@@ -391,8 +391,10 @@ def _completion_cmd(
     profile: dict | None = None,
     causal_context: dict | None = None,
 ) -> str:
+    # Named, not looked up on the `bash -lc` wrapper's login PATH, for the reason the dispatch
+    # wrapper's steps are (adapters.wrapper_python). This is the step audit F2 saw SIGKILLed 522x.
     argv = [
-        "python3",
+        adapters.wrapper_python(),
         str(ORCH / "ledger_reconcile.py"),
         "complete",
         "--run-id",
@@ -480,8 +482,9 @@ def _spawn(
     complete = _completion_cmd(
         agent, mode, run_id, target, task_type, log, started_ts, profile, causal_context
     )
-    # Marker BEFORE the python completion: the python step gets SIGKILLed in the wild (audit F2);
-    # the microsecond printf survives and ledger_reconcile backfills latency/exit from it.
+    # Marker BEFORE the python completion: the python step was SIGKILLed in the wild (audit F2).
+    # _completion_cmd no longer makes the PATH lookup that killed the dispatch steps; the marker
+    # stays first so that any later death of the step still leaves latency/exit to backfill.
     marker = adapters.done_marker_cmd(run_id, log, "orch_exp_rc")
     wrapped = f"{_wrapped(agent, argv)}; orch_exp_rc=$?; {marker}; {complete}; exit $orch_exp_rc"
     with log.open("a") as fh:

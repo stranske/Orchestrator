@@ -123,6 +123,7 @@ def _simulate_mode(
             exploration_rate=1.0,
             exploration_mode=mode,
             rng=random.Random(seed),
+            simulate=True,
         )
         if not pick:
             continue
@@ -174,6 +175,7 @@ def _task_summary(
         _neutral_capacity(route_table),
         learned=learned,
         exploration_rate=0.0,
+        simulate=True,
     )
     epsilon = _simulate_mode(
         task_type,
@@ -266,6 +268,12 @@ def _recorded_exploration_evidence(window_days: int = 120) -> dict:
                 "outcome_runs": 0,
                 "successes": 0,
                 "success_rate": None,
+                "graded_runs": 0,
+                "pass_runs": 0,
+                "pass_rate": None,
+                "durability_runs": 0,
+                "durable_runs": 0,
+                "durable_rate": None,
                 "task_types": {},
                 "agents": {},
             },
@@ -283,9 +291,23 @@ def _recorded_exploration_evidence(window_days: int = 120) -> dict:
             task_types_with_outcomes.add(task_type)
             if feedback._is_success(durability, adjudicated, verifier):
                 stat["successes"] += 1
+            # Report verdicts separately from durability: a PASS that later
+            # reverted remains a PASS grade, but did not durably hold. Pending
+            # or absent sweeps must not dilute the measured durability rate.
+            verdict = verifier if verifier is not None else adjudicated
+            if verdict is not None:
+                stat["graded_runs"] += 1
+                stat["pass_runs"] += int(verdict.upper() == "PASS")
+            if durability in {"durable"} | feedback.CAPABILITY_REGRESSION_DURABILITY:
+                stat["durability_runs"] += 1
+                stat["durable_runs"] += int(durability == "durable")
     for stat in by_mode.values():
         if stat["outcome_runs"]:
             stat["success_rate"] = stat["successes"] / stat["outcome_runs"]
+        if stat["graded_runs"]:
+            stat["pass_rate"] = stat["pass_runs"] / stat["graded_runs"]
+        if stat["durability_runs"]:
+            stat["durable_rate"] = stat["durable_runs"] / stat["durability_runs"]
         stat["task_types"] = dict(sorted(stat["task_types"].items()))
         stat["agents"] = dict(sorted(stat["agents"].items()))
     modes = {

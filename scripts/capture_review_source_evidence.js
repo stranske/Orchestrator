@@ -165,7 +165,8 @@ function main(args) {
   );
   const [input, repo, output, head] = args;
   const report = capture(fs.readFileSync(input), repo, path.resolve(output), head);
-  console.log(`${report.source_status}: ${report.retrieved_changed_files}/${report.changed_files} changed files retained; review PENDING`);
+  const retrievedFiles = report.files.filter((file) => file.status === 'RETRIEVED').length;
+  console.log(`${report.source_status}: ${report.retrieved_changed_files}/${report.changed_files} changed files retained; ${retrievedFiles}/${report.files.length} total files retained; review PENDING`);
   return report.source_status === 'COMPLETE' ? 0 : 2;
 }
 
