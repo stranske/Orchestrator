@@ -415,3 +415,29 @@ def test_weekly_registration_and_collection_errors_remain_visible(monkeypatch, c
             )
             assert switch_review.main(["--env", "process", "--json"]) == 0
             assert "fixture " + failed_stage + " failure" in capsys.readouterr().out
+
+
+def test_input_off_reads_nested_declared_defaults(tmp_path):
+    path = ledger(tmp_path, ("runtime-ac-checks", "range-lane-rollout"))
+    rows = {
+        row["capability"]: row
+        for row in monitor.report(
+            now=NOW,
+            path=path,
+            env={"ORCH_RUNTIME_AC_ALLOW_COMMANDS": "0", "ORCH_RANGE_LANE_ROLLOUT": "0"},
+            inputs={"edges": []},
+        )["rows"]
+    }
+    assert rows["runtime-ac-checks"]["input_off"] == ["input_off:ORCH_RUNTIME_AC_ALLOW_COMMANDS"]
+    assert rows["range-lane-rollout"]["input_off"] == ["input_off:ORCH_RANGE_LANE_ROLLOUT"]
+
+
+def test_nested_default_off_flag_requires_observed_disabled_input(tmp_path):
+    path = ledger(tmp_path, ("runtime-ac-checks",))
+    for env in ({}, {"ORCH_RUNTIME_AC_ALLOW_COMMANDS": "1"}):
+        assert (
+            monitor.report(now=NOW, path=path, env=env, inputs={"edges": []})["rows"][0][
+                "input_off"
+            ]
+            == []
+        )
