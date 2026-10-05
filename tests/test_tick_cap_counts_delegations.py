@@ -29,7 +29,13 @@ import tick
 
 GH_STUB = """#!/bin/sh
 echo "$*" >> "$GH_STUB_CALLS"
-case "$*" in *--method*) exit 0;; esac
+case "$*" in *--method*)
+  for arg in "$@"; do
+    case "$arg" in repos/*/issues/*/labels) num="${arg%/labels}"; num="${num##*/}";; esac
+  done
+  if [ -f "$GH_STUB_DIR/$num.post-fails" ]; then exit 1; fi
+  exit 0;;
+esac
 num="${2##*/}"
 if [ -f "$GH_STUB_DIR/$num.json" ]; then cat "$GH_STUB_DIR/$num.json"; exit 0; fi
 echo "gh: Not Found (HTTP 404)" >&2
@@ -58,6 +64,9 @@ def gh(tmp_path, monkeypatch):
         def labels(self, number: int, names: list[str]) -> None:
             payload = {"number": number, "labels": [{"name": name} for name in names]}
             (answers / f"{number}.json").write_text(json.dumps(payload))
+
+        def fail_post(self, number: int) -> None:
+            (answers / f"{number}.post-fails").touch()
 
         def reads(self) -> list[str]:
             return [line for line in calls.read_text().splitlines() if "--method" not in line]
@@ -189,6 +198,24 @@ def test_items_deferred_by_the_cap_drain_on_the_next_tick(gh, sandbox):
     second = _plan(labelled)
     assert [row["target"] for row in second["chosen"][:2]] == ["o/r#4", "o/r#5"], second
     assert (second["delegations"], second["refused"], second["deferred"]) == (2, 3, []), second
+
+
+@pytest.mark.parametrize("failed_posts", [0, 1, 3])
+def test_active_cap_deferrals_need_successful_label_applications(gh, sandbox, failed_posts):
+    """An attempted delegation still spends a slot, but a failed POST leaves it unowned."""
+    for n in range(1, 6):
+        gh.labels(n, [])
+        if n <= failed_posts:
+            gh.fail_post(n)
+    first = _plan([_item(n, []) for n in range(1, 6)], dry_run=False)
+    assert first["delegations"] == 3 and len(gh.posts()) == 3, first
+    assert sum(bool(row["applied"]) for row in first["chosen"]) == 3 - failed_posts
+    assert first["deferral"]["delegable"] == 2, first
+    assert first["deferral"]["drainable"] == (0 if failed_posts else 2), first
+    if failed_posts == 3:
+        second = _plan([_item(n, []) for n in range(1, 6)], dry_run=False)
+        assert second["deferred"] == ["o/r#4", "o/r#5"], second
+        assert second["deferral"]["drainable"] == 0, second
 
 
 # --------------------------------------------------------------------------- what refusals no longer buy

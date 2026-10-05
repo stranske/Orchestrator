@@ -545,7 +545,9 @@ def remote_tick(
     The plan names each deferral's bound, and how many deferred items were delegable on their
     discovery labels (`deferral.delegable`, the blocking quantity) beside how many of those wait only
     on this tick's own delegations (`deferral.drainable`). Those drain without help: once a label
-    applies, the target is owned, so the next tick's dispatcher refuses it and it takes no slot. A
+    applies, the target is owned, so the next tick's dispatcher refuses it and it takes no slot.
+    In an active tick, every cap-filling attempt must actually apply before these deferrals are
+    called drainable; failed POSTs leave unowned targets that can consume the same slots again. A
     delegable item deferred by the examination bound waits behind examined items that did not
     delegate, so it is not drainable. A shadow tick applies nothing, so its plan repeats."""
     import os
@@ -562,7 +564,7 @@ def remote_tick(
     deferred_by_examine_cap: list[Any] = []
     deferred_delegable: list[Any] = []
     deferred_drainable: list[Any] = []
-    delegations = refused = errors = examined = 0
+    delegations = refused = errors = examined = applied_delegations = 0
     blocked: list[Any] = []
     adversarial_reviews: list[Any] = []
     runtime_ac_gates: list[Any] = []
@@ -585,8 +587,9 @@ def remote_tick(
             if delegable:
                 deferred_delegable.append(target)
                 # Held only by this tick's own delegations, which free their slots once applied. A
+                # Failed active POSTs leave ownership unchanged and may fill the same cap again. A
                 # cap of 0 is reached with none, and nothing frees it but the operator.
-                if by_cap and delegations > 0:
+                if by_cap and delegations > 0 and (dry_run or applied_delegations == delegations):
                     deferred_drainable.append(target)
             continue
         examined += 1
@@ -693,6 +696,7 @@ def remote_tick(
         chosen.append(row)
         if is_delegation(row):
             delegations += 1
+            applied_delegations += int(bool(row["applied"]))
         elif row["skip"]:
             refused += 1
         else:
