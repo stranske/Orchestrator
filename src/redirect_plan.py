@@ -535,7 +535,10 @@ def apply_plan(
         step_id = step.get("id") or ""
         for command in step.get("commands") or []:
             # Claim release removes the expected snapshot; only delegation follows it.
-            if step_id != "delegate-retry" and step_id != "delegate-subtasks":
+            if step_id in {"delegate-retry", "delegate-subtasks"}:
+                if plan_obj.get("lane_guard") is not None and claims.holder(target):
+                    raise ValueError("target was reclaimed before delegation")
+            else:
                 _revalidate_lane(plan_obj, pid_checker)
             if step_id == "stop-process":
                 try:
