@@ -1331,3 +1331,15 @@ with a shared `batch_id`; proposal validity and downstream outcomes remain per i
 `python3 src/roles.py prompt --batch items.json --output issue_body --dispatch --output-dir bodies`
 exports valid Markdown files and a manifest containing role-run IDs and all validator verdicts.
 This extends the existing PromptAgent role; no new surface binding or autonomous dispatch is added.
+
+### Redirect routing and provenance (issue #424)
+
+Unset/`auto` sweep backends let `route_role("redirect")` select the judgment backend.
+Explicit backends remain overrides. A redirect/decompose proposal lacking a worker uses
+`router.select_agent(task_type or "implement")`, excluding reserve and backup seats:
+`implement` is a task prior, not a registered role. The plan records `agent_source=router`.
+No available worker produces a named error and inspection-only commands; direct plan
+construction refuses a missing or placeholder agent. Watch classification retains its
+recommendation while withholding apply commands until a real worker is selected.
+Role-run Brain metadata retains caller `source` and `report_state`, distinguishing
+real sweep stalls, live dispatch and historical replay without changing apply authority.
