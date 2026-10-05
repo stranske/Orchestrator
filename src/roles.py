@@ -2285,8 +2285,18 @@ def run_prompt_agent(
     }
 
 
-def run_prompt_batch(items: list[dict], *, output: str = "dispatch_prompt", **kwargs: Any) -> dict:
-    """One deterministic routing decision, independently validated/scored item outputs."""
+def run_prompt_batch(
+    items: list[dict],
+    *,
+    output: str = "dispatch_prompt",
+    env: Mapping[str, str] | None = None,
+    **kwargs: Any,
+) -> dict:
+    """One capped decision, independently validated/scored item outputs.
+
+    An explicit dispatch authorizes advisory authoring, as with run_prompt_agent;
+    it does not enable the automatic dispatch seam's ORCH_ROLE_SHADOW gate.
+    """
     if output not in {"dispatch_prompt", "issue_body"}:
         raise ValueError("output must be dispatch_prompt or issue_body")
     if not isinstance(items, list) or not items:
@@ -2332,11 +2342,29 @@ def run_prompt_batch(items: list[dict], *, output: str = "dispatch_prompt", **kw
         )
         # An empty explicit backend prevents a no-capacity batch routing again per item.
         backend = routing["agent"] if routing else ""
+    selector = None
+    if common.get("dispatch"):
+        selector = select_role_activation(
+            "prompt",
+            matched=True,
+            gate_enabled=True,
+            capacity_available=bool(backend),
+            max_invocations=_role_cap(env, "prompt"),
+            reason="batch_authoring",
+            target=batch_id,
+        )
     results = []
     for item in items:
-        result = run_prompt_agent(
-            **(common | item), output=output, backend=backend, batch_id=batch_id
-        )
+        item_args = common | item
+        if selector and not selector["invoked"]:
+            item_args = item_args | {"dispatch": False, "proposal_json": None}
+        result = run_prompt_agent(**item_args, output=output, backend=backend, batch_id=batch_id)
+        if selector and not selector["invoked"]:
+            result["errors"].append(
+                "no eligible backend has capacity for the prompt role"
+                if selector["reason"] == "no_role_capacity"
+                else selector["reason"]
+            )
         result["routing"] = routing
         results.append(result)
     return {
@@ -2344,6 +2372,7 @@ def run_prompt_batch(items: list[dict], *, output: str = "dispatch_prompt", **kw
         "output": output,
         "routing": routing,
         "backend": backend,
+        "selector": selector,
         "items": results,
     }
 
@@ -2980,6 +3009,33 @@ def _selftest() -> None:
     feedback.DB_PATH = Path(tmp) / "roles.db"
 
     try:
+        reset_role_invocation_counts()
+        body = (
+            "## Why\nAuthor a batch.\n\n## Tasks\n- [ ] Add the bounded change.\n\n"
+            "## Acceptance Criteria\n- python3 -m pytest tests/test_role_prompt_offering.py -q "
+            "passes; capture stdout in the PR.\n\n## Non-Goals\nNo dispatch gate changes.\n"
+        )
+        batch = run_prompt_batch(
+            [
+                {
+                    "target": f"o/r#{n}",
+                    "goal": "Author an issue",
+                    "proposal_json": {
+                        "summary": "Author an issue",
+                        "issue_body": body,
+                        "confidence": "high",
+                    },
+                }
+                for n in (1, 2)
+            ],
+            output="issue_body",
+            backend="cursor",
+            dispatch=True,
+            env={},
+        )
+        assert all(item["issue_body"] == body and not item["errors"] for item in batch["items"])
+        assert _ROLE_INVOCATION_COUNTS["prompt"] == 1
+        reset_role_invocation_counts()
         # route_role: excludes RESERVE (claude) by default, and only routes within eligible backends.
         pick = route_role("redirect", cap=fake_cap, learned={}, exploration_rate=0.0)
         assert (
