@@ -87,7 +87,7 @@ tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/p
             "adversarial-review: high-stakes candidates 0 of 1 merged PRs (shape rule), 0 by label"
         )
 E       AssertionError: assert 'adversarial-...g population)' == 'adversarial-...), 0 by label'
-E         
+E
 E         Skipping 33 identical leading characters in diff, use -v to show
 E         - andidates 0 of 1 merged PRs (shape rule), 0 by label
 E         + andidates unmeasured (missing population)
@@ -103,4 +103,3 @@ RESTORED
 tracked test inputs: NOT CHECKED -- /private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/closer419-controls-niy5uydv is not a git checkout. In the exec mirror that loses nothing: its tests/ IS `git archive HEAD tests`, so every file in it was tracked
 1 passed in 0.24s
 ```
-
