@@ -399,7 +399,11 @@ def find_merge(run: dict, *, _gh=None, now: int | None = None) -> dict:
     if len(records) >= OWN_BRANCH_PR_LIMIT:
         return _unjudgeable(f"{branch} carries {len(records)}+ PRs; its merge cannot be read whole")
     started = int(run.get("ts") or 0)
-    recorded = int(run.get("recorded_ts") or now or time.time()) + INGEST_CLOCK_SKEW_S
+    # A missing observation time is not evidence that this historical run saw a later merge.
+    # Direct/note-named PRs above remain attributable without this issue-branch window.
+    if not run.get("recorded_ts"):
+        return _unjudgeable("missing outcome recording time; own-branch merge window is unknown")
+    recorded = int(run["recorded_ts"]) + INGEST_CLOCK_SKEW_S
     merges = [item for item in records if item["state"].upper() == "MERGED"]
     in_window = [
         item for item in merges if started <= (_parse_gh_ts(item.get("mergedAt")) or -1) <= recorded
@@ -563,6 +567,8 @@ def read_fix_window(repo: str, since_ts: int, *, now: int, _fetch=None) -> dict:
         if arr is None:
             entry["error"] = "fix-PR search unavailable"
             break
+        # A returned positive linked repair remains evidence even if pagination is incomplete.
+        entry["items"].update({item.get("number"): item for item in arr if isinstance(item, dict)})
         if not complete:
             stop = now if end is None else end
             if stop - start <= FIX_SEARCH_MIN_SPLIT_S:
@@ -571,7 +577,6 @@ def read_fix_window(repo: str, since_ts: int, *, now: int, _fetch=None) -> dict:
             middle = (start + stop) // 2
             windows += [(start, middle), (middle, end)]  # the newer half is read first
             continue
-        entry["items"].update({item.get("number"): item for item in arr if isinstance(item, dict)})
         entry["covered_from"] = start
     return entry
 
@@ -620,12 +625,6 @@ def _fix_followup_status(
         entry = read_fix_window(repo, start, now=now, _fetch=_fix_fn)
         if fix_cache is not None:
             fix_cache[repo] = entry
-    if not _fix_covers(entry, merged_ts):
-        reached = entry["covered_from"]
-        return None, (
-            f"fix-PR search did not reach this merge ({entry['error'] or 'window starts later'}; "
-            f"read whole back to {_search_ts(reached) if reached is not None else 'nothing'})"
-        )
     for item in sorted(entry["items"].values(), key=lambda item: str(item.get("mergedAt") or "")):
         number = item.get("number")
         if number == pr_number:
@@ -639,6 +638,12 @@ def _fix_followup_status(
         haystack = f"{title}\n{item.get('body') or ''}"
         if _contains_ref(haystack, pr_number):
             return True, f"later fix PR #{number} names this change"
+    if not _fix_covers(entry, merged_ts):
+        reached = entry["covered_from"]
+        return None, (
+            f"fix-PR search did not reach this merge ({entry['error'] or 'window starts later'}; "
+            f"read whole back to {_search_ts(reached) if reached is not None else 'nothing'})"
+        )
     return False, (
         "no later fix PR names this change "
         f"(read every fix PR merged since {_search_ts(entry['covered_from'])})"
@@ -870,9 +875,6 @@ def classify_durability(
             "durability": "reverted",
             "notes": f"durability_sweep: {revert_note}; merge age {age}d",
         }
-    if reverted is None:
-        return {"durability": None, "reason": revert_note, "drain": _revert_drain(revert_note)}
-
     if delivered(pr) is False:
         paths = ", ".join(
             str(f.get("path") if isinstance(f, dict) else f) for f in (pr.get("files") or [])
@@ -902,7 +904,10 @@ def classify_durability(
     if broke is True:
         return {
             "durability": "broke_later",
-            "notes": f"durability_sweep: {fix_note}; held {age}d before that",
+            "notes": (
+                f"durability_sweep: {fix_note}; held {age}d before that; "
+                f"revert status: {revert_note}"
+            ),
             "fix_search": fix_search,
         }
     if broke is None:
@@ -914,6 +919,10 @@ def classify_durability(
             "drain": DRAIN_FIX_SEARCH,
             "fix_search": fix_search,
         }
+    # Uncertain reversion cannot erase an independently attributable failure above. Its exact
+    # subtype may still be refined later, but it must never become a learning exclusion.
+    if reverted is None:
+        return {"durability": None, "reason": revert_note, "drain": _revert_drain(revert_note)}
     return {
         "durability": "durable",
         "notes": f"durability_sweep: held {age}d; {revert_note}; {fix_note}",
