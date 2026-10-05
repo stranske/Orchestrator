@@ -1560,7 +1560,7 @@ def followup(
         nonlocal launch_available
         phase = state.get("delivery_phase")
         if phase not in {"candidate_ready", "discarded", "durable"}:
-            return
+            return None
         # A FINISH HOLDS THE GATE ONCE; A FINISH THAT ALREADY HELD IT MAY NOT (2026-10-04). This
         # used to run for every promotion that was ALREADY terminal, on every tick, and the
         # `gate_stamp.touch()` below is the one-a-day hold on launches. With 256 finished
@@ -1583,7 +1583,7 @@ def followup(
         }
         if phase == phase_before:
             if (edir / "ship-gate.json").exists():
-                return
+                return None
             # Legacy promotions may lack a local checkpoint after an earlier finish. Repair the
             # file without re-holding launches or counting another finish.
             try:
@@ -1592,12 +1592,13 @@ def followup(
                 # Local legacy evidence repair is independent of synthesis safety.
                 # Report the failed repair without manufacturing inflight work or a hold.
                 return str(exc)[:256]
-            return
+            return None
         synthesis_promotion._atomic_json(edir / "ship-gate.json", payload)
         gate_stamp.touch()
         launch_available = False
         ship_gate["finished"] += 1
         ship_gate["stamp_age_s"] = 0
+        return None
 
     # Read every promotion state ONCE before deciding anything. `promotion_inflight` used to be
     # discovered in visit order, so an evaluated candidate that sorted before the running one
