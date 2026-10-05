@@ -54,7 +54,7 @@ def _private_ledger(tmp_path, monkeypatch, cap_id):
     return ledger, beats
 
 
-def _section(tmp_path, monkeypatch, *, stamp_age=3600, last_age=30 * DAY):
+def _section(tmp_path, monkeypatch, *, stamp_age=3600, last_age=30 * DAY, artifact_age=10 * DAY):
     cap = "route-weights-export"
     monkeypatch.setattr(
         capabilities, "load_declared", lambda *_a: {cap: {"last_invocation": NOW - last_age}}
@@ -70,7 +70,7 @@ def _section(tmp_path, monkeypatch, *, stamp_age=3600, last_age=30 * DAY):
     )
     for name, age in [
         (".last-route-weights-export", stamp_age),
-        ("route-weights-export.json", 10 * DAY),
+        ("route-weights-export.json", artifact_age),
     ]:
         p = tmp_path / name
         p.write_text("{}")
@@ -79,28 +79,33 @@ def _section(tmp_path, monkeypatch, *, stamp_age=3600, last_age=30 * DAY):
     return switches.firing_regressions(now=NOW)
 
 
+@pytest.mark.parametrize("stamp_age", [0, 3600, DAY + 12 * 3600])
+@pytest.mark.parametrize("artifact_age", [60, 10 * DAY])
 def test_a_silent_heartbeat_with_a_fresh_stamp_prints_heartbeat_silent_step_ran(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, stamp_age, artifact_age
 ):
-    section = _section(tmp_path, monkeypatch)
+    section = _section(tmp_path, monkeypatch, stamp_age=stamp_age, artifact_age=artifact_age)
     text = _render_section(section)
-    assert f"heartbeat silent, step ran {_date(NOW - 3600)}" in text
+    assert f"heartbeat silent, step ran {_date(NOW - stamp_age)}" in text
     assert f"ledger last heartbeat: {_date(NOW - 30 * DAY)}" in text
-    assert "stamp age seconds=3600" in text
-    assert f"artifact mtime: {_date(NOW - 10 * DAY)}" in text
+    assert f"stamp age seconds={stamp_age}" in text
+    assert f"artifact mtime: {_date(NOW - artifact_age)}" in text
     assert len(section["rows"]) == 1  # Same row in two findings is rendered once.
     step = section["rows"][0]["step_evidence"][0]
-    assert step["artifact_mtime"] == NOW - 10 * DAY
-    assert step["stamp_mtime"] == NOW - 3600
+    assert step["artifact_mtime"] == NOW - artifact_age
+    assert step["stamp_mtime"] == NOW - stamp_age
+    assert step["stamp_age_seconds"] == stamp_age
 
 
-def test_a_real_stop_prints_step_last_ran(tmp_path, monkeypatch):
-    section = _section(tmp_path, monkeypatch, stamp_age=25 * DAY)
+@pytest.mark.parametrize("stamp_age", [DAY + 12 * 3600 + 1, 25 * DAY])
+@pytest.mark.parametrize("artifact_age", [60, 10 * DAY])
+def test_a_real_stop_prints_step_last_ran(tmp_path, monkeypatch, stamp_age, artifact_age):
+    section = _section(tmp_path, monkeypatch, stamp_age=stamp_age, artifact_age=artifact_age)
     text = _render_section(section)
-    assert f"step last ran {_date(NOW - 25 * DAY)}" in text
+    assert f"step last ran {_date(NOW - stamp_age)}" in text
     assert f"ledger last heartbeat: {_date(NOW - 30 * DAY)}" in text
-    assert f"stamp age seconds={25 * DAY}" in text
-    assert f"artifact mtime: {_date(NOW - 10 * DAY)}" in text
+    assert f"stamp age seconds={stamp_age}" in text
+    assert f"artifact mtime: {_date(NOW - artifact_age)}" in text
     assert "heartbeat silent, step ran" not in text
 
 
@@ -232,20 +237,57 @@ def test_export_success_means_a_completed_publication(tmp_path, monkeypatch, pub
     assert row["last_success"] == (NOW if published else None)
 
 
-def test_rail_exercise_heartbeats_without_record(tmp_path, monkeypatch):
+@pytest.mark.parametrize("passed", [False, True])
+def test_rail_exercise_heartbeats_without_record(tmp_path, monkeypatch, capsys, passed):
     ledger, beats = _private_ledger(tmp_path, monkeypatch, "rail-exercise-cadence")
-    record_flags = []
-    monkeypatch.setattr(
-        rail_exercise,
-        "report",
-        lambda only, record: record_flags.append(record)
-        or {"totals": {"contracts": 1, "passed": 1, "failed": 0}, "tree": "fixture"},
+    root = tmp_path / "rail_exercises"
+    folder = root / "fixture"
+    (folder / "fixtures").mkdir(parents=True)
+    (folder / "contract.json").write_text(
+        json.dumps(
+            {
+                "capability_id": "fixture",
+                "run": "true",
+                "pass_check": "true",
+                "break_case": {"run": "false" if passed else "true"},
+            }
+        )
     )
+    monkeypatch.setattr(rail_exercise, "CONTRACT_ROOT", root)
+    recorded = []
+    monkeypatch.setattr(rail_exercise, "_record", lambda row: recorded.append(row) or "recorded")
     monkeypatch.setattr(sys, "argv", ["rail_exercise.py", "--json"])
     assert rail_exercise.main() == 0
-    assert record_flags == [False]
-    assert [a[1] for a, _ in beats] == ["invocation", "success"]
+    report = json.loads(capsys.readouterr().out)
+    assert report["recording"] is False
+    assert report["contracts"][0]["status"] == ("pass" if passed else "fail")
+    assert "record" not in report["contracts"][0]
+    assert recorded == []
+    verdict = "success" if passed else "failure"
+    assert [a[1] for a, _ in beats] == ["invocation", verdict]
     row = capabilities.load(ledger, create=False)["rail-exercise-cadence"]
     assert row["last_invocation"] == NOW
-    assert row["last_success"] == NOW
-    assert [event["type"] for event in row["event_history"]] == ["invocation", "success"]
+    assert row["last_success"] == (NOW if passed else None)
+    assert [event["type"] for event in row["event_history"]] == ["invocation", verdict]
+    assert row["event_history"][1]["timestamp"] == NOW
+    assert row["event_history"][1]["metadata"]["failed"] == int(not passed)
+
+    # Positive control: the same report records the contract verdict only when armed.
+    monkeypatch.setattr(capabilities, "_now", lambda: NOW + DAY)
+    monkeypatch.setattr(sys, "argv", ["rail_exercise.py", "--json", "--record"])
+    assert rail_exercise.main() == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["recording"] is True
+    assert recorded == report["contracts"]
+    assert report["contracts"][0]["record"] == "recorded"
+    assert [a[1] for a, _ in beats] == ["invocation", verdict, "invocation", verdict]
+    row = capabilities.load(ledger, create=False)["rail-exercise-cadence"]
+    assert row["last_invocation"] == NOW + DAY
+    assert row["last_success"] == (NOW + DAY if passed else None)
+    assert [event["type"] for event in row["event_history"]] == [
+        "invocation",
+        verdict,
+        "invocation",
+        verdict,
+    ]
+    assert row["event_history"][-1]["timestamp"] == NOW + DAY
