@@ -3852,6 +3852,9 @@ def _selftest_front_door() -> None:
     ):
         env_prereq.report_gaps("capability_advisor.py front-door", gaps)
         return
+    # This reachability probe describes known substantive PR work; unknown
+    # facts are tested separately and must continue to withhold offers.
+    pr_context = {"changedFiles": 12, "additions": 600, "deletions": 100}
     cases = [
         ("summarise these 200 pages of docs", "offload"),
         ("offload this big read to a cheap agent", "offload"),
@@ -3860,15 +3863,15 @@ def _selftest_front_door() -> None:
         ("add pytest coverage for the retry helper", "testgen-lane"),
     ]
     for text, expected in cases:
-        r = advise(text, record=False)
+        r = advise(text, context=pr_context, record=False)
         ids = [c["capability_id"] for c in r["capabilities"]]
         assert r["useful"], f"front door said NO to real work: {text!r}"
         assert expected in ids, f"{text!r} -> {ids}, expected {expected}"
     # It must still be able to say NO.
     for text in ("what did I eat for lunch", "book a flight to Lisbon"):
-        assert not advise(text, record=False)["useful"], text
+        assert not advise(text, context=pr_context, record=False)["useful"], text
     # And the advice must be actionable, not a lifecycle instruction.
-    text = format_advice(advise("summarise these 200 pages", record=False))
+    text = format_advice(advise("summarise these 200 pages", context=pr_context, record=False))
     assert "how to use:" in text and "dispatcher.offload" in text, text
     assert "entered directly" in text, text
     print(
