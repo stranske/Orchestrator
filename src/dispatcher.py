@@ -1926,7 +1926,12 @@ def offload(
 
         failure_parts = [out.get("error"), out.get("stderr_tail"), out.get("agent_log_tail")]
         stdout = str(out.get("output") or "")
-        if out.get("exit") != 0 or rate_incidents.stdout_carries_capacity_evidence(stdout):
+        # A FAILED run's stdout is error evidence less codex's own record of its work: two codex
+        # offloads that printed a doc about quotas became quota incidents and shed the seat
+        # (2026-09-19, 09-20). A successful run's stdout counts only through the strict envelope.
+        if out.get("exit") != 0:
+            failure_parts.insert(0, rate_incidents.failed_stdout_evidence(agent, stdout))
+        elif rate_incidents.stdout_carries_capacity_evidence(stdout):
             failure_parts.insert(0, stdout)
         combined_output = "\n".join(str(part or "") for part in failure_parts)
         evidence_result = rate_incidents.get_structured_evidence(

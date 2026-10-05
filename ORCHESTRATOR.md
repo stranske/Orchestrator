@@ -53,7 +53,11 @@ cursor-agent live outside the default PATH):
   resource_exhausted, and ActionRequiredError with explicit quota evidence), and provides structured evidence
   for router decisions. `429` is authoritative only as `429 Too Many Requests` or when anchored to HTTP,
   status, error, or response-code context; incidental numeric prose is not a shedding signal. Generic network
-  errors and ambiguous prose are NOT recorded to avoid false shedding.
+  errors and ambiguous prose are NOT recorded to avoid false shedding. A failed run's own codex work events
+  (the commands it ran, the files it read, its messages) are never provider evidence: every reader of a
+  failed run drops them through one filter (`failure_evidence`), leaving the harness's `error`/`turn.failed`
+  events and stderr. Two codex offloads that printed this paragraph were recorded as quota incidents, and
+  shed the seat, before the offload path applied that filter (2026-09-19, 09-20).
 - **Observe fleet health** — `python3 src/observability_dashboard.py [--json] [--write-markdown path]`
   builds a read-only productivity/quality dashboard from the feedback DB plus a live capacity snapshot:
   outcome coverage, merged/durable-success rates, durability failures, capacity warnings, learned
