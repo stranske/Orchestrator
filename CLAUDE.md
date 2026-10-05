@@ -416,10 +416,12 @@ Do not create a second event log, model registry, or capability inventory.
   delegation whose issue closed with no PR of its own and no closing PR: the labelled agent never
   had a PR to run on (owner decision 2026-10-04; a LOCAL run keeps that case's FAIL). A merge the
   durability sweep cannot judge closes as `unjudgeable`: `unjudgeable_merge` when it is not the
-  run's own, `broke_later_unchecked` when no fix-PR read reached it. An unread window is never
-  `durable`, because a durable label trains as a success. Every learner excludes all these classes
-  through ONE set, `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES`, and a role run inherits the class
-  with the verdict.
+  run's own, `broke_later_unchecked` when no fix-PR read reached it. A row GitHub does not answer
+  about waits at most `durability_sweep.RETRY_HORIZON_DAYS` from its first unanswered run, on one
+  clock: then an unanswered lookup or revert check closes as `unjudgeable_merge`, an unread fix
+  window as `broke_later_unchecked`. An unread window is never `durable`, because a durable label
+  trains as a success. Every learner excludes all these classes through ONE set,
+  `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES`, and a role run inherits the class with the verdict.
   A LOCAL run's candidates start with the branches it pushed from its own worktree, read from git's
   reflogs when it completes (`pushed_branches.py`, Brain table `run_pushes`), never from the
   transcript. A PR there counts only if the run opened it inside its window, and a run without a
