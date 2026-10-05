@@ -300,7 +300,8 @@ def backfill_role_capability_edges(*, dry_run: bool = False, conn=None) -> dict:
     c = conn or feedback._conn()
     created, resolved, skipped = [], 0, 0
     try:
-        rows = c.execute("""SELECT DISTINCT r.source_run_id, r.target_run_id, ce.capability_id,
+        rows = c.execute(
+            """SELECT DISTINCT r.source_run_id, r.target_run_id, ce.capability_id,
                                ce.capability_version_id
                FROM influence_edges r
                JOIN influence_edges ce
@@ -314,7 +315,8 @@ def backfill_role_capability_edges(*, dry_run: bool = False, conn=None) -> dict:
                        SELECT 1 FROM influence_edges x
                         WHERE x.target_run_id = r.target_run_id
                           AND x.influence_type = 'capability'
-                          AND x.capability_id = ce.capability_id)""").fetchall()
+                          AND x.capability_id = ce.capability_id)"""
+        ).fetchall()
         unlinked = 0
         for role_run, work_run, cap_id, cap_version in rows:
             if dry_run:
@@ -383,13 +385,15 @@ def backfill_offload_capability_edges(*, dry_run: bool = False, conn=None) -> di
     versions = feedback._resolve_capability_versions(["offload"]) or []
     version = versions[0] if versions else None
     try:
-        rows = c.execute("""SELECT r.run_id, r.decomposition FROM runs r
+        rows = c.execute(
+            """SELECT r.run_id, r.decomposition FROM runs r
                 WHERE r.role_name IS NOT NULL AND r.decomposition IS NOT NULL
                   AND NOT EXISTS (
                         SELECT 1 FROM influence_edges x
                          WHERE x.target_run_id = r.run_id
                            AND x.influence_type = 'capability'
-                           AND x.capability_id = 'offload')""").fetchall()
+                           AND x.capability_id = 'offload')"""
+        ).fetchall()
         for run_id, raw in rows:
             try:
                 payload = json.loads(raw or "{}")
@@ -647,13 +651,15 @@ def attribute_fleet_deliverable_edges(
     links: list[dict] = []
     missing_event = 0
     try:
-        rows = c.execute("""SELECT r.run_id, r.target, r.source
+        rows = c.execute(
+            """SELECT r.run_id, r.target, r.source
                  FROM runs r
                  JOIN outcomes o
                    ON o.run_id = r.run_id
                   AND UPPER(COALESCE(o.adjudicated_verdict, o.verifier_verdict, ''))
                       IN ('PASS', 'FAIL')
-                WHERE r.source = 'keepalive'""").fetchall()
+                WHERE r.source = 'keepalive'"""
+        ).fetchall()
         for run_id, target, source in rows:
             verdicts = verdict_index.get(_fleet_deliverable(target), [])
             row = {"source": source, "target": target, "fleet_verdicts": verdicts}

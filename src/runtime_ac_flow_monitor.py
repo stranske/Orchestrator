@@ -456,7 +456,8 @@ def _write_report(path: Path, report: dict[str, Any]) -> None:
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript("""
+    conn.executescript(
+        """
         create table runs (
           run_id text primary key, ts integer, target text, task_type text,
           agent text, mode text, reasoning_level text, model text,
@@ -474,7 +475,8 @@ def _create_schema(conn: sqlite3.Connection) -> None:
           payload_json text, content_hash text, redaction_count integer,
           created_ts integer, updated_ts integer
         );
-        """)
+        """
+    )
 
 
 def _insert_gate_event(

@@ -126,7 +126,8 @@ def _run(tmp: Path, runner: str, step_name: str, cases: list[dict[str, Any]]) ->
     return dict(json.loads((tmp / "out.json").read_text(encoding="utf-8")))
 
 
-HARNESS_PRELUDE = textwrap.dedent("""
+HARNESS_PRELUDE = textwrap.dedent(
+    """
     const fs = require('fs');
     const path = require('path');
     const vm = require('vm');
@@ -180,10 +181,12 @@ HARNESS_PRELUDE = textwrap.dedent("""
       for (const spec of cases) outcomes[spec.name] = await runCase(spec);
       fs.writeFileSync(outPath, JSON.stringify(outcomes));
     }
-""").strip()
+"""
+).strip()
 
 
-STATUS_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
+STATUS_RUNNER = HARNESS_PRELUDE + textwrap.dedent(
+    """
 
     const retryHelper = require(path.join(repoRoot, '.github/scripts/github-api-with-retry.js'));
 
@@ -226,10 +229,12 @@ STATUS_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
         github,
       }, record);
     });
-""")
+"""
+)
 
 
-COMMENT_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
+COMMENT_RUNNER = HARNESS_PRELUDE + textwrap.dedent(
+    """
 
     const dedupe = require(path.join(repoRoot, '.github/scripts/comment-dedupe.js'));
     fs.writeFileSync('gate-summary.md', 'GATE SUMMARY BODY\\n<!-- gate-summary: pr=1 -->\\n');
@@ -272,10 +277,12 @@ COMMENT_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
         github,
       }, record);
     });
-""")
+"""
+)
 
 
-ORIGIN_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
+ORIGIN_RUNNER = HARNESS_PRELUDE + textwrap.dedent(
+    """
 
     main(async (spec) => {
       const record = newRecord();
@@ -285,7 +292,8 @@ ORIGIN_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
         context: { payload: spec.payload },
       }, record);
     });
-""")
+"""
+)
 
 
 STATUS_CASES: list[dict[str, Any]] = [

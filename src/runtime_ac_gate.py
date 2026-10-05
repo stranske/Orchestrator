@@ -710,7 +710,8 @@ def _scan_db_runtime_ac_rows(db_path: str | Path) -> tuple[dict, str | None]:
     try:
         c = sqlite3.connect(str(path))
         c.row_factory = sqlite3.Row
-        rows = c.execute("""
+        rows = c.execute(
+            """
             SELECT r.run_id, r.target, r.agent, r.mode, r.source, r.experiment_id,
                    o.verifier_verdict, o.adjudicated_verdict, o.merged,
                    o.durability, o.notes
@@ -720,7 +721,8 @@ def _scan_db_runtime_ac_rows(db_path: str | Path) -> tuple[dict, str | None]:
                OR o.verifier_verdict LIKE '%RUNTIME_AC%'
                OR o.notes LIKE '%runtime%AC%'
             ORDER BY r.ts DESC
-            """).fetchall()
+            """
+        ).fetchall()
     except sqlite3.Error as exc:
         return {
             "path": str(path),
