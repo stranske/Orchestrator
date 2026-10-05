@@ -1236,9 +1236,20 @@ def review(
             )
         except Exception as exc:
             print(f"switch_review: value-chain heartbeat failed: {exc}", file=sys.stderr)
-        value_chain = value_chain_monitor.report(
-            now=now, path=path, env=env, inputs=value_chain_inputs
-        )
+        try:
+            value_chain = value_chain_monitor.report(
+                now=now, path=path, env=env, inputs=value_chain_inputs
+            )
+        except Exception as exc:  # noqa: BLE001 — preserve the weekly artifact with honest errors
+            value_chain = {
+                "total": 0,
+                "rows": [],
+                "errors": [
+                    *(value_chain_inputs or {}).get("errors", []),
+                    f"Value-chain report failed: {exc}",
+                ],
+                "disabled": False,
+            }
     return {
         "generated_at": now,
         "value_chain": value_chain,
@@ -2162,18 +2173,24 @@ def main(argv: list[str]) -> int:
             )
         )
 
-        if os.environ.get("ORCH_CAPABILITY_HEARTBEATS") == "1":
-            ledger = capabilities.load_declared(capabilities.REG)
-            if "value-chain-monitor" not in ledger:
-                capabilities.register(
-                    "value-chain-monitor", capabilities.KNOWN_DECLARATIONS["value-chain-monitor"]
-                )
-        value_chain_inputs = value_chain_monitor.collect_inputs(
-            now=int(time.time()),
-            gh_fn=_gh_call,
-            repos=repos,
-            db=feedback.DB_PATH,
-        )
+        try:
+            if os.environ.get("ORCH_CAPABILITY_HEARTBEATS") == "1":
+                ledger = capabilities.load_declared(capabilities.REG)
+                if "value-chain-monitor" not in ledger:
+                    capabilities.register(
+                        "value-chain-monitor",
+                        capabilities.KNOWN_DECLARATIONS["value-chain-monitor"],
+                    )
+            value_chain_inputs = value_chain_monitor.collect_inputs(
+                now=int(time.time()),
+                gh_fn=_gh_call,
+                repos=repos,
+                db=feedback.DB_PATH,
+            )
+        except Exception as exc:  # noqa: BLE001 — retain setup failure in the report
+            value_chain_inputs = {
+                "errors": [f"Value-chain setup or input collection failed: {exc}"]
+            }
     rep = review(env=env, sources=sources, value_chain_inputs=value_chain_inputs)
     if args.do_raise:
         if not APPLY_ENABLED:

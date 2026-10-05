@@ -104,6 +104,8 @@ def first_break(row: Mapping[str, Any]) -> str | None:
         if row[field] is None:
             return None
         if row[field] == 0:
+            if field == "offered" and row.get("invocation_count"):
+                continue
             return broken
     return "works"
 

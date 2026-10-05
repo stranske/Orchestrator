@@ -1,6 +1,6 @@
 # Issue 423: independent capability demand and first breaks
 
-Source implementation for #423, based on main `ee5e1e1beaf15395fe13b8988f750df9d660c8b2`.
+Source implementation for #423, integrated with main `3fbac9b5124057f01ccb36e7214cef2824583364`.
 Weekly switch review now renders every live declared capability, separately counting
 independent demand, offers, production invocations, successes, accepted influence
 and graded durable outcomes. Missing populations remain unmeasured. Historical
@@ -10,14 +10,14 @@ reuses the ledger and Brain; it cannot open gates or enable the dispatch lane.
 ## Acceptance evidence
 
 - `python3 src/verify.py`, with a private ledger containing the new declaration and
-  a private Brain snapshot: **1871 collected and passed, zero skips; 100/100
+  a private Brain snapshot: **1900 collected and passed, zero skips; 100/100
   selftests; activation, recurrence, set coverage, admission and ledger validation
   all green**. The admission gate examined all 49 declared rows. Existing skip
   ceilings and mypy exemption ceilings are unchanged.
 - `python3 -m mypy --follow-imports=silent src/*.py`: 117 source files, no issues.
-- `python3 -m black --check src tests`: 252 files unchanged.
+- `black --check --line-length 100 --exclude '(\.venv|\.workflows-lib|node_modules)' .`: 322 files unchanged.
 - `python3 -m ruff check src tests` and `git diff --check`: clean.
-- All four issue-named pytest nodes ran in the suite. The new module has twelve
+- All four issue-named pytest nodes ran in the suite. The new module has fifteen
   tests, including complete fleet pagination, older open issues, inaccessible
   inputs, fixture/trial exclusion, kill-switch collection bypass, and independent
   precondition persistence.
@@ -32,7 +32,7 @@ time and restored byte-for-byte:
 
 The supplemental `local_verify.py` comparison to main was red at collection
 because main lacks the new module. Its per-node attribution was unavailable;
-that comparison does **not** prove all twelve nodes discriminate the base. The
+that comparison does **not** prove all twelve original nodes discriminate the base. The
 two actual code mutations above provide the requested acceptance controls.
 
 ## Read-only population check
@@ -62,3 +62,14 @@ and post-merge verification.
 Raw logs, the two RED/GREEN controls, read-only report and private-state verifier
 receipt are retained at
 `/Users/teacher/.codex/automations/pd-workloop-resume/evidence/20261005T0701Z/`.
+
+## Review recovery on the integrated candidate
+
+Both full CodeRabbit threads4181825219/4181825241 were checked. Registration,
+collection and report exceptions now preserve the weekly artifact with visible
+errors; the failure fallback remains enabled. Observed direct invocations bypass
+the advisor-offer step while preserving the recorded zero offer count. Three
+new regression nodes failed before the fix and passed after it; both original
+mutation controls were repeated on this final source and reject their faults.
+The full1900-test private verifier and existing ceilings pass after integrating
+dispatcher461; subsequent remote CI and installed acceptance remain separate.

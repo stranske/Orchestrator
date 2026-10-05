@@ -311,3 +311,56 @@ def test_evaluated_precondition_is_measured_without_an_invocation(tmp_path):
     assert row["situation_count"] == 1
     assert row["invocation_count"] == 0
     assert row["first_break"] == "not_invoked"
+
+
+def test_direct_invocations_bypass_advisor_offer():
+    row = complete_row()
+    row["offered"] = 0
+    assert monitor.first_break(row) == "works"
+    row["outcome"] = 0
+    assert monitor.first_break(row) == "no_outcome"
+    row["invocation_count"] = 0
+    row["offered"] = 1
+    assert monitor.first_break(row) == "not_invoked"
+
+
+def test_monitor_report_error_remains_visible(tmp_path, monkeypatch):
+    path = ledger(tmp_path)
+    monkeypatch.setattr(
+        switch_review, "switch_states", lambda **kw: {"held_off": [], "on_but_idle": []}
+    )
+    monkeypatch.setattr(switch_review, "stale_runners", lambda: [])
+    monkeypatch.setattr(switch_review, "mirror_drift", lambda: {"status": "ok"})
+    monkeypatch.setattr(switch_review, "fleet_gates", lambda **kw: {})
+    monkeypatch.setattr(switch_review, "_exploration_gate", lambda: {})
+    monkeypatch.setattr(switch_review, "gate_expiry", lambda **kw: {})
+    monkeypatch.setattr(
+        monitor, "report", lambda **kw: (_ for _ in ()).throw(ValueError("fixture malformed event"))
+    )
+    rep = switch_review.review(now=NOW, env={}, path=path)
+    assert not rep["value_chain"]["disabled"]
+    assert "fixture malformed event" in switch_review.format_report(rep)
+
+
+def test_weekly_registration_and_collection_errors_remain_visible(monkeypatch, capsys):
+    for failed_stage in ("registration", "collection"):
+        with monkeypatch.context() as patch:
+            patch.setenv("ORCH_CAPABILITY_HEARTBEATS", "1")
+            patch.setenv("ORCH_VALUE_CHAIN_MONITOR", "1")
+            patch.setattr(capabilities, "load_declared", lambda *args: {})
+
+            def register(*args):
+                if failed_stage == "registration":
+                    raise OSError("fixture registration failure")
+
+            patch.setattr(capabilities, "register", register)
+            patch.setattr(
+                monitor,
+                "collect_inputs",
+                lambda **kw: (_ for _ in ()).throw(ValueError("fixture collection failure")),
+            )
+            patch.setattr(
+                switch_review, "review", lambda **kw: {"errors": kw["value_chain_inputs"]["errors"]}
+            )
+            assert switch_review.main(["--env", "process", "--json"]) == 0
+            assert "fixture " + failed_stage + " failure" in capsys.readouterr().out
