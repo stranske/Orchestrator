@@ -28,7 +28,7 @@ def test_research_program_surface_is_declared_and_binds_role_prompt(tmp_path):
         advisor.CONSULT_SITES["research-program"]["caller"]
         == "~/.codex/automations/research-program/driver.py"
     )
-    for surface in ("research-program", "repo-audit:phase-4"):
+    for surface_index, surface in enumerate(("research-program", "repo-audit:phase-4")):
         # The offer must explain this caller's batch, even when task classification misses.
         binding_reason = advisor.SURFACE_BINDINGS[surface]["role-prompt"]
         assert "batch" in binding_reason.lower()
@@ -38,11 +38,29 @@ def test_research_program_surface_is_declared_and_binds_role_prompt(tmp_path):
             "Author a batch of three issue bodies from verified findings",
             unclassified_task,
         ):
+            before = path.read_bytes()
             result = advisor.advise(task, surface=surface, path=path, record=False)
             offered = {row["capability_id"]: row for row in result["capabilities"]}
             assert "role-prompt" in offered
             assert offered["role-prompt"]["bound"] is True
             assert offered["role-prompt"]["binding_reason"] == binding_reason
+            assert path.read_bytes() == before
+
+            # Real consults must attribute the offer to this surface, including a
+            # classification miss. Distinct task text keeps the two trials separate.
+            record_task = f"{task} {surface_index}"
+            recorded = advisor.advise(record_task, surface=surface, path=path)
+            assert recorded["recorded_matches"] >= 1
+            trial = next(
+                t for t in propensity.experiments(path=path)
+                if t["experiment_id"] == recorded["experiment_id"]
+            )
+            assert "role-prompt" in trial["candidates"]
+            assert trial["skills"] == [surface]
+            events = capabilities.load(path, create=False)["role-prompt"]["event_history"]
+            repeat = advisor.advise(record_task, surface=surface, path=path)
+            assert repeat["recorded_matches"] == 0
+            assert capabilities.load(path, create=False)["role-prompt"]["event_history"] == events
         assert advisor.binding_for(surface, path=path)["role-prompt"] == binding_reason
 
 

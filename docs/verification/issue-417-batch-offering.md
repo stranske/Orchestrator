@@ -92,3 +92,26 @@ with `black: command not found`. A temporary virtual environment could not insta
 the tools because `pypi.org` could not resolve. The acceptance checkboxes remain
 unchecked and this follow-up remains uncommitted until the required Black gate
 and named pytest runs can execute.
+
+## Recorded-consult follow-up on 2026-10-05
+
+Extended the first named regression to exercise recorded consults at both batch
+authoring surfaces, for classified tasks and classification misses. It checks that
+`role-prompt` enters the experiment candidate set with the correct surface
+attribution, repeated consults add no duplicate matches or events, and
+`record=False` leaves the ledger byte-identical. The collected case count is unchanged.
+
+The standard-library replay at `/tmp/issue-417-replay.py` passed all three named
+functions, rejected each required deliberate break in a private module copy with
+`AssertionError`, and passed after each restoration. Source hashes confirmed the
+three checkout modules were unchanged. Output is `/tmp/issue-417-replay.log`;
+these runner-local artifacts are not durable CI evidence. Syntax parsing and
+`git diff --check` also passed.
+
+Acceptance remains unverified: the focused pytest command with `-m "not slow"`
+fails with `No module named pytest`, and both mandatory Black commands fail with
+`black: command not found`. None of the available Python runtimes has either
+tool, the pip cache contains neither tool, and installation in a temporary
+virtual environment failed. The changes remain uncommitted under the required
+Black gate, and both acceptance checkboxes remain unchecked. GitHub API access
+also failed, preventing a PR blocker comment, label, or readiness check.
