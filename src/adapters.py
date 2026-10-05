@@ -1695,6 +1695,7 @@ def dispatch(
     # Telemetry is fail-open, but return its structured classification to callers.
     combined_output = f"{proc.stderr or ''}"
     evidence_result = None
+    reset_at = None
     try:
         import rate_incidents
 
@@ -1711,6 +1712,8 @@ def dispatch(
             surface="adapters.dispatch",
             target=str(Path(cwd).expanduser().resolve()),
         )
+        # And the same reset: the provider's own clock, from codex's harness events alone.
+        reset_at = rate_incidents.provider_reset_at(agent, stdout.splitlines())
     except Exception as exc:
         print(f"warn: rate-incident classification failed for {agent}: {exc}", file=sys.stderr)
     if evidence_result and evidence_result.get("is_authoritative"):
@@ -1723,6 +1726,7 @@ def dispatch(
                 target=str(Path(cwd).expanduser().resolve()),
                 run_id=f"sync-dispatch:{agent}:{time.time_ns()}",
                 evidence=combined_output,
+                reset_at=reset_at,
                 extra={"subcategory": evidence_result["subcategory"], "exit_code": proc.returncode},
             )
         except Exception as exc:
