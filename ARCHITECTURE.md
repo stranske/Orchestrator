@@ -265,6 +265,18 @@ step and input switches held off. Unknown demand never becomes zero. It changes 
 selection, gate, dispatcher or lifecycle decision; the existing weekly artifact carries
 the section rather than a second audit log or inventory.
 
+The same weekly artifact reports adversarial high-stakes demand from `fleet_shapes`' exact
+merged-agent population: workflow/metadata and auth/data paths, or the single 500-line
+size threshold, beside the independent label count. Raw paths are counted before top-three
+shape grouping, so a small auth change cannot vanish behind docs/tests/scripts. Missing
+facts stay unmeasured; measured zero is printed as zero. The production weekly caller
+records one match observation per UTC week in the existing capability ledger, never a
+review invocation or usefulness verdict. The advisor's shape probe stays unknown until
+two complete observations of the same rule are at least seven days apart and the latest
+is at most eight days old. Label matching remains a second route after that shadow gate;
+`adversarial.main`, the closer's existing label/title matcher and merge authority do not change.
+
+
 ## The feedback loop closes over both surfaces
 
 `feedback.py` learns (1) **router weights** — which agent per task_type — and (2) **role ↔ backend
