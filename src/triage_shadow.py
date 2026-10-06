@@ -295,6 +295,10 @@ def summary(path: Path | None = None) -> dict:
                     not isinstance(row, dict)
                     or row.get("schema_version") != 1
                     or not isinstance(row.get("triage_top_three"), list)
+                    or any(not isinstance(target, str) for target in row["triage_top_three"])
+                    or (row.get("rule_pick") is not None and not isinstance(row["rule_pick"], str))
+                    or type(row.get("ts")) is not int
+                    or not 0 < row["ts"] <= 2**63 - 1
                 ):
                     raise ValueError("unknown or malformed row schema")
                 rows.append(row)
@@ -324,8 +328,8 @@ def summary(path: Path | None = None) -> dict:
                 found = conn.execute(
                     "SELECT o.merged,o.durability,o.failure_class FROM runs r "
                     "JOIN outcomes o ON o.run_id=r.run_id WHERE r.target=? "
-                    "AND r.mode != 'role' ORDER BY r.ts DESC LIMIT 1",
-                    (target,),
+                    "AND r.mode != 'role' AND r.ts > ? ORDER BY r.ts DESC LIMIT 1",
+                    (target, row["ts"] / 1_000_000_000),
                 ).fetchone()
                 if (
                     found
@@ -345,7 +349,7 @@ def summary(path: Path | None = None) -> dict:
 def summary_line(path: Path | None = None) -> str:
     try:
         data = summary(path)
-    except (OSError, sqlite3.Error) as exc:
+    except (OSError, UnicodeError, sqlite3.Error) as exc:
         return f"triage shadow: UNKNOWN — outcome evidence unreadable ({type(exc).__name__})"
     if data["malformed_rows"]:
         return (

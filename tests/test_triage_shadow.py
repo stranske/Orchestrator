@@ -324,7 +324,8 @@ def test_replay_and_invalid_proposals_never_score_as_live_rankings(brain):
     assert triage_shadow.summary(path)["triage"]["judged"] == 0
 
 
-def test_summary_counts_only_known_durable_target_outcomes(brain):
+def test_summary_counts_only_known_durable_target_outcomes(brain, monkeypatch):
+    monkeypatch.setattr(triage_shadow.time, "time_ns", lambda: 100_000_000_000)
     path = brain / "rows.jsonl"
     triage_shadow.record_cycle(
         items(),
@@ -342,6 +343,65 @@ def test_summary_counts_only_known_durable_target_outcomes(brain):
     result = triage_shadow.summary(path)
     assert result["triage"] == {"judged": 1, "merged_durable": 1}
     assert result["rule"]["judged"] == 0
+
+
+def test_summary_does_not_credit_an_outcome_before_the_live_cycle(brain):
+    path = brain / "rows.jsonl"
+    feedback.record_run("old", "stranske/Orchestrator#3", "implement", "codex", mode="local")
+    feedback.record_outcome("old", merged=True, durability="durable")
+    with feedback._conn() as conn:
+        conn.execute("UPDATE runs SET ts=99 WHERE run_id='old'")
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ts": 100_000_000_000,
+                "triage_valid": True,
+                "live_proposal": True,
+                "rule_pick": "stranske/Orchestrator#1",
+                "triage_top_three": ["stranske/Orchestrator#3"],
+            }
+        )
+        + "\n"
+    )
+    assert triage_shadow.summary(path)["triage"]["judged"] == 0
+    with feedback._conn() as conn:
+        conn.execute("UPDATE runs SET ts=101 WHERE run_id='old'")
+    assert triage_shadow.summary(path)["triage"]["judged"] == 1
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("rule_pick", 2**100),
+        ("rule_pick", {}),
+        ("triage_top_three", [2**100]),
+        ("triage_top_three", [{}]),
+        ("ts", True),
+        ("ts", "bad"),
+        ("ts", 2**1000),
+    ],
+)
+def test_malformed_live_evidence_never_reaches_sqlite(tmp_path, monkeypatch, field, value):
+    row = {
+        "schema_version": 1,
+        "ts": 100_000_000_000,
+        "triage_valid": True,
+        "live_proposal": True,
+        "rule_pick": "stranske/Orchestrator#1",
+        "triage_top_three": ["stranske/Orchestrator#3"],
+    }
+    row[field] = value
+    path = tmp_path / "rows.jsonl"
+    path.write_text(json.dumps(row) + "\n")
+    monkeypatch.setattr(feedback, "_conn", lambda: pytest.fail("malformed evidence opened Brain"))
+    assert "UNKNOWN" in triage_shadow.summary_line(path)
+
+
+def test_invalid_utf8_evidence_is_unknown(tmp_path):
+    path = tmp_path / "rows.jsonl"
+    path.write_bytes(b"\xff")
+    assert "UNKNOWN" in triage_shadow.summary_line(path)
 
 
 def test_backfill_preserves_existing_verifier_concerns(brain):
@@ -378,6 +438,8 @@ def test_unreadable_outcomes_are_unknown(tmp_path, monkeypatch):
                 "triage_valid": True,
                 "live_proposal": True,
                 "triage_top_three": ["stranske/Orchestrator#1"],
+                "rule_pick": "stranske/Orchestrator#1",
+                "ts": 100_000_000_000,
             }
         )
         + "\n"
