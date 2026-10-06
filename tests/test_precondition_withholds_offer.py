@@ -98,7 +98,8 @@ def test_unknown_precondition_withholds_the_offer_and_records_fact_missing_on_th
     output = ca.format_advice(result)
     assert "fact_missing on closer-lane: runtime-ac-checks — PR size unknown" in output
     assert "fact_missing on closer-lane: redirect-policy — PR labels unknown" in output
-    row = capabilities.load(ledger)["runtime-ac-checks"]
+    # Observe events without registering new declared candidates between identical consults.
+    row = capabilities.load(ledger, create=False)["runtime-ac-checks"]
     events = [
         ev
         for ev in row["event_history"]
