@@ -86,8 +86,23 @@ def _ledger() -> dict:
     return capabilities.load_declared(capabilities.REG)
 
 
+# The phrase a skip reason carries when EVERY absent row is one this tree registers by itself, so
+# the skip drains at the deployed code's first writing load. Defined once here and read by verify.py,
+# which counts those skips as drainable beside the ceiling they push against.
+DECLARED_UNREGISTERED_MARK = "declared by this tree, not yet registered here"
+
+
 def ledger_rows_absent(*capability_ids: str) -> str | None:
-    """Reason string when any named capability has no row in the ledger at all."""
+    """Reason string when any named capability has no row in the ledger at all.
+
+    TWO KINDS OF ABSENCE, and only one is history. A row this tree registers by itself
+    (`capabilities.declared_row_ids`) is absent only until the deployed code's first writing load,
+    so when every absent row is one, the reason carries DECLARED_UNREGISTERED_MARK and names that
+    drain. Anything else is registration history that only running the system accumulates. Until
+    2026-10-06 both read as history, so the pre-sync verdict on the tree that declared
+    `value-chain-monitor` skipped one test more than the mirror's ceiling allows, and the reason
+    told the reader nothing could clear it but running the system, which needed that sync.
+    """
     try:
         ledger = _ledger()
     except Exception as exc:  # noqa: BLE001
@@ -97,11 +112,27 @@ def ledger_rows_absent(*capability_ids: str) -> str | None:
         return None
     import capabilities
 
-    return (
-        f"capability ledger has no row for {', '.join(missing)} — the ledger is "
-        f"machine-local state ({capabilities.REG}); it holds {len(ledger)} row(s) here, "
+    declared = set(capabilities.declared_row_ids())
+    history = [c for c in missing if c not in declared]
+    pending = [c for c in missing if c in declared]
+    where = f"the ledger is machine-local state ({capabilities.REG}); it holds {len(ledger)} row(s) here"
+    if not history:
+        return (
+            f"capability ledger has no row for {', '.join(pending)}: "
+            f"{DECLARED_UNREGISTERED_MARK} — {where}, and the deployed code registers these on "
+            f"its first writing load (`capabilities.py --json validate`, an active tick's first "
+            f"command; `capabilities.py seed-declared` makes the same load on a copy)"
+        )
+    reason = (
+        f"capability ledger has no row for {', '.join(history)} — {where}, "
         f"and these are registered by running the system, not by checking out the tree"
     )
+    if pending:
+        reason += (
+            f"; {', '.join(pending)} is declared by this tree too, but registering it alone "
+            f"would not clear this"
+        )
+    return reason
 
 
 def ledger_version_lineage_absent(*capability_ids: str) -> str | None:
@@ -739,6 +770,28 @@ def _selftest() -> None:
         got = fn()
         assert got and "definitely-not-a-capability" in got, (name, got)
 
+    # A DECLARED row's absence drains at the deployed code's first writing load, and history's
+    # never does (2026-10-06). On a private empty ledger the mark appears only when EVERY absent
+    # row is one this tree registers by itself, since only then does registering clear the skip.
+    import tempfile
+
+    import capabilities
+
+    declared = capabilities.declared_row_ids()[0]
+    saved_reg = capabilities.REG
+    with tempfile.TemporaryDirectory(prefix="env-prereq-declared-") as td:
+        capabilities.REG = Path(td) / "capabilities.json"
+        try:
+            capabilities._write_ledger_unlocked(capabilities.REG, {})
+            only = ledger_rows_absent(declared)
+            mixed = ledger_rows_absent(declared, "definitely-not-a-capability")
+        finally:
+            capabilities.REG = saved_reg
+    assert only and DECLARED_UNREGISTERED_MARK in only and declared in only, only
+    assert "first writing load" in only, only
+    assert mixed and DECLARED_UNREGISTERED_MARK not in mixed, mixed
+    assert "running the system" in mixed and "would not clear" in mixed, mixed
+
     # Same rule for the file detector: handed a path that cannot exist it MUST report absence and
     # NAME it, and handed one that does exist it must report nothing. Both directions, because a
     # detector that always reports absence would skip every check on every machine — a silent
@@ -992,7 +1045,8 @@ def _selftest() -> None:
         "marked selftest skip speaks, vibe readers, exec-mirror shape needs BOTH marks, "
         "a bare machine needs EVERY prerequisite absent, "
         "not-live rows named with their status, a recorded pytest verdict replays as the check "
-        "would have and an unreadable record replays nothing)"
+        "would have and an unreadable record replays nothing, a declared row's absence is named "
+        "drainable only when every absent row is declared)"
     )
 
 
