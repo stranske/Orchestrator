@@ -502,7 +502,13 @@ def test_an_open_pr_on_a_pushed_branch_waits_and_a_closed_one_is_this_runs_failu
     _gh(monkeypatch, prs={"fix/7-own-name": closed}, closing=nothing_carries)
     done = outcomes.ingest_modes("local")
     assert done["push_records"]["credited"] == 1, done
-    assert done["replacements"] == {"credited": 0, "waiting": 0, "unattributable": 0, "failed": 1}
+    assert done["replacements"] == {
+        "credited": 0,
+        "waiting": 0,
+        "unattributable": 0,
+        "failed": 1,
+        "not_read": 0,
+    }
     merged, verdict, durability, _failure_class, notes = _row(RUN)
     assert (merged, verdict, durability) == (0, "FAIL", "abandoned")
     assert notes == (

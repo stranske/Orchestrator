@@ -427,10 +427,11 @@ Do not create a second event log, model registry, or capability inventory.
   transcript. A PR there counts only if the run opened it inside its window, and a run without a
   usable record resolves exactly as before: unknown is not false.
   A LOCAL run's own PR closed unmerged is credited with the merge of the ONE PR linked to its issue
-  whose commit list holds the closed PR's head commit, merged after the run started: the lanes
-  rehome a PR at the same head (`outcomes.judge_replacement`). Never by branch name (#411 measured
-  that), and never a replacement with different commits: that is different work, and the FAIL
-  stands. An answer that cannot single one out is `unattributed_replacement`, excluded like the rest.
+  whose commit list holds the closed PR's head commit, merged after the run started, when the run
+  opened that PR (created at or after its start): the lanes rehome a PR at the same head
+  (`outcomes.judge_replacement`). Never by branch name (#411 measured that), and never a replacement
+  with different commits: that is different work, and the FAIL stands. An answer that cannot single
+  one out, or a closed PR older than the run, is `unattributed_replacement`, excluded like the rest.
   An issue was closed through a PR only if that PR MERGED by the time the issue closed
   (`outcomes.CLOSING_PR_MERGE_SLACK_SECONDS`). GitHub also lists every PR that links the issue
   later, which cannot have closed it: those are named in the notes and never counted, and a

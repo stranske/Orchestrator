@@ -2038,11 +2038,12 @@ UNATTRIBUTED_CLOSING_PR = "unattributed_closing_pr"
 UNATTRIBUTED_DELEGATION = "unattributed_delegation"
 
 # What outcome ingest writes when a LOCAL run's own PR closed unmerged and GitHub's complete answer
-# cannot say whether a PR linked to the run's issue carries the closed PR's head commit
-# (`outcomes.judge_replacement`): several merged PRs carry it, one carries it and the run records no
-# start to place it against, or a list that could hold it was cut short. Since 2026-10-05 a single
-# merged carrier is the run's PASS (the lanes rehome a PR at the same head) and no carrier is its
-# FAIL; this class is what remains, terminal and scored by no learner.
+# cannot tie a PR linked to the run's issue that carries the closed PR's head commit to the run
+# (`outcomes.judge_replacement`): several merged PRs carry it, a list that could hold it was cut
+# short, or the run or its closed PR cannot be placed in time (no start, no creation time, or a PR
+# opened before the run started, so not shown to be the run's). Since 2026-10-05 a single merged
+# carrier of a PR the run opened is the run's PASS (the lanes rehome a PR at the same head) and no
+# carrier is its FAIL; this class is what remains, terminal and scored by no learner.
 UNATTRIBUTED_REPLACEMENT = "unattributed_replacement"
 
 # What the durability sweep writes for a merged outcome whose merge it cannot identify as THIS run's
