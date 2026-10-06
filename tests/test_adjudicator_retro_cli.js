@@ -255,3 +255,63 @@ test('retro CLI publishes an empty report without inventing agreement or cost', 
   });
   assert.deepEqual(w.brain(), before);
 });
+
+test('retro CLI removes stale comparisons until durability is judged again', (t) => {
+  const w = world(t);
+  w.run(['-c', initialize]);
+  w.refresh();
+  const initial = w.report();
+  const identities = initial.rows.map((row) => [row.case_id, row.role_run_id]);
+
+  // Retain the durable/reverted labels, but withdraw their trusted observation dates.
+  // A previously graded report must not keep counting these labels as later truth.
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute(
+        "UPDATE outcomes SET durability_checked_ts=? WHERE run_id='original-0'",
+        (feedback.DURABILITY_DETECTION_SINCE - 1,),
+    )
+    conn.execute("UPDATE outcomes SET durability_checked_ts=NULL WHERE run_id='original-1'")
+print(json.dumps(True))
+`]);
+  const unjudgedBrain = w.brain();
+  w.refresh();
+  const unjudged = w.report();
+  assert.deepEqual(unjudged.proposal_comparison, {
+    evidence_basis: 'raw_metadata_proposals', cases: 6, proposed_decisions: 4,
+    compared: 1, pending_truth: 3, missing_merge_disposition: 0, abstained: 1, unassessed: 1,
+    agree: 0, disagree: 1, agreement_rate: 0,
+    merge_rule_agree: 0, merge_rule_disagree: 1, merge_rule_agreement_rate: 0,
+    cost_usd: 4.5, cost_measured_cases: 4, cost_per_case: 1.125,
+  });
+  for (const index of [0, 1]) {
+    assert.equal(unjudged.rows[index].later_truth, null);
+    assert.deepEqual(unjudged.rows[index].proposal_comparison, {
+      verdict: index === 0 ? 'PASS' : 'FAIL', agrees: null, merge_rule_agrees: null,
+    });
+  }
+  assert.deepEqual(unjudged.summary, initial.summary);
+  assert.deepEqual(w.brain(), unjudgedBrain, 'regrading must leave the Brain unchanged');
+
+  // The detection boundary itself is trusted. Regrading restores the original
+  // comparison without paying for another verdict or recreating any role run.
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute(
+        "UPDATE outcomes SET durability_checked_ts=? WHERE run_id IN ('original-0','original-1')",
+        (feedback.DURABILITY_DETECTION_SINCE,),
+    )
+print(json.dumps(True))
+`]);
+  const rejudgedBrain = w.brain();
+  w.refresh();
+  const restored = w.report();
+  assert.deepEqual(restored.proposal_comparison, initial.proposal_comparison);
+  assert.deepEqual(restored.rows.map((row) => [row.case_id, row.role_run_id]), identities);
+  assert.ok(restored.rows.every((row) => row.shadow_verdict === null));
+  assert.deepEqual(w.brain(), rejudgedBrain, 'restoring truth must not redispatch saved cases');
+});

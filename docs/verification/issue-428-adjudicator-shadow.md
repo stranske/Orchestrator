@@ -62,3 +62,24 @@ Focused retrospective tests passed 12 cases including merge-null refusal, direct
 annotation invariance, MCP forwarding and contested/unknown/equal verdict eligibility.
 Advisor, MCP and retrospective module selftests passed. Current-head CI and private
 mirror/live-state-copy validation are still required after integration and push.
+
+## Keepalive comparison validation, 2026-10-06
+
+- [x] Compare saved proposals with later durability and the merge-rule baseline, and
+  persist agreement rates, case counts and measured per-case costs in the state report.
+
+`node tests/test_adjudicator_retro_cli.js` passed all four CLI tests. The added regression
+withdraws trusted observation dates from saved durable/reverted cases, confirms those
+cases leave both comparison denominators, then restores the dates at the detection
+boundary and verifies the original comparison returns. Role identities, measured costs
+and the entire Brain snapshot remain unchanged by each refresh. Metadata proposals
+remain separate from accepted verdicts.
+
+Deliberately replacing the durability cutoff with zero made the added test fail (exit 1).
+The Python source was restored byte for byte; the four CLI tests then passed (exit 0).
+The existing five evidence unittest tests and the retrospective selftest also passed.
+
+The named pytest acceptance tests and their required outcome-write/unconditional-offer
+fault checks remain pending for this round: pytest and Black are absent, and PyPI could
+not be reached from this runner. This commit changes JavaScript tests and this verification
+note only; it does not change Python source or claim the named pytest checks passed.
