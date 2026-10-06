@@ -1034,6 +1034,31 @@ def _shed_row(marker: dict, entry: Path, *, now: float) -> dict:
     return row
 
 
+def credential_exposure(*, now: float | None = None) -> dict:
+    """FYI: the files under the dispatch-log and agent-runtime directories that hold a credential.
+
+    Edits and deletes nothing (`credential_redaction.exposure_report`). The two directories are
+    read from `dispatcher`, the module that writes the first and provisions the second, so this
+    section cannot drift from where agent output actually lands. Weekly, from the CLI alone: the
+    scan reads every file there through rg, about half a minute on the owner's machine, which a
+    test calling `review()` must not pay.
+    """
+    import credential_redaction
+    import dispatcher
+
+    try:
+        return credential_redaction.exposure_report(
+            {
+                "dispatch-logs": dispatcher.DISPATCH_LOG_DIR,
+                "agent-runtime": dispatcher.AGENT_RUNTIME_DIR,
+            },
+            now=now,
+            window_days=REVIEW_DAYS,
+        )
+    except Exception as exc:  # noqa: BLE001 — the weekly artifact keeps its other sections
+        return {"status": "unmeasured", "reason": f"exposure scan failed: {type(exc).__name__}"}
+
+
 # The gate fields an ON-but-idle bootstrap row carries: what is measured and what is still needed.
 _BOOTSTRAP_GATE_KEYS = (
     "synced_role_outcomes",
@@ -1456,8 +1481,12 @@ def review(
     path=None,
     sources: Mapping[str, str] | None = None,
     value_chain_inputs: dict | None = None,
+    credential_exposure_report: dict | None = None,
 ) -> dict:
-    """Which held-or-idle switches are due for an owner decision, and why."""
+    """Which held-or-idle switches are due for an owner decision, and why.
+
+    `credential_exposure_report` is computed by the weekly CLI caller (`credential_exposure`) and
+    carried as an FYI section; a caller that passes none gets no such section."""
     _capability_heartbeat()
 
     now = int(now if now is not None else time.time())
@@ -1496,7 +1525,7 @@ def review(
                 ],
                 "disabled": False,
             }
-    return {
+    rep = {
         "generated_at": now,
         "adversarial_shape": adversarial_shape_population(now=now),
         "value_chain": value_chain,
@@ -1531,6 +1560,11 @@ def review(
         "capacity_shed": capacity_shed(),
         "raise_count": len(due) + len(quiet),
     }
+    # FYI only, never counted in `raise_count`, and outside the graded projection
+    # (capability_propensity.TICK_FINDING_FIELDS["switch-review"]), so it mints no verdict.
+    if credential_exposure_report is not None:
+        rep["credential_exposure"] = credential_exposure_report
+    return rep
 
 
 def raise_questions(rep: dict, *, dry_run: bool = True) -> dict:
@@ -1839,6 +1873,11 @@ def format_report(rep: dict) -> str:
     shed = rep.get("capacity_shed")
     if shed is not None:
         lines += format_capacity_shed(shed)
+    exposure = rep.get("credential_exposure")
+    if exposure is not None:
+        import credential_redaction
+
+        lines += credential_redaction.format_lines(exposure)
     if (
         not rep["raise_count"]
         and not rep.get("stale_runners")
@@ -2551,7 +2590,12 @@ def main(argv: list[str]) -> int:
             value_chain_inputs = {
                 "errors": [f"Value-chain setup or input collection failed: {exc}"]
             }
-    rep = review(env=env, sources=sources, value_chain_inputs=value_chain_inputs)
+    rep = review(
+        env=env,
+        sources=sources,
+        value_chain_inputs=value_chain_inputs,
+        credential_exposure_report=credential_exposure(),
+    )
     # The production weekly caller collects the curve, rather than leaving a CLI-only instrument.
     # Pure report/selftest readers keep their no-network and no-state-write contract.
     if (

@@ -18,6 +18,14 @@ NOW = 1791183600
 @pytest.fixture(autouse=True)
 def isolated_adversarial_population(monkeypatch):
     """Value-chain fixtures do not exercise the independent live fleet collector."""
+    # The weekly CLI also scans the owner's runtime/log files. That independent
+    # exposure report has its own tests and must not read real credentials here.
+    monkeypatch.setenv("ORCH_CREDENTIAL_EXPOSURE_SCAN", "0")
+    monkeypatch.setattr(
+        switch_review,
+        "_GH_CALL_RUNNER",
+        lambda *args, **kwargs: (False, "", "unmeasured: independent unit-test fixture"),
+    )
     disabled = os.environ.get("ORCH_DISABLE_STEPS", "")
     monkeypatch.setenv("ORCH_DISABLE_STEPS", disabled + ",issue-size-quality")
     monkeypatch.setattr(adversarial, "record_shape_measurement", lambda *args, **kw: False)
