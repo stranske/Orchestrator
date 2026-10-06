@@ -166,21 +166,49 @@ def test_a_backlog_of_owned_items_is_read_at_most_examine_cap_times(gh, sandbox)
     assert out["delegations"] == 0 and gh.posts() == [], out
 
 
-def test_owned_closer_prs_at_the_head_cannot_hold_back_a_delegable_item(gh, sandbox):
-    """The live shape: discovery lists thirty closer PRs, each already labelled `agent:codex`, ahead
-    of one ready issue. The rail refuses the closers on their discovery labels, so they are examined
-    after the issue, which is delegated first. In backlog order it sat behind the bound and every
-    tick deferred it."""
-    closers = [_item(n, OWNED, lane="closer") for n in range(1, 31)]
+def test_owned_items_at_the_head_cannot_hold_back_a_delegable_item(gh, sandbox):
+    """Thirty items already labelled `agent:codex` in discovery, ahead of one ready issue. The rail
+    refuses the owned ones on their discovery labels, so they are examined after the issue, which
+    is delegated first. In backlog order it sat behind the bound and every tick deferred it."""
+    owned = [_item(n, OWNED, lane="opener") for n in range(1, 31)]
     for n in range(1, 31):
         gh.labels(n, OWNED)
     gh.labels(99, ["status: ready"])
-    out = _plan(closers + [_item(99, ["status: ready"], lane="opener")])
+    out = _plan(owned + [_item(99, ["status: ready"], lane="opener")])
     assert out["chosen"][0]["target"] == "o/r#99" and out["chosen"][0]["skip"] is None, out
     assert (out["delegations"], out["refused"], out["examined"]) == (1, 11, 12), out
     assert len(gh.reads()) == 12, gh.reads()
     assert len(out["deferral"]["by_examine_cap"]) == 19, out["deferral"]
     assert (out["deferral"]["delegable"], out["deferral"]["drainable"]) == (0, 0), out
+
+
+def test_closer_items_are_set_aside_unread_and_named(gh, sandbox):
+    """The live shape since 2026-09-18: discovery's closer PRs, each already in the agent pipeline,
+    ahead of one ready issue. No closer item can be delegated (the dispatcher refuses every
+    `agent:*` label), so none is examined: no label read, no plan row, no deferral, no review hook.
+    Each is named in the plan and kept out of research, as an examined target would be."""
+    closers = [
+        _item(n, OWNED, lane="closer", source_labels=["risk:major"], title="security fix")
+        for n in range(1, 31)
+    ]
+    for n in range(1, 31):
+        gh.labels(n, OWNED)
+    gh.labels(99, ["status: ready"])
+    seen: dict = {}
+
+    def research(*args, **kwargs):
+        seen.update(kwargs)
+        return _no_research()
+
+    out = _plan(closers + [_item(99, ["status: ready"], lane="opener")], research=research)
+    assert gh.reads() == ["api repos/o/r/issues/99"], gh.reads()
+    assert out["closer_not_examined"] == [f"o/r#{n}" for n in range(1, 31)], out
+    assert (out["delegations"], out["refused"], out["examined"]) == (1, 0, 1), out
+    assert out["deferred"] == [] and [row["target"] for row in out["chosen"]] == ["o/r#99"], out
+    assert not {"adversarial_reviews", "runtime_ac_gates"} & set(out), sorted(out)
+    assert {f"o/r#{n}" for n in range(1, 31)} <= seen["excluded_targets"], seen
+    line = tick.plan_headline(out, "PLAN", lane_live=False)
+    assert "examined 1/12; 30 closer set aside;" in line, line
 
 
 def test_items_deferred_by_the_cap_drain_on_the_next_tick(gh, sandbox):
@@ -284,6 +312,7 @@ def test_every_item_is_examined_or_deferred_and_the_counts_are_the_rows(gh, sand
     items = [_item(1), _item(2), _item(3), _item(4), {"target": "o/r"}] + [
         _item(n, []) for n in (6, 7, 8)
     ]
+    items.append(_item(9, OWNED, lane="closer"))
     for n in (6, 7, 8):
         gh.labels(n, [])
     out = _plan(items, max_delegations=2)
@@ -292,7 +321,9 @@ def test_every_item_is_examined_or_deferred_and_the_counts_are_the_rows(gh, sand
     assert out["refused"] == sum(bool(row["skip"]) for row in rows) == 2, out
     assert out["errors"] == sum(bool(row["error"]) for row in rows) == 1, out
     examined = len(rows) + len(out["blocked"]) + len(out["no_capacity"])
-    assert out["examined"] == examined and examined + len(out["deferred"]) == len(items), out
+    set_aside = len(out["closer_not_examined"])
+    assert out["examined"] == examined and set_aside == 1, out
+    assert examined + len(out["deferred"]) + set_aside == len(items), out
     assert out["deferral"]["by_cap"] == out["deferred"] == ["o/r#7", "o/r#8"], out
 
 
@@ -305,6 +336,7 @@ def test_the_headline_prints_each_bound_beside_its_count_and_blocking_beside_dra
     out = _plan([_item(n) for n in range(1, 21)])
     assert tick.plan_headline(out, "PLAN", lane_live=False) == (
         "TICK-PLAN: delegations 0/3 would apply (shadow); 12 refused; examined 12/12; "
+        "0 closer set aside; "
         "label reads 12 answered, 0 unanswered (refused); 0 no capacity, 0 blocked; "
         "deferred 8 (delegable 8, drainable 0) -> PLAN"
     )
@@ -323,6 +355,7 @@ def test_the_headline_when_nothing_is_refused(gh, sandbox):
 def test_the_fully_drained_line_is_one_an_empty_backlog_produces(gh, sandbox):
     assert tick.plan_headline(_plan([]), "PLAN", lane_live=False) == (
         "TICK-PLAN: delegations 0/3 would apply (shadow); 0 refused; examined 0/12; "
+        "0 closer set aside; "
         "label reads 0 answered, 0 unanswered (refused); 0 no capacity, 0 blocked; "
         "deferred 0 (delegable 0, drainable 0) -> PLAN"
     )
@@ -345,4 +378,5 @@ def test_the_headline_names_dispatcher_errors_beside_refusals(gh, sandbox):
 def test_a_plan_without_the_counts_prints_unknown_never_zero():
     line = tick.plan_headline({"chosen": []}, Path("PLAN"), lane_live=False)
     assert "delegations ?/? would apply (shadow); ? refused; examined ?/?;" in line, line
+    assert "? closer set aside;" in line, line  # a plan from before 2026-10-05
     assert "deferred 0 (delegable ?, drainable ?)" in line, line

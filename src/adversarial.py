@@ -13,10 +13,14 @@ lesson in ORCHESTRATOR.md — so review() returns the blockers for the orchestra
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import sys
+import time
 from collections.abc import Mapping
+from pathlib import Path
 
 import dispatcher
 
@@ -327,9 +331,9 @@ def review(
     whichever claim that reviewer judged worst, and nothing says which. When `context` holds more
     than one claim, pass `findings_submitted=<count>` so the aggregate can report the coverage
     floor instead of implying the whole set was examined."""
-    # Credit at the function the driver actually calls. tick.py calls adversarial.review()
-    # / high_stakes_reason(); the heartbeat sat only in main(), so the panel could run
-    # without the capability ever being credited. (2026-08-20)
+    # Credit at the function the driver actually calls: merge_guard calls high_stakes_reason()
+    # and, through review_at_head(), this (tick.py did until 2026-10-05). The heartbeat sat only
+    # in main(), so the panel could run without the capability ever being credited. (2026-08-20)
     _capability_heartbeat()
     prompt = refute_prompt(context)
     verdicts, raw = [], {}
@@ -352,7 +356,376 @@ def review(
     return agg
 
 
+# ONE VERDICT PER PR HEAD (2026-10-05). The panel judges a PR's code, and the code is its head
+# commit, so a verdict is a fact about (target, head) and nothing else. Until this date the only
+# automatic caller was the tick's pre-delegation hook: it would have re-reviewed the same head on
+# every hourly tick, and the event it recorded did not say which head it had judged.
+# `review_at_head` is the one entry for every seat — `merge_guard`'s terminal merge, and the closer
+# lane through `adversarial.py review` — and it judges again only when the head moves.
+#
+# Latched-gate answers, because the memo gates spend:
+# 1. What clears an entry? A push: the key is a hash over the head, so a new head has no entry, and
+#    the same code earns the same judgment.
+# 2. Can that run while the entry stands? Yes. And only CONCLUSIVE verdicts (PASS, BLOCKED) are
+#    reused: an INCONCLUSIVE panel is a reviewer shortfall ("NOT a pass; re-run the missing
+#    coverage"), and reusing it would forbid exactly that re-run until an unrelated push.
+# 3. One window: `panel_key` is the single function the record and the lookup both call.
+# 4. Drained, it prints `memo: none` and judges; a Brain it cannot read prints `memo: unknown` and
+#    judges too. "No verdict at this head" and "could not look" are never the same sentinel.
+PANEL_RULE = "panel@head:v1"
+CONCLUSIVE_VERDICTS = frozenset({"PASS", "BLOCKED"})
+PANEL_ARTIFACT_DIR = "adversarial-panels"
+_HEAD_RE = re.compile(r"[0-9a-f]{40}")
+_TARGET_RE = re.compile(r"[\w.-]+/[\w.-]+#[1-9]\d*")
+
+
+def panel_key(target: str, head: str, reviewers: list[str]) -> str:
+    """The identity of ONE judgment: this PR, at exactly this head, by this set of reviewers."""
+    import feedback
+
+    return feedback._completion_hash(
+        {"rule": PANEL_RULE, "target": target, "head": head, "reviewers": sorted(reviewers)}
+    )
+
+
+def _panel_artifact_path(key: str) -> Path:
+    state = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
+    return state / PANEL_ARTIFACT_DIR / f"{key.split(':')[-1]}.json"
+
+
+def recorded_verdict(target: str, head: str, reviewers: list[str]) -> dict:
+    """The newest CONCLUSIVE verdict the Brain holds for exactly this key, three-valued: `found`
+    (with the verdict and its findings when the artifact is intact), `none` (read, and nothing
+    conclusive at this head), `unknown` (the Brain could not be read). Inconclusive judgments at
+    this head are counted beside the answer and never returned as one."""
+    import feedback
+
+    key = panel_key(target, head, reviewers)
+    try:
+        with feedback._conn() as c:
+            rows = c.execute(
+                "SELECT event_id, payload_json, updated_ts FROM completion_events "
+                "WHERE producer='adversarial' AND event_type='panel' "
+                "ORDER BY updated_ts DESC, event_id DESC"
+            ).fetchall()
+    except Exception as exc:
+        return {"state": "unknown", "key": key, "error": str(exc)[:300]}
+    inconclusive = 0
+    for event_id, payload_json, recorded_ts in rows:
+        try:
+            payload = json.loads(payload_json)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict) or payload.get("adjudication_id") != key:
+            continue
+        verification = payload.get("verification") or {}
+        verdict = str(verification.get("adjudicated_verdict") or "").upper()
+        if verdict not in CONCLUSIVE_VERDICTS:
+            inconclusive += 1
+            continue
+        found = {
+            "state": "found",
+            "key": key,
+            "verdict": verdict,
+            "event_id": event_id,
+            "recorded_ts": recorded_ts,
+            "inconclusive_at_head": inconclusive,
+        }
+        expected = next(
+            (
+                ref.get("content_hash")
+                for ref in payload.get("artifact_refs") or []
+                if isinstance(ref, dict) and ref.get("kind") == "panel_result"
+            ),
+            None,
+        )
+        found["result"] = _read_panel_artifact(key, expected)
+        return found
+    return {"state": "none", "key": key, "inconclusive_at_head": inconclusive}
+
+
+def _read_panel_artifact(key: str, expected_hash: str | None) -> dict | None:
+    """The findings behind a reused verdict, only when the file still hashes to what the Brain
+    recorded. The Brain keeps verdicts and hashes, never prose, so the findings live beside it."""
+    import feedback
+
+    path = _panel_artifact_path(key)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not expected_hash or feedback._completion_hash(text) != expected_hash:
+        return None
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return None
+    return doc.get("result") if isinstance(doc, dict) else None
+
+
+def _write_panel_artifact(key: str, doc: dict) -> dict:
+    import feedback
+
+    path = _panel_artifact_path(key)
+    text = json.dumps(doc, indent=1, sort_keys=True, default=str)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        temporary.write_text(text, encoding="utf-8")
+        os.replace(temporary, path)
+    except OSError as exc:
+        return {"error": str(exc)[:300]}
+    return {
+        "artifact_id": f"{PANEL_ARTIFACT_DIR}/{path.stem[:24]}",
+        "content_hash": feedback._completion_hash(text),
+    }
+
+
+def _record_panel(target: str, head: str, reviewers: list[str], key: str, result: dict) -> dict:
+    """One Brain event per judgment, on the target's latest run for lineage (or a stable synthetic
+    id when no run exists, as the runtime-AC gate does). Never raises: the panel was paid for."""
+    import feedback
+
+    verdict = str(result.get("verdict") or "").upper() or "UNKNOWN"
+    try:
+        artifact = _write_panel_artifact(
+            key,
+            {
+                "rule": PANEL_RULE,
+                "target": target,
+                "head": head,
+                "reviewers": list(reviewers),
+                "recorded_at": int(time.time()),
+                "result": result,
+            },
+        )
+        refs: list[dict] = [{"artifact_id": f"{target}@{head}", "kind": "pr_head"}]
+        if artifact.get("content_hash"):
+            refs.append({**artifact, "kind": "panel_result"})
+        run_id = feedback.latest_run_id_for_target(target) or (
+            "adversarial-panel:" + hashlib.sha256(target.encode()).hexdigest()[:24]
+        )
+        result_hash = feedback._completion_hash(result)
+        event = feedback.record_completion_event(
+            run_id,
+            event_type="panel",
+            phase="verification",
+            producer="adversarial",
+            status=verdict.lower(),
+            event_id="panel:" + hashlib.sha256(f"{key}|{time.time_ns()}".encode()).hexdigest()[:32],
+            payload={
+                "panel_ids": [f"adversarial:{reviewer}" for reviewer in reviewers],
+                "adjudication_id": key,
+                "result_hashes": [result_hash],
+                "artifact_refs": refs,
+                "verification": {
+                    "adjudicated_verdict": verdict,
+                    "verifier_ids": list(reviewers),
+                    "result_hashes": {"panel": result_hash},
+                },
+            },
+        )
+        return {**event, "artifact": artifact}
+    except Exception as exc:
+        return {"recorded": False, "error": str(exc)[:300]}
+
+
+def _worktree_head(worktree: str) -> str:
+    import subprocess
+
+    out = subprocess.run(
+        ["git", "-C", worktree, "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+    )
+    if out.returncode != 0:
+        raise RuntimeError(f"git rev-parse HEAD failed in {worktree}: {out.stderr.strip()[:200]}")
+    return out.stdout.strip()
+
+
+def review_at_head(
+    target: str,
+    head: str,
+    *,
+    reviewers: list[str] | None = None,
+    context: str = "",
+    worktree: str | None = None,
+    env: Mapping[str, str] | None = None,
+    lookup_fn=None,
+    provision_fn=None,
+    head_fn=None,
+    review_fn=None,
+    record_fn=None,
+) -> dict:
+    """The panel on `target` at exactly `head`, judged once: a conclusive verdict recorded for this
+    (target, head, reviewers) is reused (`status: reused`), and otherwise the panel runs on a
+    worktree proven to sit at that head and its verdict is recorded (`status: executed`). A
+    worktree at any other commit is refused (`head_mismatch`) and nothing is reviewed or recorded,
+    so no head is ever credited with a judgment of another. Advisory like `review`: the caller
+    adjudicates the blockers against ground truth."""
+    reviewers = list(reviewers) if reviewers else reviewers_from_env(env)
+    base: dict = {"target": target, "head": head, "reviewers": reviewers}
+    if not _TARGET_RE.fullmatch(str(target or "")) or not _HEAD_RE.fullmatch(str(head or "")):
+        return {
+            **base,
+            "status": "invalid",
+            "detail": "target must be owner/repo#N and head a full 40-hex commit SHA",
+        }
+    lookup = (lookup_fn or recorded_verdict)(target, head, reviewers)
+    # A count when the Brain answered (0 included), None when it could not be read.
+    base.update(
+        memo=lookup.get("state"),
+        key=lookup.get("key"),
+        inconclusive_at_head=lookup.get("inconclusive_at_head"),
+    )
+    if lookup.get("state") == "found":
+        return {
+            **base,
+            "status": "reused",
+            "verdict": lookup["verdict"],
+            "recorded_ts": lookup.get("recorded_ts"),
+            "event_id": lookup.get("event_id"),
+            "result": lookup.get("result"),
+        }
+    if lookup.get("state") == "unknown":
+        base["memo_error"] = lookup.get("error")
+    try:
+        if worktree is None:
+            if provision_fn is None:
+                import provision
+
+                provision_fn = provision.provision
+            worktree = str(provision_fn(target, "closer"))
+        observed = (head_fn or _worktree_head)(str(worktree))
+    except Exception as exc:
+        return {**base, "status": "failed", "error": str(exc)[:500]}
+    if observed != head:
+        return {
+            **base,
+            "status": "head_mismatch",
+            "observed_head": observed,
+            "detail": "the worktree is not at the head this verdict would be recorded under; "
+            "nothing was reviewed or recorded",
+        }
+    try:
+        # A plain call on the default path, so the audit's static call graph sees this entry
+        # reach `review`'s heartbeat (`(review_fn or review)(...)` hides it).
+        if review_fn is None:
+            result = review(str(worktree), reviewers, context)
+        else:
+            result = review_fn(str(worktree), reviewers, context)
+    except Exception as exc:
+        return {**base, "status": "failed", "error": str(exc)[:500], "worktree": str(worktree)}
+    key = base.get("key") or panel_key(target, head, reviewers)
+    verdict = str(result.get("verdict") or "").upper()
+    return {
+        **base,
+        "status": "executed",
+        "verdict": verdict,
+        "conclusive": verdict in CONCLUSIVE_VERDICTS,
+        "worktree": str(worktree),
+        "result": result,
+        "lineage": (record_fn or _record_panel)(target, head, reviewers, key, result),
+    }
+
+
+def _selftest_review_at_head() -> None:
+    """One verdict per (target, head), offline, against a disposable Brain and state dir."""
+    import tempfile
+
+    import feedback
+
+    target, head, head2 = "o/r#7", "a" * 40, "b" * 40
+    calls: list[str] = []
+
+    def panel(verdict: str):
+        def run(worktree, reviewers, context):
+            calls.append(worktree)
+            vetoes = [{"severity": "high", "finding": "auth bypass", "confidence": 0.9}]
+            return {"verdict": verdict, "blockers": vetoes if verdict == "BLOCKED" else []}
+
+        return run
+
+    saved_db, saved_state = feedback.DB_PATH, os.environ.get("ORCH_STATE_DIR")
+    with tempfile.TemporaryDirectory(prefix="adversarial-memo-") as tmp:
+        feedback.DB_PATH = Path(tmp) / "brain.db"
+        os.environ["ORCH_STATE_DIR"] = tmp
+        try:
+
+            def at(sha, verdict="BLOCKED", **kw):
+                return review_at_head(
+                    target,
+                    sha,
+                    reviewers=["vibe", "gemini"],
+                    worktree=f"/wt/{sha[:4]}",
+                    head_fn=lambda wt: wt.endswith(sha[:4]) and sha or "",
+                    review_fn=panel(verdict),
+                    **kw,
+                )
+
+            first = at(head)
+            assert first["status"] == "executed" and first["memo"] == "none", first
+            assert first["inconclusive_at_head"] == 0 and first["lineage"].get("event_id"), first
+            again = at(head)
+            assert again["status"] == "reused" and again["verdict"] == "BLOCKED", again
+            assert again["result"]["blockers"][0]["finding"] == "auth bypass", again
+            assert len(calls) == 1, calls  # the same head is judged once
+            moved = at(head2, verdict="PASS")
+            assert moved["status"] == "executed" and moved["verdict"] == "PASS", moved
+            assert len(calls) == 2, calls  # a new head is judged afresh, never shown the old one
+            # INCONCLUSIVE is a shortfall, not a judgment: the next call re-runs it.
+            head3 = "c" * 40
+            assert at(head3, verdict="INCONCLUSIVE")["conclusive"] is False
+            rerun = at(head3, verdict="PASS")
+            assert rerun["status"] == "executed" and rerun["inconclusive_at_head"] == 1, rerun
+            # A worktree at another commit is refused: nothing reviewed, nothing recorded.
+            refused = review_at_head(
+                target,
+                "d" * 40,
+                reviewers=["vibe", "gemini"],
+                worktree="/wt/other",
+                head_fn=lambda wt: head,
+                review_fn=panel("PASS"),
+            )
+            assert refused["status"] == "head_mismatch" and len(calls) == 4, refused
+            assert recorded_verdict(target, "d" * 40, ["vibe", "gemini"])["state"] == "none"
+            # A Brain that cannot be read is UNKNOWN, never "no verdict", and the panel still runs.
+            blind = at(
+                "e" * 40,
+                lookup_fn=lambda *a: {"state": "unknown", "key": None, "error": "locked"},
+            )
+            assert blind["status"] == "executed" and blind["memo"] == "unknown", blind
+            assert blind["inconclusive_at_head"] is None, blind
+            # Findings are served only while the artifact still hashes to the recorded value.
+            _panel_artifact_path(panel_key(target, head, ["vibe", "gemini"])).write_text("{}")
+            tampered = at(head)
+            assert tampered["status"] == "reused" and tampered["result"] is None, tampered
+            assert review_at_head("o/r", head)["status"] == "invalid"
+            assert review_at_head(target, "abc123")["status"] == "invalid"
+
+            # DELIBERATE BREAK -> REVERT: a key that ignores the head shows a moved head the old
+            # verdict, which is the defect this memo exists to prevent.
+            saved_key = panel_key
+            try:
+                globals()["panel_key"] = lambda t, h, r: saved_key(t, head, r)
+                broken = at("f" * 40, verdict="PASS")
+                assert broken["status"] == "reused", "break did not change behaviour — vacuous"
+            finally:
+                globals()["panel_key"] = saved_key
+            assert at("f" * 40, verdict="PASS")["status"] == "executed", "revert did not restore"
+        finally:
+            feedback.DB_PATH = saved_db
+            if saved_state is None:
+                os.environ.pop("ORCH_STATE_DIR", None)
+            else:
+                os.environ["ORCH_STATE_DIR"] = saved_state
+    print(
+        "adversarial.py review_at_head selftest: OK (one judgment per head, a moved head judged "
+        "afresh, inconclusive re-run, head mismatch refused, unknown memo still runs, artifact "
+        "hash checked, head-blind key break->revert)"
+    )
+
+
 def _selftest():
+    _selftest_review_at_head()
     p = refute_prompt("merge a payments change")
     assert "REFUTE" in p and "broken until proven sound" in p.lower() and '"blocker"' in p, p
     # minority-veto: 2 substantiated high vetoes meet threshold 2 -> BLOCKED
@@ -514,12 +887,65 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
         pass
 
 
+def _review_cli(argv: list[str]) -> int:
+    """`adversarial.py review --target owner/repo#N --head <sha>`: the panel once per PR head.
+
+    Exit 0 when a verdict is returned (reused or freshly judged), 2 when none could be (bad input,
+    a worktree at another commit, a failed provision or run). The verdict itself is advisory and
+    never sets the exit code."""
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="adversarial.py review")
+    parser.add_argument("--target", required=True, help="owner/repo#N")
+    parser.add_argument("--head", required=True, help="the PR's full head commit SHA")
+    parser.add_argument(
+        "--reviewers",
+        default="",
+        help="comma-separated; default ORCH_ADVERSARIAL_REVIEWERS, else codex,vibe,gemini. A "
+        "verdict is reused only for the same reviewer set",
+    )
+    parser.add_argument("--context", default="", help="what the reviewers are told about the PR")
+    parser.add_argument("--worktree", help="a checkout already at --head (else one is provisioned)")
+    parser.add_argument(
+        "--lookup-only",
+        action="store_true",
+        help="report the verdict recorded for this head; never run the panel",
+    )
+    args = parser.parse_args(argv)
+    reviewers = [part.strip() for part in args.reviewers.split(",") if part.strip()]
+    reviewers = reviewers or reviewers_from_env(os.environ)
+    if args.lookup_only:
+        valid = _TARGET_RE.fullmatch(args.target) and _HEAD_RE.fullmatch(args.head)
+        out = (
+            recorded_verdict(args.target, args.head, reviewers)
+            if valid
+            else {"state": "invalid", "detail": "target owner/repo#N and a 40-hex head required"}
+        )
+        print(json.dumps(out, indent=2, default=str))
+        return 0 if out.get("state") in {"found", "none"} else 2
+    out = review_at_head(
+        args.target,
+        args.head,
+        reviewers=reviewers,
+        context=args.context or f"Pull request {args.target} at head {args.head[:12]}.",
+        worktree=args.worktree,
+        env=os.environ,
+    )
+    print(json.dumps(out, indent=2, default=str))
+    return 0 if out.get("status") in {"reused", "executed"} else 2
+
+
 def main(argv):
     _capability_heartbeat()
     if "--selftest" in argv:
         _selftest()
         return 0
-    print("usage: adversarial.py --selftest  (review() is called by the orchestrator/scheduler)")
+    if argv and argv[0] == "review":
+        return _review_cli(argv[1:])
+    print(
+        "usage: adversarial.py --selftest | adversarial.py review --target owner/repo#N "
+        "--head <sha> [--reviewers a,b] [--context TEXT] [--worktree PATH] [--lookup-only]"
+    )
     return 0
 
 
