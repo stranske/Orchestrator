@@ -31,6 +31,7 @@ from typing import Any
 
 import adapters
 import claims
+import credential_redaction
 import execution_profiles
 import feedback
 import provision
@@ -101,21 +102,9 @@ TESTGEN_READ_ONLY_GATE_GUARD = (
     "gate/helper file changed."
 )
 
-# task_type -> the capability whose schema that task's prompt literally cites.
-#
-# These lane "capabilities" are PROMPT-SCHEMA CONTRACTS, not locally-executed code paths. The
-# dispatcher never runs `cross_repo_lane.py`; it hands an agent a prompt saying "produce strict JSON
-# matching cross_repo_lane.py" and the agent returns conforming output. So their heartbeats could
-# never fire from a dispatch, and the inventory reported `no_matching_work` for capabilities whose
-# work-type was demonstrably being routed (measured 2026-08-19: 1 cross_repo dispatch, 2 testgen,
-# yet last_match=None on all of them).
-#
-# A `match` is recorded here, NOT an `invocation`. The honest claim is that work of this type was
-# routed and the capability's contract shaped the prompt — the module itself did not run. That
-# moves these from a FALSE "no matching work" to a TRUE `matched_not_invoked`, which is the state
-# the inventory's next-action text already handles correctly. Only mappings where the template
-# actually names the module are listed; `review` is deliberately absent because its prompt does not
-# cite `adversarial.py`.
+# Prompt construction records matching work; an actual local delegate additionally
+# records invocation for the three delivery lanes below, after the worker starts.
+# A dry-run plan, refused claim, or unbuildable command never invokes a lane.
 TASK_TYPE_CAPABILITY = {
     "testgen": "testgen-lane",
     "epic": "epic-decomposition",
@@ -223,7 +212,7 @@ def _lane_capability_match(task_type: str) -> None:
     """Record that a lane capability's prompt-schema contract was routed work of its type.
 
     Lazy import + never raises + inert outside an active tick, matching the sibling modules. See
-    TASK_TYPE_CAPABILITY for why this records `match` rather than `invocation`.
+    TASK_TYPE_CAPABILITY: prompt construction is matching, not worker execution.
     """
     capability_id = TASK_TYPE_CAPABILITY.get(task_type)
     if not capability_id:
@@ -481,7 +470,13 @@ def _suspicious_net_env() -> list[str]:
         "NODE_EXTRA_CA_CERTS",
         "NODE_OPTIONS",
     )
-    return [f"{n}={os.environ[n]}" for n in names if os.environ.get(n)]
+    # A proxy URL can carry `user:password@`, and these lines go to the log and the caller. The
+    # value is known to be a URL, so its whole userinfo is masked at any length, before the shapes.
+    return [
+        credential_redaction.redact(credential_redaction.mask_url_userinfo(f"{n}={os.environ[n]}"))
+        for n in names
+        if os.environ.get(n)
+    ]
 
 
 def _runtime_link(src: Path, dst: Path) -> None:
@@ -887,6 +882,43 @@ def _exercised_capability_ids(assignment: dict, agent: str) -> list[str]:
     return out
 
 
+# Only lanes whose work is executed by delegate, not every prompt-schema match.
+DELEGATE_LANE_CAPABILITIES = {
+    key: TASK_TYPE_CAPABILITY[key] for key in ("testgen", "codemod", "cross_repo")
+}
+
+
+def _delegate_lane_heartbeat(d: dict) -> None:
+    """Credit a started local delivery worker, including standalone delegate CLI calls.
+
+    The tick-only production_heartbeat gate cannot observe coverage-autopilot's
+    standalone calls. This execution edge supplies its own production authority:
+    delegate calls it only after _spawn returns, with the run identity and target.
+    Recording failure never prevents the already started worker from continuing.
+    """
+    capability_id = DELEGATE_LANE_CAPABILITIES.get(str(d.get("task_type") or ""))
+    if not capability_id:
+        return
+    try:
+        import capabilities
+
+        capabilities.heartbeat(
+            capability_id,
+            "invocation",
+            ref=d["target"],
+            metadata={
+                "source": "dispatcher.delegate",
+                "run_id": d["run_id"],
+                "task_type": d["task_type"],
+                "agent": d["agent"],
+            },
+            path=capabilities.REG,
+            idempotency_key=f"delegate:{d['run_id']}:{capability_id}",
+        )
+    except Exception as exc:
+        print(f"warn: delegate lane heartbeat failed for {capability_id}: {exc}", file=sys.stderr)
+
+
 def _spawn(d: dict) -> int:
     DISPATCH_LOG_DIR.mkdir(parents=True, exist_ok=True)
     safe = d["target"].replace("/", "__").replace("#", "_")
@@ -1259,8 +1291,12 @@ def delegate(
     if "error" in d:
         claims.release(target, agent)
         return d
+    lane_capability = DELEGATE_LANE_CAPABILITIES.get(str(d.get("task_type") or ""))
+    if lane_capability:
+        d["capability_ids"] = list(dict.fromkeys([*d.get("capability_ids", []), lane_capability]))
     safe = target.replace("/", "__").replace("#", "_")
     d["pid"] = _spawn(d)
+    _delegate_lane_heartbeat(d)
     # Close the feedback loop for LOCAL delegations: re-record the decision keyed by mode='local'
     # (so outcomes.ingest_outcomes(mode='local') discovers it and resolves the resulting PR by the
     # deterministic orchestrator/issue-N branch) with the REAL task_type; keep the agent-mode in
@@ -1347,9 +1383,11 @@ def _agent_log_tail_from_argv(argv: list[str], cwd: str | Path, *, max_chars: in
     if not path.is_absolute():
         path = Path(cwd) / path
     try:
-        return path.read_text(errors="replace")[-max_chars:]
+        text = path.read_text(errors="replace")
     except OSError:
         return ""
+    # Masked WHOLE and then cut: a tail cut first could split a token and keep a piece of it.
+    return credential_redaction.redact(text)[-max_chars:]
 
 
 def _capability_heartbeat(event_type: str, *, agent: str, mode: str | None) -> None:
@@ -1720,6 +1758,8 @@ def offload(
     max_network_retries = max(0, _env_int("ORCH_OFFLOAD_NETWORK_RETRIES", 1))
     retry_backoff_s = max(0.0, _env_float("ORCH_OFFLOAD_RETRY_BACKOFF_S", 3.0))
     complete_written = False
+    # Credentials masked in this run's output, by kind, across attempts (credential_redaction).
+    redaction_counts: dict[str, int] = {}
 
     def _record_complete(exit_code: int | None = None, error: str | None = None) -> None:
         nonlocal complete_written
@@ -1742,6 +1782,7 @@ def offload(
             requested_model=profile.get("requested_model") if profile else None,
             policy_version=execution_profiles.PROFILE_POLICY_VERSION if profile else None,
             propensity=1.0 if profile else None,
+            credentials_redacted=sum(redaction_counts.values()) or None,
         )
         # Only close what was opened -- reaching for a row deliberately not created is how a
         # "stop recording this" change quietly becomes a crash.
@@ -1878,6 +1919,18 @@ def offload(
             with logf.open("a") as fh:
                 fh.write(f"[orchestrator] offload marked failed: {error}\n")
             raise
+        # MASKED BEFORE ANYTHING READS IT. Everything below -- the stream parse, the log, the
+        # incident classifier and the dict handed back to the caller -- sees only this text. A vibe
+        # offload of 2026-09-06 printed the live GitHub token, and this function wrote it to a
+        # world-readable log and returned it to the calling session, which kept a copy of its own.
+        stdout, out_counts = credential_redaction.redact_with_counts(proc.stdout or "")
+        stderr, err_counts = credential_redaction.redact_with_counts(proc.stderr or "")
+        for kind, n in (*out_counts.items(), *err_counts.items()):
+            redaction_counts[kind] = redaction_counts.get(kind, 0) + n
+        if out_counts or err_counts:
+            proc = subprocess.CompletedProcess(
+                getattr(proc, "args", argv), proc.returncode, stdout, stderr
+            )
         attempt_stderr = proc.stderr or ""
         # THE RUN REPORTED ITS OWN MODEL. When the transport asked for stream-json, the tool's
         # `system/init` event names the model that actually served -- `gen_ai.response.model` in
@@ -1993,6 +2046,28 @@ def offload(
             time.sleep(retry_backoff_s)
     if attempts > 1:
         out["retried"] = True
+    # agy writes its per-run log itself, at the path this function chose, so it is scrubbed whole
+    # once the run is over. Until this point that file held whatever agy printed.
+    if agy_log is not None:
+        scrub = credential_redaction.scrub_file(agy_log)
+        for kind, n in (scrub.get("kinds") or {}).items():
+            redaction_counts[kind] = redaction_counts.get(kind, 0) + n
+    redaction_note = None
+    if credential_redaction.disabled():
+        out["credential_redaction"] = "disabled"
+        redaction_note = (
+            f"credential redaction DISABLED by {credential_redaction.REDACTION_DISABLED_ENV}=1: "
+            "this output was logged and returned unmasked"
+        )
+    elif redaction_counts:
+        out["credentials_redacted"] = sum(redaction_counts.values())
+        redaction_note = (
+            "credentials masked before this output was logged or returned: "
+            + credential_redaction.describe(redaction_counts)
+        )
+    if redaction_note:
+        with logf.open("a") as fh:
+            fh.write(f"[orchestrator] {redaction_note}\n")
     _record_complete(exit_code=out.get("exit"), error=out.get("error"))
     # Telemetry is fail-open. Classify the actual result, stderr, and per-run agent log.
     evidence_result = None

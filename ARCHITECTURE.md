@@ -242,6 +242,23 @@ named Sep 28 shed for the 6 h cooldown. `switch_review` names every marker, FYI 
 placed by hand that has held its seat past 14 days, or an expired one still on disk. (No stage,
 component or surface moved; the diagram is unchanged.)
 
+**What an agent prints passes one mask before this tool writes or returns it (2026-10-06).** While
+gh was broken for dispatched agents, agents fetched a GitHub token another way and printed it, and
+the dispatcher kept it wherever it keeps what an agent says: a vibe offload's stdout went into a
+world-readable dispatch log and back to the caller, whose driver saved a copy, and two experiment
+arms printed it into logs the detached wrapper fills straight from stdout. `credential_redaction`
+holds one shape list (GitHub, `sk-` keys, Slack, Google, AWS, LangSmith, JWT, bearer and basic
+headers, URL passwords, upper-case `*_TOKEN`-style assignments, PEM keys) plus the exact value of
+the gh token file. `dispatcher.offload` masks before it logs or returns. The completion step a
+detached run's wrapper already runs (`ledger_reconcile complete`) masks that run's own log segment
+in place, for runs started from 2026-10-06 only. The experiment and UX-review panels mask their
+output file before parsing it into the Brain. A mask is as long as what it hides, so an in-place
+edit moves no byte another writer is still appending after. The agent CLIs' own transcripts
+(cursor, agy, vibe, codex rollouts) are written by the CLIs and stay out of reach. A weekly FYI
+section of `switch_review` counts the files under the dispatch-log and agent-runtime directories
+holding the token's exact value or a GitHub-minted token (its own checksum holds), and edits
+nothing. (No stage, component or surface moved; the diagram is unchanged.)
+
 **The tick watchdog is infrastructure around the loop, not a stage of it** (`tick_watchdog.py`,
 2026-10-02). launchd starts no tick while one runs, so a tick that never ends is a gate with no
 drain, and everything that could report it runs inside the tick: for 5d20h from 2026-09-26 the
@@ -1338,6 +1355,18 @@ recording. A refused lane is listed with the screen's reasons instead, so the da
 warn counts only candidates the bootstrap can drain (until 2026-10-02 it also counted every lane the
 screen refuses, which only a manual offload could clear).
 
+Stage-2 disagreement credit compares the applied plan's action and named worker with the baseline;
+the raw proposal-action disagreement stays available for historical analysis. Only accepted, synced
+outcome links earn this credit. A bad outcome-link row appends its failure to the existing corpus and
+does not hide later rows; the linker reports both linked and failed counts. Once the unchanged
+20-proposal / 10-synced-outcome / 3-disagreement gate opens, the supervisor writes
+`supervised-apply-plan.json` for the next eligible stalled candidate with worker capacity and records
+a success heartbeat for producing that artifact. This is a baseline dry-run preview, not a new role
+verdict or permission to execute; live apply remains off. With no safe candidate, the report says why
+no plan was written. `redirect_apply.py --replay-stalls tests/fixtures/redirect_stalls` exercises the
+auth, exited and drift fixtures through offline proposal, named-worker plan and flag-off authorization,
+without recording role outcomes or dispatching workers.
+
 ## PromptAgent — the second role (built 2026-06-20)
 
 PromptAgent upgrades generic delegation templates without changing deterministic selection. It turns
@@ -1459,3 +1488,11 @@ construction refuses a missing or placeholder agent. Watch classification retain
 recommendation while withholding apply commands until a real worker is selected.
 Role-run Brain metadata retains caller `source` and `report_state`, distinguishing
 real sweep stalls, live dispatch and historical replay without changing apply authority.
+
+Local `dispatcher.delegate` records a delivery-lane invocation only after its worker
+starts: `testgen` → `testgen-lane`, `codemod` → `codemod-campaign`, and
+`cross_repo` → `cross-repo-coordination`. The same lane tag travels through the
+existing Brain run and versioned influence edge. Standalone delegates are observed
+even outside an active tick; prompt construction and dry-run plans only match
+work, and refused/unbuildable delegates never count as invocations. This credits
+a started worker, not a successful outcome; outcomes keep their durability gates.

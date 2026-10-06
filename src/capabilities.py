@@ -1664,6 +1664,18 @@ DECLARATION_FIELDS: tuple[str, ...] = (
 # reconciliation seed it. Adding a capability here means its declaration is reviewed with the diff
 # rather than typed into a live JSON file nobody diffs.
 KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
+    "testgen-lane": {
+        "notes": (
+            "Audit/dedup 2026-10-04 (issue #432): the existing coverage-autopilot already "
+            "dispatches testgen work through dispatcher.delegate; no new lane is needed. "
+            "The Brain's 90-day window recorded 44 testgen runs, 32 PASS outcomes, and "
+            "26 durable results, while the lane ledger recorded only 3 invocations, all "
+            "via capability_propensity. The delegate path lacked a lane invocation "
+            "heartbeat and an exercised capability tag, leaving real work and its "
+            "outcomes uncredited. Credit started delegates through the existing "
+            "invocation and versioned Brain influence-edge paths."
+        ),
+    },
     "value-chain-monitor": {
         "status": "wired",
         "entrypoint": "switch_review.py:review value_chain_monitor.py:report",
