@@ -62,6 +62,14 @@ def test_refresh_selection_is_bounded_by_immutable_creation_and_age(tmp_path):
             "strategy experiment: UNKNOWN — missing reviewer",
         ),
         (None, "strategy experiment: UNKNOWN — no completed scored evaluation"),
+        (
+            {"status": "completed", "costs": []},
+            "strategy experiment: UNKNOWN — no completed scored evaluation",
+        ),
+        (
+            {"status": "completed", "costs": False},
+            "strategy experiment: UNKNOWN — no completed scored evaluation",
+        ),
         ([], "strategy experiment: UNKNOWN — no completed scored evaluation"),
         (
             {"status": "completed", "costs": [1]},

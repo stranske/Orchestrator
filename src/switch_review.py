@@ -1725,7 +1725,9 @@ def format_report(rep: dict) -> str:
         if not isinstance(result, dict):
             raise ValueError("strategy result must be an object")
         if result.get("status") == "completed":
-            costs = result.get("costs") or {}
+            costs = result.get("costs", {})
+            if costs is None:
+                costs = {}
             if not isinstance(costs, dict) or any(
                 not isinstance(row, dict) for row in costs.values()
             ):

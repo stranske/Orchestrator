@@ -10,17 +10,24 @@ open batched PRs.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import os
 import re
 import shlex
+import sqlite3
+import subprocess
 import sys
+import tempfile
 from collections.abc import Sequence
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
 VALID_TOOLS = {"ast-grep", "comby", "jscodeshift", "openrewrite", "custom"}
 VALID_RISK_LEVELS = {"low", "medium", "high"}
 VALID_PR_STRATEGIES = {"single", "batched", "per_repo", "draft_only"}
+IGNORE_ENTRIES = (".mypy_cache/", ".pytest_cache/", ".ruff_cache/", "coverage.xml", ".coverage")
 MUTATING_FLAGS = {"--apply", "--write", "--in-place", "--fix", "-i"}
 
 CAMPAIGN_SCHEMA_EXAMPLE = {
@@ -267,7 +274,359 @@ def validate_campaign(campaign: dict[str, Any]) -> list[str]:
     )
     if not _is_nonempty_string(campaign.get("delegate_prompt")):
         errors.append("delegate_prompt must be a non-empty string")
+    if campaign.get("operation") == "gitignore-add-only":
+        if not all(isinstance(value, dict) for value in (meta, scope, recipe, rollout)):
+            return errors
+        if campaign.get("ignore_entries") != list(IGNORE_ENTRIES):
+            errors.append(
+                "gitignore-add-only requires exactly the five tool-cache/coverage entries"
+            )
+        if scope.get("include_globs") != [".gitignore"] or rollout.get("pr_strategy") != "per_repo":
+            errors.append("gitignore-add-only must target only .gitignore with per_repo PRs")
+        if recipe.get("tool") != "custom" or campaign.get("add_only") is not True:
+            errors.append("gitignore-add-only requires a custom add-only recipe")
+        prompt = str(campaign.get("delegate_prompt", "")).lower()
+        if "never remove" not in prompt or "only missing" not in prompt:
+            errors.append(
+                "delegate_prompt must require only missing lines and never remove existing lines"
+            )
+        if re.search(
+            r"\b(?:remove|delete|replace|rewrite|overwrite|truncate|erase|drop)\b",
+            prompt.replace("never remove", ""),
+        ):
+            errors.append("delegate_prompt contradicts the add-only contract")
+        repos = meta.get("repos", [])
+        if (
+            not isinstance(repos, list)
+            or not all(isinstance(repo, str) for repo in repos)
+            or len(repos) != len(set(repos))
+            or any(not re.fullmatch(r"[\w.-]+/[\w.-]+", repo) for repo in repos)
+        ):
+            errors.append("campaign repos must be unique owner/repo identities")
     return errors
+
+
+def append_missing_ignores(content: str, entries: Sequence[str] = IGNORE_ENTRIES) -> str:
+    """Preserve the original bytes, appending only absent exact ignore entries."""
+    existing = {line.strip() for line in content.splitlines()}
+    missing = [entry for entry in entries if entry not in existing]
+    if not missing:
+        return content
+    newline = "\r\n" if "\r\n" in content else "\n"
+    separator = "" if not content or content.endswith(("\n", "\r")) else newline
+    return content + separator + newline.join(missing) + newline
+
+
+def campaign_program_path(campaign: dict[str, Any]) -> Path:
+    state = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
+    return state / "capability-program" / "codemod-campaign.json"
+
+
+def _write_program(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as f:
+        json.dump(payload, f, indent=2, allow_nan=False)
+        f.write("\n")
+        temporary = Path(f.name)
+    temporary.replace(path)
+
+
+def _gh(args: list[str]) -> Any:
+    result = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=60)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or "GitHub operation failed")
+    return json.loads(result.stdout)
+
+
+def _repo_file(repo: str, path: str, gh: Any) -> str:
+    data = gh(["api", f"repos/{repo}/contents/{path}"])
+    if not isinstance(data, dict) or data.get("encoding") != "base64":
+        raise ValueError(f"unreadable {repo}:{path}")
+    return base64.b64decode(data["content"]).decode("utf-8")
+
+
+def target_issue_body(campaign: dict[str, Any], repo: str, content: str) -> str:
+    missing = [e for e in IGNORE_ENTRIES if e not in {s.strip() for s in content.splitlines()}]
+    marker = f"<!-- codemod-campaign:{campaign['campaign']['id']} -->"
+    return f"""{marker}
+## Why
+At the repository root beside `README.md`, `.gitignore` lacks the entries listed below. Tool caches and coverage artifacts must stay outside source control. Campaign source: {campaign.get('source_target', 'explicit campaign')}.
+
+## Scope
+Append only the missing entries to this repository's `.gitignore`: {', '.join(f'`{e}`' for e in missing)}.
+
+## Non-Goals
+No workflows, template-synced paths, removal of existing ignores, formatting changes, or generated artifacts.
+
+## Tasks
+- [ ] Add only the missing entries to `.gitignore`, preserving its original content byte for byte.
+- [ ] Verify `.gitignore` has an append-only diff and each effective ignore with the acceptance commands below.
+
+## Acceptance Criteria
+- [ ] Smoke verification: `git diff --numstat -- .gitignore` reports zero deleted lines; `git diff --check` exits 0. Capture exact commands and output in the PR body.
+- [ ] Smoke verification: `git check-ignore --no-index .mypy_cache/probe .pytest_cache/probe .ruff_cache/probe coverage.xml .coverage` exits 0 and prints all five paths. Capture output in the PR body.
+
+## Implementation Notes
+{campaign['delegate_prompt']}
+Repository: {repo}. Open one ready PR closing this issue, use a registry issue branch and its matching concrete runner label plus agent:auto, agents:keepalive and autofix. Never merge without the normal exact-head checks, full review-thread audit and review floor.
+"""
+
+
+def file_targets(campaign: dict[str, Any], *, gh: Any = None) -> dict[str, Any]:
+    """File format-validated, deduplicated work orders; persist each receipt before continuing."""
+    gh = gh or _gh
+    errors = validate_campaign(campaign)
+    if errors or campaign.get("operation") != "gitignore-add-only":
+        raise ValueError("invalid add-only campaign: " + "; ".join(errors))
+    program_path = campaign_program_path(campaign)
+    program = json.loads(program_path.read_text()) if program_path.exists() else {}
+    if program and program.get("campaign_id") != campaign["campaign"]["id"]:
+        raise ValueError("campaign receipt identity mismatch")
+    program.update(campaign_id=campaign["campaign"]["id"])
+    rows = program.setdefault("repos", {})
+    marker = f"<!-- codemod-campaign:{campaign['campaign']['id']} -->"
+    for repo in campaign["campaign"]["repos"]:
+        content = _repo_file(repo, ".gitignore", gh)
+        missing = [e for e in IGNORE_ENTRIES if e not in {s.strip() for s in content.splitlines()}]
+        row = rows.setdefault(repo, {})
+        for field in ("merged", "durable", "cost_usd"):
+            row.setdefault(field, None)
+        if not missing:
+            row.update(missing=[], state="already-complete")
+            _write_program(program_path, program)
+            continue
+        issues = gh(
+            [
+                "issue",
+                "list",
+                "--repo",
+                repo,
+                "--state",
+                "all",
+                "--limit",
+                "100",
+                "--search",
+                f'"codemod-campaign:{campaign["campaign"]["id"]}" in:body',
+                "--json",
+                "number,body,state,url",
+            ]
+        )
+        matches = [i for i in issues if marker in (i.get("body") or "")]
+        if len(matches) > 1 or len(issues) >= 100:
+            raise ValueError(f"ambiguous or incomplete campaign issue discovery for {repo}")
+        body = target_issue_body(campaign, repo, content)
+        if matches:
+            issue = matches[0]
+            if issue["state"] != "OPEN":
+                raise ValueError(f"closed campaign issue still has missing ignores: {issue['url']}")
+        else:
+            # Use the target's actual contract and validator, not a parallel format standard.
+            _repo_file(repo, "docs/AGENT_ISSUE_FORMAT.md", gh)
+            validator = _repo_file(repo, ".github/scripts/issue_format.py", gh)
+            readme = _repo_file(repo, "README.md", gh)
+            with tempfile.TemporaryDirectory(prefix="codemod-issue-format-") as tmp:
+                script, body_file = Path(tmp) / "issue_format.py", Path(tmp) / "body.md"
+                script.write_text(validator)
+                body_file.write_text(body)
+                (Path(tmp) / ".gitignore").write_text(content)
+                (Path(tmp) / "README.md").write_text(readme)
+                check = subprocess.run(
+                    [sys.executable, str(script), str(body_file)],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    cwd=tmp,
+                )
+                if check.returncode:
+                    raise ValueError(f"{repo} issue format rejected: {check.stdout} {check.stderr}")
+            labels = gh(["label", "list", "--repo", repo, "--search", "codemod", "--json", "name"])
+            if not any(label["name"] == "codemod" for label in labels):
+                gh(
+                    [
+                        "api",
+                        f"repos/{repo}/labels",
+                        "-f",
+                        "name=codemod",
+                        "-f",
+                        "color=5319e7",
+                        "-f",
+                        "description=Bounded repository codemod campaign",
+                    ]
+                )
+            created = gh(
+                [
+                    "api",
+                    f"repos/{repo}/issues",
+                    "-f",
+                    "title=[P2] Ignore tool caches and coverage artifacts (fleet codemod campaign)",
+                    "-f",
+                    "body=" + body,
+                    "-f",
+                    "labels[]=codemod",
+                ]
+            )
+            issue = {"number": created["number"], "url": created["html_url"], "state": "OPEN"}
+        rows[repo] = {
+            "merged": None,
+            "durable": None,
+            "cost_usd": None,
+            **rows.get(repo, {}),
+            "target": f"{repo}#{issue['number']}",
+            "url": issue["url"],
+            "missing": missing,
+            "state": "filed",
+        }
+        _write_program(program_path, program)
+    source = campaign.get("source_target")
+    link_fingerprint = {repo: row.get("url", row["state"]) for repo, row in rows.items()}
+    if source and program.get("linked_targets") != link_fingerprint:
+        repo, number = source.rsplit("#", 1)
+        links = "\n".join(f"- {repo}: {row.get('url', row['state'])}" for repo, row in rows.items())
+        # Receipt survives a failed source-link update; retry reuses the filed issues.
+        gh(
+            [
+                "api",
+                f"repos/{repo}/issues/{number}/comments",
+                "-f",
+                "body=Campaign " + campaign["campaign"]["id"] + " target receipts:\n" + links,
+            ]
+        )
+        program["linked_targets"] = link_fingerprint
+        _write_program(program_path, program)
+    return program
+
+
+def campaign_backlog(campaign: dict[str, Any], *, gh: Any = None) -> dict[str, Any]:
+    """Revalidate only this campaign's filed targets; never broaden into fleet discovery."""
+    import backlog
+
+    gh = gh or _gh
+    scoped = backlog.load_scoped_blockers()
+    errors = validate_campaign(campaign)
+    if errors:
+        raise ValueError("invalid campaign: " + "; ".join(errors))
+    path = campaign_program_path(campaign)
+    program = json.loads(path.read_text())
+    if program.get("campaign_id") != campaign["campaign"]["id"]:
+        raise ValueError("campaign receipt identity mismatch")
+    items = []
+    for repo in campaign["campaign"]["repos"]:
+        row = program.get("repos", {}).get(repo)
+        if not row:
+            raise ValueError(f"campaign target not filed: {repo}")
+        for field in ("merged", "durable", "cost_usd"):
+            row.setdefault(field, None)
+        if not row.get("target"):
+            if row.get("state") != "already-complete":
+                raise ValueError(f"missing target receipt: {repo}")
+            continue
+        target_repo, number = row["target"].rsplit("#", 1)
+        if target_repo != repo or not number.isdigit():
+            raise ValueError(f"campaign target escaped its repository: {repo}")
+        issue = gh(
+            ["issue", "view", number, "--repo", repo, "--json", "number,state,body,title,labels"]
+        )
+        marker = f"<!-- codemod-campaign:{campaign['campaign']['id']} -->"
+        if marker not in (issue.get("body") or ""):
+            raise ValueError(f"campaign provenance missing: {row['target']}")
+        prs = gh(
+            [
+                "pr",
+                "list",
+                "--repo",
+                repo,
+                "--state",
+                "all",
+                "--limit",
+                "100",
+                "--search",
+                f'"#{number}" in:body',
+                "--json",
+                "number,state,mergedAt,headRefOid,url,closingIssuesReferences",
+            ]
+        )
+        if len(prs) >= 100:
+            raise ValueError(f"incomplete PR linkage discovery: {repo}")
+        linked = [
+            p for p in prs if any(i["number"] == int(number) for i in p["closingIssuesReferences"])
+        ]
+        merged = [p for p in linked if p["state"] == "MERGED" and p.get("mergedAt")]
+        row.update(
+            delivery_prs=linked, merged=bool(merged), **campaign_measure(row["target"], merged)
+        )
+        labels = [label["name"] for label in issue["labels"]]
+        held = (
+            repo in scoped
+            or row["target"] in scoped
+            or any(
+                label in {"needs-human", "agents:paused"} or label.startswith("agent:")
+                for label in labels
+            )
+        )
+        if (
+            issue["state"] == "OPEN"
+            and not held
+            and not any(p["state"] in ("OPEN", "MERGED") for p in linked)
+        ):
+            items.append(
+                {
+                    "target": row["target"],
+                    "task_type": "codemod",
+                    "lane": "opener",
+                    "title": issue["title"],
+                    "body": issue["body"],
+                    "labels": labels,
+                    "prompt": "Implement this add-only campaign work order and open one ready PR.\n"
+                    + issue["body"],
+                }
+            )
+    return {"source": "campaign:" + campaign["campaign"]["id"], "items": items, "program": program}
+
+
+def campaign_measure(target: str, merged_prs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Project delivery durability and all target attempt costs from Brain evidence."""
+    import feedback
+
+    result: dict[str, Any] = {"durable": None, "cost_usd": None, "measurement": "UNKNOWN"}
+    if not feedback.DB_PATH.exists():
+        return result
+    numbers = {p["number"] for p in merged_prs}
+    try:
+        with closing(
+            sqlite3.connect(feedback.DB_PATH.resolve().as_uri() + "?mode=ro", uri=True)
+        ) as conn:
+            rows = conn.execute(
+                "SELECT r.pr_number,o.merged,o.durability,c.cost_usd,c.source "
+                "FROM runs r LEFT JOIN outcomes o ON o.run_id=r.run_id "
+                "LEFT JOIN costs c ON c.run_id=r.run_id WHERE r.target=?",
+                (target,),
+            ).fetchall()
+        if not rows:
+            return result
+        attributed = [r for r in rows if r[0] in numbers]
+        if {r[0] for r in attributed} != numbers or any(r[1] != 1 for r in attributed):
+            result["measurement"] = "UNKNOWN: incomplete Brain attribution for merged delivery PRs"
+            return result
+        known = [
+            r[2]
+            for r in attributed
+            if r[2] in {"durable", "reverted", "reworked", "reopened", "broke_later"}
+        ]
+        if attributed and len(known) == len(attributed):
+            result["durable"] = all(d == "durable" for d in known)
+        # Failed and PR-less attempts also spent resources on this exact target.
+        # A still-running attempt or an incomplete cost source leaves the total unknown.
+        costs = [
+            r[3]
+            for r in rows
+            if r[1] is not None and r[3] and r[3] > 0 and r[4] in feedback.COMPLETE_COST_SOURCES
+        ]
+        if len(costs) == len(rows):
+            result["cost_usd"] = sum(costs)
+        result["measurement"] = "attributed Brain outcomes; missing fields UNKNOWN"
+    except sqlite3.Error as exc:
+        result["measurement"] = "UNKNOWN: " + str(exc)
+    return result
 
 
 def parse_campaign_json(content: str) -> dict[str, Any]:
@@ -804,6 +1163,7 @@ def main(argv: Sequence[str]) -> int:
     group.add_argument("--goal-file", help="file containing the refactor/codemod goal")
     group.add_argument("--validate", help="campaign JSON file to validate")
     group.add_argument("--plan", help="campaign JSON file to turn into a dry-run plan")
+    group.add_argument("--file-targets", help="file deduplicated add-only campaign target issues")
     group.add_argument("--selftest", action="store_true", help="run offline selftests")
     parser.add_argument(
         "--repo", action="append", dest="repos", help="optional owner/repo context; repeatable"
@@ -826,6 +1186,15 @@ def main(argv: Sequence[str]) -> int:
     if args.selftest:
         _selftest()
         return 0
+
+    if args.file_targets:
+        try:
+            campaign = parse_campaign_json(Path(args.file_targets).read_text(encoding="utf-8"))
+            print(json.dumps(file_targets(campaign), indent=2))
+            return 0
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
 
     if args.validate:
         try:
