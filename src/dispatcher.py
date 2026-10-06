@@ -1534,7 +1534,10 @@ def offload(
     # and an isolated copy of `/` would copy the disk. The run still starts, logged loudly.
     try:
         source_cwd, relocated = adapters.agent_workspace(cwd, agent=agent)
-        run_cwd = _isolate_offload_cwd(source_cwd) if isolate else source_cwd
+        # A relocated run's scratch dir is already its own, empty and unshared, so it is not copied:
+        # a copy would tell the agent one directory and grant it another.
+        copied = isolate and relocated is None
+        run_cwd = _isolate_offload_cwd(source_cwd) if copied else source_cwd
     except Exception as exc:
         return {"agent": agent, "exit": 2, "output": "", "error": str(exc)}
     if relocated:
@@ -1543,8 +1546,8 @@ def offload(
             f"it runs in its own scratch workspace {relocated['workspace']}",
             file=sys.stderr,
         )
-    proc_cwd = source_cwd if agent == "gemini" and isolate else run_cwd
-    if agent == "gemini" and isolate:
+    proc_cwd = source_cwd if agent == "gemini" and copied else run_cwd
+    if agent == "gemini" and copied:
         prompt = (
             f"{prompt.rstrip()}\n\n"
             f"GEMINI ISOLATED WORKSPACE: use {run_cwd} as the workspace for all file reads, "

@@ -1408,12 +1408,15 @@ def protected_workspace_anchors() -> list[tuple[Path, str]]:
     1,513 of them were redirect or triage role runs. 5 more ran in the home directory. A real
     `codex exec` from `/` could write `~/.codex/config.toml`, `~/.codex/bin` and `~/.claude`.
 
-    Read at call time, so a test or a second instance moves them with its environment. The two
-    config roots are the whole-tree grants the owner removed from `writable_roots` on 2026-10-05:
-    each holds files that run, or are obeyed, outside any sandbox. The state dir, the local runtime
-    (the Brain and the capability ledger) and the exec mirror (the dispatcher's own code) sit inside
-    `~/.codex` by default. They are named separately so an instance that moves them keeps them out
-    of reach too.
+    Read at call time, so a test or a second instance moves them with its environment. Every home
+    counts: `$HOME` and the account's home differ when a sandbox moves HOME, and the real one still
+    holds the real control plane. The two config roots are the whole-tree grants the owner removed
+    from `writable_roots` on 2026-10-05: each holds files that run, or are obeyed, outside any
+    sandbox. The state dir, the local runtime (the Brain and the capability ledger) and the exec
+    mirror (the dispatcher's own code) sit inside `~/.codex` by default, and their overrides are
+    named too, so an instance that moves them keeps them out of reach. On macOS each anchor is
+    named again by its data-volume path, because a firmlink makes `/Users/x` and
+    `/System/Volumes/Data/Users/x` one directory.
     """
     homes = [Path.home()]
     try:
@@ -1430,20 +1433,44 @@ def protected_workspace_anchors() -> list[tuple[Path, str]]:
             (home, "the user's home"),
             (home / ".codex", "codex's config root (config.toml, bin, the lanes)"),
             (home / ".claude", "claude's config root"),
+            (
+                home / ".codex" / "orchestrator",
+                "the orchestrator's default state dir and local runtime (the Brain, the ledger)",
+            ),
+            (
+                home / ".codex" / "orchestrator-mirror",
+                "the exec mirror launchd runs (the dispatcher's own code)",
+            ),
         ]
-    default_state = Path.home() / ".codex" / "orchestrator"
-    anchors += [
-        (Path(os.environ.get("ORCH_STATE_DIR") or default_state), "the orchestrator's state dir"),
-        (
-            Path(os.environ.get("ORCH_LOCAL_RUNTIME") or default_state),
-            "the orchestrator's local runtime (the Brain, the capability ledger)",
-        ),
-        (
-            Path(os.environ.get("ORCH_MIRROR") or Path.home() / ".codex" / "orchestrator-mirror"),
-            "the exec mirror launchd runs (the dispatcher's own code)",
-        ),
-    ]
+    for variable, holds in (
+        ("ORCH_STATE_DIR", "the orchestrator's state dir"),
+        ("ORCH_LOCAL_RUNTIME", "the orchestrator's local runtime (the Brain, the ledger)"),
+        ("ORCH_MIRROR", "the exec mirror launchd runs (the dispatcher's own code)"),
+    ):
+        if os.environ.get(variable):
+            anchors.append((Path(os.environ[variable]), holds))
+    if MACOS_DATA_VOLUME.is_dir():
+        data = _canonical_anchor(MACOS_DATA_VOLUME)
+        for anchor, holds in list(anchors):
+            canonical = _canonical_anchor(anchor)
+            if canonical != Path("/") and not canonical.is_relative_to(data):
+                anchors.append((data / canonical.relative_to("/"), f"{holds}, by its data path"))
     return anchors
+
+
+# macOS mounts the data volume a second time here, and a firmlink makes `/Users/x` and
+# `/System/Volumes/Data/Users/x` the same directory. A module constant so a test can point it at a
+# directory of its own; it does not exist on Linux, where it adds nothing.
+MACOS_DATA_VOLUME = Path("/System/Volumes/Data")
+
+
+def _canonical_anchor(anchor: Path) -> Path:
+    """`anchor` expanded and resolved, or absolute as written when that fails. Never raises: a
+    malformed override such as ORCH_STATE_DIR="~nosuchuser/x" must not stop every dispatch."""
+    try:
+        return anchor.expanduser().resolve()
+    except (OSError, RuntimeError):
+        return Path(os.path.abspath(anchor))
 
 
 def _dir_identity(path: Path) -> tuple[int, int] | None:
@@ -1466,10 +1493,7 @@ def broad_workspace_reason(cwd: str | Path | None) -> str | None:
     workspace = workspace_path(cwd)
     workspace_id = _dir_identity(workspace)
     for anchor, holds in protected_workspace_anchors():
-        try:
-            canonical = anchor.expanduser().resolve()
-        except (OSError, RuntimeError):
-            canonical = anchor.expanduser().absolute()
+        canonical = _canonical_anchor(anchor)
         lineage = (canonical, *canonical.parents)
         identities = [_dir_identity(p) for p in lineage] if workspace_id is not None else []
         if workspace in lineage or workspace_id in identities:
@@ -1479,29 +1503,24 @@ def broad_workspace_reason(cwd: str | Path | None) -> str | None:
 
 
 def scratch_workspace_root() -> Path:
-    """Where a run whose requested workspace was refused gets a directory of its own."""
+    """Where a run with no safe workspace of its own gets a directory of its own."""
     state = os.environ.get("ORCH_STATE_DIR") or Path.home() / ".codex" / "orchestrator"
     return Path(state) / "scratch-workspaces"
 
 
-def agent_workspace(cwd: str | Path | None, *, agent: str) -> tuple[Path, dict | None]:
-    """The workspace an agent run gets: `cwd` made canonical, or a fresh scratch directory.
+# An EMPTY scratch directory older than this is removed when the next one is made. os.rmdir refuses
+# anything else, so whatever an agent wrote stays for its caller to read.
+SCRATCH_PRUNE_AFTER_S = 86400
+_SCRATCH_NAME = re.compile(r"^\d{8}T\d{6}Z-")
 
-    The scratch directory replaces a requested workspace that `broad_workspace_reason` refuses.
-    Relocating rather than refusing keeps a role running when its caller had nowhere better to
-    point it: the tick's cwd is `/`. The run can still read by absolute path whatever it could read
-    before, and it can write only its own empty directory. The second value is None when the
-    requested workspace is used. Otherwise it says what was refused, why, and where the run went;
-    the caller logs it, tells the agent and returns it.
 
-    One directory per run, made by mkdtemp, never shared or reused. If the state dir cannot hold it,
-    the system temp dir is tried. If neither can, WorkspaceRefused names both and the run does not
+def scratch_workspace(agent: str) -> Path:
+    """A fresh, empty directory of the run's own, for a run that has no safe workspace.
+
+    One per run, made by mkdtemp, never shared or reused. If the state dir cannot hold it, the
+    system temp dir is tried. If neither can, WorkspaceRefused names both and the run does not
     start.
     """
-    requested = workspace_path(cwd)
-    reason = broad_workspace_reason(requested)
-    if reason is None:
-        return requested, None
     prefix = time.strftime("%Y%m%dT%H%M%SZ-", time.gmtime()) + re.sub(r"[^\w.-]", "_", agent) + "-"
     roots = (
         scratch_workspace_root(),
@@ -1511,23 +1530,59 @@ def agent_workspace(cwd: str | Path | None, *, agent: str) -> tuple[Path, dict |
     for root in roots:
         try:
             root.mkdir(parents=True, exist_ok=True)
+            _prune_empty_scratch(root)
             scratch = workspace_path(tempfile.mkdtemp(prefix=prefix, dir=root))
         except OSError as exc:
             tried.append(f"{root}: {exc}")
             continue
         refused = broad_workspace_reason(scratch)
         if refused is None:
-            return scratch, {
-                "requested": str(requested),
-                "reason": reason,
-                "workspace": str(scratch),
-            }
+            return scratch
         tried.append(refused)
-    raise WorkspaceRefused(f"{reason}, and no scratch workspace could be made ({'; '.join(tried)})")
+    raise WorkspaceRefused(f"no scratch workspace could be made ({'; '.join(tried)})")
 
 
-def _refuse_broad_workspace(agent: str, workspace: Path) -> None:
-    """build_command's backstop: an argv never grants a refused workspace, whoever built it."""
+def _prune_empty_scratch(root: Path) -> None:
+    cutoff = time.time() - SCRATCH_PRUNE_AFTER_S
+    try:
+        entries = list(os.scandir(root))
+    except OSError:
+        return
+    for entry in entries:
+        if not _SCRATCH_NAME.match(entry.name):
+            continue
+        try:
+            stat = entry.stat(follow_symlinks=False)
+            if entry.is_dir(follow_symlinks=False) and stat.st_mtime < cutoff:
+                os.rmdir(entry.path)
+        except OSError:
+            pass  # not empty, or already gone: either way it stays as it is
+
+
+def agent_workspace(cwd: str | Path | None, *, agent: str) -> tuple[Path, dict | None]:
+    """The workspace an agent run gets: `cwd` made canonical, or a fresh scratch directory.
+
+    The scratch directory (`scratch_workspace`) replaces a requested workspace that
+    `broad_workspace_reason` refuses. Relocating rather than refusing keeps a role running when its
+    caller had nowhere better to point it: the tick's cwd is `/`. The run can still read by
+    absolute path whatever it could read before, and it can write only its own empty directory. The
+    second value is None when the requested workspace is used. Otherwise it says what was refused,
+    why, and where the run went; the caller logs it, tells the agent and returns it.
+    """
+    requested = workspace_path(cwd)
+    reason = broad_workspace_reason(requested)
+    if reason is None:
+        return requested, None
+    try:
+        scratch = scratch_workspace(agent)
+    except WorkspaceRefused as exc:
+        raise WorkspaceRefused(f"{reason}, and {exc}") from exc
+    return scratch, {"requested": str(requested), "reason": reason, "workspace": str(scratch)}
+
+
+def refuse_broad_workspace(agent: str, workspace: str | Path | None) -> None:
+    """Raise WorkspaceRefused when `workspace` may not be `agent`'s. The backstop every spawner
+    that cannot relocate applies: build_command, exp_abcd's arms and evaluators, dispatch()."""
     reason = broad_workspace_reason(workspace)
     if reason is not None:
         raise WorkspaceRefused(
@@ -1606,7 +1661,7 @@ def build_command(
         # never handed a workspace that holds `/`, the home dir or the control plane. Only a
         # read-only sandbox, which writes nowhere, may name one.
         if workspace is not None and sandbox != "read-only":
-            _refuse_broad_workspace(agent, workspace)
+            refuse_broad_workspace(agent, workspace)
         # Only under workspace-write: a read-only run must stay read-only, and full access and
         # the bypass above have no sandbox to widen.
         if commits_in_worktree and sandbox == "workspace-write":
@@ -1716,7 +1771,7 @@ def build_command(
         workspace = workspace_path(cwd)
         # agy has no read-only mode: `--add-dir` is always a write grant, so it never names a
         # workspace that holds `/`, the home dir or the control plane.
-        _refuse_broad_workspace(agent, workspace)
+        refuse_broad_workspace(agent, workspace)
         # Tier-aware since 2026-08-08: cheap/mid ride 3.7 Flash (newer generation AND far fewer
         # compute units on this metered seat); only `full` pays for 3.1 Pro. Non-tier modes keep
         # the full Pro seat, because agy print mode REQUIRES an explicit model (see above).
@@ -1833,7 +1888,10 @@ def dispatch(
     """Run an agent on a task; outcome is judged by git SIDE-EFFECTS, not stdout
     (per design: a commit that touches a file, not a self-claimed 'done').
     Records one consumption row; the caller reconciles real cost_usd afterward.
+    The run happens in `cwd`, so cursor, claude, vibe and aider work there unsandboxed: a `cwd`
+    that is or holds `/`, the home dir or the control plane is refused for every agent.
     """
+    refuse_broad_workspace(agent, cwd)
     cmd = build_command(
         agent,
         prompt,
@@ -1917,8 +1975,10 @@ def _selftest_workspace_never_broad() -> None:
 
     The role path from cwd `/` through dispatcher.offload, every agent, and the break demos:
     tests/test_agent_workspace_never_broad.py."""
+    global MACOS_DATA_VOLUME
     keys = ("HOME", "ORCH_STATE_DIR", "ORCH_LOCAL_RUNTIME", "ORCH_MIRROR")
     saved = {key: os.environ.get(key) for key in keys}
+    saved_data_volume = MACOS_DATA_VOLUME
     with tempfile.TemporaryDirectory() as td:
         root = Path(td).resolve()
         home, work = root / "home", root / "work"
@@ -1934,13 +1994,37 @@ def _selftest_workspace_never_broad() -> None:
                 (home, "is the user's home"),
                 (root, "contains the user's home"),
                 (home / ".codex", "is codex's config root"),
-                (home / ".codex" / "orchestrator", "is the orchestrator's local runtime"),
+                (home / ".codex" / "orchestrator", "is the orchestrator's default state dir"),
+                (home / ".codex" / "orchestrator-mirror", "is the exec mirror"),
                 (root / "state", "is the orchestrator's state dir"),
             ):
                 reason = broad_workspace_reason(broad)
                 assert reason and verb in reason, (broad, reason)
             for fine in (work, worktree, root / "state" / "scratch-workspaces" / "run"):
                 assert broad_workspace_reason(fine) is None, (fine, broad_workspace_reason(fine))
+            # Every home counts: HOME is moved here, and the account's own control plane is still
+            # refused (by spelling, so it holds where that directory does not exist).
+            try:
+                import pwd
+
+                account = Path(pwd.getpwuid(os.getuid()).pw_dir)
+            except (ImportError, KeyError, OSError):
+                account = None
+            if account is not None and account != home:
+                reason = broad_workspace_reason(account / ".codex" / "orchestrator")
+                assert reason and "default state dir" in reason, reason
+            # A firmlinked data-volume path names the same home, so it is refused too.
+            MACOS_DATA_VOLUME = root / "Data"
+            MACOS_DATA_VOLUME.mkdir()
+            reason = broad_workspace_reason(MACOS_DATA_VOLUME)
+            assert reason and "contains the user's home, by its data path" in reason, reason
+            MACOS_DATA_VOLUME = saved_data_volume
+            if MACOS_DATA_VOLUME.is_dir():
+                assert broad_workspace_reason(MACOS_DATA_VOLUME), MACOS_DATA_VOLUME
+            # A malformed override cannot make the predicate raise.
+            os.environ["ORCH_MIRROR"] = "~nosuchuser-orch-selftest/mirror"
+            assert broad_workspace_reason(work) is None
+            os.environ.pop("ORCH_MIRROR")
             # The backstop: a writable codex run and every agy run refuse; read-only may name `/`.
             for agent, mode in (("codex", None), ("codex", "full"), ("gemini", None)):
                 try:
@@ -1961,7 +2045,24 @@ def _selftest_workspace_never_broad() -> None:
             assert "filesystem root" in note["reason"] and not any(first.iterdir()), note
             assert broad_workspace_reason(first) is None, first
             assert agent_workspace(work, agent="codex") == (work, None)
+            # Pruning removes only EMPTY scratch dirs past the horizon, and only its own names.
+            scratch_root = root / "state" / "scratch-workspaces"
+            stale = time.time() - SCRATCH_PRUNE_AFTER_S - 60
+            old_empty, old_kept, other = (
+                scratch_root / "20200101T000000Z-codex-old",
+                scratch_root / "20200101T000000Z-codex-wrote",
+                scratch_root / "not-a-scratch-dir",
+            )
+            for path in (old_empty, old_kept, other):
+                path.mkdir()
+            (old_kept / "result.txt").write_text("kept for the caller\n")
+            for path in (old_empty, old_kept, other):
+                os.utime(path, (stale, stale))
+            third = scratch_workspace("codex")
+            assert not old_empty.exists(), "an old empty scratch dir is pruned"
+            assert old_kept.is_dir() and other.is_dir() and first.is_dir() and third.is_dir()
         finally:
+            MACOS_DATA_VOLUME = saved_data_volume
             for key, value in saved.items():
                 if value is None:
                     os.environ.pop(key, None)
