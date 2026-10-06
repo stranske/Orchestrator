@@ -109,6 +109,19 @@ def test_retro_records_verdicts_without_changing_outcomes(private_brain, tmp_pat
     assert again["rows"][0]["role_run_id"] == result["rows"][0]["role_run_id"]
     assert outcomes() == before
     assert again["summary"]["cost_usd"] == 2
+    persisted = json.loads(path.read_text())
+    assert persisted["summary"]["cost_usd"] == 2
+    assert persisted["rows"][0]["role_run_id"] == result["rows"][0]["role_run_id"]
+    assert "cost 2.0" in retro.weekly_line(path)
+    with sqlite3.connect(private_brain) as conn:
+        conn.execute("UPDATE outcomes SET durability='durable' WHERE run_id='original'")
+    before = outcomes()
+    refreshed = retro.run(dispatch=True, limit=0, path=path, db=private_brain)
+    persisted = json.loads(path.read_text())
+    assert persisted == refreshed
+    assert persisted["rows"][0]["later_truth"] == "PASS"
+    assert persisted["summary"]["disagree"] == 1
+    assert outcomes() == before
 
 
 @pytest.mark.parametrize(
@@ -193,6 +206,22 @@ def test_missing_evidence_never_dispatches_or_becomes_agreement(private_brain, t
     assert result["rows"][0]["error"]
     assert result["summary"]["agreement_rate"] is None
     assert result["summary"]["graded"] == 0
+
+
+def test_unmatched_verifier_comment_becomes_missing_evidence(monkeypatch):
+    pr = {
+        "state": "MERGED",
+        "mergeCommit": {"oid": "a" * 40},
+        "files": {"pageInfo": {"hasNextPage": False}, "nodes": []},
+        "comments": {"pageInfo": {"hasPreviousPage": False}, "nodes": [{}]},
+    }
+    monkeypatch.setattr(
+        retro, "_gh_json", lambda _args: {"data": {"repository": {"pullRequest": pr}}}
+    )
+    calls = iter([{"verdict": "NON_PASS"}, None])
+    monkeypatch.setattr(retro.verifier_evidence, "decision_from_pr", lambda *_args: next(calls))
+    with pytest.raises(ValueError, match="finding comment unavailable"):
+        retro.fetch_evidence({"target": "owner/repo#1", "verifier_verdict": "NON_PASS"})
 
 
 def test_pending_or_pre_detection_durability_is_not_ground_truth():

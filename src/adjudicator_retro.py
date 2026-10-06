@@ -105,12 +105,18 @@ def fetch_evidence(row: dict) -> dict:
         raise ValueError("current merge-bound verifier decision missing or changed")
     comments = pr["comments"]["nodes"]
     finding = next(
-        c
-        for c in reversed(comments)
-        if (
-            verifier_evidence.decision_from_pr(repo, {**pr, "comments": {"nodes": [c]}}) == decision
-        )
+        (
+            c
+            for c in reversed(comments)
+            if (
+                verifier_evidence.decision_from_pr(repo, {**pr, "comments": {"nodes": [c]}})
+                == decision
+            )
+        ),
+        None,
     )
+    if finding is None:
+        raise ValueError("merge-bound verifier finding comment unavailable")
     rollup = pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
     if not rollup:
         raise ValueError("complete gate evidence unavailable")
@@ -289,26 +295,27 @@ def run(
             entry["error"] = str(exc)
         saved[case_id] = entry
         # Persist every attempt so an interrupted batch does not repeat successful paid calls.
-        path.parent.mkdir(parents=True, exist_ok=True)
-        report: dict = {
-            "generated_at": int(time.time()),
-            "shadow": True,
-            "source": "retrospective",
-            "population": len(population),
-            "rows": list(saved.values()),
-        }
-        report["summary"] = summarize(report["rows"])
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(report, indent=2) + "\n")
-        temporary.replace(path)
-    rows = list(saved.values())
-    return {
+        _persist_report(path, list(saved.values()), len(population))
+    # Saved cases can gain judged durability or measured cost without a new
+    # paid attempt. Publish those refreshes for the weekly file reader too.
+    return _persist_report(path, list(saved.values()), len(population))
+
+
+def _persist_report(path: Path, rows: list[dict], population: int) -> dict:
+    """Atomically publish the same shadow evidence returned to the caller."""
+    report = {
         "generated_at": int(time.time()),
         "shadow": True,
-        "population": len(population),
+        "source": "retrospective",
+        "population": population,
         "rows": rows,
         "summary": summarize(rows),
     }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(report, indent=2) + "\n")
+    temporary.replace(path)
+    return report
 
 
 def weekly_line(path: Path | None = None) -> str:
