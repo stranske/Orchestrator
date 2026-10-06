@@ -3205,6 +3205,10 @@ HOW_TO_USE = {
         "has nothing for `--source` to point at and the gate cannot return a meaningful verdict"
     ),
     "adversarial-review": (
+        "For a PR: `adversarial.py review --target owner/repo#N --head <full head SHA>` — "
+        "judges that exact head once and returns the recorded verdict and findings on any "
+        "later call until the head moves (`--lookup-only` never runs it; `merge_guard` "
+        "calls the same entry at a high-stakes merge). For a checkout that is not a PR: "
         "adversarial.review(worktree, reviewers=['vibe','gemini']) — refute-mode "
         "minority-veto panel; use when being wrong is expensive, not for routine "
         "review. CALLABLE AT ANY SURFACE: its `{kind: closer_gate, name: "
@@ -3668,6 +3672,9 @@ def _selftest_how_to_use() -> None:
     adv = HOW_TO_USE["adversarial-review"]
     assert "CALLABLE AT ANY SURFACE" in adv, adv
     assert "closer_gate" in adv and "not a precondition for calling it" in adv, adv
+    # The PR route is the once-per-head entry (2026-10-05): an offer naming only the worktree call
+    # sends every caller around the memo, so the same head is paid for again on each round.
+    assert "adversarial.py review --target" in adv and "--head" in adv, adv
     fev = HOW_TO_USE["frontend-verifier"]
     assert "repo_path" in fev and "observable surface" in fev, fev
     # A CAPABILITY WITH TWO ROUTES MUST DOCUMENT BOTH (2026-08-25). `testgen-lane`'s declared
