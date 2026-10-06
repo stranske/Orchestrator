@@ -2806,7 +2806,7 @@ def ingest_profile_trial(
     auxiliary_traces: list[dict[str, Any]] | None = None,
     ts: int | None = None,
 ) -> dict[str, Any]:
-    """Write one profile trial's runs, attempts, and traces in a single transaction.
+    """Write one trial's runs, attempts, outcomes, and traces in a single transaction.
 
     ``trial_id`` is the idempotency key: a successful ingest is recorded in
     ``profile_trial_ingests`` and later calls return without duplicating rows.
@@ -2890,6 +2890,9 @@ def ingest_profile_trial(
                         conn=c,
                     )
                 )
+                # Worker execution success is not an adjudicated quality or durability
+                # verdict. Retain a pending outcome until that evidence arrives.
+                _record_outcome_in_conn(c, attempt["run_id"])
             for index, trace in enumerate(traces, start=1):
                 record_execution_trace(
                     trace.get("run_id") or attempts[0]["run_id"],

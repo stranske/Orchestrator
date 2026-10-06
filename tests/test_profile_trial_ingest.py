@@ -95,21 +95,30 @@ def _use_temp_feedback(tmp_path, monkeypatch):
     return db
 
 
+@pytest.mark.parametrize(
+    ("writer", "fail_on"),
+    [
+        ("_record_run_in_conn", 2),
+        ("_record_outcome_in_conn", 2),
+        ("record_execution_trace", 1),
+    ],
+)
 def test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing(
-    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, writer, fail_on
 ):
     _use_temp_feedback(tmp_path, monkeypatch)
     attempts = model_profile_trial._validate_results(trial_manifest, trial_attempt_fixture)
     calls = {"n": 0}
-    original = feedback._record_run_in_conn
+    original = getattr(feedback, writer)
 
-    def flaky(c, *args, **kwargs):
+    def flaky(*args, **kwargs):
         calls["n"] += 1
-        if calls["n"] == 2:
+        value = original(*args, **kwargs)
+        if calls["n"] == fail_on:
             raise RuntimeError("simulated mid-write failure")
-        return original(c, *args, **kwargs)
+        return value
 
-    monkeypatch.setattr(feedback, "_record_run_in_conn", flaky)
+    monkeypatch.setattr(feedback, writer, flaky)
     with pytest.raises(RuntimeError, match="simulated mid-write"):
         feedback.ingest_profile_trial(
             trial_attempt_fixture,
@@ -118,10 +127,18 @@ def test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing(
             auxiliary_traces=trial_attempt_fixture["auxiliary_traces"],
             ts=2_000,
         )
+    assert calls["n"] == fail_on
     with feedback._conn() as conn:
-        assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
-        assert conn.execute("SELECT COUNT(*) FROM execution_attempts").fetchone()[0] == 0
-        assert conn.execute("SELECT COUNT(*) FROM profile_trial_ingests").fetchone()[0] == 0
+        for table in (
+            "runs",
+            "execution_attempts",
+            "outcomes",
+            "execution_traces",
+            "completion_events",
+            "influence_edges",
+            "profile_trial_ingests",
+        ):
+            assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0, table
 
 
 def test_ingest_is_idempotent_on_trial_id(
@@ -136,6 +153,37 @@ def test_ingest_is_idempotent_on_trial_id(
         auxiliary_traces=trial_attempt_fixture["auxiliary_traces"],
         ts=2_000,
     )
+    tables = (
+        "runs",
+        "execution_attempts",
+        "outcomes",
+        "execution_traces",
+        "completion_events",
+        "influence_edges",
+        "profile_trial_ingests",
+        "route_weights",
+        "route_weights_v2",
+    )
+    with feedback._conn() as conn:
+        before = {
+            table: conn.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
+            for table in tables
+        }
+        outcomes = conn.execute(
+            "SELECT run_id,verifier_verdict,adjudicated_verdict,merged,ci_status,durability "
+            "FROM outcomes ORDER BY run_id"
+        ).fetchall()
+        assert outcomes == [
+            (run_id, None, None, None, None, "pending")
+            for run_id in sorted(attempt["run_id"] for attempt in attempts)
+        ]
+        assert len(before["runs"]) == len(outcomes) == 3
+        worker_attempts = conn.execute(
+            "SELECT run_id FROM execution_attempts WHERE operation_role='worker' ORDER BY run_id"
+        ).fetchall()
+        assert worker_attempts == [(row[0],) for row in outcomes]
+        assert len(before["execution_attempts"]) == 4  # Three workers and the evaluator trace.
+        assert len(before["execution_traces"]) == 1
     second = feedback.ingest_profile_trial(
         trial_attempt_fixture,
         manifest=trial_manifest,
@@ -145,9 +193,16 @@ def test_ingest_is_idempotent_on_trial_id(
     )
     assert first["status"] == "ingested"
     assert second["status"] == "already_ingested"
+    assert second["applied_ts"] == first["applied_ts"] == 2_000
+    assert len(first["recorded_attempt_ids"]) == 3
+    assert second["recorded_attempt_ids"] == []
     with feedback._conn() as conn:
-        assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 3
-        assert conn.execute("SELECT COUNT(*) FROM profile_trial_ingests").fetchone()[0] == 1
+        after = {
+            table: conn.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
+            for table in tables
+        }
+    assert after == before
+    assert len(after["profile_trial_ingests"]) == 1
 
 
 def test_finalize_refuses_ingest_when_identity_is_unverified(
