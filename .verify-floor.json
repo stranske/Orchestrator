@@ -1,6 +1,6 @@
 {
-  "collected": 2272,
-  "passed": 2272,
+  "collected": 2287,
+  "passed": 2287,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 47,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history.urrent-main integration for issue419; focused named tests and deliberate controls documented in docs/verification/issue-419-high-stakes-shape.md. Collected/passed measured on integrated source; existing skip/type ceilings preserved. Prior large floor notes retained in closer work/20261005T1538Z/482-floor-{branch,main}.json and Git history. 2026-10-06: +8 collected (tests/test_refusal_role_edges_migration.py), 2116 -> 2124, counted with pytest --collect-only on the merge with main 3588318. 2026-10-06 cwd-root-guard: +11 in tests/test_agent_workspace_never_broad.py (no agent run gets a workspace that is or holds /, the home dir or the control plane); collected 2124 -> 2135 counted with pytest --collect-only on the tree rebased onto main 35537f1; skip/type ceilings unchanged. Round0122 integrated main 5eeea0661a97a00d0c91d95c699935e1ba0cbdff; retained main notes at 5eeea0661a97a00d0c91d95c699935e1ba0cbdff:.verify-floor.json; measured 2165; ceilings unchanged. Closer0222 integrated maind4213d1e638c88f7aa3baf4ca31c285a46cb3f28; main note history preserved atd4213d1e638c88f7aa3baf4ca31c285a46cb3f28:.verify-floor.json and round receipt; measured2171; all ceilings unchanged. Closer0320 integrated main92be900ec4f14a3d64639f13d2a0d5ebdac8469b; main note history preserved at92be900ec4f14a3d64639f13d2a0d5ebdac8469b:.verify-floor.json and round receipt; measured2189; all ceilings unchanged. Closer0821 current-main3e926b35c8f8f0fc147d71da3c3793467112d03f integration measured2208 collection; ceilings preserved; main/branch note history retained in495-floor-{before,main}.json and Git. Closer0920 integrated maina59e751c8dc40fce0cee26adb3aae07f6f5386ef; actual collection2272; ceilings unchanged. Prior main history in Git and495-floor-main.json. Full pass evidence awaits CI."
+  "note": "Round1020 integrated main e680751; previous histories retained in Git and497-floor-{before,main}.json. Actual collection is measured below; ceilings unchanged; full suite pass awaits CI. Collection measured 2287 on integrated tree."
 }
