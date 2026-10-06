@@ -341,7 +341,12 @@ def test_new_capability_has_all_nine_admission_parts(tmp_path, monkeypatch, caps
         registrations.append(capability_id)
         register(capability_id, record, path)
 
+    clock = [int(__import__("time").time())]
+    monkeypatch.setattr(switch_review.time, "time", lambda: clock[0])
+
     def private_heartbeat(capability_id, event_type, **kwargs):
+        if capability_id == "value-chain-monitor":
+            clock[0] += 1
         return heartbeat(capability_id, event_type, path=path, **kwargs)
 
     def collect_inputs(**kwargs):
