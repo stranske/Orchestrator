@@ -1,9 +1,11 @@
 """Independent demand and first-break regressions, including the real weekly consumer."""
 
 import json
+import os
 
 import pytest
 
+import adversarial
 import capabilities
 import capability_admission
 import capability_advisor
@@ -16,6 +18,9 @@ NOW = 1791183600
 @pytest.fixture(autouse=True)
 def isolated_adversarial_population(monkeypatch):
     """Value-chain fixtures do not exercise the independent live fleet collector."""
+    disabled = os.environ.get("ORCH_DISABLE_STEPS", "")
+    monkeypatch.setenv("ORCH_DISABLE_STEPS", disabled + ",issue-size-quality")
+    monkeypatch.setattr(adversarial, "record_shape_measurement", lambda *args, **kw: False)
     monkeypatch.setattr(
         switch_review,
         "adversarial_shape_population",
