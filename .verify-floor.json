@@ -1,6 +1,6 @@
 {
-  "collected": 2100,
-  "passed": 2100,
+  "collected": 2108,
+  "passed": 2108,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 47,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history."
+  "note": "Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history. 2026-10-06: +8 collected (tests/test_refusal_role_edges_migration.py), 2100 -> 2108, counted with pytest --collect-only on the merge with main d357820."
 }
