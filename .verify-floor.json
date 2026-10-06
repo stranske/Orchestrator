@@ -1,5 +1,5 @@
 {
-  "collected": 2327,
+  "collected": 2331,
   "passed": 2326,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Current main87d041f baseline2326 passed-or-skipped retained; actual collection2327 includes one new missing-comment regression. Focused31 tests pass; exact-head full merge-result CI must establish the higher passed floor before promotion. Existing quality/skip ceilings unchanged."
+  "note": "Measured local collection2331 after real-selector, marker-only and concurrent-persistence regressions. Prior passed floor2326 retained pending exact full verification; every quality and skip ceiling unchanged."
 }

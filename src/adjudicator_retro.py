@@ -14,6 +14,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -58,7 +59,7 @@ def build_packet(row: dict, evidence: dict) -> dict:
     finding = case["disputed_finding"]
     if not isinstance(finding, dict) or not isinstance(finding.get("body"), str):
         raise ValueError("packet requires verifier finding comment text")
-    if not finding["body"].strip():
+    if not verifier_evidence.MARKER_RE.sub("", finding["body"]).strip():
         raise ValueError("packet requires verifier finding comment text")
     ground_truth = case["ground_truth_evidence"]
     if not isinstance(ground_truth, dict):
@@ -346,9 +347,22 @@ def _persist_report(path: Path, rows: list[dict], population: int) -> dict:
         "summary": summarize(rows),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(report, indent=2) + "\n")
-    temporary.replace(path)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=path.name + ".",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(json.dumps(report, indent=2) + "\n")
+        temporary.replace(path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     return report
 
 
