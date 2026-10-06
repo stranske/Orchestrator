@@ -594,6 +594,14 @@ def advise(
     pr = _pr_number_from(text, repository, context)
     pr_facts = PR_FACTS_FETCH(repository, pr) if (pr and repository) else None
     pr_facts = _merge_pr_facts_from_context(context, pr_facts, text, pr=pr)
+    # The closer supplies the two recorded verdicts at its disposition seam.
+    verdict_facts = {
+        key: (context or {})[key]
+        for key in ("verifier_verdict", "merge_disposition")
+        if key in (context or {})
+    }
+    if verdict_facts:
+        pr_facts = {**(pr_facts or {}), **verdict_facts}
     # THE SURFACE'S OWN STATE, computed once and reported on every branch. Purely additive: it
     # changes neither the candidate set nor its order, exactly like the precondition axis. What it
     # removes is one specific wrong reading — an invented name answering "nothing applies here".
@@ -680,6 +688,7 @@ def advise(
             precondition = _annotate_preconditions(
                 entries, repository, repo_path, pr_facts=pr_facts, pr=pr, ledger_path=path
             )
+            _filter_contested_verdict_offers(entries, precondition)
             entries, withheld_fact_missing = _apply_withhold_for_missing_pr_facts(
                 entries, precondition, surface=surface or skill
             )
@@ -912,6 +921,7 @@ def advise(
     precondition = _annotate_preconditions(
         matched, repository, repo_path, pr_facts=pr_facts, pr=pr, ledger_path=path
     )
+    _filter_contested_verdict_offers(matched, precondition)
     matched, withheld_fact_missing = _apply_withhold_for_missing_pr_facts(
         matched, precondition, surface=surface or skill
     )
@@ -1251,6 +1261,7 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
     # binding is INHERITED from the repo-audit parent, where offload is the whole skill's workhorse;
     # a phase cannot drop one parent entry without NO_BINDING dropping them all, so it stays.
     "closer-lane": {
+        "role-adjudicator": "shadow judgment at verifier disposition only when a recorded verifier verdict differs from the merge disposition",
         "adversarial-review": "its matcher IS {kind: closer_gate, name: high_stakes_review} -- built "
         "for this lane's complex-target selection, 0 invocations in 1,766 rounds",
         "runtime-ac-checks": "sweep classes (b)(c)(d) are merged-but-unverified, verifier non-PASS, "
@@ -2397,6 +2408,7 @@ CAPABILITY_PRECONDITIONS: dict[str, dict] = {
     "runtime-ac-checks": {"requires_pr": "nontrivial_change"},
     "adversarial-review": {"requires_pr": "high_stakes_shape"},
     "testgen-lane": {"requires_pr": "nontrivial_change"},
+    "role-adjudicator": {"requires_pr": "contested_verdict"},
 }
 
 # The keepalive's own stall signals, as labels. A PR without one has no stalled worker to redirect.
@@ -2408,6 +2420,18 @@ STALL_LABELS = ("agent:needs-attention", "agent:retry", "agent:rate-limited")
 NONTRIVIAL_MIN_FILES = 2
 NONTRIVIAL_MIN_LINES = 20
 PATTERN_KEYWORDS = ("codemod", "mechanical", "sweep", "campaign", "bulk", "across the fleet")
+
+
+def _probe_contested_verdict(facts: dict) -> tuple[bool | None, str]:
+    verifier = facts.get("verifier_verdict")
+    disposition = facts.get("merge_disposition")
+    verifier = verifier.strip().upper() if isinstance(verifier, str) else ""
+    disposition = disposition.strip().upper() if isinstance(disposition, str) else ""
+    if verifier in ("", "UNKNOWN") or disposition in ("", "UNKNOWN"):
+        return None, "verifier verdict or merge disposition unknown"
+    if verifier == disposition:
+        return False, "verifier verdict agrees with merge disposition"
+    return True, f"verifier {verifier} differs from merge disposition {disposition}"
 
 
 def _probe_stalled_worker(facts: dict) -> tuple[bool | None, str]:
@@ -2492,6 +2516,7 @@ def _probe_high_stakes_shape(facts: dict, *, path=None) -> tuple[bool | None, st
 
 
 PR_FACT_PROBES = {
+    "contested_verdict": _probe_contested_verdict,
     "high_stakes_shape": _probe_high_stakes_shape,
     "stalled_worker": _probe_stalled_worker,
     "nontrivial_change": _probe_nontrivial_change,
@@ -2863,6 +2888,22 @@ def missing_precondition_inputs(
         if required_pr_fact(cap_id) and not pr:
             needed.add(PRECONDITION_INPUT_FOR["requires_pr"])
     return sorted(needed)
+
+
+def _filter_contested_verdict_offers(entries: list[dict], summary: dict) -> None:
+    """Withhold the adjudicator outside annotation; report its distinct eligibility gate."""
+    withheld = [
+        entry
+        for entry in entries
+        if entry["capability_id"] == "role-adjudicator"
+        and entry.get("pr_requirement_met") is not True
+    ]
+    summary["withheld"] = [
+        {"capability_id": entry["capability_id"], "reason": entry.get("precondition_note")}
+        for entry in withheld
+    ]
+    if withheld:
+        entries[:] = [entry for entry in entries if entry not in withheld]
 
 
 def _annotate_preconditions(
