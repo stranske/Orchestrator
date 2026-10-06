@@ -2415,7 +2415,14 @@ PATTERN_KEYWORDS = ("codemod", "mechanical", "sweep", "campaign", "bulk", "acros
 def _probe_contested_verdict(facts: dict) -> tuple[bool | None, str]:
     verifier = facts.get("verifier_verdict")
     disposition = facts.get("merge_disposition")
-    if not verifier or not disposition:
+    if (
+        not verifier
+        or not disposition
+        or any(
+            isinstance(value, str) and value.strip().upper() in ("", "UNKNOWN")
+            for value in (verifier, disposition)
+        )
+    ):
         return None, "verifier verdict or merge disposition unknown"
     if verifier == disposition:
         return False, "verifier verdict agrees with merge disposition"

@@ -145,12 +145,20 @@ def test_closer_lane_offers_the_adjudicator_only_on_a_contested_verdict(
 
 
 def test_adjudicator_annotation_preserves_membership_when_verdict_is_unknown():
-    entries = [{"capability_id": "role-adjudicator"}]
-    entry = entries[0]
-    summary = advisor._annotate_preconditions(entries, "owner/repo", "", pr_facts={})
-    assert entries == [entry]
-    assert summary["declared"] == ["role-adjudicator"]
-    assert "role-adjudicator" in summary["unevaluated"]
+    for facts in (
+        {},
+        {"verifier_verdict": "UNKNOWN", "merge_disposition": "PASS"},
+        {"verifier_verdict": "NON_PASS", "merge_disposition": "unknown"},
+        {"verifier_verdict": " unknown ", "merge_disposition": "UNKNOWN"},
+    ):
+        entries = [{"capability_id": "role-adjudicator"}]
+        entry = entries[0]
+        summary = advisor._annotate_preconditions(entries, "owner/repo", "", pr_facts=facts)
+        assert entries == [entry]
+        assert summary["declared"] == ["role-adjudicator"]
+        assert "role-adjudicator" in summary["unevaluated"]
+        advisor._filter_contested_verdict_offers(entries, summary)
+        assert entries == []
 
 
 def test_mcp_forwards_recorded_verdicts(monkeypatch):
