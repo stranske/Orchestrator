@@ -1,6 +1,6 @@
 {
-  "collected": 2307,
-  "passed": 2307,
+  "collected": 2322,
+  "passed": 2322,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 47,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Round1020 current-main integration e680751; prior notes retained in501-floor-{before,main}.json and Git; actual collection measured below; all ceilings unchanged; full suite awaits CI. Actual collection 2307; strategy recovery99 focusedPASS, baseline8RED/restoredGREEN, ceilings preserved."
+  "note": "Round1020 strategy recovery integrated current main after guarded497 merge; both floor histories retained in Git and round receipts; actual collection measured; every quality ceiling unchanged; full suite awaits CI. Actual collection 2322;129 current-main focusedPASS;8 actual regressionRED/restoredGREEN; no quality ceiling changed."
 }

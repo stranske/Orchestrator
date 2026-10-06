@@ -72,7 +72,10 @@ LIVENESS:  the LAST block of a completed --active tick runs ~/.codex/bin/hc-ping
   mirror therefore fails on its PR, not at the owner's sync. This machine's
   verdict on a merged tree is one run per sync, taken before the live mirror changes by
   `scripts/verify_before_sync.sh` in a scratch mirror; the wrapper then installs that exact verified
-  snapshot instead of re-reading the mutable checkout (CLAUDE.md §1).
+  snapshot instead of re-reading the mutable checkout (CLAUDE.md §1). That verdict judges the ledger
+  the tree will run on: the tree's own first writing load runs on the scratch copy first, so a row
+  the tree declares is registered there as it will be live, and a new declaration cannot block the
+  sync that deploys it.
   A run judges a PRIVATE COPY of the ledger and the Brain, taken once when it starts, so it never
   queues behind the tick's ledger lock and the code under test cannot write production state. Its
   selftests run eight at a time, and the two gates that are test files report the verdicts pytest
