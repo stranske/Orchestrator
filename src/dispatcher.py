@@ -1497,6 +1497,44 @@ def _select_offload_profile(agent: str, mode: str | None) -> dict | None:
         return None
 
 
+# How many names one offload tries before it reports the log directory as unusable. A name is taken
+# only by a file already on disk and each retry moves one nanosecond on, so reaching this needs that
+# many consecutive names to exist.
+OFFLOAD_LOG_CLAIM_ATTEMPTS = 1000
+
+
+def _claim_offload_log(agent: str) -> tuple[str, Path]:
+    """One offload's run_id and log file, claimed together so that no other offload holds either.
+
+    Both used to be read from `time.time_ns()` separately, and that clock is microsecond-granular on
+    macOS (every value ends in 000), so two offloads started in the same microsecond shared them.
+    Measured from the capacity ledger on 2026-10-05: 4 of 4,517 offload logs were written by two
+    runs, and 3 offload run_ids were carried by 7 runs. A shared log holds both run headers before
+    either run's output, so `ledger_reconcile._log_segment` read nothing for the run whose header
+    came first and both outputs for the other. A shared run_id is one `runs` row in the Brain
+    (INSERT OR REPLACE), so the second run replaced the first.
+
+    The log is created with O_EXCL, so a name belongs to whichever offload creates it first, in this
+    process or another one, and a name already on disk moves the claim one nanosecond on. The run_id
+    is built from the same number, so it is as unique as the log name, and either one names the
+    other.
+    """
+    DISPATCH_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    ns = time.time_ns()
+    for _ in range(OFFLOAD_LOG_CLAIM_ATTEMPTS):
+        logf = DISPATCH_LOG_DIR / f"offload.{agent}.{ns}.log"
+        try:
+            os.close(os.open(logf, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666))
+        except FileExistsError:
+            ns += 1
+            continue
+        return f"offload:{agent}:{ns}", logf
+    raise RuntimeError(
+        f"no free offload log name in {DISPATCH_LOG_DIR}: offload.{agent}.<ns>.log was taken "
+        f"for {OFFLOAD_LOG_CLAIM_ATTEMPTS} consecutive values ending at {ns - 1}"
+    )
+
+
 def offload(
     agent: str,
     prompt: str,
@@ -1682,8 +1720,9 @@ def offload(
     # into a shell string: an argv edit after that point changes nothing that runs. The first
     # version of this rewrite sat below and was therefore inert -- the run still wrote to the shared
     # log, and the only symptom was a model that never resolved.
-    DISPATCH_LOG_DIR.mkdir(parents=True, exist_ok=True)
-    logf = DISPATCH_LOG_DIR / f"offload.{agent}.{time.time_ns()}.log"
+    # The run_id comes from the same claim, so the log and the run cannot be paired with another
+    # offload's.
+    run_id, logf = _claim_offload_log(agent)
     agy_log: Path | None = None
     if agent == "gemini" and "--log-file" in argv:
         # `adapters.agy_log_for` owns the name, because `adapters.cli_reported_model` reads it back.
@@ -1695,7 +1734,6 @@ def offload(
     wrapped = (
         f"{_path_prefix()}; {_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)}"
     )
-    run_id = f"offload:{agent}:{time.time_ns()}"
     target = f"offload:{run_cwd}"
     task_type = task_type or "offload"
     model = adapters.model_identity(agent, mode, profile)

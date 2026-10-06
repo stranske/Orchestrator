@@ -141,7 +141,19 @@ def test_closer_lane_offers_the_adjudicator_only_on_a_contested_verdict(
         ids = {m["capability_id"] for m in result["capabilities"]}
         assert ("role-adjudicator" in ids) is offered
         withheld = result["precondition"]["withheld"]
-        assert bool(withheld) is not offered
+        missing = result["fact_missing"]
+        assert bool(withheld or missing) is not offered
+        if not context:
+            assert withheld == []
+            assert missing == [
+                {
+                    "capability_id": "role-adjudicator",
+                    "surface": "closer-lane",
+                    "fact": "verifier verdict or merge disposition unknown",
+                }
+            ]
+        else:
+            assert missing == []
         if withheld:
             assert withheld[0]["capability_id"] == "role-adjudicator"
 

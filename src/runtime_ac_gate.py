@@ -251,7 +251,9 @@ def observe_shadow_spec(
     evidence = []
     if env_flag(resolved, "ORCH_RUN_RUNTIME_AC"):
         reason = "shadow_exact_checkout_missing"
-        if worktree and head_sha and spec["verification"].get("observed_head_sha") == head_sha:
+        # The authored head is historical context; every observation independently
+        # pins the current PR checkout, without rewriting the once-authored spec.
+        if worktree and head_sha:
             current = subprocess.run(
                 ["git", "-C", str(worktree), "rev-parse", "HEAD"],
                 capture_output=True,
