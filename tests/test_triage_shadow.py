@@ -1,4 +1,6 @@
+import hashlib
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -62,13 +64,20 @@ def proposal():
 
 def test_a_cycle_records_triage_top_three_beside_the_rule_pick(brain):
     path = brain / "shadow.jsonl"
+    candidates = items()
 
     def replay(**kw):
         return roles.run_triage_agent(backend="codex", cap={}, learned={}, **kw)
 
     result = triage_shadow.record_cycle(
-        items(), path=path, runner=replay, dispatch=False, proposal_json=proposal()
+        list(reversed(candidates)),
+        path=path,
+        runner=replay,
+        dispatch=False,
+        proposal_json=proposal(),
     )
+    assert result["candidate_count"] == len(candidates)
+    assert result["candidate_targets"] == [item["target"] for item in candidates]
     assert result["rule_pick"] == "stranske/Orchestrator#1"
     assert result["triage_top_three"] == [
         "stranske/Orchestrator#3",
@@ -76,10 +85,21 @@ def test_a_cycle_records_triage_top_three_beside_the_rule_pick(brain):
         "stranske/Orchestrator#4",
     ]
     assert result["triage_valid"] and not result["live_proposal"]
+    assert result["role_run_id"] is None and result["backend_run_id"] is None
+    assert result["backend"] == "codex" and result["decision_source"] == "triage_agent"
+    assert (
+        result["snapshot_sha256"]
+        == hashlib.sha256(json.dumps(candidates, sort_keys=True).encode()).hexdigest()
+    )
+    assert (
+        result["implementation_sha256"]
+        == hashlib.sha256(Path(triage_shadow.__file__).read_bytes()).hexdigest()
+    )
     assert json.loads(path.read_text()) == result
 
 
-def test_the_step_never_mutates_labels_or_dispatches(brain, monkeypatch):
+@pytest.mark.parametrize("entrypoint", ["api", "cli"])
+def test_the_step_never_mutates_labels_or_dispatches(brain, monkeypatch, capsys, entrypoint):
     def refuse(*a, **kw):
         pytest.fail("shadow step attempted worker dispatch")
 
@@ -121,6 +141,7 @@ def test_the_step_never_mutates_labels_or_dispatches(brain, monkeypatch):
         return SimpleNamespace(returncode=0, stdout=json.dumps(rows), stderr="")
 
     offloads = []
+    run_triage_agent = roles.run_triage_agent
 
     def advisory_offload(backend, prompt, **kw):
         offloads.append(kw)
@@ -129,12 +150,18 @@ def test_the_step_never_mutates_labels_or_dispatches(brain, monkeypatch):
         return {"run_id": "shadow-backend", "exit": 0, "output": json.dumps(proposal())}
 
     def live_role(**kw):
-        return roles.run_triage_agent(backend="codex", cap={}, learned={}, **kw)
+        return run_triage_agent(backend="codex", cap={}, learned={}, **kw)
 
     monkeypatch.setattr(triage_shadow.subprocess, "run", read_only)
     monkeypatch.setattr(dispatcher, "offload", advisory_offload)
-    candidates = triage_shadow.discover_candidates()
-    result = triage_shadow.record_cycle(candidates, runner=live_role)
+    monkeypatch.setattr(roles, "run_triage_agent", live_role)
+    monkeypatch.setenv("ORCH_TRIAGE_SHADOW", "1")
+    if entrypoint == "cli":
+        assert triage_shadow.main([]) == 0
+        result = json.loads(capsys.readouterr().out)
+    else:
+        candidates = triage_shadow.discover_candidates()
+        result = triage_shadow.record_cycle(candidates)
     assert result["shadow"] and result["candidate_count"] == 4
     assert result["live_proposal"] and result["role_run_id"]
     assert result["backend_run_id"] == "shadow-backend"
@@ -151,17 +178,45 @@ def test_the_step_never_mutates_labels_or_dispatches(brain, monkeypatch):
     assert all("--state" in argv and "open" in argv for argv in reads[:4])
 
 
-def test_backfill_grades_an_ungraded_disagreement_from_pr_state(brain):
+@pytest.mark.parametrize(
+    ("state", "verdict", "merged", "durability"),
+    [("MERGED", "PASS", 1, "pending"), ("CLOSED", "FAIL", 0, "abandoned")],
+)
+def test_backfill_grades_an_ungraded_disagreement_from_pr_state(
+    brain, state, verdict, merged, durability
+):
     feedback.record_role_run("triage", "triage", "snapshot", "codex", proposal=proposal())
     feedback.record_run("worker", "stranske/Orchestrator#3", "implement", "codex", mode="local")
     feedback.join_role_to_outcome("triage", "worker", accepted=False)
-    result = outcomes.backfill_triage_disagreements(_state_fn=lambda target: {"state": "MERGED"})
-    assert result["source"] == "backfill" and result["graded"][0]["verdict"] == "PASS"
+    looked_up = []
+
+    def pr_state(target):
+        looked_up.append(target)
+        return {"state": state}
+
+    result = outcomes.backfill_triage_disagreements(_state_fn=pr_state)
+    assert looked_up == ["stranske/Orchestrator#3"]
+    assert result == {
+        "source": "backfill",
+        "candidates": 1,
+        "graded": [
+            {
+                "target": "stranske/Orchestrator#3",
+                "verdict": verdict,
+                "durability": durability,
+                "accepted": False,
+            }
+        ],
+        "pending": [],
+    }
     with feedback._conn() as conn:
         assert conn.execute(
-            "SELECT accepted,counterfactual,outcome_verdict,durability FROM influence_edges "
+            "SELECT accepted,counterfactual,outcome_verdict,merged,durability FROM influence_edges "
             "WHERE source_run_id='triage' AND target_run_id='worker'"
-        ).fetchone() == (0, 1, "PASS", "pending")
+        ).fetchone() == (0, 1, verdict, merged, durability)
+        assert conn.execute(
+            "SELECT adjudicated_verdict,merged,durability FROM outcomes WHERE run_id='worker'"
+        ).fetchone() == (verdict, merged, durability)
         assert (
             "source=backfill"
             in conn.execute("SELECT notes FROM outcomes WHERE run_id='worker'").fetchone()[0]
