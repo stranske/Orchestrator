@@ -543,7 +543,16 @@ def _record_fact_missing(
                 surface=surface,
                 path=path,
             )
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            # Advice remains usable, but missing measurement must be visible. Do not
+            # copy an exception payload that may contain ledger paths or credentials.
+            advice.setdefault("fact_missing_record_errors", []).append(
+                {
+                    "capability_id": row["capability_id"],
+                    "surface": surface,
+                    "error_type": type(exc).__name__,
+                }
+            )
             ok = False
         written += 1 if ok else 0
     return written
@@ -580,8 +589,8 @@ def advise(
     # needed it. Seeding and expiry are the tick's lifecycle step (`capabilities.py sweep` +
     # `validate`).
     caps = capabilities.load_declared(path or capabilities.REG)
-    # THE PR THIS CONSULT IS ABOUT, read once. Absent or unreadable, every PR fact stays UNEVALUATED
-    # and nothing below is auto-declined — the failure mode is "offered as before", never "hidden".
+    # Read the consult's PR facts once. Unknown PR requirements withhold the offer and report the
+    # missing fact on the consulting surface; known false requirements are auto-declined.
     pr = _pr_number_from(text, repository, context)
     pr_facts = PR_FACTS_FETCH(repository, pr) if (pr and repository) else None
     pr_facts = _merge_pr_facts_from_context(context, pr_facts, text, pr=pr)
@@ -938,8 +947,9 @@ def advise(
             )
         )
     usable = [m for m in matched if m["dispatch_ready"]]
-    # A capability that matched for ANY classified task type is not "not applicable".
-    for entry in matched:
+    # A match withheld for missing facts still matched the task. A non-match against another task
+    # type must not also classify it as not applicable.
+    for entry in matched + withheld_fact_missing:
         unmatched.pop(entry["capability_id"], None)
     not_applicable = sorted(unmatched.values(), key=lambda r: r["capability_id"])
     # REPORT THE WHOLE DENOMINATOR (ADDING_CAPABILITIES.md standing rule 5). The old response
@@ -3593,6 +3603,13 @@ def format_advice(a: dict) -> str:
         # "precondition unevaluated" per entry and has no reason to think they could change that —
         # which is exactly what happened across three audit rounds.
         lines += [f"?? PRECONDITION(S) NOT EVALUATED — {remedy}", ""]
+    for row in a.get("fact_missing") or []:
+        lines.append(
+            f"?? fact_missing on {row.get('surface') or 'unspecified surface'}: "
+            f"{row['capability_id']} — {row['fact']}"
+        )
+    if a.get("fact_missing"):
+        lines.append("")
     guidance = a.get("guidance") or {}
     if guidance.get("undocumented"):
         # STATE THE CAUSE, because the alternative reading is a mechanism that does not exist. A
