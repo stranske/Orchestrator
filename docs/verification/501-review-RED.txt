@@ -1,0 +1,178 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+__________ test_pair_failure_does_not_abort_later_experiments[launch] __________
+
+pair = (PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-824/test_pair_failure_do.../experiments/pair-sequence'), {'schema_version': 2, 'repo': 'o/r', 'exp_id': 'pair-sequence', 'base': 'main', ...}, [])
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10bd068a0>
+failure = 'launch'
+
+    @pytest.mark.parametrize("failure", ["launch", "strategy", "lifecycle"])
+    def test_pair_failure_does_not_abort_later_experiments(pair, monkeypatch, failure):
+        _canon, edir, meta, _spawned = pair
+        monkeypatch.setenv("ORCH_STATE_DIR", str(edir.parent / "state"))
+        monkeypatch.setattr(exp_abcd, "ship_gate_stamp", lambda: edir.parent / "stamp")
+        (edir / "strategy.json").write_text(json.dumps({"created_ts": 1}))
+        later = edir.parent / "zz-later-pair"
+        later.mkdir()
+        later_meta = dict(meta, exp_id=later.name)
+        (later / "meta.json").write_text(json.dumps(later_meta))
+        (later / "spec.md").write_text("Later pair requirement")
+        newer = later.stat().st_mtime + 1
+        os.utime(edir, (newer, newer))  # followup visits newest experiment first
+        calls = []
+
+        def launch(_repo, exp_id):
+            calls.append(exp_id)
+            if exp_id == later.name:
+                return {"failed": [], "pending": ["waiting"], "launched": []}
+            if failure == "launch":
+                raise RuntimeError("launch unavailable")
+            return {"failed": [{"reason": "implementer-failed"}], "pending": [], "launched": []}
+
+        def record(*args):
+            if failure == "strategy":
+                raise RuntimeError("strategy recorder unavailable")
+
+        def lifecycle(*args, **kwargs):
+            if failure == "lifecycle":
+                raise RuntimeError("lifecycle unavailable")
+
+        monkeypatch.setattr(exp_abcd, "launch_pending_reviews", launch)
+        monkeypatch.setattr(strategy_experiment, "record_failed_trial", record)
+>       exp_abcd.followup(subject_lifecycle_fn=lifecycle)
+
+tests/test_strategy_review_sequence.py:273: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/exp_abcd.py:2041: in followup
+    review_state = launch_pending_reviews(meta["repo"], edir.name)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+_repo = 'o/r', exp_id = 'pair-sequence'
+
+    def launch(_repo, exp_id):
+        calls.append(exp_id)
+        if exp_id == later.name:
+            return {"failed": [], "pending": ["waiting"], "launched": []}
+        if failure == "launch":
+>           raise RuntimeError("launch unavailable")
+E           RuntimeError: launch unavailable
+
+tests/test_strategy_review_sequence.py:260: RuntimeError
+_________ test_pair_failure_does_not_abort_later_experiments[strategy] _________
+
+pair = (PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-824/test_pair_failure_do.../experiments/pair-sequence'), {'schema_version': 2, 'repo': 'o/r', 'exp_id': 'pair-sequence', 'base': 'main', ...}, [])
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10bd29e80>
+failure = 'strategy'
+
+    @pytest.mark.parametrize("failure", ["launch", "strategy", "lifecycle"])
+    def test_pair_failure_does_not_abort_later_experiments(pair, monkeypatch, failure):
+        _canon, edir, meta, _spawned = pair
+        monkeypatch.setenv("ORCH_STATE_DIR", str(edir.parent / "state"))
+        monkeypatch.setattr(exp_abcd, "ship_gate_stamp", lambda: edir.parent / "stamp")
+        (edir / "strategy.json").write_text(json.dumps({"created_ts": 1}))
+        later = edir.parent / "zz-later-pair"
+        later.mkdir()
+        later_meta = dict(meta, exp_id=later.name)
+        (later / "meta.json").write_text(json.dumps(later_meta))
+        (later / "spec.md").write_text("Later pair requirement")
+        newer = later.stat().st_mtime + 1
+        os.utime(edir, (newer, newer))  # followup visits newest experiment first
+        calls = []
+
+        def launch(_repo, exp_id):
+            calls.append(exp_id)
+            if exp_id == later.name:
+                return {"failed": [], "pending": ["waiting"], "launched": []}
+            if failure == "launch":
+                raise RuntimeError("launch unavailable")
+            return {"failed": [{"reason": "implementer-failed"}], "pending": [], "launched": []}
+
+        def record(*args):
+            if failure == "strategy":
+                raise RuntimeError("strategy recorder unavailable")
+
+        def lifecycle(*args, **kwargs):
+            if failure == "lifecycle":
+                raise RuntimeError("lifecycle unavailable")
+
+        monkeypatch.setattr(exp_abcd, "launch_pending_reviews", launch)
+        monkeypatch.setattr(strategy_experiment, "record_failed_trial", record)
+>       exp_abcd.followup(subject_lifecycle_fn=lifecycle)
+
+tests/test_strategy_review_sequence.py:273: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/exp_abcd.py:2044: in followup
+    strategy_experiment.record_failed_trial(edir.name, review_state["failed"])
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+args = ('pair-sequence', [{'reason': 'implementer-failed'}])
+
+    def record(*args):
+        if failure == "strategy":
+>           raise RuntimeError("strategy recorder unavailable")
+E           RuntimeError: strategy recorder unavailable
+
+tests/test_strategy_review_sequence.py:265: RuntimeError
+________ test_pair_failure_does_not_abort_later_experiments[lifecycle] _________
+
+pair = (PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-824/test_pair_failure_do.../experiments/pair-sequence'), {'schema_version': 2, 'repo': 'o/r', 'exp_id': 'pair-sequence', 'base': 'main', ...}, [])
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10bd2acf0>
+failure = 'lifecycle'
+
+    @pytest.mark.parametrize("failure", ["launch", "strategy", "lifecycle"])
+    def test_pair_failure_does_not_abort_later_experiments(pair, monkeypatch, failure):
+        _canon, edir, meta, _spawned = pair
+        monkeypatch.setenv("ORCH_STATE_DIR", str(edir.parent / "state"))
+        monkeypatch.setattr(exp_abcd, "ship_gate_stamp", lambda: edir.parent / "stamp")
+        (edir / "strategy.json").write_text(json.dumps({"created_ts": 1}))
+        later = edir.parent / "zz-later-pair"
+        later.mkdir()
+        later_meta = dict(meta, exp_id=later.name)
+        (later / "meta.json").write_text(json.dumps(later_meta))
+        (later / "spec.md").write_text("Later pair requirement")
+        newer = later.stat().st_mtime + 1
+        os.utime(edir, (newer, newer))  # followup visits newest experiment first
+        calls = []
+
+        def launch(_repo, exp_id):
+            calls.append(exp_id)
+            if exp_id == later.name:
+                return {"failed": [], "pending": ["waiting"], "launched": []}
+            if failure == "launch":
+                raise RuntimeError("launch unavailable")
+            return {"failed": [{"reason": "implementer-failed"}], "pending": [], "launched": []}
+
+        def record(*args):
+            if failure == "strategy":
+                raise RuntimeError("strategy recorder unavailable")
+    
+        def lifecycle(*args, **kwargs):
+            if failure == "lifecycle":
+                raise RuntimeError("lifecycle unavailable")
+    
+        monkeypatch.setattr(exp_abcd, "launch_pending_reviews", launch)
+        monkeypatch.setattr(strategy_experiment, "record_failed_trial", record)
+>       exp_abcd.followup(subject_lifecycle_fn=lifecycle)
+
+tests/test_strategy_review_sequence.py:273: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/exp_abcd.py:2053: in followup
+    subject_lifecycle_fn(edir.name, "skipped", reason="pair-review-failed")
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+args = ('pair-sequence', 'skipped'), kwargs = {'reason': 'pair-review-failed'}
+
+    def lifecycle(*args, **kwargs):
+        if failure == "lifecycle":
+>           raise RuntimeError("lifecycle unavailable")
+E           RuntimeError: lifecycle unavailable
+
+tests/test_strategy_review_sequence.py:269: RuntimeError
+=========================== short test summary info ============================
+FAILED tests/test_strategy_review_sequence.py::test_pair_failure_does_not_abort_later_experiments[launch]
+FAILED tests/test_strategy_review_sequence.py::test_pair_failure_does_not_abort_later_experiments[strategy]
+FAILED tests/test_strategy_review_sequence.py::test_pair_failure_does_not_abort_later_experiments[lifecycle]
+3 failed in 1.00s
+
+EXIT 1
