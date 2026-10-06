@@ -1,6 +1,11 @@
 {
+<<<<<<< HEAD
   "collected": 2308,
   "passed": 2308,
+=======
+  "collected": 2301,
+  "passed": 2301,
+>>>>>>> origin/main
   "skipped_max": 26,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 47,
@@ -9,5 +14,9 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
+<<<<<<< HEAD
   "note": "Current-main integration: measured collection; full suite awaits CI; all quality ceilings unchanged."
+=======
+  "note": "Round1020 repaired pre-existing literal conflict markers from keeper HEAD6961b78; original malformed floor retained in476-floor-before.json and Git. Integrated current main after guarded497 squash; exact collection measured; all observed baseline ceilings unchanged; full suite awaits CI. Actual collection 2301; focused85PASS; verdict normalization tests and unknown non-string controls retained."
+>>>>>>> origin/main
 }

@@ -1532,8 +1532,11 @@ def review(
                 ],
                 "disabled": False,
             }
+    import adjudicator_retro
+
     rep = {
         "generated_at": now,
+        "adjudicator_shadow": adjudicator_retro.weekly_line(),
         "adversarial_shape": adversarial_shape_population(now=now),
         "value_chain": value_chain,
         "runtime_ac_shadow": runtime_ac_shadow,
@@ -1752,6 +1755,8 @@ def format_report(rep: dict) -> str:
         f"  due for a decision: {rep['raise_count']}",
         "",
     ]
+    if rep.get("adjudicator_shadow"):
+        lines += [rep["adjudicator_shadow"], ""]
     lines += [adversarial_shape_line(rep.get("adversarial_shape", {})), ""]
     trial_line = profile_trial_summary_line()
     if trial_line:
