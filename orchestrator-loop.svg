@@ -68,6 +68,14 @@
 <rect class="rail" x="416" y="342" width="46" height="24" rx="4"/><text class="ct" x="439" y="358" text-anchor="middle">gates</text>
 <rect class="role" x="472" y="342" width="82" height="24" rx="4"/><text class="ct" x="513" y="358" text-anchor="middle">adjudicator</text>
 <rect class="role" x="560" y="342" width="76" height="24" rx="4"/><text class="ct" x="598" y="358" text-anchor="middle">ux_review</text>
+<!-- ADVERSARIAL PANEL AT THE TERMINAL MERGE (2026-10-05). Until this date the tick ran it before a
+     remote delegation that no closer PR can reach, so it sat in Delegate with no consumer. It now
+     runs at merge_guard's merge gate, once per (PR, head SHA), advisory. -->
+<g>
+<title>adversarial panel</title>
+<desc>The adversarial review panel runs at the terminal merge gate (merge_guard), judged once per exact PR head and reused until the head moves; it is advisory, reported beside the merge decision and never blocking. The tick no longer examines closer PRs, which it could never delegate.</desc>
+<rect class="role" x="190" y="342" width="54" height="24" rx="4"/><text class="ct" x="217" y="358" text-anchor="middle">panel</text>
+</g>
 
 <!-- flow arrows -->
 <line class="arrow" x1="348" y1="117" x2="348" y2="128" marker-end="url(#ah)"/>
