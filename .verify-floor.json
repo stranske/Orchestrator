@@ -1,6 +1,6 @@
 {
- "collected": 2439,
- "passed": 2439,
+ "collected": 2444,
+ "passed": 2444,
  "skipped_max": 26,
  "mirror_skipped_max": 21,
  "bare_mirror_skipped_max": 47,
@@ -9,5 +9,5 @@
  "selftest_skipped_max": 7,
  "gate_skipped_max": 2,
  "mypy_exempt_max": 0,
- "note": "Integrates exact main 6ef7bc6929ecded4c8ee0e63354106efee544990. Collection measured on integration result; passed retains actually executed prior/main floor; all quality ceilings unchanged. Full local verifier receipt follows. FLOOR RECORDED by verify.py --update-floor on 2026-10-06: collected=2439, passed=2439. Ceilings preserved, never re-measured \u2014 they are edited by hand."
+ "note": "Integrates main b6be66c after503; retain all quality ceilings and prior measured minima; current full verification follows. FLOOR RECORDED by verify.py --update-floor on 2026-10-06: collected=2444, passed=2444. Ceilings preserved, never re-measured \u2014 they are edited by hand."
 }

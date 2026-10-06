@@ -109,6 +109,19 @@ def test_retro_records_verdicts_without_changing_outcomes(private_brain, tmp_pat
     assert again["rows"][0]["role_run_id"] == result["rows"][0]["role_run_id"]
     assert outcomes() == before
     assert again["summary"]["cost_usd"] == 2
+    persisted = json.loads(path.read_text())
+    assert persisted["summary"]["cost_usd"] == 2
+    assert persisted["rows"][0]["role_run_id"] == result["rows"][0]["role_run_id"]
+    assert "cost 2.0" in retro.weekly_line(path)
+    with sqlite3.connect(private_brain) as conn:
+        conn.execute("UPDATE outcomes SET durability='durable' WHERE run_id='original'")
+    before = outcomes()
+    refreshed = retro.run(dispatch=True, limit=0, path=path, db=private_brain)
+    persisted = json.loads(path.read_text())
+    assert persisted == refreshed
+    assert persisted["rows"][0]["later_truth"] == "PASS"
+    assert persisted["summary"]["disagree"] == 1
+    assert outcomes() == before
 
 
 @pytest.mark.parametrize(
@@ -205,6 +218,61 @@ def test_missing_evidence_never_dispatches_or_becomes_agreement(private_brain, t
     assert result["rows"][0]["error"]
     assert result["summary"]["agreement_rate"] is None
     assert result["summary"]["graded"] == 0
+
+
+def test_missing_verifier_comment_uses_real_selector(monkeypatch):
+    pr = {
+        "state": "MERGED",
+        "mergeCommit": {"oid": "a" * 40},
+        "files": {"pageInfo": {"hasNextPage": False}, "nodes": []},
+        "comments": {"pageInfo": {"hasPreviousPage": False}, "nodes": [{}]},
+    }
+    monkeypatch.setattr(
+        retro, "_gh_json", lambda _args: {"data": {"repository": {"pullRequest": pr}}}
+    )
+    with pytest.raises(
+        ValueError, match="current merge-bound verifier decision missing or changed"
+    ):
+        retro.fetch_evidence({"target": "owner/repo#1", "verifier_verdict": "NON_PASS"})
+
+
+def test_marker_only_finding_does_not_dispatch(private_brain, tmp_path):
+    packet = evidence({})
+    packet["disputed_finding"][
+        "body"
+    ] = '<!-- verifier-corpus-decision/v1 {"verdict":"NON_PASS"} -->'
+    result = retro.run(
+        dispatch=True,
+        path=tmp_path / "report.json",
+        db=private_brain,
+        evidence_reader=lambda _row: packet,
+        runner=lambda **_kw: pytest.fail("marker-only evidence must not dispatch"),
+    )
+    assert "finding comment text" in result["rows"][0]["error"]
+
+
+def test_concurrent_report_writes_publish_complete_private_files(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from pathlib import Path
+    from threading import Barrier
+
+    path = tmp_path / "report.json"
+    barrier = Barrier(2)
+    original_replace = Path.replace
+    temporary_paths = []
+
+    def synchronized_replace(source, target):
+        temporary_paths.append(source)
+        barrier.wait(timeout=10)
+        return original_replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", synchronized_replace)
+    rows = [[{"case_id": "first"}], [{"case_id": "second"}]]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda r: retro._persist_report(path, r, 2), rows))
+    assert len(set(temporary_paths)) == 2
+    assert json.loads(path.read_text()) in results
+    assert all(not p.exists() for p in temporary_paths)
 
 
 def test_pending_or_pre_detection_durability_is_not_ground_truth():

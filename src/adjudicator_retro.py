@@ -14,6 +14,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -55,6 +56,23 @@ def build_packet(row: dict, evidence: dict) -> dict:
     }
     if roles._validate_adjudication_case(case):
         raise ValueError("packet requires target, disputed_finding and ground_truth_evidence")
+    finding = case["disputed_finding"]
+    if not isinstance(finding, dict) or not isinstance(finding.get("body"), str):
+        raise ValueError("packet requires verifier finding comment text")
+    if not verifier_evidence.MARKER_RE.sub("", finding["body"]).strip():
+        raise ValueError("packet requires verifier finding comment text")
+    ground_truth = case["ground_truth_evidence"]
+    if not isinstance(ground_truth, dict):
+        raise ValueError("packet requires merged diff summary and gate runs")
+    diff = ground_truth.get("diff_summary")
+    gates = ground_truth.get("gate_runs")
+    has_diff = (
+        bool(diff.strip()) if isinstance(diff, str) else isinstance(diff, list) and bool(diff)
+    )
+    if not has_diff:
+        raise ValueError("packet requires merged diff summary")
+    if not isinstance(gates, list) or not gates:
+        raise ValueError("packet requires gate runs")
     return case
 
 
@@ -105,12 +123,18 @@ def fetch_evidence(row: dict) -> dict:
         raise ValueError("current merge-bound verifier decision missing or changed")
     comments = pr["comments"]["nodes"]
     finding = next(
-        c
-        for c in reversed(comments)
-        if (
-            verifier_evidence.decision_from_pr(repo, {**pr, "comments": {"nodes": [c]}}) == decision
-        )
+        (
+            c
+            for c in reversed(comments)
+            if (
+                verifier_evidence.decision_from_pr(repo, {**pr, "comments": {"nodes": [c]}})
+                == decision
+            )
+        ),
+        None,
     )
+    if finding is None:
+        raise ValueError("merge-bound verifier finding comment unavailable")
     rollup = pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
     if not rollup:
         raise ValueError("complete gate evidence unavailable")
@@ -184,6 +208,22 @@ def measured_cost(run_id: str | None, db: Path | None = None) -> float | None:
     return row[0] if row and row[1] in feedback.COMPLETE_COST_SOURCES else None
 
 
+def _refresh_saved_verdicts(rows: list[dict], db: Path | None = None) -> None:
+    """Grade saved verdicts even after their disputes leave the replay window."""
+    verdicts = [row for row in rows if row.get("decision")]
+    if not verdicts:
+        return
+    with sqlite3.connect(f"file:{(db or feedback.DB_PATH).resolve()}?mode=ro", uri=True) as conn:
+        conn.row_factory = sqlite3.Row
+        for row in verdicts:
+            outcome = conn.execute(
+                "SELECT durability,durability_checked_ts FROM outcomes WHERE run_id=?",
+                (row["run_id"],),
+            ).fetchone()
+            row["later_truth"] = later_truth(dict(outcome)) if outcome else None
+            row["cost_usd"] = measured_cost(row.get("backend_run_id"), db)
+
+
 def summarize(rows: list[dict]) -> dict:
     accepted = [r for r in rows if r.get("decision") in {"uphold_blocker", "reject_blocker"}]
     graded = [r for r in accepted if r.get("later_truth")]
@@ -220,6 +260,7 @@ def run(
     runner = runner or roles.run_adjudicator_agent
     previous = json.loads(path.read_text()) if path.exists() else {}
     saved = {r["case_id"]: r for r in previous.get("rows", [])}
+    _refresh_saved_verdicts(list(saved.values()), db)
     population = disputes(db=db)
     attempted = 0
     for row in population:
@@ -289,26 +330,40 @@ def run(
             entry["error"] = str(exc)
         saved[case_id] = entry
         # Persist every attempt so an interrupted batch does not repeat successful paid calls.
-        path.parent.mkdir(parents=True, exist_ok=True)
-        report: dict = {
-            "generated_at": int(time.time()),
-            "shadow": True,
-            "source": "retrospective",
-            "population": len(population),
-            "rows": list(saved.values()),
-        }
-        report["summary"] = summarize(report["rows"])
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(report, indent=2) + "\n")
-        temporary.replace(path)
-    rows = list(saved.values())
-    return {
+        _persist_report(path, list(saved.values()), len(population))
+    # Saved cases can gain judged durability or measured cost without a new
+    # paid attempt. Publish those refreshes for the weekly file reader too.
+    return _persist_report(path, list(saved.values()), len(population))
+
+
+def _persist_report(path: Path, rows: list[dict], population: int) -> dict:
+    """Atomically publish the same shadow evidence returned to the caller."""
+    report = {
         "generated_at": int(time.time()),
         "shadow": True,
-        "population": len(population),
+        "source": "retrospective",
+        "population": population,
         "rows": rows,
         "summary": summarize(rows),
     }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=path.name + ".",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(json.dumps(report, indent=2) + "\n")
+        temporary.replace(path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    return report
 
 
 def weekly_line(path: Path | None = None) -> str:
