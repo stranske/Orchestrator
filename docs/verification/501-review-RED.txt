@@ -20,7 +20,7 @@ failure = 'launch'
         newer = later.stat().st_mtime + 1
         os.utime(edir, (newer, newer))  # followup visits newest experiment first
         calls = []
-    
+
         def launch(_repo, exp_id):
             calls.append(exp_id)
             if exp_id == later.name:
@@ -28,15 +28,15 @@ failure = 'launch'
             if failure == "launch":
                 raise RuntimeError("launch unavailable")
             return {"failed": [{"reason": "implementer-failed"}], "pending": [], "launched": []}
-    
+
         def record(*args):
             if failure == "strategy":
                 raise RuntimeError("strategy recorder unavailable")
-    
+
         def lifecycle(*args, **kwargs):
             if failure == "lifecycle":
                 raise RuntimeError("lifecycle unavailable")
-    
+
         monkeypatch.setattr(exp_abcd, "launch_pending_reviews", launch)
         monkeypatch.setattr(strategy_experiment, "record_failed_trial", record)
 >       exp_abcd.followup(subject_lifecycle_fn=lifecycle)
@@ -79,7 +79,7 @@ failure = 'strategy'
         newer = later.stat().st_mtime + 1
         os.utime(edir, (newer, newer))  # followup visits newest experiment first
         calls = []
-    
+
         def launch(_repo, exp_id):
             calls.append(exp_id)
             if exp_id == later.name:
@@ -87,15 +87,15 @@ failure = 'strategy'
             if failure == "launch":
                 raise RuntimeError("launch unavailable")
             return {"failed": [{"reason": "implementer-failed"}], "pending": [], "launched": []}
-    
+
         def record(*args):
             if failure == "strategy":
                 raise RuntimeError("strategy recorder unavailable")
-    
+
         def lifecycle(*args, **kwargs):
             if failure == "lifecycle":
                 raise RuntimeError("lifecycle unavailable")
-    
+
         monkeypatch.setattr(exp_abcd, "launch_pending_reviews", launch)
         monkeypatch.setattr(strategy_experiment, "record_failed_trial", record)
 >       exp_abcd.followup(subject_lifecycle_fn=lifecycle)
@@ -134,7 +134,7 @@ failure = 'lifecycle'
         newer = later.stat().st_mtime + 1
         os.utime(edir, (newer, newer))  # followup visits newest experiment first
         calls = []
-    
+
         def launch(_repo, exp_id):
             calls.append(exp_id)
             if exp_id == later.name:
@@ -142,7 +142,7 @@ failure = 'lifecycle'
             if failure == "launch":
                 raise RuntimeError("launch unavailable")
             return {"failed": [{"reason": "implementer-failed"}], "pending": [], "launched": []}
-    
+
         def record(*args):
             if failure == "strategy":
                 raise RuntimeError("strategy recorder unavailable")
