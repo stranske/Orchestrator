@@ -450,7 +450,39 @@ def stage2_acquisition_plan(
     else:
         live_context = "no eligible live post-escalation PRs exist"
     commands: list[dict] = []
-    if eligible:
+    supervised_apply_plan = None
+    if summary.get("ready_for_supervised_apply"):
+        import roles
+
+        status = "ready_for_supervised_apply_review"
+        recommendation = (
+            "Stage 2 is ready; inspect the dry-run supervised-apply plan; live apply stays off"
+        )
+        for candidate in all_eligible:
+            if not candidate.get("report"):
+                continue
+            import redirect_apply
+
+            if redirect_apply.lane_refusals(candidate["report"]):
+                continue
+            result = roles.run_redirect_agent(
+                candidate["report"],
+                candidate.get("acceptance_criteria") or acceptance_criteria,
+                backend=proposal_backend or "codex",
+                dispatch=False,
+            )
+            plan = result["plan"]
+            if not plan.get("apply_supported") or result.get("errors"):
+                continue
+            path = effective_report_dir / "supervised-apply-plan.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            supervised_apply_plan = str(path)
+            _capability_heartbeat("success")
+            break
+        if supervised_apply_plan is None:
+            recommendation = "Stage 2 is ready; no current safe candidate with worker capacity can produce a plan"
+    elif eligible:
         commands.extend(
             {
                 "kind": "live_stage2_record",
@@ -493,9 +525,6 @@ def stage2_acquisition_plan(
             "strict historical replay candidates are exhausted but disagreement evidence is still thin; "
             "run the calibration collect command to add bounded success-case disagreement replays"
         )
-    elif summary.get("ready_for_supervised_apply"):
-        status = "ready_for_supervised_apply_review"
-        recommendation = "Stage 2 synced evidence is ready; review Stage 3 design before implementing any apply path"
     elif summary.get("ready_for_historical_replay_analysis"):
         status = "historical_replay_ready_wait_for_live_links"
         recommendation = (
@@ -537,6 +566,7 @@ def stage2_acquisition_plan(
         "calibration_preview": calibration_preview,
         "calibration_collect_command": calibration_command,
         "commands": commands,
+        "supervised_apply_plan": supervised_apply_plan,
         "status": status,
         "recommendation": recommendation,
     }

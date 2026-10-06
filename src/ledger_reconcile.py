@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 import adapters
+import credential_redaction
 import execution_profiles
 import feedback
 import pushed_branches
@@ -45,6 +46,11 @@ import rate_incidents
 # Rows are classified only for runs STARTED at or after this instant. Older rows are the population
 # the owner's 2026-10-04 decision covers (improvement log item 0), and this rule never rewrites them.
 PROVIDER_LIMIT_INFRA_SINCE = 1791126000  # 2026-10-04T15:00:00Z, after that decision's measurement
+
+# The completion step masks credentials only in the segments of runs STARTED at or after this
+# instant. Logs that already held a token when the leak was found (2026-10-05) are the owner's to
+# rotate and clean, and a `complete` re-run by hand for an old run must not edit them.
+CREDENTIAL_SCRUB_SINCE = 1791244800  # 2026-10-06T00:00:00Z
 
 # Why a run whose own log shows a provider refusal before any work was, or was not, classified.
 # Every run counted in `seen` lands in exactly one of the others, so the counts are a partition.
@@ -620,6 +626,43 @@ def _cli_identity_for_run(run_rows, started_ts: int | None = None, log_file=None
     )
 
 
+def _scrub_run_segment(log_file: str | None, run_id: str, started_ts: int | None) -> int:
+    """Mask credentials in THIS run's own segment of its log, in place, and say so in the log.
+
+    A detached wrapper sends the agent's stdout straight into the file, so no Python reads it
+    before it lands; this step runs right after the agent exits, the first moment the segment can
+    be masked. Two experiment arms of 2026-07-09 printed the live GitHub token into exactly such a
+    log. The scrub runs from this run's header to the end of the file
+    (credential_redaction.segment_span), never over what earlier runs wrote, and a run started
+    before CREDENTIAL_SCRUB_SINCE (or with no start at all) is never scrubbed: files that already
+    held a token are the owner's to clean, not this step's. Returns how many strings were masked;
+    never fatal to the completion step."""
+    if not log_file:
+        return 0
+    if started_ts is None or started_ts < CREDENTIAL_SCRUB_SINCE:
+        return 0
+    result = credential_redaction.scrub_file(log_file, run_id=run_id)
+    if result["status"] == "disabled":
+        print(
+            f"credential redaction DISABLED by {credential_redaction.REDACTION_DISABLED_ENV}=1: "
+            "this run's log segment is unmasked",
+            file=sys.stderr,
+        )
+    elif result["status"] in ("error", "too_large"):
+        print(
+            f"warn: this run's log segment was not scrubbed ({result['status']}"
+            f"{': ' + result['error'] if result.get('error') else ''})",
+            file=sys.stderr,
+        )
+    elif result["redacted"]:
+        print(
+            "credentials masked in this run's log segment: "
+            + credential_redaction.describe(result["kinds"]),
+            file=sys.stderr,
+        )
+    return int(result.get("redacted") or 0)
+
+
 def record_completion(
     run_id: str,
     agent: str,
@@ -639,6 +682,9 @@ def record_completion(
     exit_code: int | None = None,
     workspace: str | None = None,
 ) -> None:
+    # FIRST, before anything below reads the log: the incident classifier, the reconcile pass and
+    # anyone who opens the file all see the masked segment.
+    credentials_redacted = _scrub_run_segment(log_file, run_id, started_ts)
     if selected_profile_id:
         probe_reason = None
         if not resolved_model and str(target or "").startswith("offload:/"):
@@ -713,6 +759,7 @@ def record_completion(
             if value
         }
         or None,
+        credentials_redacted=credentials_redacted or None,
     )
     try:
         feedback.record_completion_event(

@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import credential_redaction
+
 HANDOFF = Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff"))
 INCIDENT_FILE = HANDOFF / "rate-limit-incidents.ndjson"
 LOCK_FILE = HANDOFF / "rate-limit-incidents.ndjson.lock"
@@ -43,6 +45,10 @@ def _redact_bounded(text: str, max_len: int = MAX_EVIDENCE_EXCERPT) -> str:
     )
     for pattern in patterns:
         text = re.sub(pattern, "[REDACTED]", text, flags=re.IGNORECASE)
+    # The shared shape list, after the six above: it holds what they lack, a GitHub token above all.
+    # A run whose completion step died is classified from its unscrubbed log, and its excerpt lands
+    # here.
+    text = credential_redaction.redact(text)
     return text[:max_len] + ("...[TRUNCATED]" if len(text) > max_len else "")
 
 
