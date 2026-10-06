@@ -1466,6 +1466,25 @@ python3 src/roles.py triage --backlog-json ~/.codex/handoff/backlog.json [--prop
 python3 src/roles.py triage --backlog-json ~/.codex/handoff/backlog.json --dispatch
 ```
 
+### Opener candidate shadow (issue #433)
+
+The existing TriageAgent is also called by `triage_shadow.py` once per active
+cycle, independently of the worker dispatch flag. Its snapshot is read from the
+opener's priority searches and filtered through current scoped holds and open
+PR linkage. The deterministic priority/oldest pick is recorded beside the
+advisory top three in `capability-program/triage-shadow.jsonl`. The existing
+dispatch-loop role invocation is disabled for that process to prevent paying
+for two snapshots. `ORCH_TRIAGE_SHADOW=0` restores the prior caller alone.
+
+The comparison is an observational feedback surface, never an acceptance or
+worker-selection edge. Switch review consumes it with separate known outcome
+denominators; replay and provider failure cannot produce production evidence.
+`outcomes.backfill_triage_disagreements` uses the existing attribution resolvers
+and Brain tables, records `source=backfill`, and grades rejected edges without
+changing their accepted bit or assigning a counterfactual verdict to the role.
+Merge evidence retains pending durability until the usual sweep judges it.
+No new role, routing algorithm, learning store or deployment path is introduced.
+
 ## AdjudicatorAgent — the fifth role (built 2026-06-20)
 
 AdjudicatorAgent upgrades disputed-reviewer handling into a callable role. It reviews one blocker/veto
@@ -1483,12 +1502,24 @@ evidence.
   or rejecting a blocker, requires evidence gaps for `needs_more_evidence`, and rejects next steps that ask
   for mutating execution.
 
+The `adjudicator_retro` rail reads persisted verifier/merge-disposition disputes from the Brain,
+requires the trusted merge-bound verifier comment plus diff summary and exact-head gate runs,
+and calls the existing router-selected role in bounded, resumable shadow batches. Each role run
+is tagged `source=retrospective`; no outcome is created or modified and no verdict is applied.
+The report at `$ORCH_STATE_DIR/capability-program/adjudicator-retro.json` grades advice only
+against post-detection durability evidence, compares it with the merged-PASS baseline, and names
+unmeasured costs. The closer-lane advisor offers this role only when the caller's recorded
+`verifier_verdict` and `merge_disposition` disagree; missing facts withhold the offer. Weekly switch
+review consumes the saved report and prints its case, agreement, disagreement and cost counts.
+This extends the existing role and reporting rails; it does not re-enable tick adjudication.
+
 ### CLI
 
 ```bash
 python3 src/roles.py route --role adjudicator
 python3 src/roles.py adjudicate --case-json case.json [--proposal-json adjudication.json]
 python3 src/roles.py adjudicate --case-json case.json --dispatch
+python3 src/adjudicator_retro.py --dispatch --limit 5  # resume shadow evidence; --retry retries failed cases
 ```
 
 ### Prompt authoring output contracts

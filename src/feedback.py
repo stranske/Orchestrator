@@ -3537,6 +3537,7 @@ def record_role_run(
         ts=ts,
         role_name=role_name,
         model=model,
+        source=source if source == "retrospective" else None,
         capability_ids=capability_ids,
     )
     record_completion_event(
