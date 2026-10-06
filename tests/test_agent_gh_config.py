@@ -350,7 +350,7 @@ def test_both_experiment_paths_pin_gh(sandbox, monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(sandbox / "dispatcher-xdg"))
     expected = [str(sandbox / "dispatcher-xdg" / "gh")]
     arm = exp_abcd._wrapped("codex", ["codex", "exec", "Implement the change."])
-    evaluator = exp_abcd._eval_command("codex", str(tmp_path / "prompt.txt"))
+    evaluator = exp_abcd._eval_command("codex", str(tmp_path / "prompt.txt"), tmp_path)
     assert _pins(arm) == expected, arm
     assert _pins(evaluator) == expected, evaluator
 
