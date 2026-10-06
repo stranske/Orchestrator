@@ -195,9 +195,17 @@ def coverage_combine_and_report(root: pathlib.Path | None = None) -> str:
 # Imported from env_prereq rather than duplicated: a shared literal in two files is a pair that
 # drifts, and a mark that drifts turns a skip back into a silent pass.
 try:
-    from env_prereq import PREREQ_ABSENT_MARK, bare_machine, exec_mirror_shape
+    from env_prereq import (
+        DECLARED_UNREGISTERED_MARK,
+        PREREQ_ABSENT_MARK,
+        bare_machine,
+        exec_mirror_shape,
+    )
 except Exception:  # noqa: BLE001
     PREREQ_ABSENT_MARK = "PREREQUISITE ABSENT:"
+    # EMPTY, not a copy of the phrase: with no env_prereq the skips that carry it cannot be counted,
+    # and `drainable_skips` reports an empty mark as NOT COUNTED rather than as zero.
+    DECLARED_UNREGISTERED_MARK = ""
 
     def exec_mirror_shape() -> str | None:
         """Fallback when env_prereq will not import: read the tree as a CHECKOUT.
@@ -1165,7 +1173,108 @@ def _carried_forward(floor: dict) -> dict:
     }
 
 
-def _ceiling_report(floor: dict, actual: dict, *, shape: str) -> tuple[list[str], dict[str, str]]:
+# ---- ROWS THIS TREE DECLARES, AND THE SKIPS THEY ALONE CAUSE (2026-10-06) ---------------------
+# A row this tree registers by itself (`capabilities.declared_row_ids`) is absent from a ledger only
+# until the deployed code's first writing load. Until this date a check needing one skipped with a
+# reason calling it registration history, the skip pushed the exec mirror past its ceiling, and the
+# pre-sync verdict refused the sync that would have registered it (`value-chain-monitor`,
+# 2026-10-05: 22 skipped > 21). The ceiling's message then said to raise the ceiling. So every run
+# states which declared rows the ledger it judges lacks, and an exceeded skip ceiling says how many
+# of its skips registration alone drains: the blocking and the drainable number in one message.
+SKIP_CEILINGS = ("skipped_max", "selftest_skipped_max", "gate_skipped_max")
+
+
+def declared_rows_at_start(ledger: pathlib.Path | None = None) -> dict:
+    """Which rows this tree declares are absent from the ledger the run is ABOUT to judge.
+
+    Read before any child runs, because the run's last gate (`ledger validate`) is a writing load
+    that seeds them: read afterwards, the private copy would already hold the rows the checks
+    lacked. Read-only, and an unreadable ledger is reported, never read as complete.
+    """
+    try:
+        import capabilities
+
+        path = pathlib.Path(ledger or capabilities.REG)
+        total = len(capabilities.declared_row_ids())
+        if not path.exists():
+            return {"state": "absent", "declared": total, "missing": None}
+        missing = capabilities.missing_declared_rows(capabilities.load_declared(path))
+        return {"state": "read", "declared": total, "missing": missing}
+    except Exception as exc:  # noqa: BLE001 — verify.py must run even if a sibling module is broken
+        return {"state": "unreadable", "error": f"{type(exc).__name__}: {exc}"}
+
+
+def drainable_skips(
+    py: dict, st: dict, gates: dict, *, mark: str = DECLARED_UNREGISTERED_MARK
+) -> dict[str, int | None]:
+    """Of each skipped population, how many skipped ONLY for rows this tree declares. Pure.
+
+    A pytest skip counts when its message carries env_prereq's mark, which `ledger_rows_absent`
+    writes only when every absent row is declared, so registering them clears it. A selftest or a
+    gate counts only when every reason it gave carries the mark. None is NOT COUNTED (pytest left
+    no per-test record of its skips, or there is no mark to look for), never zero.
+    """
+    if not mark:
+        return dict.fromkeys(SKIP_CEILINGS)
+    tests = [v for by_name in (py.get("verdicts") or {}).values() for v in by_name.values()]
+    counted = bool(tests) or not py.get("skipped")
+    in_tests = sum(1 for v in tests if v["outcome"] == "skipped" and mark in v["message"])
+
+    def only_declared(reasons: list[str]) -> bool:
+        return bool(reasons) and all(mark in reason for reason in reasons)
+
+    return {
+        "skipped_max": in_tests if counted else None,
+        "selftest_skipped_max": sum(1 for r in st["skipped"].values() if only_declared(r)),
+        "gate_skipped_max": sum(1 for g in gates.values() if only_declared(g["skipped"])),
+    }
+
+
+def _format_declared_line(rows: dict, drainable: dict[str, int | None]) -> str:
+    """The `declared:` summary line, printed on every run. Pure."""
+    if rows.get("state") == "unreadable":
+        return f"  declared:   NOT CHECKED ({rows.get('error')})"
+    total = rows["declared"]
+    if rows.get("state") == "absent":
+        return (
+            f"  declared:   no ledger when the run began, so none of the {total} rows this tree "
+            f"declares was registered; the first writing load creates it holding all of them"
+        )
+    missing = rows.get("missing") or []
+    if not missing:
+        return (
+            f"  declared:   all {total} rows this tree declares are registered in the ledger judged"
+        )
+
+    def n(key: str) -> str:
+        value = drainable.get(key)
+        return "NOT COUNTED" if value is None else str(value)
+
+    return (
+        f"  declared:   {len(missing)} of the {total} rows this tree declares are NOT registered in "
+        f"the ledger judged ({', '.join(missing)}); {n('skipped_max')} test(s), "
+        f"{n('selftest_skipped_max')} selftest(s) and {n('gate_skipped_max')} gate(s) skipped for "
+        f"them alone. The deployed code's first writing load registers them, and the pre-sync "
+        f"verdict seeds them into its copy first: never raise a ceiling for these"
+    )
+
+
+def _drainable_clause(count: int | None, key: str) -> str:
+    """What an exceeded skip ceiling adds about the skips registration alone drains. Pure."""
+    if count is None:
+        return " How many skipped only for a declared row awaiting registration: NOT COUNTED."
+    if count == 0:
+        return " None of them skipped only for a row this tree declares (see `declared:`)."
+    return (
+        f" {count} of them skipped only for a row this tree declares and the ledger judged lacks "
+        f"(see `declared:`): the deployed code's first writing load registers it, which drains "
+        f"them, so they are never a reason to raise `{key}`."
+    )
+
+
+def _ceiling_report(
+    floor: dict, actual: dict, *, shape: str, drainable: dict[str, int | None] | None = None
+) -> tuple[list[str], dict[str, str]]:
     """The ceiling VERDICT and the `count/limit` RENDERING for every ceiling, from ONE shape
     decision. Pure.
 
@@ -1177,7 +1286,7 @@ def _ceiling_report(floor: dict, actual: dict, *, shape: str) -> tuple[list[str]
     computed against 26, which reads as a bug in the tool rather than in the tree. One call, one
     decision, and the selftest can hold both halves against each other.
     """
-    problems = _ceiling_problems(floor, actual, shape=shape)
+    problems = _ceiling_problems(floor, actual, shape=shape, drainable=drainable)
     rendered = {}
     for key, _label in CEILINGS:
         limit, in_force = ceiling_limit(floor, key, shape=shape)
@@ -1193,8 +1302,18 @@ def _ceiling_report(floor: dict, actual: dict, *, shape: str) -> tuple[list[str]
     return problems, rendered
 
 
-def _ceiling_problems(floor: dict, actual: dict, *, shape: str = CHECKOUT) -> list[str]:
+def _ceiling_problems(
+    floor: dict,
+    actual: dict,
+    *,
+    shape: str = CHECKOUT,
+    drainable: dict[str, int | None] | None = None,
+) -> list[str]:
     """Is anything skipping MORE than the agreed maximum FOR THIS TREE SHAPE? Pure, same reason.
+
+    With `drainable` (from `drainable_skips`), an exceeded SKIP ceiling also says how many of its
+    skips registering a declared row alone would drain, so the message that names the integer to
+    raise never sends the reader to raise it for a row the deployed code is about to register.
 
     `shape` defaults to CHECKOUT so an unshaped call is bounded by the base (smaller) agreement —
     the strict direction, and the one every existing caller and selftest already means.
@@ -1233,6 +1352,11 @@ def _ceiling_problems(floor: dict, actual: dict, *, shape: str = CHECKOUT) -> li
                 f"CEILING exceeded{where}: {observed} {label} > agreed maximum {limit}. "
                 f"This is bounded on purpose — either the new one is wrong, or raise "
                 f"`{in_force}` in .verify-floor.json deliberately and say why."
+                + (
+                    _drainable_clause(drainable.get(key), in_force)
+                    if drainable is not None and key in SKIP_CEILINGS
+                    else ""
+                )
             )
     return problems
 
@@ -1250,6 +1374,8 @@ def verify(
     with private_state() as run_state, tempfile.TemporaryDirectory(prefix="verify-run-") as run_dir:
         if run_state.get("refused"):
             return 1, _not_run_summary(run_state)
+        # BEFORE any child: the run's last gate is a writing load that seeds these rows.
+        declared_rows = declared_rows_at_start(run_state["ledger"])
         started = time.monotonic()
         py = run_pytest(junit=pathlib.Path(run_dir) / "pytest.xml")
         took["pytest"] = time.monotonic() - started
@@ -1307,7 +1433,10 @@ def verify(
     # See `ceiling_limit`. Computed once and threaded through the check and the rendering, so the
     # verdict and the summary cannot disagree about which agreement was in force.
     detected_shape, shape_reason = tree_shape()
-    ceiling_problems, ceiling_rendered = _ceiling_report(floor, actual, shape=detected_shape)
+    drainable = drainable_skips(py, st, gates)
+    ceiling_problems, ceiling_rendered = _ceiling_report(
+        floor, actual, shape=detected_shape, drainable=drainable
+    )
     problems += ceiling_problems
 
     def _cap(key: str) -> str:
@@ -1365,6 +1494,8 @@ def verify(
         lines.append(f"  {name:<18} {state} {res['line']}")
     if actual["gate_skipped_max"]:
         lines.append(f"  gates:      {_cap('gate_skipped_max')} skipped")
+    # ALWAYS printed, like `tree:`: whether the ledger judged lacks a row this tree registers itself.
+    lines.append(_format_declared_line(declared_rows, drainable))
 
     # Printed under a GREEN verdict as much as a red one: a row registered by another checkout can
     # be present while every check still passes, and the reader wants to know before the next merge.
@@ -2123,6 +2254,91 @@ def _selftest() -> None:
         _xml.write_text("<testsuites><testcase", encoding="utf-8")
         assert read_junit(_xml) == {}, "a truncated file must yield no verdicts, never a guess"
 
+    # ---- ROWS THIS TREE DECLARES (2026-10-06). The pre-sync verdict on the tree declaring
+    # `value-chain-monitor` skipped one test more than the mirror's ceiling, for a row only that
+    # tree's deployment registers, and the message said to raise the ceiling.
+    _m = DECLARED_UNREGISTERED_MARK
+    _py_d = {
+        "skipped": 3,
+        "verdicts": {
+            "test_a": {
+                "t1": {"outcome": "skipped", "message": f"no row for x: {_m} — drains"},
+                "t2": {"outcome": "skipped", "message": "agent CLI absent"},
+                "t3": {"outcome": "skipped", "message": f"no row for y: {_m}"},
+                "t4": {"outcome": "passed", "message": ""},
+            }
+        },
+    }
+    _st_d = {"skipped": {"m1": [f"x {_m}"], "m2": [f"x {_m}", "agent CLI absent"]}}
+    _gates_d = {"g1": {"skipped": [f"y {_m}"]}, "g2": {"skipped": []}}
+    _d = drainable_skips(_py_d, _st_d, _gates_d)
+    assert _d == {"skipped_max": 2, "selftest_skipped_max": 1, "gate_skipped_max": 1}, _d
+    # NOT COUNTED is never zero: skips pytest left no per-test record of, or no mark to look for.
+    assert drainable_skips({"skipped": 2}, {"skipped": {}}, {})["skipped_max"] is None
+    assert drainable_skips({"skipped": 0}, {"skipped": {}}, {})["skipped_max"] == 0
+    assert set(drainable_skips(_py_d, _st_d, _gates_d, mark="").values()) == {None}
+    # An exceeded skip ceiling carries the blocking AND the drainable number, in one message.
+    _z_d = {k: 0 for k, _ in CEILINGS}
+    _over_d = _ceiling_problems(
+        {"mirror_skipped_max": 21},
+        {**_z_d, "skipped_max": 22},
+        shape=EXEC_MIRROR,
+        drainable={**_d, "skipped_max": 1},
+    )
+    assert len(_over_d) == 1 and "22 skipped test(s) > agreed maximum 21" in _over_d[0], _over_d
+    assert "1 of them skipped only for a row this tree declares" in _over_d[0], _over_d
+    assert "never a reason to raise `mirror_skipped_max`" in _over_d[0], _over_d
+    for _count, _says in ((0, "None of them skipped only"), (None, "NOT COUNTED")):
+        _over_c = _ceiling_problems(
+            {"skipped_max": 1}, {**_z_d, "skipped_max": 2}, drainable={"skipped_max": _count}
+        )
+        assert len(_over_c) == 1 and _says in _over_c[0], (_count, _over_c)
+    # Only skip ceilings gain the clause; the mypy ratchet's message is unchanged.
+    _over_x = _ceiling_problems(
+        {"mypy_exempt_max": 0}, {**_z_d, "mypy_exempt_max": 1}, drainable=_d
+    )
+    assert len(_over_x) == 1 and "registration" not in _over_x[0], _over_x
+    # The `declared:` line, every state reachable: drained, pending, no ledger, unreadable.
+    assert _format_declared_line({"state": "read", "declared": 18, "missing": []}, _d) == (
+        "  declared:   all 18 rows this tree declares are registered in the ledger judged"
+    )
+    _pending = _format_declared_line(
+        {"state": "read", "declared": 18, "missing": ["value-chain-monitor"]}, _d
+    )
+    for _phrase in ("1 of the 18", "(value-chain-monitor)", "2 test(s)", "never raise a ceiling"):
+        assert _phrase in _pending, (_phrase, _pending)
+    assert PREREQ_ABSENT_MARK not in _pending, "a diagnostic line must not spend skip headroom"
+    assert "NOT COUNTED test(s)" in _format_declared_line(
+        {"state": "read", "declared": 18, "missing": ["x"]}, dict.fromkeys(SKIP_CEILINGS)
+    )
+    assert "no ledger when the run began" in _format_declared_line(
+        {"state": "absent", "declared": 18, "missing": None}, _d
+    )
+    assert "NOT CHECKED (boom)" in _format_declared_line(
+        {"state": "unreadable", "error": "boom"}, _d
+    )
+    # It reads the ledger the run is ABOUT to judge, and writes nothing to do it.
+    with tempfile.TemporaryDirectory(prefix="verify-declared-") as _td:
+        import capabilities as _caps
+
+        _ledger_d = pathlib.Path(_td) / "capabilities.json"
+        assert declared_rows_at_start(_ledger_d)["state"] == "absent"
+        _caps._write_ledger_unlocked(_ledger_d, {})
+        _caps.seed_declared(_ledger_d)
+        assert declared_rows_at_start(_ledger_d)["missing"] == [], "seeding left a declared row"
+        _rows_d = _caps.load(_ledger_d, create=False)
+        _gone = _caps.declared_row_ids()[-1]
+        del _rows_d[_gone]
+        _caps._write_ledger_unlocked(_ledger_d, _rows_d)
+        _bytes_d = _ledger_d.read_bytes()
+        _at = declared_rows_at_start(_ledger_d)
+        assert _at == {
+            "state": "read",
+            "declared": len(_caps.declared_row_ids()),
+            "missing": [_gone],
+        }, _at
+        assert _ledger_d.read_bytes() == _bytes_d, "reading the ledger to be judged wrote it"
+
     print(
         "verify.py selftest: OK (count parsing, selftest discovery, silent-zero-exit is a "
         "FAILURE, a loud skip is not a pass, skip ceiling fails when exceeded and holds when "
@@ -2135,8 +2351,9 @@ def _selftest() -> None:
         "never counted as a skip, mypy ratchet prints both numbers and its ceiling can fail, "
         "three tree shapes carry three agreed ceilings, each mirror shape GREEN under its own, "
         "selftests classify identically at any width, a run reads one private copy of the "
-        "state and writes neither source, a failed copy refuses the run, and only a replayable "
-        "pytest verdict is kept)"
+        "state and writes neither source, a failed copy refuses the run, only a replayable "
+        "pytest verdict is kept, and the declared-rows line names what the judged ledger lacks "
+        "while an exceeded skip ceiling counts the skips registration alone drains)"
     )
 
 
