@@ -43,7 +43,10 @@ class RetrospectiveEvidenceTests(unittest.TestCase):
         ):
             for value in values:
                 invalid.append(
-                    {**valid, "ground_truth_evidence": {**valid["ground_truth_evidence"], key: value}}
+                    {
+                        **valid,
+                        "ground_truth_evidence": {**valid["ground_truth_evidence"], key: value},
+                    }
                 )
         with tempfile.TemporaryDirectory() as temporary, patch.object(
             retro, "disputes", return_value=[row]
