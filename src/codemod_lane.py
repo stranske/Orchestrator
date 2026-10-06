@@ -306,14 +306,21 @@ def validate_campaign(campaign: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _missing_ignore_entries(content: str, entries: Sequence[str] = IGNORE_ENTRIES) -> list[str]:
+    """Match Git's LF-separated lines, allowing a trailing CR for CRLF files."""
+    existing = {line.removesuffix("\r") for line in content.split("\n")}
+    return [entry for entry in entries if entry not in existing]
+
+
 def append_missing_ignores(content: str, entries: Sequence[str] = IGNORE_ENTRIES) -> str:
     """Preserve the original bytes, appending only absent exact ignore entries."""
-    existing = set(content.splitlines())
-    missing = [entry for entry in entries if entry not in existing]
+    missing = _missing_ignore_entries(content, entries)
     if not missing:
         return content
     newline = "\r\n" if "\r\n" in content else "\n"
-    separator = "" if not content or content.endswith(("\n", "\r")) else newline
+    separator = "" if not content or content.endswith("\n") else newline
+    if content.endswith("\r"):
+        separator = "\n"
     return content + separator + newline.join(missing) + newline
 
 
@@ -346,7 +353,7 @@ def _repo_file(repo: str, path: str, gh: Any) -> str:
 
 
 def target_issue_body(campaign: dict[str, Any], repo: str, content: str) -> str:
-    missing = [e for e in IGNORE_ENTRIES if e not in set(content.splitlines())]
+    missing = _missing_ignore_entries(content)
     marker = f"<!-- codemod-campaign:{campaign['campaign']['id']} -->"
     return f"""{marker}
 ## Why
@@ -387,7 +394,7 @@ def file_targets(campaign: dict[str, Any], *, gh: Any = None) -> dict[str, Any]:
     marker = f"<!-- codemod-campaign:{campaign['campaign']['id']} -->"
     for repo in campaign["campaign"]["repos"]:
         content = _repo_file(repo, ".gitignore", gh)
-        missing = [e for e in IGNORE_ENTRIES if e not in set(content.splitlines())]
+        missing = _missing_ignore_entries(content)
         row = rows.setdefault(repo, {})
         for field in ("merged", "durable", "cost_usd"):
             row.setdefault(field, None)
