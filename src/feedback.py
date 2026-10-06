@@ -25,7 +25,6 @@ SQLite at ~/.codex/orchestrator/feedback/orchestrator.db. `--selftest` runs offl
 
 from __future__ import annotations
 
-from contextlib import nullcontext
 import hashlib
 import json
 import math
@@ -35,6 +34,7 @@ import sqlite3
 import sys
 import time
 from collections.abc import Callable
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
