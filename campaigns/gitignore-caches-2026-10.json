@@ -1,0 +1,61 @@
+{
+  "campaign": {
+    "id": "gitignore-caches-2026-10",
+    "title": "Ignore tool caches and coverage artifacts",
+    "goal": "Append missing tool cache and coverage ignore entries without changing existing rules",
+    "repos": [
+      "stranske/Counter_Risk",
+      "stranske/Manager-Database",
+      "stranske/Inv-Man-Intake",
+      "stranske/trip-planner",
+      "stranske/learning-management-system",
+      "stranske/Pension-Data"
+    ],
+    "constraints": [
+      "Only .gitignore changes; no workflows or template-synced files"
+    ],
+    "definition_of_done": [
+      "One ready PR per needed repository with add-only diff and effective-ignore proof"
+    ]
+  },
+  "operation": "gitignore-add-only",
+  "add_only": true,
+  "ignore_entries": [
+    ".mypy_cache/",
+    ".pytest_cache/",
+    ".ruff_cache/",
+    "coverage.xml",
+    ".coverage"
+  ],
+  "source_target": "stranske/Orchestrator#435",
+  "scope": {
+    "include_globs": [
+      ".gitignore"
+    ],
+    "exclude_globs": [],
+    "max_files": 6
+  },
+  "recipe": {
+    "tool": "custom",
+    "language": "text",
+    "summary": "Append only absent tool cache and coverage entries",
+    "risk_level": "low",
+    "command_template": "python3 -c 'from pathlib import Path; p=Path('\"'\"'.gitignore'\"'\"'); s=p.read_text().splitlines(); print('\"'\"'\\n'\"'\"'.join(e for e in ['\"'\"'.mypy_cache/'\"'\"', '\"'\"'.pytest_cache/'\"'\"', '\"'\"'.ruff_cache/'\"'\"', '\"'\"'coverage.xml'\"'\"', '\"'\"'.coverage'\"'\"'] if e not in s))' --dry-run"
+  },
+  "rollout": {
+    "batch_size": 2,
+    "branch_prefix": "codex/issue",
+    "pr_strategy": "per_repo"
+  },
+  "acceptance": [
+    "Only missing ignore lines are appended and existing content is preserved byte for byte"
+  ],
+  "validation": [
+    "git diff --check",
+    "git check-ignore --no-index .mypy_cache/probe .pytest_cache/probe .ruff_cache/probe coverage.xml .coverage"
+  ],
+  "manual_review": [
+    "Existing ignore exceptions stay present; normal machine checks and review-thread gates apply"
+  ],
+  "delegate_prompt": "Add only missing lines from .mypy_cache/, .pytest_cache/, .ruff_cache/, coverage.xml and .coverage to .gitignore. Never remove existing lines. Preserve original content byte for byte, append absent entries, and change no other file. Prove zero deleted lines with git diff --numstat and all five paths with git check-ignore --no-index; capture command output in one ready PR per source issue."
+}

@@ -27,6 +27,7 @@ import backlog
 import capabilities
 import capacity
 import claims
+import codemod_lane
 import dispatcher
 import env_prereq
 import router
@@ -109,6 +110,7 @@ def _filter_backlog(
                 "labels": item.get("labels") or [],
                 "title": item.get("title") or "",
                 "body": item.get("body") or "",
+                "prompt": item.get("prompt") or "",
             }
         )
         if len(selected) >= max_items:
@@ -128,7 +130,9 @@ def _release_rejected_claims(rejected: list[dict]) -> None:
                 pass
 
 
-def _sanitize_decision(decision: dict, task_types: set[str]) -> tuple[dict, list[dict]]:
+def _sanitize_decision(
+    decision: dict, task_types: set[str], allowed_targets: set[str] | None = None
+) -> tuple[dict, list[dict]]:
     kept = []
     rejected = []
     for assignment in decision.get("assignments") or []:
@@ -139,6 +143,8 @@ def _sanitize_decision(decision: dict, task_types: set[str]) -> tuple[dict, list
             reason = "not a selected range-lane task type"
         elif assignment.get("agent") in router.BACKUP_AGENTS:
             reason = "backup/paygo agent is not allowed in automatic range-lane rollout"
+        elif allowed_targets is not None and assignment.get("target") not in allowed_targets:
+            reason = "assignment escaped the explicit campaign targets"
         if reason:
             rejected.append({"assignment": assignment, "reason": reason})
         else:
@@ -178,13 +184,24 @@ def build_rollout(
     cached_backlog: bool = False,
     capacity_payload: dict[str, Any] | None = None,
     dry_run: bool = True,
+    campaign: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    selected_task_types = task_types or set(RANGE_TASK_TYPES)
+    if campaign is not None and (backlog_payload is not None or cached_backlog):
+        raise ValueError("campaign input cannot be combined with discovered/cached backlog")
+    if campaign is not None and task_types and task_types != {"codemod"}:
+        raise ValueError("campaign input supports only codemod tasks")
+    selected_task_types = task_types or (
+        {"codemod"} if campaign is not None else set(RANGE_TASK_TYPES)
+    )
     cap = max(0, int(max_dispatches))
     effective_backlog_payload = (
-        backlog_payload
-        if backlog_payload is not None
-        else _load_backlog_payload(cached=cached_backlog)
+        codemod_lane.campaign_backlog(campaign)
+        if campaign is not None
+        else (
+            backlog_payload
+            if backlog_payload is not None
+            else _load_backlog_payload(cached=cached_backlog)
+        )
     )
     selected, skipped = _filter_backlog(
         effective_backlog_payload,
@@ -225,7 +242,19 @@ def build_rollout(
             dry_run=dry_run,
             learned=router.learned_ranks(),
         )
-        decision, rejected_assignments = _sanitize_decision(decision, selected_task_types)
+        allowed_targets = {i["target"] for i in selected} if campaign is not None else None
+        decision, rejected_assignments = _sanitize_decision(
+            decision, selected_task_types, allowed_targets
+        )
+        if campaign is not None:
+            prompts = {i["target"]: i["prompt"] for i in selected}
+            for assignment in decision.get("assignments") or []:
+                assignment["prompt"] = prompts[assignment["target"]]
+                assignment["capability_ids"] = list(
+                    dict.fromkeys(
+                        list(assignment.get("capability_ids") or []) + ["codemod-campaign"]
+                    )
+                )
         if not dry_run and rejected_assignments:
             _release_rejected_claims(rejected_assignments)
         for row in rejected_assignments:
@@ -294,6 +323,7 @@ def build_rollout(
             "backup_paygo_allowed": False,
             "default_policy_change": False,
         },
+        "campaign": effective_backlog_payload.get("program") if campaign is not None else None,
     }
 
 
@@ -320,6 +350,13 @@ def format_human(rollout: dict) -> str:
                 f"  {row['target']}: {row['task_type']} -> " f"{row['agent']}/{row['mode']}{marker}"
             )
     lines.append(f"active dispatch requires --apply --confirm-rollout and {ENV_FLAG}=1")
+    if rollout.get("campaign"):
+        rows = rollout["campaign"].get("repos", {}).values()
+        lines.append(
+            f"campaign: repos {len(rollout['campaign'].get('repos', {}))}, "
+            f"dispatched {rollout['counts']['dispatched']}, "
+            f"merged {sum(r.get('merged') is True for r in rows)}"
+        )
     return "\n".join(lines)
 
 
@@ -462,6 +499,12 @@ def main(argv: list[str] | None = None) -> int:
         help="use ~/.codex/handoff/backlog.json instead of refreshing live GitHub state",
     )
     parser.add_argument("--selftest", action="store_true")
+    parser.add_argument("--campaign", type=Path, help="use only the filed targets of this campaign")
+    parser.add_argument(
+        "--record-campaign",
+        action="store_true",
+        help="save the refreshed campaign outcome report without enabling dispatch",
+    )
     args = parser.parse_args(argv)
 
     if args.selftest:
@@ -477,19 +520,33 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.apply and (not args.confirm_rollout or os.environ.get(ENV_FLAG) != "1"):
-        result = {
+        result: dict[str, Any] = {
             "error": f"active dispatch requires --confirm-rollout and {ENV_FLAG}=1",
             "read_only": True,
         }
         print(json.dumps(result, indent=2) if args.as_json else result["error"])
         return 2
+    if args.record_campaign and not args.campaign:
+        parser.error("--record-campaign requires --campaign")
 
-    rollout = build_rollout(
-        task_types=set(args.task_type) if args.task_type else None,
-        max_dispatches=args.max_dispatches,
-        cached_backlog=args.cached_backlog,
-        dry_run=not args.apply,
-    )
+    try:
+        campaign = (
+            codemod_lane.parse_campaign_json(args.campaign.read_text()) if args.campaign else None
+        )
+        rollout = build_rollout(
+            task_types=set(args.task_type) if args.task_type else None,
+            max_dispatches=args.max_dispatches,
+            cached_backlog=args.cached_backlog,
+            dry_run=not args.apply,
+            campaign=campaign,
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(json.dumps({"error": str(exc), "read_only": True}))
+        return 2
+    if args.record_campaign and campaign is not None:
+        codemod_lane._write_program(
+            codemod_lane.campaign_program_path(campaign), rollout["campaign"]
+        )
     if args.apply:
         decision = rollout.get("decision") or {}
         if not rollout.get("eligible") or not decision.get("assignments"):
@@ -538,6 +595,14 @@ def main(argv: list[str] | None = None) -> int:
                     ref=str(router.DECISION_JSON),
                     metadata={"dispatched": dispatched},
                 )
+        if campaign is not None:
+            program = rollout["campaign"]
+            for launched in result.get("dispatch_result", {}).get("launched") or []:
+                repo = str(launched.get("target", "")).split("#", 1)[0]
+                row = program["repos"].get(repo)
+                if row is not None:
+                    row.setdefault("dispatches", []).append(launched)
+            codemod_lane._write_program(codemod_lane.campaign_program_path(campaign), program)
         print(json.dumps(result, indent=2) if args.as_json else format_human(result))
         return 0
 
