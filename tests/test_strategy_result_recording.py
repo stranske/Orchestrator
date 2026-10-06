@@ -10,6 +10,7 @@ import pytest
 import exp_abcd
 import feedback
 import strategy_experiment
+import synthesis_promotion
 
 
 @pytest.fixture
@@ -131,3 +132,104 @@ def test_direct_evaluation_records_final_pair_candidates_and_state(measured, mon
     result = json.loads(Path(evaluated["strategy_result"]).read_text())
     assert result["status"] == "completed"
     assert result["comparison"]["pair"]["score_mean"] == 7
+
+
+def _promoted_trial(measured):
+    exp_id, plan, edir = measured
+    (edir / "meta.json").write_text(
+        json.dumps({"exp_id": exp_id, "repo": "o/r", "arms": plan["arms"]})
+    )
+    (edir / "spec.md").write_text("## Acceptance Criteria\nDeliver the requested behavior.")
+    (edir / "eval-maps.json").write_text(json.dumps({"j1": {}, "j2": {}}))
+    state = synthesis_promotion.ensure_evaluated_state(edir)
+    state["synthesis"] = {"commit": "frozen-candidate-commit", "run_ids": [f"{exp_id}:synth"]}
+    state["verification"] = {"passed": True, "evidence_hash": "sha256:verified", "evidence": {}}
+    for phase in ("synth_running", "synth_complete", "synth_verified"):
+        state, _ = synthesis_promotion.transition(state, phase, reason="test")
+    state, candidate = synthesis_promotion.compile_candidate(state, edir)
+    synthesis_promotion._atomic_json(synthesis_promotion.state_path(edir), state)
+    return state, candidate
+
+
+def test_followup_refreshes_late_costs_and_preserves_promotion_receipt(measured, monkeypatch):
+    exp_id, plan, edir = measured
+    state, candidate = _promoted_trial(measured)
+    with feedback._conn() as conn:
+        conn.execute("DELETE FROM costs")
+    strategy_experiment.refresh_evaluation_result(exp_id)
+    receipt_path = edir / "strategy-receipt.json"
+    assert json.loads(receipt_path.read_text())["acceptance_status"] == "UNKNOWN"
+    for arm in plan["arms"]:
+        for run_id in arm["attempt_run_ids"]:
+            feedback.record_cost(run_id, cost_usd=0.25, source="ccusage")
+    monkeypatch.setattr(exp_abcd, "ship_gate_stamp", lambda: edir.parent / "ship-gate.stamp")
+
+    def no_dispatch(*args, **kwargs):
+        pytest.fail("refresh must never collect, evaluate, or synthesize again")
+
+    result = exp_abcd.followup(
+        collect_fn=no_dispatch,
+        evaluate_fn=no_dispatch,
+        synthesize_fn=no_dispatch,
+        promotion_reconcile_fn=lambda *args, **kwargs: {"state": state, "actions": []},
+    )
+    assert result["processed"] == []
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["acceptance_status"] == "completed"
+    assert receipt["comparison"]["single"]["cost_usd"] == 0.75
+    assert receipt["comparison"]["pair"]["cost_usd"] == 1.5
+    assert receipt["promotion"]["candidate_id"] == candidate["candidate_id"]
+    assert receipt["promotion"]["synthesis_commit"] == candidate["synthesis"]["commit"]
+    assert receipt["promotion"]["verification_evidence_hash"] == "sha256:verified"
+    saved_receipt = receipt.copy()
+    saved_receipt.pop("written_ts")
+    strategy_experiment.refresh_evaluation_result(exp_id)
+    repeated = json.loads(receipt_path.read_text())
+    repeated.pop("written_ts")
+    assert repeated == saved_receipt
+
+
+@pytest.mark.parametrize("broken", ["missing", "candidate", "hash", "commit", "state", "json"])
+def test_receipt_needs_matching_verified_promotion_artifacts(measured, broken):
+    exp_id, _plan, edir = measured
+    state, _candidate = _promoted_trial(measured)
+    strategy_experiment.refresh_evaluation_result(exp_id)
+    assert (
+        json.loads((edir / "strategy-receipt.json").read_text())["acceptance_status"] == "completed"
+    )
+    if broken == "missing":
+        (edir / synthesis_promotion.CANDIDATE_JSON).unlink()
+    elif broken == "json":
+        (edir / synthesis_promotion.CANDIDATE_JSON).write_text("{")
+    else:
+        if broken == "candidate":
+            state["candidate"]["candidate_id"] = "another-candidate"
+        elif broken == "hash":
+            state["verification"]["evidence_hash"] = "sha256:other"
+        elif broken == "commit":
+            state["synthesis"]["commit"] = "different-commit"
+        else:
+            state["schema_version"] = 999
+        synthesis_promotion._atomic_json(synthesis_promotion.state_path(edir), state)
+    strategy_experiment.refresh_evaluation_result(exp_id)
+    receipt = json.loads((edir / "strategy-receipt.json").read_text())
+    assert receipt["status"] == "completed"
+    assert receipt["acceptance_status"] == "UNKNOWN"
+
+
+def test_refresh_cli_preserves_unknown_until_promotion_completes(measured, capsys):
+    exp_id, _plan, edir = measured
+    (edir / "eval-maps.json").write_text(json.dumps({"j1": {}, "j2": {}}))
+    assert strategy_experiment.main(["--exp-id", exp_id, "--refresh-result", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["acceptance_status"] == "UNKNOWN"
+    _promoted_trial(measured)
+    assert strategy_experiment.main(["--exp-id", exp_id, "--refresh-result", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["acceptance_status"] == "completed"
+
+
+@pytest.mark.parametrize("maps", [{}, []])
+def test_refresh_refuses_missing_original_evaluator_identities(measured, maps):
+    exp_id, _plan, edir = measured
+    (edir / "eval-maps.json").write_text(json.dumps(maps))
+    with pytest.raises(ValueError, match="original evaluator identities"):
+        strategy_experiment.refresh_evaluation_result(exp_id)

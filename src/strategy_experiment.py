@@ -36,6 +36,7 @@ import exp_abcd
 import feedback
 import fleet_shapes
 import research_scheduler
+import synthesis_promotion
 
 ORCH = Path(__file__).resolve().parent
 DEFAULT_TASK_TYPE = "implement"
@@ -664,6 +665,7 @@ def write_scored_result(
     scores: dict[str, Any],
     cost_rows: Sequence[dict[str, Any]],
     state_dir: Path | None = None,
+    result_path: Path | None = None,
 ) -> Path:
     """Write a comparison only when every arm has scored and cost coverage.
 
@@ -726,7 +728,7 @@ def write_scored_result(
         ),
         "written_ts": int(time.time()),
     }
-    path = strategy_result_path(state_dir)
+    path = result_path or strategy_result_path(state_dir)
     fleet_shapes.write_json_atomic(path, payload)
     return path
 
@@ -779,7 +781,72 @@ def write_evaluation_result(
                     }
                 )
     means = {arm_id: sum(values) / len(values) for arm_id, values in scores.items() if values}
-    return write_scored_result(plan, scores=means, cost_rows=cost_rows)
+    edir = strategy_path.parent
+    # Preserve this trial before updating the shared switch-review projection.
+    # Reading that shared file back could pick up a concurrent trial's result.
+    receipt_path = write_scored_result(
+        plan, scores=means, cost_rows=cost_rows, result_path=edir / "strategy-receipt.json"
+    )
+    receipt = json.loads(receipt_path.read_text())
+    result_path = strategy_result_path()
+    fleet_shapes.write_json_atomic(result_path, receipt)
+    promotion_error = None
+    try:
+        promotion = synthesis_promotion.load_state(edir)
+    except (OSError, ValueError, TypeError) as exc:
+        promotion = None
+        promotion_error = str(exc)[:300]
+    receipt["promotion"] = None
+    promoted = False
+    if promotion is not None:
+        candidate = promotion.get("candidate") or {}
+        verification = promotion.get("verification") or {}
+        candidate_path = edir / synthesis_promotion.CANDIDATE_JSON
+        try:
+            candidate_artifact = (
+                json.loads(candidate_path.read_text()) if candidate_path.exists() else None
+            )
+        except (OSError, ValueError) as exc:
+            candidate_artifact = None
+            promotion_error = str(exc)[:300]
+        promoted = (
+            promotion.get("experiment_id") == exp_id
+            and promotion["delivery_phase"]
+            in {"candidate_ready", "delegated_or_pr", "merged", "durable"}
+            and verification.get("passed") is True
+            and bool(verification.get("evidence_hash"))
+            and bool(candidate.get("candidate_id"))
+            and candidate_artifact == candidate
+            and candidate.get("verification_evidence_hash") == verification["evidence_hash"]
+            and bool((promotion.get("synthesis") or {}).get("commit"))
+            and (candidate.get("synthesis") or {}).get("commit") == promotion["synthesis"]["commit"]
+            and (candidate.get("delivery") or {}).get("direct_publication_allowed") is False
+        )
+        receipt["promotion"] = {
+            "delivery_phase": promotion["delivery_phase"],
+            "candidate_id": candidate.get("candidate_id"),
+            "synthesis_commit": (promotion.get("synthesis") or {}).get("commit"),
+            "verification_evidence_hash": verification.get("evidence_hash"),
+            "candidate_path": str(candidate_path),
+            "verified_candidate": promoted,
+        }
+    receipt["acceptance_status"] = (
+        "completed" if receipt["status"] == "completed" and promoted else "UNKNOWN"
+    )
+    receipt["promotion_error"] = promotion_error
+    fleet_shapes.write_json_atomic(receipt_path, receipt)
+    return result_path
+
+
+def refresh_evaluation_result(exp_id: str, *, exp_dir: Path | None = None) -> Path | None:
+    """Refresh late cost and promotion evidence without dispatching another judge."""
+    if not strategy_metadata_path(exp_id, exp_dir).exists():
+        return None
+    edir = (exp_dir or exp_abcd.EXP_DIR) / exp_id
+    maps = json.loads((edir / "eval-maps.json").read_text())
+    if not isinstance(maps, dict) or not maps:
+        raise ValueError("strategy receipt requires the original evaluator identities")
+    return write_evaluation_result(exp_id, list(maps), exp_dir=exp_dir)
 
 
 def strategy_arm_costs(
@@ -952,6 +1019,11 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--repo")
     parser.add_argument("--spec-file")
     parser.add_argument("--exp-id")
+    parser.add_argument(
+        "--refresh-result",
+        action="store_true",
+        help="Refresh the saved comparison/promotion receipt without launching agents",
+    )
     parser.add_argument("--subject", help="Select a current open, unlinked issue from fleet shapes")
     parser.add_argument(
         "--shapes-path", type=Path, help="Override fleet-shapes.json for subject selection"
@@ -1004,6 +1076,26 @@ def main(argv: Sequence[str]) -> int:
     if args.selftest:
         _selftest()
         return 0
+    if args.refresh_result:
+        if not args.exp_id or args.prepare or args.subject:
+            print(
+                "--refresh-result requires --exp-id and cannot prepare a subject", file=sys.stderr
+            )
+            return 2
+        try:
+            if refresh_evaluation_result(args.exp_id) is None:
+                raise ValueError("strategy experiment metadata not found")
+            receipt_path = exp_abcd.EXP_DIR / args.exp_id / "strategy-receipt.json"
+            receipt = json.loads(receipt_path.read_text())
+            print(
+                json.dumps(receipt, indent=2, sort_keys=True)
+                if args.json
+                else f"{receipt_path}: {receipt['acceptance_status']}"
+            )
+            return 0 if receipt["acceptance_status"] == "completed" else 1
+        except (OSError, ValueError, TypeError) as exc:
+            print(f"strategy_experiment.py: {exc}", file=sys.stderr)
+            return 1
     if args.subject:
         if not args.exp_id or not args.agent or not args.reviewer:
             print("--subject requires --exp-id, --agent, and --reviewer", file=sys.stderr)

@@ -666,6 +666,11 @@ Direct evaluation and followup both record `$ORCH_STATE_DIR/capability-program/s
 complete exact evaluator cells and measured costs are required for a completed comparison.
 Missing evidence remains UNKNOWN in the switch review. Existing synthesis promotion handles later
 candidate verification; guarded launch does not enable the unattended research switch or publish a mirror.
+After evaluation, followup refreshes late cost and promotion evidence without rerunning judges.
+To refresh one trial explicitly, run `python3 src/strategy_experiment.py --exp-id id
+--refresh-result --json`. It preserves `experiments/<exp_id>/strategy-receipt.json` with the
+comparison and candidate identity, commit, and verification hash. The command exits 1 while
+measured costs or a matching verified promotion candidate are missing, and 0 once both are present.
 
 ---
 

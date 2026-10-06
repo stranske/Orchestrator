@@ -1858,6 +1858,16 @@ def followup(
         meta_p, spec_p = edir / "meta.json", edir / "spec.md"
         if not meta_p.exists() or not spec_p.exists():
             continue
+        if (edir / "eval-maps.json").exists() and (edir / "strategy.json").exists():
+            try:
+                import strategy_experiment
+
+                strategy_experiment.refresh_evaluation_result(edir.name)
+            except Exception as exc:
+                fleet_shapes.write_json_atomic(
+                    edir / "strategy-result-error.json",
+                    {"status": "UNKNOWN", "phase": "refresh", "error": str(exc)[:300]},
+                )
         if (
             (edir / "eval-maps.json").exists()
             or (edir / "followup-skip.json").exists()
