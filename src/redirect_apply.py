@@ -274,17 +274,26 @@ def link_applied_outcomes(
         if (str(row["role_run_id"]), str(row["influenced_run_id"])) not in already
     ]
     linked: list[dict] = []
+    failures: list[dict] = []
     for row in pending:
         if dry_run:
             linked.append({**row, "linked": False, "dry_run": True})
             continue
-        result = redirect_shadow.link_outcome(
-            str(row["role_run_id"]),
-            str(row["influenced_run_id"]),
-            accepted=True,
-            notes="linked automatically from the applied redirect's own influence edge",
-            corpus_path=corpus,
-        )
+        try:
+            result = redirect_shadow.link_outcome(
+                str(row["role_run_id"]),
+                str(row["influenced_run_id"]),
+                accepted=True,
+                notes="linked automatically from the applied redirect's own influence edge",
+                corpus_path=corpus,
+            )
+        except Exception as exc:
+            failure = {**row, "reason": str(exc), "error_type": type(exc).__name__}
+            failures.append(failure)
+            redirect_shadow._append_event(
+                {"kind": "redirect_outcome_link_failed", "ts": int(time.time()), **failure}, corpus
+            )
+            continue
         synced = bool(((result.get("event") or {}).get("link_result") or {}).get("synced"))
         linked.append({**row, "linked": True, "synced": synced})
         if synced:
@@ -296,8 +305,74 @@ def link_applied_outcomes(
     return {
         "pending": len(pending),
         "linked": len([r for r in linked if r.get("linked")]),
+        "failed": len(failures),
+        "failures": failures,
         "dry_run": bool(dry_run),
         "links": linked[:20],
+    }
+
+
+def replay_stalls(directory: Path) -> dict[str, Any]:
+    """Exercise fixture proposal -> plan -> authorization, with no offload or state writes."""
+    previous = os.environ.get("ORCH_CAPABILITY_HEARTBEATS")
+    os.environ["ORCH_CAPABILITY_HEARTBEATS"] = "0"
+    try:
+        return _replay_stalls(directory)
+    finally:
+        if previous is None:
+            os.environ.pop("ORCH_CAPABILITY_HEARTBEATS", None)
+        else:
+            os.environ["ORCH_CAPABILITY_HEARTBEATS"] = previous
+
+
+def _replay_stalls(directory: Path) -> dict[str, Any]:
+    import roles
+
+    results: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("*.json")):
+        report = json.loads(path.read_text(encoding="utf-8"))
+        # A fixed named worker is fixture input, never a live routing decision or model verdict.
+        proposal = {
+            "action": (report.get("policy_decision") or {}).get("action", "redirect"),
+            "switch_agent": "codex",
+            "reason": "offline stall-chain fixture",
+            "confidence": "high",
+            "corrected_prompt": "Repair the scoped fixture defect; prove the acceptance gate before delivery.",
+        }
+        result = roles.run_redirect_agent(
+            report,
+            "fixture acceptance gate",
+            backend="codex",
+            proposal_json=proposal,
+            dispatch=False,
+        )
+        role_id = f"fixture:redirect:{path.stem}"
+        plan = redirect_plan.attach_role_lineage(result["plan"], role_id)
+        authorization = authorize(
+            plan_obj=plan,
+            role_run_id=role_id,
+            decision_source=result["decision_source"],
+            errors=result.get("errors"),
+            claim_holder=None,
+            prior_agent=report.get("agent"),
+            gate={"bootstrap_needed": True, "disagreements_needed": 3},
+            applied_targets=set(),
+            applies_today=0,
+            flag_on=False,
+            **lane_facts(report, pid_checker=lambda pid: False),
+        )
+        results.append(
+            {
+                "fixture": path.name,
+                "agent": redirect_shadow._plan_agent(plan),
+                "authorization": authorization,
+            }
+        )
+    return {
+        "total": len(results),
+        "authorized": sum(bool(r["agent"] and r["authorization"]["allowed"]) for r in results),
+        "dry_run": True,
+        "results": results,
     }
 
 
@@ -1869,6 +1944,9 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument(
+        "--replay-stalls", type=Path, help="offline fixture chain; never dispatch or apply"
+    )
+    ap.add_argument(
         "--status", action="store_true", help="gate deficits beside the drainable count"
     )
     ap.add_argument(
@@ -1917,6 +1995,14 @@ def main(argv: list[str]) -> int:
     if args.selftest:
         _selftest()
         return 0
+    if args.replay_stalls:
+        out = replay_stalls(args.replay_stalls)
+        print(
+            json.dumps(out, indent=2)
+            if args.json
+            else f"authorized {out['authorized']}/{out['total']} with named agents (dry-run)"
+        )
+        return 0 if out["total"] and out["authorized"] == out["total"] else 1
     corpus = Path(args.corpus) if args.corpus else None
     report_dir = Path(args.report_dir) if args.report_dir else None
     plan_path = Path(args.stage2_plan) if args.stage2_plan else None
@@ -1949,7 +2035,7 @@ def main(argv: list[str]) -> int:
         print(
             json.dumps(out, indent=2)
             if args.json
-            else f"linked {out['linked']} of {out['pending']} pending applied-redirect outcomes"
+            else f"linked {out['linked']}, failed {out['failed']} of {out['pending']} pending applied-redirect outcomes"
         )
         return 0
 
