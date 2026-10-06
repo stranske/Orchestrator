@@ -287,6 +287,24 @@ step and input switches held off. Unknown demand never becomes zero. It changes 
 selection, gate, dispatcher or lifecycle decision; the existing weekly artifact carries
 the section rather than a second audit log or inventory.
 
+`issue_size_quality` extends that weekly caller with a read-only join: every closed issue in
+the 90-day reviewed-fleet population contributes its checkbox-count band, and only PRs merged
+by the issue's close can contribute canonical Brain outcomes. PASS uses the final adjudication;
+verifier NON_PASS preserves the original verifier judgment. Fleet facts supply merge time for
+the existing seven-day durability window; the broke-later column uses fleet-shapes' bad-durability
+definition. Every rate carries its sample count; an answered zero is zero, and an absent sample
+is unmeasured. Per-repo search pagination and errors remain explicit. The existing weekly command
+writes `$ORCH_STATE_DIR/capability-program/size-quality.json`, with one observation per week.
+After complete observations span two weeks, compare 16+ tasks to 1–4: at least ten percentage
+points of degradation names `file_opener_bucket_wiring_issue`; otherwise it names
+`retire_issue_level_claim`. These are evidence dispositions of the issue-level wiring claim,
+not lifecycle changes or a new owner approval queue. Partial or stale observations cannot decide.
+
+A redirect `decompose` verdict calls the existing router-chosen shadow DecomposerAgent and
+attaches its plan only after the existing epic validator accepts it. `ORCH_ROLE_SHADOW` and the
+existing per-cycle cap still govern model transport. No valid plan leaves the deterministic
+2–3-slice prompt with a concrete fallback reason. The plan retains the role-run id when present;
+this seam never dispatches subtasks or changes live-apply authorization.
 The same weekly artifact reports adversarial high-stakes demand from `fleet_shapes`' exact
 merged-agent population: workflow/metadata and auth/data paths, or the single 500-line
 size threshold, beside the independent label count. Raw paths are counted before top-three
@@ -1453,3 +1471,11 @@ construction refuses a missing or placeholder agent. Watch classification retain
 recommendation while withholding apply commands until a real worker is selected.
 Role-run Brain metadata retains caller `source` and `report_state`, distinguishing
 real sweep stalls, live dispatch and historical replay without changing apply authority.
+
+Local `dispatcher.delegate` records a delivery-lane invocation only after its worker
+starts: `testgen` → `testgen-lane`, `codemod` → `codemod-campaign`, and
+`cross_repo` → `cross-repo-coordination`. The same lane tag travels through the
+existing Brain run and versioned influence edge. Standalone delegates are observed
+even outside an active tick; prompt construction and dry-run plans only match
+work, and refused/unbuildable delegates never count as invocations. This credits
+a started worker, not a successful outcome; outcomes keep their durability gates.
