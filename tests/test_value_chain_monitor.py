@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 import capabilities
 import capability_admission
 import capability_advisor
@@ -9,6 +11,16 @@ import switch_review
 import value_chain_monitor as monitor
 
 NOW = 1791183600
+
+
+@pytest.fixture(autouse=True)
+def isolated_adversarial_population(monkeypatch):
+    """Value-chain fixtures do not exercise the independent live fleet collector."""
+    monkeypatch.setattr(
+        switch_review,
+        "adversarial_shape_population",
+        lambda **kw: {"status": "unknown", "reason": "unit-test fixture"},
+    )
 
 
 def ledger(tmp_path, names=("role-prompt",)):
@@ -103,8 +115,6 @@ def test_switch_review_prints_one_line_per_live_capability(tmp_path, monkeypatch
     monkeypatch.setattr(switch_review, "fleet_gates", lambda **kw: {})
     monkeypatch.setattr(switch_review, "_exploration_gate", lambda: {})
     monkeypatch.setattr(switch_review, "gate_expiry", lambda **kw: {})
-    # Keep this fixture rendering test independent of live fleet collection.
-    monkeypatch.setattr(switch_review, "adversarial_shape_population", lambda **kw: {})
     rep = switch_review.review(now=NOW, env={}, path=path)
     text = switch_review.format_report(rep)
     assert rep["value_chain"]["total"] == 2
