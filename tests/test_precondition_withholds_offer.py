@@ -12,6 +12,46 @@ import capabilities
 import capability_advisor as ca
 import capability_propensity as cp
 
+
+def test_missing_fact_events_deduplicate_per_surface_without_cross_counting(tmp_path):
+    path = _ledger(tmp_path)
+    exp = ca.experiment_id("same bounded assessment")
+    assert cp.record_fact_missing(
+        "runtime-ac-checks", exp, fact="PR size unknown", surface="one", path=path
+    )
+    assert cp.record_fact_missing(
+        "runtime-ac-checks", exp, fact="PR size unknown", surface="two", path=path
+    )
+    assert not cp.record_fact_missing(
+        "runtime-ac-checks", exp, fact="PR size unknown", surface="two", path=path
+    )
+    assert cp.record_fact_missing(
+        "redirect-policy", exp, fact="history unknown", surface="one", path=path
+    )
+    assert cp.surface_fact_missing_total("one", path=path) == 2
+    assert cp.surface_fact_missing_total("two", path=path) == 1
+    assert cp.surface_fact_missing_total("unseen", path=path) == 0
+    assert all(not t["candidates"] and not t["declined"] for t in cp.experiments(path=path))
+
+
+def test_missing_fact_write_failures_are_visible_without_exception_payload(monkeypatch):
+    def fail(*args, **kwargs):
+        raise OSError("secret=private")
+
+    monkeypatch.setattr(cp, "record_fact_missing", fail)
+    advice = {"experiment_id": ca.experiment_id("bounded assessment")}
+    assert (
+        ca._record_fact_missing(
+            advice, [{"capability_id": "runtime-ac-checks"}], surface="closer-lane"
+        )
+        == 0
+    )
+    assert advice["fact_missing_record_errors"] == [
+        {"capability_id": "runtime-ac-checks", "surface": "closer-lane", "error_type": "OSError"}
+    ]
+    assert "secret=private" not in str(advice)
+
+
 CLOSER_BOUND = (
     "adversarial-review",
     "runtime-ac-checks",
@@ -55,6 +95,9 @@ def test_unknown_precondition_withholds_the_offer_and_records_fact_missing_on_th
     assert missing["runtime-ac-checks"]["fact"] == "PR size unknown"
     assert missing["runtime-ac-checks"]["surface"] == "closer-lane"
     assert not (offered & missing.keys())
+    output = ca.format_advice(result)
+    assert "fact_missing on closer-lane: runtime-ac-checks — PR size unknown" in output
+    assert "fact_missing on closer-lane: redirect-policy — PR labels unknown" in output
     row = capabilities.load(ledger)["runtime-ac-checks"]
     events = [
         ev
@@ -77,6 +120,18 @@ def test_unknown_precondition_withholds_the_offer_and_records_fact_missing_on_th
         path=ledger,
     )
     assert again["recorded_fact_missing"] == 0
+
+    # A match against one task type can miss another. Withholding that match for missing facts
+    # must not also report it as not applicable to this consult.
+    mixed_ledger = tmp_path / "mixed" / "capabilities.json"
+    row = capabilities._blank_capability("runtime-ac-checks")
+    row["status"] = "generated"
+    row["matcher"] = {"field": "task_type", "operator": "eq", "value": "runtime_ac"}
+    capabilities.save({"runtime-ac-checks": row}, mixed_ledger)
+    mixed = ca.advise("review acceptance criteria", record=False, path=mixed_ledger)
+    assert set(mixed["task_types"]) == {"review", "runtime_ac"}
+    assert "runtime-ac-checks" in {row["capability_id"] for row in mixed["fact_missing"]}
+    assert "runtime-ac-checks" not in {row["capability_id"] for row in mixed["not_applicable"]}
 
 
 def test_known_precondition_true_offers_and_false_declines_as_precondition_unmet(
@@ -178,6 +233,8 @@ def test_classification_miss_withholds_all_unknown_offers(tmp_path, monkeypatch)
     ]
     assert result["recorded_fact_missing"] == 1
     assert cp.surface_fact_missing_total("test-missing-facts", path=ledger) == 1
+    output = ca.format_advice(result)
+    assert "fact_missing on test-missing-facts: runtime-ac-checks — PR size unknown" in output
 
 
 def test_context_facts_evaluate_without_a_pr_number(tmp_path, monkeypatch):
