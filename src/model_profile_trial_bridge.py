@@ -308,11 +308,11 @@ def _live_capacity_reservation(
         "captured_at": captured_at,
         "snapshot_count": 1,
         "pool_id": "codex-subscription",
-        "units": len(model_profile_trial.EXPECTED_PROFILE_IDS),
+        "units": len(manifest["requests"]),
         "pool": projected["pools"].get("codex-subscription"),
         "profiles": {
             profile_id: projected["profiles"].get(profile_id)
-            for profile_id in model_profile_trial.EXPECTED_PROFILE_IDS
+            for profile_id in model_profile_trial._manifest_profile_ids(manifest)
         },
     }
     body["reservation_id"] = "trial-reservation:" + _hash(body).split(":", 1)[1][:24]
@@ -376,7 +376,7 @@ def preflight(
     reservation = _live_capacity_reservation(manifest, capacity_snapshot)
     states = {
         str((reservation["profiles"].get(profile_id) or {}).get("state") or capacity.UNKNOWN)
-        for profile_id in model_profile_trial.EXPECTED_PROFILE_IDS
+        for profile_id in model_profile_trial._manifest_profile_ids(manifest)
     }
     if not states or states - {capacity.OK, capacity.WARN}:
         blockers.append("shared_codex_pool_not_ready")
@@ -394,7 +394,7 @@ def preflight(
                 version = _cli_version(binary)
             except ValueError:
                 blockers.append("codex_cli_version_probe_failed")
-        for profile_id in model_profile_trial.EXPECTED_PROFILE_IDS:
+        for profile_id in model_profile_trial._manifest_profile_ids(manifest):
             if "local" not in execution_profiles.get_profile(profile_id)["transport_support"]:
                 blockers.append(f"profile_not_local:{profile_id}")
     elif transport == "remote":
@@ -423,7 +423,7 @@ def preflight(
             registry, model_registry = {}, {}
         remote = _profiles_by_id(registry.get("execution_profiles"))
         models = _model_rows(model_registry.get("models"))
-        for profile_id in model_profile_trial.EXPECTED_PROFILE_IDS:
+        for profile_id in model_profile_trial._manifest_profile_ids(manifest):
             local = execution_profiles.get_profile(profile_id)
             row = remote.get(profile_id)
             if not row:
@@ -464,7 +464,7 @@ def preflight(
             blockers.append("remote_trial_runner_not_immutable")
         for profile_id, row in remote.items():
             if (
-                profile_id in model_profile_trial.EXPECTED_PROFILE_IDS
+                profile_id in model_profile_trial._manifest_profile_ids(manifest)
                 and row.get("runner_ref") != remote_runner_ref
             ):
                 blockers.append(f"remote_profile_runner_ref_contract_mismatch:{profile_id}")
@@ -514,7 +514,11 @@ def build_request_envelope(
             "capacity_reservation_id": preflight_result["capacity_reservation"]["reservation_id"],
             "expected_source_sha": preflight_result.get("workflows_source_sha"),
             "runner_ref": preflight_result.get("remote_runner_ref") or RUNNER_VERSION,
-            "artifact_dir": str(trial_root / request["profile_id"]),
+            "artifact_dir": str(
+                trial_root / request["profile_id"]
+                if manifest.get("instances_per_profile", 1) == 1
+                else trial_root / request["profile_id"] / f"launch-{request['launch_ordinal']}"
+            ),
             "expected_result_fields": sorted(TRANSPORT_ATTEMPT_FIELDS),
         }
         body["request_hash"] = _hash(body)
@@ -553,12 +557,15 @@ def validate_envelope(envelope: dict[str, Any], manifest: dict[str, Any]) -> Non
     supplied = replay.pop("envelope_hash", None)
     if supplied != _hash(replay):
         raise ValueError("trial bridge envelope is not replayable")
-    request_by_profile = {row["profile_id"]: row for row in manifest["requests"]}
-    if len(envelope.get("requests") or []) != 3:
-        raise ValueError("trial bridge requires exactly three requests")
+    request_by_run = {row["run_id"]: row for row in manifest["requests"]}
+    rows = envelope.get("requests") or []
+    if len(rows) != len(request_by_run) or {row.get("run_id") for row in rows} != set(
+        request_by_run
+    ):
+        raise ValueError("trial bridge requires one exact request per instance")
     for row in envelope["requests"]:
-        request = request_by_profile.get(row.get("profile_id"))
-        if not request:
+        request = request_by_run.get(row.get("run_id"))
+        if not request or row.get("profile_id") != request["profile_id"]:
             raise ValueError("trial bridge contains an unknown profile")
         replay_row = dict(row)
         request_id = replay_row.pop("request_id", None)
@@ -814,8 +821,8 @@ def collect_remote_results(
     model_profile_trial.validate_trial_manifest(manifest)
     validate_envelope(envelope, manifest)
     requests = sorted(envelope["requests"], key=lambda row: row["launch_ordinal"])
-    if len(run_ids) != 3:
-        raise ValueError("remote trial collection requires three serial run IDs")
+    if len(run_ids) != len(requests) or len(set(run_ids)) != len(run_ids):
+        raise ValueError("remote trial collection requires one distinct serial run ID per instance")
     attempts = [
         collect_remote_attempt(
             manifest,
@@ -860,7 +867,9 @@ def _validate_transport_results(
         raise ValueError("transport did not acknowledge the frozen packet")
     attempts = results.get("attempts") or []
     by_request = {row.get("request_id"): row for row in attempts if isinstance(row, dict)}
-    if len(attempts) != 3 or set(by_request) != {row["request_id"] for row in envelope["requests"]}:
+    if len(attempts) != len(envelope["requests"]) or set(by_request) != {
+        row["request_id"] for row in envelope["requests"]
+    }:
         raise ValueError("transport results require one exact attempt per request")
     sanitized = []
     for request in envelope["requests"]:
@@ -1136,8 +1145,9 @@ def qualify_transport_contract(
 
     github_runs = [int(row["github_run_id"]) for row in sanitized]
     github_artifacts = [int(row["github_artifact_id"]) for row in sanitized]
-    if len(set(github_runs)) != 3 or len(set(github_artifacts)) != 3:
-        raise ValueError("transport qualification requires three distinct remote attempts")
+    count = len(manifest["requests"])
+    if len(set(github_runs)) != count or len(set(github_artifacts)) != count:
+        raise ValueError("transport qualification requires one distinct remote attempt per instance")
     source_manifest_hashes = {str(row["source_manifest_sha256_before"]) for row in sanitized}
     if len(source_manifest_hashes) != 1:
         raise ValueError("transport qualification source attestations disagree")

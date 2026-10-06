@@ -2877,7 +2877,7 @@ def ingest_profile_trial(
                 recorded_attempt_ids.append(
                     record_execution_attempt(
                         attempt["run_id"],
-                        attempt_id=f"attempt:trial:{manifest['trial_id']}:{attempt['profile_id']}",
+                        attempt_id=f"attempt:trial:{attempt['run_id']}",
                         attempt_ordinal=int(attempt.get("attempt_ordinal") or 1),
                         operation_role="worker",
                         profile_id=attempt["profile_id"],

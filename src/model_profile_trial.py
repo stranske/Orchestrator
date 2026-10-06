@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Guarded, read-only Astra/Terra/Luna worker-profile plumbing trial.
+"""Guarded, read-only worker-profile trial preparation and evidence ingestion.
 
 The trial is instrumentation, not a benchmark: one frozen packet, one shared
-Codex capacity snapshot, randomized launch order, and three exact profiles. It
+Codex capacity snapshot, randomized launch order, and exact registered profiles. It
 never executes a worker itself. ``prepare`` emits launch requests for a guarded
 transport bridge; ``finalize`` validates returned telemetry and proves source
-integrity. Live Brain recording remains disabled at the CLI boundary until the
-multi-row feedback write has a single atomic transaction.
+integrity. An explicit layout supports repeated instances of selected profiles;
+verified evidence can be ingested atomically into a quarantine feedback database.
 ``--selftest`` exercises prepare, validation, and reporting fully offline.
 """
 
@@ -53,6 +53,27 @@ LEGACY_PROFILE_IDS = (
 def _manifest_profile_ids(manifest: dict[str, Any]) -> tuple[str, ...]:
     requests = manifest.get("requests") or []
     actual = {item.get("profile_id") for item in requests}
+    if "instances_per_profile" in manifest and "selected_profile_ids" not in manifest:
+        raise ValueError("trial instance layout requires selected profiles")
+    if "selected_profile_ids" in manifest:
+        selected = manifest["selected_profile_ids"]
+        count = manifest.get("instances_per_profile")
+        supported = set(EXPECTED_PROFILE_IDS) | set(LEGACY_PROFILE_IDS)
+        if (
+            not isinstance(selected, list)
+            or not all(isinstance(pid, str) for pid in selected)
+            or len(selected) < 2
+            or len(set(selected)) != len(selected)
+            or not set(selected) <= supported
+            or type(count) is not int
+            or not 1 <= count <= 3
+        ):
+            raise ValueError("trial requires supported profiles and one to three instances")
+        if actual != set(selected) or any(
+            sum(item.get("profile_id") == pid for item in requests) != count for pid in selected
+        ):
+            raise ValueError("trial requests do not match the selected profile instance counts")
+        return tuple(selected)
     for supported in (EXPECTED_PROFILE_IDS, LEGACY_PROFILE_IDS):
         if actual == set(supported) and len(requests) == len(supported):
             return supported
@@ -268,11 +289,27 @@ def build_trial_manifest(
     now: int | None = None,
     capacity_state: str = "unknown",
     packet: dict[str, Any] | None = None,
+    profile_ids: Iterable[str] | None = None,
+    instances_per_profile: int = 1,
 ) -> dict[str, Any]:
     """Build a frozen, randomized, source-integrity-bound trial plan."""
     timestamp = int(time.time()) if now is None else int(now)
     roots = (orchestrator_root.resolve(), workflows_root.resolve())
-    profiles = [execution_profiles.get_profile(profile_id) for profile_id in EXPECTED_PROFILE_IDS]
+    selected = tuple(EXPECTED_PROFILE_IDS if profile_ids is None else profile_ids)
+    if type(instances_per_profile) is not int or not 1 <= instances_per_profile <= 3:
+        raise ValueError("trial requires one to three instances per profile")
+    custom_layout = profile_ids is not None or instances_per_profile != 1
+    if custom_layout:
+        _manifest_profile_ids(
+            {
+                "selected_profile_ids": list(selected),
+                "instances_per_profile": instances_per_profile,
+                "requests": [
+                    {"profile_id": pid} for pid in selected for _ in range(instances_per_profile)
+                ],
+            }
+        )
+    profiles = [execution_profiles.get_profile(profile_id) for profile_id in selected]
     pool_ids = {pool_id for profile in profiles for pool_id in profile["capacity_pool_ids"]}
     stop_reasons = []
     if pool_ids != {"codex-subscription"}:
@@ -284,29 +321,32 @@ def build_trial_manifest(
     if any(profile["reasoning_effort"] != "high" for profile in profiles):
         stop_reasons.append("reasoning_effort_not_fixed")
 
-    frozen_packet = json.loads(json.dumps(packet or FROZEN_PACKET))
+    frozen_packet = json.loads(json.dumps(FROZEN_PACKET if packet is None else packet))
     packet_hash = _sha256(frozen_packet)
     source_before = {
         "orchestrator": source_manifest(roots[0]),
         "workflows": source_manifest(roots[1]),
     }
-    order = list(EXPECTED_PROFILE_IDS)
+    order = [(pid, instance) for pid in selected for instance in range(1, instances_per_profile + 1)]
     random.Random(int(seed)).shuffle(order)
     identity = {
         "created_at": timestamp,
         "packet_hash": packet_hash,
-        "profile_ids": list(EXPECTED_PROFILE_IDS),
+        "profile_ids": list(selected),
         "seed": int(seed),
         "source_hashes": {key: value["aggregate_sha256"] for key, value in source_before.items()},
     }
+    if custom_layout:
+        identity["instances_per_profile"] = instances_per_profile
     trial_id = "model-profile-trial:" + _sha256(identity).split(":", 1)[1][:24]
     pool_snapshot = _shared_pool_snapshot(state=capacity_state, captured_at=timestamp)
     requests = []
-    for launch_ordinal, profile_id in enumerate(order, start=1):
+    for launch_ordinal, (profile_id, instance) in enumerate(order, start=1):
         profile = execution_profiles.get_profile(profile_id)
         requests.append(
             {
-                "run_id": f"{trial_id}:{profile_id}",
+                "run_id": f"{trial_id}:{profile_id}"
+                + (f":instance:{instance}" if instances_per_profile > 1 else ""),
                 "launch_ordinal": launch_ordinal,
                 "profile_id": profile_id,
                 "provider": profile["provider"],
@@ -322,7 +362,7 @@ def build_trial_manifest(
                 "capacity_pool_ids": ["codex-subscription"],
             }
         )
-    return {
+    manifest = {
         "schema": TRIAL_SCHEMA,
         "version": SCHEMA_VERSION,
         "trial_id": trial_id,
@@ -334,7 +374,7 @@ def build_trial_manifest(
         "frozen_packet": frozen_packet,
         "packet_hash": packet_hash,
         "seed": int(seed),
-        "launch_order": order,
+        "launch_order": [pid for pid, _ in order],
         "requests": requests,
         "capacity_snapshot": pool_snapshot,
         "source_before": source_before,
@@ -343,6 +383,10 @@ def build_trial_manifest(
             "reasons": stop_reasons,
         },
     }
+    if custom_layout:
+        manifest["selected_profile_ids"] = list(selected)
+        manifest["instances_per_profile"] = instances_per_profile
+    return manifest
 
 
 def validate_trial_manifest(manifest: dict[str, Any]) -> None:
@@ -373,7 +417,8 @@ def validate_trial_manifest(manifest: dict[str, Any]) -> None:
         ):
             raise ValueError("trial source manifest is incomplete")
     profile_ids = _manifest_profile_ids(manifest)
-    expected_count = len(profile_ids)
+    instances = manifest.get("instances_per_profile", 1)
+    expected_count = len(profile_ids) * instances
     identity = {
         "created_at": manifest.get("created_at"),
         "packet_hash": manifest.get("packet_hash"),
@@ -383,6 +428,8 @@ def validate_trial_manifest(manifest: dict[str, Any]) -> None:
             key: source_before[key]["aggregate_sha256"] for key in ("orchestrator", "workflows")
         },
     }
+    if "selected_profile_ids" in manifest:
+        identity["instances_per_profile"] = instances
     expected_trial_id = "model-profile-trial:" + _sha256(identity).split(":", 1)[1][:24]
     if manifest.get("trial_id") != expected_trial_id:
         raise ValueError("trial identity is not reproducible")
@@ -391,11 +438,11 @@ def validate_trial_manifest(manifest: dict[str, Any]) -> None:
     if {item.get("profile_id") for item in requests} != set(profile_ids):
         raise ValueError("trial requires an exact supported profile set")
     if len({item.get("run_id") for item in requests}) != expected_count:
-        raise ValueError("trial requires one distinct run identity per profile")
+        raise ValueError("trial requires one distinct run identity per instance")
     if manifest.get("capacity_snapshot", {}).get("snapshot_count") != 1:
         raise ValueError("trial requires one shared-pool snapshot")
     launch_order = manifest.get("launch_order") or []
-    if sorted(launch_order) != sorted(profile_ids) or len(set(launch_order)) != len(profile_ids):
+    if sorted(launch_order) != sorted(pid for pid in profile_ids for _ in range(instances)):
         raise ValueError("trial launch order is not an exact profile permutation")
     by_ordinal = sorted(requests, key=lambda item: int(item.get("launch_ordinal") or 0))
     if [item.get("profile_id") for item in by_ordinal] != launch_order:
@@ -404,10 +451,21 @@ def validate_trial_manifest(manifest: dict[str, Any]) -> None:
         range(1, expected_count + 1)
     ):
         raise ValueError("trial launch ordinals must cover the selected profile set")
+    expected_run_ids = {
+        f"{manifest['trial_id']}:{pid}" + (f":instance:{i}" if instances > 1 else "")
+        for pid in profile_ids
+        for i in range(1, instances + 1)
+    }
+    if {item.get("run_id") for item in requests} != expected_run_ids:
+        raise ValueError("trial request run identity is not reproducible")
     for request in requests:
         profile = execution_profiles.get_profile(request["profile_id"])
-        expected_run_id = f"{manifest['trial_id']}:{request['profile_id']}"
-        if request.get("run_id") != expected_run_id:
+        profile_run_ids = {
+            f"{manifest['trial_id']}:{request['profile_id']}"
+            + (f":instance:{i}" if instances > 1 else "")
+            for i in range(1, instances + 1)
+        }
+        if request.get("run_id") not in profile_run_ids:
             raise ValueError("trial request run identity is not reproducible")
         if profile.get("lifecycle_status") != "active":
             raise ValueError("trial profile is not active in the authoritative registry")
@@ -459,16 +517,16 @@ def _validate_results(manifest: dict[str, Any], results: dict[str, Any]) -> list
     ):
         raise ValueError("trial results did not acknowledge the frozen packet")
     attempts = results.get("attempts") or []
-    by_profile = {item.get("profile_id"): item for item in attempts}
-    if set(by_profile) != set(profile_ids) or len(attempts) != len(profile_ids):
-        raise ValueError("trial results require exactly one attempt per profile")
-    request_by_profile = {item["profile_id"]: item for item in manifest["requests"]}
-    for profile_id, attempt in by_profile.items():
+    by_run = {item.get("run_id"): item for item in attempts}
+    request_by_run = {item["run_id"]: item for item in manifest["requests"]}
+    if set(by_run) != set(request_by_run) or len(attempts) != len(request_by_run):
+        raise ValueError("trial results require exactly one attempt per instance")
+    for run_id, attempt in by_run.items():
         unknown_attempt = sorted(set(attempt) - ATTEMPT_FIELDS)
         if unknown_attempt:
             raise ValueError(f"trial attempt contains unsupported fields: {unknown_attempt}")
-        request = request_by_profile[profile_id]
-        if attempt.get("run_id") != request["run_id"]:
+        request = request_by_run[run_id]
+        if attempt.get("profile_id") != request["profile_id"]:
             raise ValueError("trial attempt run/profile join mismatch")
         if attempt.get("operation_role") != "worker":
             raise ValueError("trial profile attempt must be a worker")
@@ -526,8 +584,10 @@ def _validate_results(manifest: dict[str, Any], results: dict[str, Any]) -> list
     # Return only the strict allowlist so state artifacts cannot retain a
     # caller-supplied secret or raw provider response by accident.
     return [
-        {key: by_profile[profile_id].get(key) for key in sorted(ATTEMPT_FIELDS)}
-        for profile_id in profile_ids
+        {key: by_run[request["run_id"]].get(key) for key in sorted(ATTEMPT_FIELDS)}
+        for request in sorted(
+            manifest["requests"], key=lambda row: (profile_ids.index(row["profile_id"]), row["run_id"])
+        )
     ]
 
 
@@ -660,12 +720,23 @@ def _write_capability_program_trial_summary(
         "quality_by_profile": {pid: quality_by_profile.get(pid, "n/a") for pid in profile_ids},
         "cost_tokens_by_profile": {
             pid: {
-                "tokens_in": int(
-                    next(a for a in attempts if a["profile_id"] == pid).get("tokens_in") or 0
+                "tokens_in": sum(
+                    int(a.get("tokens_in") or 0) for a in attempts if a["profile_id"] == pid
                 ),
-                "tokens_out": int(
-                    next(a for a in attempts if a["profile_id"] == pid).get("tokens_out") or 0
+                "tokens_out": sum(
+                    int(a.get("tokens_out") or 0) for a in attempts if a["profile_id"] == pid
                 ),
+            }
+            for pid in profile_ids
+        },
+        "provider_resolved_identity_by_profile": {
+            pid: {
+                "provider": next(a for a in attempts if a["profile_id"] == pid)[
+                    "provider_resolved_provider"
+                ],
+                "model": next(a for a in attempts if a["profile_id"] == pid)[
+                    "provider_resolved_model"
+                ],
             }
             for pid in profile_ids
         },
@@ -1007,6 +1078,9 @@ def main(argv: list[str] | None = None) -> int:
     prepare.add_argument("--workflows-root", type=Path, required=True)
     prepare.add_argument("--output", type=Path, required=True)
     prepare.add_argument("--seed", type=int, default=56014)
+    prepare.add_argument("--profile-id", action="append", help="repeat for each selected profile")
+    prepare.add_argument("--instances-per-profile", type=int, default=1)
+    prepare.add_argument("--packet", type=Path, help="frozen recurring-work packet as JSON")
     prepare.add_argument(
         "--capacity-state", choices=("ok", "warn", "shed", "unknown"), default="unknown"
     )
@@ -1038,6 +1112,9 @@ def main(argv: list[str] | None = None) -> int:
             args.workflows_root,
             seed=args.seed,
             capacity_state=args.capacity_state,
+            profile_ids=args.profile_id,
+            instances_per_profile=args.instances_per_profile,
+            packet=json.loads(args.packet.read_text(encoding="utf-8")) if args.packet else None,
         )
         _atomic_json(args.output, payload)
     elif args.command == "finalize":
