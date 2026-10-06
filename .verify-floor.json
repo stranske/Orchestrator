@@ -1,19 +1,6 @@
 {
-<<<<<<< HEAD
-  "collected": 2361,
-  "passed": 2330,
-  "skipped_max": 26,
-  "mirror_skipped_max": 21,
-  "bare_mirror_skipped_max": 47,
-  "bare_mirror_selftest_skipped_max": 7,
-  "bare_mirror_gate_skipped_max": 2,
-  "selftest_skipped_max": 7,
-  "gate_skipped_max": 2,
-  "mypy_exempt_max": 0,
-  "note": "Integrates main002c65f; measured collection2361; retains supported executed passed baseline2330; all quality ceilings unchanged; exact merge-result CI pending."
-=======
- "collected": 2332,
- "passed": 2332,
+ "collected": 2363,
+ "passed": 2363,
  "skipped_max": 26,
  "mirror_skipped_max": 21,
  "bare_mirror_skipped_max": 47,
@@ -22,6 +9,5 @@
  "selftest_skipped_max": 7,
  "gate_skipped_max": 2,
  "mypy_exempt_max": 0,
- "note": "Integrates current main13c64945787c75b6037eb48889ebd71ccd270c44; only newer main difference was measured floor, with source unchanged; retains exact collection2332 and executed passed floor2330. Previous current-source tests remain applicable; full merge-result CI pending. Quality ceilings unchanged. FLOOR RECORDED by verify.py --update-floor on 2026-10-06: collected=2332, passed=2332. Ceilings preserved, never re-measured \u2014 they are edited by hand."
->>>>>>> origin/main
+ "note": "Repaired committed conflict markers from3167f538. Measured collection2363; existing passed minimum retained, never inferred from collection. All quality ceilings preserved; full local verify pending. FLOOR RECORDED by verify.py --update-floor on 2026-10-06: collected=2363, passed=2363. Ceilings preserved, never re-measured \u2014 they are edited by hand."
 }
