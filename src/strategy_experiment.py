@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shlex
@@ -30,12 +31,17 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+import claims
 import exp_abcd
+import feedback
+import fleet_shapes
 import research_scheduler
+import synthesis_promotion
 
 ORCH = Path(__file__).resolve().parent
 DEFAULT_TASK_TYPE = "implement"
-SUPPORTED_STRATEGIES = {"single", "parallel"}
+SUPPORTED_STRATEGIES = {"single", "parallel", "pair"}
+DEFAULT_SUBJECT_INSTANCES = 3
 
 
 def _slug(value: str) -> str:
@@ -100,6 +106,8 @@ def normalize_arm(raw: Any, index: int = 0) -> dict[str, Any]:
     if strategy == "parallel" and len(agents) < 2:
         raise ValueError(f"parallel strategy must name at least two agents: {agents!r}")
 
+    if strategy == "pair" and len(agents) != 2:
+        raise ValueError(f"pair strategy must name implementer and reviewer: {agents!r}")
     label = f"{strategy}({'+'.join(agents)}{'+synth' if synthesize else ''})"
     arm_id = f"arm-{index + 1:02d}-{_slug(label)}"
     arm_profile_id = raw.get("profile_id") if isinstance(raw, dict) else None
@@ -122,6 +130,13 @@ def normalize_arm(raw: Any, index: int = 0) -> dict[str, Any]:
         }
         for ordinal, agent in enumerate(agents)
     ]
+    if strategy == "pair":
+        # A pair is deliberately not a parallel arm.  The reviewer receives the
+        # implementer's artifact and must leave a review artifact before the
+        # candidate can be evaluated (enforced by exp_abcd.collect()).
+        members[0]["role"] = "implement"
+        members[1]["role"] = "review"
+        members[1]["review_of_member_id"] = members[0]["member_id"]
     return {
         "arm_id": arm_id,
         "strategy": strategy,
@@ -130,8 +145,248 @@ def normalize_arm(raw: Any, index: int = 0) -> dict[str, Any]:
         "synthesize": synthesize,
         "label": label,
         "profile_id": arm_profile_id,
-        "cost_basis": ("sum_agent_runs" if strategy == "parallel" else "single_agent_run"),
+        "cost_basis": (
+            "sum_agent_runs" if strategy in {"parallel", "pair"} else "single_agent_run"
+        ),
     }
+
+
+def subject_arms(
+    agent: str, reviewer: str, *, instances: int = DEFAULT_SUBJECT_INSTANCES
+) -> list[dict[str, Any]]:
+    """Three independent single and implement-then-review instances.
+
+    Keeping instances as separate arms preserves attribution.  In particular a
+    review outcome can never be averaged into an unrelated implementation run.
+    """
+    if instances != DEFAULT_SUBJECT_INSTANCES:
+        raise ValueError(f"strategy subject requires exactly {DEFAULT_SUBJECT_INSTANCES} instances")
+    if not agent or not reviewer:
+        raise ValueError("subject strategy requires an implementation agent and reviewer")
+    arms: list[dict[str, Any]] = []
+    for ordinal in range(1, instances + 1):
+        arms.append({"strategy": "single", "agents": [agent], "instance": ordinal})
+    for ordinal in range(1, instances + 1):
+        arms.append({"strategy": "pair", "agents": [agent, reviewer], "instance": ordinal})
+    return arms
+
+
+def _shape_rate(shape: dict[str, Any]) -> float | None:
+    rates = []
+    agents = shape.get("agents") or {}
+    if not isinstance(agents, dict):
+        raise RuntimeError("UNKNOWN: malformed shape agent evidence")
+    for cell in agents.values():
+        if not isinstance(cell, dict):
+            raise RuntimeError("UNKNOWN: malformed shape outcome evidence")
+        rate = cell.get("broke_later_rate")
+        if rate is None:
+            continue
+        if type(rate) not in (int, float) or not math.isfinite(rate) or not 0 <= rate <= 1:
+            raise RuntimeError("UNKNOWN: invalid broke-later rate")
+        counts = [cell.get(name, 0) for name in ("bad", "durable")]
+        if any(type(count) is not int or count < 0 for count in counts):
+            raise RuntimeError("UNKNOWN: invalid shape outcome counts")
+        if sum(counts) >= 3:
+            rates.append(float(rate))
+    return max(rates) if rates else None
+
+
+def _open_pr_links_issue(node: dict[str, Any], repo: str | None = None) -> bool:
+    number = int(node["number"])
+    for event in (node.get("timelineItems") or {}).get("nodes") or []:
+        pr = (event or {}).get("source") or {}
+        if pr.get("__typename") != "PullRequest" or pr.get("state") != "OPEN":
+            continue
+        if repo and (pr.get("repository") or {}).get("nameWithOwner", repo).lower() != repo.lower():
+            continue
+        text = f"{pr.get('body') or ''}\n{pr.get('headRefName') or ''}".lower()
+        if re.search(
+            rf"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)[^#]*#{number}\b", text
+        ) or re.search(rf"issue[-_/]{number}\b", text):
+            return True
+    return False
+
+
+def _gh_subjects_for_shape(
+    shape: dict[str, Any], target: str | None = None
+) -> list[dict[str, Any]]:
+    """Read current open issue bodies and linkage; failed reads stay UNKNOWN."""
+    import subprocess
+
+    rows: list[dict[str, Any]] = []
+    query = """query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pullRequests(first:100,states:OPEN){pageInfo{hasNextPage} nodes{__typename state body headRefName repository{nameWithOwner}}} issues(first:100,states:OPEN,orderBy:{field:CREATED_AT,direction:ASC}){pageInfo{hasNextPage} nodes{number body title updatedAt labels(first:30){nodes{name}} closedByPullRequestsReferences(first:100){pageInfo{hasNextPage} nodes{number}} timelineItems(first:100,itemTypes:[CROSS_REFERENCED_EVENT]){pageInfo{hasNextPage} nodes{...on CrossReferencedEvent{source{__typename ...on PullRequest{state body headRefName repository{nameWithOwner}}}}}}}}}}"""
+    for repo in shape.get("repos") or []:
+        if target and not target.lower().startswith(repo.lower() + "#"):
+            continue
+        try:
+            owner, name = str(repo).split("/", 1)
+            raw = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    "graphql",
+                    "-f",
+                    "query=" + query,
+                    "-f",
+                    "owner=" + owner,
+                    "-f",
+                    "name=" + name,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            ).stdout
+            live_repo = json.loads(raw)["data"]["repository"]
+            issues = live_repo["issues"]
+            open_prs = live_repo["pullRequests"]
+            if open_prs["pageInfo"]["hasNextPage"]:
+                raise RuntimeError("open PR population pagination incomplete")
+            if issues["pageInfo"]["hasNextPage"]:
+                raise RuntimeError("open issue population pagination incomplete")
+            nodes = issues["nodes"]
+        except Exception as exc:
+            raise RuntimeError(f"UNKNOWN: live issue read failed for {repo}: {exc}") from exc
+        for node in nodes:
+            linked = node.get("closedByPullRequestsReferences") or {}
+            if linked.get("pageInfo", {}).get("hasNextPage"):
+                raise RuntimeError(
+                    f"issue linkage pagination incomplete for {repo}#{node['number']}"
+                )
+            timeline = node.get("timelineItems") or {}
+            if timeline.get("pageInfo", {}).get("hasNextPage"):
+                raise RuntimeError(
+                    f"issue timeline pagination incomplete for {repo}#{node['number']}"
+                )
+            node = {
+                **node,
+                "timelineItems": {
+                    "nodes": [
+                        *timeline.get("nodes", []),
+                        *[{"source": pr} for pr in open_prs["nodes"]],
+                    ]
+                },
+            }
+            if (
+                not linked.get("nodes")
+                and not _open_pr_links_issue(node, repo)
+                and node.get("body")
+            ):
+                rows.append(
+                    {
+                        "target": f"{repo}#{node['number']}",
+                        "repo": repo,
+                        "body": node["body"],
+                        "title": node.get("title", ""),
+                        "updated_at": node.get("updatedAt"),
+                        "labels": [
+                            x.get("name", "") for x in node.get("labels", {}).get("nodes", [])
+                        ],
+                    }
+                )
+    return rows
+
+
+def select_subject(
+    shapes_path: Path,
+    *,
+    target: str | None = None,
+    issue_fetcher: Callable[[dict[str, Any]], list[dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
+    """Select a current open, unlinked subject from the worst recurring shape.
+
+    The shapes file has historical outcome rates only.  Current issue bodies and
+    linkage are always acquired separately; incomplete acquisition is UNKNOWN.
+    """
+    try:
+        payload = json.loads(shapes_path.read_text())
+        shapes = payload["shapes"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError(f"UNKNOWN: fleet-shapes unavailable or malformed: {exc}") from exc
+    ranked: list[tuple[dict[str, Any], float]] = []
+    for shape in shapes:
+        if isinstance(shape, dict) and shape.get("recurring"):
+            rate = _shape_rate(shape)
+            if rate is not None:
+                ranked.append((shape, rate))
+    if not ranked:
+        raise RuntimeError("UNKNOWN: no recurring shape with sufficient broke-later evidence")
+    ranked.sort(
+        key=lambda item: (
+            -float(item[1]),
+            -int(item[0].get("prs") or 0),
+            str(item[0].get("key") or ""),
+        )
+    )
+    fetch = issue_fetcher or (lambda shape: _gh_subjects_for_shape(shape, target))
+    for shape, rate in ranked:
+        candidates = [row for row in fetch(shape) if _matches_shape(row, shape)]
+        if target:
+            candidates = [
+                row for row in candidates if str(row.get("target", "")).lower() == target.lower()
+            ]
+        if candidates:
+            choice = sorted(candidates, key=lambda row: str(row["target"]))[0]
+            return {
+                **choice,
+                "shape": shape["key"],
+                "broke_later_rate": rate,
+                "shape_match_basis": "predicted from issue body; implementation paths not yet observed",
+                "shapes_generated_at": payload.get("generated_at"),
+            }
+    raise RuntimeError(
+        "UNKNOWN: live reads completed but no open unlinked subject matched recurring shapes"
+    )
+
+
+def _matches_shape(issue: dict[str, Any], shape: dict[str, Any]) -> bool:
+    """Keep experiments on implementation work resembling the selected shape.
+
+    Issue bodies do not know their eventual file paths, so this only applies the
+    observable commit-type/label part of a fleet shape; it deliberately does not
+    fabricate a path match.
+    """
+    title = str(issue.get("title") or "").strip().lower()
+    expected = str(shape.get("commit_type") or "other").lower()
+    conventional = re.match(rf"(?:\[[^]]+\]\s*)?{re.escape(expected)}(?:\([^)]*\))?:", title)
+    labels = {str(label).lower() for label in issue.get("labels") or []}
+    body = str(issue.get("body") or "").lower()
+    inferred = (
+        expected in {"test", "tests"} and any(cue in title for cue in ("test", "coverage"))
+    ) or (
+        expected == "fix"
+        and ("bug" in labels or any(cue in title for cue in ("fix", "bug", "failure")))
+    )
+    if expected != "other" and not conventional and not inferred:
+        return False
+    if {"needs-human", "agents:paused", "tracker:durable"} & labels or title.startswith(
+        ("dependency dashboard", "agent metrics weekly summary")
+    ):
+        return False
+    # The historical path shape cannot be known before implementation.  Require
+    # an implementation-ready body signal instead of pretending a post-merge
+    # label such as verify:compare predicts it.
+    semantic = {
+        "tests": ("test", "coverage", "pytest"),
+        "code": ("implement", "function", "module", "api"),
+        "docs": ("documentation", "readme"),
+        "config": ("config", "yaml", "toml"),
+    }
+    cues = [cue for path in shape.get("path_classes") or [] for cue in semantic.get(path, ())]
+    return (
+        ("acceptance criteria" in body or ("must" in body and "test" in body))
+        and bool(cues)
+        and any(cue in body + "\n" + title for cue in cues)
+    )
+
+
+def freeze_subject_spec(subject: dict[str, Any], directory: Path) -> Path:
+    """Persist the exact live issue body before any experiment work begins."""
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "spec.md"
+    path.write_text(str(subject["body"]), encoding="utf-8")
+    return path
 
 
 def normalize_arms(arms: Sequence[Any]) -> list[dict[str, Any]]:
@@ -217,9 +472,13 @@ def build_strategy_plan(
             f"{exp_id}:artifact:{arm['arm_id']}:synth"
             if arm["synthesis_requested"]
             else (
-                arm["members"][0]["member_id"]
-                if len(arm["members"]) == 1
-                else f"{exp_id}:artifact:{arm['arm_id']}:member-set"
+                arm["members"][-1]["member_id"]
+                if arm["strategy"] == "pair"
+                else (
+                    arm["members"][0]["member_id"]
+                    if len(arm["members"]) == 1
+                    else f"{exp_id}:artifact:{arm['arm_id']}:member-set"
+                )
             )
         )
     strategy_args: list[str] = [
@@ -315,6 +574,8 @@ def strategy_metadata(
     if prepared is not None:
         metadata["prepared"] = prepared
         metadata["prepared_ts"] = int(time.time())
+    if plan.get("subject"):
+        metadata["subject"] = plan["subject"]
     return metadata
 
 
@@ -348,23 +609,332 @@ def prepare_strategy_experiment(
     }
 
 
+def prepare_subject_experiment(
+    subject: dict[str, Any],
+    *,
+    exp_id: str,
+    agent: str,
+    reviewer: str,
+    exp_dir: Path | None = None,
+    claim_fn: Callable[[str, str], bool] = claims.claim,
+    prepare_fn: Callable[
+        [str, str, str, list[dict[str, Any]]], dict[str, Any]
+    ] = exp_abcd.prepare_arms,
+) -> dict[str, Any]:
+    """Claim, freeze, then prepare the one explicitly confirmed subject experiment."""
+    target = str(subject["target"])
+    edir = (exp_dir or exp_abcd.EXP_DIR) / exp_id
+    if (edir / "strategy.json").exists():
+        raise RuntimeError(f"experiment already exists; use its followup path: {exp_id}")
+    if not claim_fn(target, "research"):
+        raise RuntimeError(f"subject claim refused: {target}")
+    spec = freeze_subject_spec(subject, edir)
+    plan = build_strategy_plan(
+        str(subject["repo"]), str(spec), exp_id, subject_arms(agent, reviewer)
+    )
+    plan["metadata_path"] = str(edir / "strategy.json")
+    plan["subject"] = {key: subject[key] for key in ("target", "shape", "broke_later_rate")}
+    plan["subject"].update(
+        {
+            key: subject.get(key)
+            for key in ("updated_at", "shape_match_basis", "shapes_generated_at")
+        }
+    )
+    prepared = prepare_strategy_experiment(plan, prepare_fn=prepare_fn)
+    meta_path = edir / "meta.json"
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text())
+        meta["subject"] = plan["subject"]
+        meta["frozen_issue_body"] = str(spec)
+        meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True))
+    pids = [row["pid"] for row in prepared["prepared"].get("launched", []) if row.get("pid")]
+    if pids:
+        claims.update_metadata(
+            target,
+            "research",
+            pid=0,
+            pids=pids,
+            refresh_ts=True,
+            experiment_id=exp_id,
+            lane="research",
+            task_type="implement",
+        )
+    return prepared
+
+
+def strategy_result_path(state_dir: Path | None = None) -> Path:
+    root = state_dir or Path(
+        os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator")
+    )
+    return root / "capability-program" / "strategy-experiment.json"
+
+
+def publish_trial_result(receipt: dict, metadata: dict) -> Path:
+    """An older trial may refresh its archive, but cannot replace the current projection."""
+    import fcntl
+
+    path = strategy_result_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    receipt["trial_created_ts"] = metadata["created_ts"]
+    rank = (receipt["trial_created_ts"], str(receipt["exp_id"]))
+    with path.with_suffix(".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            previous = json.loads(path.read_text())
+        except (OSError, ValueError):
+            previous = {}
+        previous_rank = (previous.get("trial_created_ts", 0), str(previous.get("exp_id", "")))
+        if rank >= previous_rank:
+            fleet_shapes.write_json_atomic(path, receipt)
+    return path
+
+
+def refreshable_trials(root: Path, *, now: float, max_age_days: int) -> list[str]:
+    candidates = []
+    for edir in root.iterdir():
+        if not edir.is_dir() or not (edir / "eval-maps.json").exists():
+            continue
+        try:
+            metadata = json.loads((edir / "strategy.json").read_text())
+            created = metadata["created_ts"]
+            if type(created) is not int or not 0 <= now - created <= max_age_days * 86400:
+                continue
+            candidates.append((created, edir.name))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return [name for _, name in sorted(candidates)]
+
+
+def latest_refreshable_trial(root: Path, *, now: float, max_age_days: int) -> str | None:
+    candidates = refreshable_trials(root, now=now, max_age_days=max_age_days)
+    return candidates[-1] if candidates else None
+
+
+def record_failed_trial(exp_id: str, failures: list[dict], *, exp_dir: Path | None = None) -> None:
+    """Archive a terminal UNKNOWN instead of rescanning an unevaluable pair forever."""
+    edir = (exp_dir or exp_abcd.EXP_DIR) / exp_id
+    metadata = json.loads((edir / "strategy.json").read_text())
+    receipt: dict[str, Any] = {
+        "status": "UNKNOWN",
+        "acceptance_status": "UNKNOWN",
+        "exp_id": exp_id,
+        "unknown_reason": "pair review failed",
+        "failed_members": failures,
+        "scores": None,
+        "comparison": None,
+        "costs": {},
+    }
+    publish_trial_result(receipt, metadata)
+    fleet_shapes.write_json_atomic(edir / "strategy-receipt.json", receipt)
+
+
+def write_scored_result(
+    plan: dict[str, Any],
+    *,
+    scores: dict[str, Any],
+    cost_rows: Sequence[dict[str, Any]],
+    state_dir: Path | None = None,
+    result_path: Path | None = None,
+) -> Path:
+    """Write a comparison only when every arm has scored and cost coverage.
+
+    Partial rows are explicitly UNKNOWN rather than a zero-cost, completed score.
+    """
+    costs = strategy_arm_costs(plan, cost_rows)
+    unmeasured = [arm_id for arm_id, row in costs.items() if row["unmeasured_attempt_run_ids"]]
+    expected_arms = {arm["arm_id"] for arm in plan["arms"]}
+    score_complete = (
+        bool(expected_arms)
+        and isinstance(scores, dict)
+        and expected_arms <= set(scores)
+        and all(
+            isinstance(scores[key], (int, float))
+            and not isinstance(scores[key], bool)
+            and math.isfinite(scores[key])
+            and 0 <= scores[key] <= 10
+            for key in expected_arms
+        )
+    )
+    status = "completed" if score_complete and not unmeasured else "UNKNOWN"
+    comparison = {}
+    if status == "completed":
+        for strategy in sorted({str(arm.get("strategy", "unknown")) for arm in plan["arms"]}):
+            ids = [arm["arm_id"] for arm in plan["arms"] if arm.get("strategy") == strategy]
+            comparison[strategy] = {
+                "instances": len(ids),
+                "score_mean": sum(float(scores[key]) for key in ids) / len(ids),
+                "cost_usd": round(sum(costs[key]["cost_usd"] for key in ids), 8),
+                "arm_ids": ids,
+            }
+    payload = {
+        "schema_version": 1,
+        "status": status,
+        "exp_id": plan["exp_id"],
+        "subject": plan.get("subject"),
+        "scores": scores if status == "completed" else None,
+        "comparison": comparison if status == "completed" else None,
+        "costs": costs,
+        "cost_scale": feedback.COST_SCALE,
+        "unknown_reason": (
+            None
+            if status == "completed"
+            else "incomplete scored evaluation or explicitly measured cost coverage"
+        ),
+        "written_ts": int(time.time()),
+    }
+    path = result_path or strategy_result_path(state_dir)
+    fleet_shapes.write_json_atomic(path, payload)
+    return path
+
+
+def write_evaluation_result(
+    exp_id: str, evaluators: Sequence[str], *, exp_dir: Path | None = None
+) -> Path | None:
+    """Project exact v2 evaluation rows and measured costs into the strategy state.
+
+    A missing judge cell or cost row writes UNKNOWN; it never manufactures a
+    completed comparison from an evaluator process merely having exited.
+    """
+    strategy_path = strategy_metadata_path(exp_id, exp_dir)
+    if not strategy_path.exists():
+        return None
+    metadata = json.loads(strategy_path.read_text())
+    arms = metadata.get("strategy_arms") or []
+    plan = {"exp_id": exp_id, "arms": arms, "subject": metadata.get("subject")}
+    final_to_arm = {str(arm.get("final_artifact_id")): str(arm.get("arm_id")) for arm in arms}
+    scores: dict[str, list[float]] = {str(arm["arm_id"]): [] for arm in arms}
+    cost_rows: list[dict[str, Any]] = []
+    with feedback._conn() as conn:
+        for member_id, arm_id in final_to_arm.items():
+            rows = conn.execute(
+                "SELECT evaluator_id,score FROM evaluations_v2 WHERE experiment_id=? AND implementer_member_id=?",
+                (exp_id, member_id),
+            ).fetchall()
+            by_evaluator = {str(row[0]): row[1] for row in rows}
+            if any(
+                evaluator not in by_evaluator or by_evaluator[evaluator] is None
+                for evaluator in evaluators
+            ):
+                scores.pop(arm_id, None)
+                continue
+            scores[arm_id] = [float(by_evaluator[evaluator]) for evaluator in evaluators]
+        run_ids = [run_id for arm in arms for run_id in arm.get("attempt_run_ids") or []]
+        for run_id in run_ids:
+            row = conn.execute(
+                "SELECT tokens_in,tokens_out,cost_usd,latency_s,source FROM costs WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            if row is not None:
+                cost_rows.append(
+                    {
+                        "run_id": run_id,
+                        "tokens_in": row[0],
+                        "tokens_out": row[1],
+                        "cost_usd": row[2],
+                        "latency_s": row[3],
+                        "source": row[4],
+                    }
+                )
+    means = {arm_id: sum(values) / len(values) for arm_id, values in scores.items() if values}
+    edir = strategy_path.parent
+    # Preserve this trial before updating the shared switch-review projection.
+    # Reading that shared file back could pick up a concurrent trial's result.
+    receipt_path = write_scored_result(
+        plan, scores=means, cost_rows=cost_rows, result_path=edir / "strategy-receipt.json"
+    )
+    receipt = json.loads(receipt_path.read_text())
+    promotion_error = None
+    try:
+        promotion = synthesis_promotion.load_state(edir)
+    except (OSError, ValueError, TypeError) as exc:
+        promotion = None
+        promotion_error = str(exc)[:300]
+    receipt["promotion"] = None
+    promoted = False
+    if promotion is not None:
+        candidate = promotion.get("candidate") or {}
+        verification = promotion.get("verification") or {}
+        candidate_path = edir / synthesis_promotion.CANDIDATE_JSON
+        try:
+            candidate_artifact = (
+                json.loads(candidate_path.read_text()) if candidate_path.exists() else None
+            )
+        except (OSError, ValueError) as exc:
+            candidate_artifact = None
+            promotion_error = str(exc)[:300]
+        promoted = (
+            promotion.get("experiment_id") == exp_id
+            and promotion["delivery_phase"]
+            in {"candidate_ready", "delegated_or_pr", "merged", "durable"}
+            and verification.get("passed") is True
+            and bool(verification.get("evidence_hash"))
+            and bool(candidate.get("candidate_id"))
+            and candidate_artifact == candidate
+            and candidate.get("verification_evidence_hash") == verification["evidence_hash"]
+            and bool((promotion.get("synthesis") or {}).get("commit"))
+            and (candidate.get("synthesis") or {}).get("commit") == promotion["synthesis"]["commit"]
+            and (candidate.get("delivery") or {}).get("direct_publication_allowed") is False
+        )
+        receipt["promotion"] = {
+            "delivery_phase": promotion["delivery_phase"],
+            "candidate_id": candidate.get("candidate_id"),
+            "synthesis_commit": (promotion.get("synthesis") or {}).get("commit"),
+            "verification_evidence_hash": verification.get("evidence_hash"),
+            "candidate_path": str(candidate_path),
+            "verified_candidate": promoted,
+        }
+    receipt["acceptance_status"] = (
+        "completed" if receipt["status"] == "completed" and promoted else "UNKNOWN"
+    )
+    receipt["promotion_error"] = promotion_error
+    publish_trial_result(receipt, metadata)
+    fleet_shapes.write_json_atomic(receipt_path, receipt)
+    return receipt_path
+
+
+def refresh_evaluation_result(exp_id: str, *, exp_dir: Path | None = None) -> Path | None:
+    """Refresh late cost and promotion evidence without dispatching another judge."""
+    if not strategy_metadata_path(exp_id, exp_dir).exists():
+        return None
+    edir = (exp_dir or exp_abcd.EXP_DIR) / exp_id
+    maps = json.loads((edir / "eval-maps.json").read_text())
+    if not isinstance(maps, dict) or not maps:
+        raise ValueError("strategy receipt requires the original evaluator identities")
+    return write_evaluation_result(exp_id, list(maps), exp_dir=exp_dir)
+
+
 def strategy_arm_costs(
     plan: dict[str, Any], cost_rows: Sequence[dict[str, Any]]
 ) -> dict[str, dict[str, Any]]:
-    """Sum observed member and synthesis attempts for each strategy arm."""
+    """Sum whole-run measured costs; preserve exact gaps for late reconciliation."""
     by_run = {str(row.get("run_id")): row for row in cost_rows if row.get("run_id")}
+    measured = {
+        run_id
+        for run_id, row in by_run.items()
+        if row.get("source") in feedback.COMPLETE_COST_SOURCES
+        and type(row.get("cost_usd")) in (int, float)
+        and math.isfinite(row["cost_usd"])
+        and row["cost_usd"] >= 0
+    }
     out: dict[str, dict[str, Any]] = {}
     for arm in plan["arms"]:
         attempt_ids = list(arm.get("attempt_run_ids") or [])
         observed = [by_run[run_id] for run_id in attempt_ids if run_id in by_run]
+        unmeasured = [run_id for run_id in attempt_ids if run_id not in measured]
         out[arm["arm_id"]] = {
             "attempt_run_ids": attempt_ids,
             "planned_attempt_count": len(attempt_ids),
             "observed_attempt_count": len(observed),
             "missing_attempt_run_ids": [run_id for run_id in attempt_ids if run_id not in by_run],
+            "unmeasured_attempt_run_ids": unmeasured,
+            "sources": {
+                run_id: by_run[run_id].get("source") for run_id in attempt_ids if run_id in by_run
+            },
             "tokens_in": sum(int(row.get("tokens_in") or 0) for row in observed),
             "tokens_out": sum(int(row.get("tokens_out") or 0) for row in observed),
-            "cost_usd": round(sum(float(row.get("cost_usd") or 0.0) for row in observed), 8),
+            "cost_usd": (
+                None if unmeasured else round(sum(float(row["cost_usd"]) for row in observed), 8)
+            ),
             "latency_s": sum(float(row.get("latency_s") or 0.0) for row in observed),
             "final_artifact_id": arm.get("final_artifact_id"),
         }
@@ -501,6 +1071,7 @@ def _selftest() -> None:
                     "tokens_in": 10,
                     "tokens_out": 5,
                     "cost_usd": 1.0,
+                    "source": "ccusage",
                     "latency_s": 2.0,
                 }
                 for run_id in plan["arms"][1]["attempt_run_ids"]
@@ -518,6 +1089,17 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--repo")
     parser.add_argument("--spec-file")
     parser.add_argument("--exp-id")
+    parser.add_argument(
+        "--refresh-result",
+        action="store_true",
+        help="Refresh the saved comparison/promotion receipt without launching agents",
+    )
+    parser.add_argument("--subject", help="Select a current open, unlinked issue from fleet shapes")
+    parser.add_argument(
+        "--shapes-path", type=Path, help="Override fleet-shapes.json for subject selection"
+    )
+    parser.add_argument("--agent", help="Implementation agent for --subject")
+    parser.add_argument("--reviewer", help="Reviewer agent for --subject")
     source = parser.add_mutually_exclusive_group()
     source.add_argument(
         "--hypothesis", help="Hypothesis id from experiments/hypotheses.json, e.g. H4"
@@ -564,6 +1146,54 @@ def main(argv: Sequence[str]) -> int:
     if args.selftest:
         _selftest()
         return 0
+    if args.refresh_result:
+        if not args.exp_id or args.prepare or args.subject:
+            print(
+                "--refresh-result requires --exp-id and cannot prepare a subject", file=sys.stderr
+            )
+            return 2
+        try:
+            if refresh_evaluation_result(args.exp_id) is None:
+                raise ValueError("strategy experiment metadata not found")
+            receipt_path = exp_abcd.EXP_DIR / args.exp_id / "strategy-receipt.json"
+            receipt = json.loads(receipt_path.read_text())
+            print(
+                json.dumps(receipt, indent=2, sort_keys=True)
+                if args.json
+                else f"{receipt_path}: {receipt['acceptance_status']}"
+            )
+            return 0 if receipt["acceptance_status"] == "completed" else 1
+        except (OSError, ValueError, TypeError) as exc:
+            print(f"strategy_experiment.py: {exc}", file=sys.stderr)
+            return 1
+    if args.subject:
+        if not args.exp_id or not args.agent or not args.reviewer:
+            print("--subject requires --exp-id, --agent, and --reviewer", file=sys.stderr)
+            return 2
+        if (
+            not args.prepare
+            or not args.confirm_strategy
+            or os.environ.get("ORCH_STRATEGY_EXPERIMENT") != "1"
+        ):
+            print(
+                "--subject requires --prepare --confirm-strategy and ORCH_STRATEGY_EXPERIMENT=1",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            shapes_path = args.shapes_path or (
+                Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
+                / "fleet-shapes.json"
+            )
+            subject = select_subject(shapes_path, target=args.subject)
+            plan = prepare_subject_experiment(
+                subject, exp_id=args.exp_id, agent=args.agent, reviewer=args.reviewer
+            )
+            print(json.dumps(plan, indent=2, sort_keys=True) if args.json else _format_plan(plan))
+            return 0
+        except Exception as exc:
+            print(f"strategy_experiment.py: {exc}", file=sys.stderr)
+            return 1
     missing = [name for name in ("repo", "spec_file", "exp_id") if not getattr(args, name)]
     if missing:
         print(

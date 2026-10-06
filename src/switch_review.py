@@ -1717,6 +1717,33 @@ def format_report(rep: dict) -> str:
         f"  due for a decision: {rep['raise_count']}",
         "",
     ]
+    try:
+        import strategy_experiment
+
+        result_path = strategy_experiment.strategy_result_path()
+        result = json.loads(result_path.read_text())
+        if not isinstance(result, dict):
+            raise ValueError("strategy result must be an object")
+        if result.get("status") == "completed":
+            costs = result.get("costs", {})
+            if costs is None:
+                costs = {}
+            if not isinstance(costs, dict) or any(
+                not isinstance(row, dict) for row in costs.values()
+            ):
+                raise ValueError("strategy costs must contain objects")
+            total = sum(float(row.get("cost_usd") or 0) for row in costs.values())
+            lines += [
+                f"  strategy experiment: completed {result.get('exp_id')} total_cost=${total:.4f}",
+                "",
+            ]
+        else:
+            lines += [
+                f"  strategy experiment: UNKNOWN — {result.get('unknown_reason', 'incomplete evidence')}",
+                "",
+            ]
+    except (OSError, ValueError, TypeError):
+        lines += ["  strategy experiment: UNKNOWN — no completed scored evaluation", ""]
     if rep.get("adjudicator_shadow"):
         lines += [rep["adjudicator_shadow"], ""]
     lines += [adversarial_shape_line(rep.get("adversarial_shape", {})), ""]
