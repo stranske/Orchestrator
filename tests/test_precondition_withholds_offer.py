@@ -133,6 +133,40 @@ def test_unknown_precondition_withholds_the_offer_and_records_fact_missing_on_th
     assert "runtime-ac-checks" in {row["capability_id"] for row in mixed["fact_missing"]}
     assert "runtime-ac-checks" not in {row["capability_id"] for row in mixed["not_applicable"]}
 
+    # A capability-specific eligibility filter must not swallow an unknown verdict before
+    # the surface can report the missing fact, on either the bound-only or classified path.
+    adjudicator_ledger = tmp_path / "adjudicator.json"
+    row = capabilities._blank_capability("role-adjudicator")
+    row["status"] = "generated"
+    capabilities.save({"role-adjudicator": row}, adjudicator_ledger)
+    for text in ("xyzzy plugh", "review disputed verifier results"):
+        result = ca.advise(
+            text,
+            surface="closer-lane",
+            repository="stranske/Repo",
+            record=True,
+            path=adjudicator_ledger,
+        )
+        assert result["capabilities"] == []
+        assert result["fact_missing"] == [
+            {
+                "capability_id": "role-adjudicator",
+                "surface": "closer-lane",
+                "fact": "verifier verdict or merge disposition unknown",
+            }
+        ]
+        assert result["recorded_fact_missing"] == 1
+    events = [
+        ev
+        for ev in capabilities.load_declared(adjudicator_ledger)["role-adjudicator"]["event_history"]
+        if ev["type"] == "match"
+    ]
+    assert len(events) == 2
+    assert all(ev["metadata"]["source"] == cp.FACT_MISSING_SOURCE for ev in events)
+    counts = cp.surface_decline_counts("closer-lane", path=adjudicator_ledger)
+    assert counts["offered"] == counts["declined"] == {}
+    assert cp.surface_fact_missing_total("closer-lane", path=adjudicator_ledger) == 2
+
 
 def test_known_precondition_true_offers_and_false_declines_as_precondition_unmet(
     tmp_path, monkeypatch
