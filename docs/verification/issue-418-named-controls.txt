@@ -1,0 +1,104 @@
+Run UTC 2026-10-06T14:25:02.815807+00:00
+Base main69f3bbb8d5ef8aaa7edbb24ba606d9543145e52f; source source490 merge576314847b600c2b84d43fc6b057f5071ab048fc
+COMMAND python3.12 -m pytest tests/test_precondition_withholds_offer.py::test_unknown_precondition_withholds_the_offer_and_records_fact_missing_on_the_surface tests/test_precondition_withholds_offer.py::test_known_precondition_true_offers_and_false_declines_as_precondition_unmet tests/test_precondition_withholds_offer.py::test_detect_reports_fact_missing_per_surface_and_never_as_a_decline -q
+...                                                                      [100%]
+3 passed in 2.82s
+
+
+EXIT 0
+MUTATION src/capability_advisor.py: return entry.get("pr_requirement_met") is None -> return False
+COMMAND python3.12 -m pytest tests/test_precondition_withholds_offer.py::test_unknown_precondition_withholds_the_offer_and_records_fact_missing_on_the_surface -q
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_unknown_precondition_withholds_the_offer_and_records_fact_missing_on_the_surface _
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-804/test_unknown_precondition_with0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ae73c80>
+
+    def test_unknown_precondition_withholds_the_offer_and_records_fact_missing_on_the_surface(
+        tmp_path, monkeypatch
+    ):
+        ledger = _ledger(tmp_path)
+        monkeypatch.setattr(ca, "PR_FACTS_FETCH", lambda *a, **k: None)
+    
+        result = ca.advise(
+            "closer: sweep the merge queue",
+            surface="closer-lane",
+            repository="stranske/Repo",
+            record=True,
+            path=ledger,
+        )
+        offered = {e["capability_id"] for e in result["capabilities"]}
+>       assert "runtime-ac-checks" not in offered
+E       AssertionError: assert 'runtime-ac-checks' not in {'adversarial-review', 'cross-repo-coordination', 'offload', 'redirect-plan', 'redirect-policy', 'runtime-ac-checks'}
+
+tests/test_precondition_withholds_offer.py:90: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_precondition_withholds_offer.py::test_unknown_precondition_withholds_the_offer_and_records_fact_missing_on_the_surface
+1 failed in 0.64s
+
+
+EXIT 1
+BYTE IDENTICAL RESTORATION SHA256 5d71ba17e6d82230e7b3d40b72642ef5b271fc6489ba949a8e3adc1098c990a7
+COMMAND python3.12 -m pytest tests/test_precondition_withholds_offer.py::test_unknown_precondition_withholds_the_offer_and_records_fact_missing_on_the_surface -q
+.                                                                        [100%]
+1 passed in 0.42s
+
+
+EXIT 0
+MUTATION src/capability_propensity.py: for cap_id in trial.get("declined") or []:
+            declined[cap_id] -> for cap_id in (trial.get("declined") or []) + (trial.get("fact_missing") or []):
+            declined[cap_id]
+COMMAND python3.12 -m pytest tests/test_precondition_withholds_offer.py::test_detect_reports_fact_missing_per_surface_and_never_as_a_decline -q
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____ test_detect_reports_fact_missing_per_surface_and_never_as_a_decline ______
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-806/test_detect_reports_fact_missi0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a20f1d0>
+capsys = <_pytest.capture.CaptureFixture object at 0x10a258a40>
+
+    def test_detect_reports_fact_missing_per_surface_and_never_as_a_decline(
+        tmp_path, monkeypatch, capsys
+    ):
+        ledger = _ledger(tmp_path)
+        monkeypatch.setattr(ca, "PR_FACTS_FETCH", lambda *a, **k: None)
+        ca.advise(
+            "closer: sweep the merge queue",
+            surface="closer-lane",
+            repository="stranske/Repo",
+            record=True,
+            path=ledger,
+        )
+        det = cp.detect(path=ledger)
+        surf = det["surfaces"]["closer-lane"]
+        assert surf["fact_missing"] >= 1
+        counts = cp.surface_decline_counts("closer-lane", path=ledger)
+        assert counts["offered"].get("runtime-ac-checks", 0) == 0
+        withheld = set(cp.experiments(path=ledger)[0]["fact_missing"])
+        assert not (withheld & counts["offered"].keys())
+>       assert not (withheld & counts["declined"].keys())
+E       AssertionError: assert not ({'adversarial-review', 'cross-repo-coordination', 'offload', 'redirect-plan', 'redirect-policy', 'runtime-ac-checks'} & dict_keys(['adversarial-review', 'cross-repo-coordination', 'offload', 'redirect-plan', 'redirect-policy', 'runtime-ac-checks']))
+E        +  where dict_keys(['adversarial-review', 'cross-repo-coordination', 'offload', 'redirect-plan', 'redirect-policy', 'runtime-ac-checks']) = <built-in method keys of dict object at 0x10a4f7900>()
+E        +    where <built-in method keys of dict object at 0x10a4f7900> = {'adversarial-review': 1, 'cross-repo-coordination': 1, 'offload': 1, 'redirect-plan': 1, ...}.keys
+
+tests/test_precondition_withholds_offer.py:202: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_precondition_withholds_offer.py::test_detect_reports_fact_missing_per_surface_and_never_as_a_decline
+1 failed in 2.52s
+
+
+EXIT 1
+BYTE IDENTICAL RESTORATION SHA256 0c952552bd800957d68273619b962007044702c3bacc46f95890a47fae5509fa
+COMMAND python3.12 -m pytest tests/test_precondition_withholds_offer.py::test_detect_reports_fact_missing_per_surface_and_never_as_a_decline -q
+.                                                                        [100%]
+1 passed in 2.55s
+
+
+EXIT 0
+COMMAND python3.12 -m pytest tests/test_precondition_withholds_offer.py -q
+...........                                                              [100%]
+11 passed in 2.79s
+
+
+EXIT 0

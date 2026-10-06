@@ -688,10 +688,10 @@ def advise(
             precondition = _annotate_preconditions(
                 entries, repository, repo_path, pr_facts=pr_facts, pr=pr, ledger_path=path
             )
-            _filter_contested_verdict_offers(entries, precondition)
             entries, withheld_fact_missing = _apply_withhold_for_missing_pr_facts(
                 entries, precondition, surface=surface or skill
             )
+            _filter_contested_verdict_offers(entries, precondition)
             _attach_how_to_use(entries)
             try:
                 import capability_propensity
@@ -921,10 +921,12 @@ def advise(
     precondition = _annotate_preconditions(
         matched, repository, repo_path, pr_facts=pr_facts, pr=pr, ledger_path=path
     )
-    _filter_contested_verdict_offers(matched, precondition)
+    # Report unknown PR verdicts before capability-specific eligibility gates can remove
+    # them. In particular, an unknown adjudicator verdict is a missing surface fact.
     matched, withheld_fact_missing = _apply_withhold_for_missing_pr_facts(
         matched, precondition, surface=surface or skill
     )
+    _filter_contested_verdict_offers(matched, precondition)
     _attach_how_to_use(matched)
     try:
         import capability_propensity
