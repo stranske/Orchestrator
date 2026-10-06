@@ -639,6 +639,13 @@ def test_an_experiment_evaluators_output_is_masked_before_it_reaches_the_brain(
 
 def test_a_ux_review_panels_output_is_masked_before_it_reaches_the_brain(tmp_path, monkeypatch):
     token = minted("o")
+    # ISOLATION, as in test_experiment_arm_identity: the fake Popen below replaces it process-wide,
+    # and with a cold advertised-model cache (a fresh runner) `adapters.model_identity` probes the
+    # CLI catalog through subprocess.run, which then hands the fake `stdout=PIPE`, an int. Red on
+    # the first CI run, green locally on a warm cache. ORCH_MODEL_PROBE=0 is adapters' own
+    # kill switch: pinned models only, no subprocess.
+    monkeypatch.setenv("ORCH_MODEL_PROBE", "0")
+    monkeypatch.setattr(ux_review.adapters, "_ADVERTISED_MEMO", {})
     monkeypatch.setattr(ux_review, "REVIEW_DIR", tmp_path)
     monkeypatch.setattr(ux_review, "register_panel_subject", lambda *a, **k: None)
     monkeypatch.setattr(ux_review, "build_rubric_prompt", lambda bundle: "RUBRIC")
