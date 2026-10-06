@@ -1441,3 +1441,11 @@ construction refuses a missing or placeholder agent. Watch classification retain
 recommendation while withholding apply commands until a real worker is selected.
 Role-run Brain metadata retains caller `source` and `report_state`, distinguishing
 real sweep stalls, live dispatch and historical replay without changing apply authority.
+
+Local `dispatcher.delegate` records a delivery-lane invocation only after its worker
+starts: `testgen` → `testgen-lane`, `codemod` → `codemod-campaign`, and
+`cross_repo` → `cross-repo-coordination`. The same lane tag travels through the
+existing Brain run and versioned influence edge. Standalone delegates are observed
+even outside an active tick; prompt construction and dry-run plans only match
+work, and refused/unbuildable delegates never count as invocations. This credits
+a started worker, not a successful outcome; outcomes keep their durability gates.

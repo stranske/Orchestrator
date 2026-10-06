@@ -1,0 +1,125 @@
+"""A started local delegate reaches both the private ledger and the Brain's causal edge."""
+
+import json
+
+import pytest
+
+import capabilities
+import dispatcher
+import feedback
+import roles
+
+LANES = dispatcher.DELEGATE_LANE_CAPABILITIES
+
+
+@pytest.fixture
+def world(monkeypatch, tmp_path):
+    ledger = tmp_path / "capabilities.json"
+    rows = {}
+    for name in LANES.values():
+        row = capabilities._blank_capability(name)
+        row["capability_version_id"] = f"{name}@test-v1"
+        rows[name] = row
+    capabilities.save(rows, ledger)
+    monkeypatch.setattr(capabilities, "REG", ledger)
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS", raising=False)
+    monkeypatch.setattr(dispatcher, "DISPATCH_LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr(dispatcher.claims, "reap_stale", lambda: None)
+    monkeypatch.setattr(dispatcher.claims, "claim", lambda *_: True)
+    monkeypatch.setattr(dispatcher.claims, "release", lambda *_: None)
+    monkeypatch.setattr(dispatcher.provision, "provision", lambda *_: tmp_path)
+    monkeypatch.setattr(
+        dispatcher.repo_knowledge, "append_context", lambda prompt, *_a, **_k: prompt
+    )
+    monkeypatch.setattr(
+        roles, "activate_dispatch_roles", lambda _a, prompt, **_k: {"prompt": prompt}
+    )
+    monkeypatch.setattr(dispatcher.adapters, "build_command", lambda *_a, **_k: ["true"])
+    monkeypatch.setattr(dispatcher.adapters, "model_identity", lambda *_: "test-model")
+    monkeypatch.setattr(dispatcher, "_auth_prelude", lambda *_: "")
+    monkeypatch.setattr(dispatcher, "_agent_runtime_prelude", lambda *_: "")
+    monkeypatch.setattr(dispatcher, "_net_hygiene_prelude", lambda: "")
+    # Run the real plan_dispatch and _spawn recording path; intercept only OS launch.
+    monkeypatch.setattr(
+        dispatcher.subprocess, "Popen", lambda *_a, **_k: type("Process", (), {"pid": 1234})()
+    )
+    return ledger
+
+
+def _delegate(task_type):
+    return dispatcher.delegate(
+        "cursor", "stranske/Test#432", "opener", "Do the bounded work", task_type=task_type
+    )
+
+
+def _assert_credit(world, result, capability_id):
+    assert "error" not in result
+    row = json.loads(world.read_text())["capabilities"][capability_id]
+    events = [e for e in row["event_history"] if e["type"] == "invocation"]
+    assert len(events) == 1
+    assert events[0]["ref"] == "stranske/Test#432"
+    assert events[0]["metadata"]["run_id"] == result["run_id"]
+    with feedback._conn() as db:
+        event = db.execute(
+            "SELECT payload_json FROM completion_events WHERE run_id=? AND phase='decision'",
+            (result["run_id"],),
+        ).fetchone()
+        assert json.loads(event[0])["capability_ids"] == [capability_id]
+        edges = db.execute(
+            "SELECT capability_id, capability_version_id FROM influence_edges "
+            "WHERE target_run_id=? AND influence_type='capability' AND accepted=1",
+            (result["run_id"],),
+        ).fetchall()
+        assert {tuple(e) for e in edges} == {(capability_id, f"{capability_id}@test-v1")}
+
+
+def test_a_testgen_delegate_heartbeats_testgen_lane_and_tags_the_run(world):
+    _assert_credit(world, _delegate("testgen"), "testgen-lane")
+
+
+@pytest.mark.parametrize("task_type", ["codemod", "cross_repo"])
+def test_codemod_and_cross_repo_delegates_tag_their_lanes(world, task_type):
+    _assert_credit(world, _delegate(task_type), LANES[task_type])
+
+
+def test_an_implement_delegate_tags_none_of_them(world):
+    result = _delegate("implement")
+    assert "error" not in result
+    assert all(
+        not r["last_invocation"] for r in json.loads(world.read_text())["capabilities"].values()
+    )
+    with feedback._conn() as db:
+        assert (
+            db.execute(
+                "SELECT COUNT(*) FROM influence_edges WHERE target_run_id=? AND influence_type='capability'",
+                (result["run_id"],),
+            ).fetchone()[0]
+            == 0
+        )
+
+
+@pytest.mark.parametrize("failure", ["claimed", "unbuildable", "spawn"])
+def test_a_delegate_that_does_not_start_never_invokes_the_lane(world, monkeypatch, failure):
+    if failure == "claimed":
+        monkeypatch.setattr(dispatcher.claims, "claim", lambda *_: False)
+        monkeypatch.setattr(dispatcher.claims, "holder", lambda *_: {"agent": "other"})
+    elif failure == "unbuildable":
+        monkeypatch.setattr(dispatcher, "plan_dispatch", lambda *_a, **_k: None)
+    else:
+
+        def fail(*_a, **_k):
+            raise OSError("worker could not start")
+
+        monkeypatch.setattr(dispatcher.subprocess, "Popen", fail)
+    if failure == "spawn":
+        with pytest.raises(OSError, match="could not start"):
+            _delegate("testgen")
+    else:
+        assert "error" in _delegate("testgen")
+    assert all(
+        not r["last_invocation"] for r in json.loads(world.read_text())["capabilities"].values()
+    )
