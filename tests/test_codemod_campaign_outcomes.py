@@ -88,7 +88,10 @@ class CampaignOutcomeTests(unittest.TestCase):
         for row in saved["repos"].values():
             self.assertEqual(row["state"], "already-complete")
             self.assertNotIn("target", row)
-            self.assertEqual([row[field] for field in ("merged", "durable", "cost_usd")], [None] * 3)
+            self.assertEqual(
+                [row[field] for field in ("merged", "durable", "cost_usd")],
+                [None] * 3,
+            )
 
     def test_record_campaign_persists_outcomes_without_dispatch(self):
         complete, durable, pending, unattributed, unmerged, partial = self.campaign["campaign"][
@@ -167,6 +170,9 @@ class CampaignOutcomeTests(unittest.TestCase):
             if repo != complete:
                 self.assertEqual(row["target"], program["repos"][repo]["target"])
                 self.assertEqual(row["delivery_prs"][0]["headRefOid"], "head-91")
-        self.assertEqual(saved["repos"][durable]["dispatches"], program["repos"][durable]["dispatches"])
+        self.assertEqual(
+            saved["repos"][durable]["dispatches"],
+            program["repos"][durable]["dispatches"],
+        )
         self.assertIn("campaign: repos 6, dispatched 0, merged 4", rollout.format_human(result))
         dispatch.assert_not_called()
