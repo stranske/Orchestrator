@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -165,6 +166,38 @@ def test_launch_retry_reuses_the_committed_seed(pair, monkeypatch):
     assert exp_abcd.launch_pending_reviews("o/r", meta["exp_id"])["launched"]
     assert git(wt, "rev-parse", "HEAD") == seeded
     assert (wt / "value.txt").read_text() == "implementation\n"
+
+
+@pytest.mark.parametrize("role", ["implementation", "review"])
+@pytest.mark.parametrize("stale", [False, True])
+@pytest.mark.parametrize("unreadable_marker", [False, True])
+def test_missing_completion_marker_expires_only_after_idle_bound(
+    pair, monkeypatch, role, stale, unreadable_marker
+):
+    _canon, edir, meta, spawned = pair
+    impl, reviewer = exp_abcd.experiment_members(meta)
+    member = impl if role == "implementation" else reviewer
+    log = edir / exp_abcd.exp_log_path(member["agent"], member["member_id"])
+    log.write_text("started\n")
+    now = 2_000_000
+    monkeypatch.setattr(exp_abcd.time, "time", lambda: now)
+    stamp = now - (6 * 3600 + 1 if stale else 60)
+    os.utime(log, (stamp, stamp))
+    if unreadable_marker:
+        (edir / "done").mkdir()
+        run_id = exp_abcd._member_run_id(meta["exp_id"], member)
+        (edir / "done" / f"{run_id}.json").write_text("invalid JSON")
+    result = exp_abcd.launch_pending_reviews("o/r", meta["exp_id"])
+    assert not spawned
+    if stale:
+        prefix = "implementer" if role == "implementation" else "reviewer"
+        assert result["failed"] == [
+            {"member_id": reviewer["member_id"], "reason": prefix + "-no-completion-marker"}
+        ]
+        assert not result["pending"]
+    else:
+        assert result["pending"] == [reviewer["member_id"]]
+        assert not result["failed"]
 
 
 def test_failed_pair_gets_terminal_unknown_and_is_not_rescanned(pair, monkeypatch):

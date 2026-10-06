@@ -1,6 +1,6 @@
 {
-  "collected": 2322,
-  "passed": 2322,
+  "collected": 2369,
+  "passed": 2326,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 47,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Round1020 strategy recovery integrated current main after guarded497 merge; both floor histories retained in Git and round receipts; actual collection measured; every quality ceiling unchanged; full suite awaits CI. Actual collection 2322;129 current-main focusedPASS;8 actual regressionRED/restoredGREEN; no quality ceiling changed."
+  "note": "Round1220 combined existing strategy reporting with current main adjudicator/triage reporting. Retain supported main passed-or-skipped floor2326; actual collection measured after review repair. All quality ceilings unchanged; full merge-result CI pending. Actual measured collection2369; passed floor2326 retained from current main. Missing completion marker actualRED4failed/fresh4passed; restored/current focused suitePASS."
 }

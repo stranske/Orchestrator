@@ -855,7 +855,15 @@ def prepare_arms(
     }
 
 
-def launch_pending_reviews(repo: str, exp_id: str) -> dict:
+def _completion_log_stale(log: Path, stale_after_s: int) -> bool:
+    """Require observed idle-log age before expiring an absent completion marker."""
+    try:
+        return time.time() - log.stat().st_mtime > stale_after_s
+    except OSError:
+        return False
+
+
+def launch_pending_reviews(repo: str, exp_id: str, *, stale_after_s: int = 6 * 3600) -> dict:
     """Launch review members only after their paired implementation completed successfully."""
     edir = exp_paths(exp_id)
     meta = json.loads((edir / "meta.json").read_text())
@@ -871,7 +879,15 @@ def launch_pending_reviews(repo: str, exp_id: str) -> dict:
             try:
                 reviewed = json.loads((edir / "done" / f"{review_run}.json").read_text())
             except (OSError, ValueError):
-                pending.append(reviewer["member_id"])
+                if _completion_log_stale(reviewer_log, stale_after_s):
+                    failed.append(
+                        {
+                            "member_id": reviewer["member_id"],
+                            "reason": "reviewer-no-completion-marker",
+                        }
+                    )
+                else:
+                    pending.append(reviewer["member_id"])
                 continue
             if (
                 reviewed.get("run_id") != review_run
@@ -889,7 +905,16 @@ def launch_pending_reviews(repo: str, exp_id: str) -> dict:
         try:
             done = json.loads(marker.read_text())
         except (OSError, ValueError):
-            pending.append(reviewer["member_id"])
+            impl_log = edir / exp_log_path(impl["agent"], impl["member_id"])
+            if _completion_log_stale(impl_log, stale_after_s):
+                failed.append(
+                    {
+                        "member_id": reviewer["member_id"],
+                        "reason": "implementer-no-completion-marker",
+                    }
+                )
+            else:
+                pending.append(reviewer["member_id"])
             continue
         if done.get("run_id") != impl_run or done.get("rc_of") != "agent" or done.get("rc") != 0:
             failed.append({"member_id": reviewer["member_id"], "reason": "implementer-failed"})
