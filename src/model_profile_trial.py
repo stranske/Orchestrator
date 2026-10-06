@@ -131,6 +131,7 @@ RESULT_FIELDS = {
     "attempts",
     "auxiliary_traces",
     "identity_verified",
+    "quality_by_profile",
 }
 ATTEMPT_FIELDS = {
     "run_id",
@@ -529,12 +530,98 @@ def _validate_results(manifest: dict[str, Any], results: dict[str, Any]) -> list
     ]
 
 
+def _capability_program_summary_path() -> Path:
+    state_root = Path(
+        os.environ.get("ORCH_STATE_DIR", str(Path.home() / ".codex" / "orchestrator"))
+    )
+    return state_root / "capability-program" / "profile-trial.json"
+
+
+def _load_capability_program_trial_summary() -> dict[str, Any] | None:
+    path = _capability_program_summary_path()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _is_measured_program_summary(payload: dict[str, Any] | None) -> bool:
+    if not payload:
+        return False
+    if payload.get("brain_ingest_enabled"):
+        return True
+    if payload.get("identity_verified"):
+        return True
+    quality = payload.get("quality_by_profile")
+    if isinstance(quality, dict) and any(value != "n/a" for value in quality.values()):
+        return True
+    return False
+
+
+def _authoritative_identity_verified(attempts: list[dict[str, Any]]) -> bool:
+    for attempt in attempts:
+        evidence = attempt.get("identity_evidence")
+        if not isinstance(evidence, dict):
+            return False
+        ref = str(evidence.get("artifact_ref") or attempt.get("artifact_ref") or "").strip()
+        if not ref:
+            return False
+        artifact_path = Path(ref).expanduser()
+        if not artifact_path.is_file():
+            return False
+        expected_hash = str(evidence.get("artifact_sha256") or "")
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_hash):
+            return False
+        actual_hash = "sha256:" + hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+        if actual_hash != expected_hash:
+            return False
+    return True
+
+
+def _require_verified_identity_for_ingest(
+    results: dict[str, Any], attempts: list[dict[str, Any]]
+) -> None:
+    if results.get("identity_verified") is not True:
+        raise ValueError("trial ingest refused: worker identity is unverified")
+    if not _authoritative_identity_verified(attempts):
+        raise ValueError("trial ingest refused: identity evidence is not authoritative")
+
+
+def _validated_quality_by_profile(
+    results: dict[str, Any], attempts: list[dict[str, Any]]
+) -> dict[str, Any]:
+    profile_ids = sorted({item["profile_id"] for item in attempts})
+    supplied = results.get("quality_by_profile")
+    if supplied is None:
+        return {profile_id: "n/a" for profile_id in profile_ids}
+    if not isinstance(supplied, dict):
+        raise ValueError("trial results quality_by_profile must be a mapping")
+    unknown = sorted(set(supplied) - set(profile_ids))
+    if unknown:
+        raise ValueError(f"trial results quality_by_profile has unknown profiles: {unknown}")
+    quality_by_profile: dict[str, Any] = {}
+    for profile_id in profile_ids:
+        value = supplied.get(profile_id, "n/a")
+        if value in (None, "n/a"):
+            quality_by_profile[profile_id] = "n/a"
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("trial results quality_by_profile values must be numeric or n/a")
+        numeric = float(value)
+        if numeric < 0.0 or numeric > 1.0:
+            raise ValueError("trial results quality_by_profile values must be between 0 and 1")
+        quality_by_profile[profile_id] = numeric
+    return quality_by_profile
+
+
 def _write_capability_program_trial_summary(
     manifest: dict[str, Any],
     attempts: list[dict[str, Any]],
     *,
     identity_verified: bool,
     brain_ingest_enabled: bool,
+    quality_by_profile: dict[str, Any],
     timestamp: int,
 ) -> None:
     """Persist a one-line-friendly trial summary for switch review and program tracking."""
@@ -553,7 +640,7 @@ def _write_capability_program_trial_summary(
         "instance_count": len(attempts),
         "identity_verified": bool(identity_verified),
         "brain_ingest_enabled": bool(brain_ingest_enabled),
-        "quality_by_profile": {pid: "n/a" for pid in profile_ids},
+        "quality_by_profile": {pid: quality_by_profile.get(pid, "n/a") for pid in profile_ids},
         "cost_tokens_by_profile": {
             pid: {
                 "tokens_in": int(
@@ -583,8 +670,6 @@ def finalize_trial(
     """Validate source integrity, record instrumentation, and prove no learning writes."""
     validate_trial_manifest(manifest)
     attempts = _validate_results(manifest, results)
-    if ingest_brain and results.get("identity_verified") is False:
-        raise ValueError("trial ingest refused: worker identity is unverified")
     timestamp = int(time.time()) if now is None else int(now)
     source_after = {
         key: source_manifest(Path(value["root"]))
@@ -596,6 +681,13 @@ def finalize_trial(
     )
     if not source_unchanged:
         raise ValueError("source integrity changed during read-only trial")
+
+    if ingest_brain:
+        _require_verified_identity_for_ingest(results, attempts)
+    identity_verified = (
+        results.get("identity_verified") is True and _authoritative_identity_verified(attempts)
+    )
+    quality_by_profile = _validated_quality_by_profile(results, attempts)
 
     write_feedback = record_feedback or ingest_brain
     weights_before = _weight_snapshot() if write_feedback else {}
@@ -614,13 +706,26 @@ def finalize_trial(
             "ingested",
             "already_ingested",
         }
-        _write_capability_program_trial_summary(
-            manifest,
-            attempts,
-            identity_verified=ingest_brain,
-            brain_ingest_enabled=brain_ingest_enabled,
-            timestamp=timestamp,
-        )
+        existing_summary = _load_capability_program_trial_summary()
+        if not ingest_brain and _is_measured_program_summary(existing_summary):
+            preserved = existing_summary or {}
+            _write_capability_program_trial_summary(
+                manifest,
+                attempts,
+                identity_verified=bool(preserved.get("identity_verified")),
+                brain_ingest_enabled=bool(preserved.get("brain_ingest_enabled")),
+                quality_by_profile=dict(preserved.get("quality_by_profile") or quality_by_profile),
+                timestamp=timestamp,
+            )
+        else:
+            _write_capability_program_trial_summary(
+                manifest,
+                attempts,
+                identity_verified=identity_verified,
+                brain_ingest_enabled=brain_ingest_enabled,
+                quality_by_profile=quality_by_profile,
+                timestamp=timestamp,
+            )
     weights_after = _weight_snapshot() if write_feedback else {}
     if weights_after != weights_before:
         raise AssertionError("instrumentation trial altered route weights")

@@ -1,9 +1,31 @@
 from __future__ import annotations
 
+import hashlib
+import json
+
 import pytest
 
 import feedback
 import model_profile_trial
+
+TRIAL_FEEDBACK_TABLES = (
+    "runs",
+    "execution_attempts",
+    "outcomes",
+    "execution_traces",
+    "completion_events",
+    "influence_edges",
+    "profile_trial_ingests",
+)
+
+
+def _assert_trial_feedback_tables_empty(conn) -> None:
+    for table in TRIAL_FEEDBACK_TABLES:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone()
+        count = 0 if not exists else conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        assert count == 0, table
 
 
 @pytest.fixture
@@ -129,15 +151,7 @@ def test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing(
         )
     assert calls["n"] == fail_on
     with feedback._conn() as conn:
-        for table in (
-            "runs",
-            "execution_attempts",
-            "outcomes",
-            "execution_traces",
-            "completion_events",
-            "influence_edges",
-            "profile_trial_ingests",
-        ):
+        for table in TRIAL_FEEDBACK_TABLES:
             assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0, table
 
 
@@ -219,4 +233,102 @@ def test_finalize_refuses_ingest_when_identity_is_unverified(
             now=2_000,
         )
     with feedback._conn() as conn:
-        assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
+        _assert_trial_feedback_tables_empty(conn)
+
+
+def test_finalize_refuses_ingest_when_identity_verified_is_omitted(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="identity is unverified"):
+        model_profile_trial.finalize_trial(
+            trial_manifest,
+            trial_attempt_fixture,
+            record_feedback=True,
+            ingest_brain=True,
+            now=2_000,
+        )
+    with feedback._conn() as conn:
+        _assert_trial_feedback_tables_empty(conn)
+
+
+def _bind_authoritative_identity(tmp_path, trial_attempt_fixture):
+    artifact_dir = tmp_path / "identity-artifacts"
+    artifact_dir.mkdir()
+    for attempt in trial_attempt_fixture["attempts"]:
+        artifact_path = artifact_dir / f"{attempt['profile_id']}-identity.json"
+        artifact_path.write_text(
+            json.dumps({"profile_id": attempt["profile_id"], "acknowledged": True}),
+            encoding="utf-8",
+        )
+        digest = "sha256:" + hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+        attempt["artifact_ref"] = str(artifact_path)
+        attempt["identity_evidence"]["artifact_ref"] = str(artifact_path)
+        attempt["identity_evidence"]["artifact_sha256"] = digest
+    trial_attempt_fixture["identity_verified"] = True
+    return trial_attempt_fixture
+
+
+def test_finalize_writes_measured_quality_by_profile(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    _bind_authoritative_identity(tmp_path, trial_attempt_fixture)
+    quality = {
+        "codex-6-astra-high": 0.82,
+        "codex-5.6-terra-high": 0.76,
+        "codex-5.6-luna-high": 0.79,
+    }
+    trial_attempt_fixture["quality_by_profile"] = quality
+    model_profile_trial.finalize_trial(
+        trial_manifest,
+        trial_attempt_fixture,
+        record_feedback=True,
+        ingest_brain=True,
+        now=2_000,
+    )
+    summary = json.loads(
+        (tmp_path / "capability-program" / "profile-trial.json").read_text(encoding="utf-8")
+    )
+    assert summary["identity_verified"] is True
+    assert summary["brain_ingest_enabled"] is True
+    assert summary["quality_by_profile"] == quality
+
+
+def test_transport_recording_preserves_measured_program_summary(
+    tmp_path, monkeypatch, trial_roots, trial_manifest, trial_attempt_fixture
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    program_dir = tmp_path / "capability-program"
+    program_dir.mkdir(parents=True)
+    preserved = {
+        "trial_id": trial_manifest["trial_id"],
+        "updated_at": 1_500,
+        "profile_count": 3,
+        "instance_count": 3,
+        "identity_verified": True,
+        "brain_ingest_enabled": True,
+        "quality_by_profile": {
+            "codex-6-astra-high": 0.9,
+            "codex-5.6-terra-high": 0.8,
+            "codex-5.6-luna-high": 0.85,
+        },
+        "cost_tokens_by_profile": {},
+        "aggregate_tokens_in": 0,
+        "aggregate_tokens_out": 0,
+    }
+    (program_dir / "profile-trial.json").write_text(json.dumps(preserved), encoding="utf-8")
+    model_profile_trial.finalize_trial(
+        trial_manifest,
+        trial_attempt_fixture,
+        record_feedback=True,
+        ingest_brain=False,
+        now=2_000,
+    )
+    summary = json.loads((program_dir / "profile-trial.json").read_text(encoding="utf-8"))
+    assert summary["identity_verified"] is True
+    assert summary["brain_ingest_enabled"] is True
+    assert summary["quality_by_profile"] == preserved["quality_by_profile"]
+    assert summary["updated_at"] == 2_000
