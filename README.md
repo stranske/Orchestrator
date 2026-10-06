@@ -696,3 +696,14 @@ the dispatch-log and agent-runtime directories that hold the gh token's exact va
 GitHub-minted token, the newest first. It deletes and edits nothing; a secret file it cannot read
 is reported UNMEASURED, never as zero. `python3 src/credential_redaction.py scan --root NAME=PATH`
 runs the same report by hand.
+
+### Retrospective adjudicator shadow evidence
+
+`python3 src/adjudicator_retro.py --limit 5` collects real merge-bound verifier packets without
+calling a model. Add `--dispatch` to run the existing router-selected adjudicator in shadow;
+repeat the bounded command to resume, or add `--retry` for failed evidence/dispatch attempts.
+Only role-run evidence and the state report are written; delivery outcomes, labels and merges
+stay under the existing delivery rails. Weekly switch review reports graded agreement against
+later durability, the merged-PASS baseline, and measured versus unknown cost. At the closer
+consult seam supply `context.verifier_verdict` and `context.merge_disposition`; the adjudicator
+is offered only when those recorded values disagree.

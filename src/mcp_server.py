@@ -111,6 +111,14 @@ TOOLS = [
                     "guesses, and a failed precondition never withholds "
                     "or reorders the offer.",
                 },
+                "verifier_verdict": {
+                    "type": "string",
+                    "description": "Recorded verifier verdict at the closer disposition seam.",
+                },
+                "merge_disposition": {
+                    "type": "string",
+                    "description": "Recorded merge disposition to compare with the verifier verdict.",
+                },
                 "previous": {
                     "type": "object",
                     "description": "the prior capability_advice result; when supplied, the "
@@ -310,6 +318,10 @@ def _call_tool(name: str, args: dict):
             # Same rule for the precondition input: a declared condition the caller cannot supply an
             # answer for is a condition nothing evaluates, which is the defect being fixed.
             repo_path=str(args.get("repo_path") or ""),
+            context={
+                key: args[key] for key in ("verifier_verdict", "merge_disposition") if key in args
+            }
+            or None,
         )
         previous = args.get("previous")
         if isinstance(previous, dict):

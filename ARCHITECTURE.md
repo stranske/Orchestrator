@@ -1502,12 +1502,24 @@ evidence.
   or rejecting a blocker, requires evidence gaps for `needs_more_evidence`, and rejects next steps that ask
   for mutating execution.
 
+The `adjudicator_retro` rail reads persisted verifier/merge-disposition disputes from the Brain,
+requires the trusted merge-bound verifier comment plus diff summary and exact-head gate runs,
+and calls the existing router-selected role in bounded, resumable shadow batches. Each role run
+is tagged `source=retrospective`; no outcome is created or modified and no verdict is applied.
+The report at `$ORCH_STATE_DIR/capability-program/adjudicator-retro.json` grades advice only
+against post-detection durability evidence, compares it with the merged-PASS baseline, and names
+unmeasured costs. The closer-lane advisor offers this role only when the caller's recorded
+`verifier_verdict` and `merge_disposition` disagree; missing facts withhold the offer. Weekly switch
+review consumes the saved report and prints its case, agreement, disagreement and cost counts.
+This extends the existing role and reporting rails; it does not re-enable tick adjudication.
+
 ### CLI
 
 ```bash
 python3 src/roles.py route --role adjudicator
 python3 src/roles.py adjudicate --case-json case.json [--proposal-json adjudication.json]
 python3 src/roles.py adjudicate --case-json case.json --dispatch
+python3 src/adjudicator_retro.py --dispatch --limit 5  # resume shadow evidence; --retry retries failed cases
 ```
 
 ### Prompt authoring output contracts
