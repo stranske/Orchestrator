@@ -557,6 +557,10 @@ def _validate_results(manifest: dict[str, Any], results: dict[str, Any]) -> list
             raise ValueError("trial attempt missing runner version")
         if not str(attempt.get("cli_version") or "").strip():
             raise ValueError("trial attempt missing CLI version")
+        for field in ("tokens_in", "tokens_out"):
+            value = attempt.get(field)
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError(f"trial attempt {field} must be a nonnegative integer or null")
         evidence = attempt.get("identity_evidence")
         if not isinstance(evidence, dict):
             raise ValueError("trial attempt missing authoritative identity evidence")
@@ -695,6 +699,14 @@ def _validated_quality_by_profile(
     return quality_by_profile
 
 
+def _trial_token_total(attempts: list[dict[str, Any]], field: str) -> int | str:
+    """Sum measured usage only when every instance supplied that direction."""
+    values = [attempt.get(field) for attempt in attempts]
+    if not values or any(value is None for value in values):
+        return "n/a"
+    return sum(values)
+
+
 def _write_capability_program_trial_summary(
     manifest: dict[str, Any],
     attempts: list[dict[str, Any]],
@@ -711,8 +723,8 @@ def _write_capability_program_trial_summary(
     out_dir = state_root / "capability-program"
     out_dir.mkdir(parents=True, exist_ok=True)
     profile_ids = sorted({item["profile_id"] for item in attempts})
-    tokens_in = sum(int(item.get("tokens_in") or 0) for item in attempts)
-    tokens_out = sum(int(item.get("tokens_out") or 0) for item in attempts)
+    tokens_in = _trial_token_total(attempts, "tokens_in")
+    tokens_out = _trial_token_total(attempts, "tokens_out")
     payload = {
         "trial_id": manifest["trial_id"],
         "updated_at": timestamp,
@@ -723,12 +735,8 @@ def _write_capability_program_trial_summary(
         "quality_by_profile": {pid: quality_by_profile.get(pid, "n/a") for pid in profile_ids},
         "cost_tokens_by_profile": {
             pid: {
-                "tokens_in": sum(
-                    int(a.get("tokens_in") or 0) for a in attempts if a["profile_id"] == pid
-                ),
-                "tokens_out": sum(
-                    int(a.get("tokens_out") or 0) for a in attempts if a["profile_id"] == pid
-                ),
+                field: _trial_token_total([a for a in attempts if a["profile_id"] == pid], field)
+                for field in ("tokens_in", "tokens_out")
             }
             for pid in profile_ids
         },

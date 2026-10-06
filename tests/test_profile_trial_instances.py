@@ -16,6 +16,7 @@ from unittest.mock import patch
 import feedback
 import model_profile_trial as trial
 import model_profile_trial_bridge as bridge
+import switch_review
 
 
 class ProfileTrialInstancesTest(unittest.TestCase):
@@ -139,6 +140,60 @@ class ProfileTrialInstancesTest(unittest.TestCase):
         with feedback._conn() as conn:
             for table in ("runs", "execution_attempts", "outcomes", "profile_trial_ingests"):
                 self.assertEqual(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 0)
+
+    def test_missing_instance_usage_keeps_profile_and_total_cost_unknown(self):
+        for field in ("tokens_in", "tokens_out"):
+            for missing in ("omitted", "null"):
+                with self.subTest(field=field, missing=missing):
+                    results = self.results()
+                    affected = results["attempts"][-1]
+                    if missing == "omitted":
+                        affected.pop(field)
+                    else:
+                        affected[field] = None
+                    trial.finalize_trial(self.manifest, results, record_feedback=True)
+                    summary = json.loads(trial._capability_program_summary_path().read_text())
+                    self.assertEqual(
+                        summary["cost_tokens_by_profile"][affected["profile_id"]][field], "n/a"
+                    )
+                    self.assertEqual(summary[f"aggregate_{field}"], "n/a")
+                    other = "tokens_out" if field == "tokens_in" else "tokens_in"
+                    self.assertEqual(
+                        summary[f"aggregate_{other}"], sum(a[other] for a in results["attempts"])
+                    )
+                    unaffected = next(p for p in self.profiles if p != affected["profile_id"])
+                    self.assertEqual(
+                        summary["cost_tokens_by_profile"][unaffected][field],
+                        sum(a[field] for a in results["attempts"] if a["profile_id"] == unaffected),
+                    )
+                    self.assertIn("n/a", switch_review.profile_trial_summary_line())
+
+    def test_invalid_instance_usage_is_rejected_before_any_feedback_write(self):
+        invalid = (-1, True, False, 1.5, "12", float("nan"), float("inf"), [], {})
+        with patch.object(feedback, "ingest_profile_trial") as ingest:
+            for field in ("tokens_in", "tokens_out"):
+                for value in invalid:
+                    with self.subTest(field=field, value=value):
+                        results = self.results()
+                        results["attempts"][-1][field] = value
+                        with self.assertRaisesRegex(ValueError, field):
+                            trial.finalize_trial(self.manifest, results, ingest_brain=True)
+                        ingest.assert_not_called()
+                        self.assertFalse(trial._capability_program_summary_path().exists())
+
+    def test_explicit_zero_usage_remains_measured_zero(self):
+        results = self.results()
+        for attempt in results["attempts"]:
+            attempt.update(tokens_in=0, tokens_out=0)
+        trial.finalize_trial(self.manifest, results, ingest_brain=True)
+        summary = json.loads(trial._capability_program_summary_path().read_text())
+        self.assertEqual(summary["aggregate_tokens_in"], 0)
+        self.assertEqual(summary["aggregate_tokens_out"], 0)
+        self.assertEqual(
+            summary["cost_tokens_by_profile"],
+            dict.fromkeys(self.profiles, {"tokens_in": 0, "tokens_out": 0}),
+        )
+        self.assertIn("cost 0in+0out/0in+0out", switch_review.profile_trial_summary_line())
 
     def test_missing_duplicate_and_misjoined_instance_are_rejected(self):
         for mutation in ("missing", "duplicate", "wrong-profile"):
