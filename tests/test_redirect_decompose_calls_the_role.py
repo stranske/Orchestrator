@@ -63,3 +63,24 @@ def test_shadow_gate_and_cycle_cap_preserve_deterministic_fallback(monkeypatch):
     assert calls[-1]["dispatch"] is False
     assert "per_cycle_invocation_cap" in rep["prompt_text"]
     roles.reset_role_invocation_counts()
+
+
+def test_decomposer_exception_preserves_deterministic_fallback(monkeypatch):
+    roles.reset_role_invocation_counts()
+    monkeypatch.setenv("ORCH_ROLE_SHADOW", "1")
+    monkeypatch.setenv("ORCH_CAPABILITY_HEARTBEATS", "0")
+    monkeypatch.setattr(roles.feedback, "record_role_selector_event", lambda *a, **kw: None)
+
+    def unavailable(**kwargs):
+        raise RuntimeError("role unavailable")
+
+    monkeypatch.setattr(roles, "run_decomposer_agent", unavailable)
+    try:
+        rep = redirect_plan.plan(
+            {"target": "o/r#1", "policy_decision": {"action": "decompose"}}, next_agent="codex"
+        )
+        assert rep["decomposition"]["proposal"] is None
+        assert "decomposer unavailable" in rep["prompt_text"]
+        assert "split the work into 2-3" in rep["prompt_text"]
+    finally:
+        roles.reset_role_invocation_counts()

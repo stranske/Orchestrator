@@ -2,6 +2,8 @@ import copy
 import json
 import sqlite3
 
+import pytest
+
 import issue_size_quality as quality
 import switch_review
 
@@ -155,3 +157,27 @@ def test_missing_outcome_for_a_second_closing_pr_cannot_grade_the_issue():
     assert rep["missing_outcomes"] == ["o/r#1"]
     assert rep["bands"][1]["joined"] == 0
     assert rep["bands"][1]["pass"]["rate"] is None
+
+
+@pytest.mark.parametrize(
+    "disabled",
+    [
+        "fleet-shapes,issue-size-quality",
+        "fleet-shapes issue-size-quality",
+        "fleet-shapes\tissue-size-quality",
+    ],
+)
+def test_weekly_kill_switch_never_collects_or_writes(tmp_path, monkeypatch, capsys, disabled):
+    import fleet_shapes
+
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ORCH_VALUE_CHAIN_MONITOR", "0")
+    monkeypatch.setenv("ORCH_DISABLE_STEPS", disabled)
+    monkeypatch.setattr(switch_review, "review", lambda **kw: {})
+    monkeypatch.setattr(fleet_shapes, "load_facts", lambda state: {})
+    calls = []
+    monkeypatch.setattr(quality, "run", lambda **kw: calls.append(kw) or {})
+    assert switch_review.main(["--json", "--env", "process"]) == 0
+    assert calls == []
+    assert "issue_size_quality" not in json.loads(capsys.readouterr().out)
+    assert not (tmp_path / "capability-program/size-quality.json").exists()
