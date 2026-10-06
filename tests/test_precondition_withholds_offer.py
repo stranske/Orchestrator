@@ -158,7 +158,9 @@ def test_unknown_precondition_withholds_the_offer_and_records_fact_missing_on_th
         assert result["recorded_fact_missing"] == 1
     events = [
         ev
-        for ev in capabilities.load_declared(adjudicator_ledger)["role-adjudicator"]["event_history"]
+        for ev in capabilities.load_declared(adjudicator_ledger)["role-adjudicator"][
+            "event_history"
+        ]
         if ev["type"] == "match"
     ]
     assert len(events) == 2
