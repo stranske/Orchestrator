@@ -1,0 +1,11 @@
+✔ retro CLI preserves raw proposals without grading metadata and refreshes measured costs (529.848792ms)
+✔ retro CLI reuses saved cases when later durability and costs arrive (903.715ms)
+✔ retro CLI publishes an empty report without inventing agreement or cost (256.332ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1743.666708

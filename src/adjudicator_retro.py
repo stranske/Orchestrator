@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 import feedback
+import fleet_shapes
 import roles
 import verifier_evidence
 
@@ -51,6 +52,7 @@ def build_packet(row: dict, evidence: dict) -> dict:
     case = {
         "target": row.get("target"),
         "source": "retrospective",
+        "metadata_only": True,
         "disputed_finding": evidence.get("disputed_finding"),
         "ground_truth_evidence": evidence.get("ground_truth_evidence"),
     }
@@ -195,7 +197,7 @@ def later_truth(row: dict) -> str | None:
     durability = row.get("durability")
     if durability == "durable":
         return "PASS"
-    if durability in {"broke_later", "reverted", "reopened", "abandoned", "reworked"}:
+    if durability in fleet_shapes.BAD_DURABILITY:
         return "FAIL"
     return None
 
@@ -217,15 +219,43 @@ def _refresh_saved_verdicts(rows: list[dict], db: Path | None = None) -> None:
         conn.row_factory = sqlite3.Row
         for row in verdicts:
             outcome = conn.execute(
-                "SELECT durability,durability_checked_ts FROM outcomes WHERE run_id=?",
+                "SELECT merged,durability,durability_checked_ts FROM outcomes WHERE run_id=?",
                 (row["run_id"],),
             ).fetchone()
             row["later_truth"] = later_truth(dict(outcome)) if outcome else None
+            merged = outcome["merged"] if outcome else None
+            row["merge_rule_verdict"] = (
+                ("PASS" if merged else "FAIL") if merged is not None else None
+            )
             row["cost_usd"] = measured_cost(row.get("backend_run_id"), db)
 
 
+def _apply_evidence_floor(row: dict) -> None:
+    """Preserve raw historical proposals; separate their effective disposition.
+
+    This report's producer has never supplied inspected source/artifact contents.
+    Legacy rows and explicit false flags therefore cannot upgrade its evidence.
+    Applying the floor is local and requires no repeated backend call.
+    """
+    row["metadata_only"] = True
+    row["disposition"] = "needs_more_evidence"
+    if row.get("shadow_verdict") is not None:
+        row.setdefault("raw_shadow_verdict", row["shadow_verdict"])
+    row["shadow_verdict"] = None
+    row["disposition_reason"] = (
+        "Retrospective diff counts and gate statuses do not establish inspected "
+        "source, byte parity or complete acceptance artifacts."
+    )
+
+
 def summarize(rows: list[dict]) -> dict:
-    accepted = [r for r in rows if r.get("decision") in {"uphold_blocker", "reject_blocker"}]
+    # Classify independently of stored flags, including pre-floor legacy rows.
+    classified = [dict(row) for row in rows]
+    for row in classified:
+        _apply_evidence_floor(row)
+    accepted = [
+        row for row in classified if row.get("disposition") in {"uphold_blocker", "reject_blocker"}
+    ]
     graded = [r for r in accepted if r.get("later_truth")]
     agree = sum(r["shadow_verdict"] == r["later_truth"] for r in graded)
     baseline = sum(r["merge_rule_verdict"] == r["later_truth"] for r in graded)
@@ -233,6 +263,10 @@ def summarize(rows: list[dict]) -> dict:
     return {
         "cases": len(rows),
         "adjudicated": len(accepted),
+        "proposed_decisions": sum(
+            r.get("decision") in {"uphold_blocker", "reject_blocker"} for r in rows
+        ),
+        "metadata_only_cases": len(rows),
         "graded": len(graded),
         "agree": agree,
         "disagree": len(graded) - agree,
@@ -241,6 +275,59 @@ def summarize(rows: list[dict]) -> dict:
         "cost_usd": sum(measured_costs) if measured_costs else None,
         "cost_measured_cases": len(measured_costs),
         "cost_per_case": sum(measured_costs) / len(measured_costs) if measured_costs else None,
+    }
+
+
+def compare_proposals(rows: list[dict]) -> dict:
+    """Compare raw metadata proposals, without granting them effective verdicts.
+
+    Both rates use the same cases with a binary proposal, judged later truth and
+    known merge disposition. Abstentions and missing evidence stay outside that
+    denominator. This measures retrospective correlation, not accepted adjudication.
+    """
+    verdicts = {"uphold_blocker": "FAIL", "reject_blocker": "PASS"}
+    compared = []
+    proposed = pending = missing_merge = abstained = 0
+    for row in rows:
+        decision = row.get("decision")
+        verdict = verdicts.get(decision) if isinstance(decision, str) else None
+        truth = row.get("later_truth")
+        baseline = row.get("merge_rule_verdict")
+        comparable = (
+            verdict is not None and truth in {"PASS", "FAIL"} and baseline in {"PASS", "FAIL"}
+        )
+        row["proposal_comparison"] = {
+            "verdict": verdict,
+            "agrees": verdict == truth if comparable else None,
+            "merge_rule_agrees": baseline == truth if comparable else None,
+        }
+        if verdict is not None:
+            proposed += 1
+            if truth not in {"PASS", "FAIL"}:
+                pending += 1
+            elif baseline not in {"PASS", "FAIL"}:
+                missing_merge += 1
+        elif row.get("decision") == "needs_more_evidence":
+            abstained += 1
+        if comparable:
+            compared.append(row["proposal_comparison"])
+    agree = sum(case["agrees"] for case in compared)
+    baseline_agree = sum(case["merge_rule_agrees"] for case in compared)
+    return {
+        "evidence_basis": "raw_metadata_proposals",
+        "cases": len(rows),
+        "proposed_decisions": proposed,
+        "compared": len(compared),
+        "pending_truth": pending,
+        "missing_merge_disposition": missing_merge,
+        "abstained": abstained,
+        "unassessed": len(rows) - proposed - abstained,
+        "agree": agree,
+        "disagree": len(compared) - agree,
+        "agreement_rate": agree / len(compared) if compared else None,
+        "merge_rule_agree": baseline_agree,
+        "merge_rule_disagree": len(compared) - baseline_agree,
+        "merge_rule_agreement_rate": baseline_agree / len(compared) if compared else None,
     }
 
 
@@ -263,6 +350,23 @@ def run(
     _refresh_saved_verdicts(list(saved.values()), db)
     population = disputes(db=db)
     attempted = 0
+    # A paid verdict can outlive the replay window while its Brain write is
+    # pending. Repair only the original role record, never redispatch that case.
+    if dispatch and retry:
+        for entry in saved.values():
+            record = entry.get("role_record")
+            if not entry.get("role_record_error") or not record:
+                continue
+            if attempted >= max(0, limit):
+                break
+            attempted += 1
+            try:
+                feedback.record_role_run(**record)
+                entry["role_run_id"] = record["run_id"]
+                entry["role_record_error"] = None
+            except Exception as exc:
+                entry["role_record_error"] = str(exc)
+            _persist_report(path, list(saved.values()), len(population))
     for row in population:
         identity = {k: row[k] for k in ("run_id", "verifier_verdict", "adjudicated_verdict")}
         case_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
@@ -280,7 +384,9 @@ def run(
             "case_id": case_id,
             "target": row["target"],
             "later_truth": later_truth(row),
-            "merge_rule_verdict": "PASS" if row["merged"] else "FAIL",
+            "merge_rule_verdict": (
+                ("PASS" if row["merged"] else "FAIL") if row["merged"] is not None else None
+            ),
             "cost_usd": None,
         }
         try:
@@ -304,20 +410,17 @@ def run(
                             "backend",
                             "errors",
                             "role_record_error",
+                            "role_record",
                         )
                     }
                 )
-                if (
-                    result.get("proposal")
-                    and not result.get("errors")
-                    and not result.get("role_record_error")
-                ):
+                if result.get("proposal") and not result.get("errors"):
                     entry["decision"] = result["proposal"]["decision"]
                     entry["proposal"] = result["proposal"]
-                    entry["shadow_verdict"] = {
-                        "uphold_blocker": "FAIL",
-                        "reject_blocker": "PASS",
-                    }.get(entry["decision"])
+                    entry["disposition"] = (result.get("advisory_plan") or {}).get(
+                        "decision", "needs_more_evidence"
+                    )
+                    _apply_evidence_floor(entry)
                 entry["cost_usd"] = measured_cost(result.get("backend_run_id"), db)
         except (
             ValueError,
@@ -339,13 +442,21 @@ def run(
 
 def _persist_report(path: Path, rows: list[dict], population: int) -> dict:
     """Atomically publish the same shadow evidence returned to the caller."""
+    for row in rows:
+        _apply_evidence_floor(row)
+    comparison = compare_proposals(rows)
+    summary = summarize(rows)
+    comparison.update(
+        {key: summary[key] for key in ("cost_usd", "cost_measured_cases", "cost_per_case")}
+    )
     report = {
         "generated_at": int(time.time()),
         "shadow": True,
         "source": "retrospective",
         "population": population,
         "rows": rows,
-        "summary": summarize(rows),
+        "summary": summary,
+        "proposal_comparison": comparison,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
@@ -402,7 +513,9 @@ def main() -> int:
     )
     parser.add_argument("--limit", type=int, default=5)
     parser.add_argument(
-        "--retry", action="store_true", help="Retry unrecorded/failed evidence attempts"
+        "--retry",
+        action="store_true",
+        help="Repair pending Brain records without redispatch; retry failed evidence attempts",
     )
     args = parser.parse_args()
     if args.selftest:

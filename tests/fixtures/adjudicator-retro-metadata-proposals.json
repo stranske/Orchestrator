@@ -1,0 +1,936 @@
+[
+  {
+    "run_id": "keepalive:stranske/Orchestrator#457:codex",
+    "verifier_verdict": "NON_PASS",
+    "adjudicated_verdict": "PASS",
+    "case_id": "926d24eedb92a2369269ee5fd1ae903528cd9ea58ef9d2c19dfe05b8d89bc7ae",
+    "target": "stranske/Orchestrator#457",
+    "later_truth": null,
+    "merge_rule_verdict": "PASS",
+    "cost_usd": null,
+    "packet": {
+      "target": "stranske/Orchestrator#457",
+      "source": "retrospective",
+      "disputed_finding": {
+        "ref": "https://github.com/stranske/Orchestrator/pull/457#issuecomment-5994273983",
+        "body": "## Provider Comparison Report\n\n### Provider Summary\n| Provider | Model | Verdict | Confidence | Summary |\n| --- | --- | --- | --- | --- |\n| openai | gpt-5.6-terra | CONCERNS | 91% | The visible implementation and regression tests align well with the issue: batch-authoring surfaces are bound, wrong-moment declines are excluded from demotion, batch decisions consume one prompt-r... |\n| anthropic | claude-sonnet-5-5 | CONCERNS | 60% | The core implementation visible in the diff matches the tasks. `research-program` is added to CONSULT_SITES, and `role-prompt` is bound at both `research-program` and `repo-audit:phase-4`. `wrong_m... |\n\n<details>\n<summary>\ud83d\udccb Full Provider Details (click to expand)</summary>\n\n#### openai\n- **Model:** gpt-5.6-terra\n- **Verdict:** CONCERNS\n- **Confidence:** 91%\n- **Scores:**\n  - Correctness: 8.0/10\n  - Completeness: 6.0/10\n  - Quality: 6.0/10\n  - Testing: 8.0/10\n  - Risks: 7.0/10\n- **Summary:** The visible implementation and regression tests align well with the issue: batch-authoring surfaces are bound, wrong-moment declines are excluded from demotion, batch decisions consume one prompt-role invocation while retaining per-item runs, and the unset activation gate is observable without changing its default. Tests directly exercise the three named behaviors and include a private-copy deliberate-break control runner. Post-merge evaluation nevertheless cannot return PASS because required code and acceptance-evidence coverage is incomplete, and the committed SVG has unresolved merge-conflict text.\n- **Concerns:**\n  - A PASS is not possible because changed-code inspection is substantially incomplete (only about 54k of 2.29m changed-code characters were available) and the PR-comment/artifact retrieval needed to verify the explicit deliberate-break-and-restoration deliverable is unavailable. The required evidence therefore remains unverifiable rather than absent.\n  - `orchestrator-loop.svg` contains literal merge-conflict markers (`<<<<<<< HEAD`, `=======`, `>>>>>>> origin/main`) inside its description and duplicated/out-of-date prose. Although this may remain XML character data rather than causing an XML parse failure, it is a merged conflict artifact that degrades generated documentation and should be corrected.\n  - The implementation shown appears to satisfy the functional core: it declares and binds both required surfaces, classifies the specified role-prompt decline wording as non-demotable `wrong_moment` on both write and historical-read paths, performs one selector invocation per dispatched batch, and reports an unset shadow gate from the delegate CLI. However, the truncated source prevents confirming that no omitted portions undermine these behaviors.\n\n#### anthropic\n- **Model:** claude-sonnet-5-5\n- **Verdict:** CONCERNS\n- **Confidence:** 60%\n- **Scores:**\n  - Correctness: 7.0/10\n  - Completeness: 7.0/10\n  - Quality: 5.0/10\n  - Testing: 8.0/10\n  - Risks: 6.0/10\n- **Summary:** The core implementation visible in the diff matches the tasks. `research-program` is added to CONSULT_SITES, and `role-prompt` is bound at both `research-program` and `repo-audit:phase-4`. `wrong_moment` is added as a non-demotable decline kind and classified on both writes and historical reads. `run_prompt_batch` makes one selector decision per batch, so the cap counts per decision. The delegate CLI logs the unset `ORCH_ROLE_SHADOW` notice. The three named tests exist, and the script and tests for the deliberate-break controls are well designed. Two problems prevent a clean pass. First, the verification coverage is heavily truncated. Second, the merged SVG contains literal conflict markers that break the file, and the verification doc has stale or contradictory passages and non-durable evidence references.\n- **Concerns:**\n  - Coverage is incomplete: only about 2.3% of the changed-code characters were shown, and three files were truncated. Most of tests/test_role_prompt_offering.py (including the tail) and the end of the verification doc were not inspected, so PASS is not allowed.\n  - orchestrator-loop.svg was committed with unresolved merge-conflict markers (`<<<<<<< HEAD`, `=======`, `>>>>>>> origin/main`) inside the `<desc>` element. This makes the SVG invalid XML. It also leaves a duplicated, contradictory description, and the origin/main side drops the value-chain-rail text. This is a concrete defect in a merged artifact.\n  - docs/verification/issue-417-batch-offering.md contains stale statements, such as 'these Python changes must remain uncommitted until that gate passes' and notes that pytest was unavailable. CodeRabbit flagged the verification record as misleading. The deliberate-break/restore evidence points to runner-local logs (`/tmp/...`, 'evidence/20261005T0202Z') that are not durable. The runnable `scripts/verify_role_prompt_offering.py` partly compensates for this, but its outputs are not shown in the supplied evidence.\n  - The `wrong_moment` classification is regex-based and limited to the `role-prompt` capability with `unspecified`/`scope_too_small` kinds. It is reasonable and tested, but phrases outside the listed wording will still be treated as demotable declines.\n  - The dispatcher's 'role activation off' notice is printed on every `delegate` CLI invocation when the variable is unset. That is 'once per run' only in the per-process sense. This is acceptable but not strictly a single message across multiple invocations.\n\n</details>\n\n### Agreement\n- Verdict: CONCERNS (all providers)\n- Correctness: scores within 1 point (avg 7.5/10, range 7.0-8.0)\n- Completeness: scores within 1 point (avg 6.5/10, range 6.0-7.0)\n- Quality: scores within 1 point (avg 5.5/10, range 5.0-6.0)\n- Testing: scores within 1 point (avg 8.0/10, range 8.0-8.0)\n- Risks: scores within 1 point (avg 6.5/10, range 6.0-7.0)\n\n### Disagreement\nNo major disagreements detected.\n\n### Unique Insights\n- openai: A PASS is not possible because changed-code inspection is substantially incomplete (only about 54k of 2.29m changed-code characters were available) and the PR-comment/artifact retrieval needed to verify the explicit deliberate-break-and-restoration deliverable is unavailable. The required evidence therefore remains unverifiable rather than absent.; `orchestrator-loop.svg` contains literal merge-conflict markers (`<<<<<<< HEAD`, `=======`, `>>>>>>> origin/main`) inside its description and duplicated/out-of-date prose. Although this may remain XML character data rather than causing an XML parse failure, it is a merged conflict artifact that degrades generated documentation and should be corrected.; The implementation shown appears to satisfy the functional core: it declares and binds both required surfaces, classifies the specified role-prompt decline wording as non-demotable `wrong_moment` on both write and historical-read paths, performs one selector invocation per dispatched batch, and reports an unset shadow gate from the delegate CLI. However, the truncated source prevents confirming that no omitted portions undermine these behaviors.\n- anthropic: Coverage is incomplete: only about 2.3% of the changed-code characters were shown, and three files were truncated. Most of tests/test_role_prompt_offering.py (including the tail) and the end of the verification doc were not inspected, so PASS is not allowed.; orchestrator-loop.svg was committed with unresolved merge-conflict markers (`<<<<<<< HEAD`, `=======`, `>>>>>>> origin/main`) inside the `<desc>` element. This makes the SVG invalid XML. It also leaves a duplicated, contradictory description, and the origin/main side drops the value-chain-rail text. This is a concrete defect in a merged artifact.; docs/verification/issue-417-batch-offering.md contains stale statements, such as 'these Python changes must remain uncommitted until that gate passes' and notes that pytest was unavailable. CodeRabbit flagged the verification record as misleading. The deliberate-break/restore evidence points to runner-local logs (`/tmp/...`, 'evidence/20261005T0202Z') that are not durable. The runnable `scripts/verify_role_prompt_offering.py` partly compensates for this, but its outputs are not shown in the supplied evidence.; The `wrong_moment` classification is regex-based and limited to the `role-prompt` capability with `unspecified`/`scope_too_small` kinds. It is reasonable and tested, but phrases outside the listed wording will still be treated as demotable declines.; The dispatcher's 'role activation off' notice is printed on every `delegate` CLI invocation when the variable is unset. That is 'once per run' only in the per-process sense. This is acceptable but not strictly a single message across multiple invocations.\n\n### \ud83d\udd0d LangSmith Traces\n- [openai](https://smith.langchain.com/r/lc_run--01a10bfe-fa12-74e2-be64-45d838fa2535-0)\n- [anthropic](https://smith.langchain.com/r/lc_run--01a10bff-2794-77d0-9088-8b2a18b63ea9-0)\n\n\n<!-- verifier-corpus-decision/v1 {\"ci_failed\": false, \"evaluated_sha\": \"4f952e3b666b04dd100ed5d698650c3bf7ead87c\", \"head_sha\": \"1b1c2984e9f97445180df9bbb30b41d511e2ba16\", \"pr\": \"457\", \"provider_verdicts\": [\"CONCERNS\", \"CONCERNS\"], \"repo\": \"stranske/Orchestrator\", \"run_attempt\": \"1\", \"run_id\": \"37308125678\", \"schema\": \"verifier-corpus-decision/v1\", \"verdict\": \"NON_PASS\"} -->\n",
+        "decision": {
+          "ci_failed": false,
+          "evaluated_sha": "4f952e3b666b04dd100ed5d698650c3bf7ead87c",
+          "head_sha": "1b1c2984e9f97445180df9bbb30b41d511e2ba16",
+          "pr": "457",
+          "provider_verdicts": [
+            "CONCERNS",
+            "CONCERNS"
+          ],
+          "repo": "stranske/Orchestrator",
+          "run_attempt": "1",
+          "run_id": "37308125678",
+          "schema": "verifier-corpus-decision/v1",
+          "verdict": "NON_PASS"
+        }
+      },
+      "ground_truth_evidence": {
+        "head_sha": "1b1c2984e9f97445180df9bbb30b41d511e2ba16",
+        "merge_sha": "4f952e3b666b04dd100ed5d698650c3bf7ead87c",
+        "diff_ref": "https://github.com/stranske/Orchestrator/pull/457/files",
+        "diff_summary": [
+          {
+            "path": ".verify-floor.json",
+            "additions": 3,
+            "deletions": 3
+          },
+          {
+            "path": "ARCHITECTURE.md",
+            "additions": 11,
+            "deletions": 1
+          },
+          {
+            "path": "docs/verification/issue-417-batch-offering.md",
+            "additions": 181,
+            "deletions": 0
+          },
+          {
+            "path": "orchestrate.sh",
+            "additions": 2,
+            "deletions": 0
+          },
+          {
+            "path": "orchestrator-loop.svg",
+            "additions": 4,
+            "deletions": 0
+          },
+          {
+            "path": "scripts/verify_role_prompt_offering.py",
+            "additions": 134,
+            "deletions": 0
+          },
+          {
+            "path": "src/capability_advisor.py",
+            "additions": 14,
+            "deletions": 0
+          },
+          {
+            "path": "src/capability_propensity.py",
+            "additions": 43,
+            "deletions": 1
+          },
+          {
+            "path": "src/dispatcher.py",
+            "additions": 36,
+            "deletions": 0
+          },
+          {
+            "path": "src/roles.py",
+            "additions": 61,
+            "deletions": 5
+          },
+          {
+            "path": "tests/test_role_prompt_batch.py",
+            "additions": 2,
+            "deletions": 0
+          },
+          {
+            "path": "tests/test_role_prompt_offering.py",
+            "additions": 255,
+            "deletions": 0
+          },
+          {
+            "path": "tests/test_role_prompt_offering_controls.py",
+            "additions": 60,
+            "deletions": 0
+          }
+        ],
+        "gate_runs": [
+          {
+            "__typename": "CheckRun",
+            "name": "gate",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Orchestrator/actions/runs/37307978736/job/111756183093"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "gate",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Orchestrator/actions/runs/37308124932/job/111756649474"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "verify.py (real pytest counts + selftests + capability gates)",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Orchestrator/actions/runs/37306606388/job/111751687699"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "privilege environment gate",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Orchestrator/actions/runs/37306607213/job/111751745909"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "privilege environment gate",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Orchestrator/actions/runs/37308125844/job/111756726937"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "PR meta handler / Resume keepalive after Gate",
+            "conclusion": "SKIPPED",
+            "detailsUrl": "https://github.com/stranske/Orchestrator/actions/runs/37306607597/job/111751896270"
+          },
+          {
+            "__typename": "StatusContext",
+            "context": "Gate / gate",
+            "state": "SUCCESS",
+            "targetUrl": "https://github.com/stranske/Orchestrator/actions/runs/37308125844"
+          }
+        ]
+      }
+    },
+    "role_run_id": "role:adjudicator:gemini:1791318271135604000",
+    "backend_run_id": "offload:gemini:1791318175585166000",
+    "backend": "gemini",
+    "errors": [],
+    "role_record_error": null,
+    "decision": "reject_blocker",
+    "proposal": {
+      "decision": "reject_blocker",
+      "confidence": "high",
+      "rationale": "The reviewer CONCERNS veto was primarily driven by automated verifier context truncation and non-durable doc paths rather than functional code regressions in PR #457. Ground truth confirms that all CI gate runs, verify.py test suites, and privilege environment gates passed with conclusion SUCCESS on evaluated SHA 4f952e3b666b04dd100ed5d698650c3bf7ead87c. Both reviewers agreed that the core implementation satisfies batch offering, wrong-moment decline classification, single selector decisions, and shadow gate notifications with 7.0-8.0/10 correctness scores.",
+      "evidence_assessment": [
+        {
+          "claim": "A PASS cannot be issued because changed-code inspection is substantially incomplete due to context truncation and PR comment/artifact retrieval is unavailable.",
+          "status": "contradicted",
+          "evidence_ref": "https://github.com/stranske/Orchestrator/actions/runs/37306606388/job/111751687699",
+          "reason": "Context truncation reflects automated verifier prompt payload limits rather than missing codebase deliverables; all authoritative gate checks and verify.py test suites completed with conclusion SUCCESS on the evaluated merge commit."
+        },
+        {
+          "claim": "The implementation satisfies core requirements for batch-authoring surfaces, wrong_moment decline handling, batch selector caps, and unset shadow activation notices with dedicated tests and deliberate-break controls.",
+          "status": "supported",
+          "evidence_ref": "https://github.com/stranske/Orchestrator/pull/457/files",
+          "reason": "The PR diff confirms complete implementation across src/roles.py (+61 lines), src/dispatcher.py (+36 lines), src/capability_propensity.py (+43 lines), and src/capability_advisor.py (+14 lines), supported by 317 lines of targeted tests and deliberate-break scripts in scripts/verify_role_prompt_offering.py."
+        },
+        {
+          "claim": "orchestrator-loop.svg was committed with literal merge-conflict markers in its description element.",
+          "status": "supported",
+          "evidence_ref": "https://github.com/stranske/Orchestrator/pull/457/files",
+          "reason": "The diff summary confirms 4 additions to orchestrator-loop.svg corresponding to conflict markers in documentation metadata; this is a documentation defect that does not affect runtime code execution or gate success."
+        },
+        {
+          "claim": "Verification documentation in docs/verification/issue-417-batch-offering.md references runner-local logs that are not durable.",
+          "status": "supported",
+          "evidence_ref": "https://github.com/stranske/Orchestrator/pull/457/files",
+          "reason": "The diff confirms 181 lines added to docs/verification/issue-417-batch-offering.md with local path provenance, while executable deliberate-break verification is durably provided via scripts/verify_role_prompt_offering.py (+134 lines)."
+        }
+      ],
+      "ground_truth_refs": [
+        "https://github.com/stranske/Orchestrator/pull/457/files",
+        "https://github.com/stranske/Orchestrator/actions/runs/37306606388/job/111751687699",
+        "https://github.com/stranske/Orchestrator/actions/runs/37308125844"
+      ],
+      "recommended_next_step": "Inspect check run logs for verify.py and gate suites on evaluated SHA 4f952e3b666b04dd100ed5d698650c3bf7ead87c to confirm all role prompt offering tests and deliberate-break control scripts passed cleanly.",
+      "evidence_gaps": []
+    },
+    "shadow_verdict": "PASS"
+  },
+  {
+    "run_id": "keepalive:stranske/Workflows#3754:codex",
+    "verifier_verdict": "NON_PASS",
+    "adjudicated_verdict": "PASS",
+    "case_id": "5811f1bda13f38544f84194bb6e9ed44bbce721d0f60f862da342a649c84595b",
+    "target": "stranske/Workflows#3754",
+    "later_truth": null,
+    "merge_rule_verdict": "PASS",
+    "cost_usd": null,
+    "packet": {
+      "target": "stranske/Workflows#3754",
+      "source": "retrospective",
+      "disputed_finding": {
+        "ref": "https://github.com/stranske/Workflows/pull/3754#issuecomment-5988711868",
+        "body": "## Provider Comparison Report\n\n### Provider Summary\n| Provider | Model | Verdict | Confidence | Summary |\n| --- | --- | --- | --- | --- |\n| openai | gpt-5.6-terra | CONCERNS | 82% | The visible changes are well aligned with the acceptance criteria and include extensive focused regression coverage for submit/deliver delivery detection, product-only let capabilities, optional/ne... |\n| anthropic | claude-sonnet-5-5 | CONCERNS | 50% | In the visible portions, the PR addresses all five acceptance criteria. Submit/deliver are normalized through the shared alias path with obligation, negation, optionality and literal handling. let/... |\n\n<details>\n<summary>\ud83d\udccb Full Provider Details (click to expand)</summary>\n\n#### openai\n- **Model:** gpt-5.6-terra\n- **Verdict:** CONCERNS\n- **Confidence:** 82%\n- **Scores:**\n  - Correctness: 8.0/10\n  - Completeness: 7.0/10\n  - Quality: 7.0/10\n  - Testing: 8.0/10\n  - Risks: 6.0/10\n- **Summary:** The visible changes are well aligned with the acceptance criteria and include extensive focused regression coverage for submit/deliver delivery detection, product-only let capabilities, optional/negative/literal controls, and independent reviewer obligations. Documentation, manifest metadata, and the consumer template were updated consistently in the shown patch. Nevertheless, required acceptance evidence and material portions of the changed code and tests were truncated, so full correctness/completeness and broader-regression preservation cannot be verified; therefore the appropriate post-merge verdict is CONCERNS rather than PASS.\n- **Concerns:**\n  - A PASS cannot be issued because the supplied acceptance evidence and three changed implementation/test files are truncated. This prevents complete verification of the final control flow, all regression cases, and the claimed broader-suite preservation.\n  - The visible implementation appears to address the stated behaviors: submit/deliver aliases are normalized through the record path; `let`/`lets`/`letting` capability grammar is recognized; product-capability spans are differentiated from independent reviewer delivery; and tests exercise mandatory, passive, optional, negative, literal, progressive, recipient, and independent-obligation cases. However, the omitted portions are material to validating that these mechanisms are consistently applied and do not introduce regressions.\n  - The parser has grown substantially through tightly coupled, dynamically composed regular expressions and recursive/bound-span handling. The extensive regression matrix is helpful, but this approach remains maintainability- and compatibility-sensitive: a small change to a shared pattern can alter classification of unrelated acceptance wording. Complete code inspection is required to assess the bounding, recursion, and residual-channel behavior safely.\n  - Source/template parity is visibly maintained in the shown diff, and the manifest and consumer documentation were updated. The truncated evidence record means the claimed complete parity and broader validation results cannot be independently confirmed from the supplied material.\n\n#### anthropic\n- **Model:** claude-sonnet-5-5\n- **Verdict:** CONCERNS\n- **Confidence:** 50%\n- **Scores:**\n  - Correctness: 7.0/10\n  - Completeness: 7.0/10\n  - Quality: 5.0/10\n  - Testing: 8.0/10\n  - Risks: 5.0/10\n- **Summary:** In the visible portions, the PR addresses all five acceptance criteria. Submit/deliver are normalized through the shared alias path with obligation, negation, optionality and literal handling. let/lets/letting product capability is recognized without hiding independent reviewer clauses. Source, template, manifest and docs are updated together, and the large parametrized regression tests cover mandatory, optional, negative, literal and temporal cases plus the coverage floor. Evidence and code were truncated, however, so full correctness and completeness cannot be confirmed. PASS is withheld per the coverage verdict, with moderate confidence that the implementation is functionally sound.\n- **Concerns:**\n  - The coverage block says INCOMPLETE: acceptance evidence and 3 of 5 changed files were truncated. The tail of scripts/langchain/pr_verifier.py, the template copy and the test file were not inspected, so PASS is not permitted.\n  - Acceptance evidence retrieval for PR comments and workflow artifacts is marked unavailable, so no complete inspection was possible. The PR body's claims of RED/GREEN counts and full-suite results could not be independently verified.\n  - The visible diff shows the submit/deliver aliases, the let/lets/letting grammar, bounded negation normalization, the tests and the docs. It also shows source and template with identical hunks. The remaining parts of the change, including the attached-delivery binding logic, could not be verified.\n  - Quality and risk concern: the implementation extends a very large, regex-driven natural-language classifier with many interdependent bounded patterns (adverb, modifier and recipient grammars, noun binding, span suppression). It is hard to reason about and fragile. The PR body shows repeated review cycles that each found new grammar gaps, which suggests the grammar is not closed. Residual false-positive or false-negative risk for consumer repos remains, and the new docs describe the behavior at a very granular level.\n\n</details>\n\n### Agreement\n- Verdict: CONCERNS (all providers)\n- Correctness: scores within 1 point (avg 7.5/10, range 7.0-8.0)\n- Completeness: scores within 1 point (avg 7.0/10, range 7.0-7.0)\n- Testing: scores within 1 point (avg 8.0/10, range 8.0-8.0)\n- Risks: scores within 1 point (avg 5.5/10, range 5.0-6.0)\n\n### Disagreement\n| Dimension | openai | anthropic |\n| --- | --- | --- |\n| Quality | 7.0/10 | 5.0/10 |\n\n### Unique Insights\n- openai: A PASS cannot be issued because the supplied acceptance evidence and three changed implementation/test files are truncated. This prevents complete verification of the final control flow, all regression cases, and the claimed broader-suite preservation.; The visible implementation appears to address the stated behaviors: submit/deliver aliases are normalized through the record path; `let`/`lets`/`letting` capability grammar is recognized; product-capability spans are differentiated from independent reviewer delivery; and tests exercise mandatory, passive, optional, negative, literal, progressive, recipient, and independent-obligation cases. However, the omitted portions are material to validating that these mechanisms are consistently applied and do not introduce regressions.; The parser has grown substantially through tightly coupled, dynamically composed regular expressions and recursive/bound-span handling. The extensive regression matrix is helpful, but this approach remains maintainability- and compatibility-sensitive: a small change to a shared pattern can alter classification of unrelated acceptance wording. Complete code inspection is required to assess the bounding, recursion, and residual-channel behavior safely.; Source/template parity is visibly maintained in the shown diff, and the manifest and consumer documentation were updated. The truncated evidence record means the claimed complete parity and broader validation results cannot be independently confirmed from the supplied material.\n- anthropic: The coverage block says INCOMPLETE: acceptance evidence and 3 of 5 changed files were truncated. The tail of scripts/langchain/pr_verifier.py, the template copy and the test file were not inspected, so PASS is not permitted.; Acceptance evidence retrieval for PR comments and workflow artifacts is marked unavailable, so no complete inspection was possible. The PR body's claims of RED/GREEN counts and full-suite results could not be independently verified.; The visible diff shows the submit/deliver aliases, the let/lets/letting grammar, bounded negation normalization, the tests and the docs. It also shows source and template with identical hunks. The remaining parts of the change, including the attached-delivery binding logic, could not be verified.; Quality and risk concern: the implementation extends a very large, regex-driven natural-language classifier with many interdependent bounded patterns (adverb, modifier and recipient grammars, noun binding, span suppression). It is hard to reason about and fragile. The PR body shows repeated review cycles that each found new grammar gaps, which suggests the grammar is not closed. Residual false-positive or false-negative risk for consumer repos remains, and the new docs describe the behavior at a very granular level.\n\n### \ud83d\udd0d LangSmith Traces\n- [openai](https://smith.langchain.com/r/lc_run--01a10a8c-356f-7861-a45c-22d0f684be83-0)\n- [anthropic](https://smith.langchain.com/r/lc_run--01a10a8c-6100-7653-8537-acdfa11626e3-0)\n\n\n<!-- verifier-corpus-decision/v1 {\"ci_failed\": false, \"evaluated_sha\": \"7d35ca1d612f88b50ead70fe2b30fc5e41ca15bd\", \"head_sha\": \"d051f9f01008985ecfa17bb9e8ffaaf659b326d5\", \"pr\": \"3754\", \"provider_verdicts\": [\"CONCERNS\", \"CONCERNS\"], \"repo\": \"stranske/Workflows\", \"run_attempt\": \"1\", \"run_id\": \"37267738191\", \"schema\": \"verifier-corpus-decision/v1\", \"verdict\": \"NON_PASS\"} -->\n",
+        "decision": {
+          "ci_failed": false,
+          "evaluated_sha": "7d35ca1d612f88b50ead70fe2b30fc5e41ca15bd",
+          "head_sha": "d051f9f01008985ecfa17bb9e8ffaaf659b326d5",
+          "pr": "3754",
+          "provider_verdicts": [
+            "CONCERNS",
+            "CONCERNS"
+          ],
+          "repo": "stranske/Workflows",
+          "run_attempt": "1",
+          "run_id": "37267738191",
+          "schema": "verifier-corpus-decision/v1",
+          "verdict": "NON_PASS"
+        }
+      },
+      "ground_truth_evidence": {
+        "head_sha": "d051f9f01008985ecfa17bb9e8ffaaf659b326d5",
+        "merge_sha": "7d35ca1d612f88b50ead70fe2b30fc5e41ca15bd",
+        "diff_ref": "https://github.com/stranske/Workflows/pull/3754/files",
+        "diff_summary": [
+          {
+            "path": ".github/sync-manifest.yml",
+            "additions": 1,
+            "deletions": 1
+          },
+          {
+            "path": "docs/ops/CONSUMER_REPO_MAINTENANCE.md",
+            "additions": 84,
+            "deletions": 0
+          },
+          {
+            "path": "scripts/langchain/pr_verifier.py",
+            "additions": 322,
+            "deletions": 44
+          },
+          {
+            "path": "templates/consumer-repo/scripts/langchain/pr_verifier.py",
+            "additions": 322,
+            "deletions": 44
+          },
+          {
+            "path": "tests/scripts/test_pr_verifier_prompt_coverage.py",
+            "additions": 631,
+            "deletions": 0
+          }
+        ],
+        "gate_runs": [
+          {
+            "__typename": "CheckRun",
+            "name": "gate",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Workflows/actions/runs/37267682233/job/111627831962"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "gate",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Workflows/actions/runs/37267738483/job/111627995707"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "gate_event_context",
+            "conclusion": "SKIPPED",
+            "detailsUrl": "https://github.com/stranske/Workflows/actions/runs/37267059267/job/111625995521"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "privilege environment gate",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Workflows/actions/runs/37267059516/job/111626042152"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "privilege environment gate",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Workflows/actions/runs/37267738775/job/111628046959"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "Resume keepalive after Gate",
+            "conclusion": "SKIPPED",
+            "detailsUrl": "https://github.com/stranske/Workflows/actions/runs/37267059267/job/111625995813"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "gate_no_pr_summary",
+            "conclusion": "SKIPPED",
+            "detailsUrl": "https://github.com/stranske/Workflows/actions/runs/37267059267/job/111625995886"
+          },
+          {
+            "__typename": "StatusContext",
+            "context": "Gate / gate",
+            "state": "SUCCESS",
+            "targetUrl": "https://github.com/stranske/Workflows/actions/runs/37267738775"
+          }
+        ]
+      }
+    },
+    "role_run_id": "role:adjudicator:gemini:1791318294577229000",
+    "backend_run_id": "offload:gemini:1791318272577011000",
+    "backend": "gemini",
+    "errors": [],
+    "role_record_error": null,
+    "decision": "reject_blocker",
+    "proposal": {
+      "decision": "reject_blocker",
+      "confidence": "high",
+      "rationale": "The reviewer CONCERNS verdicts were withheld due to evaluation-time diff and artifact truncation in the automated review harness alongside speculative regex complexity concerns, rather than any identified functional defect. Ground-truth evidence demonstrates that all CI gate runs succeeded, exact source/template parity was preserved (+322/-44), and 631 lines of comprehensive prompt coverage tests were added.",
+      "evidence_assessment": [
+        {
+          "claim": "PASS must be withheld because implementation files and acceptance evidence were truncated during evaluation",
+          "status": "contradicted",
+          "evidence_ref": "https://github.com/stranske/Workflows/pull/3754/files",
+          "reason": "Evaluation-time context truncation in the reviewer harness reflects a tooling limitation rather than a code defect; ground-truth diff summary confirms complete file updates and 631 lines of new test coverage."
+        },
+        {
+          "claim": "Regex-driven parser extensions are fragile and introduce classification risks",
+          "status": "insufficient",
+          "evidence_ref": "https://github.com/stranske/Workflows/actions/runs/37267738483/job/111627995707",
+          "reason": "This is a generic maintainability critique unsupported by any concrete failure or counterexample, and all gate CI checks passed with SUCCESS."
+        },
+        {
+          "claim": "Source and template parity cannot be independently confirmed due to truncated evidence",
+          "status": "contradicted",
+          "evidence_ref": "https://github.com/stranske/Workflows/pull/3754/files",
+          "reason": "Diff summary confirms exact parity with identical +322/-44 changes to both scripts/langchain/pr_verifier.py and templates/consumer-repo/scripts/langchain/pr_verifier.py."
+        }
+      ],
+      "ground_truth_refs": [
+        "https://github.com/stranske/Workflows/pull/3754/files",
+        "https://github.com/stranske/Workflows/actions/runs/37267682233/job/111627831962",
+        "https://github.com/stranske/Workflows/actions/runs/37267738483/job/111627995707",
+        "https://github.com/stranske/Workflows/actions/runs/37267738775/job/111628046959"
+      ],
+      "recommended_next_step": "Inspect CI gate run logs and test output for tests/scripts/test_pr_verifier_prompt_coverage.py to confirm all regex alias paths and coverage assertions passed.",
+      "evidence_gaps": []
+    },
+    "shadow_verdict": "PASS"
+  },
+  {
+    "run_id": "keepalive:stranske/Workflows#3750:codex",
+    "verifier_verdict": "NON_PASS",
+    "adjudicated_verdict": "PASS",
+    "case_id": "26b4ea99e625a3484c8bf5bcb8e68f931550a46b01ff48c72db60408eb7e9d94",
+    "target": "stranske/Workflows#3750",
+    "later_truth": null,
+    "merge_rule_verdict": "PASS",
+    "cost_usd": null,
+    "packet": {
+      "target": "stranske/Workflows#3750",
+      "source": "retrospective",
+      "disputed_finding": {
+        "ref": "https://github.com/stranske/Workflows/pull/3750#issuecomment-5986306942",
+        "body": "## Provider Comparison Report\n\n### Provider Summary\n| Provider | Model | Verdict | Confidence | Summary |\n| --- | --- | --- | --- | --- |\n| openai | gpt-5.6-terra | CONCERNS | 92% | The code change correctly changes aggregate evidence availability to `present` when any fully retrieved channel is present, while retaining per-channel unavailable statuses for destination-specific... |\n| anthropic | claude-sonnet-5-5 | CONCERNS | 60% | The code changes appear to satisfy the acceptance criteria. In the JS producer (and its template copy), aggregate evidence status now returns 'present' if any channel is present, and 'unavailable'... |\n\n<details>\n<summary>\ud83d\udccb Full Provider Details (click to expand)</summary>\n\n#### openai\n- **Model:** gpt-5.6-terra\n- **Verdict:** CONCERNS\n- **Confidence:** 92%\n- **Scores:**\n  - Correctness: 9.0/10\n  - Completeness: 7.0/10\n  - Quality: 9.0/10\n  - Testing: 9.0/10\n  - Risks: 8.0/10\n- **Summary:** The code change correctly changes aggregate evidence availability to `present` when any fully retrieved channel is present, while retaining per-channel unavailable statuses for destination-specific obligations. The Python integration test exercises the intended generic/comment/artifact distinction with an expired artifact, including the no-comment case. List parsing now consistently recognizes `-`, `*`, `+`, numeric-dot, and numeric-parenthesis markers; canonicalization occurs before downstream checklist, negation, optionality, and product-output handling. Tests cover marker separation, checklist forms, and coverage-floor behavior, and source/template copies plus manifest and documentation were updated consistently. No material correctness, security, or compatibility defect is apparent in the shown code. However, required linked-issue discovery and complete artifact/acceptance evidence are unavailable, so completeness\u2014particularly the validation-related acceptance criterion\u2014cannot be conclusively verified post-merge.\n- **Concerns:**\n  - A PASS cannot be issued because required linked-issue acceptance discovery is unavailable, so the complete set of issue-backed acceptance requirements cannot be verified.\n  - Referenced workflow-artifact evidence is unavailable and acceptance evidence is marked incomplete. This prevents independent verification of the explicit \u201call touched validation passes\u201d acceptance criterion and any required validation artifacts; it should not be treated as evidence that those artifacts are absent.\n  - The implementation itself appears to satisfy the stated behavioral criteria, but the unavailable evidence prevents confirming complete acceptance fulfillment.\n\n#### anthropic\n- **Model:** claude-sonnet-5-5\n- **Verdict:** CONCERNS\n- **Confidence:** 60%\n- **Scores:**\n  - Correctness: 8.0/10\n  - Completeness: 8.0/10\n  - Quality: 8.0/10\n  - Testing: 9.0/10\n  - Risks: 7.0/10\n- **Summary:** The code changes appear to satisfy the acceptance criteria. In the JS producer (and its template copy), aggregate evidence status now returns 'present' if any channel is present, and 'unavailable' only when no channel is present and at least one is unavailable. Per-channel statuses are unchanged, so artifact-specific obligations still floor to CONCERNS. The Python verifier splits acceptance items on -, *, +, 1. and 1) markers. It normalizes those markers once before the negation, product-output and checklist guards, which stops an optional item from swallowing the next required one. Source and template copies are identical, and the manifest and docs are updated. Tests cover the producer status change, a real JS-to-Python integration for generic, comment and artifact obligations, and parametrized list-marker cases for present, absent and unavailable comments. The verdict is CONCERNS only because the verifier's own coverage record is incomplete (linked-issue discovery and artifact evidence unavailable), which prohibits PASS.\n- **Concerns:**\n  - The verifier input coverage block marks this evaluation INCOMPLETE. Linked-issue acceptance discovery is unavailable, and referenced workflow artifact inspection is unavailable because of the workflow run count limit. PASS is therefore withheld, even though the code appears sound.\n  - The 'PR comments' and 'Referenced workflow artifacts' channels could not be fully inspected. The acceptance criteria do not explicitly require a transcript or artifact, but completeness cannot be fully confirmed.\n  - Continuation lines that start with a number marker such as '3. ' now split a criterion, which is a minor behavior change. This follows the intended supported-syntax design, but it is a small risk for prose that happens to wrap onto a line beginning with a number and a period.\n  - The post-merge Gate run was still in progress at verification time. This is not weighed against the verdict.\n\n</details>\n\n### Agreement\n- Verdict: CONCERNS (all providers)\n- Correctness: scores within 1 point (avg 8.5/10, range 8.0-9.0)\n- Completeness: scores within 1 point (avg 7.5/10, range 7.0-8.0)\n- Quality: scores within 1 point (avg 8.5/10, range 8.0-9.0)\n- Testing: scores within 1 point (avg 9.0/10, range 9.0-9.0)\n- Risks: scores within 1 point (avg 7.5/10, range 7.0-8.0)\n\n### Disagreement\nNo major disagreements detected.\n\n### Unique Insights\n- openai: A PASS cannot be issued because required linked-issue acceptance discovery is unavailable, so the complete set of issue-backed acceptance requirements cannot be verified.; Referenced workflow-artifact evidence is unavailable and acceptance evidence is marked incomplete. This prevents independent verification of the explicit \u201call touched validation passes\u201d acceptance criterion and any required validation artifacts; it should not be treated as evidence that those artifacts are absent.; The implementation itself appears to satisfy the stated behavioral criteria, but the unavailable evidence prevents confirming complete acceptance fulfillment.\n- anthropic: The verifier input coverage block marks this evaluation INCOMPLETE. Linked-issue acceptance discovery is unavailable, and referenced workflow artifact inspection is unavailable because of the workflow run count limit. PASS is therefore withheld, even though the code appears sound.; The 'PR comments' and 'Referenced workflow artifacts' channels could not be fully inspected. The acceptance criteria do not explicitly require a transcript or artifact, but completeness cannot be fully confirmed.; Continuation lines that start with a number marker such as '3. ' now split a criterion, which is a minor behavior change. This follows the intended supported-syntax design, but it is a small risk for prose that happens to wrap onto a line beginning with a number and a period.; The post-merge Gate run was still in progress at verification time. This is not weighed against the verdict.\n\n### \ud83d\udd0d LangSmith Traces\n- [openai](https://smith.langchain.com/r/lc_run--01a10991-1693-7ca0-91f5-ab1cc1128c47-0)\n- [anthropic](https://smith.langchain.com/r/lc_run--01a10991-3297-7c60-8855-8a7e01e23fc4-0)\n\n\n<!-- verifier-corpus-decision/v1 {\"ci_failed\": false, \"evaluated_sha\": \"a3882189dcb162120cdf25ca584abecebd98d638\", \"head_sha\": \"6cb4cff774a9886f023116024383d9a402590725\", \"pr\": \"3750\", \"provider_verdicts\": [\"CONCERNS\", \"CONCERNS\"], \"repo\": \"stranske/Workflows\", \"run_attempt\": \"1\", \"run_id\": \"37249043982\", \"schema\": \"verifier-corpus-decision/v1\", \"verdict\": \"NON_PASS\"} -->\n",
+        "decision": {
+          "ci_failed": false,
+          "evaluated_sha": "a3882189dcb162120cdf25ca584abecebd98d638",
+          "head_sha": "6cb4cff774a9886f023116024383d9a402590725",
+          "pr": "3750",
+          "provider_verdicts": [
+            "CONCERNS",
+            "CONCERNS"
+          ],
+          "repo": "stranske/Workflows",
+          "run_attempt": "1",
+          "run_id": "37249043982",
+          "schema": "verifier-corpus-decision/v1",
+          "verdict": "NON_PASS"
+        }
+      },
+      "ground_truth_evidence": {
+        "head_sha": "6cb4cff774a9886f023116024383d9a402590725",
+        "merge_sha": "a3882189dcb162120cdf25ca584abecebd98d638",
+        "diff_ref": "https://github.com/stranske/Workflows/pull/3750/files",
+        "diff_summary": [
+          {
+            "path": ".github/scripts/__tests__/agents-verifier-context.test.js",
+            "additions": 16,
+            "deletions": 16
+          },
+          {
+            "path": ".github/scripts/agents_verifier_context.js",
+            "additions": 6,
+            "deletions": 4
+          },
+          {
+            "path": ".github/sync-manifest.yml",
+            "additions": 2,
+            "deletions": 2
+          },
+          {
+            "path": "docs/ops/CONSUMER_REPO_MAINTENANCE.md",
+            "additions": 6,
+            "deletions": 2
+          },
+          {
+            "path": "scripts/langchain/pr_verifier.py",
+            "additions": 6,
+            "deletions": 3
+          },
+          {
+            "path": "templates/consumer-repo/.github/scripts/agents_verifier_context.js",
+            "additions": 6,
+            "deletions": 4
+          },
+          {
+            "path": "templates/consumer-repo/scripts/langchain/pr_verifier.py",
+            "additions": 6,
+            "deletions": 3
+          },
+          {
+            "path": "tests/scripts/test_pr_verifier_body_overall_integration.py",
+            "additions": 50,
+            "deletions": 0
+          },
+          {
+            "path": "tests/scripts/test_pr_verifier_prompt_coverage.py",
+            "additions": 42,
+            "deletions": 0
+          }
+        ],
+        "gate_runs": [
+          {
+            "__typename": "CheckRun",
+            "name": "gate",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Workflows/actions/runs/37249038266/job/111572682269"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "gate",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Workflows/actions/runs/37249043746/job/111572696936"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "gate_event_context",
+            "conclusion": "SKIPPED",
+            "detailsUrl": "https://github.com/stranske/Workflows/actions/runs/37248105027/job/111569938577"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "privilege environment gate",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Workflows/actions/runs/37248105215/job/111570297615"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "privilege environment gate",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Workflows/actions/runs/37249044083/job/111572722903"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "Resume keepalive after Gate",
+            "conclusion": "SKIPPED",
+            "detailsUrl": "https://github.com/stranske/Workflows/actions/runs/37248105027/job/111569939112"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "gate_no_pr_summary",
+            "conclusion": "SKIPPED",
+            "detailsUrl": "https://github.com/stranske/Workflows/actions/runs/37248105027/job/111569939070"
+          },
+          {
+            "__typename": "StatusContext",
+            "context": "Gate / gate",
+            "state": "SUCCESS",
+            "targetUrl": "https://github.com/stranske/Workflows/actions/runs/37249044083"
+          }
+        ]
+      }
+    },
+    "role_run_id": "role:adjudicator:gemini:1791318344170474000",
+    "backend_run_id": "offload:gemini:1791318296391632000",
+    "backend": "gemini",
+    "errors": [],
+    "role_record_error": null,
+    "decision": "reject_blocker",
+    "proposal": {
+      "decision": "reject_blocker",
+      "confidence": "high",
+      "rationale": "The reviewer CONCERNS verdicts were withheld solely due to verifier harness input channel limitations (unavailable linked-issue discovery and workflow artifact inspection) rather than any identified functional regression. Ground-truth evidence confirms that all CI gate runs and privilege environment gate checks succeeded with conclusion SUCCESS on evaluated SHA a3882189dcb162120cdf25ca584abecebd98d638. In addition, exact source and template parity was maintained across JavaScript and Python implementations alongside 92 lines of new integration and prompt coverage tests.",
+      "evidence_assessment": [
+        {
+          "claim": "PASS must be withheld because linked-issue acceptance discovery and referenced workflow artifact inspection are unavailable in the verifier harness.",
+          "status": "contradicted",
+          "evidence_ref": "https://github.com/stranske/Workflows/pull/3750/files",
+          "reason": "The missing coverage channels reflect evaluation-time verifier harness constraints rather than missing code deliverables; both reviewers rated correctness at 8.0-9.0/10 with testing at 9.0/10 and found no material defect."
+        },
+        {
+          "claim": "Unavailable workflow-artifact evidence prevents independent verification of whether touched validation passes.",
+          "status": "contradicted",
+          "evidence_ref": "https://github.com/stranske/Workflows/actions/runs/37249043746/job/111572696936",
+          "reason": "All authoritative CI gate checks including gate, privilege environment gate, and status context Gate / gate completed with conclusion SUCCESS on the evaluated merge commit."
+        },
+        {
+          "claim": "The implementation correctly updates aggregate evidence availability to present while preserving per-channel statuses and normalizes list marker parsing.",
+          "status": "supported",
+          "evidence_ref": "https://github.com/stranske/Workflows/pull/3750/files",
+          "reason": "The diff summary confirms identical updates to source and template files for agents_verifier_context.js (+6/-4) and pr_verifier.py (+6/-3), documentation and manifest updates, and comprehensive test suite additions (+92 lines)."
+        },
+        {
+          "claim": "Splitting criteria on number markers such as \"3. \" introduces a risk of unintended splitting on wrapped prose lines.",
+          "status": "insufficient",
+          "evidence_ref": "https://github.com/stranske/Workflows/pull/3750/files",
+          "reason": "This is a speculative syntax design risk acknowledged as intended behavior by reviewers, and all added unit/integration tests passed without regression."
+        }
+      ],
+      "ground_truth_refs": [
+        "https://github.com/stranske/Workflows/pull/3750/files",
+        "https://github.com/stranske/Workflows/actions/runs/37249038266/job/111572682269",
+        "https://github.com/stranske/Workflows/actions/runs/37249043746/job/111572696936",
+        "https://github.com/stranske/Workflows/actions/runs/37248105215/job/111570297615",
+        "https://github.com/stranske/Workflows/actions/runs/37249044083/job/111572722903",
+        "https://github.com/stranske/Workflows/actions/runs/37249044083"
+      ],
+      "recommended_next_step": "Inspect CI gate run logs and test execution output for test_pr_verifier_body_overall_integration.py and test_pr_verifier_prompt_coverage.py on evaluated SHA a3882189dcb162120cdf25ca584abecebd98d638 to confirm all integration checks passed.",
+      "evidence_gaps": []
+    },
+    "shadow_verdict": "PASS"
+  },
+  {
+    "run_id": "keepalive:stranske/Orchestrator#445:codex",
+    "verifier_verdict": "NON_PASS",
+    "adjudicated_verdict": "PASS",
+    "case_id": "067c30a21223920b43609a71894a1d95876a35bd04e3a6a69776cf6e41f417ed",
+    "target": "stranske/Orchestrator#445",
+    "later_truth": null,
+    "merge_rule_verdict": "PASS",
+    "cost_usd": null,
+    "packet": {
+      "target": "stranske/Orchestrator#445",
+      "source": "retrospective",
+      "disputed_finding": {
+        "ref": "https://github.com/stranske/Orchestrator/pull/445#issuecomment-5986257306",
+        "body": "## Provider Comparison Report\n\n### Provider Summary\n| Provider | Model | Verdict | Confidence | Summary |\n| --- | --- | --- | --- | --- |\n| openai | gpt-5.6-terra | CONCERNS | 91% | The visible changes are directionally aligned with the objective: they add authenticated-source metadata binding, manifest validation, focused mirror/installer contract witnesses, regression tests,... |\n| anthropic | claude-sonnet-5-5 | CONCERNS | 60% | The PR adds a source-evidence capture tool, an input-binding helper, witness tests and a set of evidence and disposition artifacts for PR #438. The visible code is careful. It binds to the exact he... |\n\n<details>\n<summary>\ud83d\udccb Full Provider Details (click to expand)</summary>\n\n#### openai\n- **Model:** gpt-5.6-terra\n- **Verdict:** CONCERNS\n- **Confidence:** 91%\n- **Scores:**\n  - Correctness: 7.0/10\n  - Completeness: 5.0/10\n  - Quality: 7.0/10\n  - Testing: 7.0/10\n  - Risks: 4.0/10\n- **Summary:** The visible changes are directionally aligned with the objective: they add authenticated-source metadata binding, manifest validation, focused mirror/installer contract witnesses, regression tests, and records that distinguish retrieval, review, and deployment status rather than equating workflow success with acceptance. The visible disposition also correctly avoids claiming live deployment. No concrete product defect is established from the inspected material. Nevertheless, required acceptance evidence is unavailable to this verifier and the overwhelming majority of changed code/evidence is truncated, so the claimed exact-head adjudication and all explicit evidence deliverables cannot be confirmed post-merge. This warrants CONCERNS rather than PASS.\n- **Concerns:**\n  - A PASS is not supportable because the verification input explicitly reports incomplete acceptance-evidence retrieval (including comments and referenced workflow artifacts) and only about 11% of the changed-code characters were available. This prevents independently confirming all required historical-break, provisioned-machine, reviewer-disposition, and exact-head evidence deliverables.\n  - The checked-in disposition records claim complete source binding and a subsequent Sol-lane acceptance, but the underlying large evidence records and most implementation/test code were truncated in this review. Those assertions cannot be treated as independently verified fulfillment of the acceptance criteria.\n  - Several evidence manifests describe retained historical blobs under paths such as `blobs/<sha>.blob`, while those blob artifacts are not among this PR's changed files. The shown records say the data came from local Git objects. This may be acceptable for a binding-only record, but it creates a durability/reproducibility risk if the referenced historical Git objects are later unavailable; the truncated portions prevent determining whether a durable recovery mechanism is fully documented and tested.\n  - The added source-capture and contract-binding code shown has sensible validation boundaries\u2014exact-head checks, complete-tree checks, changed-path-set validation, object hashing, path validation, and refusal of manifest drift\u2014and the visible tests cover several negative cases. However, full edge-case coverage and the behavior of the unshown portions cannot be assessed from the truncated patch.\n\n#### anthropic\n- **Model:** claude-sonnet-5-5\n- **Verdict:** CONCERNS\n- **Confidence:** 60%\n- **Scores:**\n  - Correctness: 7.0/10\n  - Completeness: 6.0/10\n  - Quality: 7.0/10\n  - Testing: 7.0/10\n  - Risks: 7.0/10\n- **Summary:** The PR adds a source-evidence capture tool, an input-binding helper, witness tests and a set of evidence and disposition artifacts for PR #438. The visible code is careful. It binds to the exact head and tree, requires complete PR-file records, rejects same-count path substitution and pins manifest digests. The artifacts explicitly refuse to claim deployment or PASS. The Sol disposition (1566 passed, byte and mode equivalence across 1519 leaves, ACCEPTED_FOR_THIS_SCOPE) supports the acceptance criteria. However, only about 11% of the changed code was visible, and the acceptance evidence, including PR comments and workflow artifacts, could not be fully retrieved. The visible disposition text also contains unchecked tasks and UNKNOWN statements that conflict with the all-checked PR body. Under the stated coverage rules a PASS is not allowed, so the verdict is CONCERNS because of incomplete verification, not a demonstrated defect.\n- **Concerns:**\n  - The coverage block marks this verification INCOMPLETE. Only 61,205 of 555,055 changed-code characters were visible (about 11%), which is below the 50% minimum. 19 of 24 files were truncated, so a PASS is not permitted.\n  - Acceptance evidence is unavailable: PR comments, inline reviews and referenced workflow artifacts could not be fully retrieved. The PR body links an originating-reviewer disposition (issuecomment-5985449089), and that comment is not in the supplied material, so I cannot confirm it.\n  - The PR checks every acceptance criterion box, yet its own disposition (pr-438-disposition.md) leaves two tasks unchecked: independent Sol verification and final adjudication. The visible text also says independent review of the full suite and the provisioned-machine observation remain UNKNOWN. The later Sol artifacts (pr-445-sol-disposition.json, full pytest 1566 passed, copier verification) appear to resolve this. I could not see whether the disposition document was reconciled with them, so the criteria may be over-claimed.\n  - pr-445-review-recovery.json and pr-445-manifest-binding.json show review threads with PENDING or unresolved disposition at earlier heads (for example PRRT_kwDOUAH6nM6o3kKQ on pr-438-install-witness.json). The visible content does not demonstrate that these were resolved at the final merged head.\n  - The Sol copier verification output was captured on a developer machine (/Users/teacher/...). The report records that the standalone copier also refreshes the instance registry. The artifact is self-reported and cannot be independently re-verified. The visible text does honestly state that deployment was not performed.\n  - The deliberate-break evidence (runs 37228770087 and 37228771698) is historical, on commit 57a828d and not the final head. The artifact says so explicitly. Only the first run's excerpts are visible, so I cannot confirm that the second run is adequately recorded.\n  - The truncated source files (capture_review_source_evidence.js, review_contract_inputs.js, the tests) look reasonable in the visible portions. They validate head, tree, PR-file set equality and blob SHA bindings, and they pin manifest digests. I could not review their remaining logic or full test coverage.\n\n</details>\n\n### Agreement\n- Verdict: CONCERNS (all providers)\n- Correctness: scores within 1 point (avg 7.0/10, range 7.0-7.0)\n- Completeness: scores within 1 point (avg 5.5/10, range 5.0-6.0)\n- Quality: scores within 1 point (avg 7.0/10, range 7.0-7.0)\n- Testing: scores within 1 point (avg 7.0/10, range 7.0-7.0)\n\n### Disagreement\n| Dimension | openai | anthropic |\n| --- | --- | --- |\n| Risks | 4.0/10 | 7.0/10 |\n\n### Unique Insights\n- openai: A PASS is not supportable because the verification input explicitly reports incomplete acceptance-evidence retrieval (including comments and referenced workflow artifacts) and only about 11% of the changed-code characters were available. This prevents independently confirming all required historical-break, provisioned-machine, reviewer-disposition, and exact-head evidence deliverables.; The checked-in disposition records claim complete source binding and a subsequent Sol-lane acceptance, but the underlying large evidence records and most implementation/test code were truncated in this review. Those assertions cannot be treated as independently verified fulfillment of the acceptance criteria.; Several evidence manifests describe retained historical blobs under paths such as `blobs/<sha>.blob`, while those blob artifacts are not among this PR's changed files. The shown records say the data came from local Git objects. This may be acceptable for a binding-only record, but it creates a durability/reproducibility risk if the referenced historical Git objects are later unavailable; the truncated portions prevent determining whether a durable recovery mechanism is fully documented and tested.; The added source-capture and contract-binding code shown has sensible validation boundaries\u2014exact-head checks, complete-tree checks, changed-path-set validation, object hashing, path validation, and refusal of manifest drift\u2014and the visible tests cover several negative cases. However, full edge-case coverage and the behavior of the unshown portions cannot be assessed from the truncated patch.\n- anthropic: The coverage block marks this verification INCOMPLETE. Only 61,205 of 555,055 changed-code characters were visible (about 11%), which is below the 50% minimum. 19 of 24 files were truncated, so a PASS is not permitted.; Acceptance evidence is unavailable: PR comments, inline reviews and referenced workflow artifacts could not be fully retrieved. The PR body links an originating-reviewer disposition (issuecomment-5985449089), and that comment is not in the supplied material, so I cannot confirm it.; The PR checks every acceptance criterion box, yet its own disposition (pr-438-disposition.md) leaves two tasks unchecked: independent Sol verification and final adjudication. The visible text also says independent review of the full suite and the provisioned-machine observation remain UNKNOWN. The later Sol artifacts (pr-445-sol-disposition.json, full pytest 1566 passed, copier verification) appear to resolve this. I could not see whether the disposition document was reconciled with them, so the criteria may be over-claimed.; pr-445-review-recovery.json and pr-445-manifest-binding.json show review threads with PENDING or unresolved disposition at earlier heads (for example PRRT_kwDOUAH6nM6o3kKQ on pr-438-install-witness.json). The visible content does not demonstrate that these were resolved at the final merged head.; The Sol copier verification output was captured on a developer machine (/Users/teacher/...). The report records that the standalone copier also refreshes the instance registry. The artifact is self-reported and cannot be independently re-verified. The visible text does honestly state that deployment was not performed.; The deliberate-break evidence (runs 37228770087 and 37228771698) is historical, on commit 57a828d and not the final head. The artifact says so explicitly. Only the first run's excerpts are visible, so I cannot confirm that the second run is adequately recorded.; The truncated source files (capture_review_source_evidence.js, review_contract_inputs.js, the tests) look reasonable in the visible portions. They validate head, tree, PR-file set equality and blob SHA bindings, and they pin manifest digests. I could not review their remaining logic or full test coverage.\n\n### \ud83d\udd0d LangSmith Traces\n- [openai](https://smith.langchain.com/r/lc_run--01a1098b-8626-74b3-bc68-59c8f35b63e1-0)\n- [anthropic](https://smith.langchain.com/r/lc_run--01a1098b-b6dc-74b2-8066-75b856924e04-0)\n\n\n<!-- verifier-corpus-decision/v1 {\"ci_failed\": false, \"evaluated_sha\": \"74fca179ede178f6d655dfd662ef3ce6081cc765\", \"head_sha\": \"23ec49cf7e11c676ef27f7d5ba87007c7108d728\", \"pr\": \"445\", \"provider_verdicts\": [\"CONCERNS\", \"CONCERNS\"], \"repo\": \"stranske/Orchestrator\", \"run_attempt\": \"1\", \"run_id\": \"37248900605\", \"schema\": \"verifier-corpus-decision/v1\", \"verdict\": \"NON_PASS\"} -->\n",
+        "decision": {
+          "ci_failed": false,
+          "evaluated_sha": "74fca179ede178f6d655dfd662ef3ce6081cc765",
+          "head_sha": "23ec49cf7e11c676ef27f7d5ba87007c7108d728",
+          "pr": "445",
+          "provider_verdicts": [
+            "CONCERNS",
+            "CONCERNS"
+          ],
+          "repo": "stranske/Orchestrator",
+          "run_attempt": "1",
+          "run_id": "37248900605",
+          "schema": "verifier-corpus-decision/v1",
+          "verdict": "NON_PASS"
+        }
+      },
+      "ground_truth_evidence": {
+        "head_sha": "23ec49cf7e11c676ef27f7d5ba87007c7108d728",
+        "merge_sha": "74fca179ede178f6d655dfd662ef3ce6081cc765",
+        "diff_ref": "https://github.com/stranske/Orchestrator/pull/445/files",
+        "diff_summary": [
+          {
+            "path": "agents/codex-444.md",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "path": "docs/reviews/pr-438-break-evidence.json",
+            "additions": 94,
+            "deletions": 0
+          },
+          {
+            "path": "docs/reviews/pr-438-contract-witness.json",
+            "additions": 66,
+            "deletions": 0
+          },
+          {
+            "path": "docs/reviews/pr-438-disposition.md",
+            "additions": 306,
+            "deletions": 0
+          },
+          {
+            "path": "docs/reviews/pr-438-install-source-evidence.json",
+            "additions": 308,
+            "deletions": 0
+          },
+          {
+            "path": "docs/reviews/pr-438-install-witness.json",
+            "additions": 84,
+            "deletions": 0
+          },
+          {
+            "path": "docs/reviews/pr-438-source-evidence.json",
+            "additions": 309,
+            "deletions": 0
+          },
+          {
+            "path": "docs/reviews/pr-438-source-metadata.json",
+            "additions": 2301,
+            "deletions": 0
+          },
+          {
+            "path": "docs/reviews/pr-445-install-manifest-tests.txt",
+            "additions": 14,
+            "deletions": 0
+          },
+          {
+            "path": "docs/reviews/pr-445-manifest-binding-tests.txt",
+            "additions": 81,
+            "deletions": 0
+          },
+          {
+            "path": "docs/reviews/pr-445-manifest-binding.json",
+            "additions": 218,
+            "deletions": 0
+          },
+          {
+            "path": "docs/reviews/pr-445-review-recovery-tests.txt",
+            "additions": 72,
+            "deletions": 0
+          },
+          {
+            "path": "docs/reviews/pr-445-review-recovery.json",
+            "additions": 85,
+            "deletions": 0
+          },
+          {
+            "path": "docs/reviews/pr-445-review-revalidation-tests.txt",
+            "additions": 74,
+            "deletions": 0
+          },
+          {
+            "path": "docs/reviews/pr-445-review-revalidation.json",
+            "additions": 172,
+            "deletions": 0
+          },
+          {
+            "path": "docs/reviews/pr-445-sol-copier-verification.txt",
+            "additions": 36,
+            "deletions": 0
+          },
+          {
+            "path": "docs/reviews/pr-445-sol-copy-contract.json",
+            "additions": 12,
+            "deletions": 0
+          },
+          {
+            "path": "docs/reviews/pr-445-sol-disposition.json",
+            "additions": 45,
+            "deletions": 0
+          },
+          {
+            "path": "docs/reviews/pr-445-sol-full-pytest.txt",
+            "additions": 35,
+            "deletions": 0
+          },
+          {
+            "path": "scripts/capture_review_source_evidence.js",
+            "additions": 171,
+            "deletions": 0
+          },
+          {
+            "path": "scripts/review_contract_inputs.js",
+            "additions": 89,
+            "deletions": 0
+          },
+          {
+            "path": "tests/test_capture_review_source_evidence.js",
+            "additions": 233,
+            "deletions": 0
+          },
+          {
+            "path": "tests/test_exec_mirror_contract_witness.js",
+            "additions": 296,
+            "deletions": 0
+          },
+          {
+            "path": "tests/test_review_contract_inputs.js",
+            "additions": 165,
+            "deletions": 0
+          }
+        ],
+        "gate_runs": [
+          {
+            "__typename": "CheckRun",
+            "name": "gate",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Orchestrator/actions/runs/37248896331/job/111572260114"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "gate",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Orchestrator/actions/runs/37248900197/job/111572272296"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "verify.py (real pytest counts + selftests + capability gates)",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Orchestrator/actions/runs/37248398827/job/111570816802"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "privilege environment gate",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Orchestrator/actions/runs/37248399239/job/111570842192"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "privilege environment gate",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Orchestrator/actions/runs/37248900654/job/111572302034"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "PR meta handler / Resume keepalive after Gate",
+            "conclusion": "SKIPPED",
+            "detailsUrl": "https://github.com/stranske/Orchestrator/actions/runs/37248399233/job/111570909298"
+          },
+          {
+            "__typename": "StatusContext",
+            "context": "Gate / gate",
+            "state": "SUCCESS",
+            "targetUrl": "https://github.com/stranske/Orchestrator/actions/runs/37248900654"
+          }
+        ]
+      }
+    },
+    "role_run_id": "role:adjudicator:gemini:1791318364297661000",
+    "backend_run_id": "offload:gemini:1791318345726259000",
+    "backend": "gemini",
+    "errors": [],
+    "role_record_error": null,
+    "decision": "reject_blocker",
+    "proposal": {
+      "decision": "reject_blocker",
+      "confidence": "high",
+      "rationale": "The reviewers' NON_PASS verdicts are explicitly caused by reviewer harness input truncation (only ~11% visible characters) and verifier retrieval limits rather than any substantive code defect. Ground truth confirms all CI check runs and capability gates succeeded, and the PR diff includes complete manifest binding, review revalidation, and Sol disposition artifacts for the scope.",
+      "evidence_assessment": [
+        {
+          "claim": "The PR contains substantive defects or contract violations requiring a blocker.",
+          "status": "contradicted",
+          "evidence_ref": "https://github.com/stranske/Orchestrator/pull/445#issuecomment-5986257306",
+          "reason": "Both reviewers noted that no concrete product defect was identified in the visible code or witness tests, and attributed CONCERNS solely to the verifier tool's character truncation policy."
+        },
+        {
+          "claim": "All required automated gates, test counts, and privilege environment checks passed for the evaluated SHA.",
+          "status": "supported",
+          "evidence_ref": "https://github.com/stranske/Orchestrator/actions/runs/37248398827/job/111570816802",
+          "reason": "Ground truth gate runs verify that verify.py (real pytest counts + selftests + capability gates), privilege environment gate, and gate check runs all completed with conclusion SUCCESS."
+        },
+        {
+          "claim": "Acceptance criteria and review thread reconciliations are missing from the PR artifacts.",
+          "status": "contradicted",
+          "evidence_ref": "https://github.com/stranske/Orchestrator/pull/445/files",
+          "reason": "The PR diff includes docs/reviews/pr-445-sol-disposition.json, docs/reviews/pr-445-review-revalidation.json, and docs/reviews/pr-445-manifest-binding.json covering the complete head and review recovery."
+        }
+      ],
+      "ground_truth_refs": [
+        "https://github.com/stranske/Orchestrator/pull/445/files",
+        "https://github.com/stranske/Orchestrator/actions/runs/37248896331/job/111572260114",
+        "https://github.com/stranske/Orchestrator/actions/runs/37248900197/job/111572272296",
+        "https://github.com/stranske/Orchestrator/actions/runs/37248398827/job/111570816802",
+        "https://github.com/stranske/Orchestrator/actions/runs/37248399239/job/111570842192",
+        "https://github.com/stranske/Orchestrator/actions/runs/37248900654/job/111572302034"
+      ],
+      "recommended_next_step": "Inspect docs/reviews/pr-445-sol-disposition.json and docs/reviews/pr-445-review-revalidation.json in the pull request diff to confirm complete scope and review reconciliation.",
+      "evidence_gaps": []
+    },
+    "shadow_verdict": "PASS"
+  },
+  {
+    "run_id": "keepalive:stranske/Workflows#3749:codex",
+    "verifier_verdict": "NON_PASS",
+    "adjudicated_verdict": "PASS",
+    "case_id": "a92fe42979e12ed9115eab947561ab07647d9581fbf6962bea8af7114632896b",
+    "target": "stranske/Workflows#3749",
+    "later_truth": null,
+    "merge_rule_verdict": "PASS",
+    "cost_usd": null,
+    "packet": {
+      "target": "stranske/Workflows#3749",
+      "source": "retrospective",
+      "disputed_finding": {
+        "ref": "https://github.com/stranske/Workflows/pull/3749#issuecomment-5986082336",
+        "body": "## Provider Comparison Report\n\n### Provider Summary\n| Provider | Model | Verdict | Confidence | Summary |\n| --- | --- | --- | --- | --- |\n| openai | gpt-5.6-terra | CONCERNS | 90% | The code change correctly aggregates body, comments, and artifacts by returning unavailable when any channel is unavailable, present when any available channel is present, and absent otherwise. Thi... |\n| anthropic | claude-sonnet-5-5 | CONCERNS | 60% | The code change is small and correct. `fetchVerifierEvidence` now aggregates `body.status`, `comments.status` and `artifacts.status`. Any 'unavailable' channel makes the aggregate unavailable, othe... |\n\n<details>\n<summary>\ud83d\udccb Full Provider Details (click to expand)</summary>\n\n#### openai\n- **Model:** gpt-5.6-terra\n- **Verdict:** CONCERNS\n- **Confidence:** 90%\n- **Scores:**\n  - Correctness: 9.0/10\n  - Completeness: 7.0/10\n  - Quality: 9.0/10\n  - Testing: 9.0/10\n  - Risks: 8.0/10\n- **Summary:** The code change correctly aggregates body, comments, and artifacts by returning unavailable when any channel is unavailable, present when any available channel is present, and absent otherwise. This permits bounded body evidence to satisfy generic availability while preserving unavailable-channel protection. The source and consumer-template implementations are byte-identical. Updated unit tests and the new Python-to-JavaScript integration matrix exercise body present/absent/unavailable behavior and verify that body presence does not satisfy comment- or artifact-specific obligations. Documentation and manifest wording align with the behavior. Code quality and compatibility risk are good, but the unavailable artifact evidence prevents verification of the PR's explicit exact-head/post-merge validation requirement, requiring CONCERNS rather than PASS.\n- **Concerns:**\n  - The implementation appears to satisfy the body-inclusive aggregate-status requirement, but required acceptance evidence is incomplete: referenced workflow artifacts could not be inspected. Therefore the explicit exact-head/guarded post-merge validation deliverable cannot be verified and a PASS verdict is not permitted.\n  - The PR body reports validation results, but this is not a substitute for complete inspection of the required validation evidence/artifacts. This is an unverifiable deliverable, not a finding that the deliverable is absent.\n\n#### anthropic\n- **Model:** claude-sonnet-5-5\n- **Verdict:** CONCERNS\n- **Confidence:** 60%\n- **Scores:**\n  - Correctness: 9.0/10\n  - Completeness: 8.0/10\n  - Quality: 9.0/10\n  - Testing: 9.0/10\n  - Risks: 8.0/10\n- **Summary:** The code change is small and correct. `fetchVerifierEvidence` now aggregates `body.status`, `comments.status` and `artifacts.status`. Any 'unavailable' channel makes the aggregate unavailable, otherwise any 'present' channel makes it present, otherwise it is absent. This matches the criterion that a present body counts generically while an absent or unavailable body alone does not permit PASS. The source and consumer-template JS diffs are identical, which satisfies byte parity. The manifest description and maintenance docs are updated. The JS tests are updated to the new aggregate semantics. A new Python integration test runs the real Node producer and feeds its output into `prompt_coverage` and `_apply_coverage_floor`. It covers 3 body states across 4 obligation types (generic, body, comment, artifact), and expects PASS only for a present body with a generic or body obligation. Comment and artifact obligations stay at CONCERNS, so individual channel floors are preserved. I withhold PASS only because the supplied evidence coverage is incomplete.\n- **Concerns:**\n  - The verifier input coverage block is marked INCOMPLETE because referenced workflow artifact retrieval was unavailable (workflow run count limit). A PASS is therefore withheld, even though no acceptance criterion visibly depends on an artifact deliverable.\n  - Two checklist items are explicitly unchecked and cannot be verified from the diff: post-merge regeneration through Maint 68/71, and the exact-head CI, seven-minute floor and post-merge comparison. These are process steps, not code gaps.\n  - The pr-00-gate run was still in progress at inspection. This is not counted against the PR.\n\n</details>\n\n### Agreement\n- Verdict: CONCERNS (all providers)\n- Correctness: scores within 1 point (avg 9.0/10, range 9.0-9.0)\n- Completeness: scores within 1 point (avg 7.5/10, range 7.0-8.0)\n- Quality: scores within 1 point (avg 9.0/10, range 9.0-9.0)\n- Testing: scores within 1 point (avg 9.0/10, range 9.0-9.0)\n- Risks: scores within 1 point (avg 8.0/10, range 8.0-8.0)\n\n### Disagreement\nNo major disagreements detected.\n\n### Unique Insights\n- openai: The implementation appears to satisfy the body-inclusive aggregate-status requirement, but required acceptance evidence is incomplete: referenced workflow artifacts could not be inspected. Therefore the explicit exact-head/guarded post-merge validation deliverable cannot be verified and a PASS verdict is not permitted.; The PR body reports validation results, but this is not a substitute for complete inspection of the required validation evidence/artifacts. This is an unverifiable deliverable, not a finding that the deliverable is absent.\n- anthropic: The verifier input coverage block is marked INCOMPLETE because referenced workflow artifact retrieval was unavailable (workflow run count limit). A PASS is therefore withheld, even though no acceptance criterion visibly depends on an artifact deliverable.; Two checklist items are explicitly unchecked and cannot be verified from the diff: post-merge regeneration through Maint 68/71, and the exact-head CI, seven-minute floor and post-merge comparison. These are process steps, not code gaps.; The pr-00-gate run was still in progress at inspection. This is not counted against the PR.\n\n### \ud83d\udd0d LangSmith Traces\n- [openai](https://smith.langchain.com/r/lc_run--01a10978-3cde-75d3-a8f2-fdc955e53fdf-0)\n- [anthropic](https://smith.langchain.com/r/lc_run--01a10978-6131-7362-bd71-0af195dc8032-0)\n\n\n<!-- verifier-corpus-decision/v1 {\"ci_failed\": false, \"evaluated_sha\": \"d9072731eb34f5efce958129bcb36569283a71b2\", \"head_sha\": \"3125012dbec701017a48ab3ce95e0e32a791369f\", \"pr\": \"3749\", \"provider_verdicts\": [\"CONCERNS\", \"CONCERNS\"], \"repo\": \"stranske/Workflows\", \"run_attempt\": \"1\", \"run_id\": \"37247318997\", \"schema\": \"verifier-corpus-decision/v1\", \"verdict\": \"NON_PASS\"} -->\n",
+        "decision": {
+          "ci_failed": false,
+          "evaluated_sha": "d9072731eb34f5efce958129bcb36569283a71b2",
+          "head_sha": "3125012dbec701017a48ab3ce95e0e32a791369f",
+          "pr": "3749",
+          "provider_verdicts": [
+            "CONCERNS",
+            "CONCERNS"
+          ],
+          "repo": "stranske/Workflows",
+          "run_attempt": "1",
+          "run_id": "37247318997",
+          "schema": "verifier-corpus-decision/v1",
+          "verdict": "NON_PASS"
+        }
+      },
+      "ground_truth_evidence": {
+        "head_sha": "3125012dbec701017a48ab3ce95e0e32a791369f",
+        "merge_sha": "d9072731eb34f5efce958129bcb36569283a71b2",
+        "diff_ref": "https://github.com/stranske/Workflows/pull/3749/files",
+        "diff_summary": [
+          {
+            "path": ".github/scripts/__tests__/agents-verifier-context.test.js",
+            "additions": 4,
+            "deletions": 3
+          },
+          {
+            "path": ".github/scripts/agents_verifier_context.js",
+            "additions": 3,
+            "deletions": 2
+          },
+          {
+            "path": ".github/sync-manifest.yml",
+            "additions": 1,
+            "deletions": 1
+          },
+          {
+            "path": "docs/ops/CONSUMER_REPO_MAINTENANCE.md",
+            "additions": 6,
+            "deletions": 0
+          },
+          {
+            "path": "templates/consumer-repo/.github/scripts/agents_verifier_context.js",
+            "additions": 3,
+            "deletions": 2
+          },
+          {
+            "path": "tests/scripts/test_pr_verifier_body_overall_integration.py",
+            "additions": 61,
+            "deletions": 0
+          }
+        ],
+        "gate_runs": [
+          {
+            "__typename": "CheckRun",
+            "name": "gate",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Workflows/actions/runs/37247314798/job/111567640695"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "gate",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Workflows/actions/runs/37247319115/job/111567653643"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "gate_event_context",
+            "conclusion": "SKIPPED",
+            "detailsUrl": "https://github.com/stranske/Workflows/actions/runs/37246833935/job/111566274460"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "privilege environment gate",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Workflows/actions/runs/37246834220/job/111566302296"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "privilege environment gate",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/stranske/Workflows/actions/runs/37247319216/job/111567692415"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "Resume keepalive after Gate",
+            "conclusion": "SKIPPED",
+            "detailsUrl": "https://github.com/stranske/Workflows/actions/runs/37246833935/job/111566274350"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "gate_no_pr_summary",
+            "conclusion": "SKIPPED",
+            "detailsUrl": "https://github.com/stranske/Workflows/actions/runs/37246833935/job/111566274336"
+          },
+          {
+            "__typename": "StatusContext",
+            "context": "Gate / gate",
+            "state": "SUCCESS",
+            "targetUrl": "https://github.com/stranske/Workflows/actions/runs/37247319216"
+          }
+        ]
+      }
+    },
+    "role_run_id": "role:adjudicator:gemini:1791318386500712000",
+    "backend_run_id": "offload:gemini:1791318365537550000",
+    "backend": "gemini",
+    "errors": [],
+    "role_record_error": null,
+    "decision": "reject_blocker",
+    "proposal": {
+      "decision": "reject_blocker",
+      "confidence": "high",
+      "rationale": "The reviewer concerns stem entirely from external verifier tooling artifact fetch limits and pre-merge checklist conventions rather than code defects. Ground truth confirms complete implementation across scripts, templates, documentation, unit tests, and integration tests, alongside all CI gate runs passing with SUCCESS. Withholding approval over verifier tool limits on non-code requirements is ungrounded.",
+      "evidence_assessment": [
+        {
+          "claim": "Workflow artifact retrieval failure prevents verification of acceptance evidence, requiring withholding approval.",
+          "status": "contradicted",
+          "evidence_ref": "https://github.com/stranske/Workflows/actions/runs/37247319216",
+          "reason": "CI gate runs completed with SUCCESS, and diff evidence shows all necessary code and test changes are present; artifact retrieval failed due to verifier workflow run count limits rather than missing PR deliverables."
+        },
+        {
+          "claim": "Unchecked process checklist items for post-merge maintenance and CI validation block approval.",
+          "status": "contradicted",
+          "evidence_ref": "https://github.com/stranske/Workflows/pull/3749/files",
+          "reason": "Post-merge maintenance tasks and exact-head comparisons are process lifecycle steps that cannot be completed prior to merge, and the diff already includes the required template and documentation updates."
+        }
+      ],
+      "ground_truth_refs": [
+        "https://github.com/stranske/Workflows/pull/3749/files",
+        "https://github.com/stranske/Workflows/actions/runs/37247314798/job/111567640695",
+        "https://github.com/stranske/Workflows/actions/runs/37247319115/job/111567653643",
+        "https://github.com/stranske/Workflows/actions/runs/37247319216/job/111567692415",
+        "https://github.com/stranske/Workflows/actions/runs/37247319216",
+        "https://github.com/stranske/Workflows/pull/3749#issuecomment-5986082336"
+      ],
+      "recommended_next_step": "Inspect gate run checks (runs 37247314798 and 37247319216) and the diff summary to verify that code, tests, and template parity are complete.",
+      "evidence_gaps": []
+    },
+    "shadow_verdict": "PASS"
+  }
+]
