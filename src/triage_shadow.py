@@ -246,8 +246,7 @@ def record_cycle(
     if valid:
         work_now = [rec for rec in recs if rec.get("action") == "work_now"]
         if any(
-            not isinstance(rec.get("priority"), int)
-            or not 1 <= rec["priority"] <= 5
+            not isinstance(rec.get("priority"), int) or not 1 <= rec["priority"] <= 5
             for rec in work_now
         ):
             valid = False
@@ -348,6 +347,11 @@ def summary_line(path: Path | None = None) -> str:
         data = summary(path)
     except (OSError, sqlite3.Error) as exc:
         return f"triage shadow: UNKNOWN — outcome evidence unreadable ({type(exc).__name__})"
+    if data["malformed_rows"]:
+        return (
+            f"triage shadow: UNKNOWN — malformed corpus rows {data['malformed_rows']}; "
+            f"valid cycles {data['valid_cycles']}"
+        )
 
     def percent(arm):
         count = data[arm]["judged"]

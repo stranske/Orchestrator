@@ -372,7 +372,15 @@ def test_unreadable_outcomes_are_unknown(tmp_path, monkeypatch):
 
     path = tmp_path / "shadow.jsonl"
     path.write_text(
-        json.dumps({"schema_version": 1, "triage_valid": True, "live_proposal": True}) + "\n"
+        json.dumps(
+            {
+                "schema_version": 1,
+                "triage_valid": True,
+                "live_proposal": True,
+                "triage_top_three": ["stranske/Orchestrator#1"],
+            }
+        )
+        + "\n"
     )
 
     def unavailable():
@@ -381,3 +389,12 @@ def test_unreadable_outcomes_are_unknown(tmp_path, monkeypatch):
     monkeypatch.setattr(feedback, "_conn", unavailable)
     text = triage_shadow.summary_line(path)
     assert "UNKNOWN" in text and "0 judged" not in text
+
+
+def test_malformed_corpus_cannot_report_a_complete_zero_judged_population(tmp_path, monkeypatch):
+    path = tmp_path / "malformed.jsonl"
+    path.write_text("not json\n")
+    monkeypatch.setattr(feedback, "_conn", lambda: pytest.fail("malformed corpus opened Brain"))
+    text = triage_shadow.summary_line(path)
+    assert "UNKNOWN" in text and "malformed corpus rows 1" in text
+    assert "0 judged" not in text
