@@ -1056,3 +1056,96 @@ the guard block is present byte for byte, which is what the deployment-evidence 
 
 The copy-contract line is not a gate: it reports and never blocks, and it has no state that could
 latch.
+
+## A newly declared row can no longer block the sync that deploys it (2026-10-06)
+
+**The incident.** On 2026-10-05 the owner's sync of main `4f952e3` stopped NOT VERIFIED and nothing
+was deployed. In the exec-mirror shape `verify.py` reported `CEILING exceeded (exec mirror): 22
+skipped test(s) > agreed maximum 21`. Twenty-one skips were the git family, as agreed. The
+twenty-second was `test_no_fixture_names_an_unknown_capability`, skipped because the copy of the
+live ledger had no row for `value-chain-monitor` (#423), and the set-coverage gate skipped for the
+same reason.
+
+**Why it could never clear by itself.** `value-chain-monitor` is declared in
+`capabilities.KNOWN_DECLARATIONS`, and its row was registered only by the weekly switch review,
+running from the live mirror. That caller could reach the live mirror only through a sync, and the
+sync was refused for want of the row, so every later sync would have been refused the same way. The
+owner unblocked this one by hand at about 23:50Z: the row was registered in the live ledger with the
+weekly caller's exact call (48 to 49 rows).
+
+**The fix is in the repository, and no wrapper or copier patch is needed.** The wrapper runs
+`$SRC/scripts/verify_before_sync.sh` from the source it syncs, so the fix arrives with the pull and
+nothing under `~/.codex/bin` changes.
+
+1. **A row the tree declares is registered by the tree's first writing load.** `capabilities.load()`
+   already seeded a missing `KNOWN_GATES` row on every writing load. It now also seeds every
+   `KNOWN_DECLARATIONS` entry that declares a `status` (`capabilities.declared_row_ids`,
+   `_seed_declared_rows`), at that status, never `active`, with a `declaration_registered` event. An
+   entry without a status is an overlay on a row registered some other way and is never seeded. An
+   active tick's first command, `capabilities.py --json validate`, is such a load, so a deployed
+   declaration is registered within one tick. The switch review no longer registers the row itself.
+2. **The pre-sync verdict judges the ledger the tree will run on.** Before `verify.py`, the script
+   runs the scratch mirror's own `capabilities.py seed-declared` on the scratch COPY of the ledger:
+   the same writing load, in the same environment `verify.py` then gets (`in_state_copy`, one
+   definition for both). With no ledger in the copy (a fresh machine, or CI's `exec-mirror` job)
+   nothing is loaded. A load that fails is NOT VERIFIED, because the deployed tick's first command
+   would fail the same way. The live ledger is never written.
+3. **The skip says what clears it.** When every row a check lacks is one the tree declares,
+   `env_prereq.ledger_rows_absent` says the row is "declared by this tree, not yet registered here"
+   and names the load that registers it. `verify.py` prints a `declared:` line on every run, and an
+   exceeded skip ceiling says how many of its skips registration alone drains, so the message that
+   names the integer to raise never sends the reader to raise it for such a row.
+
+**What you will see.** Two new lines in the pre-sync output, the second repeated in the verdict
+block:
+
+```
+== declared rows: this tree's first writing load, made on the state copy
+   declared rows: none seeded, <copy>/capabilities.json already holds all 18 this tree declares
+```
+
+A tree that declares a new row prints `declared rows: seeded 1 of the 19 this tree declares into
+<copy> (<id>), as the deployed code's first writing load registers them; none is active` instead.
+The `verify.py` summary gains `declared:   all 18 rows this tree declares are registered in the
+ledger judged`.
+
+**Latched-gate answers.**
+
+1. *What decrements it?* `capabilities._seed_declared_rows`, run by every writing load: the
+   deployed tick's first command, and the pre-sync script's load on its copy.
+2. *Can that run while the gate is closed?* Yes. The pre-sync load runs inside the run whose verdict
+   decides the sync, from the source being verified, so nothing has to be deployed first. Before
+   this change the only drain was the weekly caller that the closed gate kept from deploying.
+3. *Measuring window = draining window?* Yes. The load writes the same ledger copy `verify.py` then
+   judges, from the same tree's declaration tables, and the skip reason and the `declared:` line
+   read the same `declared_row_ids`.
+4. *What does it print when drained?* `declared rows: none seeded, ... already holds all N this tree
+   declares`, and `declared:   all N rows this tree declares are registered in the ledger judged`.
+   Every sync of a tree whose declared rows are all registered prints both, and the tests pin both.
+
+**A limit, stated so nobody infers more.** A CI run starts with no ledger, so CI judges no declared
+row during its checks; only its last gate, `ledger validate`, creates the ledger. A new declaration
+that a populated ledger would reject (admission, set coverage) is therefore caught by this
+machine's pre-sync verdict, before it is deployed, and not on its PR. Before this change such a row
+was judged only after deployment, by the next sync, unless its own skip had already refused the
+sync that would deploy it.
+
+**Witnessed on 2026-10-06** with `scripts/verify_before_sync.sh` itself: the installed copier under
+a scratch `HOME` and `ORCH_MIRROR`, on a copy of this machine's live state whose ledger was the live
+ledger minus `value-chain-monitor` (48 rows; that file's sha256 was unchanged afterwards), except in
+the control run:
+
+| Run | Source | Ledger | Verdict |
+|---|---|---|---|
+| W1 | main `35537f1` | live, minus `value-chain-monitor` | NOT VERIFIED. `22/21 max [mirror_skipped_max]`, set coverage SKIP for that row; the only problem, as on 2026-10-05 |
+| W2, control | main `35537f1` | live, the row present | VERIFIED, `21/21`: the row was the only blocker |
+| W3 | this change `f5e8094` | live, minus `value-chain-monitor` | the row seeded into the copy; `21/21`, set coverage and admission green, `declared:   all 18 rows ... registered`; one failure from the race below |
+| W3b | `f5e8094` again, run alone | the same | VERIFIED: 2118 passed, 0 failed, `21/21` |
+
+W1 to W3 ran at the same time. W3's failure, `test_new_capability_has_all_nine_admission_parts`
+(`assert 0 == 1` on `invocation_count`), is a clock race in `switch_review.review` that predates
+this change. The review fixes `now` before it records its own invocation, so a run whose heartbeat
+lands a second later drops out of its own report. On main `35537f1` a 1.05 s gap reproduces it every
+time (the invocation is recorded, `invocation_count` is 0), and main's version of the test failed the
+same way under load. It can turn any busy pre-sync run red, and a rerun clears it; it is tracked
+separately.

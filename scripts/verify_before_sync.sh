@@ -20,8 +20,10 @@
 #   - the top-level files: the ledger, the plans and the .last-* stamps;
 #   - the Brain, through SQLite's backup API;
 #   - every directory up to VERIFY_BEFORE_SYNC_MAX_DIR_MB. Larger ones are skipped and named.
-# HOME stays real, so the installed CLIs and skills are seen. Afterwards it re-checks that the
-# source did not move while verify.py ran. It never touches the live mirror, the live ledger or the
+# HOME stays real, so the installed CLIs and skills are seen. Before verify.py, the scratch mirror's
+# own `capabilities.py seed-declared` makes the tree's first writing load on the copy, so a row the
+# tree declares is judged registered, as it will be live from the first tick (2026-10-06; see the
+# step below). Afterwards it re-checks that the source did not move while verify.py ran. It never touches the live mirror, the live ledger or the
 # live Brain, and never runs the live sync: what to do with the verdict is the caller's decision.
 #
 # Usage: scripts/verify_before_sync.sh [--snapshot-out DIR] [--digest-out FILE] [SRC]
@@ -31,7 +33,8 @@
 #        VERIFIED run prints; retained for diagnostics, not as the wrapper's deployment gate
 # Exit:  0 VERIFIED
 #        1 NOT VERIFIED: verify.py failed (its exit code is printed), or passed without judging
-#          the scratch tree as the shape this caller expects, so the right ceilings were not applied
+#          the scratch tree as the shape this caller expects, so the right ceilings were not applied,
+#          or the tree's first writing load failed on the copy of the ledger
 #        2 NOTHING VERIFIED: SRC is not a checkout, or the scratch copy failed
 #        3 VOID: SRC changed while verify.py ran, so the verdict is about a tree nobody would copy
 # Env:   ORCH_SYNC_SCRIPT  the copy script (default ~/.codex/bin/orch-sync-mirror.sh)
@@ -320,13 +323,44 @@ for registry in features.json repo_knowledge.json hypotheses.json; do
     exit 2
   fi
 done
+
+# ONE ENVIRONMENT for every process that touches the state copy: the declared-row load below and
+# verify.py. Two literal lists could drift, and the load would then seed a ledger verify.py never
+# reads.
+in_state_copy() {
+  ORCH_LOCAL_RUNTIME="$runtime_copy" ORCH_STATE_DIR="$statedir_copy" \
+    ORCH_CAPABILITIES_PATH="$ledger_copy" ORCH_FEEDBACK_DB="$brain_copy" \
+    ORCH_FEATURES_PATH="$registry_copy/features.json" \
+    ORCH_REPO_KNOWLEDGE_PATH="$registry_copy/repo_knowledge.json" \
+    ORCH_HYP_PATH="$registry_copy/hypotheses.json" \
+    "$@"
+}
+
+# THE ROWS THIS TREE DECLARES (2026-10-06). The verdict is about the tree going live, so it judges
+# the ledger that tree will run on. The tree's first act on the ledger is a writing load (an active
+# tick's first command is `capabilities.py --json validate`), and that load registers every row the
+# tree declares and the ledger lacks (capabilities.declared_row_ids). The live ledger cannot have had
+# it yet: only the deployment this verdict decides can make it. Judged as the ledger stood, a newly
+# declared row made its recurrence fixture's check skip. On 2026-10-05 the sync of the tree declaring
+# `value-chain-monitor` stopped at 22 skipped > the mirror's 21, and every later sync would have
+# stopped the same way. So the scratch mirror's own code makes that load on the COPY first, and the
+# line names the rows it registered; the live ledger is never touched. With no ledger in the copy (a
+# fresh machine, or CI's exec-mirror job) there is nothing to load, and verify.py judges as before.
+say "== declared rows: this tree's first writing load, made on the state copy"
+if [[ -f "$ledger_copy" ]]; then
+  if ! seed_line="$(cd "$scratch/mirror" && in_state_copy "$python_bin" capabilities.py seed-declared 2>&1)"; then
+    fail "NOT VERIFIED: this tree's first writing load failed on a copy of the live ledger, so its"
+    fail "first tick would fail the same way. It printed:"
+    printf '%s\n' "$seed_line" >&2
+    exit 1
+  fi
+else
+  seed_line="declared rows: none seeded, the state copy holds no ledger (the deployed code creates one holding them on its first load)"
+fi
+say "   $seed_line"
+
 say "== verify.py in the scratch mirror, on the state copy (HOME stays real for the installed CLIs)"
-(cd "$scratch/mirror" && ORCH_LOCAL_RUNTIME="$runtime_copy" ORCH_STATE_DIR="$statedir_copy" \
-  ORCH_CAPABILITIES_PATH="$ledger_copy" ORCH_FEEDBACK_DB="$brain_copy" \
-  ORCH_FEATURES_PATH="$registry_copy/features.json" \
-  ORCH_REPO_KNOWLEDGE_PATH="$registry_copy/repo_knowledge.json" \
-  ORCH_HYP_PATH="$registry_copy/hypotheses.json" \
-  "$python_bin" verify.py ${floor_flag:+"$floor_flag"}) 2>&1 | tee "$scratch/verify.log"
+(cd "$scratch/mirror" && in_state_copy "$python_bin" verify.py ${floor_flag:+"$floor_flag"}) 2>&1 | tee "$scratch/verify.log"
 pipe_status=("${PIPESTATUS[@]}")
 rc=${pipe_status[0]}
 tee_rc=${pipe_status[1]}
@@ -372,6 +406,7 @@ say "== verify-before-sync: $verdict for $src @ $head_short ($dirty uncommitted)
 say "   scratch mirror built by $sync_script, verified on a copy of $runtime_src; the live mirror,"
 say "   the live registry copy, the live ledger and the live Brain were not written"
 say "   $contract_line"
+say "   $seed_line"
 if [[ "$rc" == "0" && "$shape_ok" == "1" ]]; then
   say "   verified source identity: $(fingerprint "$before")"
   if [[ -n "$snapshot_out" ]]; then
