@@ -1,6 +1,6 @@
 {
-  "collected": 2326,
-  "passed": 2326,
+  "collected": 2347,
+  "passed": 2347,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 47,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Round1220 restores parseable floor from current main. Passed floor2326 retains verified baseline; collection measured from integrated profile/trial source; all ceilings unchanged. Exact-head Gate full suite pending."
+  "note": "Round1220 exact integrated checkout: verify.py --floor-may-lag measured 2347 passed, 0 failed, 0 skipped, 2347 collected; 103/103 selftests and capability/admission/ledger gates pass. Counts updated from actual execution; all skip and quality ceilings unchanged. Private-copy evidence does not establish live deployment."
 }
