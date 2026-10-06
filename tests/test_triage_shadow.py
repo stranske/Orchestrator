@@ -138,7 +138,9 @@ def test_the_step_never_mutates_labels_or_dispatches(brain, monkeypatch):
     assert result["shadow"] and result["candidate_count"] == 4
     assert result["live_proposal"] and result["role_run_id"]
     assert result["backend_run_id"] == "shadow-backend"
-    assert result["triage_top_three"] == [rec["target"] for rec in proposal()["recommendations"][:3]]
+    assert result["triage_top_three"] == [
+        rec["target"] for rec in proposal()["recommendations"][:3]
+    ]
     assert json.loads(triage_shadow.corpus_path().read_text()) == result
     assert len(offloads) == 1
     assert [argv[argv.index("--label") + 1] for argv in reads[:3]] == [
