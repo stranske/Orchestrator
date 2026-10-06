@@ -141,6 +141,21 @@ applied; a failed POST still consumes the spend bound but leaves its target unow
 again. (No stage,
 component or surface moved; the diagram is unchanged.)
 
+**The rejected-role edges written for refusals are deleted once (2026-10-05).** Before that change
+the tick wrote its rejected-role edge for every row, and a refusal records no run. The Brain held 210
+such edges. The tick logs place 208 of them in a tick that refused the target: 78 point at a run
+nothing recorded, 25 were written before the run's first recording and linked by its back-fill, and
+105 were written by later ticks that refused a target its delegation had left owned. Each says a role
+was overruled by a run that never saw it. A one-time data migration in `feedback.py`
+(`influence_edges.refusal-role-edges-2026-10-05`) deletes those rows and keeps an edge written within
+300 s after a recording of its run. `runs.ts` holds only the latest recording, so the first is read
+from the run's completion events. It selects only the tick's own rows: role, `remote:` target,
+rejected, no capability, the tick's metadata hash. The 2 edges from delegating ticks stay. The
+deleted rows are kept in the migration's marker, and `feedback.py restore-refusal-role-edges` puts
+them back. `completion_event_health` orphans fall from 298 to 220. The rest are capability edges, so
+`dry_seam_audit` still fails on them. (No stage, component or surface moved; the diagram is
+unchanged.)
+
 The adapter also decides each codex run's writable boundary. A run whose job is to commit (a
 dispatch from `plan_dispatch`, or an experiment arm) gets `--add-dir` for exactly its linked
 worktree's git dir, plus the canonical clone's `objects/`, `refs/` and `logs/`
