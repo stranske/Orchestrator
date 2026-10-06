@@ -1,6 +1,6 @@
 {
- "collected": 2378,
- "passed": 2378,
+ "collected": 2442,
+ "passed": 2408,
  "skipped_max": 26,
  "mirror_skipped_max": 21,
  "bare_mirror_skipped_max": 47,
@@ -9,5 +9,5 @@
  "selftest_skipped_max": 7,
  "gate_skipped_max": 2,
  "mypy_exempt_max": 0,
- "note": "Integrates exactmain7fc56ffcfc5bdd76b7e1197205c55df69e12ded6. Collection measured on integration result; passed retains actually executed prior/main floor; all quality ceilings unchanged. Full local verifier receipt follows. FLOOR RECORDED by verify.py --update-floor on 2026-10-06: collected=2378, passed=2378. Ceilings preserved, never re-measured \u2014 they are edited by hand."
+ "note": "Integrates origin/main 6ef7bc6929ecded4c8ee0e63354106efee544990. Collection count is main's recorded 2408 plus 34 cases counted from the PR's two additional test modules, including parametrization; pytest collection and execution could not be rerun because pytest is unavailable. Passed retains main's recorded 2408; all quality ceilings unchanged."
 }

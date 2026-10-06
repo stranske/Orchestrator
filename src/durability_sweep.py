@@ -185,8 +185,10 @@ def _current_durability(run_id: str) -> str:
     return str((row[0] if row else None) or "pending")
 
 
-def _merged_verifier_candidates() -> dict[tuple[str, int], set[str]]:
-    """Resolve every merged outcome to an explicit PR before attributing evidence."""
+def _verifier_claims() -> tuple[dict, dict]:
+    """(claims, inherited): every merged outcome resolved to an explicit PR. A local run credited
+    with a REPLACEMENT's merge (`outcomes.REPLACEMENT_CREDIT`: the lane rehomed its closed PR at
+    the same head) INHERITS that PR from the run that is the PR's own, so it is kept apart."""
     with feedback._conn() as c:
         rows = c.execute(
             "SELECT r.run_id,r.target,r.source,COALESCE(o.notes,'') "
@@ -194,27 +196,47 @@ def _merged_verifier_candidates() -> dict[tuple[str, int], set[str]]:
             "WHERE o.merged=1 ORDER BY r.ts ASC"
         ).fetchall()
     found: dict[tuple[str, int], set[str]] = {}
+    inherited: dict[tuple[str, int], set[str]] = {}
     for run_id, target, source, notes in rows:
         repo, number = provision.parse_target(str(target or ""))
         if not repo:
             continue
+        claims = found
         if source != "keepalive":
             explicit = _explicit_merged_pr_target(str(target or ""), notes)
             if not explicit:
                 continue
             repo, number = provision.parse_target(explicit)
+            if notes.startswith(outcomes.REPLACEMENT_CREDIT):
+                claims = inherited
         if number is not None:
-            found.setdefault((repo.lower(), int(number)), set()).add(str(run_id))
+            claims.setdefault((repo.lower(), int(number)), set()).add(str(run_id))
+    return found, inherited
+
+
+def _merged_verifier_candidates() -> dict[tuple[str, int], set[str]]:
+    """Resolve every merged outcome to an explicit PR before attributing evidence. A run that
+    inherited a replacement's PR is a candidate only when no other run claims it: two claims
+    credit nobody, so the replacement's own keepalive run would lose the verifier evidence it had
+    before the inheritance existed."""
+    found, inherited = _verifier_claims()
+    for key, run_ids in inherited.items():
+        found.setdefault(key, run_ids)
     return found
 
 
 def verifier_candidate_run_ids(
     repo: str, number: int, *, prospective_run_id: str | None = None
 ) -> set[str]:
-    """A PR marker can credit one run only when its Brain mapping is unique."""
-    candidates = _merged_verifier_candidates().get((repo.lower(), int(number)), set()).copy()
+    """A PR marker can credit one run only when its Brain mapping is unique. A prospective run is
+    the PR's own run being recorded, so a run that only inherited the PR yields to it."""
+    found, inherited = _verifier_claims()
+    key = (repo.lower(), int(number))
+    candidates = set(found.get(key, set()))
     if prospective_run_id:
         candidates.add(prospective_run_id)
+    elif not candidates:
+        candidates = set(inherited.get(key, set()))
     return candidates
 
 
