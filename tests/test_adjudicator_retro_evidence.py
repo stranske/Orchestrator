@@ -7,7 +7,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import adjudicator_retro as retro
 import feedback
@@ -15,6 +15,56 @@ import verifier_evidence
 
 
 class RetrospectiveEvidenceTests(unittest.TestCase):
+    def test_incomplete_packet_evidence_never_dispatches(self):
+        row = {
+            "run_id": "original",
+            "target": "owner/repo#1",
+            "verifier_verdict": "NON_PASS",
+            "adjudicated_verdict": "PASS",
+            "merged": 1,
+        }
+        valid = {
+            "disputed_finding": {"body": "Missing acceptance test"},
+            "ground_truth_evidence": {"diff_summary": "Added test", "gate_runs": ["gate-run"]},
+        }
+        invalid = [
+            {**valid, "disputed_finding": finding}
+            for finding in (
+                "verifier-comment",
+                {"ref": "verifier-comment"},
+                {"body": "  "},
+                {"body": ["Missing test"]},
+            )
+        ]
+        invalid.append({**valid, "ground_truth_evidence": "merge=PASS"})
+        for key, values in (
+            ("diff_summary", (None, "", "  ", [], {"ref": "diff"})),
+            ("gate_runs", (None, [], "gate-run", {"ref": "gate-run"})),
+        ):
+            for value in values:
+                invalid.append(
+                    {**valid, "ground_truth_evidence": {**valid["ground_truth_evidence"], key: value}}
+                )
+        with tempfile.TemporaryDirectory() as temporary, patch.object(
+            retro, "disputes", return_value=[row]
+        ):
+            runner = Mock(side_effect=AssertionError("incomplete packet dispatched"))
+            for packet in invalid:
+                with self.subTest(packet=packet):
+                    with self.assertRaises(ValueError):
+                        retro.build_packet(row, packet)
+                    result = retro.run(
+                        dispatch=True,
+                        retry=True,
+                        path=Path(temporary) / "report.json",
+                        evidence_reader=lambda _row: packet,
+                        runner=runner,
+                    )
+                    self.assertIn("error", result["rows"][0])
+                    self.assertEqual(result["summary"]["graded"], 0)
+                    self.assertIsNone(result["summary"]["agreement_rate"])
+            runner.assert_not_called()
+
     def test_fetch_evidence_selects_the_validated_verifier_comment(self):
         decision = {
             "schema": verifier_evidence.MARKER,

@@ -55,6 +55,21 @@ def build_packet(row: dict, evidence: dict) -> dict:
     }
     if roles._validate_adjudication_case(case):
         raise ValueError("packet requires target, disputed_finding and ground_truth_evidence")
+    finding = case["disputed_finding"]
+    if not isinstance(finding, dict) or not isinstance(finding.get("body"), str):
+        raise ValueError("packet requires verifier finding comment text")
+    if not finding["body"].strip():
+        raise ValueError("packet requires verifier finding comment text")
+    ground_truth = case["ground_truth_evidence"]
+    if not isinstance(ground_truth, dict):
+        raise ValueError("packet requires merged diff summary and gate runs")
+    diff = ground_truth.get("diff_summary")
+    gates = ground_truth.get("gate_runs")
+    has_diff = bool(diff.strip()) if isinstance(diff, str) else isinstance(diff, list) and bool(diff)
+    if not has_diff:
+        raise ValueError("packet requires merged diff summary")
+    if not isinstance(gates, list) or not gates:
+        raise ValueError("packet requires gate runs")
     return case
 
 
