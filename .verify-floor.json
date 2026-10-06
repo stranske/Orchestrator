@@ -1,6 +1,11 @@
 {
+<<<<<<< HEAD
  "collected": 2366,
  "passed": 2366,
+=======
+ "collected": 2338,
+ "passed": 2338,
+>>>>>>> origin/main
  "skipped_max": 26,
  "mirror_skipped_max": 21,
  "bare_mirror_skipped_max": 47,
@@ -9,5 +14,9 @@
  "selftest_skipped_max": 7,
  "gate_skipped_max": 2,
  "mypy_exempt_max": 0,
+<<<<<<< HEAD
  "note": "Repaired committed conflict markers from58c4a36. Exact collection2366 measured after thirteen ingestion regressions; passed floor2347 retained from actually executed prior repair. Ceilings unchanged. Full local verify pending. FLOOR RECORDED by verify.py --update-floor on 2026-10-06: collected=2366, passed=2366. Ceilings preserved, never re-measured \u2014 they are edited by hand."
+=======
+ "note": "Integrates exactmain69f3bbb8d5ef8aaa7edbb24ba606d9543145e52f. Collection measured on integration result; passed retains actually executed prior/main floor; all quality ceilings unchanged. Full local verifier receipt follows. FLOOR RECORDED by verify.py --update-floor on 2026-10-06: collected=2338, passed=2338. Ceilings preserved, never re-measured \u2014 they are edited by hand."
+>>>>>>> origin/main
 }

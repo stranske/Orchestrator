@@ -88,6 +88,32 @@ Complete these in order.
     )
     assert all(0.0 <= check["confidence"] <= 1.0 for check in checks)
 
+    # Parameterized names must select the exact case, including IDs with spaces,
+    # through both command and deliberate-break authoring.
+    parameter_node = "tests/test_example.py::TestExample::test_one[case with spaces]"
+    parameter_spec = runtime_ac.author_issue_spec(
+        "owner/repo#1",
+        f"## Tasks\n- [ ] Named test: `{parameter_node}`, `::test_two[other]`.\n"
+        "## Acceptance Criteria\n- Deliberate-break → revert: remove reader; tests FAIL; revert.\n",
+    )
+    assert runtime_ac.validate_spec(parameter_spec) == []
+    parameter_checks = parameter_spec["acceptance_criteria"][1]["checks"]
+    expected_nodes = [parameter_node, "tests/test_example.py::test_two[other]"]
+    assert [shlex.split(check["command"])[-1] for check in parameter_checks] == expected_nodes
+    break_check = parameter_spec["acceptance_criteria"][0]["checks"][0]
+    assert break_check["type"] == "deliberate_break"
+    assert shlex.split(break_check["test_cmd"])[-2:] == expected_nodes
+    assert break_check["test_paths"] == ["tests/test_example.py"]
+    for suffix in ("[unterminated", "[bad;case]"):
+        line = f"Named test: `tests/test_example.py::test_one{suffix}`."
+        manual_spec = runtime_ac.author_issue_spec(
+            "owner/repo#1", f"## Acceptance Criteria\n- {line}\n"
+        )
+        manual = manual_spec["acceptance_criteria"][0]["checks"][0]
+        assert manual["type"] == "manual"
+        assert manual["instructions"] == line
+        assert manual["confidence"] == 0.0
+
 
 def test_a_passing_named_test_under_coverage_flags_is_PASS(tmp_path, monkeypatch):
     (tmp_path / "test_one.py").write_text("def test_one():\n    assert True\n")
@@ -492,3 +518,130 @@ def test_shadow_execution_records_checks_without_outcome_write(
     assert result["gate_event"]["validation_status"] == "accepted"
     with feedback._conn() as conn:
         assert conn.execute("SELECT COUNT(*) FROM outcomes").fetchone()[0] == 0
+
+
+def test_existing_ingested_run_refreshes_shadow_observation(private_brain, monkeypatch):
+    monkeypatch.setattr(keepalive_outcomes, "_gh_throttle", lambda _: None)
+    monkeypatch.setenv("ORCH_RUN_RUNTIME_AC", "0")
+    pr = {
+        "number": 20,
+        "state": "OPEN",
+        "title": "Delivery",
+        "body": "Closes #1",
+        "headRefName": "codex/issue-1",
+        "headRefOid": "a" * 40,
+        "labels": [{"name": "agent:codex"}],
+        "author": {"login": "stranske"},
+        "createdAt": "2026-10-05T10:00:00Z",
+        "updatedAt": "2026-10-05T10:00:00Z",
+    }
+    calls = []
+    original = gate.observe_shadow_spec
+
+    def observe(*args, **kwargs):
+        calls.append(kwargs["head_sha"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(gate, "observe_shadow_spec", observe)
+    kwargs = {
+        "_pr_fetch_fn": lambda *_: [pr],
+        "_issue_fetch_fn": lambda *_: BODY,
+        "_spec_dir": private_brain / "specs",
+    }
+    first = keepalive_outcomes.ingest_keepalive_outcomes(["owner/repo"], **kwargs)
+    path = gate.spec_path("owner/repo#20", spec_dir=kwargs["_spec_dir"])
+    before = path.read_bytes()
+    second = keepalive_outcomes.ingest_keepalive_outcomes(["owner/repo"], **kwargs)
+    assert first["runtime_ac_specs_authored"] == 1
+    assert second["runtime_ac_specs_authored"] == 0
+    assert calls == ["a" * 40, "a" * 40]
+    assert path.read_bytes() == before
+    keepalive_outcomes.ingest_keepalive_outcomes(["owner/repo"], dry_run=True, **kwargs)
+    assert len(calls) == 2
+
+
+def test_existing_shadow_spec_observes_new_exact_head(private_brain, monkeypatch):
+    authored = gate.author_keepalive_spec(
+        "owner/repo",
+        {"number": 21, "body": "Closes #1", "headRefOid": "a" * 40},
+        "fixture",
+        issue_fetch_fn=lambda *_: BODY,
+        spec_dir=private_brain,
+    )
+    path = Path(authored["spec_path"])
+    before = path.read_bytes()
+    current = "b" * 40
+    monkeypatch.setattr(
+        gate.subprocess,
+        "run",
+        lambda *_a, **_k: subprocess.CompletedProcess([], 0, stdout=current + "\n", stderr=""),
+    )
+    monkeypatch.setattr(
+        runtime_ac,
+        "run_verification",
+        lambda *_a, **_k: {"gate": {"verdict": "PASS"}, "check_results": []},
+    )
+    result = gate.observe_shadow_spec(
+        "owner/repo#21",
+        "fixture",
+        spec_dir=private_brain,
+        env={"ORCH_RUN_RUNTIME_AC": "1"},
+        worktree=private_brain,
+        head_sha=current,
+    )
+    assert result["status"] == "executed"
+    assert result["blocks"] is False
+    assert path.read_bytes() == before
+    # A caller-supplied SHA still cannot substitute for the actual checkout.
+    current = "c" * 40
+    stale = gate.observe_shadow_spec(
+        "owner/repo#21",
+        "fixture",
+        spec_dir=private_brain,
+        env={"ORCH_RUN_RUNTIME_AC": "1"},
+        worktree=private_brain,
+        head_sha="b" * 40,
+    )
+    assert stale["status"] != "executed"
+
+
+def test_mixed_named_nodes_preserve_rejected_obligation_as_manual():
+    body = (
+        "## Acceptance Criteria\n"
+        "- Named tests: `tests/test_safe.py::test_ok` and "
+        "`tests/test_safe.py::test_case[bad;marker]`.\n"
+    )
+    spec = runtime_ac.author_issue_spec("owner/repo#1", body)
+    criterion = spec["acceptance_criteria"][0]
+    checks = criterion["checks"]
+    commands = [check for check in checks if check["type"] == "command"]
+    assert len(commands) == 1
+    assert "test_ok" in commands[0]["command"]
+    manual = [check for check in checks if check["type"] == "manual"]
+    assert len(manual) == 1
+    assert "test_case[bad;marker]" in manual[0]["instructions"]
+    assert "manual_review" in criterion["evidence_required"]
+    results = [{"id": commands[0]["id"], "status": "PASS", "exit_code": 0}]
+    assert runtime_ac.evaluate_results(spec, {"check_results": results})["verdict"] != "PASS"
+
+
+def test_class_qualified_shorthand_preserves_both_obligations():
+    body = "## Acceptance Criteria\n- Named tests: `tests/test_example.py::TestExample::test_one[one]`, `::TestExample::test_two[two]`.\n"
+    spec = runtime_ac.author_issue_spec("owner/repo#1", body)
+    commands = [
+        c["command"] for c in spec["acceptance_criteria"][0]["checks"] if c["type"] == "command"
+    ]
+    assert len(commands) == 2
+    assert "TestExample::test_one[one]" in commands[0]
+    assert "TestExample::test_two[two]" in commands[1]
+
+
+def test_unterminated_named_node_cannot_disappear_into_pass():
+    body = "## Acceptance Criteria\n- Named tests: `tests/test_safe.py::test_ok` and `tests/test_safe.py::test_case[unterminated`.\n"
+    spec = runtime_ac.author_issue_spec("owner/repo#1", body)
+    criterion = spec["acceptance_criteria"][0]
+    commands = [c for c in criterion["checks"] if c["type"] == "command"]
+    assert len(commands) == 1
+    assert any(c["type"] == "manual" for c in criterion["checks"])
+    results = [{"id": commands[0]["id"], "status": "PASS", "exit_code": 0}]
+    assert runtime_ac.evaluate_results(spec, {"check_results": results})["verdict"] != "PASS"
