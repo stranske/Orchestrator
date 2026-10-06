@@ -1,5 +1,5 @@
 {
-  "collected": 2326,
+  "collected": 2330,
   "passed": 2326,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Round1020 repaired pre-existing literal conflict markers from keeper HEAD6961b78; original malformed floor retained in476-floor-before.json and Git. Integrated current main after guarded497 squash; exact collection measured; all observed baseline ceilings unchanged; full suite awaits CI. Actual collection 2301; focused85PASS; verdict normalization tests and unknown non-string controls retained. Current-main integration: measured collection; full suite awaits CI; all quality ceilings unchanged. Merge conflict resolution: combined triage and adjudicator shadow tests; actual collection measured at 2326; all quality ceilings unchanged."
+  "note": "Round1220 integrates current main87d041f16ffb787f31154f326c8d1b3d8858e077; actual collection2330; passed floor retains max pre-integration main/head baseline2326, not collection. Focused source tests executed; full merge-result CI awaits push. Prior note histories retained in Git and round receipts; all quality ceilings unchanged."
 }
