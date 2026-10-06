@@ -1460,6 +1460,7 @@ def review(
     """Which held-or-idle switches are due for an owner decision, and why."""
     _capability_heartbeat()
 
+    explicit_now = now is not None
     now = int(now if now is not None else time.time())
     states = switch_states(now=now, env=env, path=path, sources=sources)
     due, quiet = states["held_off"], states["on_but_idle"]
@@ -1484,7 +1485,13 @@ def review(
             print(f"switch_review: value-chain heartbeat failed: {exc}", file=sys.stderr)
         try:
             value_chain = value_chain_monitor.report(
-                now=now, path=path, env=env, inputs=value_chain_inputs
+                # A real invocation can cross a second after the review cutoff
+                # was sampled. Include that heartbeat in the live report while
+                # preserving explicitly requested historical cutoffs.
+                now=now if explicit_now else int(time.time()),
+                path=path,
+                env=env,
+                inputs=value_chain_inputs,
             )
         except Exception as exc:  # noqa: BLE001 — preserve the weekly artifact with honest errors
             value_chain = {

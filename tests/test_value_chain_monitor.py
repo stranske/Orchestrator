@@ -283,6 +283,21 @@ def test_fleet_population_paginates_and_rejects_partial_evidence():
 
 
 def test_new_capability_has_all_nine_admission_parts(tmp_path, monkeypatch, capsys):
+    # Simulate registration/report work crossing a real second boundary.
+    # The caller must count its own invocation without widening explicit historical cutoffs.
+    clock = {"now": NOW}
+    real_time = switch_review.time
+
+    class ReviewClock:
+        def time(self):
+            return clock["now"]
+
+        def __getattr__(self, name):
+            return getattr(real_time, name)
+
+    monkeypatch.setattr(switch_review, "time", ReviewClock())
+    monkeypatch.setattr(capabilities, "_now", lambda: clock["now"])
+    monkeypatch.setenv("ORCH_DISABLE_STEPS", "issue-size-quality")
     spec = {
         "capability_id": "value-chain-monitor",
         **capabilities.KNOWN_DECLARATIONS["value-chain-monitor"],
@@ -316,6 +331,7 @@ def test_new_capability_has_all_nine_admission_parts(tmp_path, monkeypatch, caps
         register(capability_id, record, path)
 
     def private_heartbeat(capability_id, event_type, **kwargs):
+        clock["now"] += 1
         return heartbeat(capability_id, event_type, path=path, **kwargs)
 
     def collect_inputs(**kwargs):
@@ -363,6 +379,21 @@ def test_new_capability_has_all_nine_admission_parts(tmp_path, monkeypatch, caps
     assert "value-chain-monitor" in capability_advisor.SURFACE_BINDINGS["tick"]
     assert "value-chain-monitor" in capability_advisor.SURFACE_BINDINGS["rail-exercise:audit"]
     assert monitor.recurrence_fixture()
+
+    # A historical report remains bounded even after newer live invocations.
+    before = path.read_bytes()
+    monkeypatch.setenv("ORCH_CAPABILITY_HEARTBEATS", "0")
+    historical = switch_review.review(
+        now=NOW,
+        path=path,
+        env={"ORCH_VALUE_CHAIN_MONITOR": "1"},
+        value_chain_inputs={"fleet_issues": [], "completion_events": [], "edges": []},
+    )
+    row = next(
+        r for r in historical["value_chain"]["rows"] if r["capability"] == "value-chain-monitor"
+    )
+    assert row["invocation_count"] == 0
+    assert path.read_bytes() == before
 
 
 def test_weekly_cli_honors_kill_switch_without_reading_inputs(monkeypatch, capsys):
