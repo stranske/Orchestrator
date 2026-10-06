@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Integrates main002c65f fixture reporting repair; measured collection2335; retains prior executed passed floor2331 (2331PASS/103selftests/5gates before integration). Full current merge-result CI pending; no quality ceiling changed."
+  "note": "Integrates current main13c64945787c75b6037eb48889ebd71ccd270c44; only newer main difference was measured floor, with source unchanged; retains exact collection2335 and executed passed floor2331. Previous current-source tests remain applicable; full merge-result CI pending. Quality ceilings unchanged."
 }
