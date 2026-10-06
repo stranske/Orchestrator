@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Sequence
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -387,8 +388,11 @@ def file_targets(campaign: dict[str, Any], *, gh: Any = None) -> dict[str, Any]:
     for repo in campaign["campaign"]["repos"]:
         content = _repo_file(repo, ".gitignore", gh)
         missing = [e for e in IGNORE_ENTRIES if e not in {s.strip() for s in content.splitlines()}]
+        row = rows.setdefault(repo, {})
+        for field in ("merged", "durable", "cost_usd"):
+            row.setdefault(field, None)
         if not missing:
-            rows[repo] = {**rows.get(repo, {}), "missing": [], "state": "already-complete"}
+            row.update(missing=[], state="already-complete")
             _write_program(program_path, program)
             continue
         issues = gh(
@@ -510,6 +514,8 @@ def campaign_backlog(campaign: dict[str, Any], *, gh: Any = None) -> dict[str, A
         row = program.get("repos", {}).get(repo)
         if not row:
             raise ValueError(f"campaign target not filed: {repo}")
+        for field in ("merged", "durable", "cost_usd"):
+            row.setdefault(field, None)
         if not row.get("target"):
             if row.get("state") != "already-complete":
                 raise ValueError(f"missing target receipt: {repo}")
@@ -586,17 +592,24 @@ def campaign_measure(target: str, merged_prs: list[dict[str, Any]]) -> dict[str,
         return result
     numbers = {p["number"] for p in merged_prs}
     try:
-        with sqlite3.connect(feedback.DB_PATH.resolve().as_uri() + "?mode=ro", uri=True) as conn:
+        with closing(
+            sqlite3.connect(feedback.DB_PATH.resolve().as_uri() + "?mode=ro", uri=True)
+        ) as conn:
             rows = conn.execute(
                 "SELECT r.pr_number,o.merged,o.durability,c.cost_usd,c.source "
-                "FROM runs r JOIN outcomes o ON o.run_id=r.run_id "
+                "FROM runs r LEFT JOIN outcomes o ON o.run_id=r.run_id "
                 "LEFT JOIN costs c ON c.run_id=r.run_id WHERE r.target=?",
                 (target,),
             ).fetchall()
-        attributed = [r for r in rows if r[0] in numbers and r[1] == 1]
-        if not attributed:
+        attributed = [r for r in rows if r[0] in numbers]
+        if {r[0] for r in attributed} != numbers or any(r[1] != 1 for r in attributed):
+            result["measurement"] = "UNKNOWN: incomplete Brain attribution for merged delivery PRs"
             return result
-        known = [r[2] for r in attributed if r[2] and r[2] != "pending"]
+        known = [
+            r[2]
+            for r in attributed
+            if r[2] in {"durable", "reverted", "reworked", "reopened", "broke_later"}
+        ]
         if len(known) == len(attributed):
             result["durable"] = all(d == "durable" for d in known)
         costs = [

@@ -145,6 +145,9 @@ def test_already_complete_repositories_are_not_filed(campaign, github):
     program = lane.file_targets(campaign, gh=gh)
     assert program["repos"][first]["state"] == "already-complete"
     assert "target" not in program["repos"][first]
+    assert program["repos"][first]["merged"] is None
+    assert program["repos"][first]["durable"] is None
+    assert program["repos"][first]["cost_usd"] is None
     assert sum(a[0] == "api" and a[1].endswith("/issues") for a in calls) == 5
 
 
