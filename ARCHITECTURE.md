@@ -1338,6 +1338,18 @@ recording. A refused lane is listed with the screen's reasons instead, so the da
 warn counts only candidates the bootstrap can drain (until 2026-10-02 it also counted every lane the
 screen refuses, which only a manual offload could clear).
 
+Stage-2 disagreement credit compares the applied plan's action and named worker with the baseline;
+the raw proposal-action disagreement stays available for historical analysis. Only accepted, synced
+outcome links earn this credit. A bad outcome-link row appends its failure to the existing corpus and
+does not hide later rows; the linker reports both linked and failed counts. Once the unchanged
+20-proposal / 10-synced-outcome / 3-disagreement gate opens, the supervisor writes
+`supervised-apply-plan.json` for the next eligible stalled candidate with worker capacity and records
+a success heartbeat for producing that artifact. This is a baseline dry-run preview, not a new role
+verdict or permission to execute; live apply remains off. With no safe candidate, the report says why
+no plan was written. `redirect_apply.py --replay-stalls tests/fixtures/redirect_stalls` exercises the
+auth, exited and drift fixtures through offline proposal, named-worker plan and flag-off authorization,
+without recording role outcomes or dispatching workers.
+
 ## PromptAgent — the second role (built 2026-06-20)
 
 PromptAgent upgrades generic delegation templates without changing deterministic selection. It turns
