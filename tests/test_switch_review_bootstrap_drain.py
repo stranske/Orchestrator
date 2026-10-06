@@ -223,6 +223,15 @@ def test_a_closed_gate_reads_finished_through_the_real_status(sandbox):
                 "target": f"o/r#{i}",
                 "valid_proposal": True,
                 "disagreement": i < redirect_shadow.DISAGREEMENT_OUTCOME_TARGET,
+                # Stage-2 credit needs the applied plan, not the raw proposal flag.
+                "baseline_action": "redirect",
+                "baseline_agent": "codex",
+                "plan": {
+                    "action": "redirect",
+                    "next_agent": (
+                        "cursor" if i < redirect_shadow.DISAGREEMENT_OUTCOME_TARGET else "codex"
+                    ),
+                },
             }
         )
         events.append(
