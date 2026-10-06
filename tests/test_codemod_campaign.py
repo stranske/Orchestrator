@@ -382,3 +382,46 @@ def test_blocked_apply_preserves_preview_receipt_without_explicit_record(
     assert rollout.main(argv) == 0
     assert json.loads(capsys.readouterr().out)["dispatch_result"]["blocked"]
     assert bool(writes) is explicit
+
+
+def test_whitespace_decoy_does_not_replace_effective_exact_ignore(tmp_path, campaign, github):
+    import os
+    import subprocess
+
+    git_env = os.environ.copy()
+    for name in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CEILING_DIRECTORIES",
+        "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+    ):
+        git_env.pop(name, None)
+
+    original = " .coverage \n"
+    repaired = lane.append_missing_ignores(original)
+    assert repaired.startswith(original)
+    assert all(entry in repaired.splitlines() for entry in lane.IGNORE_ENTRIES)
+    assert lane.append_missing_ignores(repaired) == repaired
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, env=git_env)
+    (tmp_path / ".gitignore").write_text(repaired)
+    assert (
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "check-ignore", "--no-index", ".coverage"],
+            capture_output=True,
+            text=True,
+            env=git_env,
+        ).returncode
+        == 0
+    )
+    body = lane.target_issue_body(campaign, "stranske/Ready", original)
+    scope = body.split("## Scope\n", 1)[1].split("\n## Non-Goals", 1)[0]
+    assert "`.coverage`" in scope
+
+    gh, _calls, ignores, _issues = github
+    repo = campaign["campaign"]["repos"][0]
+    ignores[repo] += original
+    assert ".coverage" in lane.file_targets(campaign, gh=gh)["repos"][repo]["missing"]
