@@ -1,13 +1,13 @@
 {
- "collected": 2163,
- "passed": 2163,
- "skipped_max": 26,
- "mirror_skipped_max": 21,
- "bare_mirror_skipped_max": 47,
- "bare_mirror_selftest_skipped_max": 7,
- "bare_mirror_gate_skipped_max": 2,
- "selftest_skipped_max": 7,
- "gate_skipped_max": 2,
- "mypy_exempt_max": 0,
- "note": "Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history. FLOOR 2100 -> 2109 on 2026-10-05 (read-only agents are told not to act on GitHub, branch claude/read-only-agents-github-rule): measured by pytest --collect-only on the branch rebased onto d357820; the 9 tests of tests/test_read_only_github_rule.py are the whole delta. All skip/exemption ceilings unchanged. Retained prior conflicted note: Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history.urrent-main integration for issue419; focused named tests and deliberate controls documented in docs/verification/issue-419-high-stakes-shape.md. Collected/passed measured on integrated source; existing skip/type ceilings preserved. Prior large floor notes retained in closer work/20261005T1538Z/482-floor-{branch,main}.json and Git history. 2026-10-06: +8 collected (tests/test_refusal_role_edges_migration.py), 2116 -> 2124, counted with pytest --collect-only on the merge with main 3588318. Round0122 integrated main 5eeea0661a97a00d0c91d95c699935e1ba0cbdff; retained main notes at 5eeea0661a97a00d0c91d95c699935e1ba0cbdff:.verify-floor.json; measured 2163; ceilings unchanged."
+  "collected": 2169,
+  "passed": 2169,
+  "skipped_max": 26,
+  "mirror_skipped_max": 21,
+  "bare_mirror_skipped_max": 47,
+  "bare_mirror_selftest_skipped_max": 7,
+  "bare_mirror_gate_skipped_max": 2,
+  "selftest_skipped_max": 7,
+  "gate_skipped_max": 2,
+  "mypy_exempt_max": 0,
+  "note": "Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history. FLOOR 2100 -> 2109 on 2026-10-05 (read-only agents are told not to act on GitHub, branch claude/read-only-agents-github-rule): measured by pytest --collect-only on the branch rebased onto d357820; the 9 tests of tests/test_read_only_github_rule.py are the whole delta. All skip/exemption ceilings unchanged. Retained prior conflicted note: Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history.urrent-main integration for issue419; focused named tests and deliberate controls documented in docs/verification/issue-419-high-stakes-shape.md. Collected/passed measured on integrated source; existing skip/type ceilings preserved. Prior large floor notes retained in closer work/20261005T1538Z/482-floor-{branch,main}.json and Git history. 2026-10-06: +8 collected (tests/test_refusal_role_edges_migration.py), 2116 -> 2124, counted with pytest --collect-only on the merge with main 3588318. Round0122 integrated main 5eeea0661a97a00d0c91d95c699935e1ba0cbdff; retained main notes at 5eeea0661a97a00d0c91d95c699935e1ba0cbdff:.verify-floor.json; measured 2163; ceilings unchanged. Closer0222 integrated maind4213d1e638c88f7aa3baf4ca31c285a46cb3f28; main note history preserved atd4213d1e638c88f7aa3baf4ca31c285a46cb3f28:.verify-floor.json and round receipt; measured2169; all ceilings unchanged."
 }
