@@ -704,7 +704,7 @@ def _trial_token_total(attempts: list[dict[str, Any]], field: str) -> int | str:
     values = [attempt.get(field) for attempt in attempts]
     if not values or any(value is None for value in values):
         return "n/a"
-    return sum(values)
+    return sum(value for value in values if value is not None)
 
 
 def _write_capability_program_trial_summary(
