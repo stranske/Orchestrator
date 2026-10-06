@@ -103,6 +103,8 @@ def test_switch_review_prints_one_line_per_live_capability(tmp_path, monkeypatch
     monkeypatch.setattr(switch_review, "fleet_gates", lambda **kw: {})
     monkeypatch.setattr(switch_review, "_exploration_gate", lambda: {})
     monkeypatch.setattr(switch_review, "gate_expiry", lambda **kw: {})
+    # Keep this fixture rendering test independent of live fleet collection.
+    monkeypatch.setattr(switch_review, "adversarial_shape_population", lambda **kw: {})
     rep = switch_review.review(now=NOW, env={}, path=path)
     text = switch_review.format_report(rep)
     assert rep["value_chain"]["total"] == 2
