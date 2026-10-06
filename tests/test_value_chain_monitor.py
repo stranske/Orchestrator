@@ -310,12 +310,19 @@ def test_new_capability_has_all_nine_admission_parts(tmp_path, monkeypatch, caps
     heartbeat = capabilities.heartbeat
     registrations = []
     registered_at_collection = []
+    heartbeat_timestamp = capabilities._now() - 100
 
     def private_register(capability_id, record):
         registrations.append(capability_id)
         register(capability_id, record, path)
 
     def private_heartbeat(capability_id, event_type, **kwargs):
+        # These are separate weekly invocations. Give their private fixture
+        # events distinct timestamps instead of relying on wall-clock delay to
+        # avoid heartbeat's deliberate same-second idempotency.
+        nonlocal heartbeat_timestamp
+        heartbeat_timestamp += 1
+        kwargs.setdefault("timestamp", heartbeat_timestamp)
         return heartbeat(capability_id, event_type, path=path, **kwargs)
 
     def collect_inputs(**kwargs):
