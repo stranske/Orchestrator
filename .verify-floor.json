@@ -1,6 +1,6 @@
 {
-  "collected": 2326,
-  "passed": 2326,
+  "collected": 2327,
+  "passed": 2327,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 47,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Round1020 repaired pre-existing literal conflict markers from keeper HEAD6961b78; original malformed floor retained in476-floor-before.json and Git. Integrated current main after guarded497 squash; exact collection measured; all observed baseline ceilings unchanged; full suite awaits CI. Actual collection 2301; focused85PASS; verdict normalization tests and unknown non-string controls retained. Current-main integration: measured collection; full suite awaits CI; all quality ceilings unchanged. Merge conflict resolution: combined triage and adjudicator shadow tests; actual collection measured at 2326; all quality ceilings unchanged."
+  "note": "Merged main87d041f baseline plus one missing-comment evidence regression: actual collection2327. Focused adjudicator/source report tests pass; full suite verdict awaits exact-head CI. Existing test/type/selftest/skip ceilings unchanged. Passed is the required verification floor, not a locally observed full-suite result."
 }
