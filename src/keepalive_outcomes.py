@@ -371,7 +371,10 @@ def _fetch_issue_body(repo: str, number: int) -> str | None:
         "body",
     ]
     issue = _run_json(args)
-    return str(issue["body"]) if isinstance(issue, dict) and issue.get("body") else None
+    body = issue.get("body") if isinstance(issue, dict) else None
+    # A malformed response must remain retryable. Coercing it to text would
+    # publish a once-authored spec that can never recover the real issue's ACs.
+    return body if isinstance(body, str) and body.strip() else None
 
 
 def _agent_from_labels(labels: list[str]) -> tuple[str, str] | None:
@@ -1176,6 +1179,38 @@ def ingest_keepalive_outcomes(
         "runtime_ac_shadow_errors": [],
     }
 
+    def observe_shadow(repo, pr, run_id):
+        target = f"{repo}#{int(pr['number'])}"
+
+        if not dry_run:
+            # The older issue names keepalive_ingest.py; this is the deployed ingest edge.
+            # Source authoring/observation cannot alter the PR outcome or the hard merge gate.
+            import runtime_ac_gate
+
+            try:
+                authored = runtime_ac_gate.author_keepalive_spec(
+                    repo,
+                    pr,
+                    run_id,
+                    spec_dir=_spec_dir,
+                    issue_fetch_fn=_issue_fetch_fn
+                    or (_fetch_issue_body if _pr_fetch_fn is None else lambda _r, _n: None),
+                )
+                if authored.get("spec_authored"):
+                    summary["runtime_ac_specs_authored"] += 1
+                if authored.get("status") in {"authored", "existing"}:
+                    runtime_ac_gate.observe_shadow_spec(
+                        target,
+                        run_id,
+                        spec_dir=_spec_dir,
+                        worktree=pr.get("_worktree"),
+                        head_sha=pr.get("headRefOid"),
+                    )
+                elif authored.get("error"):
+                    summary["runtime_ac_shadow_errors"].append(f"{target}: {authored['error']}")
+            except Exception as exc:
+                summary["runtime_ac_shadow_errors"].append(f"{target}: {exc}")
+
     for repo in repos:
         _gh_throttle("core")  # `gh pr list` per repo = CORE (5000/hr)
         prs = pr_fetch_fn(repo, lookback_days)
@@ -1303,6 +1338,7 @@ def ingest_keepalive_outcomes(
             _record_attribution(summary, attribution_source)
             existing_run_id = _existing_remote_for_pr(repo, pr_number)
             if existing_run_id:
+                observe_shadow(repo, pr, existing_run_id)
                 if not dry_run:
                     _stamp_existing_dispatch_policy(
                         existing_run_id,
@@ -1367,33 +1403,7 @@ def ingest_keepalive_outcomes(
             elif dry_run:
                 summary["runs_recorded"] += 1
 
-            if not dry_run and not run_already_exists:
-                # The older issue names keepalive_ingest.py; this is the deployed ingest edge.
-                # Source authoring/observation cannot alter the PR outcome or the hard merge gate.
-                import runtime_ac_gate
-
-                try:
-                    authored = runtime_ac_gate.author_keepalive_spec(
-                        repo,
-                        pr,
-                        run_id,
-                        spec_dir=_spec_dir,
-                        issue_fetch_fn=_issue_fetch_fn
-                        or (_fetch_issue_body if _pr_fetch_fn is None else lambda _r, _n: None),
-                    )
-                    if authored.get("spec_authored"):
-                        summary["runtime_ac_specs_authored"] += 1
-                        runtime_ac_gate.observe_shadow_spec(
-                            target,
-                            run_id,
-                            spec_dir=_spec_dir,
-                            worktree=pr.get("_worktree"),
-                            head_sha=pr.get("headRefOid"),
-                        )
-                    elif authored.get("error"):
-                        summary["runtime_ac_shadow_errors"].append(f"{target}: {authored['error']}")
-                except Exception as exc:
-                    summary["runtime_ac_shadow_errors"].append(f"{target}: {exc}")
+            observe_shadow(repo, pr, run_id)
 
             if oc is not None and _should_record_outcome(existing_oc, oc):
                 if not dry_run:
