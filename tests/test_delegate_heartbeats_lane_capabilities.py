@@ -40,7 +40,10 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(dispatcher.claims, "reap_stale", lambda: None)
     monkeypatch.setattr(dispatcher.claims, "claim", lambda *_: True)
     monkeypatch.setattr(dispatcher.claims, "release", lambda *_: None)
-    monkeypatch.setattr(dispatcher.provision, "provision", lambda *_: tmp_path)
+    # A delegated workspace must not contain the isolated control-plane state.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(dispatcher.provision, "provision", lambda *_: workspace)
     monkeypatch.setattr(
         dispatcher.repo_knowledge, "append_context", lambda prompt, *_a, **_k: prompt
     )
