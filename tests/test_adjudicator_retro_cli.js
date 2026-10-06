@@ -315,3 +315,53 @@ print(json.dumps(True))
   assert.ok(restored.rows.every((row) => row.shadow_verdict === null));
   assert.deepEqual(w.brain(), rejudgedBrain, 'restoring truth must not redispatch saved cases');
 });
+
+test('closer lane offers the adjudicator only when both verdicts establish a dispute', (t) => {
+  const w = world(t);
+  const results = w.run(['-c', `
+import json
+from unittest.mock import patch
+import capabilities
+import capability_advisor as advisor
+
+row = capabilities._blank_capability("role-adjudicator")
+row["status"] = "generated"
+capabilities.save({"role-adjudicator": row})
+contexts = [
+    {},
+    {"verifier_verdict": "NON_PASS"},
+    {"merge_disposition": "PASS"},
+    {"verifier_verdict": "UNKNOWN", "merge_disposition": "PASS"},
+    {"verifier_verdict": "NON_PASS", "merge_disposition": " UNKNOWN "},
+    {"verifier_verdict": " ", "merge_disposition": "PASS"},
+    {"verifier_verdict": "pass", "merge_disposition": " PASS "},
+    {"verifier_verdict": "NON_PASS", "merge_disposition": "non_pass"},
+    {"verifier_verdict": "NON_PASS", "merge_disposition": "PASS"},
+    {"verifier_verdict": "PASS", "merge_disposition": " NON_PASS "},
+]
+results = []
+with patch.object(advisor, "PR_FACTS_FETCH", return_value={}):
+    for text in ("xyzzy plugh", "review disputed verifier results"):
+        for context in contexts:
+            result = advisor.advise(
+                text, surface="closer-lane", repository="owner/repo",
+                context=context, record=False,
+            )
+            results.append({
+                "text": text,
+                "context": context,
+                "offered": any(c["capability_id"] == "role-adjudicator"
+                               for c in result["capabilities"]),
+                "withheld": result["precondition"]["withheld"],
+                "missing": result["fact_missing"],
+            })
+print(json.dumps(results))
+`]);
+  assert.equal(results.length, 20);
+  for (const [index, result] of results.entries()) {
+    const offered = index % 10 >= 8;
+    assert.equal(result.offered, offered, JSON.stringify(result));
+    assert.equal(Boolean(result.withheld.length || result.missing.length), !offered,
+      'an ineligible offer must explain whether evidence is missing or verdicts agree');
+  }
+});
