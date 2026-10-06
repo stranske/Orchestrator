@@ -235,3 +235,47 @@ def test_failed_pair_gets_terminal_unknown_and_is_not_rescanned(pair, monkeypatc
         subject_lifecycle_fn=lambda *args, **kwargs: None,
     )
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("failure", ["launch", "strategy", "lifecycle"])
+def test_pair_failure_does_not_abort_later_experiments(pair, monkeypatch, failure):
+    _canon, edir, meta, _spawned = pair
+    monkeypatch.setenv("ORCH_STATE_DIR", str(edir.parent / "state"))
+    monkeypatch.setattr(exp_abcd, "ship_gate_stamp", lambda: edir.parent / "stamp")
+    (edir / "strategy.json").write_text(json.dumps({"created_ts": 1}))
+    later = edir.parent / "zz-later-pair"
+    later.mkdir()
+    later_meta = dict(meta, exp_id=later.name)
+    (later / "meta.json").write_text(json.dumps(later_meta))
+    (later / "spec.md").write_text("Later pair requirement")
+    newer = later.stat().st_mtime + 1
+    os.utime(edir, (newer, newer))  # followup visits newest experiment first
+    calls = []
+
+    def launch(_repo, exp_id):
+        calls.append(exp_id)
+        if exp_id == later.name:
+            return {"failed": [], "pending": ["waiting"], "launched": []}
+        if failure == "launch":
+            raise RuntimeError("launch unavailable")
+        return {"failed": [{"reason": "implementer-failed"}], "pending": [], "launched": []}
+
+    def record(*args):
+        if failure == "strategy":
+            raise RuntimeError("strategy recorder unavailable")
+
+    def lifecycle(*args, **kwargs):
+        if failure == "lifecycle":
+            raise RuntimeError("lifecycle unavailable")
+
+    monkeypatch.setattr(exp_abcd, "launch_pending_reviews", launch)
+    monkeypatch.setattr(strategy_experiment, "record_failed_trial", record)
+    exp_abcd.followup(subject_lifecycle_fn=lifecycle)
+    assert calls == [edir.name, later.name]
+    marker = json.loads((edir / "followup-skip.json").read_text())
+    assert marker["reason"] == (
+        "pair-review-error" if failure == "launch" else "pair-review-failed"
+    )
+    calls.clear()
+    exp_abcd.followup(subject_lifecycle_fn=lifecycle)
+    assert calls == [later.name]

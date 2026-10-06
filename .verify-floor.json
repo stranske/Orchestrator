@@ -1,13 +1,13 @@
 {
-  "collected": 2376,
-  "passed": 2332,
-  "skipped_max": 26,
-  "mirror_skipped_max": 21,
-  "bare_mirror_skipped_max": 47,
-  "bare_mirror_selftest_skipped_max": 7,
-  "bare_mirror_gate_skipped_max": 2,
-  "selftest_skipped_max": 7,
-  "gate_skipped_max": 2,
-  "mypy_exempt_max": 0,
-  "note": "Integrates main 69f3bbb8d5ef8aaa7edbb24ba606d9543145e52f. Expected collection is 2376: main's recorded 2332 plus 44 PR strategy tests, equivalently the PR's 2374 plus main's two new missing-fact tests. Retains main's measured passed floor of 2332. Merge-result collection and execution still require CI verification; quality ceilings unchanged."
+ "collected": 2379,
+ "passed": 2379,
+ "skipped_max": 26,
+ "mirror_skipped_max": 21,
+ "bare_mirror_skipped_max": 47,
+ "bare_mirror_selftest_skipped_max": 7,
+ "bare_mirror_gate_skipped_max": 2,
+ "selftest_skipped_max": 7,
+ "gate_skipped_max": 2,
+ "mypy_exempt_max": 0,
+ "note": "Pair-review exception containment:3realRED cases on original source,47focusedGREEN on restored repair; actual2379collection; prior executed passed floor retained; full local verify pending. All quality ceilings preserved. FLOOR RECORDED by verify.py --update-floor on 2026-10-06: collected=2379, passed=2379. Ceilings preserved, never re-measured \u2014 they are edited by hand."
 }

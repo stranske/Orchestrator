@@ -2038,22 +2038,40 @@ def followup(
         except ValueError:
             continue  # malformed member metadata: skip the experiment, never guess its identity
         if any(member.get("role") == "review" for member in members):
-            review_state = launch_pending_reviews(meta["repo"], edir.name)
+            reason = "pair-review-failed"
+            try:
+                review_state = launch_pending_reviews(meta["repo"], edir.name)
+            except Exception as exc:
+                reason = "pair-review-error"
+                review_state = {
+                    "failed": [{"reason": reason, "error_type": type(exc).__name__}],
+                    "pending": [],
+                    "launched": [],
+                }
             if review_state["failed"]:
+                payload = {"reason": reason, "ts": int(now), **review_state}
+                # Persist termination before fallible side effects. One failed
+                # experiment must not stall later experiments or retry forever.
+                fleet_shapes.write_json_atomic(edir / "followup-skip.json", payload)
+                errors = []
                 if (edir / "strategy.json").exists():
-                    strategy_experiment.record_failed_trial(edir.name, review_state["failed"])
-                fleet_shapes.write_json_atomic(
-                    edir / "followup-skip.json",
-                    {
-                        "reason": "pair-review-failed",
-                        "ts": int(now),
-                        **review_state,
-                    },
-                )
-                subject_lifecycle_fn(edir.name, "skipped", reason="pair-review-failed")
-                out["skipped"].append(
-                    {"exp_id": edir.name, "reason": "pair-review-failed", **review_state}
-                )
+                    try:
+                        strategy_experiment.record_failed_trial(edir.name, review_state["failed"])
+                    except Exception as exc:
+                        errors.append(
+                            {"phase": "strategy-result", "error_type": type(exc).__name__}
+                        )
+                try:
+                    subject_lifecycle_fn(edir.name, "skipped", reason=reason)
+                except Exception as exc:
+                    errors.append({"phase": "subject-lifecycle", "error_type": type(exc).__name__})
+                if errors:
+                    payload["side_effect_errors"] = errors
+                    try:
+                        fleet_shapes.write_json_atomic(edir / "followup-skip.json", payload)
+                    except OSError:
+                        pass  # the first durable terminal marker already exists
+                out["skipped"].append({"exp_id": edir.name, **payload})
                 continue
             if review_state["launched"] or review_state["pending"]:
                 out["skipped"].append(
