@@ -50,6 +50,8 @@ MODSRC="$1/src"
 [[ -d "$MODSRC" ]] || MODSRC="$1"
 cp "$MODSRC"/*.py "$ORCH_MIRROR"/
 cp "$FAKE_VERIFY" "$ORCH_MIRROR/verify.py"
+# The stand-in capabilities.py, unless a case ships the real module from its source.
+[[ -z "${FAKE_CAPABILITIES:-}" ]] || cp "$FAKE_CAPABILITIES" "$ORCH_MIRROR/capabilities.py"
 cp "$1/orchestrate.sh" "$ORCH_MIRROR/orchestrate.sh"
 # The real copier ships experiments/*.json only when the source has them.
 if compgen -G "$1/experiments/*.json" > /dev/null; then
@@ -70,6 +72,7 @@ statedir = env.get("ORCH_STATE_DIR", str(default))
 ledger = pathlib.Path(env.get("ORCH_CAPABILITIES_PATH", runtime / "capabilities.json"))
 brain_path = env.get("ORCH_FEEDBACK_DB", str(runtime / "feedback" / "orchestrator.db"))
 brain = sqlite3.connect(brain_path)
+held_at_start = ledger.read_text() if ledger.is_file() else ""
 seen = {
     "verify_cwd": os.getcwd(),
     "verify_home": env["HOME"],
@@ -77,7 +80,7 @@ seen = {
     "verify_statedir": statedir,
     "verify_ledger": str(ledger),
     "verify_brain": brain_path,
-    "saw_ledger": ledger.read_text().strip(),
+    "saw_ledger": held_at_start.strip(),
     "saw_stamp": str((runtime / ".last-periodic-report").is_file()),
     "saw_docs": str((runtime / "local-docs" / "a.md").is_file()),
     "saw_big": str((runtime / "agent-runtime").exists()),
@@ -112,10 +115,31 @@ expected = os.environ.get("FAKE_EXPECT_MIRROR_FILE")
 if expected:
     with open(env["FAKE_RECORD"], "a") as fh:
         fh.write(f"copied_expected={pathlib.Path(expected).is_file()}\n")
+expected_row = os.environ.get("FAKE_EXPECT_ROW")
+if expected_row:  # judged on the ledger as it was handed over, before the write above
+    with open(env["FAKE_RECORD"], "a") as fh:
+        fh.write(f"saw_expected_row={expected_row in held_at_start}\n")
 print("  tree:       " + os.environ.get("FAKE_TREE", "EXEC MIRROR — mirror_* ceilings apply"))
 rc = int(os.environ.get("FAKE_VERIFY_RC", "0"))
 print("  VERIFIED — fake" if rc == 0 else "  FAILED — fake")
 sys.exit(rc)
+"""
+
+
+# Stands in for capabilities.py, which the script runs as `capabilities.py seed-declared` on the
+# state copy before verify.py: the tree's first writing load. It records what it was handed, may
+# write the ledger as that load would (FAKE_SEED_WRITE), and prints the line the script repeats.
+FAKE_CAPABILITIES = r"""import os, pathlib, sys
+env = os.environ
+ledger = pathlib.Path(env["ORCH_CAPABILITIES_PATH"])
+with open(env["FAKE_RECORD"], "a") as fh:
+    fh.write(f"seed_args={' '.join(sys.argv[1:])}\nseed_cwd={os.getcwd()}\n")
+    fh.write(f"seed_ledger={ledger}\nseed_brain={env.get('ORCH_FEEDBACK_DB', '')}\n")
+write = env.get("FAKE_SEED_WRITE")
+if write:
+    ledger.write_text(write)
+print(env.get("FAKE_SEED_LINE", "declared rows: none seeded, fake"))
+sys.exit(int(env.get("FAKE_SEED_RC", "0")))
 """
 
 
@@ -153,6 +177,7 @@ def world(tmp_path: Path) -> dict:
     _git(src, "commit", "-q", "-m", "init")
     (tmp_path / "fake-sync.sh").write_text(FAKE_SYNC)
     (tmp_path / "fake-verify.py").write_text(FAKE_VERIFY)
+    (tmp_path / "fake-capabilities.py").write_text(FAKE_CAPABILITIES)
     tmpdir = tmp_path / "tmpdir"
     tmpdir.mkdir()
     return {
@@ -172,6 +197,7 @@ def _run(world: dict, *args: str, **env: str) -> tuple[subprocess.CompletedProce
         "TMPDIR": str(world["tmpdir"]),
         "ORCH_SYNC_SCRIPT": str(world["tmp"] / "fake-sync.sh"),
         "FAKE_VERIFY": str(world["tmp"] / "fake-verify.py"),
+        "FAKE_CAPABILITIES": str(world["tmp"] / "fake-capabilities.py"),
         "FAKE_COPY_GUARD": str(paths.REPO_ROOT / "scripts/incumbent_copy_guard.sh"),
         "FAKE_INSTALLER": str(INSTALLER),
         "FAKE_RECORD": str(world["record"]),
@@ -570,3 +596,92 @@ def test_keep_leaves_the_scratch_mirror_for_inspection(world):
 def test_the_script_feeds_no_here_document_to_anything():
     """The same structural rule orchestrate.sh follows, for the same bash 5.3 pipe deadlock."""
     assert ("<" + "<") not in SCRIPT.read_text(encoding="utf-8")
+
+
+# ---- THE ROWS THIS TREE DECLARES (2026-10-06) ---------------------------------------------------
+# On 2026-10-05 the sync of the tree declaring `value-chain-monitor` stopped at 22 skipped > the
+# mirror's 21: the copy of the live ledger lacked the row, only the weekly caller that tree deployed
+# could register it, and so every later sync would have stopped the same way. The script now makes
+# the tree's first writing load (`capabilities.py seed-declared`) on the COPY before verify.py runs.
+
+
+def test_declared_rows_are_seeded_into_the_copy_before_verify_py_judges_it(world):
+    ledger = world["state"] / "capabilities.json"
+    before = ledger.read_bytes()
+    seeded = '{"capabilities": {"x": {}, "declared-row": {}}}'
+    line = "declared rows: seeded 1 of the 18 this tree declares into COPY (declared-row)"
+    result, record = _run(world, FAKE_SEED_WRITE=seeded, FAKE_SEED_LINE=line)
+    assert result.returncode == 0, result.stdout + result.stderr
+    # The tree's own load, run in the scratch mirror on the SAME state copy verify.py then judged.
+    assert record["seed_args"] == "seed-declared", record
+    assert Path(record["seed_cwd"]).resolve() == Path(record["verify_cwd"]).resolve(), record
+    assert record["seed_ledger"] == record["verify_ledger"], record
+    assert record["seed_brain"] == record["verify_brain"], record
+    assert world["tmpdir"] in Path(record["seed_ledger"]).parents, record
+    # verify.py judged the ledger AFTER the load, and the live ledger was never written.
+    assert record["saw_ledger"] == seeded, record
+    assert ledger.read_bytes() == before, ledger.read_text()
+    # Named at the step and again in the verdict block, beside the verdict it explains.
+    assert result.stdout.count(line) == 2, result.stdout
+
+
+def test_a_first_load_that_fails_is_not_verified_and_verify_py_never_runs(world):
+    """The deployed tick's first command would fail the same way, so there is nothing to judge."""
+    snapshot = world["tmpdir"] / "must-not-exist"
+    receipt = world["tmpdir"] / "must-not-exist.sha256"
+    result, record = _run(
+        world,
+        "--snapshot-out",
+        str(snapshot),
+        "--digest-out",
+        str(receipt),
+        str(world["src"]),
+        FAKE_SEED_RC="3",
+        FAKE_SEED_LINE="Traceback: the load broke",
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "NOT VERIFIED: this tree's first writing load failed" in result.stderr, result.stderr
+    assert "Traceback: the load broke" in result.stderr, result.stderr
+    assert "seed_args" in record and "verify_cwd" not in record, record
+    assert not snapshot.exists() and not receipt.exists()
+
+
+def test_without_a_ledger_in_the_copy_nothing_is_seeded_or_created(world):
+    """A fresh machine, or CI's exec-mirror job: no ledger to load, so verify.py judges as before."""
+    (world["state"] / "capabilities.json").unlink()
+    result, record = _run(world)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "seed_args" not in record, record
+    assert "none seeded, the state copy holds no ledger" in result.stdout, result.stdout
+    assert record["saw_ledger"] == "", record
+    assert not (world["state"] / "capabilities.json").exists()
+
+
+def test_the_real_first_load_registers_a_declared_row_the_live_ledger_lacks(world):
+    """The incident's own shape, through the REAL modules: a live ledger holding every declared row
+    but `value-chain-monitor`. The scratch mirror's capabilities.py registers it on the copy, the
+    verdict judges the copy holding it, nothing deployed changes, and the live ledger is untouched.
+    """
+    import capabilities
+
+    for module in paths.MODULE_DIR.glob("*.py"):
+        (world["src"] / module.name).write_bytes(module.read_bytes())
+    _git(world["src"], "add", "-A")
+    _git(world["src"], "commit", "-q", "-m", "the real modules")
+    ledger = world["state"] / "capabilities.json"
+    capabilities._write_ledger_unlocked(ledger, {})
+    capabilities.seed_declared(ledger)
+    rows = capabilities.load(ledger, create=False)
+    del rows["value-chain-monitor"]
+    capabilities._write_ledger_unlocked(ledger, rows)
+    before = ledger.read_bytes()
+
+    result, record = _run(
+        world, FAKE_CAPABILITIES="", FAKE_EXPECT_ROW='"capability_id": "value-chain-monitor"'
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    total = len(capabilities.declared_row_ids())
+    assert f"seeded 1 of the {total} this tree declares" in result.stdout, result.stdout
+    assert "(value-chain-monitor)" in result.stdout, result.stdout
+    assert record["saw_expected_row"] == "True", record
+    assert ledger.read_bytes() == before, "the live ledger was written"

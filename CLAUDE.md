@@ -293,7 +293,10 @@ Do not create a second event log, model registry, or capability inventory.
     changes.** `scripts/verify_before_sync.sh SRC` builds a throwaway mirror from the sync's own
     source with the real copy script, isolated as `docs/MIRROR_SYNC_PATCH.md` prescribes. It
     verifies that mirror on a scratch COPY of the live state, because `verify.py`'s `ledger
-    validate` gate is a writing load and must not write the live ledger before the copy. It then
+    validate` gate is a writing load and must not write the live ledger before the copy. Before
+    `verify.py`, the tree's own first-tick ledger load runs on that copy (`capabilities.py
+    seed-declared`), so every row the tree declares is judged registered, as it will be live:
+    a newly declared capability cannot block the sync that deploys it (2026-10-06). It then
     re-checks both the source identity and deployment-payload digest, then publishes that payload
     only on green. The sync wrapper `~/.codex/bin/orch-mirror-sync.sh` installs the verified snapshot;
     it never re-reads the source or refetches the registry. A red or missing helper stops before
@@ -384,6 +387,11 @@ Do not create a second event log, model registry, or capability inventory.
   a full session. `git fetch origin` first, then search. The honest verdict on a branch carrying
   someone else's ledger row comes from a fresh-state run with BOTH `ORCH_STATE_DIR` and
   `ORCH_LOCAL_RUNTIME` pointed at empty directories, which is what CI does.
+  The reverse case is not history either: a row THIS tree declares (`capabilities.declared_row_ids`:
+  every `KNOWN_GATES` entry, and every `KNOWN_DECLARATIONS` entry that declares a status) is
+  registered by the first writing load, at its declared status and never `active`. Its absence only
+  means that load has not run here yet, and `env_prereq.ledger_rows_absent` says so in the skip
+  reason. Registering it by hand or raising a ceiling for it is never the fix.
 - **The split is TOOL vs EVIDENCE.** Generic capabilities, gates and tests are committed. This
   instance's evidence is not: `CAPABILITY_USEFULNESS.md`, `LOCAL_POLICY.md`, `*.local.md`,
   `experiments/`, `ux_reviews/`, `data/`, `Audits/` — gitignored in the tree — plus the ledger, the
