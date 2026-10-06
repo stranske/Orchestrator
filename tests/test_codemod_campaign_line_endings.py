@@ -21,7 +21,19 @@ class CampaignLineEndingTests(unittest.TestCase):
         self.campaign = json.loads(
             (paths.REPO_ROOT / "campaigns/gitignore-caches-2026-10.json").read_text()
         )
-        subprocess.run(["git", "init", "-q", temporary], check=True)
+        self.git_env = os.environ.copy()
+        for name in (
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_COMMON_DIR",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_CEILING_DIRECTORIES",
+            "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+        ):
+            self.git_env.pop(name, None)
+        subprocess.run(["git", "init", "-q", temporary], check=True, env=self.git_env)
 
     def assert_effective_append(self, original):
         repaired = lane.append_missing_ignores(original)
@@ -35,6 +47,7 @@ class CampaignLineEndingTests(unittest.TestCase):
             ["git", "-C", str(self.root), "check-ignore", "--no-index", *probes],
             capture_output=True,
             text=True,
+            env=self.git_env,
         )
         self.assertEqual(checked.returncode, 0)
         self.assertEqual(checked.stdout.splitlines(), probes)
