@@ -18,6 +18,31 @@ def _shape(key, rate, *, bad=1, durable=3):
     }
 
 
+@pytest.mark.parametrize(
+    "rate,bad",
+    [
+        (float("nan"), 1),
+        (float("inf"), 1),
+        (True, 1),
+        (0.5, "bad"),
+    ],
+)
+def test_invalid_shape_statistics_cannot_choose_a_subject(tmp_path, rate, bad):
+    path = tmp_path / "shapes.json"
+    path.write_text(json.dumps({"shapes": [_shape("invalid", rate, bad=bad)]}))
+    with pytest.raises(RuntimeError, match="UNKNOWN"):
+        subject.select_subject(
+            path,
+            issue_fetcher=lambda shape: [
+                {
+                    "target": "o/r#2",
+                    "title": "tests: add coverage",
+                    "body": "## Acceptance Criteria\n- pytest coverage test",
+                }
+            ],
+        )
+
+
 def test_selects_worst_resolved_rate_and_exact_target(tmp_path):
     path = tmp_path / "shapes.json"
     path.write_text(

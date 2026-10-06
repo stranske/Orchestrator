@@ -129,3 +129,76 @@ def test_review_uses_frozen_delta_and_evaluates_the_corrected_pair_once(pair):
     final = Path(collected["diffs"][reviewer["member_id"]]["path"]).read_text()
     assert "+corrected" in final and "+implementation" not in final and "later.txt" not in final
     assert "+seeded new file" in final
+
+
+def test_launch_retry_reuses_the_committed_seed(pair, monkeypatch):
+    canon, edir, meta, spawned = pair
+    impl, reviewer = exp_abcd.experiment_members(meta)
+    impl_wt = exp_abcd.exp_worktree("o/r", meta["exp_id"], impl["agent"], impl["member_id"])
+    impl_wt.parent.mkdir(parents=True)
+    git(
+        canon,
+        "worktree",
+        "add",
+        "-b",
+        exp_abcd.exp_branch(meta["exp_id"], impl["agent"], impl["member_id"]),
+        str(impl_wt),
+        meta["base_sha"],
+    )
+    (impl_wt / "value.txt").write_text("implementation\n")
+    git(impl_wt, "commit", "-am", "implementation")
+    run_id = exp_abcd._member_run_id(meta["exp_id"], impl)
+    (edir / "done").mkdir()
+    (edir / "done" / f"{run_id}.json").write_text(
+        json.dumps({"run_id": run_id, "rc": 0, "rc_of": "agent"})
+    )
+    original_spawn = exp_abcd._spawn
+
+    def unavailable(*args, **kwargs):
+        raise OSError("spawn unavailable")
+
+    monkeypatch.setattr(exp_abcd, "_spawn", unavailable)
+    assert exp_abcd.launch_pending_reviews("o/r", meta["exp_id"])["failed"]
+    wt = exp_abcd.exp_worktree("o/r", meta["exp_id"], reviewer["agent"], reviewer["member_id"])
+    seeded = git(wt, "rev-parse", "HEAD")
+    monkeypatch.setattr(exp_abcd, "_spawn", original_spawn)
+    assert exp_abcd.launch_pending_reviews("o/r", meta["exp_id"])["launched"]
+    assert git(wt, "rev-parse", "HEAD") == seeded
+    assert (wt / "value.txt").read_text() == "implementation\n"
+
+
+def test_failed_pair_gets_terminal_unknown_and_is_not_rescanned(pair, monkeypatch):
+    _canon, edir, meta, _spawned = pair
+    monkeypatch.setenv("ORCH_STATE_DIR", str(edir.parent / "state"))
+    (edir / "strategy.json").write_text(json.dumps({"created_ts": 1}))
+    monkeypatch.setattr(exp_abcd, "ship_gate_stamp", lambda: edir.parent / "stamp")
+    calls = []
+
+    def failed(*args):
+        calls.append(args)
+        return {
+            "failed": [{"member_id": "pair-1", "reason": "implementer-failed"}],
+            "pending": [],
+            "launched": [],
+        }
+
+    monkeypatch.setattr(exp_abcd, "launch_pending_reviews", failed)
+
+    def refuse(*args, **kwargs):
+        pytest.fail("failed pair dispatched a judge or synthesis")
+
+    exp_abcd.followup(
+        collect_fn=refuse,
+        evaluate_fn=refuse,
+        synthesize_fn=refuse,
+        subject_lifecycle_fn=lambda *args, **kwargs: None,
+    )
+    assert (edir / "followup-skip.json").exists()
+    assert json.loads((edir / "strategy-receipt.json").read_text())["status"] == "UNKNOWN"
+    exp_abcd.followup(
+        collect_fn=refuse,
+        evaluate_fn=refuse,
+        synthesize_fn=refuse,
+        subject_lifecycle_fn=lambda *args, **kwargs: None,
+    )
+    assert len(calls) == 1

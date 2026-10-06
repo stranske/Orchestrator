@@ -13,6 +13,73 @@ import strategy_experiment
 import synthesis_promotion
 
 
+def test_old_trial_refresh_cannot_overwrite_current_projection(measured):
+    exp_id, _plan, edir = measured
+    metadata = json.loads((edir / "strategy.json").read_text())
+    metadata["created_ts"] = 200
+    (edir / "strategy.json").write_text(json.dumps(metadata))
+    strategy_experiment.write_evaluation_result(exp_id, ["j1", "j2"])
+    old = edir.parent / "old"
+    old.mkdir()
+    (old / "strategy.json").write_text(json.dumps({**metadata, "created_ts": 100}))
+    result = strategy_experiment.write_evaluation_result("old", ["j1", "j2"])
+    assert json.loads(result.read_text())["exp_id"] == "old"
+    assert json.loads(strategy_experiment.strategy_result_path().read_text())["exp_id"] == exp_id
+
+
+def test_refresh_selection_is_bounded_by_immutable_creation_and_age(tmp_path):
+    for name, created in [("old", 10), ("current", 200), ("expired", 1)]:
+        edir = tmp_path / name
+        edir.mkdir()
+        (edir / "eval-maps.json").write_text("{}")
+        (edir / "strategy.json").write_text(json.dumps({"created_ts": created}))
+    assert (
+        strategy_experiment.latest_refreshable_trial(tmp_path, now=210, max_age_days=1) == "current"
+    )
+    assert (
+        strategy_experiment.latest_refreshable_trial(tmp_path, now=200000, max_age_days=1) is None
+    )
+
+
+@pytest.mark.parametrize(
+    "result,expected",
+    [
+        (
+            {
+                "status": "completed",
+                "exp_id": "current",
+                "costs": {"single": {"cost_usd": 0.25}, "pair": {"cost_usd": 0.5}},
+            },
+            "strategy experiment: completed current total_cost=$0.7500",
+        ),
+        (
+            {"status": "UNKNOWN", "unknown_reason": "missing reviewer"},
+            "strategy experiment: UNKNOWN — missing reviewer",
+        ),
+        (None, "strategy experiment: UNKNOWN — no completed scored evaluation"),
+    ],
+)
+def test_switch_report_exposes_trial_cost_and_unknown_evidence(
+    tmp_path, monkeypatch, result, expected
+):
+    import switch_review
+
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    if result is not None:
+        path = strategy_experiment.strategy_result_path()
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(result))
+    report = {
+        "review_days": 30,
+        "raise_count": 0,
+        "held_off": [],
+        "on_but_idle": [],
+        "unconditioned": [],
+        "mirror_drift": {"status": "ok"},
+    }
+    assert expected in switch_review.format_report(report)
+
+
 @pytest.fixture
 def measured(tmp_path, monkeypatch):
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "feedback.db")

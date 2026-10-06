@@ -40,6 +40,7 @@ from typing import Any, TypedDict
 
 import adapters
 import capabilities
+import credential_redaction
 import dispatcher
 import execution_profiles
 import feedback
@@ -450,6 +451,11 @@ def _spawn(
     profile_id: str | None = None,
     causal_context: dict | None = None,
 ) -> int:
+    # An arm commits in its own worktree, so a scratch dir cannot stand in for it: a worktree that
+    # is or holds `/`, the home dir or the control plane is refused for every agent, before anything
+    # is recorded. build_command refuses it for codex and agy; cursor, claude and vibe would
+    # otherwise run there unsandboxed.
+    adapters.refuse_broad_workspace(agent, cwd)
     log.parent.mkdir(parents=True, exist_ok=True)
     if agent == "gemini":
         prompt = dispatcher._gemini_workspace_prompt(prompt, cwd)
@@ -915,27 +921,57 @@ def launch_pending_reviews(repo: str, exp_id: str) -> dict:
             continue
         seed = edir / f"review-seed-{_artifact_identity(agent, member_id)}.patch"
         seed.write_text(patch)
-        applied = provision._run(["git", "-C", str(wt), "apply", str(seed)], check=False)
-        if applied.returncode:
-            failed.append({"member_id": member_id, "reason": "review-seed-apply-failed"})
-            continue
+        seed_receipt = edir / f"review-seed-{_artifact_identity(agent, member_id)}.json"
+        expected_seed = {
+            "reviewer": member_id,
+            "implementer": impl["member_id"],
+            "base": frozen_base,
+            "patch": str(seed),
+            "patch_sha256": hashlib.sha256(patch.encode()).hexdigest(),
+        }
+        if seed_receipt.exists():
+            try:
+                saved = json.loads(seed_receipt.read_text())
+                valid = all(saved.get(k) == v for k, v in expected_seed.items())
+                valid = (
+                    valid
+                    and bool(saved.get("seed_commit"))
+                    and provision._run(
+                        [
+                            "git",
+                            "-C",
+                            str(wt),
+                            "merge-base",
+                            "--is-ancestor",
+                            saved["seed_commit"],
+                            "HEAD",
+                        ],
+                        check=False,
+                    ).returncode
+                    == 0
+                )
+            except (OSError, ValueError, TypeError):
+                valid = False
+            if not valid:
+                failed.append({"member_id": member_id, "reason": "review-seed-proof-mismatch"})
+                continue
+        else:
+            applied = provision._run(["git", "-C", str(wt), "apply", str(seed)], check=False)
+            if applied.returncode:
+                failed.append({"member_id": member_id, "reason": "review-seed-apply-failed"})
+                continue
         # Commit the complete seed, including new files, before the reviewer
         # starts. Otherwise a no-change review can leave untracked seed files
         # invisible to collect's committed/uncommitted Git delta.
-        provision._run(["git", "-C", str(wt), "add", "--all"])
-        provision._run(
-            ["git", "-C", str(wt), "commit", "-m", "experiment: seed paired implementation"]
-        )
-        (edir / f"review-seed-{_artifact_identity(agent, member_id)}.json").write_text(
-            json.dumps(
-                {
-                    "reviewer": member_id,
-                    "implementer": impl["member_id"],
-                    "base": frozen_base,
-                    "patch": str(seed),
-                }
+        if not seed_receipt.exists():
+            provision._run(["git", "-C", str(wt), "add", "--all"])
+            provision._run(
+                ["git", "-C", str(wt), "commit", "-m", "experiment: seed paired implementation"]
             )
-        )
+            expected_seed["seed_commit"] = provision._run(
+                ["git", "-C", str(wt), "rev-parse", "HEAD"]
+            ).stdout.strip()
+            fleet_shapes.write_json_atomic(seed_receipt, expected_seed)
         log = edir / exp_log_path(agent, member_id)
         run_id = _member_run_id(exp_id, reviewer)
         mode = AGENT_MODE.get(agent, "full")
@@ -959,17 +995,21 @@ def launch_pending_reviews(repo: str, exp_id: str) -> dict:
             "describing validation performed. Do not push or open a PR.\n\nFROZEN SPECIFICATION:\n"
             + (edir / "spec.md").read_text(encoding="utf-8")
         )
-        pid = _spawn(
-            agent,
-            mode,
-            prompt,
-            wt,
-            log,
-            run_id=run_id,
-            target=target,
-            task_type="review",
-            causal_context={"arm_id": reviewer["arm_id"]},
-        )
+        try:
+            pid = _spawn(
+                agent,
+                mode,
+                prompt,
+                wt,
+                log,
+                run_id=run_id,
+                target=target,
+                task_type="review",
+                causal_context={"arm_id": reviewer["arm_id"]},
+            )
+        except Exception:
+            failed.append({"member_id": member_id, "reason": "reviewer-launch-failed"})
+            continue
         launched.append({"member_id": member_id, "pid": pid, "seed": str(seed)})
     subject_target = (meta.get("subject") or {}).get("target")
     if launched and subject_target:
@@ -1226,10 +1266,20 @@ def _extract_cited_evidence_types(parsed: dict | None) -> list[str]:
     return feedback.normalize_evidence_type_citations(parsed.get("cited_evidence_types"))
 
 
-def _eval_command(agent: str, promptfile: str) -> str:
+def _eval_command(agent: str, promptfile: str, workspace: str | Path | None = None) -> str:
     """Bash command running one evaluator with the (large) prompt read from a file via
     "$(cat ...)" — shell substitution avoids embedding 270KB+ in an argv we build in Python.
+
+    The evaluator runs in `workspace`, by default a fresh scratch directory of its own
+    (adapters.scratch_workspace). It only reads a prompt and prints a verdict, so it is given
+    nowhere else to write. Both callers (`evaluate` here, `ux_review`) start it with `Popen` and no
+    `cwd`, so it inherited theirs: the tick's `/`, where cursor's `--workspace .`, claude and vibe
+    work unsandboxed. agy's `--add-dir` named this module's directory, which in the mirror is the
+    dispatcher's own code.
     """
+    workspace = adapters.workspace_path(workspace or adapters.scratch_workspace(f"eval-{agent}"))
+    adapters.refuse_broad_workspace(agent, workspace)
+    promptfile = os.path.abspath(promptfile)  # read after the `cd`, so never relative
     path = 'export PATH="/opt/homebrew/bin:$HOME/.local/bin:$HOME/.cursor/bin:$PATH"'
     prelude = dispatcher._agent_runtime_prelude(agent) + dispatcher._auth_prelude(agent)
     P = f'"$(cat {shlex.quote(promptfile)})"'
@@ -1248,7 +1298,7 @@ def _eval_command(agent: str, promptfile: str) -> str:
     )
     gemini_model = adapters.gemini_model()
     gemini_model_arg = f" --model {shlex.quote(gemini_model)}" if gemini_model else ""
-    gemini_add_dir = shlex.quote(str(ORCH.resolve()))
+    gemini_add_dir = shlex.quote(str(workspace))
     cmds = {
         "claude": f"claude -p {P} --dangerously-skip-permissions",
         "codex": f"codex exec --skip-git-repo-check {codex_sandbox_args} {P}",
@@ -1261,7 +1311,8 @@ def _eval_command(agent: str, promptfile: str) -> str:
         f"--print {P} --dangerously-skip-permissions --add-dir {gemini_add_dir} "
         f"--print-timeout 40m --log-file {shlex.quote(gemini_log_file)}"
     )
-    return f"{path}; ({prelude}{cmds[agent]})"
+    # `&&`: if the evaluator cannot enter its workspace it does not start anywhere else.
+    return f"{path}; cd {shlex.quote(str(workspace))} && ({prelude}{cmds[agent]})"
 
 
 def _capacity_map() -> dict:
@@ -1485,7 +1536,11 @@ def evaluate(
             evaluator_agent, mode, run_id, target, "review", out_path, started_ts
         )
         out.close()
-        parsed = _extract_json(out_path.read_text(errors="replace"))
+        # The evaluator wrote this file itself and it is this run's alone, so it is masked whole,
+        # and the parse below, which carries its notes into the Brain, reads it masked in memory.
+        parsed = _extract_json(
+            credential_redaction.scrub_and_read(out_path, who=f"experiment {exp_id} evaluator {ev}")
+        )
         matrix[ev] = parsed
         for gap in _extract_evidence_gaps(parsed):
             feedback.record_evidence_gap(f"{exp_id}:eval", ev, gap)
@@ -1854,11 +1909,16 @@ def followup(
             )
             promotion_inflight = True
             launch_available = False
+    import strategy_experiment
+
+    refresh_trial = strategy_experiment.latest_refreshable_trial(
+        EXP_DIR, now=now, max_age_days=max_age_days
+    )
     for edir in dirs:
         meta_p, spec_p = edir / "meta.json", edir / "spec.md"
         if not meta_p.exists() or not spec_p.exists():
             continue
-        if (edir / "eval-maps.json").exists() and (edir / "strategy.json").exists():
+        if edir.name == refresh_trial:
             try:
                 import strategy_experiment
 
@@ -1955,6 +2015,17 @@ def followup(
         if any(member.get("role") == "review" for member in members):
             review_state = launch_pending_reviews(meta["repo"], edir.name)
             if review_state["failed"]:
+                if (edir / "strategy.json").exists():
+                    strategy_experiment.record_failed_trial(edir.name, review_state["failed"])
+                fleet_shapes.write_json_atomic(
+                    edir / "followup-skip.json",
+                    {
+                        "reason": "pair-review-failed",
+                        "ts": int(now),
+                        **review_state,
+                    },
+                )
+                subject_lifecycle_fn(edir.name, "skipped", reason="pair-review-failed")
                 out["skipped"].append(
                     {"exp_id": edir.name, "reason": "pair-review-failed", **review_state}
                 )
@@ -2315,8 +2386,11 @@ def _resume_synthesis_promotion(state: dict) -> dict:
     """
     synthesis = state.get("synthesis") or {}
     agent = str(synthesis.get("synth_agent") or "").strip()
-    worktree = Path(str(synthesis.get("worktree") or ""))
-    if not agent or not worktree.exists():
+    # A blank worktree is a missing one. `Path("")` is `.`, which always exists, so it used to pass
+    # this check and resume the synthesis in the caller's cwd (the tick's is `/`).
+    recorded = str(synthesis.get("worktree") or "").strip()
+    worktree = Path(recorded)
+    if not agent or not recorded or not worktree.exists():
         return {"blocked": True, "reason": "resume lacks synthesis agent/worktree"}
     ordinal = len(synthesis.get("resume_history") or []) + 1
     run_id = f"{state['experiment_id']}:synth:resume:{ordinal}"
@@ -2655,25 +2729,51 @@ def _selftest_checks():
     assert _extract_cited_evidence_types(
         {"cited_evidence_types": [" test_run_output ", {"name": "test_run_output"}]}
     ) == ["test_run_output"]
-    old_bypass = os.environ.get("ORCH_CODEX_BYPASS_INNER_SANDBOX")
-    try:
-        os.environ["ORCH_CODEX_BYPASS_INNER_SANDBOX"] = "0"
-        ec = _eval_command("codex", "/tmp/p.txt")
-        assert 'read-only "$(cat /tmp/p.txt)"' in ec and "homebrew" in ec, ec
-        os.environ["ORCH_CODEX_BYPASS_INNER_SANDBOX"] = "1"
-        ecn = _eval_command("codex", "/tmp/p.txt")
-        assert "--dangerously-bypass-approvals-and-sandbox" in ecn and "--sandbox" not in ecn, ecn
-    finally:
-        if old_bypass is None:
-            os.environ.pop("ORCH_CODEX_BYPASS_INNER_SANDBOX", None)
+    # Every evaluator runs in a workspace of its own, never its caller's cwd or this module's dir
+    # (in the mirror, the dispatcher's code). tests/test_agent_workspace_never_broad.py covers more.
+    import tempfile as _eval_tf
+
+    with _eval_tf.TemporaryDirectory(prefix="exp-abcd-eval-ws-") as _ws:
+        ws = Path(_ws).resolve()
+        cd_ws = f"cd {shlex.quote(str(ws))} && ("
+        old_bypass = os.environ.get("ORCH_CODEX_BYPASS_INNER_SANDBOX")
+        try:
+            os.environ["ORCH_CODEX_BYPASS_INNER_SANDBOX"] = "0"
+            ec = _eval_command("codex", "/tmp/p.txt", ws)
+            assert 'read-only "$(cat /tmp/p.txt)"' in ec and "homebrew" in ec and cd_ws in ec, ec
+            os.environ["ORCH_CODEX_BYPASS_INNER_SANDBOX"] = "1"
+            ecn = _eval_command("codex", "/tmp/p.txt", ws)
+            assert (
+                "--dangerously-bypass-approvals-and-sandbox" in ecn and "--sandbox" not in ecn
+            ), ecn
+        finally:
+            if old_bypass is None:
+                os.environ.pop("ORCH_CODEX_BYPASS_INNER_SANDBOX", None)
+            else:
+                os.environ["ORCH_CODEX_BYPASS_INNER_SANDBOX"] = old_bypass
+        ecl = _eval_command("claude", "/tmp/p.txt", ws)
+        assert ".claude-oauth-token" in ecl and 'claude -p "$(cat /tmp/p.txt)"' in ecl, ecl
+        eg = _eval_command("gemini", "/tmp/p.txt", ws)
+        assert f"--add-dir {shlex.quote(str(ws))}" in eg and "homebrew" in eg and cd_ws in eg, eg
+        evb = _eval_command("vibe", "/tmp/p.txt", ws)
+        assert "--trust" in evb and cd_ws in evb, evb
+        try:
+            _eval_command("cursor", "/tmp/p.txt", "/")
+        except adapters.WorkspaceRefused:
+            pass
         else:
-            os.environ["ORCH_CODEX_BYPASS_INNER_SANDBOX"] = old_bypass
-    ecl = _eval_command("claude", "/tmp/p.txt")
-    assert ".claude-oauth-token" in ecl and 'claude -p "$(cat /tmp/p.txt)"' in ecl, ecl
-    eg = _eval_command("gemini", "/tmp/p.txt")
-    assert f"--add-dir {shlex.quote(str(ORCH.resolve()))}" in eg and "homebrew" in eg, eg
-    evb = _eval_command("vibe", "/tmp/p.txt")
-    assert "--trust" in evb, evb
+            raise AssertionError("an evaluator was given / as its workspace")
+        old_state = os.environ.get("ORCH_STATE_DIR")
+        os.environ["ORCH_STATE_DIR"] = str(ws / "state")
+        try:
+            default = _eval_command("vibe", "/tmp/p.txt")
+            made = list((ws / "state" / "scratch-workspaces").iterdir())
+            assert len(made) == 1 and f"cd {shlex.quote(str(made[0]))} && (" in default, made
+        finally:
+            if old_state is None:
+                os.environ.pop("ORCH_STATE_DIR", None)
+            else:
+                os.environ["ORCH_STATE_DIR"] = old_state
     # >=4-evaluator policy: a 2-implementer A/B tops up with NEUTRAL non-implementers (limits self-favoring)
     e2 = _ensure_min_evaluators(["codex", "cursor"])
     assert len(e2) == 4 and e2[:2] == [
@@ -3067,6 +3167,9 @@ def _selftest_checks():
     # this is a fix and not an applicability gate.
     old_model_probe = os.environ.get("ORCH_MODEL_PROBE")
     old_advertised_memo = dict(adapters._ADVERTISED_MEMO)
+    # Each evaluator gets a scratch workspace under the state dir; keep this block's out of the
+    # live one.
+    old_state_dir = os.environ.get("ORCH_STATE_DIR")
 
     class FakePopen:
         next_pid = 4900
@@ -3105,6 +3208,7 @@ def _selftest_checks():
         feedback.DB_PATH = tmp / "feedback" / "orchestrator.db"
         adapters.HANDOFF = tmp
         adapters.LEDGER = tmp / "capacity-ledger.ndjson"
+        os.environ["ORCH_STATE_DIR"] = str(tmp / "state")
         captured = {}
 
         def fake_build_command(agent, prompt, mode, cwd=None, **kwargs):
@@ -3252,6 +3356,10 @@ def _selftest_checks():
             os.environ.pop("ORCH_MODEL_PROBE", None)
         else:
             os.environ["ORCH_MODEL_PROBE"] = old_model_probe
+        if old_state_dir is None:
+            os.environ.pop("ORCH_STATE_DIR", None)
+        else:
+            os.environ["ORCH_STATE_DIR"] = old_state_dir
         adapters._ADVERTISED_MEMO.clear()
         adapters._ADVERTISED_MEMO.update(old_advertised_memo)
         shutil.rmtree(tmp, ignore_errors=True)

@@ -172,13 +172,23 @@ def subject_arms(
 
 
 def _shape_rate(shape: dict[str, Any]) -> float | None:
-    rates = [
-        float(cell["broke_later_rate"])
-        for cell in (shape.get("agents") or {}).values()
-        if isinstance(cell, dict)
-        and isinstance(cell.get("broke_later_rate"), (int, float))
-        and int(cell.get("bad", 0) or 0) + int(cell.get("durable", 0) or 0) >= 3
-    ]
+    rates = []
+    agents = shape.get("agents") or {}
+    if not isinstance(agents, dict):
+        raise RuntimeError("UNKNOWN: malformed shape agent evidence")
+    for cell in agents.values():
+        if not isinstance(cell, dict):
+            raise RuntimeError("UNKNOWN: malformed shape outcome evidence")
+        rate = cell.get("broke_later_rate")
+        if rate is None:
+            continue
+        if type(rate) not in (int, float) or not math.isfinite(rate) or not 0 <= rate <= 1:
+            raise RuntimeError("UNKNOWN: invalid broke-later rate")
+        counts = [cell.get(name, 0) for name in ("bad", "durable")]
+        if any(type(count) is not int or count < 0 for count in counts):
+            raise RuntimeError("UNKNOWN: invalid shape outcome counts")
+        if sum(counts) >= 3:
+            rates.append(float(rate))
     return max(rates) if rates else None
 
 
@@ -659,6 +669,60 @@ def strategy_result_path(state_dir: Path | None = None) -> Path:
     return root / "capability-program" / "strategy-experiment.json"
 
 
+def publish_trial_result(receipt: dict, metadata: dict) -> Path:
+    """An older trial may refresh its archive, but cannot replace the current projection."""
+    import fcntl
+
+    path = strategy_result_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    receipt["trial_created_ts"] = metadata["created_ts"]
+    rank = (receipt["trial_created_ts"], str(receipt["exp_id"]))
+    with path.with_suffix(".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            previous = json.loads(path.read_text())
+        except (OSError, ValueError):
+            previous = {}
+        previous_rank = (previous.get("trial_created_ts", 0), str(previous.get("exp_id", "")))
+        if rank >= previous_rank:
+            fleet_shapes.write_json_atomic(path, receipt)
+    return path
+
+
+def latest_refreshable_trial(root: Path, *, now: float, max_age_days: int) -> str | None:
+    candidates = []
+    for edir in root.iterdir():
+        if not edir.is_dir() or not (edir / "eval-maps.json").exists():
+            continue
+        try:
+            metadata = json.loads((edir / "strategy.json").read_text())
+            created = metadata["created_ts"]
+            if type(created) is not int or not 0 <= now - created <= max_age_days * 86400:
+                continue
+            candidates.append((created, edir.name))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return max(candidates)[1] if candidates else None
+
+
+def record_failed_trial(exp_id: str, failures: list[dict], *, exp_dir: Path | None = None) -> None:
+    """Archive a terminal UNKNOWN instead of rescanning an unevaluable pair forever."""
+    edir = (exp_dir or exp_abcd.EXP_DIR) / exp_id
+    metadata = json.loads((edir / "strategy.json").read_text())
+    receipt = {
+        "status": "UNKNOWN",
+        "acceptance_status": "UNKNOWN",
+        "exp_id": exp_id,
+        "unknown_reason": "pair review failed",
+        "failed_members": failures,
+        "scores": None,
+        "comparison": None,
+        "costs": {},
+    }
+    publish_trial_result(receipt, metadata)
+    fleet_shapes.write_json_atomic(edir / "strategy-receipt.json", receipt)
+
+
 def write_scored_result(
     plan: dict[str, Any],
     *,
@@ -788,8 +852,6 @@ def write_evaluation_result(
         plan, scores=means, cost_rows=cost_rows, result_path=edir / "strategy-receipt.json"
     )
     receipt = json.loads(receipt_path.read_text())
-    result_path = strategy_result_path()
-    fleet_shapes.write_json_atomic(result_path, receipt)
     promotion_error = None
     try:
         promotion = synthesis_promotion.load_state(edir)
@@ -834,8 +896,9 @@ def write_evaluation_result(
         "completed" if receipt["status"] == "completed" and promoted else "UNKNOWN"
     )
     receipt["promotion_error"] = promotion_error
+    publish_trial_result(receipt, metadata)
     fleet_shapes.write_json_atomic(receipt_path, receipt)
-    return result_path
+    return receipt_path
 
 
 def refresh_evaluation_result(exp_id: str, *, exp_dir: Path | None = None) -> Path | None:

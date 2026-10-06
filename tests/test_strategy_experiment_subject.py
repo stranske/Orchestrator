@@ -59,7 +59,7 @@ def test_subject_path_freezes_the_spec_and_prepares_two_strategy_arms_with_three
 def test_prepare_refuses_without_the_confirm_flag(tmp_path, monkeypatch, capsys) -> None:
     shapes = tmp_path / "fleet-shapes.json"
     shapes.write_text(json.dumps({"shapes": []}))
-    monkeypatch.delenv("ORCH_STRATEGY_EXPERIMENT", raising=False)
+    monkeypatch.setenv("ORCH_STRATEGY_EXPERIMENT", "1")
     assert (
         strategy_experiment.main(
             [
