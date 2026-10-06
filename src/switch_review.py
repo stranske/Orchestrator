@@ -1667,6 +1667,33 @@ def not_counted_phrase(row: dict) -> str:
     return "; ".join(parts)
 
 
+def profile_trial_summary_line() -> str | None:
+    """One-line profile-trial status from the capability-program artifact, when present."""
+    path = (
+        Path(os.environ.get("ORCH_STATE_DIR", str(Path.home() / ".codex" / "orchestrator")))
+        / "capability-program"
+        / "profile-trial.json"
+    )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+    profiles = int(payload.get("profile_count") or 0)
+    instances = int(payload.get("instance_count") or 0)
+    identity = "Y" if payload.get("identity_verified") else "N"
+    costs = payload.get("cost_tokens_by_profile") or {}
+    quality = payload.get("quality_by_profile") or {}
+    cost_bits = (
+        "/".join(str((costs.get(pid) or {}).get("tokens_in", "n/a")) for pid in sorted(costs))
+        or "n/a"
+    )
+    qual_bits = "/".join(str(quality.get(pid, "n/a")) for pid in sorted(quality)) or "n/a"
+    return (
+        f"profile trial: profiles {profiles}, instances {instances}, "
+        f"identity verified {identity}, quality {qual_bits}, cost {cost_bits}"
+    )
+
+
 def format_report(rep: dict) -> str:
     lines = [
         "# Switch review — held switches must be revisited, not forgotten",
@@ -1676,6 +1703,9 @@ def format_report(rep: dict) -> str:
         "",
     ]
     lines += [adversarial_shape_line(rep.get("adversarial_shape", {})), ""]
+    trial_line = profile_trial_summary_line()
+    if trial_line:
+        lines += [trial_line, ""]
     if rep.get("value_chain") and not rep["value_chain"].get("disabled"):
         import value_chain_monitor
 

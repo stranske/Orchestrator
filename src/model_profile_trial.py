@@ -130,6 +130,7 @@ RESULT_FIELDS = {
     "acknowledged",
     "attempts",
     "auxiliary_traces",
+    "identity_verified",
 }
 ATTEMPT_FIELDS = {
     "run_id",
@@ -528,17 +529,62 @@ def _validate_results(manifest: dict[str, Any], results: dict[str, Any]) -> list
     ]
 
 
+def _write_capability_program_trial_summary(
+    manifest: dict[str, Any],
+    attempts: list[dict[str, Any]],
+    *,
+    identity_verified: bool,
+    brain_ingest_enabled: bool,
+    timestamp: int,
+) -> None:
+    """Persist a one-line-friendly trial summary for switch review and program tracking."""
+    state_root = Path(
+        os.environ.get("ORCH_STATE_DIR", str(Path.home() / ".codex" / "orchestrator"))
+    )
+    out_dir = state_root / "capability-program"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    profile_ids = sorted({item["profile_id"] for item in attempts})
+    tokens_in = sum(int(item.get("tokens_in") or 0) for item in attempts)
+    tokens_out = sum(int(item.get("tokens_out") or 0) for item in attempts)
+    payload = {
+        "trial_id": manifest["trial_id"],
+        "updated_at": timestamp,
+        "profile_count": len(profile_ids),
+        "instance_count": len(attempts),
+        "identity_verified": bool(identity_verified),
+        "brain_ingest_enabled": bool(brain_ingest_enabled),
+        "quality_by_profile": {pid: "n/a" for pid in profile_ids},
+        "cost_tokens_by_profile": {
+            pid: {
+                "tokens_in": int(
+                    next(a for a in attempts if a["profile_id"] == pid).get("tokens_in") or 0
+                ),
+                "tokens_out": int(
+                    next(a for a in attempts if a["profile_id"] == pid).get("tokens_out") or 0
+                ),
+            }
+            for pid in profile_ids
+        },
+        "aggregate_tokens_in": tokens_in,
+        "aggregate_tokens_out": tokens_out,
+    }
+    _atomic_json(out_dir / "profile-trial.json", payload)
+
+
 def finalize_trial(
     manifest: dict[str, Any],
     results: dict[str, Any],
     *,
     state_path: Path | None = None,
     record_feedback: bool = False,
+    ingest_brain: bool = False,
     now: int | None = None,
 ) -> dict[str, Any]:
     """Validate source integrity, record instrumentation, and prove no learning writes."""
     validate_trial_manifest(manifest)
     attempts = _validate_results(manifest, results)
+    if ingest_brain and results.get("identity_verified") is False:
+        raise ValueError("trial ingest refused: worker identity is unverified")
     timestamp = int(time.time()) if now is None else int(now)
     source_after = {
         key: source_manifest(Path(value["root"]))
@@ -551,80 +597,31 @@ def finalize_trial(
     if not source_unchanged:
         raise ValueError("source integrity changed during read-only trial")
 
-    if record_feedback:
-        selected_db = Path(feedback.DB_PATH).expanduser().resolve()
-        live_db = (
-            Path.home() / ".codex" / "orchestrator" / "feedback" / "orchestrator.db"
-        ).resolve()
-        if selected_db == live_db or "quarantine" not in selected_db.name.lower():
-            raise ValueError(
-                "trial feedback recording is allowed only in an explicitly named quarantine database"
-            )
-    weights_before = _weight_snapshot() if record_feedback else {}
-    recorded_attempt_ids = []
-    if record_feedback:
-        for attempt in attempts:
-            profile = execution_profiles.get_profile(attempt["profile_id"])
-            feedback.record_run(
-                attempt["run_id"],
-                manifest["trial_id"],
-                "instrumentation:model_profile_trial",
-                "codex",
-                mode="trial",
-                reasoning_level="high",
-                source="instrumentation",
-                assignment="instrumentation",
-                work_type="model_profile_trial",
-                routing_metadata={
-                    "trial_id": manifest["trial_id"],
-                    "profile_id": attempt["profile_id"],
-                    "packet_hash": manifest["packet_hash"],
-                    "learning_enabled": False,
-                },
-                ts=timestamp,
-            )
-            provider_resolved_model = attempt.get("provider_resolved_model")
-            recorded_attempt_ids.append(
-                feedback.record_execution_attempt(
-                    attempt["run_id"],
-                    attempt_id=f"attempt:trial:{manifest['trial_id']}:{attempt['profile_id']}",
-                    attempt_ordinal=int(attempt.get("attempt_ordinal") or 1),
-                    operation_role="worker",
-                    profile_id=attempt["profile_id"],
-                    requested_provider=profile["provider"],
-                    requested_model=attempt["requested_model"],
-                    selected_model=attempt.get("selected_model"),
-                    reported_model=attempt.get("reported_model"),
-                    resolved_provider=(
-                        attempt.get("provider_resolved_provider")
-                        if provider_resolved_model
-                        else None
-                    ),
-                    resolved_model=provider_resolved_model,
-                    fallback_reason=attempt.get("fallback_reason"),
-                    runner_version=attempt.get("runner_version"),
-                    cli_version=attempt.get("cli_version"),
-                    status=attempt.get("status"),
-                    tokens_in=int(attempt.get("tokens_in") or 0),
-                    tokens_out=int(attempt.get("tokens_out") or 0),
-                    latency_s=float(attempt.get("latency_s") or 0.0),
-                    source="model-profile-trial",
-                    raw_ref=attempt.get("artifact_ref"),
-                    completed_ts=timestamp,
-                )
-            )
-        for index, trace in enumerate(results.get("auxiliary_traces") or [], start=1):
-            feedback.record_execution_trace(
-                trace.get("run_id") or attempts[0]["run_id"],
-                trace_id=trace.get("trace_id") or f"trial-evaluator-{index}",
-                provider=trace.get("provider"),
-                model=trace.get("model"),
-                operation=trace.get("operation") or "evaluate_pr_compare",
-                operation_role=trace.get("operation_role"),
-                status=trace.get("status"),
-                source="model-profile-trial",
-            )
-    weights_after = _weight_snapshot() if record_feedback else {}
+    write_feedback = record_feedback or ingest_brain
+    weights_before = _weight_snapshot() if write_feedback else {}
+    recorded_attempt_ids: list[str] = []
+    brain_ingest_enabled = False
+    if write_feedback:
+        ingest_payload = feedback.ingest_profile_trial(
+            results,
+            manifest=manifest,
+            attempts=attempts,
+            auxiliary_traces=list(results.get("auxiliary_traces") or []),
+            ts=timestamp,
+        )
+        recorded_attempt_ids = list(ingest_payload.get("recorded_attempt_ids") or [])
+        brain_ingest_enabled = ingest_brain and ingest_payload.get("status") in {
+            "ingested",
+            "already_ingested",
+        }
+        _write_capability_program_trial_summary(
+            manifest,
+            attempts,
+            identity_verified=ingest_brain,
+            brain_ingest_enabled=brain_ingest_enabled,
+            timestamp=timestamp,
+        )
+    weights_after = _weight_snapshot() if write_feedback else {}
     if weights_after != weights_before:
         raise AssertionError("instrumentation trial altered route weights")
 
@@ -669,6 +666,7 @@ def finalize_trial(
             "before": weights_before,
             "after": weights_after,
         },
+        "brain_ingest_enabled": brain_ingest_enabled,
         "next_action": "retain_shadow_and_collect_only_productive_outcomes",
     }
     if state_path:
@@ -884,6 +882,11 @@ def main(argv: list[str] | None = None) -> int:
     finalize.add_argument("--results", type=Path, required=True)
     finalize.add_argument("--state", type=Path, required=True)
     finalize.add_argument("--confirm-instrumentation", action="store_true")
+    finalize.add_argument(
+        "--ingest",
+        action="store_true",
+        help="atomically record verified trial rows in the quarantine Brain",
+    )
     report = sub.add_parser("report")
     report.add_argument("--state", type=Path, default=DEFAULT_STATE_PATH)
     args = parser.parse_args(argv)
@@ -911,7 +914,8 @@ def main(argv: list[str] | None = None) -> int:
             json.loads(args.manifest.read_text(encoding="utf-8")),
             json.loads(args.results.read_text(encoding="utf-8")),
             state_path=args.state,
-            record_feedback=False,
+            record_feedback=bool(args.ingest),
+            ingest_brain=bool(args.ingest),
         )
     else:
         payload = build_report(args.state)
