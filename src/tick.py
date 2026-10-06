@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """tick.py — the autonomous REMOTE orchestration tick (the cron loop's brain; OFF until the owner activates).
 
-For each actionable opener/closer item: CHOOSE a keepalive agent (router.select_remote_agent — reserve-
+For each actionable opener item (closer items are set aside: their PRs are already in the agent
+pipeline, so none can be delegated): CHOOSE a keepalive agent (router.select_remote_agent — reserve-
 aware, so routine work avoids Claude's scarce weekly cap) -> APPLY its `agent:<X>` label
 (dispatcher.delegate_remote) to drive the GitHub keepalive on REMOTE capacity -> then INGEST keepalive PR
 outcomes (outcomes.ingest_outcomes) so the feedback loop gets LIVE data. This is the "orchestrator mostly
@@ -24,7 +25,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-import adversarial
 import capabilities
 import claims
 import dispatcher
@@ -36,87 +36,8 @@ import research_scheduler
 import research_subjects
 import roles
 import router
-import runtime_ac_gate
 
 RESEARCH_MAX_PER_TICK = 1
-
-
-def _adversarial_context(item: dict, reason: str) -> str:
-    labels = ", ".join(item.get("labels") or []) or "(none)"
-    title = item.get("title") or ""
-    return (
-        f"High-stakes closer PR {item.get('target')}: {title}. Reason: {reason}. Labels: {labels}."
-    )
-
-
-def _adversarial_review_status(
-    item: dict,
-    *,
-    dry_run: bool,
-    env: Mapping[str, str] | None = None,
-    provision_fn=None,
-    review_fn=None,
-) -> dict | None:
-    reason = adversarial.high_stakes_reason(item)
-    if not reason:
-        return None
-    target = item.get("target")
-    base = {"target": target, "reason": reason}
-    if dry_run:
-        return {**base, "status": "planned"}
-    env = env or {}
-    if not adversarial.review_enabled(env):
-        return {
-            **base,
-            "status": "required_but_not_run",
-            "detail": "set ORCH_RUN_ADVERSARIAL_REVIEW=1 to run the advisory panel",
-        }
-    reviewers = adversarial.reviewers_from_env(env)
-    try:
-        if provision_fn is None:
-            import provision
-
-            provision_fn = provision.provision
-        if review_fn is None:
-            review_fn = adversarial.review
-        worktree = provision_fn(str(target), "closer")
-        result = review_fn(str(worktree), reviewers, _adversarial_context(item, reason))
-        lineage = None
-        lineage_run_id = item.get("run_id") or feedback.latest_run_id_for_target(str(target))
-        if lineage_run_id:
-            try:
-                result_hash = feedback._completion_hash(result)
-                lineage = feedback.record_completion_event(
-                    lineage_run_id,
-                    event_type="panel",
-                    phase="verification",
-                    producer="adversarial",
-                    status=result.get("verdict"),
-                    payload={
-                        "panel_ids": [f"adversarial:{reviewer}" for reviewer in reviewers],
-                        "adjudication_id": feedback._completion_hash(
-                            {"target": target, "reviewers": reviewers, "reason": reason}
-                        ),
-                        "result_hashes": [result_hash],
-                        "verification": {
-                            "adjudicated_verdict": result.get("verdict"),
-                            "verifier_ids": reviewers,
-                            "result_hashes": {"panel": result_hash},
-                        },
-                    },
-                )
-            except Exception as exc:
-                lineage = {"error_hash": feedback._completion_hash(str(exc))}
-        return {
-            **base,
-            "status": "executed",
-            "reviewers": reviewers,
-            "worktree": str(worktree),
-            "result": result,
-            "lineage": lineage,
-        }
-    except Exception as exc:
-        return {**base, "status": "failed", "error": str(exc)}
 
 
 def _target_repo(target: str) -> str | None:
@@ -448,13 +369,13 @@ DISPATCH_LANE_ENV = "ORCH_DISPATCH_LANE"
 # counts they bound, so the loop and the TICK-PLAN headline read the same numbers.
 DELEGATIONS_PER_TICK_ENV = "ORCH_MAX_REMOTE_PER_TICK"
 DELEGATIONS_PER_TICK_DEFAULT = 3
-# Every examined item costs a `gh api` label read plus the role-selector hooks (and, for a closer
-# item, the runtime-AC gate and, when high-stakes, an adversarial panel). A refusal spends nothing
-# remote, so it no longer counts against the cap, which leaves this bound as what keeps a backlog
-# of owned items from turning into unbounded reads. Measured over the live period (2026-06-15 to
-# 09-02): the backlog per tick was p90 24, max 42 items, and the items that were not owned were p90
-# 3, p99 15, max 29. Examined first (`examination_order`), the unowned ones fit inside 4 x 3 = 12 in
-# all but 25 of 1,857 ticks.
+# Every examined item costs a `gh api` label read. A refusal spends nothing remote, so it no longer
+# counts against the cap, which leaves this bound as what keeps a backlog of owned items from
+# turning into unbounded reads. Measured over the live period (2026-06-15 to 09-02): the backlog per
+# tick was p90 24, max 42 items, and the items that were not owned were p90 3, p99 15, max 29.
+# Examined first (`examination_order`), the unowned ones fit inside 4 x 3 = 12 in all but 25 of
+# 1,857 ticks. Closer items, owned by construction, are not examined at all since 2026-10-05
+# (`remote_tick`).
 EXAMINED_PER_DELEGATION = 4
 
 
@@ -504,11 +425,11 @@ def examination_order(items: list) -> list[tuple[dict, bool]]:
     """`(item, delegable)` pairs: items the rail would not refuse on their discovery labels first,
     the rest after them, each group in backlog order.
 
-    The order is what keeps the examination bound from latching. Discovery lists a closer item only
-    when its PR already carries an `agent:*` label (`backlog.build_backlog`), and it lists the closer
-    items first. Examined in that order, they are refused one after another, and enough of them hold
-    every item behind them out of every tick until keepalive finishes them. Examined last, they can
-    hold back nothing that could be delegated."""
+    The order is what keeps the examination bound from latching. Items whose discovery labels the
+    rail refuses (paused, or already carrying an `agent:*` label) are refused one after another if
+    examined first, and enough of them hold every item behind them out of every tick. Examined
+    last, they can hold back nothing that could be delegated. Closer items were the bulk of that
+    population until 2026-10-05, when `remote_tick` stopped examining them at all."""
     delegable: list[tuple[dict, bool]] = []
     refused: list[tuple[dict, bool]] = []
     for item in items:
@@ -529,11 +450,20 @@ def remote_tick(
     ingest_dry_run: bool | None = None,
     max_delegations: int | None = None,
     env: Mapping[str, str] | None = None,
-    runtime_ac_gate_fn=None,
     research_tick_fn=None,
 ) -> dict:
     """Choose + delegate each item to a keepalive agent (remote), then ingest outcomes. Applies no labels
     when dry_run; do_ingest=False skips the ingest pass (tests).
+
+    CLOSER ITEMS ARE NOT EXAMINED (2026-10-05). Discovery lists one only for an open PR that already
+    carries an `agent:*` label (`backlog.build_backlog`), and the dispatcher refuses every such label
+    (`dispatcher._remote_skip_reason`), so no closer item could ever be delegated here. Each still
+    cost a label read, a runtime-AC gate event in the Brain and an adjudicator selector, and a
+    high-stakes one an adversarial panel planned before a delegation that never happens, whose result
+    nothing read. Those review hooks belong to the decision a closer PR actually faces, its terminal
+    merge: `merge_guard` runs the runtime-AC gate, and the panel once per (target, head SHA)
+    (`adversarial.review_at_head`). The plan names every closer item it set aside
+    (`closer_not_examined`) and they stay excluded from research, as examined targets are.
 
     Two bounds per tick, from `delegation_bounds`. The CAP (ORCH_MAX_REMOTE_PER_TICK, default 3)
     counts delegations, the rows `is_delegation` accepts, so a large backlog can't fan out unbounded
@@ -566,8 +496,6 @@ def remote_tick(
     deferred_drainable: list[Any] = []
     delegations = refused = errors = examined = applied_delegations = 0
     blocked: list[Any] = []
-    adversarial_reviews: list[Any] = []
-    runtime_ac_gates: list[Any] = []
     role_shadows: list[dict] = []
     triage_shadow = roles.activate_tick_triage(items, cap, env=env, dry_run=dry_run)
     role_shadows.append(
@@ -577,8 +505,15 @@ def remote_tick(
             "role_run_id": (triage_shadow.get("result") or {}).get("role_run_id"),
         }
     )
-    runtime_ac_gate_fn = runtime_ac_gate_fn or runtime_ac_gate.gate_status
-    for item, delegable in examination_order(items):
+    # One pass, one predicate: an item is set aside here or examined below, never both.
+    examinable: list[dict] = []
+    closer_not_examined: list[Any] = []
+    for item in items:
+        if item.get("lane") == "closer":
+            closer_not_examined.append(item.get("target"))
+        else:
+            examinable.append(item)
+    for item, delegable in examination_order(examinable):
         target = item.get("target")
         if delegations >= cap_n or examined >= examine_n:  # per-tick bounds: defer the rest
             by_cap = delegations >= cap_n
@@ -607,30 +542,6 @@ def remote_tick(
                 }
             )
             continue
-        gate_status = runtime_ac_gate_fn(item, dry_run=dry_run, env=env)
-        if gate_status:
-            runtime_ac_gates.append(gate_status)
-            if gate_status.get("blocks"):
-                adjudication = roles.activate_adjudicator_disagreement(
-                    item, gate_status, None, cap, env=env, dry_run=dry_run
-                )
-                role_shadows.append(
-                    {
-                        "role": "adjudicator",
-                        "target": item.get("target"),
-                        "selector": adjudication.get("selector"),
-                        "role_run_id": (adjudication.get("result") or {}).get("role_run_id"),
-                    }
-                )
-                blocked.append(
-                    {
-                        "target": item.get("target"),
-                        "task_type": tt,
-                        "reason": f"runtime AC gate {gate_status.get('status')}",
-                        "verdict": gate_status.get("verdict"),
-                    }
-                )
-                continue
         task_learned = (learned or {}).get(tt) if learned else None
         pick = router.select_remote_agent(tt, cap, learned=task_learned)
         if not pick:
@@ -642,20 +553,6 @@ def remote_tick(
                 }
             )
             continue
-        review_status = _adversarial_review_status(item, dry_run=dry_run, env=env)
-        if review_status:
-            adversarial_reviews.append(review_status)
-        adjudication = roles.activate_adjudicator_disagreement(
-            item, gate_status, review_status, cap, env=env, dry_run=dry_run
-        )
-        role_shadows.append(
-            {
-                "role": "adjudicator",
-                "target": item.get("target"),
-                "selector": adjudication.get("selector"),
-                "role_run_id": (adjudication.get("result") or {}).get("role_run_id"),
-            }
-        )
         recommendation = (triage_shadow.get("recommendations") or {}).get(item.get("target")) or {}
         triage_role_id = (triage_shadow.get("result") or {}).get("role_run_id")
         triage_agrees = recommendation.get("action") in {"work_now", "monitor"}
@@ -684,9 +581,6 @@ def remote_tick(
             rejected_ids = []
             if triage_role_id and not triage_agrees:
                 rejected_ids.append(triage_role_id)
-            adjudicator_role_id = (adjudication.get("result") or {}).get("role_run_id")
-            if adjudicator_role_id:
-                rejected_ids.append(adjudicator_role_id)
             for role_run_id in rejected_ids:
                 feedback.record_influence_edge(
                     target_run_id=downstream_run_id,
@@ -705,12 +599,14 @@ def remote_tick(
         else:
             errors += 1
     # Research yields capacity only to rows that will run: a refusal runs no agent. Every examined
-    # target stays excluded from research, because a refused one is another agent's work.
+    # target stays excluded from research, because a refused one is another agent's work, and so
+    # does every closer item set aside unexamined, which is another agent's work by construction.
     production_reserve: dict[str, int] = {}
     for row in chosen:
         if is_delegation(row):
             production_reserve[row["agent"]] = production_reserve.get(row["agent"], 0) + 1
     reserved_targets = {str(row["target"]) for row in chosen if row.get("target")}
+    reserved_targets.update(str(target) for target in closer_not_examined if target)
     range_task_types = {"testgen", "epic", "codemod", "cross_repo", "runtime_ac"}
     reserved_targets.update(
         str(item.get("target"))
@@ -756,8 +652,7 @@ def remote_tick(
             "by_examine_cap": deferred_by_examine_cap,
             "delegable_targets": deferred_delegable,
         },
-        "adversarial_reviews": adversarial_reviews,
-        "runtime_ac_gates": runtime_ac_gates,
+        "closer_not_examined": closer_not_examined,
         "role_shadows": role_shadows,
         "research": research,
     }
@@ -970,27 +865,61 @@ def _selftest():
             0,
         ), bounded
         # Items the rail refuses on their DISCOVERY labels are examined after the rest, so owned
-        # closer PRs at the head of the backlog cannot hold back an item that can be delegated.
-        owned_live = {"o/r#931", "o/r#932", "o/r#933"}
+        # items at the head of the backlog cannot hold back an item that can be delegated.
+        owned_live = {"o/r#935", "o/r#936"}
         dispatcher._target_labels = owned_or_fresh  # type: ignore
         ordered = remote_tick(
             [
-                {"target": f"o/r#{n}", "lane": "closer", "labels": ["agent:codex"]}
-                for n in (931, 932, 933)
+                {"target": f"o/r#{n}", "task_type": "implement", "labels": ["agent:codex"]}
+                for n in (935, 936)
             ]
-            + [{"target": "o/r#934", "task_type": "implement", "labels": ["status: ready"]}],
+            + [{"target": "o/r#937", "task_type": "implement", "labels": ["status: ready"]}],
             all_keep,
             dry_run=True,
             do_ingest=False,
             max_delegations=1,
             research_tick_fn=no_research,
         )
-        assert ordered["chosen"][0]["target"] == "o/r#934" and ordered["delegations"] == 1, ordered
-        assert ordered["deferred"] == ["o/r#931", "o/r#932", "o/r#933"], ordered
+        assert ordered["chosen"][0]["target"] == "o/r#937" and ordered["delegations"] == 1, ordered
+        assert ordered["deferred"] == ["o/r#935", "o/r#936"], ordered
         assert (ordered["deferral"]["delegable"], ordered["deferral"]["drainable"]) == (
             0,
             0,
         ), ordered
+        # CLOSER ITEMS ARE SET ASIDE, NEVER EXAMINED (2026-10-05): no label read, no plan row, no
+        # deferral, and no review hook, because no closer item can be delegated. Each is named in
+        # the plan and stays out of research, as an examined target would.
+        reads.clear()
+        research_arbitration = {}
+
+        def capture_excluded(*args, **kwargs):
+            research_arbitration.update(kwargs)
+            return no_research()
+
+        dispatcher._target_labels = owned_and_counted  # type: ignore
+        closers = [
+            {
+                "target": f"o/r#{n}",
+                "lane": "closer",
+                "labels": ["agent:codex"],
+                "source_labels": ["risk:major", "runtime-ac"],
+                "title": "security: auth migration",
+            }
+            for n in (931, 932, 933)
+        ]
+        set_aside = remote_tick(
+            closers,
+            all_keep,
+            dry_run=True,
+            do_ingest=False,
+            research_tick_fn=capture_excluded,
+        )
+        assert set_aside["closer_not_examined"] == ["o/r#931", "o/r#932", "o/r#933"], set_aside
+        assert reads == [] and set_aside["examined"] == 0 and set_aside["chosen"] == [], set_aside
+        assert set_aside["deferred"] == [] and set_aside["blocked"] == [], set_aside
+        assert not {"adversarial_reviews", "runtime_ac_gates"} & set(set_aside), set_aside
+        assert [r["role"] for r in set_aside["role_shadows"]] == ["triage"], set_aside
+        assert {"o/r#931", "o/r#932", "o/r#933"} <= research_arbitration["excluded_targets"]
         dispatcher._target_labels = lambda target: (set(), "")  # type: ignore
         research_arbitration = {}
 
@@ -1042,40 +971,6 @@ def _selftest():
         assert research_arbitration["production_reserve"] == {}, research_arbitration
         assert production_range["target"] in research_arbitration["excluded_targets"]
         dispatcher._target_labels = lambda target: (set(), "")  # type: ignore
-        high = {
-            "target": "stranske/Workflows#202",
-            "task_type": "implement",
-            "lane": "closer",
-            "labels": ["risk:high"],
-            "title": "security-sensitive workflow change",
-        }
-        out4 = remote_tick(
-            [high], all_keep, dry_run=True, do_ingest=False, research_tick_fn=no_research
-        )
-        assert out4["adversarial_reviews"][0]["status"] == "planned", out4
-        assert out4["chosen"][0]["target"] == high["target"], out4
-        quiet = _adversarial_review_status(high, dry_run=False, env={})
-        assert quiet["status"] == "required_but_not_run", quiet
-        ran = _adversarial_review_status(
-            high,
-            dry_run=False,
-            env={"ORCH_RUN_ADVERSARIAL_REVIEW": "1", "ORCH_ADVERSARIAL_REVIEWERS": "vibe,gemini"},
-            provision_fn=lambda target, lane: "/tmp/mock-worktree",
-            review_fn=lambda worktree, reviewers, context: {
-                "verdict": "PASS",
-                "n_vetoes": 0,
-                "reviewers": reviewers,
-                "context": context,
-            },
-        )
-        assert ran["status"] == "executed" and ran["reviewers"] == ["vibe", "gemini"], ran
-        assert ran["result"]["verdict"] == "PASS", ran
-        assert (
-            _adversarial_review_status(
-                {"target": "o/r#1", "lane": "closer", "labels": []}, dry_run=True
-            )
-            is None
-        )
 
         research_shadow = research_tick(
             [{"target": "o/r#research", "task_type": "implement", "lane": "opener"}],
@@ -1171,50 +1066,6 @@ def _selftest():
             no_spare_research["status"] == "no_spare" and not no_spare_research["planned"]
         ), no_spare_research
 
-        with tempfile.TemporaryDirectory(prefix="runtime-ac-gate-") as tmp:
-            runtime_item = {
-                "target": "stranske/Workflows#303",
-                "task_type": "implement",
-                "lane": "closer",
-                "labels": ["runtime-ac"],
-                "title": "Runtime-sensitive merge",
-            }
-            spec_path = runtime_ac_gate.spec_path(runtime_item["target"], spec_dir=tmp)
-            spec_path.parent.mkdir(parents=True, exist_ok=True)
-            spec_path.write_text("{}", encoding="utf-8")
-
-            planned_out = remote_tick(
-                [runtime_item],
-                all_keep,
-                dry_run=True,
-                do_ingest=False,
-                research_tick_fn=no_research,
-                runtime_ac_gate_fn=lambda item, **kwargs: {
-                    "target": item["target"],
-                    "status": "planned",
-                    "blocks": False,
-                },
-            )
-            assert planned_out["runtime_ac_gates"][0]["status"] == "planned", planned_out
-            assert planned_out["chosen"][0]["target"] == runtime_item["target"], planned_out
-
-            blocked_out = remote_tick(
-                [runtime_item],
-                all_keep,
-                dry_run=False,
-                env={},
-                do_ingest=False,
-                research_tick_fn=no_research,
-                runtime_ac_gate_fn=lambda item, **kwargs: {
-                    "target": item["target"],
-                    "status": "executed",
-                    "verdict": "FAIL",
-                    "blocks": True,
-                },
-            )
-            assert blocked_out["runtime_ac_gates"][0]["blocks"] is True, blocked_out
-            assert blocked_out["blocked"] and not blocked_out["chosen"], blocked_out
-
         # --- v2 arm identity (line D): legacy members are why evaluations_v2 stayed empty ---
         v2 = research_v2_arms(["codex", "claude", "codex"], {"codex": "codex:gpt-5.6"})
         assert [a["arm_id"] for a in v2] == ["agent-codex", "agent-claude"], v2
@@ -1237,7 +1088,7 @@ def _selftest():
             "no-capacity skip, per-tick cap counts delegations not refusals, examination bound, "
             "refused-on-discovery-labels examined last, refusals reserve no research capacity, "
             "unread labels and unknown claim holders refuse, "
-            "adversarial review hook, runtime AC gate hook, "
+            "closer items set aside unexamined and kept out of research, "
             "production-before-research arbitration, true research task_type, "
             "shadow/opt-in research hook)"
         )
@@ -1268,7 +1119,10 @@ def plan_headline(out: Mapping[str, Any], artifact: Any, *, lane_live: bool) -> 
 
     Until 2026-10-04 the shadow line read "3 targets chosen, 0 applied, 3 skipped" every hour.
     "Skipped" lumped a refusal together with a delegation that would have applied, so it could not show
-    that every slot held a refusal while an item was deferred."""
+    that every slot held a refusal while an item was deferred.
+
+    Closer items set aside unexamined (2026-10-05) print beside the examined count, so every backlog
+    item is in exactly one count on the line: examined, deferred, or set aside."""
     chosen = out.get("chosen") or []
     applied = sum(row.get("applied") is True for row in chosen)
     # The ownership read's own pair: a target whose labels GitHub did not return is refused,
@@ -1277,6 +1131,7 @@ def plan_headline(out: Mapping[str, Any], artifact: Any, *, lane_live: bool) -> 
     answered = sum(row.get("labels_read") is True for row in chosen)
     unanswered = sum(row.get("labels_read") is False for row in chosen)
     deferral = out.get("deferral") or {}
+    closers = out.get("closer_not_examined")
 
     def n(value: Any) -> str:
         return "?" if value is None else str(value)
@@ -1287,6 +1142,7 @@ def plan_headline(out: Mapping[str, Any], artifact: Any, *, lane_live: bool) -> 
     return (
         f"TICK-PLAN: {delegations}; {n(out.get('refused'))} refused{errors}; "
         f"examined {n(out.get('examined'))}/{n(out.get('examine_cap'))}; "
+        f"{n(None if closers is None else len(closers))} closer set aside; "
         f"label reads {answered} answered, {unanswered} unanswered (refused); "
         f"{len(out.get('no_capacity') or [])} no capacity, "
         f"{len(out.get('blocked') or [])} blocked; "

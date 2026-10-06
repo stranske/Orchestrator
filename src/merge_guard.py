@@ -1,16 +1,27 @@
 #!/usr/bin/env python3
-"""Guard terminal PR merges with the same runtime-AC gates used by tick.py.
+"""Guard terminal PR merges: exact head, review floor, runtime-AC gate, advisory panel.
 
 Default mode is dry-run. Active mode requires --confirm-merge, and required
 runtime-AC gates still require ORCH_RUN_RUNTIME_AC=1 before any checks run.
+
+THE CLOSER-PR REVIEW HOOKS LIVE HERE (2026-10-05). The tick ran the runtime-AC gate and the
+adversarial panel before a remote delegation that no closer item can reach, so nothing they said
+could change any outcome. The decision a closer PR actually faces is this one, its terminal merge.
+The runtime-AC gate blocks it as before. A high-stakes PR also gets the adversarial panel, judged
+once per exact head (`adversarial.review_at_head`) and ADVISORY, as the owner set it: its verdict
+and blockers are reported beside the merge decision for the merger to verify against ground truth,
+and it never blocks. It runs only when ORCH_RUN_ADVERSARIAL_REVIEW=1, the flag the tick read; with
+the flag off, a verdict already recorded for this head is still reported.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -71,7 +82,7 @@ def pr_metadata(target: str, *, run_fn=subprocess.run) -> dict[str, Any]:
         "-R",
         repo,
         "--json",
-        "title,labels,state,isDraft,mergeStateStatus",
+        "title,labels,state,isDraft,mergeStateStatus,closingIssuesReferences",
     ]
     res = run_fn(cmd, capture_output=True, text=True)
     if res.returncode != 0:
@@ -80,6 +91,15 @@ def pr_metadata(target: str, *, run_fn=subprocess.run) -> dict[str, Any]:
         doc = json.loads(res.stdout or "{}")
     except Exception as exc:
         return {"target": target, "error": f"could not parse gh pr view JSON: {exc}"}
+    closing = []
+    for ref in doc.get("closingIssuesReferences") or []:
+        if not isinstance(ref, dict) or not ref.get("number"):
+            continue
+        owner = ((ref.get("repository") or {}).get("owner") or {}).get("login")
+        name = (ref.get("repository") or {}).get("name")
+        closing.append(
+            f"{owner}/{name}#{ref['number']}" if owner and name else f"{repo}#{ref['number']}"
+        )
     return {
         "target": target,
         "title": doc.get("title") or "",
@@ -87,7 +107,27 @@ def pr_metadata(target: str, *, run_fn=subprocess.run) -> dict[str, Any]:
         "state": doc.get("state"),
         "is_draft": bool(doc.get("isDraft")),
         "merge_state_status": doc.get("mergeStateStatus"),
+        "closing_issues": closing,
     }
+
+
+def source_issue_labels(closing: list[str], *, run_fn=subprocess.run) -> dict:
+    """The labels of the issues a PR closes. Risk metadata lives on ISSUES: no PR in the fleet
+    carries a `risk:*` label (backlog.build_backlog says why), so the high-stakes rule reads these.
+    `{"labels": [...]}` when every issue answered, `{"labels": None, "error": ...}` otherwise: a
+    label set some issue did not answer for is unknown, never empty."""
+    labels: list[str] = []
+    for ref in closing:
+        repo, num = provision.parse_target(ref)
+        res = run_fn(["gh", "api", f"repos/{repo}/issues/{num}"], capture_output=True, text=True)
+        try:
+            doc = json.loads(res.stdout or "{}") if res.returncode == 0 else None
+        except ValueError:
+            doc = None
+        if not isinstance(doc, dict):
+            return {"labels": None, "error": f"{ref}: {(res.stderr or 'unreadable')[-200:]}"}
+        labels.extend(_label_names(doc.get("labels")))
+    return {"labels": sorted(set(labels))}
 
 
 def evaluate_merge_gate(
@@ -139,6 +179,107 @@ def evaluate_merge_gate(
             "reason": "runtime AC gate would need a spec before active merge",
         }
     return result
+
+
+def adversarial_review_status(
+    target: str,
+    meta: Mapping[str, Any],
+    *,
+    head: str | None,
+    env: Mapping[str, str] | None = None,
+    run_fn=subprocess.run,
+    **review_kwargs: Any,
+) -> dict[str, Any]:
+    """The advisory panel at this merge: `routine`, `unknown` (the source-issue labels the rule
+    needs did not answer), `no_head`, `required_but_not_run` (flag off and nothing recorded for this
+    head), or a verdict, `reused` for this exact head or `executed` now. Never blocks.
+    `review_kwargs` reach `adversarial.review_at_head` (its worktree and test seams)."""
+    import adversarial
+
+    source = source_issue_labels(list(meta.get("closing_issues") or []), run_fn=run_fn)
+    pr_labels: list[str] = list(meta.get("labels") or [])
+    source_labels: list[str] = list(source.get("labels") or [])
+    title = str(meta.get("title") or "")
+    item = {
+        "target": target,
+        "lane": "closer",
+        "labels": pr_labels,
+        "source_labels": source_labels,
+        "title": title,
+    }
+    reason = adversarial.high_stakes_reason(item)
+    if not reason:
+        if source.get("labels") is None:
+            return {
+                "status": "unknown",
+                "detail": f"source-issue labels unread ({source.get('error')}); high stakes "
+                "undetermined, so no panel was considered",
+            }
+        return {"status": "routine"}
+    if not head:
+        return {
+            "status": "no_head",
+            "reason": reason,
+            "detail": "pass --expected-head: a panel verdict is recorded per exact head",
+        }
+    env = os.environ if env is None else env
+    reviewers = adversarial.reviewers_from_env(env)
+    if not adversarial.review_enabled(env):
+        recorded = adversarial.recorded_verdict(target, head, reviewers)
+        if recorded.get("state") == "found":
+            return {"reason": reason, "status": "reused", **recorded}
+        return {
+            "status": "required_but_not_run",
+            "reason": reason,
+            "memo": recorded.get("state"),
+            "detail": "high-stakes PR with no panel verdict at this head; set "
+            "ORCH_RUN_ADVERSARIAL_REVIEW=1, or run: python3 src/adversarial.py review "
+            f"--target {target} --head {head}",
+        }
+    labels = ", ".join(pr_labels + source_labels) or "(none)"
+    context = f"High-stakes PR {target}: {title}. Reason: {reason}. Labels: {labels}."
+    out = adversarial.review_at_head(
+        target, head, reviewers=reviewers, context=context, env=env, **review_kwargs
+    )
+    return {"reason": reason, **out}
+
+
+def adjudicate_disagreement(
+    target: str,
+    gate: Mapping[str, Any] | None,
+    panel: Mapping[str, Any],
+    *,
+    env: Mapping[str, str] | None,
+    dry_run: bool,
+    activate_fn=None,
+) -> dict[str, Any] | None:
+    """The adjudicator role on a genuine disagreement between the two verdicts this merge holds: an
+    executed runtime-AC gate and a CONCLUSIVE panel verdict. None when either is missing or they
+    agree, so a routine merge records nothing. An inconclusive panel is a shortfall to re-run, not
+    a disagreement. Shadow, as everywhere: its advice blocks nothing."""
+    import adversarial
+    import roles
+
+    verdict = str(panel.get("verdict") or "").upper()
+    if verdict not in adversarial.CONCLUSIVE_VERDICTS:
+        return None
+    item = {"target": target, "lane": "closer"}
+    review = {"result": {**(panel.get("result") or {}), "verdict": verdict}}
+    if roles.adjudication_case_for_disagreement(item, dict(gate or {}), review) is None:
+        return None
+    import router
+
+    activate = activate_fn or roles.activate_adjudicator_disagreement
+    try:
+        cap = router.load_capacity()
+    except Exception:
+        cap = {}
+    out = activate(item, dict(gate or {}), review, cap, env=env, dry_run=dry_run)
+    return {
+        "selector": out.get("selector"),
+        "case": out.get("case"),
+        "role_run_id": (out.get("result") or {}).get("role_run_id"),
+    }
 
 
 def record_merge_outcome(
@@ -227,6 +368,8 @@ def guarded_merge(
     remote_runs_fn=feedback.runs_for_target,
     record_outcome_fn=feedback.record_outcome,
     preflight_fn=exact_head_merge_gate.snapshot,
+    panel_fn=None,
+    adjudicate_fn=None,
 ) -> dict[str, Any]:
     dry_run = not confirm_merge
     if confirm_merge and not expected_head:
@@ -270,6 +413,23 @@ def guarded_merge(
     }
     if gate_result["blocked"]:
         return result
+    # Advisory, after every deterministic gate has passed, so no panel is paid for a PR that
+    # cannot merge. Nothing it returns, and nothing it raises, may block or stop this merge.
+    try:
+        panel = (panel_fn or adversarial_review_status)(
+            target, gate_result["metadata"], head=expected_head, env=env
+        )
+    except Exception as exc:
+        panel = {"status": "error", "error": str(exc)[:500]}
+    result["adversarial_review"] = panel
+    try:
+        adjudication = (adjudicate_fn or adjudicate_disagreement)(
+            target, gate_result.get("gate"), panel, env=env, dry_run=dry_run
+        )
+    except Exception as exc:
+        adjudication = {"error": str(exc)[:500]}
+    if adjudication is not None:
+        result["adjudication"] = adjudication
     if dry_run:
         return result
 
@@ -299,6 +459,40 @@ def guarded_merge(
 
 
 def _selftest() -> None:
+    """Every case runs against a disposable Brain, state dir and spec dir.
+
+    Until 2026-10-05 these cases ran the real runtime-AC gate against the LIVE Brain: 735 runs from
+    2026-08-21 wrote 3,702 gate events for the fixtures `o/r#5` and `o/r#6`, and the runtime-AC flow
+    monitor reported them as live firing (51 PASS, 204 required in one 72-hour window) and asked
+    for specs at `o/r#5` and `o/r#6`, while the fleet's real executions were zero."""
+    import tempfile
+
+    saved = {key: os.environ.get(key) for key in ("ORCH_STATE_DIR", "ORCH_RUNTIME_AC_SPEC_DIR")}
+    saved_db = feedback.DB_PATH
+    with tempfile.TemporaryDirectory(prefix="merge-guard-sandbox-") as sandbox:
+        feedback.DB_PATH = Path(sandbox) / "brain.db"
+        os.environ["ORCH_STATE_DIR"] = sandbox
+        os.environ["ORCH_RUNTIME_AC_SPEC_DIR"] = str(Path(sandbox) / "specs")
+        try:
+            _selftest_cases()
+            _selftest_panel()
+            leaked = feedback.runtime_ac_gate_events(cutoff_ts=0)
+            assert leaked and all(e["target"].startswith("o/r#") for e in leaked), leaked
+        finally:
+            feedback.DB_PATH = saved_db
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+    print(
+        "merge_guard.py selftest: OK (metadata, runtime AC gate, dry-run, guarded gh merge, "
+        "outcome patch, delegation deferred to ingest, advisory panel once per head, "
+        "conclusive-disagreement adjudication, disposable Brain)"
+    )
+
+
+def _selftest_cases() -> None:
     import tempfile
 
     assert build_merge_cmd("o/r#5") == ["gh", "pr", "merge", "5", "-R", "o/r", "--squash"]
@@ -489,16 +683,167 @@ def _selftest() -> None:
                     "isDraft": False,
                     "mergeStateStatus": "CLEAN",
                     "labels": [{"name": "runtime-ac"}],
+                    "closingIssuesReferences": [
+                        {"number": 4, "repository": {"name": "r", "owner": {"login": "o"}}},
+                        {"number": 9},
+                    ],
                 }
             ),
             stderr="",
         ),
     )
     assert parsed_meta["labels"] == ["runtime-ac"] and parsed_meta["title"] == "T", parsed_meta
-    print(
-        "merge_guard.py selftest: OK (metadata, runtime AC gate, dry-run, guarded gh merge, "
-        "outcome patch, delegation deferred to ingest)"
+    assert parsed_meta["closing_issues"] == ["o/r#4", "o/r#9"], parsed_meta
+
+
+def _selftest_panel() -> None:
+    """The advisory panel at the terminal merge: high stakes read from the SOURCE issue, judged
+    once per exact head, never blocking, and adjudicated only on a conclusive disagreement."""
+    head = "a" * 40
+    reviews: list[str] = []
+
+    def issue_labels(*names):
+        doc = {"labels": [{"name": name} for name in names]}
+        return lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, json.dumps(doc), "")
+
+    def stub_panel(verdict):
+        def run(worktree, reviewers, context):
+            reviews.append(context)
+            return {"verdict": verdict, "blockers": [{"severity": "high", "finding": "fails open"}]}
+
+        return run
+
+    def meta(target, closing=("o/r#40",), title="routine copy edit"):
+        return {
+            "target": target,
+            "labels": ["agent:codex"],
+            "title": title,
+            "state": "OPEN",
+            "is_draft": False,
+            "closing_issues": list(closing),
+        }
+
+    def clean(target, *, expected_head):
+        return {"target": target, "head": expected_head, "blocked": False, "reason": None}
+
+    merged: list[list[str]] = []
+
+    def fake_merge(cmd, capture_output=True, text=True):
+        merged.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="merged", stderr="")
+
+    on = {"ORCH_RUN_ADVERSARIAL_REVIEW": "1", "ORCH_ADVERSARIAL_REVIEWERS": "vibe,gemini"}
+
+    def merge(verdict="BLOCKED", labels=("risk:major",), env=None, expected=head, **kw):
+        def panel(target, metadata, *, head, env):
+            return adversarial_review_status(
+                target,
+                metadata,
+                head=head,
+                env=env,
+                run_fn=issue_labels(*labels),
+                worktree="/wt/at-head",
+                head_fn=lambda wt: head,
+                review_fn=stub_panel(verdict),
+            )
+
+        return guarded_merge(
+            "o/r#41",
+            expected_head=expected,
+            confirm_merge=expected is not None,
+            env=on if env is None else env,
+            metadata_fn=meta,
+            gate_fn=lambda item, **kwargs: None,
+            preflight_fn=clean,
+            merge_fn=fake_merge,
+            remote_runs_fn=lambda target, mode=None: [],
+            panel_fn=panel,
+            **kw,
+        )
+
+    # Risk lives on the SOURCE issue; the PR carries only its agent label. Advisory: it merges.
+    first = merge()
+    panel = first["adversarial_review"]
+    assert panel["status"] == "executed" and panel["verdict"] == "BLOCKED", first
+    assert panel["reason"] == "high-stakes label: risk:major", panel
+    assert first["merge_executed"] is True and first["blocked"] is False, first
+    assert "fails open" in panel["result"]["blockers"][0]["finding"], panel
+    # The same head is judged once; the verdict and its findings come back from the record.
+    again = merge(verdict="PASS")
+    assert again["adversarial_review"]["status"] == "reused", again
+    assert again["adversarial_review"]["verdict"] == "BLOCKED" and len(reviews) == 1, again
+    # Flag off: a verdict recorded for this head is still reported, and nothing runs.
+    quiet = merge(env={"ORCH_ADVERSARIAL_REVIEWERS": "vibe,gemini"})
+    assert quiet["adversarial_review"]["status"] == "reused" and len(reviews) == 1, quiet
+    # Flag off at a head with no verdict: required, named, with the one command that judges it.
+    other = "b" * 40
+    unjudged = merge(env={"ORCH_ADVERSARIAL_REVIEWERS": "vibe,gemini"}, expected=other)
+    status = unjudged["adversarial_review"]
+    assert status["status"] == "required_but_not_run" and status["memo"] == "none", status
+    assert f"--head {other}" in status["detail"] and unjudged["merge_executed"], status
+    # A dry run with no head cannot key a verdict, so it does not judge one.
+    assert merge(expected=None)["adversarial_review"]["status"] == "no_head"
+    # Routine work is named routine; unread source labels are unknown, never routine.
+    assert merge(labels=("bug",))["adversarial_review"] == {"status": "routine"}
+    unread = guarded_merge(
+        "o/r#42",
+        metadata_fn=meta,
+        gate_fn=lambda item, **kwargs: None,
+        panel_fn=lambda target, metadata, *, head, env: adversarial_review_status(
+            target,
+            metadata,
+            head=head,
+            env=env,
+            run_fn=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "HTTP 502"),
+        ),
     )
+    assert unread["adversarial_review"]["status"] == "unknown", unread
+
+    # A panel that raises is reported and the merge goes ahead: it is advisory.
+    def boom(*a, **k):
+        raise RuntimeError("provision failed")
+
+    crashed = guarded_merge(
+        "o/r#43",
+        expected_head=head,
+        confirm_merge=True,
+        metadata_fn=meta,
+        gate_fn=lambda item, **kwargs: None,
+        preflight_fn=clean,
+        merge_fn=fake_merge,
+        remote_runs_fn=lambda target, mode=None: [],
+        panel_fn=boom,
+    )
+    assert crashed["adversarial_review"]["status"] == "error" and crashed["merge_executed"], crashed
+
+    # Adjudication only on a CONCLUSIVE disagreement with an executed gate.
+    called: list[tuple] = []
+
+    def activate(item, gate, review, cap, **kwargs):
+        called.append((gate.get("verdict"), review["result"]["verdict"]))
+        return {"selector": {"selector_status": "matched_not_invoked"}, "case": {}, "result": None}
+
+    passed_gate = {"status": "executed", "verdict": "PASS", "blocks": False}
+    blocked_panel = {"status": "executed", "verdict": "BLOCKED", "result": {"blockers": []}}
+    adjudicated = adjudicate_disagreement(
+        "o/r#41", passed_gate, blocked_panel, env={}, dry_run=False, activate_fn=activate
+    )
+    assert adjudicated is not None, "a PASS gate against a BLOCKED panel is a disagreement"
+    assert adjudicated["selector"]["selector_status"] == "matched_not_invoked", adjudicated
+    assert called == [("PASS", "BLOCKED")], called
+    for gate, panel in (
+        (passed_gate, {"verdict": "PASS"}),
+        (passed_gate, {"verdict": "INCONCLUSIVE"}),
+        (None, blocked_panel),
+        (passed_gate, {"status": "routine"}),
+    ):
+        assert (
+            adjudicate_disagreement(
+                "o/r#41", gate, panel, env={}, dry_run=False, activate_fn=activate
+            )
+            is None
+        ), (gate, panel)
+    assert len(called) == 1, called
 
 
 def main(argv: list[str]) -> int:
