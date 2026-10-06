@@ -149,7 +149,10 @@ safety switch, not dead code.
    its recommendation, so the switch re-raises itself if that verdict ever flips.
 4. **tick.py → dispatcher.py** — claims a target (claims.py: atomic, live-pid-guarded, reap-grace +
    reap-mutex), spawns the agent in an isolated worktree with a kill-proof done-marker, releases on
-   exit. High-stakes closer items pass through the **adversarial.py** refute-mode veto panel.
+   exit. Closer items are set aside unexamined: discovery lists only PRs already in the agent
+   pipeline, which the dispatcher never re-delegates. Their review hooks run at the decision they
+   face, the terminal merge (`merge_guard.py`): the runtime-AC gate, and for a high-stakes PR the
+   **adversarial.py** refute-mode veto panel, advisory and judged once per exact head.
 5. **exp_abcd.py followup** — collects + cross-evaluates finished A/B/C experiments (nothing used to;
    this drained a 249-experiment backlog in July 2026), records objective anchors, and resumes the
    `synthesis_promotion.py` lifecycle. Useful syntheses must complete, pass scope/secret/local

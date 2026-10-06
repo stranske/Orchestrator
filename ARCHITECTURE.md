@@ -156,6 +156,28 @@ them back. `completion_event_health` orphans fall from 298 to 220. The rest are 
 `dry_seam_audit` still fails on them. (No stage, component or surface moved; the diagram is
 unchanged.)
 
+**The closer-PR review hooks run at the merge, not before a delegation (2026-10-05).** Discovery
+lists a closer item only for a PR that already carries an `agent:*` label, and the dispatcher refuses
+every such label, so the tick can never delegate one. It still ran three hooks on each: the
+runtime-AC gate, the adversarial panel for a high-stakes one, and the adjudicator on their
+disagreement. None could change an outcome, and nothing read the panel's result. In the 30 days to
+2026-10-06 they wrote 1,243 runtime-AC gate events for fleet PRs, every one `skipped`; 851 were shadow
+ticks re-examining four PRs that merged on 2026-09-18, from a backlog not refreshed since. The
+adjudicator hook recorded 1,777 selector events and matched no case, and the panel would have
+re-reviewed the same head on every hourly tick. The
+tick now sets closer items aside unexamined: they are named in the plan (`closer_not_examined`), counted on the
+TICK-PLAN line, and kept out of research. Their hooks run at the decision a closer PR faces, its
+terminal merge. `merge_guard` already ran the runtime-AC gate. It now gives a high-stakes PR the panel,
+with the risk label read from the source issue because no fleet PR carries `risk:*`. The panel is
+judged once per (PR, head SHA) by `adversarial.review_at_head` and stays advisory, behind the same
+flag. The adjudicator is consulted only on a conclusive disagreement. The memo key is a hash over
+the head, so a moved head is never shown an old verdict. Only PASS and BLOCKED are reused: an
+INCONCLUSIVE panel is a shortfall, and reusing it would forbid its own re-run. A worktree at any other
+commit is refused, and nothing is recorded. The Brain keeps the verdict and hashes; the findings
+live in a hash-checked artifact beside it. The closer lane, which merges fleet PRs itself, reaches the
+same entry through the advisor's `HOW_TO_USE` (`adversarial.py review --target … --head …`).
+The panel moved from the Delegate stage to the Monitor + verify gate, so the diagram draws it there.
+
 The adapter also decides each codex run's writable boundary. A run whose job is to commit (a
 dispatch from `plan_dispatch`, or an experiment arm) gets `--add-dir` for exactly its linked
 worktree's git dir, plus the canonical clone's `objects/`, `refs/` and `logs/`
