@@ -261,7 +261,9 @@ running experiments opportunistically (the research scheduler) and refreshing th
       when merge/durability signals would otherwise look successful.
 - [x] **Wire adversarial review into the dispatch path** for high-stakes merges. `tick.py` now detects
       closer PRs with explicit high-risk metadata, reports the advisory panel in dry-run, and only runs it
-      in active ticks when `ORCH_RUN_ADVERSARIAL_REVIEW=1`.
+      in active ticks when `ORCH_RUN_ADVERSARIAL_REVIEW=1`. *Moved 2026-10-05:* the tick no longer
+      examines closer items (none can be delegated); the panel runs at `merge_guard.py`'s terminal
+      merge, once per exact head (`adversarial.review_at_head`), still advisory and still behind the flag.
 - [x] **Runtime AC checks, first increment.** `runtime_ac.py` emits strict AC-bound spec-authoring prompts,
       validates runtime verification JSON for metadata/context, per-AC evidence requirements,
       frontend/command/deliberate-break/manual checks, non-regression checks, and verdict policies, and
