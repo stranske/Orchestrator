@@ -1,0 +1,21 @@
+{
+  "cases": 37,
+  "population": 122,
+  "summary": {
+    "cases": 37,
+    "adjudicated": 0,
+    "proposed_decisions": 19,
+    "metadata_only_cases": 37,
+    "graded": 0,
+    "agree": 0,
+    "disagree": 0,
+    "agreement_rate": null,
+    "merge_rule_agreement_rate": null,
+    "cost_usd": null,
+    "cost_measured_cases": 0,
+    "cost_per_case": null
+  },
+  "raw_proposals_unchanged": true,
+  "production_report_changed": false,
+  "paid_redispatch": false
+}

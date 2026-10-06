@@ -736,6 +736,7 @@ def _compact_adjudication_case(case: dict) -> dict:
         "blocker",
         "acceptance_criteria",
         "ground_truth_evidence",
+        "metadata_only",
         "repo_context",
         "prior_decision",
     ):
@@ -750,6 +751,15 @@ def _compact_adjudication_case(case: dict) -> dict:
     return compact
 
 
+def adjudication_metadata_only(case: dict) -> bool:
+    """The retrospective producer supplies counts/statuses, not inspected contents.
+
+    A caller's false flag cannot upgrade this producer's evidence contract.
+    Non-retrospective cases retain their existing evidence-specific behavior.
+    """
+    return case.get("source") == "retrospective" or case.get("metadata_only") is True
+
+
 def _adjudicator_prompt(ctx: dict) -> str:
     case = _compact_adjudication_case(ctx.get("case") or {})
     context = (ctx.get("context") or "").strip() or "(none provided)"
@@ -762,6 +772,10 @@ def _adjudicator_prompt(ctx: dict) -> str:
             "CRITICAL-EVALUATOR STANCE: adjudicate against evidence, not reviewer confidence. A blocker should",
             "stand only when the supplied ground truth supports it. Reject bare, convention-blind, or contradicted",
             "claims. Use needs_more_evidence when the evidence is insufficient to prove or disprove the claim.",
+            "",
+            "Evidence boundary: retrospective packets contain file-change counts and gate statuses only.",
+            "Equal change counts do not prove byte parity; green CI does not establish artifact completeness.",
+            "For metadata-only evidence, use needs_more_evidence; do not infer inspected source or artifacts.",
             "",
             "Rails you must not cross:",
             "- Do NOT emit PASS, FAIL, BLOCKED, verifier_verdict, merge, label, claim, or worker-selection fields.",
@@ -2780,6 +2794,17 @@ def run_adjudicator_agent(
     else:
         decision_source = "baseline_needs_more_evidence"
         advisory_plan = baseline
+
+    if adjudication_metadata_only(compact_case):
+        decision_source = "metadata_only_needs_more_evidence"
+        advisory_plan = {
+            **baseline,
+            "rationale": "File-change counts and gate statuses do not establish inspected source, parity or artifact completeness.",
+            "evidence_gaps": [
+                "Revision-bound inspected source or relevant patch contents are unavailable.",
+                "Source/template byte comparisons and required acceptance artifact contents/coverage are unverified.",
+            ],
+        }
 
     role_run_id: str | None = None
     role_record_error: str | None = None

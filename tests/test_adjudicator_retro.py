@@ -94,8 +94,10 @@ def test_retro_records_verdicts_without_changing_outcomes(private_brain, tmp_pat
     assert (
         outcomes() == before
     )  # includes absence of NEW outcome rows, not just old verdict equality
-    assert result["summary"]["agree"] == 1
-    assert result["summary"]["merge_rule_agreement_rate"] == 0
+    assert result["summary"]["agree"] == 0
+    assert result["summary"]["adjudicated"] == 0
+    assert result["summary"]["proposed_decisions"] == 1
+    assert result["summary"]["merge_rule_agreement_rate"] is None
     assert result["summary"]["cost_usd"] is None
     with sqlite3.connect(private_brain) as conn:
         recorded = conn.execute(
@@ -120,7 +122,7 @@ def test_retro_records_verdicts_without_changing_outcomes(private_brain, tmp_pat
     persisted = json.loads(path.read_text())
     assert persisted == refreshed
     assert persisted["rows"][0]["later_truth"] == "PASS"
-    assert persisted["summary"]["disagree"] == 1
+    assert persisted["summary"]["disagree"] == 0
     assert outcomes() == before
 
 
@@ -306,3 +308,82 @@ def test_saved_error_rows_do_not_gain_window_dependent_grades(private_brain, tmp
     result = retro.run(dispatch=False, limit=0, path=path, db=private_brain)
     assert result["rows"]
     assert all(row["later_truth"] is None for row in result["rows"])
+
+
+@pytest.mark.parametrize("decision", ["uphold_blocker", "reject_blocker"])
+@pytest.mark.parametrize("flag", [None, False, True])
+def test_retrospective_metadata_cannot_upgrade_raw_proposal(decision, flag):
+    case = {"target": "owner/repo#1", "source": "retrospective", **evidence({})}
+    if flag is not None:
+        case["metadata_only"] = flag
+    raw = {**proposal(), "decision": decision}
+    result = roles.run_adjudicator_agent(case=case, backend="gemini", proposal_json=raw)
+    assert result["proposal"] == raw
+    assert result["advisory_plan"]["decision"] == "needs_more_evidence"
+    assert result["advisory_plan"]["evidence_gaps"]
+    assert result["decision_source"] == "metadata_only_needs_more_evidence"
+    assert result["case"].get("metadata_only") is flag
+
+
+def test_non_retrospective_adjudication_retains_existing_contract():
+    case = {"target": "owner/repo#1", **evidence({})}
+    raw = proposal()
+    result = roles.run_adjudicator_agent(case=case, backend="gemini", proposal_json=raw)
+    assert result["advisory_plan"] == raw
+    assert result["decision_source"] == "adjudicator_agent"
+
+
+def test_five_real_metadata_proposals_keep_raw_history_without_grades(tmp_path):
+    from pathlib import Path
+
+    fixture = Path(__file__).parent / "fixtures/adjudicator-retro-metadata-proposals.json"
+    rows = json.loads(fixture.read_text())
+    raw = json.loads(json.dumps(rows))
+    report = retro._persist_report(tmp_path / "retro.json", rows, 122)
+    assert len(rows) == 5
+    for current, original in zip(report["rows"], raw):
+        assert current["proposal"] == original["proposal"]
+        assert current["decision"] == original["decision"]
+        assert current["backend_run_id"] == original["backend_run_id"]
+        assert current["disposition"] == "needs_more_evidence"
+        assert current["shadow_verdict"] is None
+    assert report["summary"]["proposed_decisions"] == 5
+    assert report["summary"]["adjudicated"] == report["summary"]["graded"] == 0
+    assert report["summary"]["agreement_rate"] is None
+
+
+def test_legacy_false_flag_and_saved_decisions_resume_without_redispatch(private_brain, tmp_path):
+    path = tmp_path / "retro.json"
+    first = retro.run(dispatch=False, path=path, db=private_brain, evidence_reader=evidence)
+    row = first["rows"][0]
+    row.update(
+        decision="reject_blocker",
+        proposal={**proposal(), "decision": "reject_blocker"},
+        shadow_verdict="PASS",
+        metadata_only=False,
+        backend_run_id="backend-one",
+    )
+    row["packet"].pop("metadata_only", None)
+    row["packet"]["metadata_only"] = False
+    path.write_text(json.dumps(first))
+    with sqlite3.connect(private_brain) as conn:
+        conn.execute("UPDATE costs SET cost_usd=2,source='ccusage' WHERE run_id='backend-one'")
+        before = conn.execute("SELECT * FROM outcomes ORDER BY run_id").fetchall()
+    raw = row["proposal"].copy()
+    resumed = retro.run(
+        dispatch=True,
+        limit=5,
+        path=path,
+        db=private_brain,
+        runner=lambda **kw: pytest.fail("saved case must not redispatch"),
+    )
+    with sqlite3.connect(private_brain) as conn:
+        assert conn.execute("SELECT * FROM outcomes ORDER BY run_id").fetchall() == before
+    saved = resumed["rows"][0]
+    assert saved["proposal"] == raw
+    assert saved["decision"] == "reject_blocker"
+    assert saved["raw_shadow_verdict"] == "PASS"
+    assert saved["shadow_verdict"] is None
+    assert saved["disposition"] == "needs_more_evidence"
+    assert resumed["summary"]["cost_usd"] == 2
+    assert resumed["summary"]["adjudicated"] == resumed["summary"]["graded"] == 0

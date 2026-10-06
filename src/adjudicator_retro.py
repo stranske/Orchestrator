@@ -51,6 +51,7 @@ def build_packet(row: dict, evidence: dict) -> dict:
     case = {
         "target": row.get("target"),
         "source": "retrospective",
+        "metadata_only": True,
         "disputed_finding": evidence.get("disputed_finding"),
         "ground_truth_evidence": evidence.get("ground_truth_evidence"),
     }
@@ -224,8 +225,32 @@ def _refresh_saved_verdicts(rows: list[dict], db: Path | None = None) -> None:
             row["cost_usd"] = measured_cost(row.get("backend_run_id"), db)
 
 
+def _apply_evidence_floor(row: dict) -> None:
+    """Preserve raw historical proposals; separate their effective disposition.
+
+    This report's producer has never supplied inspected source/artifact contents.
+    Legacy rows and explicit false flags therefore cannot upgrade its evidence.
+    Applying the floor is local and requires no repeated backend call.
+    """
+    row["metadata_only"] = True
+    row["disposition"] = "needs_more_evidence"
+    if row.get("shadow_verdict") is not None:
+        row.setdefault("raw_shadow_verdict", row["shadow_verdict"])
+    row["shadow_verdict"] = None
+    row["disposition_reason"] = (
+        "Retrospective diff counts and gate statuses do not establish inspected "
+        "source, byte parity or complete acceptance artifacts."
+    )
+
+
 def summarize(rows: list[dict]) -> dict:
-    accepted = [r for r in rows if r.get("decision") in {"uphold_blocker", "reject_blocker"}]
+    # Classify independently of stored flags, including pre-floor legacy rows.
+    classified = [dict(row) for row in rows]
+    for row in classified:
+        _apply_evidence_floor(row)
+    accepted = [
+        row for row in classified if row.get("disposition") in {"uphold_blocker", "reject_blocker"}
+    ]
     graded = [r for r in accepted if r.get("later_truth")]
     agree = sum(r["shadow_verdict"] == r["later_truth"] for r in graded)
     baseline = sum(r["merge_rule_verdict"] == r["later_truth"] for r in graded)
@@ -233,6 +258,10 @@ def summarize(rows: list[dict]) -> dict:
     return {
         "cases": len(rows),
         "adjudicated": len(accepted),
+        "proposed_decisions": sum(
+            r.get("decision") in {"uphold_blocker", "reject_blocker"} for r in rows
+        ),
+        "metadata_only_cases": len(rows),
         "graded": len(graded),
         "agree": agree,
         "disagree": len(graded) - agree,
@@ -314,10 +343,10 @@ def run(
                 ):
                     entry["decision"] = result["proposal"]["decision"]
                     entry["proposal"] = result["proposal"]
-                    entry["shadow_verdict"] = {
-                        "uphold_blocker": "FAIL",
-                        "reject_blocker": "PASS",
-                    }.get(entry["decision"])
+                    entry["disposition"] = (result.get("advisory_plan") or {}).get(
+                        "decision", "needs_more_evidence"
+                    )
+                    _apply_evidence_floor(entry)
                 entry["cost_usd"] = measured_cost(result.get("backend_run_id"), db)
         except (
             ValueError,
@@ -339,6 +368,8 @@ def run(
 
 def _persist_report(path: Path, rows: list[dict], population: int) -> dict:
     """Atomically publish the same shadow evidence returned to the caller."""
+    for row in rows:
+        _apply_evidence_floor(row)
     report = {
         "generated_at": int(time.time()),
         "shadow": True,

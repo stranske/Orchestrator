@@ -1,0 +1,18 @@
+[
+  {
+    "name": "role-floor",
+    "red_exit": 1,
+    "green_exit": 0,
+    "restored_sha256": "317db19be56f7644e11f0dda1c239f726591b91f7d5a11cb15906681b590d9a1",
+    "red_summary": "6 failed in 0.26s",
+    "green_summary": "6 passed in 0.20s"
+  },
+  {
+    "name": "report-floor",
+    "red_exit": 1,
+    "green_exit": 0,
+    "restored_sha256": "99e393051d5ed3106e298cdd2dc67b314a186bdf316e8ea1094d3ab0a7bd8471",
+    "red_summary": "1 failed in 2.00s",
+    "green_summary": "1 passed in 0.19s"
+  }
+]

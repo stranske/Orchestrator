@@ -1,0 +1,130 @@
+FFFFFF                                                                   [100%]
+=================================== FAILURES ===================================
+_ test_retrospective_metadata_cannot_upgrade_raw_proposal[None-uphold_blocker] _
+
+decision = 'uphold_blocker', flag = None
+
+    @pytest.mark.parametrize("decision", ["uphold_blocker", "reject_blocker"])
+    @pytest.mark.parametrize("flag", [None, False, True])
+    def test_retrospective_metadata_cannot_upgrade_raw_proposal(decision, flag):
+        case = {"target": "owner/repo#1", "source": "retrospective", **evidence({})}
+        if flag is not None:
+            case["metadata_only"] = flag
+        raw = {**proposal(), "decision": decision}
+        result = roles.run_adjudicator_agent(case=case, backend="gemini", proposal_json=raw)
+        assert result["proposal"] == raw
+>       assert result["advisory_plan"]["decision"] == "needs_more_evidence"
+E       AssertionError: assert 'uphold_blocker' == 'needs_more_evidence'
+E         
+E         - needs_more_evidence
+E         + uphold_blocker
+
+tests/test_adjudicator_retro.py:322: AssertionError
+_ test_retrospective_metadata_cannot_upgrade_raw_proposal[None-reject_blocker] _
+
+decision = 'reject_blocker', flag = None
+
+    @pytest.mark.parametrize("decision", ["uphold_blocker", "reject_blocker"])
+    @pytest.mark.parametrize("flag", [None, False, True])
+    def test_retrospective_metadata_cannot_upgrade_raw_proposal(decision, flag):
+        case = {"target": "owner/repo#1", "source": "retrospective", **evidence({})}
+        if flag is not None:
+            case["metadata_only"] = flag
+        raw = {**proposal(), "decision": decision}
+        result = roles.run_adjudicator_agent(case=case, backend="gemini", proposal_json=raw)
+        assert result["proposal"] == raw
+>       assert result["advisory_plan"]["decision"] == "needs_more_evidence"
+E       AssertionError: assert 'reject_blocker' == 'needs_more_evidence'
+E         
+E         - needs_more_evidence
+E         + reject_blocker
+
+tests/test_adjudicator_retro.py:322: AssertionError
+_ test_retrospective_metadata_cannot_upgrade_raw_proposal[False-uphold_blocker] _
+
+decision = 'uphold_blocker', flag = False
+
+    @pytest.mark.parametrize("decision", ["uphold_blocker", "reject_blocker"])
+    @pytest.mark.parametrize("flag", [None, False, True])
+    def test_retrospective_metadata_cannot_upgrade_raw_proposal(decision, flag):
+        case = {"target": "owner/repo#1", "source": "retrospective", **evidence({})}
+        if flag is not None:
+            case["metadata_only"] = flag
+        raw = {**proposal(), "decision": decision}
+        result = roles.run_adjudicator_agent(case=case, backend="gemini", proposal_json=raw)
+        assert result["proposal"] == raw
+>       assert result["advisory_plan"]["decision"] == "needs_more_evidence"
+E       AssertionError: assert 'uphold_blocker' == 'needs_more_evidence'
+E         
+E         - needs_more_evidence
+E         + uphold_blocker
+
+tests/test_adjudicator_retro.py:322: AssertionError
+_ test_retrospective_metadata_cannot_upgrade_raw_proposal[False-reject_blocker] _
+
+decision = 'reject_blocker', flag = False
+
+    @pytest.mark.parametrize("decision", ["uphold_blocker", "reject_blocker"])
+    @pytest.mark.parametrize("flag", [None, False, True])
+    def test_retrospective_metadata_cannot_upgrade_raw_proposal(decision, flag):
+        case = {"target": "owner/repo#1", "source": "retrospective", **evidence({})}
+        if flag is not None:
+            case["metadata_only"] = flag
+        raw = {**proposal(), "decision": decision}
+        result = roles.run_adjudicator_agent(case=case, backend="gemini", proposal_json=raw)
+        assert result["proposal"] == raw
+>       assert result["advisory_plan"]["decision"] == "needs_more_evidence"
+E       AssertionError: assert 'reject_blocker' == 'needs_more_evidence'
+E         
+E         - needs_more_evidence
+E         + reject_blocker
+
+tests/test_adjudicator_retro.py:322: AssertionError
+_ test_retrospective_metadata_cannot_upgrade_raw_proposal[True-uphold_blocker] _
+
+decision = 'uphold_blocker', flag = True
+
+    @pytest.mark.parametrize("decision", ["uphold_blocker", "reject_blocker"])
+    @pytest.mark.parametrize("flag", [None, False, True])
+    def test_retrospective_metadata_cannot_upgrade_raw_proposal(decision, flag):
+        case = {"target": "owner/repo#1", "source": "retrospective", **evidence({})}
+        if flag is not None:
+            case["metadata_only"] = flag
+        raw = {**proposal(), "decision": decision}
+        result = roles.run_adjudicator_agent(case=case, backend="gemini", proposal_json=raw)
+        assert result["proposal"] == raw
+>       assert result["advisory_plan"]["decision"] == "needs_more_evidence"
+E       AssertionError: assert 'uphold_blocker' == 'needs_more_evidence'
+E         
+E         - needs_more_evidence
+E         + uphold_blocker
+
+tests/test_adjudicator_retro.py:322: AssertionError
+_ test_retrospective_metadata_cannot_upgrade_raw_proposal[True-reject_blocker] _
+
+decision = 'reject_blocker', flag = True
+
+    @pytest.mark.parametrize("decision", ["uphold_blocker", "reject_blocker"])
+    @pytest.mark.parametrize("flag", [None, False, True])
+    def test_retrospective_metadata_cannot_upgrade_raw_proposal(decision, flag):
+        case = {"target": "owner/repo#1", "source": "retrospective", **evidence({})}
+        if flag is not None:
+            case["metadata_only"] = flag
+        raw = {**proposal(), "decision": decision}
+        result = roles.run_adjudicator_agent(case=case, backend="gemini", proposal_json=raw)
+        assert result["proposal"] == raw
+>       assert result["advisory_plan"]["decision"] == "needs_more_evidence"
+E       AssertionError: assert 'reject_blocker' == 'needs_more_evidence'
+E         
+E         - needs_more_evidence
+E         + reject_blocker
+
+tests/test_adjudicator_retro.py:322: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_adjudicator_retro.py::test_retrospective_metadata_cannot_upgrade_raw_proposal[None-uphold_blocker]
+FAILED tests/test_adjudicator_retro.py::test_retrospective_metadata_cannot_upgrade_raw_proposal[None-reject_blocker]
+FAILED tests/test_adjudicator_retro.py::test_retrospective_metadata_cannot_upgrade_raw_proposal[False-uphold_blocker]
+FAILED tests/test_adjudicator_retro.py::test_retrospective_metadata_cannot_upgrade_raw_proposal[False-reject_blocker]
+FAILED tests/test_adjudicator_retro.py::test_retrospective_metadata_cannot_upgrade_raw_proposal[True-uphold_blocker]
+FAILED tests/test_adjudicator_retro.py::test_retrospective_metadata_cannot_upgrade_raw_proposal[True-reject_blocker]
+6 failed in 0.26s

@@ -61,11 +61,11 @@ class RetrospectiveEvidenceTests(unittest.TestCase):
                 conn.execute(
                     "UPDATE costs SET cost_usd=2,source='ccusage' WHERE run_id='backend-one'"
                 )
-            for durability, truth, agree in (
-                ("reverted", "FAIL", 1),
-                ("broke_later", "FAIL", 1),
-                ("durable", "PASS", 0),
-                ("pending", None, 0),
+            for durability, truth in (
+                ("reverted", "FAIL"),
+                ("broke_later", "FAIL"),
+                ("durable", "PASS"),
+                ("pending", None),
             ):
                 with self.subTest(durability=durability):
                     with sqlite3.connect(db) as conn:
@@ -84,14 +84,14 @@ class RetrospectiveEvidenceTests(unittest.TestCase):
                     assert refreshed["rows"][0]["role_run_id"] == "shadow-role"
                     assert refreshed["rows"][0]["later_truth"] == truth
                     summary = refreshed["summary"]
-                    assert summary["cases"] == summary["adjudicated"] == 1
-                    assert summary["graded"] == int(truth is not None)
-                    assert summary["agree"] == agree
-                    assert summary["disagree"] == int(truth == "PASS")
-                    assert summary["agreement_rate"] == (agree if truth else None)
-                    assert summary["merge_rule_agreement_rate"] == (
-                        int(truth == "PASS") if truth else None
-                    )
+                    assert summary["cases"] == summary["proposed_decisions"] == 1
+                    assert summary["adjudicated"] == summary["graded"] == 0
+                    assert summary["agree"] == summary["disagree"] == 0
+                    assert summary["agreement_rate"] is None
+                    assert summary["merge_rule_agreement_rate"] is None
+                    assert refreshed["rows"][0]["proposal"]["decision"] == "uphold_blocker"
+                    assert refreshed["rows"][0]["disposition"] == "needs_more_evidence"
+                    assert refreshed["rows"][0]["shadow_verdict"] is None
                     assert summary["cost_measured_cases"] == 1
                     assert summary["cost_usd"] == summary["cost_per_case"] == 2
                     with sqlite3.connect(db) as conn:
