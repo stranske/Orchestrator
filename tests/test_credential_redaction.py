@@ -385,12 +385,44 @@ def test_a_token_printed_straight_into_more_letters_is_still_found(tmp_path):
     assert rep["other_github_tokens"]["files"] == 1, "its own 40 characters carry the checksum"
 
 
-def test_the_ambient_env_hint_masks_a_proxy_password(monkeypatch):
-    password = "pw" * 6
-    monkeypatch.setenv("HTTPS_PROXY", f"http://user:{password}@proxy.local:8080")
-    lines = dispatcher._suspicious_net_env()
-    assert any(line.startswith("HTTPS_PROXY=http://user:") for line in lines), lines
-    assert not any(password in line for line in lines), lines
+@pytest.mark.parametrize(
+    "userinfo",
+    ["user:" + "pw" * 6, "user:pw12", "k3y"],
+    ids=["long-password", "short-password", "key-as-username"],
+)
+def test_the_ambient_env_hint_masks_a_proxy_userinfo_of_any_length(monkeypatch, userinfo):
+    """The value is known to be a URL, so the free-text 8-character floor does not apply
+    (CodeRabbit on #496: `http://user:pw12@proxy` kept its password)."""
+    plain = f"HTTPS_PROXY=http://{userinfo}@proxy.local:8080"
+    monkeypatch.setenv("HTTPS_PROXY", plain.split("=", 1)[1])
+    line = next(
+        line for line in dispatcher._suspicious_net_env() if line.startswith("HTTPS_PROXY=")
+    )
+    assert userinfo not in line and line.endswith("@proxy.local:8080"), line
+    assert len(line) == len(plain), "the host and port stay where they were"
+
+
+def test_a_panel_read_is_masked_even_when_the_scrub_fails(monkeypatch, tmp_path, capsys):
+    token = minted("o")
+    out = tmp_path / "eval-out.txt"
+    out.write_text(f"ran it: {token}\n")
+    monkeypatch.setattr(
+        cr,
+        "scrub_file",
+        lambda path, **_k: {"path": str(path), "status": "error", "error": "OSError"},
+    )
+    assert token not in cr.scrub_and_read(out, who="unit panel")
+    assert "unit panel: credential scrub of" in capsys.readouterr().err
+
+
+def test_with_the_kill_switch_a_panel_read_says_it_is_unmasked(monkeypatch, tmp_path, capsys):
+    token = minted("o")
+    out = tmp_path / "eval-out.txt"
+    out.write_text(f"ran it: {token}\n")
+    monkeypatch.setenv(cr.REDACTION_DISABLED_ENV, "1")
+    assert token in cr.scrub_and_read(out, who="unit panel")
+    err = capsys.readouterr().err
+    assert "returned disabled" in err and "kill switch also leaves unmasked" in err
 
 
 # ---- the completion step -----------------------------------------------------------------------
@@ -554,9 +586,18 @@ def _brain_text(db: Path, prefix: str) -> str:
         )
 
 
+@pytest.mark.parametrize("scrub", ["works", "fails"])
 def test_an_experiment_evaluators_output_is_masked_before_it_reaches_the_brain(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, capsys, scrub
 ):
+    """The parse reads the output masked in memory, so even a scrub that failed (it reports a
+    status and never raises) cannot hand the Brain the unmasked file (CodeRabbit on #496)."""
+    if scrub == "fails":
+        monkeypatch.setattr(
+            cr,
+            "scrub_file",
+            lambda path, **_k: {"path": str(path), "status": "error", "error": "OSError"},
+        )
     token = minted("o")
     exp_id = "mask-eval"
     meta = _v2_meta(
@@ -587,7 +628,11 @@ def test_an_experiment_evaluators_output_is_masked_before_it_reaches_the_brain(
     monkeypatch.setattr(exp_abcd.subprocess, "Popen", _fake_popen(payload))
     exp_abcd.evaluate("o/r", str(spec), exp_id, ["claude", "codex", "cursor", "vibe"], timeout=1)
     outs = sorted(edir.glob("eval-out-*.txt"))
-    assert outs and all(token not in p.read_text() for p in outs)
+    assert outs
+    if scrub == "works":
+        assert all(token not in p.read_text() for p in outs)
+    else:
+        assert "credential scrub of" in capsys.readouterr().err, "a failed scrub is said"
     stored = _brain_text(tmp_path / "feedback.db", "evaluations")
     assert "[REDACTED:github-token]" in stored and token not in stored
 

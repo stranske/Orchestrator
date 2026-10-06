@@ -833,9 +833,13 @@ def review(
             except Exception:
                 pass
         out.close()
-        # This evaluator's file alone, masked whole before its findings are parsed into the Brain.
-        credential_redaction.scrub_file(out_path)
-        evaluator_results[ev] = _extract_json(out_path.read_text(errors="replace"))
+        # This evaluator's file alone, masked whole, and read masked before its findings are parsed
+        # into the Brain.
+        evaluator_results[ev] = _extract_json(
+            credential_redaction.scrub_and_read(
+                out_path, who=f"ux review {review_id} evaluator {ev}"
+            )
+        )
 
     try:
         adv_proc.wait(timeout=timeout)
@@ -846,8 +850,11 @@ def review(
         except Exception:
             pass
     adv_out.close()
-    credential_redaction.scrub_file(adv_out_path)
-    adversarial_result = parse_adversarial_output(adv_out_path.read_text(errors="replace"))
+    adversarial_result = parse_adversarial_output(
+        credential_redaction.scrub_and_read(
+            adv_out_path, who=f"ux review {review_id} adversary {adversary}"
+        )
+    )
 
     agg = aggregate_panel(evaluator_results, adversarial_result, len(evaluators), bundle=bundle)
     # Corroborated-consensus set, computed once: the arm labels below are relative to what the

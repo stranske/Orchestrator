@@ -1320,9 +1320,10 @@ def evaluate(
         )
         out.close()
         # The evaluator wrote this file itself and it is this run's alone, so it is masked whole,
-        # before the parse below carries its notes into the Brain.
-        credential_redaction.scrub_file(out_path)
-        parsed = _extract_json(out_path.read_text(errors="replace"))
+        # and the parse below, which carries its notes into the Brain, reads it masked in memory.
+        parsed = _extract_json(
+            credential_redaction.scrub_and_read(out_path, who=f"experiment {exp_id} evaluator {ev}")
+        )
         matrix[ev] = parsed
         for gap in _extract_evidence_gaps(parsed):
             feedback.record_evidence_gap(f"{exp_id}:eval", ev, gap)

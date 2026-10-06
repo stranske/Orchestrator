@@ -16,8 +16,9 @@ THE RULE. One shape list, applied wherever this tool persists or returns an agen
     hint before it logs or returns any of them, and scrubs the per-run agy log it named;
   * `ledger_reconcile.record_completion`, the step a detached run's wrapper runs after the agent
     exits, scrubs that run's own segment of its log in place (dispatches and experiment arms);
-  * the experiment evaluators and the UX-review panel scrub their per-run output file before it is
-    parsed, because the parse is what reaches the Brain.
+  * the experiment evaluators and the UX-review panel scrub their per-run output file, then parse
+    it masked in memory (`scrub_and_read`), because the parse is what reaches the Brain and a
+    scrub that failed must not hand it the unmasked file.
 
 A mask is exactly as long as what it hides: `[REDACTED:<kind>]` padded with `*`, line breaks kept.
 That is what makes an in-place edit safe in a log another process may still be appending to: no
@@ -355,6 +356,38 @@ def scrub_file(path: str | Path, *, run_id: str | None = None) -> dict:
     if counts:
         result.update(status="scrubbed", redacted=sum(counts.values()), kinds=counts)
     return result
+
+
+def scrub_and_read(path: str | Path, *, who: str) -> str:
+    """Scrub a file written for one run, then return its text MASKED IN MEMORY for a parser.
+
+    For the panels whose parse reaches the Brain. `scrub_file` never raises, so a failed scrub
+    (`error`, `too_large`) would otherwise hand the parser the unmasked file; masking the text
+    read back closes that, and a status other than `clean` or `scrubbed` is said on stderr, the
+    kill switch's `disabled` included, so an unmasked output never lands unannounced."""
+    result = scrub_file(path)
+    if result["status"] not in ("clean", "scrubbed"):
+        detail = f" ({result['error']})" if result.get("error") else ""
+        print(
+            f"warn: {who}: credential scrub of {path} returned {result['status']}{detail}; "
+            "parsing text masked in memory"
+            + (", which the kill switch also leaves unmasked" if disabled() else ""),
+            file=sys.stderr,
+        )
+    return redact(Path(path).read_text(errors="replace"))
+
+
+def mask_url_userinfo(text: str) -> str:
+    """Mask the WHOLE userinfo of every `scheme://userinfo@host` in `text`, at any length.
+
+    For a value KNOWN to be a URL, such as a proxy variable. The free-text `url-password` shape
+    needs 8 characters so prose is never masked, which would let `http://user:pw12@proxy` keep its
+    password; a proxy URL is not prose. Same-length mask, so the host and port stay readable."""
+    if disabled():
+        return text
+    return re.sub(
+        r"(?<=://)[^/@\s]+(?=@)", lambda m: _mask(m.group(0), "url-userinfo"), text, flags=re.A
+    )
 
 
 def describe(counts: Mapping[str, int]) -> str:

@@ -482,8 +482,13 @@ def _suspicious_net_env() -> list[str]:
         "NODE_EXTRA_CA_CERTS",
         "NODE_OPTIONS",
     )
-    # A proxy URL can carry `user:password@`, and these lines go to the log and the caller.
-    return [credential_redaction.redact(f"{n}={os.environ[n]}") for n in names if os.environ.get(n)]
+    # A proxy URL can carry `user:password@`, and these lines go to the log and the caller. The
+    # value is known to be a URL, so its whole userinfo is masked at any length, before the shapes.
+    return [
+        credential_redaction.redact(credential_redaction.mask_url_userinfo(f"{n}={os.environ[n]}"))
+        for n in names
+        if os.environ.get(n)
+    ]
 
 
 def _runtime_link(src: Path, dst: Path) -> None:
