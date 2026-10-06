@@ -186,6 +186,23 @@ worktree's git dir, plus the canonical clone's `objects/`, `refs/` and `logs/`
 in place. Offloads, read-only runs and the outer-seat bypass get nothing, and the clone's `config`
 and `hooks/` are never granted. No stage, component or surface moved, so the diagram is unchanged.
 
+**No agent run is given a workspace that is or holds `/`, the home dir or the control plane
+(2026-10-05).** A run's workspace is where it may write. codex makes `--cd` a write entry of the
+run's own permission profile, so `writable_roots` cannot narrow it. agy's `--add-dir` is its write
+guard. cursor, claude and vibe have no sandbox and work in the process cwd. The tick runs from
+launchd with cwd `/`, and a role offloads with `cwd="."` unless it has a worktree, so 1,521 offloads
+ran in `/` from 2026-07-10 to 2026-10-02 (gemini 1,279, cursor 224, codex 18; 1,513 were redirect or
+triage role runs), each able to write the whole disk. `adapters.broad_workspace_reason` is the one
+predicate. It refuses `/`, the home dir, `~/.codex`, `~/.claude`, the state dir, the local runtime
+and the exec mirror, and any directory containing one of them. It compares the spelling and, for
+case variants, the directory identity. `dispatcher.offload` replaces a refused workspace before
+isolation with a fresh scratch directory under `$ORCH_STATE_DIR/scratch-workspaces`
+(`adapters.agent_workspace`). The run still starts. The relocation goes to stderr, the dispatch log,
+the agent's prompt, the result's `workspace_relocated` and the ledger's `workspace_relocated_from`.
+`plan_dispatch` skips a refused provisioned worktree like a provision failure, because a committing
+run cannot work in scratch. `build_command` refuses to emit one for a writable codex run or for agy,
+whoever calls it. (No stage, component or surface moved; the diagram is unchanged.)
+
 The dispatcher's agent prelude moves `XDG_CONFIG_HOME` into each agent's runtime, and gh honours
 it. Until 2026-10-04 an agent whose dispatcher exported neither `GH_CONFIG_DIR` nor `GH_TOKEN` (a
 delegate or offload started from a session, a lane or the check-in runner) read an empty config
@@ -490,6 +507,15 @@ on every branch. Direct entry follows the same rule: the dispatcher-derived map 
 the ledger, so a retired target is not offered as `entered_directly`. Latent when fixed (the ledger's
 one not-live row was bound nowhere), but a clean runner has 31 bound ids with no ledger row, which the
 classified path had been counting as bound.
+
+**A row the code declares exists from the first writing load (2026-10-06).** Every writing load seeds
+each `KNOWN_GATES` entry and each `KNOWN_DECLARATIONS` entry that declares a status
+(`capabilities.declared_row_ids`), at its declared status and never `active`, so a declared capability
+lacks its row on a machine only until that machine's first tick of the tree. Until then such a row
+was registered only by a caller its own module wrote, which ran only after deployment. For
+`value-chain-monitor` that made the pre-sync verdict refuse the very sync that would deploy the
+caller (`docs/MIRROR_SYNC_PATCH.md`). (No stage, component or surface moved; the diagram is
+unchanged.)
 
 **And a binding is only half of layer 1: `CONSULT_SITES` is the other half, and nothing declared it
 until 2026-08-23.** `SURFACE_BINDINGS` says which capabilities a surface should be offered; nothing

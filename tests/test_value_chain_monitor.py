@@ -1,7 +1,11 @@
 """Independent demand and first-break regressions, including the real weekly consumer."""
 
 import json
+import os
 
+import pytest
+
+import adversarial
 import capabilities
 import capability_admission
 import capability_advisor
@@ -9,6 +13,27 @@ import switch_review
 import value_chain_monitor as monitor
 
 NOW = 1791183600
+
+
+@pytest.fixture(autouse=True)
+def isolated_adversarial_population(monkeypatch):
+    """Value-chain fixtures do not exercise the independent live fleet collector."""
+    # The weekly CLI also scans the owner's runtime/log files. That independent
+    # exposure report has its own tests and must not read real credentials here.
+    monkeypatch.setenv("ORCH_CREDENTIAL_EXPOSURE_SCAN", "0")
+    monkeypatch.setattr(
+        switch_review,
+        "_GH_CALL_RUNNER",
+        lambda *args, **kwargs: (False, "", "unmeasured: independent unit-test fixture"),
+    )
+    disabled = os.environ.get("ORCH_DISABLE_STEPS", "")
+    monkeypatch.setenv("ORCH_DISABLE_STEPS", disabled + ",issue-size-quality")
+    monkeypatch.setattr(adversarial, "record_shape_measurement", lambda *args, **kw: False)
+    monkeypatch.setattr(
+        switch_review,
+        "adversarial_shape_population",
+        lambda **kw: {"status": "unknown", "reason": "unit-test fixture"},
+    )
 
 
 def ledger(tmp_path, names=("role-prompt",)):
@@ -317,8 +342,9 @@ def test_new_capability_has_all_nine_admission_parts(tmp_path, monkeypatch, caps
     assert not incomplete["ready_to_build"], incomplete
     assert "dedup_recorded" in incomplete["declarable_missing"]
 
-    # Exercise the weekly caller: direct registration cannot prove it introduces
-    # the row before collection, credits the real run, or tolerates the next week.
+    # Exercise the weekly caller as an active tick runs it. The tick's first command is a writing
+    # load, which registers the declared row (2026-10-06); the caller itself registers nothing,
+    # and must credit the real run and tolerate the next week.
     path = ledger(tmp_path, ("switch-review",))
     monkeypatch.setattr(capabilities, "REG", path)
     register = capabilities.register
@@ -360,6 +386,13 @@ def test_new_capability_has_all_nine_admission_parts(tmp_path, monkeypatch, caps
     assert path.read_bytes() == before
     assert registrations == []
 
+    # The tick's first command, `capabilities.py --json validate`: its writing load seeds the row at
+    # the declared status, recording who registered it, and never as active.
+    assert capabilities.validate_ledger(path)["valid"]
+    seeded = capabilities.load(path, create=False)["value-chain-monitor"]
+    assert seeded["status"] == capabilities.KNOWN_DECLARATIONS["value-chain-monitor"]["status"]
+    assert [e["type"] for e in seeded["event_history"]] == [capabilities.DECLARED_ROW_EVENT]
+
     monkeypatch.setenv("ORCH_CAPABILITY_HEARTBEATS", "1")
     for invocation_count in (1, 2):
         assert switch_review.main(["--env", "process", "--json"]) == 0
@@ -367,7 +400,7 @@ def test_new_capability_has_all_nine_admission_parts(tmp_path, monkeypatch, caps
         assert not section["errors"], section
         monitored = next(r for r in section["rows"] if r["capability"] == "value-chain-monitor")
         assert monitored["invocation_count"] == invocation_count
-    assert registrations == ["value-chain-monitor"]
+    assert registrations == [], "the weekly caller registers nothing; the declaration does"
     assert registered_at_collection == [False, True, True]
     events = capabilities.load_declared(path)["value-chain-monitor"]["event_history"]
     assert sum(e["type"] == "invocation" for e in events) == 2
@@ -452,28 +485,29 @@ def test_monitor_report_error_remains_visible(tmp_path, monkeypatch):
     assert "fixture malformed event" in switch_review.format_report(rep)
 
 
-def test_weekly_registration_and_collection_errors_remain_visible(monkeypatch, capsys):
-    for failed_stage in ("registration", "collection"):
-        with monkeypatch.context() as patch:
-            patch.setenv("ORCH_CAPABILITY_HEARTBEATS", "1")
-            patch.setenv("ORCH_VALUE_CHAIN_MONITOR", "1")
-            patch.setattr(capabilities, "load_declared", lambda *args: {})
+def test_weekly_collection_errors_remain_visible(monkeypatch, capsys):
+    # Registration is no longer this caller's stage (2026-10-06): the declared row is seeded by the
+    # writing load an active tick makes first, whose failure aborts the tick and refuses a sync.
+    # The caller must still surface a collection failure, and must not register on the way.
+    with monkeypatch.context() as patch:
+        patch.setenv("ORCH_CAPABILITY_HEARTBEATS", "1")
+        patch.setenv("ORCH_VALUE_CHAIN_MONITOR", "1")
+        patch.setattr(capabilities, "load_declared", lambda *args: {})
 
-            def register(*args):
-                if failed_stage == "registration":
-                    raise OSError("fixture registration failure")
+        def register(*args):
+            raise AssertionError("the weekly caller registered a row")
 
-            patch.setattr(capabilities, "register", register)
-            patch.setattr(
-                monitor,
-                "collect_inputs",
-                lambda **kw: (_ for _ in ()).throw(ValueError("fixture collection failure")),
-            )
-            patch.setattr(
-                switch_review, "review", lambda **kw: {"errors": kw["value_chain_inputs"]["errors"]}
-            )
-            assert switch_review.main(["--env", "process", "--json"]) == 0
-            assert "fixture " + failed_stage + " failure" in capsys.readouterr().out
+        patch.setattr(capabilities, "register", register)
+        patch.setattr(
+            monitor,
+            "collect_inputs",
+            lambda **kw: (_ for _ in ()).throw(ValueError("fixture collection failure")),
+        )
+        patch.setattr(
+            switch_review, "review", lambda **kw: {"errors": kw["value_chain_inputs"]["errors"]}
+        )
+        assert switch_review.main(["--env", "process", "--json"]) == 0
+        assert "fixture collection failure" in capsys.readouterr().out
 
 
 def test_input_off_reads_nested_declared_defaults(tmp_path):

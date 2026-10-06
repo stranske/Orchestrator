@@ -870,9 +870,9 @@ def _selftest() -> None:
         prepared_source_hashes = {
             name: proof["aggregate_sha256"] for name, proof in prepared["source_before"].items()
         }
-        assert prepared_source_hashes == recomputed_source_hashes, (
-            "prepare source-integrity proof did not validate"
-        )
+        assert (
+            prepared_source_hashes == recomputed_source_hashes
+        ), "prepare source-integrity proof did not validate"
         try:
             validate_trial_manifest(prepared)
         except ValueError as exc:
@@ -883,9 +883,9 @@ def _selftest() -> None:
         try:
             validate_trial_manifest(tampered)
         except ValueError as exc:
-            assert str(exc) == "trial packet hash does not match frozen packet", (
-                f"tampered packet rejection did not name its integrity failure: {exc}"
-            )
+            assert (
+                str(exc) == "trial packet hash does not match frozen packet"
+            ), f"tampered packet rejection did not name its integrity failure: {exc}"
         else:
             raise AssertionError("validation accepted a packet altered after proof computation")
 
@@ -946,9 +946,9 @@ def _selftest() -> None:
             record_feedback=False,
             now=2_000,
         )
-        assert state["source_integrity"]["unchanged"] is True, (
-            "prepared state did not preserve its source-integrity proof"
-        )
+        assert (
+            state["source_integrity"]["unchanged"] is True
+        ), "prepared state did not preserve its source-integrity proof"
 
         state_before_report = state_path.read_bytes()
         report = build_report(state_path)
