@@ -1,6 +1,6 @@
 {
- "collected": 2496,
- "passed": 2496,
+ "collected": 2498,
+ "passed": 2498,
  "skipped_max": 26,
  "mirror_skipped_max": 21,
  "bare_mirror_skipped_max": 47,
@@ -9,5 +9,5 @@
  "selftest_skipped_max": 7,
  "gate_skipped_max": 2,
  "mypy_exempt_max": 0,
- "note": "Integrates exactmain b6be66c917ef868ba3cabbc3034fb9a5248fd399 after503; all quality ceilings retained; full fresh verifier measured on final integration follows. FLOOR RECORDED by verify.py --update-floor on 2026-10-06: collected=2496, passed=2496. Ceilings preserved, never re-measured \u2014 they are edited by hand."
+ "note": "Exact main 4267123e50a59029fb63b85fb7bfa04381676fec integrated. Full private run executed2496 PASS,103 selftests and5 gates; update-floor raised prior2460 to2496 with every ceiling preserved. Final malformed empty/scalar cost guard adds2 collected nodes: exact final collection2498; all44 affected focused cases PASS. Floor2498 is the stricter union of executed nodes, not a claim that final full verification ran; fresh CI remains required."
 }
