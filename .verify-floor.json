@@ -1,6 +1,6 @@
 {
-  "collected": 2374,
-  "passed": 2330,
+  "collected": 2376,
+  "passed": 2332,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 47,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Integrates current main13c64945787c75b6037eb48889ebd71ccd270c44; only newer main difference was measured floor, with source unchanged; retains exact collection2374 and executed passed floor2330. Previous current-source tests remain applicable; full merge-result CI pending. Quality ceilings unchanged."
+  "note": "Integrates main 69f3bbb8d5ef8aaa7edbb24ba606d9543145e52f. Expected collection is 2376: main's recorded 2332 plus 44 PR strategy tests, equivalently the PR's 2374 plus main's two new missing-fact tests. Retains main's measured passed floor of 2332. Merge-result collection and execution still require CI verification; quality ceilings unchanged."
 }
