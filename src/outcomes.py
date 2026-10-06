@@ -53,6 +53,7 @@ import base64
 import binascii
 import json
 import re
+import sqlite3
 import subprocess
 import sys
 import time
@@ -1087,6 +1088,90 @@ def _pending_durability_detail(run: dict) -> dict:
         "target": run["target"],
         "durability": run.get("existing_durability") or "pending",
     }
+
+
+def backfill_triage_disagreements(*, limit: int = 100, _state_fn=None) -> dict:
+    """Resolve rejected triage edges observationally, never turn them into accepted credit.
+
+    The historical population is measured now, rather than assuming the old
+    issue's count still holds. Existing attribution guards decide whose PR it
+    was; a merge stays pending until the normal durability sweep judges it.
+    """
+    with feedback._conn() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT e.edge_id,r.* FROM influence_edges e "
+                "JOIN runs s ON s.run_id=e.source_run_id JOIN runs r ON r.run_id=e.target_run_id "
+                "WHERE s.role_name='triage' AND e.influence_type='role' AND e.accepted=0 "
+                "AND e.counterfactual=1 AND e.outcome_verdict IS NULL AND r.mode != 'role' "
+                "ORDER BY e.created_ts LIMIT ?",
+                (max(0, limit),),
+            )
+        ]
+    result: dict = {"source": "backfill", "candidates": len(rows), "graded": [], "pending": []}
+    for row in rows:
+        if _state_fn:
+            state = _state_fn(row["target"])
+        elif is_local_delegate(row.get("mode"), row.get("target")):
+            state = _local_pr_state(
+                row["target"], row.get("agent"), pushes=feedback.run_pushes(row["run_id"])
+            )
+        elif needs_delegation_guard(row.get("source")):
+            state = _delegated_pr_state(row["target"], row.get("agent"), row.get("ts"))
+        else:
+            state = _pr_state(row["target"], row.get("agent"))
+        observed = state_to_outcome(state)
+        if observed is None:
+            result["pending"].append({"target": row["target"], "state": state})
+            continue
+        with feedback._conn() as conn:
+            # Revalidate the edge after the network read; another ingest may have graded it.
+            current = conn.execute(
+                "SELECT accepted,outcome_verdict FROM influence_edges WHERE edge_id=?",
+                (row["edge_id"],),
+            ).fetchone()
+            if not current or current[0] or current[1] is not None:
+                continue
+            existing = conn.execute(
+                "SELECT durability FROM outcomes WHERE run_id=?", (row["run_id"],)
+            ).fetchone()
+            if existing:
+                stored = conn.execute(
+                    "SELECT adjudicated_verdict,verifier_verdict,merged,durability,failure_class "
+                    "FROM outcomes WHERE run_id=?",
+                    (row["run_id"],),
+                ).fetchone()
+                verdict = stored[0] or stored[1]
+                merged, durability, failure_class = stored[2], stored[3], stored[4]
+            else:
+                observed["notes"] = "source=backfill; triage disagreement; " + observed.get(
+                    "notes", ""
+                )
+                feedback._record_outcome_in_conn(conn, row["run_id"], **observed)
+                verdict = observed.get("adjudicated_verdict") or observed.get("verifier_verdict")
+                merged, durability, failure_class = (
+                    observed.get("merged"),
+                    observed.get("durability"),
+                    observed.get("failure_class"),
+                )
+            if failure_class in feedback.LEARNING_EXCLUDED_FAILURE_CLASSES:
+                verdict = "UNATTRIBUTED"
+            conn.execute(
+                "UPDATE influence_edges SET outcome_verdict=?,merged=?,durability=?,propagated_ts=? "
+                "WHERE edge_id=? AND accepted=0 AND outcome_verdict IS NULL",
+                (verdict, merged, durability, int(time.time()), row["edge_id"]),
+            )
+        result["graded"].append(
+            {
+                "target": row["target"],
+                "verdict": verdict,
+                "durability": durability,
+                "accepted": False,
+            }
+        )
+    return result
 
 
 def ingest_outcomes(mode: str = "remote", dry_run: bool = False, _state_fn=None) -> dict:

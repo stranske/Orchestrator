@@ -131,6 +131,26 @@ Verdicts (ACTIVE / gated / CLI-only) reflect the 2026-07-08 dormancy re-scan; re
 refresh. "Gated" = code is live but a default-OFF `ORCH_*` flag holds it back — an intentional
 safety switch, not dead code.
 
+### Opener triage shadow
+
+`triage_shadow.py` extends the existing TriageAgent role. Each active cycle reads
+priority-labelled issues across the sixteen supported repos, excludes current
+scoped holds and open PR linkages, and records the model's top three beside the
+opener's priority/oldest rule. The rule and worker dispatch remain unchanged.
+`ORCH_TRIAGE_SHADOW=0` disables this observation. Search or linkage failures are
+UNKNOWN and spend no role invocation. Proposal replay is labelled and never
+scored as a production comparison. The weekly switch review prints both arms'
+merged-and-durable rates with their judged denominators; pending durability is
+unmeasured. Repeated candidate cycles are observations, not independent tasks.
+
+`python3 src/triage_shadow.py --backfill` also resolves the *current* ungraded
+triage disagreement population with the existing outcome attribution guards.
+The issue's historical count is not a target count: migrations and intervening
+delivery can change it. Rejected edges stay rejected; a merge records pending
+durability, and unavailable GitHub evidence stays pending. This observes local
+state and uses read-only GitHub calls; it never labels, claims or delegates work.
+The model role uses the existing read-only offload transport and a private cwd.
+
 ### The tick (hourly `orchestrate.sh --active`)
 1. **capacity.py** — per-seat budget/policy across 5h + weekly quota windows (steady/reserve/drain),
    plus two **dispatchability gates that run before any budget math**: a seat sheds if its CLI
