@@ -17,6 +17,10 @@ production duels.
 > `Code/Audits/Orchestrator/2026-07-08-dormancy-rescan.md`; current activation truth is generated
 > from the local capability ledger with `python3 src/capabilities.py inventory`.
 
+The existing codemod/range rails accept a versioned add-only gitignore campaign: format-validated
+per-repo work orders, exact-target previews, guarded one-off dispatch, and attributed outcome
+reporting. See [the campaign contract](docs/CODEMOD_CAMPAIGN.md).
+
 ## How it runs (execution topology)
 
 ```
