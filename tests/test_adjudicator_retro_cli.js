@@ -127,6 +127,21 @@ test('retro CLI preserves raw proposals without grading metadata and refreshes m
     cost_usd: 4.5, cost_measured_cases: 4, cost_per_case: 1.125,
   });
   const report = w.report();
+  assert.deepEqual(report.proposal_comparison, {
+    evidence_basis: 'raw_metadata_proposals', cases: 6, proposed_decisions: 4,
+    compared: 3, pending_truth: 1, missing_merge_disposition: 0, abstained: 1, unassessed: 1,
+    agree: 2, disagree: 1, agreement_rate: 2 / 3,
+    merge_rule_agree: 1, merge_rule_disagree: 2, merge_rule_agreement_rate: 1 / 3,
+    cost_usd: 4.5, cost_measured_cases: 4, cost_per_case: 1.125,
+  });
+  assert.deepEqual(report.rows.map((row) => row.proposal_comparison), [
+    { verdict: 'PASS', agrees: true, merge_rule_agrees: true },
+    { verdict: 'FAIL', agrees: true, merge_rule_agrees: false },
+    { verdict: 'PASS', agrees: false, merge_rule_agrees: false },
+    { verdict: 'FAIL', agrees: null, merge_rule_agrees: null },
+    { verdict: null, agrees: null, merge_rule_agrees: null },
+    { verdict: null, agrees: null, merge_rule_agrees: null },
+  ]);
   assert.deepEqual(report.summary, summary, 'the CLI and persisted report must agree');
   assert.equal(report.population, 0);
   assert.equal(report.shadow, true);
@@ -180,10 +195,42 @@ print(json.dumps(True))
     cost_usd: 5.25, cost_measured_cases: 5, cost_per_case: 1.05,
   });
   assert.deepEqual(w.report().summary, summary);
+  assert.deepEqual(w.report().proposal_comparison, {
+    evidence_basis: 'raw_metadata_proposals', cases: 6, proposed_decisions: 4,
+    compared: 4, pending_truth: 0, missing_merge_disposition: 0, abstained: 1, unassessed: 1,
+    agree: 2, disagree: 2, agreement_rate: 0.5,
+    merge_rule_agree: 2, merge_rule_disagree: 2, merge_rule_agreement_rate: 0.5,
+    cost_usd: 5.25, cost_measured_cases: 5, cost_per_case: 1.05,
+  });
   assert.deepEqual(w.report().rows.map((row) => [row.case_id, row.role_run_id]), identities);
   assert.deepEqual(w.brain(), before);
   assert.deepEqual(w.refresh(), summary, 'a second process must not duplicate saved cases');
   assert.deepEqual(w.brain(), before);
+
+  // Refresh baseline facts too: unknown or deleted outcomes cannot keep stale comparisons.
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("UPDATE outcomes SET merged=NULL WHERE run_id='original-0'")
+    conn.execute("UPDATE outcomes SET merged=0 WHERE run_id='original-1'")
+    conn.execute("DELETE FROM outcomes WHERE run_id='original-2'")
+print(json.dumps(True))
+`]);
+  const changedBrain = w.brain();
+  w.refresh();
+  assert.deepEqual(w.report().proposal_comparison, {
+    evidence_basis: 'raw_metadata_proposals', cases: 6, proposed_decisions: 4,
+    compared: 2, pending_truth: 1, missing_merge_disposition: 1, abstained: 1, unassessed: 1,
+    agree: 1, disagree: 1, agreement_rate: 0.5,
+    merge_rule_agree: 2, merge_rule_disagree: 0, merge_rule_agreement_rate: 1,
+    cost_usd: 5.25, cost_measured_cases: 5, cost_per_case: 1.05,
+  });
+  assert.equal(w.report().rows[0].merge_rule_verdict, null);
+  assert.equal(w.report().rows[0].proposal_comparison.agrees, null);
+  assert.equal(w.report().rows[1].merge_rule_verdict, 'FAIL');
+  assert.equal(w.report().rows[2].later_truth, null);
+  assert.deepEqual(w.brain(), changedBrain);
 });
 
 test('retro CLI publishes an empty report without inventing agreement or cost', (t) => {
@@ -199,5 +246,12 @@ test('retro CLI publishes an empty report without inventing agreement or cost', 
   });
   assert.deepEqual(w.report().summary, summary);
   assert.deepEqual(w.report().rows, []);
+  assert.deepEqual(w.report().proposal_comparison, {
+    evidence_basis: 'raw_metadata_proposals', cases: 0, proposed_decisions: 0,
+    compared: 0, pending_truth: 0, missing_merge_disposition: 0, abstained: 0, unassessed: 0,
+    agree: 0, disagree: 0, agreement_rate: null,
+    merge_rule_agree: 0, merge_rule_disagree: 0, merge_rule_agreement_rate: null,
+    cost_usd: null, cost_measured_cases: 0, cost_per_case: null,
+  });
   assert.deepEqual(w.brain(), before);
 });

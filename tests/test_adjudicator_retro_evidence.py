@@ -185,6 +185,9 @@ class RetrospectiveEvidenceTests(unittest.TestCase):
             for durability, truth in (
                 ("reverted", "FAIL"),
                 ("broke_later", "FAIL"),
+                ("reopened", "FAIL"),
+                ("abandoned", "FAIL"),
+                ("reworked", "FAIL"),
                 ("durable", "PASS"),
                 ("pending", None),
             ):
@@ -215,6 +218,26 @@ class RetrospectiveEvidenceTests(unittest.TestCase):
                     assert refreshed["rows"][0]["shadow_verdict"] is None
                     assert summary["cost_measured_cases"] == 1
                     assert summary["cost_usd"] == summary["cost_per_case"] == 2
+                    comparison = refreshed["proposal_comparison"]
+                    assert comparison["evidence_basis"] == "raw_metadata_proposals"
+                    assert comparison["cases"] == comparison["proposed_decisions"] == 1
+                    assert comparison["compared"] == int(truth is not None)
+                    assert comparison["pending_truth"] == int(truth is None)
+                    assert comparison["agree"] == int(truth == "FAIL")
+                    assert comparison["disagree"] == int(truth == "PASS")
+                    assert comparison["agreement_rate"] == (
+                        float(truth == "FAIL") if truth else None
+                    )
+                    assert comparison["merge_rule_agreement_rate"] == (
+                        float(truth == "PASS") if truth else None
+                    )
+                    assert comparison["cost_measured_cases"] == 1
+                    assert comparison["cost_usd"] == comparison["cost_per_case"] == 2
+                    assert refreshed["rows"][0]["proposal_comparison"] == {
+                        "verdict": "FAIL",
+                        "agrees": truth == "FAIL" if truth else None,
+                        "merge_rule_agrees": truth == "PASS" if truth else None,
+                    }
                     with sqlite3.connect(db) as conn:
                         after = conn.execute("SELECT * FROM outcomes ORDER BY run_id").fetchall()
                         assert after == before
