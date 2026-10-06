@@ -548,6 +548,7 @@ def main(argv: list[str] | None = None) -> int:
             codemod_lane.campaign_program_path(campaign), rollout["campaign"]
         )
     if args.apply:
+        dispatched = 0
         decision = rollout.get("decision") or {}
         if not rollout.get("eligible") or not decision.get("assignments"):
             result = {**rollout, "dispatch_result": {"count": 0, "blocked": True}}
@@ -595,7 +596,7 @@ def main(argv: list[str] | None = None) -> int:
                     ref=str(router.DECISION_JSON),
                     metadata={"dispatched": dispatched},
                 )
-        if campaign is not None:
+        if campaign is not None and (args.record_campaign or dispatched > 0):
             program = rollout["campaign"]
             for launched in result.get("dispatch_result", {}).get("launched") or []:
                 repo = str(launched.get("target", "")).split("#", 1)[0]

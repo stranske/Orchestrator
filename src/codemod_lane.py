@@ -411,7 +411,7 @@ def file_targets(campaign: dict[str, Any], *, gh: Any = None) -> dict[str, Any]:
                 "number,body,state,url",
             ]
         )
-        matches = [i for i in issues if marker in i["body"]]
+        matches = [i for i in issues if marker in (i.get("body") or "")]
         if len(matches) > 1 or len(issues) >= 100:
             raise ValueError(f"ambiguous or incomplete campaign issue discovery for {repo}")
         body = target_issue_body(campaign, repo, content)
@@ -527,7 +527,7 @@ def campaign_backlog(campaign: dict[str, Any], *, gh: Any = None) -> dict[str, A
             ["issue", "view", number, "--repo", repo, "--json", "number,state,body,title,labels"]
         )
         marker = f"<!-- codemod-campaign:{campaign['campaign']['id']} -->"
-        if marker not in issue["body"]:
+        if marker not in (issue.get("body") or ""):
             raise ValueError(f"campaign provenance missing: {row['target']}")
         prs = gh(
             [

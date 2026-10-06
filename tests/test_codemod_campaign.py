@@ -327,3 +327,58 @@ def test_invalid_campaign_cannot_broaden_scope(campaign):
     broken = copy.deepcopy(campaign)
     broken["campaign"]["repos"].append(broken["campaign"]["repos"][0])
     assert lane.validate_campaign(broken)
+
+
+@pytest.mark.parametrize("empty", [{"body": None}, {}])
+def test_empty_issue_bodies_cannot_crash_campaign_discovery(campaign, github, empty):
+    gh, _calls, _ignores, _issues = github
+
+    def with_empty_issue(args):
+        result = gh(args)
+        if args[:2] == ["issue", "list"]:
+            return [*result, {"number": 999, **empty}]
+        return result
+
+    program = lane.file_targets(campaign, gh=with_empty_issue)
+    assert len(program["repos"]) == len(campaign["campaign"]["repos"])
+
+
+@pytest.mark.parametrize("empty", [{"body": None}, {}])
+def test_empty_target_body_is_missing_provenance(campaign, github, empty):
+    gh, _calls, _ignores, issues = github
+    lane.file_targets(campaign, gh=gh)
+    row = next(iter(issues.values()))
+    row.pop("body")
+    row.update(empty)
+    with pytest.raises(ValueError, match="campaign provenance missing"):
+        lane.campaign_backlog(campaign, gh=gh)
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_blocked_apply_preserves_preview_receipt_without_explicit_record(
+    campaign, tmp_path, monkeypatch, capsys, explicit
+):
+    campaign_path = tmp_path / "campaign.json"
+    campaign_path.write_text(json.dumps(campaign))
+    monkeypatch.setenv(rollout.ENV_FLAG, "1")
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        rollout,
+        "build_rollout",
+        lambda **kwargs: {
+            "campaign": {"campaign_id": campaign["campaign"]["id"], "repos": {}},
+            "eligible": False,
+            "decision": {"assignments": []},
+        },
+    )
+    writes = []
+    monkeypatch.setattr(lane, "_write_program", lambda *args: writes.append(args))
+    monkeypatch.setattr(
+        rollout.dispatcher, "run", lambda **kwargs: pytest.fail("blocked apply dispatched")
+    )
+    argv = ["--apply", "--confirm-rollout", "--campaign", str(campaign_path), "--json"]
+    if explicit:
+        argv.append("--record-campaign")
+    assert rollout.main(argv) == 0
+    assert json.loads(capsys.readouterr().out)["dispatch_result"]["blocked"]
+    assert bool(writes) is explicit
