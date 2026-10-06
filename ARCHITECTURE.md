@@ -141,6 +141,21 @@ applied; a failed POST still consumes the spend bound but leaves its target unow
 again. (No stage,
 component or surface moved; the diagram is unchanged.)
 
+**The rejected-role edges written for refusals are deleted once (2026-10-05).** Before that change
+the tick wrote its rejected-role edge for every row, and a refusal records no run. The Brain held 210
+such edges. The tick logs place 208 of them in a tick that refused the target: 78 point at a run
+nothing recorded, 25 were written before the run's first recording and linked by its back-fill, and
+105 were written by later ticks that refused a target its delegation had left owned. Each says a role
+was overruled by a run that never saw it. A one-time data migration in `feedback.py`
+(`influence_edges.refusal-role-edges-2026-10-05`) deletes those rows and keeps an edge written within
+300 s after a recording of its run. `runs.ts` holds only the latest recording, so the first is read
+from the run's completion events. It selects only the tick's own rows: role, `remote:` target,
+rejected, no capability, the tick's metadata hash. The 2 edges from delegating ticks stay. The
+deleted rows are kept in the migration's marker, and `feedback.py restore-refusal-role-edges` puts
+them back. `completion_event_health` orphans fall from 298 to 220. The rest are capability edges, so
+`dry_seam_audit` still fails on them. (No stage, component or surface moved; the diagram is
+unchanged.)
+
 The adapter also decides each codex run's writable boundary. A run whose job is to commit (a
 dispatch from `plan_dispatch`, or an experiment arm) gets `--add-dir` for exactly its linked
 worktree's git dir, plus the canonical clone's `objects/`, `refs/` and `logs/`
@@ -261,6 +276,18 @@ with ledger invocations and existing Brain influence edges, naming the earliest 
 step and input switches held off. Unknown demand never becomes zero. It changes no
 selection, gate, dispatcher or lifecycle decision; the existing weekly artifact carries
 the section rather than a second audit log or inventory.
+
+The same weekly artifact reports adversarial high-stakes demand from `fleet_shapes`' exact
+merged-agent population: workflow/metadata and auth/data paths, or the single 500-line
+size threshold, beside the independent label count. Raw paths are counted before top-three
+shape grouping, so a small auth change cannot vanish behind docs/tests/scripts. Missing
+facts stay unmeasured; measured zero is printed as zero. The production weekly caller
+records one match observation per UTC week in the existing capability ledger, never a
+review invocation or usefulness verdict. The advisor's shape probe stays unknown until
+two complete observations of the same rule are at least seven days apart and the latest
+is at most eight days old. Label matching remains a second route after that shadow gate;
+`adversarial.main`, the closer's existing label/title matcher and merge authority do not change.
+
 
 ## The feedback loop closes over both surfaces
 
