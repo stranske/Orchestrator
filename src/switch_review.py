@@ -1715,6 +1715,9 @@ def format_report(rep: dict) -> str:
     if rep.get("adjudicator_shadow"):
         lines += [rep["adjudicator_shadow"], ""]
     lines += [adversarial_shape_line(rep.get("adversarial_shape", {})), ""]
+    import triage_shadow
+
+    lines += [triage_shadow.summary_line(), ""]
     if rep.get("value_chain") and not rep["value_chain"].get("disabled"):
         import value_chain_monitor
 
