@@ -36,7 +36,6 @@ import difflib
 import json
 import pathlib
 import re
-import subprocess
 import sys
 import time
 from typing import Any
@@ -634,7 +633,7 @@ def advise(
                 "by_entry_mode": {},
             },
             "precondition": _annotate_preconditions(
-                [], repository, repo_path, pr_facts=pr_facts, pr=pr
+                [], repository, repo_path, pr_facts=pr_facts, pr=pr, ledger_path=path
             ),
             "surface_template": unsubstituted_surface(surface) or None,
             "surface_status": surface_state,
@@ -670,7 +669,7 @@ def advise(
                 for cid, why in live
             ]
             precondition = _annotate_preconditions(
-                entries, repository, repo_path, pr_facts=pr_facts, pr=pr
+                entries, repository, repo_path, pr_facts=pr_facts, pr=pr, ledger_path=path
             )
             entries, withheld_fact_missing = _apply_withhold_for_missing_pr_facts(
                 entries, precondition, surface=surface or skill
@@ -777,7 +776,7 @@ def advise(
             "bound_not_live": binding["not_live"],
             "bound_unregistered": binding["unregistered"],
             "precondition": _annotate_preconditions(
-                [], repository, repo_path, pr_facts=pr_facts, pr=pr
+                [], repository, repo_path, pr_facts=pr_facts, pr=pr, ledger_path=path
             ),
             "surface_template": unsubstituted_surface(surface or skill) or None,
             "surface_status": surface_state,
@@ -901,7 +900,9 @@ def advise(
     # capability that was noise on two frontend-less repositories produced the highest
     # evidence-to-effort finding of a third audit on a repository that has a display surface, so two
     # negatives are not a verdict on a binding. The sort key below is deliberately unchanged.
-    precondition = _annotate_preconditions(matched, repository, repo_path, pr_facts=pr_facts, pr=pr)
+    precondition = _annotate_preconditions(
+        matched, repository, repo_path, pr_facts=pr_facts, pr=pr, ledger_path=path
+    )
     matched, withheld_fact_missing = _apply_withhold_for_missing_pr_facts(
         matched, precondition, surface=surface or skill
     )
@@ -2384,7 +2385,7 @@ CAPABILITY_PRECONDITIONS: dict[str, dict] = {
     "cross-repo-coordination": {"requires_pr": "multi_repo_change"},
     "codemod-campaign": {"requires_pr": "repeated_pattern"},
     "runtime-ac-checks": {"requires_pr": "nontrivial_change"},
-    "adversarial-review": {"requires_pr": "nontrivial_change"},
+    "adversarial-review": {"requires_pr": "high_stakes_shape"},
     "testgen-lane": {"requires_pr": "nontrivial_change"},
 }
 
@@ -2459,7 +2460,29 @@ def _probe_repeated_pattern(facts: dict) -> tuple[bool | None, str]:
     )
 
 
+def _probe_high_stakes_shape(facts: dict, *, path=None) -> tuple[bool | None, str]:
+    import adversarial
+
+    ready, evidence = adversarial.shape_shadow_readiness(path=path)
+    if not ready:
+        return None, f"shape route held in shadow: {evidence}"
+    reason = (
+        adversarial.high_stakes_from_shape(facts)
+        or adversarial.high_stakes_label_reason(facts)
+        or adversarial.high_stakes_title_reason(facts)
+    )
+    if reason:
+        return True, reason
+    if not adversarial.shape_facts_complete(facts) or not facts.get("source_labels_complete", True):
+        return None, "PR paths, changed-line count or source-issue labels incomplete"
+    return (
+        False,
+        "measured PR has no workflow, metadata, auth/data, size or high-stakes label signal",
+    )
+
+
 PR_FACT_PROBES = {
+    "high_stakes_shape": _probe_high_stakes_shape,
     "stalled_worker": _probe_stalled_worker,
     "nontrivial_change": _probe_nontrivial_change,
     "multi_repo_change": _probe_multi_repo_change,
@@ -2485,44 +2508,14 @@ def _pr_number_from(text: str, repository: str, context: dict | None) -> int | N
 
 
 def _fetch_pr_facts(repository: str, pr: int) -> dict | None:
-    """ONE read of the PR the consult names. None when gh cannot answer — every PR fact then stays
-    UNEVALUATED, and nothing is auto-declined on a fetch failure."""
+    """One shared GraphQL read includes both PR and source-issue risk metadata."""
     try:
-        proc = subprocess.run(
-            [
-                "gh",
-                "pr",
-                "view",
-                str(pr),
-                "-R",
-                repository,
-                "--json",
-                "number,labels,changedFiles,additions,deletions,title,files",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if proc.returncode != 0:
-            return None
-        raw = json.loads(proc.stdout)
+        fact = fleet_shapes.fetch_facts(repository, [pr]).get(pr)
     except Exception:  # noqa: BLE001
         return None
-    if not isinstance(raw, dict):
+    if fact is None:
         return None
-    return {
-        "number": raw.get("number"),
-        "labels": [lab.get("name") for lab in raw.get("labels") or [] if isinstance(lab, dict)],
-        "changedFiles": raw.get("changedFiles"),
-        "additions": raw.get("additions"),
-        "deletions": raw.get("deletions"),
-        "paths": [
-            str(f.get("path"))
-            for f in raw.get("files") or []
-            if isinstance(f, dict) and f.get("path")
-        ],
-        "title": raw.get("title"),
-    }
+    return {**fact, "number": pr, "changedFiles": fact.get("files_total")}
 
 
 PR_FACTS_FETCH = _fetch_pr_facts
@@ -2696,6 +2689,7 @@ def evaluate_precondition(
     repo_path: str = "",
     facts: dict | None = None,
     pr_facts: dict | None = None,
+    ledger_path=None,
 ) -> dict:
     """Does this capability's declared precondition hold for this consult?
 
@@ -2800,7 +2794,11 @@ def evaluate_precondition(
                 f"`owner/repo#N` in the task)"
             )
         else:
-            value, evidence = probe_pr(pr_facts)
+            value, evidence = (
+                _probe_high_stakes_shape(pr_facts, path=ledger_path)
+                if needs_pr == "high_stakes_shape"
+                else probe_pr(pr_facts)
+            )
             out["pr_requirement_met"] = value
             out["pr_requirement_evidence"] = evidence
             if value is None:
@@ -2864,6 +2862,7 @@ def _annotate_preconditions(
     *,
     pr_facts: dict | None = None,
     pr: int | None = None,
+    ledger_path=None,
 ) -> dict:
     """Stamp every entry with its precondition verdict. ORDER AND MEMBERSHIP ARE UNTOUCHED.
 
@@ -2884,6 +2883,7 @@ def _annotate_preconditions(
             repo_path=repo_path,
             facts=facts,
             pr_facts=pr_facts,
+            ledger_path=ledger_path,
         )
         entry.update(verdict)
         if verdict["applies_to"] or verdict["requires"] or verdict["requires_pr"]:
@@ -5048,6 +5048,9 @@ def _selftest_preconditions() -> None:
                 SURFACE_BINDINGS["t-precond"] = real
             CAPABILITY_PRECONDITIONS.clear()
             CAPABILITY_PRECONDITIONS.update(real_pre)
+    assert required_pr_fact("adversarial-review") == "high_stakes_shape"
+    assert PR_FACT_PROBES["high_stakes_shape"] is _probe_high_stakes_shape
+
     print(
         "capability_advisor precondition selftest: OK (applies_to explains an offer and changes "
         "neither the set nor the order; undeclared and unevaluated are never failures)"
