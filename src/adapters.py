@@ -24,6 +24,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Iterable
 from pathlib import Path
@@ -1388,6 +1389,153 @@ def workspace_path(cwd: str | Path | None) -> Path:
     return Path(cwd or ".").expanduser().resolve()
 
 
+class WorkspaceRefused(ValueError):
+    """An agent run was about to be given a workspace that is or contains a protected directory.
+
+    A ValueError, so a caller that already treats an unbuildable command as a skip skips the run
+    instead of starting it."""
+
+
+def protected_workspace_anchors() -> list[tuple[Path, str]]:
+    """The directories no agent workspace may be or contain, each with what it holds.
+
+    A workspace is where an agent run may WRITE. codex turns `--cd` into a write entry of the run's
+    own permission profile, so `writable_roots` in ~/.codex/config.toml cannot narrow it. agy's
+    `--add-dir` is agy's write-isolation guard. cursor, claude and vibe have no sandbox and work in
+    the process cwd. Nothing checked the workspace until 2026-10-05, and the tick runs from launchd
+    with cwd `/`, where a role's `cwd="."` default resolves. Measured from the capacity ledger,
+    1,521 offloads ran in `/` from 2026-07-10 to 2026-10-02 (gemini 1,279, cursor 224, codex 18);
+    1,513 of them were redirect or triage role runs. 5 more ran in the home directory. A real
+    `codex exec` from `/` could write `~/.codex/config.toml`, `~/.codex/bin` and `~/.claude`.
+
+    Read at call time, so a test or a second instance moves them with its environment. The two
+    config roots are the whole-tree grants the owner removed from `writable_roots` on 2026-10-05:
+    each holds files that run, or are obeyed, outside any sandbox. The state dir, the local runtime
+    (the Brain and the capability ledger) and the exec mirror (the dispatcher's own code) sit inside
+    `~/.codex` by default. They are named separately so an instance that moves them keeps them out
+    of reach too.
+    """
+    homes = [Path.home()]
+    try:
+        import pwd
+
+        account_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+        if account_home not in homes:
+            homes.append(account_home)
+    except (ImportError, KeyError, OSError):
+        pass
+    anchors: list[tuple[Path, str]] = [(Path("/"), "the filesystem root")]
+    for home in homes:
+        anchors += [
+            (home, "the user's home"),
+            (home / ".codex", "codex's config root (config.toml, bin, the lanes)"),
+            (home / ".claude", "claude's config root"),
+        ]
+    default_state = Path.home() / ".codex" / "orchestrator"
+    anchors += [
+        (Path(os.environ.get("ORCH_STATE_DIR") or default_state), "the orchestrator's state dir"),
+        (
+            Path(os.environ.get("ORCH_LOCAL_RUNTIME") or default_state),
+            "the orchestrator's local runtime (the Brain, the capability ledger)",
+        ),
+        (
+            Path(os.environ.get("ORCH_MIRROR") or Path.home() / ".codex" / "orchestrator-mirror"),
+            "the exec mirror launchd runs (the dispatcher's own code)",
+        ),
+    ]
+    return anchors
+
+
+def _dir_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
+def broad_workspace_reason(cwd: str | Path | None) -> str | None:
+    """Why `cwd` may not be an agent's workspace, or None when it may.
+
+    Refused when the workspace IS or CONTAINS a protected directory, because granting a directory
+    grants everything under it. Compared twice. The canonical spelling (`workspace_path`) also covers
+    a path that does not exist yet. Directory identity (device, inode) along each anchor's ancestry
+    catches what a spelling can hide: a case variant on a case-insensitive volume (`/USERS/teacher`
+    is `/Users/teacher` on APFS, and `resolve()` keeps the case it was given).
+    """
+    workspace = workspace_path(cwd)
+    workspace_id = _dir_identity(workspace)
+    for anchor, holds in protected_workspace_anchors():
+        try:
+            canonical = anchor.expanduser().resolve()
+        except (OSError, RuntimeError):
+            canonical = anchor.expanduser().absolute()
+        lineage = (canonical, *canonical.parents)
+        identities = [_dir_identity(p) for p in lineage] if workspace_id is not None else []
+        if workspace in lineage or workspace_id in identities:
+            same = workspace == canonical or (identities and identities[0] == workspace_id)
+            return f"{workspace} {'is' if same else 'contains'} {holds} ({canonical})"
+    return None
+
+
+def scratch_workspace_root() -> Path:
+    """Where a run whose requested workspace was refused gets a directory of its own."""
+    state = os.environ.get("ORCH_STATE_DIR") or Path.home() / ".codex" / "orchestrator"
+    return Path(state) / "scratch-workspaces"
+
+
+def agent_workspace(cwd: str | Path | None, *, agent: str) -> tuple[Path, dict | None]:
+    """The workspace an agent run gets: `cwd` made canonical, or a fresh scratch directory.
+
+    The scratch directory replaces a requested workspace that `broad_workspace_reason` refuses.
+    Relocating rather than refusing keeps a role running when its caller had nowhere better to
+    point it: the tick's cwd is `/`. The run can still read by absolute path whatever it could read
+    before, and it can write only its own empty directory. The second value is None when the
+    requested workspace is used. Otherwise it says what was refused, why, and where the run went;
+    the caller logs it, tells the agent and returns it.
+
+    One directory per run, made by mkdtemp, never shared or reused. If the state dir cannot hold it,
+    the system temp dir is tried. If neither can, WorkspaceRefused names both and the run does not
+    start.
+    """
+    requested = workspace_path(cwd)
+    reason = broad_workspace_reason(requested)
+    if reason is None:
+        return requested, None
+    prefix = time.strftime("%Y%m%dT%H%M%SZ-", time.gmtime()) + re.sub(r"[^\w.-]", "_", agent) + "-"
+    roots = (
+        scratch_workspace_root(),
+        Path(tempfile.gettempdir()) / "orchestrator-scratch-workspaces",
+    )
+    tried: list[str] = []
+    for root in roots:
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            scratch = workspace_path(tempfile.mkdtemp(prefix=prefix, dir=root))
+        except OSError as exc:
+            tried.append(f"{root}: {exc}")
+            continue
+        refused = broad_workspace_reason(scratch)
+        if refused is None:
+            return scratch, {
+                "requested": str(requested),
+                "reason": reason,
+                "workspace": str(scratch),
+            }
+        tried.append(refused)
+    raise WorkspaceRefused(f"{reason}, and no scratch workspace could be made ({'; '.join(tried)})")
+
+
+def _refuse_broad_workspace(agent: str, workspace: Path) -> None:
+    """build_command's backstop: an argv never grants a refused workspace, whoever built it."""
+    reason = broad_workspace_reason(workspace)
+    if reason is not None:
+        raise WorkspaceRefused(
+            f"refusing to grant {agent} the workspace {reason}; relocate it first with "
+            "adapters.agent_workspace, as dispatcher.offload does"
+        )
+
+
 def build_command(
     agent: str,
     prompt: str,
@@ -1441,22 +1589,29 @@ def build_command(
             "exec",
             "--skip-git-repo-check",
         ]
-        if cwd is not None:
-            cmd += ["--cd", str(Path(cwd).expanduser().resolve())]
+        workspace = workspace_path(cwd) if cwd is not None else None
+        if workspace is not None:
+            cmd += ["--cd", str(workspace)]
         # The outer-seat bypass may preserve a workspace-write profile because
         # the parent seatbelt remains authoritative. It must never defeat an
         # explicit read-only narrowing: in that case keep the child sandbox and
         # fail closed if macOS refuses nested seatbelt application.
         if codex_bypass_inner_sandbox() and mode != "assess" and permission_mode != "read-only":
+            sandbox = None
             cmd += ["--dangerously-bypass-approvals-and-sandbox"]
         else:
             sandbox = "read-only" if mode == "assess" else (permission_mode or "workspace-write")
             cmd += ["--sandbox", sandbox]
-            # Only under workspace-write: a read-only run must stay read-only, and full access and
-            # the bypass above have no sandbox to widen.
-            if commits_in_worktree and sandbox == "workspace-write":
-                for root in codex_worktree_git_roots(cwd):
-                    cmd += ["--add-dir", root]
+        # codex makes `--cd` a write entry of the run's permission profile, so a writable run is
+        # never handed a workspace that holds `/`, the home dir or the control plane. Only a
+        # read-only sandbox, which writes nowhere, may name one.
+        if workspace is not None and sandbox != "read-only":
+            _refuse_broad_workspace(agent, workspace)
+        # Only under workspace-write: a read-only run must stay read-only, and full access and
+        # the bypass above have no sandbox to widen.
+        if commits_in_worktree and sandbox == "workspace-write":
+            for root in codex_worktree_git_roots(cwd):
+                cmd += ["--add-dir", root]
         if mode != "assess":
             cmd += ["--json"]
         if requested_model:
@@ -1559,6 +1714,9 @@ def build_command(
             str(AGENT_RUNTIME / "gemini" / "logs" / "agy.log"),
         )
         workspace = workspace_path(cwd)
+        # agy has no read-only mode: `--add-dir` is always a write grant, so it never names a
+        # workspace that holds `/`, the home dir or the control plane.
+        _refuse_broad_workspace(agent, workspace)
         # Tier-aware since 2026-08-08: cheap/mid ride 3.7 Flash (newer generation AND far fewer
         # compute units on this metered seat); only `full` pays for 3.1 Pro. Non-tier modes keep
         # the full Pro seat, because agy print mode REQUIRES an explicit model (see above).
@@ -1754,6 +1912,63 @@ def dispatch(
     return result
 
 
+def _selftest_workspace_never_broad() -> None:
+    """No argv grants `/`, the home dir or the control plane; a refused workspace is relocated.
+
+    The role path from cwd `/` through dispatcher.offload, every agent, and the break demos:
+    tests/test_agent_workspace_never_broad.py."""
+    keys = ("HOME", "ORCH_STATE_DIR", "ORCH_LOCAL_RUNTIME", "ORCH_MIRROR")
+    saved = {key: os.environ.get(key) for key in keys}
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td).resolve()
+        home, work = root / "home", root / "work"
+        (home / ".codex" / "orchestrator" / "worktrees" / "wt").mkdir(parents=True)
+        work.mkdir()
+        try:
+            for key in keys:
+                os.environ.pop(key, None)
+            os.environ.update(HOME=str(home), ORCH_STATE_DIR=str(root / "state"))
+            worktree = home / ".codex" / "orchestrator" / "worktrees" / "wt"
+            for broad, verb in (
+                ("/", "is the filesystem root"),
+                (home, "is the user's home"),
+                (root, "contains the user's home"),
+                (home / ".codex", "is codex's config root"),
+                (home / ".codex" / "orchestrator", "is the orchestrator's local runtime"),
+                (root / "state", "is the orchestrator's state dir"),
+            ):
+                reason = broad_workspace_reason(broad)
+                assert reason and verb in reason, (broad, reason)
+            for fine in (work, worktree, root / "state" / "scratch-workspaces" / "run"):
+                assert broad_workspace_reason(fine) is None, (fine, broad_workspace_reason(fine))
+            # The backstop: a writable codex run and every agy run refuse; read-only may name `/`.
+            for agent, mode in (("codex", None), ("codex", "full"), ("gemini", None)):
+                try:
+                    build_command(agent, "x", mode=mode, cwd="/")
+                except WorkspaceRefused as exc:
+                    assert "the filesystem root" in str(exc), exc
+                else:
+                    raise AssertionError(f"{agent} mode={mode} was granted / as its workspace")
+            assess = build_command("codex", "x", mode="assess", cwd="/")
+            assert assess[assess.index("--cd") + 1] == "/", assess
+            ok = build_command("codex", "x", cwd=work)
+            assert ok[ok.index("--cd") + 1] == str(work), ok
+            # Relocation: a fresh, empty, per-run directory under the state dir, and the note.
+            first, note = agent_workspace("/", agent="codex")
+            second, _ = agent_workspace("/", agent="codex")
+            assert first != second and first.parent == root / "state" / "scratch-workspaces"
+            assert note and note["requested"] == "/" and note["workspace"] == str(first), note
+            assert "filesystem root" in note["reason"] and not any(first.iterdir()), note
+            assert broad_workspace_reason(first) is None, first
+            assert agent_workspace(work, agent="codex") == (work, None)
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
 def _selftest():
     old_codex_sandbox = os.environ.pop("CODEX_SANDBOX", None)
     old_codex_bypass = os.environ.pop("ORCH_CODEX_BYPASS_INNER_SANDBOX", None)
@@ -1918,6 +2133,7 @@ def _selftest_inner(*, gaps: list[str] | None = None):
         ):
             assert "--add-dir" not in kept, kept
         assert codex_worktree_git_roots(common.parent) == [], "a .git DIRECTORY is never granted"
+    _selftest_workspace_never_broad()
     # Claude 5 family: Haiku 4.5 (cheap) / Sonnet 5.5 (mid) / Opus 5.5 (full) — but the seat is CAPPED
     # at mid (scarce weekly), so the `full` lane really dispatches Sonnet 5.5. Expectations are
     # written post-ceiling because that is what reaches the CLI.
@@ -2214,7 +2430,7 @@ def _selftest_inner(*, gaps: list[str] | None = None):
     print(
         "adapters.py selftest: OK (cursor composer/explicit-frontier/safe-bare-frontier, "
         "vibe subscription, codex/claude cheap-model map, aider venv, gemini lane-ready, "
-        "codex linked-worktree git grant)"
+        "codex linked-worktree git grant, no broad agent workspace)"
     )
 
 

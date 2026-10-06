@@ -305,6 +305,15 @@ def _offload_prompt(prompt: str, cwd: str | Path, agent: str | None = None) -> s
     return f"{_agent_preamble(agent or '')}\n\n{prompt.rstrip()}\n\n" + "\n".join(rules)
 
 
+def _relocated_workspace_rule(relocated: dict) -> str:
+    """The offload rule that tells a relocated run where it is and why (adapters.agent_workspace)."""
+    return (
+        f"- Workspace: {relocated['workspace']} is an empty scratch directory of your own. The "
+        f"requested workspace was refused because {relocated['reason']}. Read other files by "
+        "absolute path; write only inside your workspace."
+    )
+
+
 def _offload_ignore(_dir: str, names: list[str]) -> set[str]:
     heavy = {
         ".git",
@@ -752,6 +761,16 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
     # string whenever the runtime sat behind a symlink, and the selftest's `--add-dir == cwd`
     # assertion failed under every macOS scratch runtime. (2026-10-02)
     cwd = adapters.workspace_path(cwd)
+    # This agent's job is to commit in the provisioned worktree, so a scratch directory cannot stand
+    # in for it the way it does for an offload. A worktree that is, or holds, `/`, the home dir or
+    # the control plane means provisioning is broken: skip it like any provision failure, loudly.
+    refused = adapters.broad_workspace_reason(cwd)
+    if refused:
+        return {
+            "error": f"provisioned workspace refused: {refused}",
+            "target": target,
+            "agent": agent,
+        }
     role_activation = None
     try:
         # Local import avoids making deterministic dispatcher module import-time
@@ -1445,6 +1464,9 @@ def offload(
     By default this runs in `cwd`. With isolate=True, it first copies `cwd` to a persistent local
     offload workspace so multiple code-building offloads can run in parallel without same-dir races.
     The isolated result is NOT auto-merged; the orchestrator reviews and integrates deliberately.
+    A `cwd` that is, or holds, `/`, the home dir or the control plane is never granted: the run gets
+    a fresh scratch directory instead (`adapters.agent_workspace`), and the result's
+    `workspace_relocated` says so.
 
     Runs a cheaper agent and RETURNS its output to the orchestrating seat — no claim, no PR.
     The seat spends that agent's capacity instead of its own and gets back only the result.
@@ -1506,11 +1528,21 @@ def offload(
     # an inherited *_PROXY (see _net_hygiene_prelude), and concurrent agent CLI runs do NOT serialize. A
     # driving seat already owns its heartbeat via orchestrate-seat.sh; a standalone/library offload
     # (e.g. repo-audit) must not silently halt opener+closer. Do not re-add without a fleet-mutation reason.
+    # A workspace that is, or holds, `/`, the home dir or the control plane is replaced by a fresh
+    # per-run scratch directory (adapters.agent_workspace), BEFORE isolation copies it: the tick runs
+    # with cwd `/`, so a role's `cwd="."` handed codex, agy and cursor the whole disk 1,521 times,
+    # and an isolated copy of `/` would copy the disk. The run still starts, logged loudly.
     try:
-        source_cwd = adapters.workspace_path(cwd)
+        source_cwd, relocated = adapters.agent_workspace(cwd, agent=agent)
         run_cwd = _isolate_offload_cwd(source_cwd) if isolate else source_cwd
     except Exception as exc:
         return {"agent": agent, "exit": 2, "output": "", "error": str(exc)}
+    if relocated:
+        print(
+            f"warn: {agent} offload workspace relocated: {relocated['reason']}; "
+            f"it runs in its own scratch workspace {relocated['workspace']}",
+            file=sys.stderr,
+        )
     proc_cwd = source_cwd if agent == "gemini" and isolate else run_cwd
     if agent == "gemini" and isolate:
         prompt = (
@@ -1521,6 +1553,8 @@ def offload(
             "under the Orchestrator runtime."
         )
     prepared_prompt = _offload_prompt(prompt, run_cwd, agent)
+    if relocated:
+        prepared_prompt = f"{prepared_prompt}\n{_relocated_workspace_rule(relocated)}"
     profile = execution_profiles.get_profile(profile_id) if profile_id else None
     if profile is None:
         # SELECT one when the caller did not name it. This single line is why no worker execution
@@ -1637,6 +1671,8 @@ def offload(
         requested_model=profile.get("requested_model") if profile else None,
         policy_version=execution_profiles.PROFILE_POLICY_VERSION if profile else None,
         propensity=1.0 if profile else None,
+        # Present only on a relocated run, so relocations are countable from the ledger alone.
+        workspace_relocated_from=relocated["requested"] if relocated else None,
     )
 
     def _record_offload_run() -> None:
@@ -1717,6 +1753,11 @@ def offload(
             f"{agent}/{mode} cwd={run_cwd} process_cwd={proc_cwd} timeout={timeout}s "
             f"run_id={run_id} ===\n"
         )
+        if relocated:
+            fh.write(
+                f"[orchestrator] WORKSPACE RELOCATED: {relocated['reason']}; this run writes only "
+                f"in its own scratch workspace {relocated['workspace']}\n"
+            )
     max_network_retries = max(0, _env_int("ORCH_OFFLOAD_NETWORK_RETRIES", 1))
     retry_backoff_s = max(0.0, _env_float("ORCH_OFFLOAD_RETRY_BACKOFF_S", 3.0))
     complete_written = False
@@ -1993,6 +2034,8 @@ def offload(
             time.sleep(retry_backoff_s)
     if attempts > 1:
         out["retried"] = True
+    if relocated:
+        out["workspace_relocated"] = relocated
     _record_complete(exit_code=out.get("exit"), error=out.get("error"))
     # Telemetry is fail-open. Classify the actual result, stderr, and per-run agent log.
     evidence_result = None
