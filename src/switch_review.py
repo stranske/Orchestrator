@@ -1402,6 +1402,53 @@ def _firing_lines(section: dict) -> list[str]:
     return lines + [""]
 
 
+def adversarial_shape_population(*, state_dir: Path | None = None, now: int | None = None) -> dict:
+    """Read the fleet counter's exact population, never infer risk from its top-three classes."""
+    import adversarial
+    import fleet_shapes
+
+    root = state_dir or fleet_shapes.default_state_dir()
+    now = int(time.time()) if now is None else now
+    report_path = root / "fleet-shapes.json"
+    try:
+        payload = json.loads(report_path.read_text())
+        section = dict(payload["adversarial_shape"])
+        stamp = payload["generated_at"]
+        if type(stamp) is not int or not 0 <= now - stamp <= 2 * 86400:
+            raise ValueError("fleet-shapes population is stale or future-dated")
+        if section.get("rule") != adversarial.shape_rule_id():
+            raise ValueError("fleet-shapes population was measured under a different shape rule")
+        for key in ("shape_candidates", "label_candidates", "population", "unknown"):
+            if type(section.get(key)) is not int or section[key] < 0:
+                raise ValueError(f"invalid {key}")
+        if section["population"] != payload["counts"]["prs"]:
+            raise ValueError("population disagrees with fleet-shapes PR count")
+        if any(
+            section[k] > section["population"]
+            for k in ("shape_candidates", "label_candidates", "unknown")
+        ):
+            raise ValueError("candidate count exceeds population")
+        if section.get("status") not in {"ok", "partial"} or (section["status"] == "ok") != (
+            section["unknown"] == 0
+        ):
+            raise ValueError("measurement status disagrees with unknown count")
+        return {**section, "report_path": str(report_path), "generated_at": stamp}
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return {"status": "unknown", "report_path": str(report_path), "reason": str(exc)}
+
+
+def adversarial_shape_line(section: dict) -> str:
+    if section.get("status") not in {"ok", "partial"}:
+        return f"adversarial-review: high-stakes candidates unmeasured ({section.get('reason', 'missing population')})"
+    line = (
+        f"adversarial-review: high-stakes candidates {section['shape_candidates']} of "
+        f"{section['population']} merged PRs (shape rule), {section['label_candidates']} by label"
+    )
+    if section["unknown"]:
+        line += f"; {section['unknown']} PRs unmeasured (counts are lower bounds)"
+    return line
+
+
 def review(
     *,
     now: int | None = None,
@@ -1454,6 +1501,7 @@ def review(
     return {
         "generated_at": now,
         "adjudicator_shadow": adjudicator_retro.weekly_line(),
+        "adversarial_shape": adversarial_shape_population(now=now),
         "value_chain": value_chain,
         "runtime_ac_shadow": runtime_ac_shadow,
         "review_days": REVIEW_DAYS,
@@ -1632,6 +1680,7 @@ def format_report(rep: dict) -> str:
     ]
     if rep.get("adjudicator_shadow"):
         lines += [rep["adjudicator_shadow"], ""]
+    lines += [adversarial_shape_line(rep.get("adversarial_shape", {})), ""]
     if rep.get("value_chain") and not rep["value_chain"].get("disabled"):
         import value_chain_monitor
 
@@ -2165,6 +2214,17 @@ def _selftest() -> None:
     text = "\n".join(_firing_lines(proof))
     assert "step last ran" in text and "heartbeat silent, step ran" not in text
     assert "UNKNOWN" in "\n".join(_firing_lines({"status": "unknown", "reason": "absent"}))
+    assert "candidates 0 of 0" in adversarial_shape_line(
+        {
+            "status": "ok",
+            "shape_candidates": 0,
+            "population": 0,
+            "label_candidates": 0,
+            "unknown": 0,
+        }
+    )
+    assert "unmeasured" in adversarial_shape_line({"status": "unknown"})
+
     print(
         "switch_review.py selftest: OK (held-off raised, ON-but-idle re-raised after the window, "
         "recently-triggering stays silent, a consult trial is named and not counted, "
@@ -2496,6 +2556,15 @@ def main(argv: list[str]) -> int:
                 "errors": [f"Value-chain setup or input collection failed: {exc}"]
             }
     rep = review(env=env, sources=sources, value_chain_inputs=value_chain_inputs)
+    import adversarial
+
+    try:
+        rep["adversarial_shape_measurement_recorded"] = adversarial.record_shape_measurement(
+            rep.get("adversarial_shape", {"status": "unknown"}),
+            now=rep.get("generated_at", int(time.time())),
+        )
+    except (OSError, ValueError) as exc:
+        rep["adversarial_shape_measurement_error"] = str(exc)
     if args.do_raise:
         if not APPLY_ENABLED:
             print("refusing to raise: set ORCH_SWITCH_REVIEW=1", file=sys.stderr)

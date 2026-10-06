@@ -452,7 +452,7 @@ def test_a_dst_spanning_pr_measures_its_true_hours_to_merge(us_central, brain):
     path.write_text(json.dumps({"schema": fleet_shapes.FACTS_SCHEMA, "facts": {"o/r#1": legacy}}))
     reader = fleet_shapes.time_to_merge_summary(brain, 60)  # a reader converts in memory
     assert reader["codex"]["median_hours"] == 48.0
-    payload = fleet_shapes.run(window_days=60, state_dir=brain, fetch_fn=_no_fetch)
+    payload = fleet_shapes.run(window_days=60, state_dir=brain, fetch_fn=_no_fetch, fetch_limit=0)
     assert payload["counts"]["facts_rebased_this_run"] == 1
     assert payload["shapes"][0]["agents"]["codex"]["hours_to_merge_median"] == 48.0
     saved = json.loads(path.read_text())["facts"]["o/r#1"]
@@ -461,6 +461,6 @@ def test_a_dst_spanning_pr_measures_its_true_hours_to_merge(us_central, brain):
         merged,
         utc_epoch.UTC,
     )
-    again = fleet_shapes.run(window_days=60, state_dir=brain, fetch_fn=_no_fetch)
+    again = fleet_shapes.run(window_days=60, state_dir=brain, fetch_fn=_no_fetch, fetch_limit=0)
     assert again["counts"]["facts_rebased_this_run"] == 0
     assert again["shapes"][0]["agents"]["codex"]["hours_to_merge_median"] == 48.0
