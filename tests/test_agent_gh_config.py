@@ -2,20 +2,23 @@
 
 THE DEFECT (measured 2026-10-04). `dispatcher._agent_runtime_prelude` moves XDG_CONFIG_HOME into the
 agent's runtime so the agent CLIs keep their mutable state out of the real home. gh honours
-XDG_CONFIG_HOME too, so in every dispatched agent it read an empty `<runtime>/<agent>/.config/gh`,
-printed "gh auth login" and exited 4 before it asked the keyring for a token. Over 90 days of
-dispatch logs, 58 of the 58 delegated codex runs that called gh failed that way on their first
-call, and 25 of them then read the token through `git credential fill` instead. cursor and gemini
-runs reported the same failure in their own words.
+XDG_CONFIG_HOME too, so in an agent whose dispatcher exported neither GH_CONFIG_DIR nor GH_TOKEN it
+read an empty `<runtime>/<agent>/.config/gh`, printed "gh auth login" and exited 4 before it asked
+the keyring for a token. The tick's orchestrate.sh exports both and its children inherit them, so
+the agents it starts were never affected. Over 90 days of dispatch logs, 58 of the 58 delegated
+codex runs that called gh failed that way on their first call, and 25 of them then read the token
+through `git credential fill` instead. cursor and gemini runs reported the same failure in their
+own words.
 
 THE FIX. The prelude exports GH_CONFIG_DIR, resolved by gh's own rule from the DISPATCHER's
 environment (`dispatcher.gh_config_dir`). gh then takes the token from wherever that config says,
-the keyring on the owner's machine, exactly as the dispatcher's gh does. Nothing new enters the
-agent's argv or environment, and every other XDG-honouring tool keeps the runtime redirect.
+the keyring on the owner's machine, exactly as the dispatcher's gh does. The pin adds no token to
+the agent's argv or environment, and every other XDG-honouring tool keeps the runtime redirect.
 
 The behavioural tests run the REAL gh and bash against a scratch config that holds a string that is
 not a credential. HOME is in the sandbox and the environment is built from scratch, so neither the
-owner's keychain nor an inherited token can reach them, and no test touches the network.
+owner's keychain nor an inherited token can reach them. The model-catalog probe is off, so no test
+touches the network.
 """
 
 from __future__ import annotations
@@ -27,15 +30,21 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
+import adapters
+import capacity
 import dispatcher
 import exp_abcd
 import paths
 
-AGENTS = ("codex", "cursor", "vibe", "gemini", "claude", "aider")
+# The router's seats, the same set adapters.build_command builds and so the set that reaches the
+# prelude. A seat added there is covered here without anyone remembering this file.
+AGENTS = tuple(capacity.AGENTS)
 # Deliberately not token-shaped: no secret scanner should ever match the fixture.
 FAKE = "orch-test-not-a-credential"
 EXPORT = re.compile(r"export GH_CONFIG_DIR=('[^']*'|[^\s;]+);")
@@ -59,6 +68,11 @@ def sandbox(monkeypatch, tmp_path):
         dispatcher.AGENT_GH_CONFIG_DISABLED_ENV,
     ):
         monkeypatch.delenv(var, raising=False)
+    # exp_abcd._eval_command resolves gemini's model for every seat, and a cold catalog cache makes
+    # that a real `agy models` server call that rewrites the cache. ORCH_MODEL_PROBE=0 is adapters'
+    # own off switch, used for the same call by tests/test_experiment_arm_identity.py.
+    monkeypatch.setenv("ORCH_MODEL_PROBE", "0")
+    monkeypatch.setattr(adapters, "_ADVERTISED_MEMO", {})
     return tmp_path
 
 
@@ -107,6 +121,8 @@ def test_the_pin_follows_ghs_own_lookup_order(sandbox, monkeypatch):
     assert dispatcher.gh_config_dir() == sandbox / "home" / ".config" / "gh"
     monkeypatch.setenv("XDG_CONFIG_HOME", str(sandbox / "xdg"))
     assert dispatcher.gh_config_dir() == sandbox / "xdg" / "gh"
+    # Inside a dispatched agent XDG_CONFIG_HOME names the runtime and GH_CONFIG_DIR carries the pin,
+    # so an agent that dispatches in turn hands its own agent the same config only if explicit wins.
     monkeypatch.setenv("GH_CONFIG_DIR", str(sandbox / "explicit"))
     assert dispatcher.gh_config_dir() == sandbox / "explicit"
 
@@ -116,8 +132,17 @@ def test_every_agent_prelude_pins_gh_to_its_dispatchers_config(sandbox, monkeypa
     monkeypatch.setenv("XDG_CONFIG_HOME", str(sandbox / "dispatcher-xdg"))
     prelude = dispatcher._agent_runtime_prelude(agent)
     assert _pins(prelude) == [str(sandbox / "dispatcher-xdg" / "gh")], prelude
-    # Every other XDG-honouring tool keeps its config in the runtime, as before.
+
+
+@pytest.mark.parametrize("agent", AGENTS)
+def test_the_prelude_still_redirects_xdg_config_home_into_the_agents_runtime(sandbox, agent):
+    """Not about gh: the pin is additive, so every other XDG-honouring tool keeps the redirect.
+
+    Kept apart from the gh tests so that narrowing the redirect, which is a design question of its
+    own, fails this test by name and not six tests named for gh.
+    """
     runtime_config = sandbox / "agent-runtime" / agent / ".config"
+    prelude = dispatcher._agent_runtime_prelude(agent)
     assert f"export XDG_CONFIG_HOME={shlex.quote(str(runtime_config))};" in prelude, prelude
 
 
@@ -128,8 +153,25 @@ def test_the_pin_is_a_path_and_never_a_token(sandbox, monkeypatch, agent):
     monkeypatch.setenv("GITHUB_TOKEN", FAKE)
     prelude = dispatcher._agent_runtime_prelude(agent)
     assert FAKE not in prelude, prelude
-    assert "GH_TOKEN" not in prelude and "GITHUB_TOKEN" not in prelude, prelude
+    assert not dispatcher.TOKEN_ASSIGNMENT.search(prelude), prelude
     assert _pins(prelude) == [str(sandbox / "home" / ".config" / "gh")], prelude
+
+
+def test_the_token_guard_refuses_an_assignment_and_allows_an_unset():
+    """The guard names the one forbidden thing; `unset GH_TOKEN` is how a token would be REMOVED."""
+    caught = (
+        "export GH_TOKEN=abc; ",
+        "GH_TOKEN=abc gh pr list; ",
+        "env GITHUB_TOKEN=abc cmd; ",
+        "declare -x GH_TOKEN=abc; ",
+    )
+    allowed = (
+        "unset GH_TOKEN GITHUB_TOKEN; ",
+        "env -u GH_TOKEN cmd; ",
+        "export GH_CONFIG_DIR=/x; ",
+    )
+    assert [s for s in caught if not dispatcher.TOKEN_ASSIGNMENT.search(s)] == []
+    assert [s for s in allowed if dispatcher.TOKEN_ASSIGNMENT.search(s)] == []
 
 
 @pytest.mark.parametrize("agent", AGENTS)
@@ -141,6 +183,15 @@ def test_the_kill_switch_removes_the_pin_and_nothing_else(sandbox, monkeypatch, 
     dropped = [part for part in pinned if part not in unpinned]
     assert len(dropped) == 1 and dropped[0].startswith("export GH_CONFIG_DIR="), dropped
     assert [part for part in pinned if part != dropped[0]] == unpinned
+
+
+@pytest.mark.parametrize("value,disabled", [(" 1", True), ("1\r", True), ("0", False), ("", False)])
+def test_the_kill_switch_reads_a_padded_one_and_only_one(sandbox, monkeypatch, value, disabled):
+    """`1\\r` is what a CRLF env file sourced with `set -a` delivers, and it must still disable."""
+    monkeypatch.setenv(dispatcher.AGENT_GH_CONFIG_DISABLED_ENV, value)
+    assert dispatcher.agent_gh_config_disabled() is disabled
+    pins = _pins(dispatcher._agent_runtime_prelude("codex"))
+    assert pins == ([] if disabled else [str(sandbox / "home" / ".config" / "gh")]), pins
 
 
 @NEEDS_GH
@@ -160,7 +211,7 @@ def test_a_dispatched_agents_gh_authenticates_from_the_dispatchers_config(sandbo
     assert "gh auth login" in unpinned.stdout + unpinned.stderr, unpinned.stderr
 
 
-def _child_env(sandbox: Path, **extra: str) -> dict[str, str]:
+def _child_env(sandbox: Path, *, module_dir: Path | None = None, **extra: str) -> dict[str, str]:
     """A child interpreter that imports the dispatcher with every runtime path in the sandbox.
 
     It inherits no ORCH_* variable, so nothing points it back at live state, and the registries
@@ -182,7 +233,7 @@ def _child_env(sandbox: Path, **extra: str) -> dict[str, str]:
         ORCH_OFFLOAD_DIR=str(runtime / "offloads"),
         ORCH_MODEL_PROBE="0",
         ORCH_CODEX_BYPASS_INNER_SANDBOX="0",
-        PYTHONPATH=str(paths.MODULE_DIR),
+        PYTHONPATH=str(module_dir or paths.MODULE_DIR),
         **extra,
     )
     env.update(
@@ -191,55 +242,43 @@ def _child_env(sandbox: Path, **extra: str) -> dict[str, str]:
     return env
 
 
+@contextmanager
+def _no_registry_seeded():
+    """Attribute registry writes to this child, not another xdist worker.
+
+    Import unchanged private source files; an accidental default registry write still
+    fails the guard, while concurrent tests cannot create files in this child's tree.
+    """
+    with tempfile.TemporaryDirectory(prefix="agent-gh-child-") as temp:
+        module_dir = Path(temp) / "src"
+        shutil.copytree(
+            paths.MODULE_DIR,
+            module_dir,
+            ignore=shutil.ignore_patterns("__pycache__", "experiments"),
+        )
+        yield module_dir
+        created = [
+            str(module_dir / "experiments" / name)
+            for name in paths.SEEDED_REGISTRY_ENV.values()
+            if (module_dir / "experiments" / name).exists()
+        ]
+        assert not created, f"the child seeded a registry inside MODULE_DIR: {created}"
+
+
 def _run_child(sandbox: Path, script: str, *args: str, **extra: str) -> dict:
-    seeded = [paths.MODULE_DIR / "experiments" / n for n in paths.SEEDED_REGISTRY_ENV.values()]
-    absent = [path for path in seeded if not path.exists()]
-    proc = subprocess.run(
-        [sys.executable, "-c", script, *args],
-        cwd=sandbox,
-        env=_child_env(sandbox, **extra),
-        capture_output=True,
-        text=True,
-        timeout=180,
-        stdin=subprocess.DEVNULL,
-    )
-    created = [str(path) for path in absent if path.exists()]
-    assert not created, f"the child seeded a registry inside MODULE_DIR: {created}"
+    with _no_registry_seeded() as module_dir:
+        proc = subprocess.run(
+            [sys.executable, "-c", script, *args],
+            cwd=sandbox,
+            env=_child_env(sandbox, module_dir=module_dir, **extra),
+            capture_output=True,
+            text=True,
+            timeout=180,
+            stdin=subprocess.DEVNULL,
+        )
     lines = [line for line in proc.stdout.splitlines() if line.startswith("RESULT ")]
     assert proc.returncode == 0 and len(lines) == 1, (proc.stdout[-3000:], proc.stderr[-3000:])
     return json.loads(lines[0][len("RESULT ") :])
-
-
-NESTED = """
-import json
-import dispatcher
-print("RESULT " + json.dumps(str(dispatcher.gh_config_dir())))
-"""
-
-
-def test_a_dispatcher_run_inside_a_dispatched_agent_pins_the_same_config(sandbox, monkeypatch):
-    """An agent that offloads in turn hands ITS agent the same gh config, not its own runtime's.
-
-    Inside the agent XDG_CONFIG_HOME names the runtime, so the order of gh's rule decides this:
-    the explicit GH_CONFIG_DIR the prelude exported must win over the redirect.
-    """
-    expected = _dispatcher_gh_config(sandbox)
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(sandbox / "dispatcher-xdg"))
-    prelude = dispatcher._agent_runtime_prelude("codex")
-    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(NESTED)}"
-    env = _child_env(sandbox)
-    proc = subprocess.run(
-        ["bash", "-c", prelude + command],
-        cwd=sandbox,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=180,
-        stdin=subprocess.DEVNULL,
-    )
-    lines = [line for line in proc.stdout.splitlines() if line.startswith("RESULT ")]
-    assert proc.returncode == 0 and len(lines) == 1, (proc.stdout[-2000:], proc.stderr[-2000:])
-    assert json.loads(lines[0][len("RESULT ") :]) == str(expected)
 
 
 PLAN = """
@@ -349,13 +388,15 @@ def test_relative_config_paths_keep_dispatcher_identity_across_child_cwd(
 
 
 def test_dispatcher_selftest_runs_with_the_gh_config_pin_disabled(sandbox):
-    ran = subprocess.run(
-        [sys.executable, str(paths.MODULE_DIR / "dispatcher.py"), "--selftest"],
-        cwd=sandbox,
-        env=_child_env(sandbox, ORCH_AGENT_GH_CONFIG_DISABLED="1"),
-        capture_output=True,
-        text=True,
-        timeout=180,
-    )
+    with _no_registry_seeded() as module_dir:
+        ran = subprocess.run(
+            [sys.executable, str(module_dir / "dispatcher.py"), "--selftest"],
+            cwd=sandbox,
+            env=_child_env(sandbox, module_dir=module_dir, ORCH_AGENT_GH_CONFIG_DISABLED="1"),
+            capture_output=True,
+            text=True,
+            timeout=180,
+            stdin=subprocess.DEVNULL,
+        )
     assert ran.returncode == 0, (ran.stdout[-2000:], ran.stderr[-2000:])
     assert "dispatcher.py selftest: OK" in ran.stdout

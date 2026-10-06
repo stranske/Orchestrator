@@ -172,13 +172,19 @@ in place. Offloads, read-only runs and the outer-seat bypass get nothing, and th
 and `hooks/` are never granted. No stage, component or surface moved, so the diagram is unchanged.
 
 The dispatcher's agent prelude moves `XDG_CONFIG_HOME` into each agent's runtime, and gh honours
-it, so until 2026-10-04 every dispatched agent's gh read an empty config and stopped at "gh auth
-login" before asking the keyring for a token. The prelude now pins `GH_CONFIG_DIR` to the directory
-the dispatcher's own gh reads, by gh's own lookup order (`dispatcher.gh_config_dir`). Relative
-paths are anchored to the dispatcher's cwd before the child changes directory. The agent therefore
-uses the same config; authentication also requires access to that config's credential store. The pin is a path: no token enters the agent's argv or
-environment, and every other tool keeps the redirect. No stage, component or surface moved, so the
-diagram is unchanged.
+it. Until 2026-10-04 an agent whose dispatcher exported neither `GH_CONFIG_DIR` nor `GH_TOKEN` (a
+delegate or offload started from a session, a lane or the check-in runner) read an empty config
+and stopped at "gh auth login" before asking the keyring for a token. Agents the tick starts were
+never in that state: `orchestrate.sh` exports both and the dispatcher passes its environment
+through, so they also carry the tick's `GH_TOKEN`. The prelude now pins `GH_CONFIG_DIR` to the
+directory the dispatcher's own gh reads, by gh's own lookup order (`dispatcher.gh_config_dir`).
+Relative paths are anchored to the dispatcher's cwd before the child changes directory. The agent
+therefore uses the same config; authentication also requires access to that config's credential
+store. The pin is a path and adds no token to the agent's argv or environment, and every other
+tool keeps the redirect. It works in both directions: gh's own writes (`auth logout`, `auth
+switch`, `config set`) from an unsandboxed agent reach that config and keyring entry too, as they
+would from the dispatcher's shell. No stage, component or surface moved, so the diagram is
+unchanged.
 
 **The detached wrappers name the interpreter of their own python steps (2026-10-05).** The dispatch
 and experiment wrappers are `bash -lc` strings that end with python steps: the claim release and the
@@ -265,6 +271,18 @@ with ledger invocations and existing Brain influence edges, naming the earliest 
 step and input switches held off. Unknown demand never becomes zero. It changes no
 selection, gate, dispatcher or lifecycle decision; the existing weekly artifact carries
 the section rather than a second audit log or inventory.
+
+The same weekly artifact reports adversarial high-stakes demand from `fleet_shapes`' exact
+merged-agent population: workflow/metadata and auth/data paths, or the single 500-line
+size threshold, beside the independent label count. Raw paths are counted before top-three
+shape grouping, so a small auth change cannot vanish behind docs/tests/scripts. Missing
+facts stay unmeasured; measured zero is printed as zero. The production weekly caller
+records one match observation per UTC week in the existing capability ledger, never a
+review invocation or usefulness verdict. The advisor's shape probe stays unknown until
+two complete observations of the same rule are at least seven days apart and the latest
+is at most eight days old. Label matching remains a second route after that shadow gate;
+`adversarial.main`, the closer's existing label/title matcher and merge authority do not change.
+
 
 ## The feedback loop closes over both surfaces
 

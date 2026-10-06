@@ -19,7 +19,7 @@ stores = {'tmp': PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000
     def test_an_unknown_population_is_none_and_an_empty_one_is_zero(stores):
         current = {**LANE, "target": "o/r#25", "state": "stalled", "recommended_action": "inspect"}
         judge = Judge("inspect")
-    
+
         missing = _run(stores, judge, plan_path=stores["tmp"] / "absent.json")
         assert missing["passing_screen"] is None and missing["population"]["status"] == "missing"
 >       assert missing["candidate_counts"]["eligible"] is None
