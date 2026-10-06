@@ -122,3 +122,28 @@ JavaScript witnesses.
 The checkout's `.git` directory is read-only: `git add` cannot create `index.lock`.
 The changes are committed using an isolated Git directory under `/tmp`, with a
 single-commit bundle and patch for transfer; the shared checkout retains the edits.
+
+## Keepalive shadow-dispatch regression, 2026-10-06
+
+Added two JavaScript regressions for the first task's packet and dispatch boundaries.
+They use private Brain databases and the real packet builder and AdjudicatorAgent,
+with mocked routing and transport. Two persisted disputes follow different router
+choices, retain verifier/diff/gate evidence in the prompts, dispatch in isolation,
+and record proposals as `source=retrospective` role runs. A one-case limit bounds
+each dispatch, and resuming saved decisions neither recollects nor dispatches them.
+Eight incomplete-packet variants fail before routing, transport or role recording;
+a repaired dry packet clears its previous error without writing to the Brain.
+Full outcome snapshots include both original rows and possible new rows.
+
+`node tests/test_adjudicator_retro_cli.js`: seven tests passed.
+`PYTHONPATH=src python3 -m unittest discover -s tests -p test_adjudicator_retro_evidence.py -v`:
+five tests passed. In temporary source copies, writing `outcomes.merged`, disabling
+retrospective isolation and forcing a backend each made the new dispatch regression
+fail (exit 1). Both copied modules were restored byte for byte; all seven Node tests
+passed afterward (exit 0). These controls do not replace the named pytest controls.
+
+Pytest and Black are absent from both Python environments, and PyPI name resolution
+failed. No Python source changes or task-completion claims are made. The named
+pytest acceptance tests and their required faults remain pending. The checkout's
+Git directory is read-only, so this round also supplies an isolated commit, patch
+and bundle under `/tmp` for transfer.
