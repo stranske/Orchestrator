@@ -185,3 +185,81 @@ def test_rail_exercise_records_fixture_provenance(monkeypatch):
     )
     assert calls[0]["provenance"] == "fixture_observed"
     assert calls[0]["metadata"]["source"] == "rail_exercise"
+
+
+def test_corpus_headlines_exclude_fixture_only_evidence_and_preserve_production(
+    tmp_path, monkeypatch
+):
+    path = _ledger(tmp_path)
+    monkeypatch.setattr(capabilities, "_fleet_edge_counts", lambda **kw: {})
+    _record(path, "a-fixture", "advice:fixture-pass", "fixture_observed")
+    _record(path, "a-fixture", "advice:fixture-fail", "fixture_observed", useful=False)
+    fixture = cp.report(path=path)
+    assert fixture["experiment_count"] == fixture["resolved_experiment_count"] == 0
+    assert fixture["verdict_count"] == fixture["verdicts_outcome_derived"] == 0
+    assert fixture["verdicts_by_provenance"] == {}
+    assert fixture["verdicts_self_reported_share"] is None
+    assert fixture["capabilities_with_evidence"] == 0
+    assert fixture["fixture_experiment_count"] == fixture["fixture_verdict_count"] == 2
+
+    _record(path, "z-production", "advice:production", "machine_observed")
+    mixed = cp.report(path=path)
+    assert mixed["experiment_count"] == mixed["resolved_experiment_count"] == 1
+    assert mixed["verdict_count"] == mixed["verdicts_outcome_derived"] == 1
+    assert mixed["verdicts_by_provenance"] == {"machine_observed": 1}
+    assert mixed["capabilities_with_evidence"] == 1
+    assert mixed["fixture_experiment_count"] == mixed["fixture_verdict_count"] == 2
+
+
+def test_unmigrated_rail_contracts_are_fixture_evidence_on_read(tmp_path, monkeypatch):
+    path = _ledger(tmp_path)
+    monkeypatch.setattr(capabilities, "_fleet_edge_counts", lambda **kw: {})
+    _record(path, "a-fixture", "advice:rail-exercise:legacy", "machine_observed")
+    _record(
+        path,
+        "a-fixture",
+        "advice:legacy-hash",
+        "self_reported",
+        evidence="contract proposers/P0/orch/exercises/a-fixture.json: stated_task=proof",
+    )
+    before = path.read_bytes()
+    result = cp.report(path=path)
+    assert result["experiment_count"] == result["verdict_count"] == 0
+    assert result["capabilities_with_evidence"] == 0
+    assert result["fixture_experiment_count"] == result["fixture_verdict_count"] == 2
+    assert path.read_bytes() == before
+    # Read-time classification must not silently perform or suppress explicit maintenance.
+    assert cp.migrate_fixture_provenance(path=path) == {"changed": 2, "left": 0, "scanned": 2}
+    assert cp.migrate_fixture_provenance(path=path) == {"changed": 0, "left": 2, "scanned": 2}
+    _record(
+        path,
+        "z-production",
+        "advice:production",
+        "machine_observed",
+        evidence="Fixed a production regression discovered using a fixture",
+    )
+    mixed = cp.report(path=path)
+    assert mixed["experiment_count"] == mixed["verdict_count"] == 1
+    assert mixed["fixture_verdict_count"] == 2
+
+
+def test_formatted_corpus_report_shows_fixture_counts(tmp_path, monkeypatch):
+    path = _ledger(tmp_path)
+    monkeypatch.setattr(capabilities, "_fleet_edge_counts", lambda **kw: {})
+    _record(path, "a-fixture", "advice:fixture-pass", "fixture_observed")
+    _record(path, "a-fixture", "advice:fixture-fail", "fixture_observed", useful=False)
+    text = cp._fmt(cp.report(path=path))
+    assert "experiments: 0 (0 resolved)" in text
+    assert "fixture evidence: 2 experiments / 2 verdict events" in text
+
+
+def test_fixture_invocation_excluded_without_losing_mixed_production_trial(tmp_path):
+    path = _ledger(tmp_path)
+    cp.record_trigger("a-fixture", "advice:rail-exercise:fixture-only", path=path)
+    assert cp.report(path=path)["experiment_count"] == 0
+    cp.record_trigger("a-fixture", "advice:mixed", path=path, metadata={"source": "rail_exercise"})
+    _record(path, "z-production", "advice:mixed", "machine_observed")
+    report = cp.report(path=path)
+    assert report["experiment_count"] == report["resolved_experiment_count"] == 1
+    trial = next(row for row in cp.experiments(path=path) if row["experiment_id"] == "advice:mixed")
+    assert trial["triggered"] == ["z-production"]
