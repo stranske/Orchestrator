@@ -1,6 +1,6 @@
 {
   "collected": 2327,
-  "passed": 2327,
+  "passed": 2326,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 47,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Merged main87d041f baseline plus one missing-comment evidence regression: actual collection2327. Focused adjudicator/source report tests pass; full suite verdict awaits exact-head CI. Existing test/type/selftest/skip ceilings unchanged. Passed is the required verification floor, not a locally observed full-suite result."
+  "note": "Current main87d041f baseline2326 passed-or-skipped retained; actual collection2327 includes one new missing-comment regression. Focused31 tests pass; exact-head full merge-result CI must establish the higher passed floor before promotion. Existing quality/skip ceilings unchanged."
 }
