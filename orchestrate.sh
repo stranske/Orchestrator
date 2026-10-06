@@ -86,10 +86,14 @@ export ORCH_DISPATCH_LANE="${ORCH_DISPATCH_LANE:-0}"
 # (ok/low/unknown, or even a gh_capacity error) proceeds, so a broken probe never halts the cadence.
 # It also skips when the --active preflight found GitHub unable to answer this tick (_gh_deferred).
 export ORCH_GH_THROTTLE="${ORCH_GH_THROTTLE:-1}"
-# Pre-delegation adversarial review (2026-07-08, audit item 16d): tick.py already gates HIGH-STAKES
-# closer items (explicit high-risk labels only — low volume) through adversarial.py's refute-mode
-# minority-veto panel, but the flag was never exported, so the gate reported required_but_not_run
-# since it shipped (built != flowing again). Reviewers default to the cheap seats. Advisory:
+# Adversarial review panel (2026-07-08, audit item 16d): exported ON so the tick's pre-delegation
+# panel on HIGH-STAKES closer items would run. Since 2026-10-05 the tick does not examine closer items
+# at all (none can be delegated: discovery lists only PRs already carrying agent:*), so nothing the
+# tick runs reads this export. The panel runs at merge_guard.py's terminal merge, once per exact head
+# (adversarial.review_at_head), and merge_guard reads the flag from the MERGING session's environment,
+# where it is unset unless that session sets it. Whether it should run by default at every
+# high-stakes merge is held until its retrospective test reports (improvement log item 0, 10-05).
+# Kept so the owner's setting stays recorded where capability_recurrence_check reads it. Advisory:
 # adjudicate-don't-obey — vetoes are flags to verify, never an automatic block.
 export ORCH_RUN_ADVERSARIAL_REVIEW="${ORCH_RUN_ADVERSARIAL_REVIEW:-1}"
 export ORCH_ADVERSARIAL_REVIEWERS="${ORCH_ADVERSARIAL_REVIEWERS:-vibe,gemini}"
