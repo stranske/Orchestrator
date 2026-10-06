@@ -991,27 +991,6 @@ REFUSAL_ROLE_EDGE_METADATA: dict[str, Any] = {"status": "shadow_only", "disagree
 # `dispatcher.delegate_remote` returns. On the owner's Brain both such edges sat 0 s after their
 # run's recording, and the nearest edge a refusal wrote sat 3,306 s from any recording: the next tick.
 REFUSAL_EDGE_SAME_TICK_SECONDS = 300
-REFUSAL_EDGE_COLUMNS = (
-    "edge_id",
-    "schema_version",
-    "source_event_id",
-    "source_run_id",
-    "target_event_id",
-    "target_run_id",
-    "influence_type",
-    "influence_id",
-    "accepted",
-    "counterfactual",
-    "acceptance_gate_id",
-    "outcome_verdict",
-    "merged",
-    "durability",
-    "created_ts",
-    "propagated_ts",
-    "metadata_hash",
-    "capability_id",
-    "capability_version_id",
-)
 
 
 def refusal_role_edge_metadata_hash() -> str:
@@ -1063,25 +1042,29 @@ def _delete_refusal_role_edges(c: sqlite3.Connection, tables: set[str]) -> dict[
     influence type, target kind, acceptance, capability or metadata stays as it is. The rows are
     deleted rather than flagged: no column marks an edge retracted, and every reader of this table
     would need to learn one, while a deleted row is gone for all of them at once. The triage advice
-    itself stays on its role run. Every deleted row is kept in the marker's `detail`, and
-    `restore_refusal_role_edges` puts them back."""
-    rows = c.execute(
-        f"SELECT {','.join(REFUSAL_EDGE_COLUMNS)} FROM influence_edges "
-        "WHERE influence_type='role' AND substr(target_run_id,1,7)='remote:' AND accepted=0 "
-        "AND capability_id IS NULL AND metadata_hash=? ORDER BY created_ts, edge_id",
-        (refusal_role_edge_metadata_hash(),),
-    ).fetchall()
+    itself stays on its role run. Every deleted row is kept, with every column the table has, in
+    the marker's `detail`, and `restore_refusal_role_edges` puts them back."""
+    columns = [row[1] for row in c.execute("PRAGMA table_info(influence_edges)").fetchall()]
+    rows = [
+        dict(zip(columns, row))
+        for row in c.execute(
+            f"SELECT {','.join(columns)} FROM influence_edges "
+            "WHERE influence_type='role' AND substr(target_run_id,1,7)='remote:' AND accepted=0 "
+            "AND capability_id IS NULL AND metadata_hash=? ORDER BY created_ts, edge_id",
+            (refusal_role_edge_metadata_hash(),),
+        ).fetchall()
+    ]
     recordings: dict[str, list[int]] = {}
     kept: list[str] = []
-    deleted: list[tuple] = []
+    deleted: list[dict[str, Any]] = []
     by_reason = {"never_recorded": 0, "before_first_recording": 0, "after_a_recording": 0}
     for row in rows:
-        target, created = str(row[5]), int(row[14])
+        target, created = str(row["target_run_id"]), int(row["created_ts"])
         if target not in recordings:
             recordings[target] = _run_recording_times(c, target, tables)
         times = recordings[target]
         if any(0 <= created - ts <= REFUSAL_EDGE_SAME_TICK_SECONDS for ts in times):
-            kept.append(str(row[0]))
+            kept.append(str(row["edge_id"]))
             continue
         if not times:
             by_reason["never_recorded"] += 1
@@ -1091,7 +1074,7 @@ def _delete_refusal_role_edges(c: sqlite3.Connection, tables: set[str]) -> dict[
             by_reason["after_a_recording"] += 1
         deleted.append(row)
     for row in deleted:
-        c.execute("DELETE FROM influence_edges WHERE edge_id=?", (row[0],))
+        c.execute("DELETE FROM influence_edges WHERE edge_id=?", (row["edge_id"],))
     return {
         "selector": {
             "influence_type": "role",
@@ -1107,9 +1090,9 @@ def _delete_refusal_role_edges(c: sqlite3.Connection, tables: set[str]) -> dict[
         "kept_edge_ids": kept,
         "deleted": len(deleted),
         "deleted_by_reason": by_reason,
-        "deleted_linked": sum(1 for row in deleted if row[4] is not None),
-        "columns": list(REFUSAL_EDGE_COLUMNS),
-        "rows": [list(row) for row in deleted],
+        "deleted_linked": sum(1 for row in deleted if row["target_event_id"] is not None),
+        "columns": columns,
+        "rows": [[row[name] for name in columns] for row in deleted],
     }
 
 
