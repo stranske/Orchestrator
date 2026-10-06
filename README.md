@@ -547,7 +547,11 @@ safety switch, not dead code.
   `ORCH_AGENT_GH_CONFIG_DISABLED=1` stops pinning a dispatched agent's gh to the config its
   dispatcher's gh reads (`dispatcher.gh_config_dir`), so the prelude is exactly what it was before
   the pin. Inherited explicit config or token authentication remains effective; agents depending
-  on the pin return to the empty runtime config and "gh auth login".
+  on the pin return to the empty runtime config and "gh auth login";
+  `ORCH_CREDENTIAL_REDACTION_DISABLED=1` stops masking credentials in agent output
+  (`credential_redaction`), and every place that would have masked says so where the output lands;
+  `ORCH_CREDENTIAL_EXPOSURE_SCAN=0` skips switch review's exposure scan, which then reports
+  `disabled`, never a zero.
 - **Daily compiler cadence** — the active tick atomically publishes completion-event JSONL plus
   pattern-miner status/inventory artifacts. Empty output is a healthy “no eligible history yet”
   result, not a reason to seed synthetic data.
@@ -659,3 +663,13 @@ The weekly switch-review report also consumes firing-monitor regressions and ove
 the current ledger heartbeat with the declared cadence step's success-stamp age and artifact time,
 so missing heartbeat instrumentation can be distinguished from stopped steps. Missing evidence
 remains UNKNOWN, and this section raises no additional owner questions or automated actions.
+
+Credentials an agent prints are masked before this tool writes or returns them
+(`credential_redaction`): `dispatcher.offload` masks stdout, stderr and the agy log; the completion
+step masks a detached run's own log segment in place; the experiment and UX-review panels mask
+their output before it reaches the Brain. The agent CLIs' own transcripts are outside its reach.
+The weekly switch-review report carries a `credential_exposure` section, FYI only: the files under
+the dispatch-log and agent-runtime directories that hold the gh token's exact value or a
+GitHub-minted token, the newest first. It deletes and edits nothing; a secret file it cannot read
+is reported UNMEASURED, never as zero. `python3 src/credential_redaction.py scan --root NAME=PATH`
+runs the same report by hand.
