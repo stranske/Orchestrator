@@ -389,16 +389,14 @@ def _collection_requirements(case: dict) -> tuple[dict | None, list[dict]]:
 
 
 def _case_evaluated_sha(case: dict) -> str | None:
-    packet = case.get("packet") if isinstance(case.get("packet"), dict) else {}
-    finding = (
-        packet.get("disputed_finding") if isinstance(packet.get("disputed_finding"), dict) else {}
-    )
-    decision = finding.get("decision") if isinstance(finding.get("decision"), dict) else {}
-    ground_truth = (
-        packet.get("ground_truth_evidence")
-        if isinstance(packet.get("ground_truth_evidence"), dict)
-        else {}
-    )
+    raw_packet = case.get("packet")
+    packet: dict[Any, Any] = raw_packet if isinstance(raw_packet, dict) else {}
+    raw_finding = packet.get("disputed_finding")
+    finding: dict[Any, Any] = raw_finding if isinstance(raw_finding, dict) else {}
+    raw_decision = finding.get("decision")
+    decision: dict[Any, Any] = raw_decision if isinstance(raw_decision, dict) else {}
+    raw_ground_truth = packet.get("ground_truth_evidence")
+    ground_truth: dict[Any, Any] = raw_ground_truth if isinstance(raw_ground_truth, dict) else {}
     sha = decision.get("evaluated_sha") or ground_truth.get("merge_sha")
     return (
         sha
