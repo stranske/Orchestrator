@@ -30,15 +30,17 @@ class CampaignOutcomeTests(unittest.TestCase):
         with contextlib.closing(sqlite3.connect(self.db)) as conn, conn:
             conn.executescript(feedback.SCHEMA)
 
-    def record_run(self, run_id, target, number, durability="durable", cost=2.5, source="ccusage"):
+    def record_run(
+        self, run_id, target, number, durability="durable", cost=2.5, source="ccusage", merged=1
+    ):
         with contextlib.closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
                 "INSERT INTO runs(run_id,target,pr_number) VALUES (?,?,?)", (run_id, target, number)
             )
             if durability is not None:
                 conn.execute(
-                    "INSERT INTO outcomes(run_id,merged,durability) VALUES (?,1,?)",
-                    (run_id, durability),
+                    "INSERT INTO outcomes(run_id,merged,durability) VALUES (?,?,?)",
+                    (run_id, merged, durability),
                 )
             conn.execute(
                 "INSERT INTO costs(run_id,cost_usd,source) VALUES (?,?,?)", (run_id, cost, source)
@@ -66,6 +68,41 @@ class CampaignOutcomeTests(unittest.TestCase):
         result = lane.campaign_measure("owner/repo#7", [{"number": 91}])
         self.assertIsNone(result["durable"])
         self.assertEqual(result["cost_usd"], 2.5)
+
+    def test_cost_includes_failed_attempts_with_and_without_prs(self):
+        self.record_run("delivery", "owner/repo#7", 91)
+        self.record_run("closed", "owner/repo#7", 92, merged=0, cost=1.5)
+        self.record_run("no-pr", "owner/repo#7", None, merged=0, cost=2)
+        self.record_run("other-target", "owner/repo#8", 91, cost=100)
+        result = lane.campaign_measure("owner/repo#7", [{"number": 91}])
+        self.assertIs(result["durable"], True)
+        self.assertEqual(result["cost_usd"], 6)
+
+    def test_cost_is_measured_before_any_delivery_merges(self):
+        self.record_run("failed", "owner/repo#7", None, merged=0, cost=1.5)
+        result = lane.campaign_measure("owner/repo#7", [])
+        self.assertIsNone(result["durable"])
+        self.assertEqual(result["cost_usd"], 1.5)
+
+    def test_incomplete_failed_attempt_cost_keeps_total_unknown(self):
+        self.record_run("delivery", "owner/repo#7", 91)
+        for cost, source in [(0, "ccusage"), (1.5, "ledger")]:
+            with self.subTest(cost=cost, source=source):
+                with contextlib.closing(sqlite3.connect(self.db)) as conn, conn:
+                    conn.execute("DELETE FROM runs WHERE run_id='failed'")
+                    conn.execute("DELETE FROM outcomes WHERE run_id='failed'")
+                    conn.execute("DELETE FROM costs WHERE run_id='failed'")
+                self.record_run("failed", "owner/repo#7", 92, merged=0, cost=cost, source=source)
+                result = lane.campaign_measure("owner/repo#7", [{"number": 91}])
+                self.assertIs(result["durable"], True)
+                self.assertIsNone(result["cost_usd"])
+
+    def test_unfinished_attempt_keeps_total_cost_unknown(self):
+        self.record_run("delivery", "owner/repo#7", 91)
+        self.record_run("unfinished", "owner/repo#7", None, durability=None, cost=1.5)
+        result = lane.campaign_measure("owner/repo#7", [{"number": 91}])
+        self.assertIs(result["durable"], True)
+        self.assertIsNone(result["cost_usd"])
 
     def test_complete_repositories_have_explicit_unknown_outcomes(self):
         campaign = copy.deepcopy(self.campaign)
@@ -109,6 +146,7 @@ class CampaignOutcomeTests(unittest.TestCase):
         program["repos"][durable]["dispatches"] = [{"target": f"{durable}#10"}]
         lane._write_program(lane.campaign_program_path(self.campaign), program)
         self.record_run("durable", f"{durable}#10", 91)
+        self.record_run("failed", f"{durable}#10", None, merged=0, cost=1.5)
         self.record_run("pending", f"{pending}#10", 91, "pending", 0, "ledger")
         self.record_run("partial", f"{partial}#10", 91)
 
@@ -159,7 +197,7 @@ class CampaignOutcomeTests(unittest.TestCase):
         self.assertEqual(set(saved["repos"]), set(self.campaign["campaign"]["repos"]))
         for repo, expected in [
             (complete, (None, None, None)),
-            (durable, (True, True, 2.5)),
+            (durable, (True, True, 4)),
             (pending, (True, None, None)),
             (unattributed, (True, None, None)),
             (unmerged, (False, None, None)),

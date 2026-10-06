@@ -48,6 +48,9 @@ It holds campaign identity, exact target receipts, linked PR heads and merge sta
 started dispatch receipts, and attributed Brain durability/cost. Preview reports current
 observations; `--record-campaign` saves them without dispatch. Missing Brain outcomes,
 unattributed merges, pending durability and incomplete cost remain UNKNOWN/null.
+Cost includes every recorded attempt for the exact target, including failed attempts
+and attempts without a PR. A total is reported only when all attempts have outcomes
+and complete cost evidence; durability refers to the merged delivery PRs.
 The file is a projection of existing delivery/Brain evidence, not a new learning store.
 A receipt for a different campaign is refused rather than silently overwritten.
 The human summary prints `campaign: repos N, dispatched D, merged M`.

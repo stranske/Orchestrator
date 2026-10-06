@@ -1,5 +1,5 @@
 {
-  "collected": 2353,
+  "collected": 2357,
   "passed": 2326,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Round1220 combines campaign source with current main triage/adjudicator report. Passed floor2326 is retained from main; actual collection measured after null-body/blocked-preview regressions. Full merge-result CI pending; all quality ceilings unchanged. Actual collection2353;64 focused tests pass,5 failing regression cases restored to GREEN. Passed2326 is retained baseline, no full local suite claim."
+  "note": "Collection2357 measured after four campaign cost regressions;31 focused campaign tests pass. Cost includes failed and PR-less target attempts and remains unknown for unfinished or incomplete-cost attempts. Passed2326 is retained from main; all quality ceilings unchanged. Full suite CI pending; no full local suite claim."
 }

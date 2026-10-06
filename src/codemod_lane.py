@@ -584,11 +584,11 @@ def campaign_backlog(campaign: dict[str, Any], *, gh: Any = None) -> dict[str, A
 
 
 def campaign_measure(target: str, merged_prs: list[dict[str, Any]]) -> dict[str, Any]:
-    """Project attributed Brain outcomes; absence never becomes durable or free."""
+    """Project delivery durability and all target attempt costs from Brain evidence."""
     import feedback
 
     result: dict[str, Any] = {"durable": None, "cost_usd": None, "measurement": "UNKNOWN"}
-    if not merged_prs or not feedback.DB_PATH.exists():
+    if not feedback.DB_PATH.exists():
         return result
     numbers = {p["number"] for p in merged_prs}
     try:
@@ -601,6 +601,8 @@ def campaign_measure(target: str, merged_prs: list[dict[str, Any]]) -> dict[str,
                 "LEFT JOIN costs c ON c.run_id=r.run_id WHERE r.target=?",
                 (target,),
             ).fetchall()
+        if not rows:
+            return result
         attributed = [r for r in rows if r[0] in numbers]
         if {r[0] for r in attributed} != numbers or any(r[1] != 1 for r in attributed):
             result["measurement"] = "UNKNOWN: incomplete Brain attribution for merged delivery PRs"
@@ -610,12 +612,16 @@ def campaign_measure(target: str, merged_prs: list[dict[str, Any]]) -> dict[str,
             for r in attributed
             if r[2] in {"durable", "reverted", "reworked", "reopened", "broke_later"}
         ]
-        if len(known) == len(attributed):
+        if attributed and len(known) == len(attributed):
             result["durable"] = all(d == "durable" for d in known)
+        # Failed and PR-less attempts also spent resources on this exact target.
+        # A still-running attempt or an incomplete cost source leaves the total unknown.
         costs = [
-            r[3] for r in attributed if r[3] and r[3] > 0 and r[4] in feedback.COMPLETE_COST_SOURCES
+            r[3]
+            for r in rows
+            if r[1] is not None and r[3] and r[3] > 0 and r[4] in feedback.COMPLETE_COST_SOURCES
         ]
-        if len(costs) == len(attributed):
+        if len(costs) == len(rows):
             result["cost_usd"] = sum(costs)
         result["measurement"] = "attributed Brain outcomes; missing fields UNKNOWN"
     except sqlite3.Error as exc:
