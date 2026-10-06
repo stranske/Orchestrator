@@ -1,6 +1,6 @@
 {
- "collected": 2444,
- "passed": 2444,
+ "collected": 2445,
+ "passed": 2445,
  "skipped_max": 26,
  "mirror_skipped_max": 21,
  "bare_mirror_skipped_max": 47,
@@ -9,5 +9,5 @@
  "selftest_skipped_max": 7,
  "gate_skipped_max": 2,
  "mypy_exempt_max": 0,
- "note": "Integrates main b6be66c after503; retain all quality ceilings and prior measured minima; current full verification follows. FLOOR RECORDED by verify.py --update-floor on 2026-10-06: collected=2444, passed=2444. Ceilings preserved, never re-measured \u2014 they are edited by hand."
+ "note": "Current main4267123 integrated full2444 PASS/103 selftests/5 gates from preceding502 receipt. Exact-line whitespace follow-up adds one named regression: actual strip mutation RED,32 focused PASS plus2subtests, exact final collection 2445. All ceilings retained; final-head full CI pending."
 }

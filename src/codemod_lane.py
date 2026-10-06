@@ -308,7 +308,7 @@ def validate_campaign(campaign: dict[str, Any]) -> list[str]:
 
 def append_missing_ignores(content: str, entries: Sequence[str] = IGNORE_ENTRIES) -> str:
     """Preserve the original bytes, appending only absent exact ignore entries."""
-    existing = {line.strip() for line in content.splitlines()}
+    existing = set(content.splitlines())
     missing = [entry for entry in entries if entry not in existing]
     if not missing:
         return content
@@ -346,7 +346,7 @@ def _repo_file(repo: str, path: str, gh: Any) -> str:
 
 
 def target_issue_body(campaign: dict[str, Any], repo: str, content: str) -> str:
-    missing = [e for e in IGNORE_ENTRIES if e not in {s.strip() for s in content.splitlines()}]
+    missing = [e for e in IGNORE_ENTRIES if e not in set(content.splitlines())]
     marker = f"<!-- codemod-campaign:{campaign['campaign']['id']} -->"
     return f"""{marker}
 ## Why
@@ -387,7 +387,7 @@ def file_targets(campaign: dict[str, Any], *, gh: Any = None) -> dict[str, Any]:
     marker = f"<!-- codemod-campaign:{campaign['campaign']['id']} -->"
     for repo in campaign["campaign"]["repos"]:
         content = _repo_file(repo, ".gitignore", gh)
-        missing = [e for e in IGNORE_ENTRIES if e not in {s.strip() for s in content.splitlines()}]
+        missing = [e for e in IGNORE_ENTRIES if e not in set(content.splitlines())]
         row = rows.setdefault(repo, {})
         for field in ("merged", "durable", "cost_usd"):
             row.setdefault(field, None)
