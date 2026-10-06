@@ -2698,6 +2698,7 @@ def run_adjudicator_agent(
     *,
     case: dict,
     context: str = "",
+    source: str | None = None,
     cap: dict | None = None,
     learned: dict | None = None,
     backend: str | None = None,
@@ -2747,7 +2748,14 @@ def run_adjudicator_agent(
             errors.append("case validation failed; refusing live dispatch")
         else:
             _role_capability_event("adjudicator", "invocation", metadata={"backend": backend_name})
-            res = dispatcher.offload(backend_name, prompt, cwd=cwd, mode=role.mode, timeout=timeout)
+            res = dispatcher.offload(
+                backend_name,
+                prompt,
+                cwd=cwd,
+                mode=role.mode,
+                timeout=timeout,
+                isolate=source == "retrospective",
+            )
             backend_run_id = res.get("run_id")
             backend_model = res.get("model")
             raw_output = res.get("output", "")
@@ -2790,6 +2798,7 @@ def run_adjudicator_agent(
                 proposal=proposal,
                 # Cost telemetry, not provenance; None on the replay path (see run_redirect_agent).
                 model=backend_model,
+                source=source,
             )
         except Exception as exc:
             role_record_error = str(exc)
