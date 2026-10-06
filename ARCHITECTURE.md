@@ -254,6 +254,23 @@ named Sep 28 shed for the 6 h cooldown. `switch_review` names every marker, FYI 
 placed by hand that has held its seat past 14 days, or an expired one still on disk. (No stage,
 component or surface moved; the diagram is unchanged.)
 
+**What an agent prints passes one mask before this tool writes or returns it (2026-10-06).** While
+gh was broken for dispatched agents, agents fetched a GitHub token another way and printed it, and
+the dispatcher kept it wherever it keeps what an agent says: a vibe offload's stdout went into a
+world-readable dispatch log and back to the caller, whose driver saved a copy, and two experiment
+arms printed it into logs the detached wrapper fills straight from stdout. `credential_redaction`
+holds one shape list (GitHub, `sk-` keys, Slack, Google, AWS, LangSmith, JWT, bearer and basic
+headers, URL passwords, upper-case `*_TOKEN`-style assignments, PEM keys) plus the exact value of
+the gh token file. `dispatcher.offload` masks before it logs or returns. The completion step a
+detached run's wrapper already runs (`ledger_reconcile complete`) masks that run's own log segment
+in place, for runs started from 2026-10-06 only. The experiment and UX-review panels mask their
+output file before parsing it into the Brain. A mask is as long as what it hides, so an in-place
+edit moves no byte another writer is still appending after. The agent CLIs' own transcripts
+(cursor, agy, vibe, codex rollouts) are written by the CLIs and stay out of reach. A weekly FYI
+section of `switch_review` counts the files under the dispatch-log and agent-runtime directories
+holding the token's exact value or a GitHub-minted token (its own checksum holds), and edits
+nothing. (No stage, component or surface moved; the diagram is unchanged.)
+
 **The tick watchdog is infrastructure around the loop, not a stage of it** (`tick_watchdog.py`,
 2026-10-02). launchd starts no tick while one runs, so a tick that never ends is a gate with no
 drain, and everything that could report it runs inside the tick: for 5d20h from 2026-09-26 the
