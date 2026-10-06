@@ -123,8 +123,7 @@ class StrategyCostMeasurementTests(unittest.TestCase):
 
     def test_earlier_duplicate_measurement_cannot_hide_partial_replacement(self):
         rows = [
-            {"run_id": run_id, "cost_usd": 0.25, "source": "ccusage"}
-            for run_id in self.run_ids
+            {"run_id": run_id, "cost_usd": 0.25, "source": "ccusage"} for run_id in self.run_ids
         ]
         rows.append({"run_id": self.run_ids[-1], "cost_usd": 0.01, "source": "langsmith"})
         costs = strategy_experiment.strategy_arm_costs(self.plan, rows)
