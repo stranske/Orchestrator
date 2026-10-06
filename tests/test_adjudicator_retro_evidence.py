@@ -10,11 +10,133 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import adjudicator_retro as retro
+import capabilities
 import feedback
+import roles
 import verifier_evidence
 
 
 class RetrospectiveEvidenceTests(unittest.TestCase):
+    def test_retry_repairs_brain_record_without_repeating_paid_verdict(self):
+        for partial_write in (False, True):
+            with self.subTest(partial_write=partial_write), tempfile.TemporaryDirectory() as root:
+                self._exercise_record_recovery(Path(root), partial_write)
+
+    def _exercise_record_recovery(self, root, partial_write):
+        db = root / "brain.db"
+        proposal = {
+            "decision": "uphold_blocker",
+            "confidence": "high",
+            "rationale": "The finding needs inspection.",
+            "evidence_assessment": [
+                {
+                    "claim": "Missing test",
+                    "status": "supported",
+                    "evidence_ref": "gate-run",
+                    "reason": "Inspect the gate evidence",
+                }
+            ],
+            "ground_truth_refs": ["gate-run"],
+            "recommended_next_step": "Inspect the regression evidence",
+            "evidence_gaps": [],
+        }
+        reader = Mock(
+            return_value={
+                "disputed_finding": {"body": "Missing acceptance test"},
+                "ground_truth_evidence": {"diff_summary": "Added test", "gate_runs": ["gate-run"]},
+            }
+        )
+        offload = Mock(
+            return_value={
+                "run_id": "backend-one",
+                "model": "gemini-test-model",
+                "output": json.dumps(proposal),
+                "exit": 0,
+            }
+        )
+        recorder = feedback.record_role_run
+        attempts = []
+
+        def unavailable(run_id, role_name, target, agent, **kwargs):
+            kwargs.update(run_id=run_id, role_name=role_name, target=target, agent=agent)
+            attempts.append(kwargs)
+            if partial_write:
+                recorder(**kwargs)
+            raise sqlite3.OperationalError("Brain temporarily unavailable")
+
+        with (
+            patch.object(feedback, "DB_PATH", db),
+            patch.object(capabilities, "REG", root / "capabilities.json"),
+            patch.dict("os.environ", {"ORCH_CAPABILITIES_PATH": str(root / "capabilities.json")}),
+            patch.object(roles, "route_role", return_value={"agent": "gemini"}),
+            patch.object(roles, "_role_capability_event"),
+            patch.object(roles.dispatcher, "offload", offload),
+        ):
+            with feedback._conn() as conn:
+                conn.execute(
+                    "INSERT INTO runs(run_id,ts,target) VALUES ('original',?,'owner/repo#1')",
+                    (int(time.time()),),
+                )
+                conn.execute(
+                    "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+                    "VALUES ('original','NON_PASS','PASS',1)"
+                )
+                before = conn.execute("SELECT * FROM outcomes ORDER BY run_id").fetchall()
+            path = root / "retro.json"
+            with patch.object(feedback, "record_role_run", side_effect=unavailable):
+                first = retro.run(dispatch=True, path=path, db=db, evidence_reader=reader)
+                row = first["rows"][0]
+                assert row["proposal"] == proposal
+                assert row["decision"] == "uphold_blocker"
+                assert row["role_run_id"] is None
+                assert row["role_record_error"] == "Brain temporarily unavailable"
+                assert row["role_record"] == attempts[0]
+                assert json.loads(path.read_text()) == first
+
+                # A pending record can outlive the replay window. Dry runs,
+                # ordinary resumes and a zero retry limit must leave it pending.
+                with patch.object(retro, "disputes", return_value=[]):
+                    for options in (
+                        {"dispatch": False, "retry": True},
+                        {"dispatch": True},
+                        {"dispatch": True, "retry": True, "limit": 0},
+                    ):
+                        pending = retro.run(path=path, db=db, **options)
+                        assert pending["rows"][0]["role_record_error"]
+                    assert len(attempts) == 1
+                    failed = retro.run(dispatch=True, retry=True, path=path, db=db)
+                    assert failed["rows"][0]["role_record_error"]
+                    assert attempts[1] == attempts[0]
+
+            with patch.object(retro, "disputes", return_value=[]):
+                repaired = retro.run(dispatch=True, retry=True, path=path, db=db)
+                saved = repaired["rows"][0]
+                assert saved["role_run_id"] == attempts[0]["run_id"]
+                assert saved["role_record_error"] is None
+                assert saved["proposal"] == proposal
+                assert saved["disposition"] == "needs_more_evidence"
+                assert saved["shadow_verdict"] is None
+                assert json.loads(path.read_text()) == repaired
+                assert (
+                    retro.run(dispatch=True, retry=True, path=path, db=db)["rows"]
+                    == repaired["rows"]
+                )
+            with sqlite3.connect(db) as conn:
+                assert conn.execute("SELECT * FROM outcomes ORDER BY run_id").fetchall() == before
+                records = conn.execute(
+                    "SELECT run_id,ts,source,model,decomposition FROM runs "
+                    "WHERE role_name='adjudicator'"
+                ).fetchall()
+            assert len(records) == 1
+            run_id, ts, source, model, decomposition = records[0]
+            assert run_id == attempts[0]["run_id"]
+            assert ts == attempts[0]["ts"]
+            assert source == "retrospective"
+            assert model == "gemini-test-model"
+            assert json.loads(decomposition)["proposal"] == proposal
+            offload.assert_called_once()
+            reader.assert_called_once()
+
     def test_saved_verdicts_refresh_after_leaving_the_dispute_window(self):
         now = feedback.DURABILITY_DETECTION_SINCE + 100 * 86400
         with tempfile.TemporaryDirectory() as temporary, patch.dict(
@@ -61,11 +183,14 @@ class RetrospectiveEvidenceTests(unittest.TestCase):
                 conn.execute(
                     "UPDATE costs SET cost_usd=2,source='ccusage' WHERE run_id='backend-one'"
                 )
-            for durability, truth, agree in (
-                ("reverted", "FAIL", 1),
-                ("broke_later", "FAIL", 1),
-                ("durable", "PASS", 0),
-                ("pending", None, 0),
+            for durability, truth in (
+                ("reverted", "FAIL"),
+                ("broke_later", "FAIL"),
+                ("reopened", "FAIL"),
+                ("abandoned", "FAIL"),
+                ("reworked", "FAIL"),
+                ("durable", "PASS"),
+                ("pending", None),
             ):
                 with self.subTest(durability=durability):
                     with sqlite3.connect(db) as conn:
@@ -84,16 +209,36 @@ class RetrospectiveEvidenceTests(unittest.TestCase):
                     assert refreshed["rows"][0]["role_run_id"] == "shadow-role"
                     assert refreshed["rows"][0]["later_truth"] == truth
                     summary = refreshed["summary"]
-                    assert summary["cases"] == summary["adjudicated"] == 1
-                    assert summary["graded"] == int(truth is not None)
-                    assert summary["agree"] == agree
-                    assert summary["disagree"] == int(truth == "PASS")
-                    assert summary["agreement_rate"] == (agree if truth else None)
-                    assert summary["merge_rule_agreement_rate"] == (
-                        int(truth == "PASS") if truth else None
-                    )
+                    assert summary["cases"] == summary["proposed_decisions"] == 1
+                    assert summary["adjudicated"] == summary["graded"] == 0
+                    assert summary["agree"] == summary["disagree"] == 0
+                    assert summary["agreement_rate"] is None
+                    assert summary["merge_rule_agreement_rate"] is None
+                    assert refreshed["rows"][0]["proposal"]["decision"] == "uphold_blocker"
+                    assert refreshed["rows"][0]["disposition"] == "needs_more_evidence"
+                    assert refreshed["rows"][0]["shadow_verdict"] is None
                     assert summary["cost_measured_cases"] == 1
                     assert summary["cost_usd"] == summary["cost_per_case"] == 2
+                    comparison = refreshed["proposal_comparison"]
+                    assert comparison["evidence_basis"] == "raw_metadata_proposals"
+                    assert comparison["cases"] == comparison["proposed_decisions"] == 1
+                    assert comparison["compared"] == int(truth is not None)
+                    assert comparison["pending_truth"] == int(truth is None)
+                    assert comparison["agree"] == int(truth == "FAIL")
+                    assert comparison["disagree"] == int(truth == "PASS")
+                    assert comparison["agreement_rate"] == (
+                        float(truth == "FAIL") if truth else None
+                    )
+                    assert comparison["merge_rule_agreement_rate"] == (
+                        float(truth == "PASS") if truth else None
+                    )
+                    assert comparison["cost_measured_cases"] == 1
+                    assert comparison["cost_usd"] == comparison["cost_per_case"] == 2
+                    assert refreshed["rows"][0]["proposal_comparison"] == {
+                        "verdict": "FAIL",
+                        "agrees": truth == "FAIL" if truth else None,
+                        "merge_rule_agrees": truth == "PASS" if truth else None,
+                    }
                     with sqlite3.connect(db) as conn:
                         after = conn.execute("SELECT * FROM outcomes ORDER BY run_id").fetchall()
                         assert after == before

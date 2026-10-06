@@ -736,6 +736,7 @@ def _compact_adjudication_case(case: dict) -> dict:
         "blocker",
         "acceptance_criteria",
         "ground_truth_evidence",
+        "metadata_only",
         "repo_context",
         "prior_decision",
     ):
@@ -750,6 +751,15 @@ def _compact_adjudication_case(case: dict) -> dict:
     return compact
 
 
+def adjudication_metadata_only(case: dict) -> bool:
+    """The retrospective producer supplies counts/statuses, not inspected contents.
+
+    A caller's false flag cannot upgrade this producer's evidence contract.
+    Non-retrospective cases retain their existing evidence-specific behavior.
+    """
+    return case.get("source") == "retrospective" or case.get("metadata_only") is True
+
+
 def _adjudicator_prompt(ctx: dict) -> str:
     case = _compact_adjudication_case(ctx.get("case") or {})
     context = (ctx.get("context") or "").strip() or "(none provided)"
@@ -762,6 +772,10 @@ def _adjudicator_prompt(ctx: dict) -> str:
             "CRITICAL-EVALUATOR STANCE: adjudicate against evidence, not reviewer confidence. A blocker should",
             "stand only when the supplied ground truth supports it. Reject bare, convention-blind, or contradicted",
             "claims. Use needs_more_evidence when the evidence is insufficient to prove or disprove the claim.",
+            "",
+            "Evidence boundary: retrospective packets contain file-change counts and gate statuses only.",
+            "Equal change counts do not prove byte parity; green CI does not establish artifact completeness.",
+            "For metadata-only evidence, use needs_more_evidence; do not infer inspected source or artifacts.",
             "",
             "Rails you must not cross:",
             "- Do NOT emit PASS, FAIL, BLOCKED, verifier_verdict, merge, label, claim, or worker-selection fields.",
@@ -2781,25 +2795,40 @@ def run_adjudicator_agent(
         decision_source = "baseline_needs_more_evidence"
         advisory_plan = baseline
 
+    if adjudication_metadata_only(compact_case):
+        decision_source = "metadata_only_needs_more_evidence"
+        advisory_plan = {
+            **baseline,
+            "rationale": "File-change counts and gate statuses do not establish inspected source, parity or artifact completeness.",
+            "evidence_gaps": [
+                "Revision-bound inspected source or relevant patch contents are unavailable.",
+                "Source/template byte comparisons and required acceptance artifact contents/coverage are unverified.",
+            ],
+        }
+
     role_run_id: str | None = None
     role_record_error: str | None = None
+    role_record: dict | None = None
     if dispatch and backend_name:
         role_run_id = f"role:adjudicator:{backend_name}:{time.time_ns()}"
+        # Keep the original identity and telemetry for record-only recovery if
+        # the Brain is temporarily unavailable after a paid backend call.
+        role_record = {
+            "run_id": role_run_id,
+            "role_name": "adjudicator",
+            "target": str(compact_case.get("target") or "adjudicator-role"),
+            "agent": backend_name,
+            "reasoning_level": role.mode,
+            "backend_run_id": backend_run_id,
+            "action": advisory_plan.get("decision"),
+            "decision_source": decision_source,
+            "proposal": proposal,
+            "model": backend_model,
+            "source": source,
+            "ts": int(time.time()),
+        }
         try:
-            feedback.record_role_run(
-                role_run_id,
-                "adjudicator",
-                str(compact_case.get("target") or "adjudicator-role"),
-                backend_name,
-                reasoning_level=role.mode,
-                backend_run_id=backend_run_id,
-                action=advisory_plan.get("decision"),
-                decision_source=decision_source,
-                proposal=proposal,
-                # Cost telemetry, not provenance; None on the replay path (see run_redirect_agent).
-                model=backend_model,
-                source=source,
-            )
+            feedback.record_role_run(**role_record)
         except Exception as exc:
             role_record_error = str(exc)
             role_run_id = None
@@ -2820,6 +2849,7 @@ def run_adjudicator_agent(
         "role_run_id": role_run_id,
         "backend_run_id": backend_run_id,
         "role_record_error": role_record_error,
+        "role_record": role_record,
         "routing": routing,
         "decision_source": decision_source,
         "prompt": prompt,

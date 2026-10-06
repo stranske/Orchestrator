@@ -62,3 +62,63 @@ Focused retrospective tests passed 12 cases including merge-null refusal, direct
 annotation invariance, MCP forwarding and contested/unknown/equal verdict eligibility.
 Advisor, MCP and retrospective module selftests passed. Current-head CI and private
 mirror/live-state-copy validation are still required after integration and push.
+
+## Keepalive comparison validation, 2026-10-06
+
+- [x] Compare saved proposals with later durability and the merge-rule baseline, and
+  persist agreement rates, case counts and measured per-case costs in the state report.
+
+`node tests/test_adjudicator_retro_cli.js` passed all four CLI tests. The added regression
+withdraws trusted observation dates from saved durable/reverted cases, confirms those
+cases leave both comparison denominators, then restores the dates at the detection
+boundary and verifies the original comparison returns. Role identities, measured costs
+and the entire Brain snapshot remain unchanged by each refresh. Metadata proposals
+remain separate from accepted verdicts.
+
+Deliberately replacing the durability cutoff with zero made the added test fail (exit 1).
+The Python source was restored byte for byte; the four CLI tests then passed (exit 0).
+The existing five evidence unittest tests and the retrospective selftest also passed.
+
+The named pytest acceptance tests and their required outcome-write/unconditional-offer
+fault checks remain pending for this round: pytest and Black are absent, and PyPI could
+not be reached from this runner. This commit changes JavaScript tests and this verification
+note only; it does not change Python source or claim the named pytest checks passed.
+
+## Keepalive eligibility reconciliation, 2026-10-06
+
+Reviewed the six latest commits (`2cec3a8` through `51cf5e2`) before making changes.
+The comparison report, closer-lane binding and weekly line already exist. Current-run
+verification supports these task checkboxes:
+
+- [x] Compare saved raw proposals with later durability and the merge-rule baseline;
+  persist agreement rates, measured costs and counts in the state report.
+- [x] Bind `role-adjudicator` on `closer-lane` with `requires_pr: contested_verdict`.
+- [x] Render `adjudicator shadow: cases N, agree A, disagree D, cost C` in switch review.
+- [ ] Run the three named pytest acceptance tests on the current tree.
+- [ ] Run the required deliberate outcome-write and unconditional-offer faults against
+  the named pytest tests, then restore and verify they pass.
+
+The new JavaScript regression exercises both advisor classification paths across ten
+contexts: missing either verdict, unknown or blank evidence, agreeing verdicts and disputes
+in either direction. Each ineligible result must explain the missing fact or agreement.
+All five CLI tests pass, including saved durability/cost refresh and weekly rendering.
+The existing five evidence unittest tests and three retrospective selftest checks pass.
+
+Fault controls ran in temporary source copies with private Brain databases: an
+`outcomes.merged` UPDATE made the snapshot witnesses fail (exit 1), and treating
+agreeing verdicts as contested made the new eligibility witness fail (exit 1).
+Each copied source was restored byte for byte and all five CLI tests passed (exit 0).
+The repository's Python source remained unchanged. These controls verify the
+JavaScript witnesses; they do not replace the pending named pytest fault checks.
+
+GitHub access verified PR #506 is open and ready for review. The attempted PR-body
+checkbox reconciliation was refused by the connector because it requires approval;
+this runner's approval policy is `never`. The PR body therefore remains unchanged.
+Pytest and Black are unavailable in both the active and system Python environments;
+attempts to install them from PyPI failed. No Python files change in this round, and
+the named pytest acceptance checks remain pending rather than being inferred from the
+JavaScript witnesses.
+
+The checkout's `.git` directory is read-only: `git add` cannot create `index.lock`.
+The changes are committed using an isolated Git directory under `/tmp`, with a
+single-commit bundle and patch for transfer; the shared checkout retains the edits.
