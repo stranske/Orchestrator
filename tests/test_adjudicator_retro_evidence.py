@@ -7,7 +7,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import adjudicator_retro as retro
 import feedback
@@ -15,6 +15,144 @@ import verifier_evidence
 
 
 class RetrospectiveEvidenceTests(unittest.TestCase):
+    def test_saved_verdicts_refresh_after_leaving_the_dispute_window(self):
+        now = feedback.DURABILITY_DETECTION_SINCE + 100 * 86400
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(
+            "os.environ", {"ORCH_STATE_DIR": temporary}
+        ):
+            db = Path(temporary) / "brain.db"
+            with patch.object(feedback, "DB_PATH", db), feedback._conn() as conn:
+                conn.execute(
+                    "INSERT INTO runs(run_id,ts,target) VALUES ('original',?,'owner/repo#1')",
+                    (now - 89 * 86400,),
+                )
+                conn.execute(
+                    "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+                    "VALUES ('original','NON_PASS','PASS',1)"
+                )
+                conn.execute(
+                    "INSERT INTO costs(run_id,cost_usd,source) VALUES ('backend-one',0,'ledger')"
+                )
+            reader = Mock(
+                return_value={
+                    "disputed_finding": {"body": "Missing acceptance test"},
+                    "ground_truth_evidence": {
+                        "diff_summary": "Added test",
+                        "gate_runs": ["gate-run"],
+                    },
+                }
+            )
+            runner = Mock(
+                return_value={
+                    "proposal": {"decision": "uphold_blocker"},
+                    "role_run_id": "shadow-role",
+                    "backend_run_id": "backend-one",
+                }
+            )
+            with patch.object(retro.time, "time", return_value=now):
+                initial = retro.run(dispatch=True, db=db, evidence_reader=reader, runner=runner)
+            assert initial["summary"]["graded"] == 0
+            assert initial["summary"]["cost_per_case"] is None
+            path = Path(temporary) / "capability-program/adjudicator-retro.json"
+            assert path.exists()
+
+            # The original dispute ages out before its later failure and complete cost arrive.
+            with sqlite3.connect(db) as conn:
+                conn.execute(
+                    "UPDATE costs SET cost_usd=2,source='ccusage' WHERE run_id='backend-one'"
+                )
+            for durability, truth, agree in (
+                ("reverted", "FAIL", 1),
+                ("broke_later", "FAIL", 1),
+                ("durable", "PASS", 0),
+                ("pending", None, 0),
+            ):
+                with self.subTest(durability=durability):
+                    with sqlite3.connect(db) as conn:
+                        conn.execute(
+                            "UPDATE outcomes SET durability=?,durability_checked_ts=? "
+                            "WHERE run_id='original'",
+                            (durability, now + 2 * 86400),
+                        )
+                        before = conn.execute("SELECT * FROM outcomes ORDER BY run_id").fetchall()
+                    with patch.object(retro.time, "time", return_value=now + 2 * 86400):
+                        refreshed = retro.run(
+                            dispatch=True, db=db, evidence_reader=reader, runner=runner
+                        )
+                    assert json.loads(path.read_text()) == refreshed
+                    assert refreshed["population"] == 0
+                    assert refreshed["rows"][0]["role_run_id"] == "shadow-role"
+                    assert refreshed["rows"][0]["later_truth"] == truth
+                    summary = refreshed["summary"]
+                    assert summary["cases"] == summary["adjudicated"] == 1
+                    assert summary["graded"] == int(truth is not None)
+                    assert summary["agree"] == agree
+                    assert summary["disagree"] == int(truth == "PASS")
+                    assert summary["agreement_rate"] == (agree if truth else None)
+                    assert summary["merge_rule_agreement_rate"] == (
+                        int(truth == "PASS") if truth else None
+                    )
+                    assert summary["cost_measured_cases"] == 1
+                    assert summary["cost_usd"] == summary["cost_per_case"] == 2
+                    with sqlite3.connect(db) as conn:
+                        after = conn.execute("SELECT * FROM outcomes ORDER BY run_id").fetchall()
+                        assert after == before
+            reader.assert_called_once()
+            runner.assert_called_once()
+
+    def test_incomplete_packet_evidence_never_dispatches(self):
+        row = {
+            "run_id": "original",
+            "target": "owner/repo#1",
+            "verifier_verdict": "NON_PASS",
+            "adjudicated_verdict": "PASS",
+            "merged": 1,
+        }
+        valid = {
+            "disputed_finding": {"body": "Missing acceptance test"},
+            "ground_truth_evidence": {"diff_summary": "Added test", "gate_runs": ["gate-run"]},
+        }
+        invalid = [
+            {**valid, "disputed_finding": finding}
+            for finding in (
+                "verifier-comment",
+                {"ref": "verifier-comment"},
+                {"body": "  "},
+                {"body": ["Missing test"]},
+            )
+        ]
+        invalid.append({**valid, "ground_truth_evidence": "merge=PASS"})
+        for key, values in (
+            ("diff_summary", (None, "", "  ", [], {"ref": "diff"})),
+            ("gate_runs", (None, [], "gate-run", {"ref": "gate-run"})),
+        ):
+            for value in values:
+                invalid.append(
+                    {
+                        **valid,
+                        "ground_truth_evidence": {**valid["ground_truth_evidence"], key: value},
+                    }
+                )
+        with tempfile.TemporaryDirectory() as temporary, patch.object(
+            retro, "disputes", return_value=[row]
+        ):
+            runner = Mock(side_effect=AssertionError("incomplete packet dispatched"))
+            for packet in invalid:
+                with self.subTest(packet=packet):
+                    with self.assertRaises(ValueError):
+                        retro.build_packet(row, packet)
+                    result = retro.run(
+                        dispatch=True,
+                        retry=True,
+                        path=Path(temporary) / "report.json",
+                        evidence_reader=lambda _row: packet,
+                        runner=runner,
+                    )
+                    self.assertIn("error", result["rows"][0])
+                    self.assertEqual(result["summary"]["graded"], 0)
+                    self.assertIsNone(result["summary"]["agreement_rate"])
+            runner.assert_not_called()
+
     def test_fetch_evidence_selects_the_validated_verifier_comment(self):
         decision = {
             "schema": verifier_evidence.MARKER,
