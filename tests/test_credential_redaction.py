@@ -648,6 +648,19 @@ def test_the_report_counts_by_hash_and_checksum_and_prints_no_value(monkeypatch,
     assert before == {p: (p.read_bytes(), p.stat().st_mtime) for p in before}, "nothing is edited"
 
 
+def test_a_drained_tree_prints_a_measured_zero(monkeypatch, tmp_path):
+    """The drained state is reachable and reads as good news, apart from `UNMEASURED` below."""
+    secret = tmp_path / "gh_cli_token"
+    secret.write_text(minted("o") + "\n")
+    monkeypatch.setenv(cr.SECRET_FILES_ENV, str(secret))
+    (tmp_path / "clean").mkdir()
+    (tmp_path / "clean" / "run.log").write_text("nothing here\n")
+    rep = cr.exposure_report({"r": tmp_path / "clean"}, use_rg=False)
+    assert rep["status"] == "ok" and rep["exposed_files"] == 0, rep
+    lines = "\n".join(cr.format_lines(rep))
+    assert "gh_cli_token (exact value): 0 file(s)" in lines and "UNMEASURED" not in lines
+
+
 def test_an_unreadable_secret_is_unmeasured_never_zero(monkeypatch, tmp_path):
     monkeypatch.setenv(cr.SECRET_FILES_ENV, str(tmp_path / "missing"))
     rep = cr.exposure_report({"r": tmp_path}, use_rg=False)
@@ -706,6 +719,9 @@ def test_the_weekly_caller_carries_the_section_into_its_report(monkeypatch, caps
     sentinel = {"status": "disabled", "reason": "sentinel"}
     captured: dict = {}
     monkeypatch.setenv("ORCH_VALUE_CHAIN_MONITOR", "0")
+    # main() also records the weekly adversarial shape measurement, a ledger write that only a
+    # live tick's heartbeat flag arms; unset, it writes nothing.
+    monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS", raising=False)
     monkeypatch.setattr(switch_review, "credential_exposure", lambda **_k: sentinel)
 
     def fake_review(**kwargs):
