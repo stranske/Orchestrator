@@ -46,6 +46,10 @@ def github(campaign, tmp_path, monkeypatch):
             return [copy.deepcopy(issues[repo])] if repo in issues else []
         if args[0] == "api" and args[1].endswith("/comments"):
             return {"id": 1}
+        if args[:2] == ["label", "list"]:
+            return [{"name": "refactor"}]
+        if args[0] == "api" and args[1].endswith("/labels"):
+            return {"name": "codemod"}
         if args[0] == "api":
             repo = args[1].removeprefix("repos/").removesuffix("/issues")
             body = next(a.removeprefix("body=") for a in args if a.startswith("body="))
@@ -87,6 +91,7 @@ def test_the_campaign_validates_and_targets_only_missing_entries(campaign, githu
     lane.file_targets(campaign, gh=gh)
     creates = [a for a in calls if a[0] == "api" and a[1].endswith("/issues")]
     assert len(creates) == 6
+    assert sum(a[0] == "api" and a[1].endswith("/labels") for a in calls) == 6
     assert sum(a[0] == "api" and a[1].endswith("/comments") for a in calls) == 1
     broken = copy.deepcopy(campaign)
     broken["delegate_prompt"] += " Remove an existing ignore line."

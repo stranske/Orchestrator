@@ -432,6 +432,20 @@ def file_targets(campaign: dict[str, Any], *, gh: Any = None) -> dict[str, Any]:
                 )
                 if check.returncode:
                     raise ValueError(f"{repo} issue format rejected: {check.stdout} {check.stderr}")
+            labels = gh(["label", "list", "--repo", repo, "--search", "codemod", "--json", "name"])
+            if not any(label["name"] == "codemod" for label in labels):
+                gh(
+                    [
+                        "api",
+                        f"repos/{repo}/labels",
+                        "-f",
+                        "name=codemod",
+                        "-f",
+                        "color=5319e7",
+                        "-f",
+                        "description=Bounded repository codemod campaign",
+                    ]
+                )
             created = gh(
                 [
                     "api",
