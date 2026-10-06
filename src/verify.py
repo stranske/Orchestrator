@@ -1215,7 +1215,8 @@ def drainable_skips(
     no per-test record of its skips, or there is no mark to look for), never zero.
     """
     if not mark:
-        return dict.fromkeys(SKIP_CEILINGS)
+        uncounted: dict[str, int | None] = dict.fromkeys(SKIP_CEILINGS)
+        return uncounted
     tests = [v for by_name in (py.get("verdicts") or {}).values() for v in by_name.values()]
     counted = bool(tests) or not py.get("skipped")
     in_tests = sum(1 for v in tests if v["outcome"] == "skipped" and mark in v["message"])
