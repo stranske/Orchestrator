@@ -1,7 +1,11 @@
 """Independent demand and first-break regressions, including the real weekly consumer."""
 
 import json
+import os
 
+import pytest
+
+import adversarial
 import capabilities
 import capability_admission
 import capability_advisor
@@ -9,6 +13,27 @@ import switch_review
 import value_chain_monitor as monitor
 
 NOW = 1791183600
+
+
+@pytest.fixture(autouse=True)
+def isolated_adversarial_population(monkeypatch):
+    """Value-chain fixtures do not exercise the independent live fleet collector."""
+    # The weekly CLI also scans the owner's runtime/log files. That independent
+    # exposure report has its own tests and must not read real credentials here.
+    monkeypatch.setenv("ORCH_CREDENTIAL_EXPOSURE_SCAN", "0")
+    monkeypatch.setattr(
+        switch_review,
+        "_GH_CALL_RUNNER",
+        lambda *args, **kwargs: (False, "", "unmeasured: independent unit-test fixture"),
+    )
+    disabled = os.environ.get("ORCH_DISABLE_STEPS", "")
+    monkeypatch.setenv("ORCH_DISABLE_STEPS", disabled + ",issue-size-quality")
+    monkeypatch.setattr(adversarial, "record_shape_measurement", lambda *args, **kw: False)
+    monkeypatch.setattr(
+        switch_review,
+        "adversarial_shape_population",
+        lambda **kw: {"status": "unknown", "reason": "unit-test fixture"},
+    )
 
 
 def ledger(tmp_path, names=("role-prompt",)):
@@ -315,7 +340,12 @@ def test_new_capability_has_all_nine_admission_parts(tmp_path, monkeypatch, caps
         registrations.append(capability_id)
         register(capability_id, record, path)
 
+    clock = [int(__import__("time").time())]
+    monkeypatch.setattr(switch_review.time, "time", lambda: clock[0])
+
     def private_heartbeat(capability_id, event_type, **kwargs):
+        if capability_id == "value-chain-monitor":
+            clock[0] += 1
         return heartbeat(capability_id, event_type, path=path, **kwargs)
 
     def collect_inputs(**kwargs):

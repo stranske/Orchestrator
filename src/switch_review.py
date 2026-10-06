@@ -1489,6 +1489,7 @@ def review(
     carried as an FYI section; a caller that passes none gets no such section."""
     _capability_heartbeat()
 
+    live_review_clock = now is None
     now = int(now if now is not None else time.time())
     states = switch_states(now=now, env=env, path=path, sources=sources)
     due, quiet = states["held_off"], states["on_but_idle"]
@@ -1512,6 +1513,10 @@ def review(
         except Exception as exc:
             print(f"switch_review: value-chain heartbeat failed: {exc}", file=sys.stderr)
         try:
+            # The heartbeat may cross a second boundary during earlier readers.
+            # Include it in a live snapshot; keep explicitly injected clocks exact.
+            if live_review_clock:
+                now = int(time.time())
             value_chain = value_chain_monitor.report(
                 now=now, path=path, env=env, inputs=value_chain_inputs
             )
