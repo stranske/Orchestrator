@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """tick.py — the autonomous REMOTE orchestration tick (the cron loop's brain; OFF until the owner activates).
 
-For each actionable opener/closer item: CHOOSE a keepalive agent (router.select_remote_agent — reserve-
+For each actionable opener item (closer items are set aside: their PRs are already in the agent
+pipeline, so none can be delegated): CHOOSE a keepalive agent (router.select_remote_agent — reserve-
 aware, so routine work avoids Claude's scarce weekly cap) -> APPLY its `agent:<X>` label
 (dispatcher.delegate_remote) to drive the GitHub keepalive on REMOTE capacity -> then INGEST keepalive PR
 outcomes (outcomes.ingest_outcomes) so the feedback loop gets LIVE data. This is the "orchestrator mostly
@@ -373,7 +374,7 @@ DELEGATIONS_PER_TICK_DEFAULT = 3
 # turning into unbounded reads. Measured over the live period (2026-06-15 to 09-02): the backlog per
 # tick was p90 24, max 42 items, and the items that were not owned were p90 3, p99 15, max 29.
 # Examined first (`examination_order`), the unowned ones fit inside 4 x 3 = 12 in all but 25 of
-# 1,857 ticks. Closer items, most of that backlog, are not examined at all since 2026-10-05
+# 1,857 ticks. Closer items, owned by construction, are not examined at all since 2026-10-05
 # (`remote_tick`).
 EXAMINED_PER_DELEGATION = 4
 
