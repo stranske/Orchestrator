@@ -94,6 +94,14 @@ LIVENESS:  the LAST block of a completed --active tick runs ~/.codex/bin/hc-ping
   validates the ledger and writes `capability-validation.json` plus `capability-inventory.md` under
   the local state directory.
 
+The weekly switch review also collects issue task-count delivery quality across the reviewed
+fleet: `python3 src/issue_size_quality.py --json` prints PASS, durability, broke-later and original
+verifier NON_PASS rates with sample counts, and persists the two-week comparison under
+`$ORCH_STATE_DIR/capability-program/size-quality.json`. Missing samples stay unmeasured. Disable
+this collection with `ORCH_DISABLE_STEPS=issue-size-quality`; it changes no dispatch or lifecycle
+state. Redirect decomposition attaches the existing role's validated plan behind the existing
+`ORCH_ROLE_SHADOW` gate and cycle cap, retaining the deterministic fallback with a stated reason.
+
 The weekly switch review includes a read-only **value chain** for every live capability:
 independently measured situation count beside production invocation, usable output,
 accepted influence and graded outcome, with the first broken step named. Missing or

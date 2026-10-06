@@ -66,6 +66,7 @@ FIXTURE = "gh" + "p_" + "A" * 36
 @pytest.fixture(autouse=True)
 def _hermetic(monkeypatch):
     """No test reads this machine's real secret files, and redaction is on unless a test says so."""
+    monkeypatch.setenv("ORCH_DISABLE_STEPS", "issue-size-quality")
     monkeypatch.setenv(cr.SECRET_FILES_ENV, "")
     monkeypatch.delenv(cr.REDACTION_DISABLED_ENV, raising=False)
     monkeypatch.delenv(cr.EXPOSURE_SCAN_ENV, raising=False)
