@@ -101,21 +101,9 @@ TESTGEN_READ_ONLY_GATE_GUARD = (
     "gate/helper file changed."
 )
 
-# task_type -> the capability whose schema that task's prompt literally cites.
-#
-# These lane "capabilities" are PROMPT-SCHEMA CONTRACTS, not locally-executed code paths. The
-# dispatcher never runs `cross_repo_lane.py`; it hands an agent a prompt saying "produce strict JSON
-# matching cross_repo_lane.py" and the agent returns conforming output. So their heartbeats could
-# never fire from a dispatch, and the inventory reported `no_matching_work` for capabilities whose
-# work-type was demonstrably being routed (measured 2026-08-19: 1 cross_repo dispatch, 2 testgen,
-# yet last_match=None on all of them).
-#
-# A `match` is recorded here, NOT an `invocation`. The honest claim is that work of this type was
-# routed and the capability's contract shaped the prompt — the module itself did not run. That
-# moves these from a FALSE "no matching work" to a TRUE `matched_not_invoked`, which is the state
-# the inventory's next-action text already handles correctly. Only mappings where the template
-# actually names the module are listed; `review` is deliberately absent because its prompt does not
-# cite `adversarial.py`.
+# Prompt construction records matching work; an actual local delegate additionally
+# records invocation for the three delivery lanes below, after the worker starts.
+# A dry-run plan, refused claim, or unbuildable command never invokes a lane.
 TASK_TYPE_CAPABILITY = {
     "testgen": "testgen-lane",
     "epic": "epic-decomposition",
@@ -223,7 +211,7 @@ def _lane_capability_match(task_type: str) -> None:
     """Record that a lane capability's prompt-schema contract was routed work of its type.
 
     Lazy import + never raises + inert outside an active tick, matching the sibling modules. See
-    TASK_TYPE_CAPABILITY for why this records `match` rather than `invocation`.
+    TASK_TYPE_CAPABILITY: prompt construction is matching, not worker execution.
     """
     capability_id = TASK_TYPE_CAPABILITY.get(task_type)
     if not capability_id:
@@ -898,6 +886,43 @@ def _exercised_capability_ids(assignment: dict, agent: str) -> list[str]:
     return out
 
 
+# Only lanes whose work is executed by delegate, not every prompt-schema match.
+DELEGATE_LANE_CAPABILITIES = {
+    key: TASK_TYPE_CAPABILITY[key] for key in ("testgen", "codemod", "cross_repo")
+}
+
+
+def _delegate_lane_heartbeat(d: dict) -> None:
+    """Credit a started local delivery worker, including standalone delegate CLI calls.
+
+    The tick-only production_heartbeat gate cannot observe coverage-autopilot's
+    standalone calls. This execution edge supplies its own production authority:
+    delegate calls it only after _spawn returns, with the run identity and target.
+    Recording failure never prevents the already started worker from continuing.
+    """
+    capability_id = DELEGATE_LANE_CAPABILITIES.get(str(d.get("task_type") or ""))
+    if not capability_id:
+        return
+    try:
+        import capabilities
+
+        capabilities.heartbeat(
+            capability_id,
+            "invocation",
+            ref=d["target"],
+            metadata={
+                "source": "dispatcher.delegate",
+                "run_id": d["run_id"],
+                "task_type": d["task_type"],
+                "agent": d["agent"],
+            },
+            path=capabilities.REG,
+            idempotency_key=f"delegate:{d['run_id']}:{capability_id}",
+        )
+    except Exception as exc:
+        print(f"warn: delegate lane heartbeat failed for {capability_id}: {exc}", file=sys.stderr)
+
+
 def _spawn(d: dict) -> int:
     DISPATCH_LOG_DIR.mkdir(parents=True, exist_ok=True)
     safe = d["target"].replace("/", "__").replace("#", "_")
@@ -1270,8 +1295,12 @@ def delegate(
     if "error" in d:
         claims.release(target, agent)
         return d
+    lane_capability = DELEGATE_LANE_CAPABILITIES.get(str(d.get("task_type") or ""))
+    if lane_capability:
+        d["capability_ids"] = list(dict.fromkeys([*d.get("capability_ids", []), lane_capability]))
     safe = target.replace("/", "__").replace("#", "_")
     d["pid"] = _spawn(d)
+    _delegate_lane_heartbeat(d)
     # Close the feedback loop for LOCAL delegations: re-record the decision keyed by mode='local'
     # (so outcomes.ingest_outcomes(mode='local') discovers it and resolves the resulting PR by the
     # deterministic orchestrator/issue-N branch) with the REAL task_type; keep the agent-mode in

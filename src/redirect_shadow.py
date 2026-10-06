@@ -142,7 +142,34 @@ def _plan_summary(plan: dict) -> dict:
         "prompt_file": plan.get("prompt_file") or "",
         "prompt_sha256": _sha_text(prompt_text) if prompt_text else None,
         "step_ids": [s.get("id") for s in plan.get("steps") or [] if s.get("id")],
+        "next_agent": _plan_agent(plan),
     }
+
+
+def _plan_agent(plan: dict) -> str | None:
+    for step in plan.get("steps") or []:
+        if step.get("id") not in {"delegate-retry", "delegate-subtasks"}:
+            continue
+        for command in step.get("commands") or []:
+            if "--agent" in command:
+                index = command.index("--agent") + 1
+                if index < len(command):
+                    return str(command[index])
+    return plan.get("next_agent")
+
+
+def applied_disagreement(row: dict, application: dict | None = None) -> bool:
+    """Compare the applied plan with the baseline, retaining raw proposal disagreement."""
+    plan = row.get("plan") or {}
+    action = (application or {}).get("plan_action") or plan.get("action")
+    # Old corpus rows lack the plan summary; do not rewrite their historical raw field.
+    action = action or row.get("proposal_action")
+    baseline_action = row.get("baseline_action")
+    if action not in {"redirect", "decompose"} or not baseline_action:
+        return False
+    agent = plan.get("next_agent") or (row.get("proposal") or {}).get("switch_agent")
+    baseline_agent = (row.get("baseline") or {}).get("next_agent") or row.get("baseline_agent")
+    return action != baseline_action or bool(agent and baseline_agent and agent != baseline_agent)
 
 
 def _proposal_summary(proposal: dict | None) -> dict | None:
@@ -239,6 +266,9 @@ def build_entry(result: dict, report: dict, acceptance_criteria: str, *, source:
         "valid_proposal": proposal is not None
         and result.get("decision_source") == "redirect_agent",
         "baseline_action": baseline_action,
+        "baseline_agent": baseline.get("next_agent")
+        or baseline.get("switch_agent")
+        or report.get("agent"),
         "proposal_action": proposal_action,
         "plan_action": plan.get("action"),
         "disagreement": bool(
@@ -474,6 +504,9 @@ def summarize(corpus_path: Path = CORPUS_PATH) -> dict:
     proposals = [e for e in events if e.get("kind") == "redirect_proposal"]
     links = [e for e in events if e.get("kind") == "redirect_outcome_link"]
     historical_links = [e for e in events if e.get("kind") == "redirect_historical_outcome_link"]
+    applications = {
+        e.get("role_run_id"): e for e in events if e.get("kind") == APPLY_KIND and e.get("applied")
+    }
     by_backend: dict[str, int] = {}
     baseline_actions: dict[str, int] = {}
     proposal_actions: dict[str, int] = {}
@@ -518,7 +551,10 @@ def summarize(corpus_path: Path = CORPUS_PATH) -> dict:
         synced_links += 1 if (link.get("link_result") or {}).get("synced") else 0
         outcome = link.get("role_outcome") or {}
         outcome_successes += 1 if outcome.get("success") else 0
-        disagreement_outcomes += 1 if row.get("disagreement") else 0
+        if link.get("accepted") and (link.get("link_result") or {}).get("synced"):
+            disagreement_outcomes += int(
+                applied_disagreement(row, applications.get(row.get("role_run_id")))
+            )
 
     ready_for_analysis = valid >= READINESS_TARGET
     ready_for_supervised_apply = (
