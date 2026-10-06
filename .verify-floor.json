@@ -1,6 +1,6 @@
 {
-  "collected": 2199,
-  "passed": 2199,
+  "collected": 2274,
+  "passed": 2274,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 47,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history. Round0022 current-main integration35883184e72622be3f16477e7087a5a248fd3b76; main history retained at35883184e72622be3f16477e7087a5a248fd3b76:.verify-floor.json; measured collection2118; ceiling keys unchanged. Round0022 current-main integration35537f1b24cb694f675a8977dbace2d0391f1170; main history retained at35537f1b24cb694f675a8977dbace2d0391f1170:.verify-floor.json; measured collection2126; ceiling keys unchanged. Round0122 current-main integration5eeea0661a97a00d0c91d95c699935e1ba0cbdff; main history retained at5eeea0661a97a00d0c91d95c699935e1ba0cbdff:.verify-floor.json; measured collection2156; ceiling keys unchanged. Closer0222 integrated maind4213d1e638c88f7aa3baf4ca31c285a46cb3f28; main note history preserved atd4213d1e638c88f7aa3baf4ca31c285a46cb3f28:.verify-floor.json and round receipt; measured2162; all ceilings unchanged. Closer0320 integrated main92be900ec4f14a3d64639f13d2a0d5ebdac8469b; main note history preserved at92be900ec4f14a3d64639f13d2a0d5ebdac8469b:.verify-floor.json and round receipt; measured2180; all ceilings unchanged. Closer0821 integrated main3e926b35c8f8f0fc147d71da3c3793467112d03f; measured2199; ceilings/history retained in490-floor-{before,main}.json and Git."
+  "note": "Round1020 integrated current main e68075132e553241300d16a59a39bd62abb97340; both prior note histories retained in Git and round490-floor receipts; actual collection measured; all quality ceilings unchanged; full suite pass awaits CI. Measured collection 2274."
 }

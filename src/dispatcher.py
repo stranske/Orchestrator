@@ -31,6 +31,7 @@ from typing import Any
 
 import adapters
 import claims
+import credential_redaction
 import execution_profiles
 import feedback
 import provision
@@ -293,6 +294,15 @@ def _offload_prompt(prompt: str, cwd: str | Path, agent: str | None = None) -> s
     return f"{_agent_preamble(agent or '')}\n\n{prompt.rstrip()}\n\n" + "\n".join(rules)
 
 
+def _relocated_workspace_rule(relocated: dict) -> str:
+    """The offload rule that tells a relocated run where it is and why (adapters.agent_workspace)."""
+    return (
+        f"- Workspace: {relocated['workspace']} is an empty scratch directory of your own. The "
+        f"requested workspace was refused because {relocated['reason']}. Read other files by "
+        "absolute path; write only inside your workspace."
+    )
+
+
 def _offload_ignore(_dir: str, names: list[str]) -> set[str]:
     heavy = {
         ".git",
@@ -469,7 +479,13 @@ def _suspicious_net_env() -> list[str]:
         "NODE_EXTRA_CA_CERTS",
         "NODE_OPTIONS",
     )
-    return [f"{n}={os.environ[n]}" for n in names if os.environ.get(n)]
+    # A proxy URL can carry `user:password@`, and these lines go to the log and the caller. The
+    # value is known to be a URL, so its whole userinfo is masked at any length, before the shapes.
+    return [
+        credential_redaction.redact(credential_redaction.mask_url_userinfo(f"{n}={os.environ[n]}"))
+        for n in names
+        if os.environ.get(n)
+    ]
 
 
 def _runtime_link(src: Path, dst: Path) -> None:
@@ -740,6 +756,16 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
     # string whenever the runtime sat behind a symlink, and the selftest's `--add-dir == cwd`
     # assertion failed under every macOS scratch runtime. (2026-10-02)
     cwd = adapters.workspace_path(cwd)
+    # This agent's job is to commit in the provisioned worktree, so a scratch directory cannot stand
+    # in for it the way it does for an offload. A worktree that is, or holds, `/`, the home dir or
+    # the control plane means provisioning is broken: skip it like any provision failure, loudly.
+    refused = adapters.broad_workspace_reason(cwd)
+    if refused:
+        return {
+            "error": f"provisioned workspace refused: {refused}",
+            "target": target,
+            "agent": agent,
+        }
     role_activation = None
     try:
         # Local import avoids making deterministic dispatcher module import-time
@@ -1376,9 +1402,11 @@ def _agent_log_tail_from_argv(argv: list[str], cwd: str | Path, *, max_chars: in
     if not path.is_absolute():
         path = Path(cwd) / path
     try:
-        return path.read_text(errors="replace")[-max_chars:]
+        text = path.read_text(errors="replace")
     except OSError:
         return ""
+    # Masked WHOLE and then cut: a tail cut first could split a token and keep a piece of it.
+    return credential_redaction.redact(text)[-max_chars:]
 
 
 def _capability_heartbeat(event_type: str, *, agent: str, mode: str | None) -> None:
@@ -1474,6 +1502,9 @@ def offload(
     By default this runs in `cwd`. With isolate=True, it first copies `cwd` to a persistent local
     offload workspace so multiple code-building offloads can run in parallel without same-dir races.
     The isolated result is NOT auto-merged; the orchestrator reviews and integrates deliberately.
+    A `cwd` that is, or holds, `/`, the home dir or the control plane is never granted: the run gets
+    a fresh scratch directory instead (`adapters.agent_workspace`), and the result's
+    `workspace_relocated` says so.
 
     Runs a cheaper agent and RETURNS its output to the orchestrating seat — no claim, no PR.
     The seat spends that agent's capacity instead of its own and gets back only the result.
@@ -1535,13 +1566,26 @@ def offload(
     # an inherited *_PROXY (see _net_hygiene_prelude), and concurrent agent CLI runs do NOT serialize. A
     # driving seat already owns its heartbeat via orchestrate-seat.sh; a standalone/library offload
     # (e.g. repo-audit) must not silently halt opener+closer. Do not re-add without a fleet-mutation reason.
+    # A workspace that is, or holds, `/`, the home dir or the control plane is replaced by a fresh
+    # per-run scratch directory (adapters.agent_workspace), BEFORE isolation copies it: the tick runs
+    # with cwd `/`, so a role's `cwd="."` handed codex, agy and cursor the whole disk 1,521 times,
+    # and an isolated copy of `/` would copy the disk. The run still starts, logged loudly.
     try:
-        source_cwd = adapters.workspace_path(cwd)
-        run_cwd = _isolate_offload_cwd(source_cwd) if isolate else source_cwd
+        source_cwd, relocated = adapters.agent_workspace(cwd, agent=agent)
+        # A relocated run's scratch dir is already its own, empty and unshared, so it is not copied:
+        # a copy would tell the agent one directory and grant it another.
+        copied = isolate and relocated is None
+        run_cwd = _isolate_offload_cwd(source_cwd) if copied else source_cwd
     except Exception as exc:
         return {"agent": agent, "exit": 2, "output": "", "error": str(exc)}
-    proc_cwd = source_cwd if agent == "gemini" and isolate else run_cwd
-    if agent == "gemini" and isolate:
+    if relocated:
+        print(
+            f"warn: {agent} offload workspace relocated: {relocated['reason']}; "
+            f"it runs in its own scratch workspace {relocated['workspace']}",
+            file=sys.stderr,
+        )
+    proc_cwd = source_cwd if agent == "gemini" and copied else run_cwd
+    if agent == "gemini" and copied:
         prompt = (
             f"{prompt.rstrip()}\n\n"
             f"GEMINI ISOLATED WORKSPACE: use {run_cwd} as the workspace for all file reads, "
@@ -1550,6 +1594,8 @@ def offload(
             "under the Orchestrator runtime."
         )
     prepared_prompt = _offload_prompt(prompt, run_cwd, agent)
+    if relocated:
+        prepared_prompt = f"{prepared_prompt}\n{_relocated_workspace_rule(relocated)}"
     profile = execution_profiles.get_profile(profile_id) if profile_id else None
     if profile is None:
         # SELECT one when the caller did not name it. This single line is why no worker execution
@@ -1666,6 +1712,8 @@ def offload(
         requested_model=profile.get("requested_model") if profile else None,
         policy_version=execution_profiles.PROFILE_POLICY_VERSION if profile else None,
         propensity=1.0 if profile else None,
+        # Present only on a relocated run, so relocations are countable from the ledger alone.
+        workspace_relocated_from=relocated["requested"] if relocated else None,
     )
 
     def _record_offload_run() -> None:
@@ -1746,9 +1794,16 @@ def offload(
             f"{agent}/{mode} cwd={run_cwd} process_cwd={proc_cwd} timeout={timeout}s "
             f"run_id={run_id} ===\n"
         )
+        if relocated:
+            fh.write(
+                f"[orchestrator] WORKSPACE RELOCATED: {relocated['reason']}; this run writes only "
+                f"in its own scratch workspace {relocated['workspace']}\n"
+            )
     max_network_retries = max(0, _env_int("ORCH_OFFLOAD_NETWORK_RETRIES", 1))
     retry_backoff_s = max(0.0, _env_float("ORCH_OFFLOAD_RETRY_BACKOFF_S", 3.0))
     complete_written = False
+    # Credentials masked in this run's output, by kind, across attempts (credential_redaction).
+    redaction_counts: dict[str, int] = {}
 
     def _record_complete(exit_code: int | None = None, error: str | None = None) -> None:
         nonlocal complete_written
@@ -1771,6 +1826,7 @@ def offload(
             requested_model=profile.get("requested_model") if profile else None,
             policy_version=execution_profiles.PROFILE_POLICY_VERSION if profile else None,
             propensity=1.0 if profile else None,
+            credentials_redacted=sum(redaction_counts.values()) or None,
         )
         # Only close what was opened -- reaching for a row deliberately not created is how a
         # "stop recording this" change quietly becomes a crash.
@@ -1907,6 +1963,18 @@ def offload(
             with logf.open("a") as fh:
                 fh.write(f"[orchestrator] offload marked failed: {error}\n")
             raise
+        # MASKED BEFORE ANYTHING READS IT. Everything below -- the stream parse, the log, the
+        # incident classifier and the dict handed back to the caller -- sees only this text. A vibe
+        # offload of 2026-09-06 printed the live GitHub token, and this function wrote it to a
+        # world-readable log and returned it to the calling session, which kept a copy of its own.
+        stdout, out_counts = credential_redaction.redact_with_counts(proc.stdout or "")
+        stderr, err_counts = credential_redaction.redact_with_counts(proc.stderr or "")
+        for kind, n in (*out_counts.items(), *err_counts.items()):
+            redaction_counts[kind] = redaction_counts.get(kind, 0) + n
+        if out_counts or err_counts:
+            proc = subprocess.CompletedProcess(
+                getattr(proc, "args", argv), proc.returncode, stdout, stderr
+            )
         attempt_stderr = proc.stderr or ""
         # THE RUN REPORTED ITS OWN MODEL. When the transport asked for stream-json, the tool's
         # `system/init` event names the model that actually served -- `gen_ai.response.model` in
@@ -2022,6 +2090,30 @@ def offload(
             time.sleep(retry_backoff_s)
     if attempts > 1:
         out["retried"] = True
+    if relocated:
+        out["workspace_relocated"] = relocated
+    # agy writes its per-run log itself, at the path this function chose, so it is scrubbed whole
+    # once the run is over. Until this point that file held whatever agy printed.
+    if agy_log is not None:
+        scrub = credential_redaction.scrub_file(agy_log)
+        for kind, n in (scrub.get("kinds") or {}).items():
+            redaction_counts[kind] = redaction_counts.get(kind, 0) + n
+    redaction_note = None
+    if credential_redaction.disabled():
+        out["credential_redaction"] = "disabled"
+        redaction_note = (
+            f"credential redaction DISABLED by {credential_redaction.REDACTION_DISABLED_ENV}=1: "
+            "this output was logged and returned unmasked"
+        )
+    elif redaction_counts:
+        out["credentials_redacted"] = sum(redaction_counts.values())
+        redaction_note = (
+            "credentials masked before this output was logged or returned: "
+            + credential_redaction.describe(redaction_counts)
+        )
+    if redaction_note:
+        with logf.open("a") as fh:
+            fh.write(f"[orchestrator] {redaction_note}\n")
     _record_complete(exit_code=out.get("exit"), error=out.get("error"))
     # Telemetry is fail-open. Classify the actual result, stderr, and per-run agent log.
     evidence_result = None
