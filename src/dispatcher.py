@@ -267,6 +267,17 @@ def _agent_preamble(agent: str) -> str:
     )
 
 
+# What a read-only agent (an offload, a reviewer, an evaluator) must not do on GitHub. Since the gh
+# config pin (#461), an agent started from a session holds its dispatcher's gh, which can write;
+# before it, gh failed closed there. Such agents need READS: every gh call that stopped at the login
+# error in 90 days of offload logs was a read. Owner decision 2026-10-05. Offloads and evaluators
+# read this one sentence, so the two cannot drift apart.
+GH_READ_ONLY_RULE = (
+    "On GitHub, do not open, merge or close pull requests, close issues, edit labels, or post "
+    "comments or reviews. Reading with gh is fine."
+)
+
+
 def _offload_prompt(prompt: str, cwd: str | Path, agent: str | None = None) -> str:
     rules = [
         "OFFLOAD WORKSPACE RULES:",
@@ -279,7 +290,7 @@ def _offload_prompt(prompt: str, cwd: str | Path, agent: str | None = None) -> s
             "- If you cannot complete the offload in this invocation, print exactly "
             "OFFLOAD_INCOMPLETE: <reason> and stop."
         ),
-        "- Do not run git commit, git push, or gh pr create from an offload.",
+        f"- Do not run git commit or git push from an offload. {GH_READ_ONLY_RULE}",
         "- If you edit files, keep changes inside the current workspace and report changed paths.",
         (
             "- Product-level owner decision needed? Print one line "
