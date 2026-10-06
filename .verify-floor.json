@@ -1,13 +1,13 @@
 {
- "collected": 2165,
- "passed": 2165,
- "skipped_max": 26,
- "mirror_skipped_max": 21,
- "bare_mirror_skipped_max": 47,
- "bare_mirror_selftest_skipped_max": 7,
- "bare_mirror_gate_skipped_max": 2,
- "selftest_skipped_max": 7,
- "gate_skipped_max": 2,
- "mypy_exempt_max": 0,
- "note": "Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history.urrent-main integration for issue419; focused named tests and deliberate controls documented in docs/verification/issue-419-high-stakes-shape.md. Collected/passed measured on integrated source; existing skip/type ceilings preserved. Prior large floor notes retained in closer work/20261005T1538Z/482-floor-{branch,main}.json and Git history. 2026-10-06: +8 collected (tests/test_refusal_role_edges_migration.py), 2116 -> 2124, counted with pytest --collect-only on the merge with main 3588318. 2026-10-06 cwd-root-guard: +11 in tests/test_agent_workspace_never_broad.py (no agent run gets a workspace that is or holds /, the home dir or the control plane); collected 2124 -> 2135 counted with pytest --collect-only on the tree rebased onto main 35537f1; skip/type ceilings unchanged. Round0122 integrated main 5eeea0661a97a00d0c91d95c699935e1ba0cbdff; retained main notes at 5eeea0661a97a00d0c91d95c699935e1ba0cbdff:.verify-floor.json; measured 2165; ceilings unchanged."
+  "collected": 2171,
+  "passed": 2171,
+  "skipped_max": 26,
+  "mirror_skipped_max": 21,
+  "bare_mirror_skipped_max": 47,
+  "bare_mirror_selftest_skipped_max": 7,
+  "bare_mirror_gate_skipped_max": 2,
+  "selftest_skipped_max": 7,
+  "gate_skipped_max": 2,
+  "mypy_exempt_max": 0,
+  "note": "Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history.urrent-main integration for issue419; focused named tests and deliberate controls documented in docs/verification/issue-419-high-stakes-shape.md. Collected/passed measured on integrated source; existing skip/type ceilings preserved. Prior large floor notes retained in closer work/20261005T1538Z/482-floor-{branch,main}.json and Git history. 2026-10-06: +8 collected (tests/test_refusal_role_edges_migration.py), 2116 -> 2124, counted with pytest --collect-only on the merge with main 3588318. 2026-10-06 cwd-root-guard: +11 in tests/test_agent_workspace_never_broad.py (no agent run gets a workspace that is or holds /, the home dir or the control plane); collected 2124 -> 2135 counted with pytest --collect-only on the tree rebased onto main 35537f1; skip/type ceilings unchanged. Round0122 integrated main 5eeea0661a97a00d0c91d95c699935e1ba0cbdff; retained main notes at 5eeea0661a97a00d0c91d95c699935e1ba0cbdff:.verify-floor.json; measured 2165; ceilings unchanged. Closer0222 integrated maind4213d1e638c88f7aa3baf4ca31c285a46cb3f28; main note history preserved atd4213d1e638c88f7aa3baf4ca31c285a46cb3f28:.verify-floor.json and round receipt; measured2171; all ceilings unchanged."
 }
