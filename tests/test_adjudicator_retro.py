@@ -116,6 +116,8 @@ def test_retro_records_verdicts_without_changing_outcomes(private_brain, tmp_pat
     [
         ({}, False),
         ({"verifier_verdict": "PASS", "merge_disposition": "PASS"}, False),
+        ({"verifier_verdict": "pass", "merge_disposition": " PASS "}, False),
+        ({"verifier_verdict": "CONCERNS ", "merge_disposition": "concerns"}, False),
         ({"verifier_verdict": "NON_PASS", "merge_disposition": "PASS"}, True),
     ],
 )
@@ -150,6 +152,8 @@ def test_adjudicator_annotation_preserves_membership_when_verdict_is_unknown():
         {"verifier_verdict": "UNKNOWN", "merge_disposition": "PASS"},
         {"verifier_verdict": "NON_PASS", "merge_disposition": "unknown"},
         {"verifier_verdict": " unknown ", "merge_disposition": "UNKNOWN"},
+        {"verifier_verdict": [None], "merge_disposition": "PASS"},
+        {"verifier_verdict": "PASS", "merge_disposition": {}},
     ):
         entries = [{"capability_id": "role-adjudicator"}]
         entry = entries[0]

@@ -20,7 +20,7 @@ import shlex
 import tempfile
 import time
 from collections import OrderedDict
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -1664,6 +1664,17 @@ DECLARATION_FIELDS: tuple[str, ...] = (
 # declaration this module reconciles, and the fix is the same — declare it in code and let
 # reconciliation seed it. Adding a capability here means its declaration is reviewed with the diff
 # rather than typed into a live JSON file nobody diffs.
+#
+# AN ENTRY THAT DECLARES A `status` IS A COMPLETE REGISTRATION (2026-10-06), and every writing load
+# seeds it when the ledger lacks it, exactly as it seeds a missing `KNOWN_GATES` row: the declared
+# fields over a blank row, at the declared status, never `active` (see `_seed_declared_rows`). An
+# entry without a status is an OVERLAY on a row registered some other way, and is never seeded.
+# Until this date such a row was registered only by whatever caller its module wrote: for
+# `value-chain-monitor` the weekly switch review, run from the live mirror. The pre-sync verdict
+# judged a copy of the live ledger, which lacked the row, so the new row's recurrence fixture made
+# one more test skip than the exec mirror's ceiling allows, and the sync that would have deployed the
+# registering caller was refused on every attempt. `rail-exercise-cadence` had no registering caller
+# at all, so a fresh machine never got its row.
 KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
     "testgen-lane": {
         "notes": (
@@ -1850,7 +1861,7 @@ def _status_set_by_transition(cap: dict[str, Any]) -> bool:
         kind = event.get("type")
         if kind == "transition":
             return event.get("to") == cap.get("status")
-        if kind in ("gate_registered", "migrated"):
+        if kind in ("gate_registered", "migrated", DECLARED_ROW_EVENT):
             return False
         if kind == "declaration_reconciled" and (
             "to" in event or "status" in (event.get("changed_fields") or [])
@@ -1948,6 +1959,88 @@ def _reconcile_known_declarations(capabilities: dict[str, dict[str, Any]], now: 
     return changed
 
 
+# The event a writing load records on a `KNOWN_DECLARATIONS` row it registers; a seeded gate row
+# keeps `gate_registered`. Both are a DECLARATION's placement, never a lifecycle decision
+# (`_status_set_by_transition`), and both say `activation_inferred: False`.
+DECLARED_ROW_EVENT = "declaration_registered"
+# The statuses a declaration may register a row at. Never `active`: that needs the producer,
+# consumer, outcome, expiry, kill-switch and rollback evidence `validate_capability` checks, which
+# no declaration carries. Never a not-live status, which would register a row nothing can use.
+SEEDABLE_STATES = frozenset(CANONICAL_STATES) - {"active"} - NOT_LIVE_STATES
+
+
+def declared_row_ids() -> list[str]:
+    """Every capability this tree registers BY ITSELF: the rows a writing load seeds when absent.
+
+    Each `KNOWN_GATES` entry, and each `KNOWN_DECLARATIONS` entry that declares a `status`. ONE
+    definition, read by the seeding below, by `env_prereq.ledger_rows_absent` (which names such a
+    row's absence as drainable rather than as history) and by verify.py's `declared:` line.
+    """
+    return sorted(
+        {*KNOWN_GATES, *(name for name, row in KNOWN_DECLARATIONS.items() if "status" in row)}
+    )
+
+
+def missing_declared_rows(capabilities: Mapping[str, Any]) -> list[str]:
+    """The rows this tree registers by itself that `capabilities` lacks, sorted. Pure.
+
+    A retired or superseded row is PRESENT: seeding only ever adds a row, and a retirement is a
+    lifecycle decision a re-registration must not undo.
+    """
+    return [name for name in declared_row_ids() if name not in capabilities]
+
+
+def _seed_declared_rows(capabilities: dict[str, dict[str, Any]], now: int) -> list[str]:
+    """Register, in place, every row this tree declares and the ledger lacks; return those ids.
+
+    THE DRAIN FOR A NEWLY DECLARED ROW, on every writing load. An active tick's first command
+    (`capabilities.py --json validate`) is one, and `scripts/verify_before_sync.sh` makes one on its
+    scratch copy of the ledger before judging a sync (`seed_declared`). So a tree that declares a
+    row registers it on its first tick, and the verdict on deploying that tree judges the ledger the
+    tree will produce, not the one it has not reached yet.
+
+    A gate gets its gate machinery, as it always has. A declaration gets exactly what
+    `register(name, KNOWN_DECLARATIONS[name])` writes, plus the event saying who registered it.
+    Neither is ever `active`: a declared status outside SEEDABLE_STATES is left unseeded, so
+    `missing_declared_rows` keeps naming it and `seed_declared` fails loudly, rather than marking a
+    capability active from code existence. An existing row is never touched.
+    """
+    seeded: list[str] = []
+    for name in missing_declared_rows(capabilities):
+        declared = KNOWN_GATES[name] if name in KNOWN_GATES else KNOWN_DECLARATIONS[name]
+        if declared.get("status", "observed") not in SEEDABLE_STATES:
+            continue
+        cap = _blank_capability(name)
+        cap.update(json.loads(json.dumps(declared)))
+        event = DECLARED_ROW_EVENT
+        if name in KNOWN_GATES:
+            event = "gate_registered"
+            expiry = now + GATED_TTL_DAYS * 86400
+            cap.update(
+                {
+                    "expiry": expiry,
+                    "activation_deadline": expiry,
+                    "next_transition": "retired",
+                    "kill_switch": "restore documented default-off gate",
+                    "rollback": {
+                        "transition": "retired",
+                        "reason": "gate evidence expired or regressed",
+                    },
+                }
+            )
+        cap["event_history"].append(
+            {
+                "timestamp": now,
+                "type": event,
+                "source": "code declaration reconciliation",
+                "activation_inferred": False,
+            }
+        )
+        capabilities[name] = cap
+        seeded.append(name)
+    return seeded
+
+
 def load(path: Path = REG, *, create: bool = True) -> dict[str, dict[str, Any]]:
     if not create:
         # RAW rows, exactly as they sit on disk: declaration-owned fields (matcher, status,
@@ -2006,38 +2099,10 @@ def load(path: Path = REG, *, create: bool = True) -> dict[str, dict[str, Any]]:
         ledger = _parse_ledger_cached(path, path.read_bytes())
         capabilities = ledger["capabilities"]
         now = _now()
-        declarations_added = False
         # Code upgrades may introduce a capability after the local ledger already
         # exists. Register missing declarations conservatively without overwriting
         # accumulated lifecycle state or evidence on existing records.
-        for name, gate in KNOWN_GATES.items():
-            if name in capabilities:
-                continue
-            cap = _blank_capability(name)
-            cap.update(gate)
-            expiry = now + GATED_TTL_DAYS * 86400
-            cap.update(
-                {
-                    "expiry": expiry,
-                    "activation_deadline": expiry,
-                    "next_transition": "retired",
-                    "kill_switch": "restore documented default-off gate",
-                    "rollback": {
-                        "transition": "retired",
-                        "reason": "gate evidence expired or regressed",
-                    },
-                }
-            )
-            cap["event_history"].append(
-                {
-                    "timestamp": now,
-                    "type": "gate_registered",
-                    "source": "code declaration reconciliation",
-                    "activation_inferred": False,
-                }
-            )
-            capabilities[name] = cap
-            declarations_added = True
+        declarations_added = bool(_seed_declared_rows(capabilities, now))
         declarations_reconciled = _reconcile_known_declarations(capabilities, now)
         if _expire_in_place(capabilities, now) or declarations_added or declarations_reconciled:
             _write_ledger_unlocked(path, capabilities)
@@ -2070,6 +2135,41 @@ def load_declared(path: Path = REG) -> dict[str, dict[str, Any]]:
     capabilities = load(path, create=False)
     _reconcile_known_declarations(capabilities, _now())
     return capabilities
+
+
+def seed_declared(path: Path = REG) -> dict[str, Any]:
+    """Make the WRITING load on `path` and report which declared rows it registered.
+
+    It is the load an active tick's first command makes (`validate_ledger`), so this does to the
+    ledger what the deployed tree does before anything else runs. `scripts/verify_before_sync.sh`
+    runs it on its scratch copy so the verdict judges that ledger. `missing` names a declared row
+    still absent afterwards, which only a declaration outside SEEDABLE_STATES can leave.
+    """
+    before = set(missing_declared_rows(load(path, create=False)))
+    missing = missing_declared_rows(load(path, create=True))
+    return {
+        "path": str(path),
+        "declared": len(declared_row_ids()),
+        "seeded": sorted(before - set(missing)),
+        "missing": missing,
+    }
+
+
+def format_seed_report(report: dict[str, Any]) -> str:
+    """One line for `seed_declared`: what was absent, what is registered now, what is not. Pure."""
+    total, path = report["declared"], report["path"]
+    if report["missing"]:
+        return (
+            f"declared rows: NOT SEEDED {', '.join(report['missing'])} in {path}: a declared "
+            f"status outside {sorted(SEEDABLE_STATES)} is never registered by a load"
+        )
+    if report["seeded"]:
+        return (
+            f"declared rows: seeded {len(report['seeded'])} of the {total} this tree declares "
+            f"into {path} ({', '.join(report['seeded'])}), as the deployed code's first writing "
+            f"load registers them; none is active"
+        )
+    return f"declared rows: none seeded, {path} already holds all {total} this tree declares"
 
 
 def save(capabilities: dict[str, dict[str, Any]], path: Path = REG) -> None:
@@ -3512,6 +3612,28 @@ def _selftest() -> None:
             load(summary_path, create=False)["redirect-apply-bootstrap"]["status"] == "canary"
         ), "create=True did not reconcile disk"
 
+        # A DECLARED ROW IS REGISTERED BY THE WRITING LOAD (2026-10-06), so a new declaration never
+        # waits on a caller only its own deployment can run. The read-only view still seeds nothing;
+        # the writing load seeds the row at its declared status with its registration event, once;
+        # an overlay (no status) is never seeded; the report says so in each state.
+        seed_path = root / "seed.json"
+        declared_id = next(n for n, d in sorted(KNOWN_DECLARATIONS.items()) if "status" in d)
+        overlay_id = next(n for n, d in sorted(KNOWN_DECLARATIONS.items()) if "status" not in d)
+        _write_ledger_unlocked(
+            seed_path, {"keep": {**_blank_capability("keep"), "status": "wired"}}
+        )
+        assert declared_id in missing_declared_rows(load_declared(seed_path)), "the reader seeded"
+        first = seed_declared(seed_path)
+        assert declared_id in first["seeded"] and first["missing"] == [], first
+        assert "seeded" in format_seed_report(first) and declared_id in format_seed_report(first)
+        seeded_row = load(seed_path, create=False)[declared_id]
+        assert seeded_row["status"] == KNOWN_DECLARATIONS[declared_id]["status"] != "active"
+        assert [e["type"] for e in seeded_row["event_history"]] == [DECLARED_ROW_EVENT], seeded_row
+        assert overlay_id not in load(seed_path, create=False), "an overlay was seeded"
+        again = seed_declared(seed_path)
+        assert again["seeded"] == [] and again["missing"] == [], again
+        assert "none seeded" in format_seed_report(again), format_seed_report(again)
+
         cap = _blank_capability("active-fixture")
         cap.update(
             {
@@ -4318,6 +4440,8 @@ def main(argv: list[str]) -> int:
     sub.add_parser("usage")  # why capabilities are NOT used, and what would change that
     sub.add_parser("sweep")
     sub.add_parser("reconcile")
+    # The writing load, reporting the declared rows it registered: the pre-sync verdict's first step.
+    sub.add_parser("seed-declared")
     register_cmd = sub.add_parser("register")
     register_cmd.add_argument("--name", required=True)
     register_cmd.add_argument("--record-json", type=Path, required=True)
@@ -4371,6 +4495,10 @@ def main(argv: list[str]) -> int:
         result = reconcile_all()
         print(json.dumps(result, indent=2))
         return 0 if result["valid"] else 1
+    if args.command == "seed-declared":
+        seeded = seed_declared()
+        print(json.dumps(seeded, indent=2) if args.json else format_seed_report(seeded))
+        return 1 if seeded["missing"] else 0
     if args.command == "register":
         record = json.loads(args.record_json.read_text(encoding="utf-8"))
         register(args.name, record)
