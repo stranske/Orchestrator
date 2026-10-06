@@ -1126,7 +1126,26 @@ ledger judged`.
 **A limit, stated so nobody infers more.** A CI run starts with no ledger, so CI judges no declared
 row during its checks; only its last gate, `ledger validate`, creates the ledger. A new declaration
 that a populated ledger would reject (admission, set coverage) is therefore caught by this
-machine's pre-sync verdict, before it is deployed, and not on its PR. Before this change it was
-caught only after deployment, by the next sync.
+machine's pre-sync verdict, before it is deployed, and not on its PR. Before this change such a row
+was judged only after deployment, by the next sync, unless its own skip had already refused the
+sync that would deploy it.
 
-WITNESS_TABLE_PLACEHOLDER
+**Witnessed on 2026-10-06** with `scripts/verify_before_sync.sh` itself: the installed copier under
+a scratch `HOME` and `ORCH_MIRROR`, on a copy of this machine's live state whose ledger was the live
+ledger minus `value-chain-monitor` (48 rows; that file's sha256 was unchanged afterwards), except in
+the control run:
+
+| Run | Source | Ledger | Verdict |
+|---|---|---|---|
+| W1 | main `35537f1` | live, minus `value-chain-monitor` | NOT VERIFIED. `22/21 max [mirror_skipped_max]`, set coverage SKIP for that row; the only problem, as on 2026-10-05 |
+| W2, control | main `35537f1` | live, the row present | VERIFIED, `21/21`: the row was the only blocker |
+| W3 | this change `f5e8094` | live, minus `value-chain-monitor` | the row seeded into the copy; `21/21`, set coverage and admission green, `declared:   all 18 rows ... registered`; one failure from the race below |
+| W3b | `f5e8094` again, run alone | the same | VERIFIED: 2118 passed, 0 failed, `21/21` |
+
+W1 to W3 ran at the same time. W3's failure, `test_new_capability_has_all_nine_admission_parts`
+(`assert 0 == 1` on `invocation_count`), is a clock race in `switch_review.review` that predates
+this change. The review fixes `now` before it records its own invocation, so a run whose heartbeat
+lands a second later drops out of its own report. On main `35537f1` a 1.05 s gap reproduces it every
+time (the invocation is recorded, `invocation_count` is 0), and main's version of the test failed the
+same way under load. It can turn any busy pre-sync run red, and a rerun clears it; it is tracked
+separately.

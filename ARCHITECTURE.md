@@ -434,6 +434,15 @@ the ledger, so a retired target is not offered as `entered_directly`. Latent whe
 one not-live row was bound nowhere), but a clean runner has 31 bound ids with no ledger row, which the
 classified path had been counting as bound.
 
+**A row the code declares exists from the first writing load (2026-10-06).** Every writing load seeds
+each `KNOWN_GATES` entry and each `KNOWN_DECLARATIONS` entry that declares a status
+(`capabilities.declared_row_ids`), at its declared status and never `active`, so a declared capability
+lacks its row on a machine only until that machine's first tick of the tree. Until then such a row
+was registered only by a caller its own module wrote, which ran only after deployment. For
+`value-chain-monitor` that made the pre-sync verdict refuse the very sync that would deploy the
+caller (`docs/MIRROR_SYNC_PATCH.md`). (No stage, component or surface moved; the diagram is
+unchanged.)
+
 **And a binding is only half of layer 1: `CONSULT_SITES` is the other half, and nothing declared it
 until 2026-08-23.** `SURFACE_BINDINGS` says which capabilities a surface should be offered; nothing
 said which surfaces are ever ASKED, and the two are independent — from a capability's point of view,
