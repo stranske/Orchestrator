@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Integrates main002c65f; measured collection2374; retains supported executed passed baseline2330; all quality ceilings unchanged; exact merge-result CI pending."
+  "note": "Integrates current main13c64945787c75b6037eb48889ebd71ccd270c44; only newer main difference was measured floor, with source unchanged; retains exact collection2374 and executed passed floor2330. Previous current-source tests remain applicable; full merge-result CI pending. Quality ceilings unchanged."
 }
