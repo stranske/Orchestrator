@@ -1,13 +1,13 @@
 {
-  "collected": 2206,
-  "passed": 2206,
-  "skipped_max": 26,
-  "mirror_skipped_max": 21,
-  "bare_mirror_skipped_max": 47,
-  "bare_mirror_selftest_skipped_max": 7,
-  "bare_mirror_gate_skipped_max": 2,
-  "selftest_skipped_max": 7,
-  "gate_skipped_max": 2,
-  "mypy_exempt_max": 0,
-  "note": "Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history.urrent-main integration for issue419; focused named tests and deliberate controls documented in docs/verification/issue-419-high-stakes-shape.md. Collected/passed measured on integrated source; existing skip/type ceilings preserved. Prior large floor notes retained in closer work/20261005T1538Z/482-floor-{branch,main}.json and Git history. 2026-10-06: +8 collected (tests/test_refusal_role_edges_migration.py), 2116 -> 2124, counted with pytest --collect-only on the merge with main 3588318. Closer-hooks placement (2026-10-05): +30 tests (tick sets closer items aside; adversarial.review_at_head once per head; merge_guard advisory panel and sandboxed selftest; audit counts no comment as a caller), 2124 -> 2154, counted with pytest --collect-only on the merge with main 35537f1; skip/type ceilings unchanged. Closed-PR replacement credit: +29 tests (tests/test_outcomes_replacement_credit.py), 2154 -> 2183, measured with pytest --collect-only on the branch rebased onto 5eeea06; ceilings unchanged. Review fixes: +23 more (52 in that file), 2183 -> 2206, re-measured with pytest --collect-only on 5eeea06."
+ "collected": 2209,
+ "passed": 2209,
+ "skipped_max": 26,
+ "mirror_skipped_max": 21,
+ "bare_mirror_skipped_max": 47,
+ "bare_mirror_selftest_skipped_max": 7,
+ "bare_mirror_gate_skipped_max": 2,
+ "selftest_skipped_max": 7,
+ "gate_skipped_max": 2,
+ "mypy_exempt_max": 0,
+ "note": "Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history.urrent-main integration for issue419; focused named tests and deliberate controls documented in docs/verification/issue-419-high-stakes-shape.md. Collected/passed measured on integrated source; existing skip/type ceilings preserved. Prior large floor notes retained in closer work/20261005T1538Z/482-floor-{branch,main}.json and Git history. 2026-10-06: +8 collected (tests/test_refusal_role_edges_migration.py), 2116 -> 2124, counted with pytest --collect-only on the merge with main 3588318. Closer-hooks placement (2026-10-05): +30 tests (tick sets closer items aside; adversarial.review_at_head once per head; merge_guard advisory panel and sandboxed selftest; audit counts no comment as a caller), 2124 -> 2154, counted with pytest --collect-only on the merge with main 35537f1; skip/type ceilings unchanged. Closed-PR replacement credit: +29 tests (tests/test_outcomes_replacement_credit.py), 2154 -> 2183, measured with pytest --collect-only on the branch rebased onto 5eeea06; ceilings unchanged. Review fixes: +23 more (52 in that file), 2183 -> 2206, re-measured with pytest --collect-only on 5eeea06. Round0122 decline-control recovery adds3 regressions; measured2209; ceilings unchanged."
 }

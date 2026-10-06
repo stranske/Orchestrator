@@ -1749,6 +1749,18 @@ def recheck_replacements(*, dry_run: bool = False, now: int | None = None, _reso
         summary["stopped"] = f"declined: owner question {declined['question_id']}"
     if summary["stopped"] or not runs:
         return summary
+    if not dry_run:
+        with feedback._conn() as connection:
+            question_exists = connection.execute(
+                "SELECT 1 FROM owner_questions WHERE instr(question, ?) > 0 LIMIT 1",
+                (REPLACEMENT_RECHECK_TOKEN,),
+            ).fetchone()
+        if not question_exists:
+            feedback.record_owner_question(
+                f"{REPLACEMENT_RECHECK_TOKEN} Re-judge closed-PR FAIL rows; "
+                "answer decline to stop this recheck.",
+                "run it",
+            )
     snapshots = _recheck_snapshots()
     fresh = [run for run in runs if run["run_id"] not in snapshots]
     if fresh and not dry_run:

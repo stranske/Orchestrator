@@ -790,3 +790,42 @@ def test_the_undo_command_restores_and_runs_nothing_else(monkeypatch, capsys):
     )
     assert outcomes.main(["--undo-replacement-recheck"]) == 0
     assert calls == [1] and json.loads(capsys.readouterr().out) == {"x": 1}
+
+
+def test_recheck_creates_the_decline_control_once_before_snapshot(brain, monkeypatch):
+    states = seed_the_two(brain)
+    snapshot = outcomes._recheck_snapshot
+
+    def checked_snapshot(*args):
+        with feedback._conn() as connection:
+            questions = connection.execute(
+                "SELECT question, default_action FROM owner_questions WHERE instr(question, ?) > 0",
+                (outcomes.REPLACEMENT_RECHECK_TOKEN,),
+            ).fetchall()
+        assert len(questions) == 1
+        assert "decline" in questions[0][0].lower()
+        assert questions[0][1] == "run it"
+        return snapshot(*args)
+
+    monkeypatch.setattr(outcomes, "_recheck_snapshot", checked_snapshot)
+    outcomes.recheck_replacements(_resolve=resolver(states), now=1_791_300_000)
+    outcomes.undo_replacement_recheck()
+    outcomes.recheck_replacements(_resolve=resolver(states), now=1_791_300_100)
+    with feedback._conn() as connection:
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM owner_questions WHERE instr(question, ?) > 0",
+                (outcomes.REPLACEMENT_RECHECK_TOKEN,),
+            ).fetchone()[0]
+            == 1
+        )
+
+
+@pytest.mark.parametrize("dry_run, enabled", [(True, True), (False, False)])
+def test_recheck_does_not_create_control_when_it_cannot_write(brain, monkeypatch, dry_run, enabled):
+    states = seed_the_two(brain)
+    if not enabled:
+        monkeypatch.setenv(outcomes.REPLACEMENT_RECHECK_SWITCH, "0")
+    outcomes.recheck_replacements(dry_run=dry_run, _resolve=resolver(states), now=1_791_300_000)
+    with feedback._conn() as connection:
+        assert connection.execute("SELECT count(*) FROM owner_questions").fetchone()[0] == 0
