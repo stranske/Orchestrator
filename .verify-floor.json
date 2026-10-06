@@ -1,6 +1,6 @@
 {
- "collected": 2118,
- "passed": 2118,
+ "collected": 2126,
+ "passed": 2126,
  "skipped_max": 26,
  "mirror_skipped_max": 21,
  "bare_mirror_skipped_max": 47,
@@ -9,5 +9,5 @@
  "selftest_skipped_max": 7,
  "gate_skipped_max": 2,
  "mypy_exempt_max": 0,
- "note": "Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history. Round0022 current-main integration35883184e72622be3f16477e7087a5a248fd3b76; main history retained at35883184e72622be3f16477e7087a5a248fd3b76:.verify-floor.json; measured collection2118; ceiling keys unchanged."
+ "note": "Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history. Round0022 current-main integration35883184e72622be3f16477e7087a5a248fd3b76; main history retained at35883184e72622be3f16477e7087a5a248fd3b76:.verify-floor.json; measured collection2118; ceiling keys unchanged. Round0022 current-main integration35537f1b24cb694f675a8977dbace2d0391f1170; main history retained at35537f1b24cb694f675a8977dbace2d0391f1170:.verify-floor.json; measured collection2126; ceiling keys unchanged."
 }
