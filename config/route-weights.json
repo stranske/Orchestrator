@@ -1,5 +1,19 @@
 {
-  "generated_at": "2026-10-02T02:20:09Z",
+  "exploration": {
+    "challengers": {
+      "codemod": "codex",
+      "cross_repo": "gemini",
+      "implement": "cursor",
+      "mechanical": "codex",
+      "review": "codex",
+      "testgen": "cursor"
+    },
+    "mode": "thompson-hybrid",
+    "policy_version": "route-exploration/v1:3a6c98d6b101db3c3697a87c329ee1eb4641877525132291e18919a7754ed61e",
+    "rate": 0.05,
+    "week_start": 1790812800
+  },
+  "generated_at": "2026-10-06T05:50:11Z",
   "min_observations": 20,
   "reserve": {
     "implement": [
