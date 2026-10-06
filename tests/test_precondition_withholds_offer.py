@@ -108,7 +108,7 @@ def test_known_precondition_true_offers_and_false_declines_as_precondition_unmet
     assert by_id["runtime-ac-checks"]["auto_declined"]["kind"] == "scope_too_small"
     assert by_id["redirect-policy"]["precondition_met"] is False
     assert by_id["redirect-policy"]["auto_declined"]["kind"] == "precondition_unmet"
-    assert not result["fact_missing"]
+    assert {row["capability_id"] for row in result["fact_missing"]} == {"adversarial-review"}
 
     result = ca.advise(
         "closer: stranske/Repo#1234 merge and verify",
@@ -122,7 +122,7 @@ def test_known_precondition_true_offers_and_false_declines_as_precondition_unmet
     for name in ("runtime-ac-checks", "redirect-policy"):
         assert by_id[name]["precondition_met"] is True
         assert "auto_declined" not in by_id[name]
-    assert not result["fact_missing"]
+    assert {row["capability_id"] for row in result["fact_missing"]} == {"adversarial-review"}
 
 
 def test_detect_reports_fact_missing_per_surface_and_never_as_a_decline(
@@ -206,7 +206,7 @@ def test_context_facts_evaluate_without_a_pr_number(tmp_path, monkeypatch):
         path=ledger,
     )
     by_id = {e["capability_id"]: e for e in result["capabilities"]}
-    assert not result["fact_missing"]
+    assert {row["capability_id"] for row in result["fact_missing"]} == {"adversarial-review"}
     assert by_id["runtime-ac-checks"]["auto_declined"]["kind"] == "scope_too_small"
     assert by_id["redirect-policy"]["auto_declined"]["kind"] == "precondition_unmet"
     assert by_id["cross-repo-coordination"]["precondition_met"] is True

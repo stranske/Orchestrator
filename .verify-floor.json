@@ -1,13 +1,13 @@
 {
-  "collected": 2108,
-  "passed": 2108,
-  "skipped_max": 26,
-  "mirror_skipped_max": 21,
-  "bare_mirror_skipped_max": 47,
-  "bare_mirror_selftest_skipped_max": 7,
-  "bare_mirror_gate_skipped_max": 2,
-  "selftest_skipped_max": 7,
-  "gate_skipped_max": 2,
-  "mypy_exempt_max": 0,
-  "note": "Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history. Issue426 adds eight offline redirect-gate tests; collection remeasured on merged main d357820. All skip/type ceilings unchanged."
+ "collected": 2124,
+ "passed": 2124,
+ "skipped_max": 26,
+ "mirror_skipped_max": 21,
+ "bare_mirror_skipped_max": 47,
+ "bare_mirror_selftest_skipped_max": 7,
+ "bare_mirror_gate_skipped_max": 2,
+ "selftest_skipped_max": 7,
+ "gate_skipped_max": 2,
+ "mypy_exempt_max": 0,
+ "note": "Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history. Issue426 adds eight offline redirect-gate tests; collection remeasured on merged main d357820. All skip/type ceilings unchanged. Round0022 integrates main35883184e72622be3f16477e7087a5a248fd3b76; preserves both acceptance seams and main history at35883184e72622be3f16477e7087a5a248fd3b76:.verify-floor.json; measured2124; ceilings unchanged."
 }
