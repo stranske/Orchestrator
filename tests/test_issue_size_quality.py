@@ -7,6 +7,14 @@ import pytest
 import issue_size_quality as quality
 import switch_review
 
+
+@pytest.fixture(autouse=True)
+def isolate_unrelated_credential_scan(monkeypatch):
+    monkeypatch.setattr(
+        switch_review, "credential_exposure", lambda **kwargs: {"status": "disabled"}
+    )
+
+
 NOW = 1800000000
 
 
