@@ -115,14 +115,15 @@ function world(t) {
   };
 }
 
-test('retro CLI refreshes mixed-case agreement and measured-cost denominators', (t) => {
+test('retro CLI preserves raw proposals without grading metadata and refreshes measured costs', (t) => {
   const w = world(t);
   const saved = w.run(['-c', initialize]);
   const before = w.brain();
   const summary = w.refresh();
   assert.deepEqual(summary, {
-    cases: 6, adjudicated: 4, graded: 3, agree: 2, disagree: 1,
-    agreement_rate: 2 / 3, merge_rule_agreement_rate: 1 / 3,
+    cases: 6, adjudicated: 0, proposed_decisions: 4, metadata_only_cases: 6,
+    graded: 0, agree: 0, disagree: 0,
+    agreement_rate: null, merge_rule_agreement_rate: null,
     cost_usd: 4.5, cost_measured_cases: 4, cost_per_case: 1.125,
   });
   const report = w.report();
@@ -131,6 +132,11 @@ test('retro CLI refreshes mixed-case agreement and measured-cost denominators', 
   assert.equal(report.shadow, true);
   assert.equal(report.source, 'retrospective');
   assert.deepEqual(report.rows.map((row) => row.role_run_id), saved.map((row) => row.role_run_id));
+  assert.deepEqual(report.rows.map((row) => row.decision), saved.map((row) => row.decision));
+  assert.ok(report.rows.every((row) => row.disposition === 'needs_more_evidence'));
+  assert.ok(report.rows.every((row) => row.shadow_verdict === null));
+  assert.equal(report.rows[0].raw_shadow_verdict, 'PASS');
+  assert.equal(report.rows[1].raw_shadow_verdict, 'FAIL');
   assert.equal(report.rows[2].cost_usd, null, 'ledger placeholders are not measured costs');
   assert.equal(report.rows[3].cost_usd, 0, 'a measured zero still counts in the denominator');
   assert.equal(report.rows[3].later_truth, null, 'pending durability must stay ungraded');
@@ -147,8 +153,8 @@ rendered = switch_review.format_report({
 })
 print(json.dumps({"line": line, "rendered": rendered}))
 `]);
-  assert.equal(line, 'adjudicator shadow: cases 6, agree 2, disagree 1, cost 4.5 '
-    + '(graded 3; costs measured 4)');
+  assert.equal(line, 'adjudicator shadow: cases 6, agree 0, disagree 0, cost 4.5 '
+    + '(graded 0; costs measured 4)');
   assert.equal(rendered.split('\n').filter((text) => text === line).length, 1);
 });
 
@@ -168,8 +174,9 @@ print(json.dumps(True))
   const before = w.brain();
   const summary = w.refresh();
   assert.deepEqual(summary, {
-    cases: 6, adjudicated: 4, graded: 4, agree: 2, disagree: 2,
-    agreement_rate: 0.5, merge_rule_agreement_rate: 0.5,
+    cases: 6, adjudicated: 0, proposed_decisions: 4, metadata_only_cases: 6,
+    graded: 0, agree: 0, disagree: 0,
+    agreement_rate: null, merge_rule_agreement_rate: null,
     cost_usd: 5.25, cost_measured_cases: 5, cost_per_case: 1.05,
   });
   assert.deepEqual(w.report().summary, summary);
@@ -185,7 +192,8 @@ test('retro CLI publishes an empty report without inventing agreement or cost', 
   const before = w.brain();
   const summary = w.refresh();
   assert.deepEqual(summary, {
-    cases: 0, adjudicated: 0, graded: 0, agree: 0, disagree: 0,
+    cases: 0, adjudicated: 0, proposed_decisions: 0, metadata_only_cases: 0,
+    graded: 0, agree: 0, disagree: 0,
     agreement_rate: null, merge_rule_agreement_rate: null,
     cost_usd: null, cost_measured_cases: 0, cost_per_case: null,
   });

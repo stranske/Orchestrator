@@ -14,3 +14,5 @@ Validation:
 - Legacy false-flag recovery and non-retrospective behavior are tested; private-Brain tests retain zero outcome writes.
 
 Adjacent logs are verbatim. `428-controls.json` binds deliberate controls to restored source hashes before the subsequent prompt relocation. No new backend/model setting, scheduler change or merge authorization is implied.
+
+The separate Node CLI suite initially found three stale expected summaries that still graded metadata-only proposals. The final tests retain raw decision/verdict preservation, measured-cost refresh, repeated-process idempotency, weekly rendering and no-Brain-write assertions while expecting zero accepted/graded metadata cases. All three CLI tests now pass; no production code changed in this final test-only commit.
