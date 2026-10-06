@@ -371,7 +371,10 @@ def _fetch_issue_body(repo: str, number: int) -> str | None:
         "body",
     ]
     issue = _run_json(args)
-    return str(issue["body"]) if isinstance(issue, dict) and issue.get("body") else None
+    body = issue.get("body") if isinstance(issue, dict) else None
+    # A malformed response must remain retryable. Coercing it to text would
+    # publish a once-authored spec that can never recover the real issue's ACs.
+    return body if isinstance(body, str) and body.strip() else None
 
 
 def _agent_from_labels(labels: list[str]) -> tuple[str, str] | None:
