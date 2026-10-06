@@ -33,6 +33,11 @@ def test_refresh_selection_is_bounded_by_immutable_creation_and_age(tmp_path):
         edir.mkdir()
         (edir / "eval-maps.json").write_text("{}")
         (edir / "strategy.json").write_text(json.dumps({"created_ts": created}))
+    assert strategy_experiment.refreshable_trials(tmp_path, now=210, max_age_days=1) == [
+        "expired",
+        "old",
+        "current",
+    ]
     assert (
         strategy_experiment.latest_refreshable_trial(tmp_path, now=210, max_age_days=1) == "current"
     )
@@ -57,6 +62,11 @@ def test_refresh_selection_is_bounded_by_immutable_creation_and_age(tmp_path):
             "strategy experiment: UNKNOWN — missing reviewer",
         ),
         (None, "strategy experiment: UNKNOWN — no completed scored evaluation"),
+        ([], "strategy experiment: UNKNOWN — no completed scored evaluation"),
+        (
+            {"status": "completed", "costs": [1]},
+            "strategy experiment: UNKNOWN — no completed scored evaluation",
+        ),
     ],
 )
 def test_switch_report_exposes_trial_cost_and_unknown_evidence(
@@ -300,3 +310,25 @@ def test_refresh_refuses_missing_original_evaluator_identities(measured, maps):
     (edir / "eval-maps.json").write_text(json.dumps(maps))
     with pytest.raises(ValueError, match="original evaluator identities"):
         strategy_experiment.refresh_evaluation_result(exp_id)
+
+
+def test_followup_refreshes_all_eligible_archived_receipts(measured, monkeypatch):
+    exp_id, _plan, edir = measured
+    (edir / "eval-maps.json").write_text("{}")
+    newer = edir.parent / "newer"
+    newer.mkdir()
+    metadata = json.loads((edir / "strategy.json").read_text())
+    import time
+
+    metadata["created_ts"] = int(time.time()) - 10
+    (newer / "strategy.json").write_text(json.dumps(metadata))
+    (edir / "meta.json").write_text("{}")
+    (edir / "spec.md").write_text("archived")
+    (newer / "meta.json").write_text("{}")
+    (newer / "spec.md").write_text("archived")
+    (newer / "eval-maps.json").write_text("{}")
+    refreshed = []
+    monkeypatch.setattr(strategy_experiment, "refresh_evaluation_result", refreshed.append)
+    monkeypatch.setattr(exp_abcd, "ship_gate_stamp", lambda: edir.parent / "ship-gate.stamp")
+    exp_abcd.followup()
+    assert set(refreshed) == {exp_id, "newer"}

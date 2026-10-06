@@ -1037,19 +1037,24 @@ def launch_pending_reviews(repo: str, exp_id: str, *, stale_after_s: int = 6 * 3
             continue
         launched.append({"member_id": member_id, "pid": pid, "seed": str(seed)})
     subject_target = (meta.get("subject") or {}).get("target")
+    claim_error = None
     if launched and subject_target:
-        import claims
+        try:
+            import claims
 
-        holder = claims.holder(subject_target) or {}
-        claims.update_metadata(
-            subject_target,
-            "research",
-            pid=0,
-            pids=[*holder.get("pids", []), *[row["pid"] for row in launched]],
-            refresh_ts=True,
-            experiment_id=exp_id,
-        )
-    return {"launched": launched, "pending": pending, "failed": failed}
+            holder = claims.holder(subject_target) or {}
+            claims.update_metadata(
+                subject_target,
+                "research",
+                pid=0,
+                pids=[*holder.get("pids", []), *[row["pid"] for row in launched]],
+                refresh_ts=True,
+                experiment_id=exp_id,
+            )
+        except Exception as exc:
+            # Spawned reviewers remain live; bookkeeping is not a launch failure.
+            claim_error = str(exc)[:300]
+    return {"launched": launched, "pending": pending, "failed": failed, "claim_error": claim_error}
 
 
 def prepare_arm(
@@ -1946,14 +1951,14 @@ def followup(
             launch_available = False
     import strategy_experiment
 
-    refresh_trial = strategy_experiment.latest_refreshable_trial(
+    refresh_trials = strategy_experiment.refreshable_trials(
         EXP_DIR, now=now, max_age_days=max_age_days
     )
     for edir in dirs:
         meta_p, spec_p = edir / "meta.json", edir / "spec.md"
         if not meta_p.exists() or not spec_p.exists():
             continue
-        if edir.name == refresh_trial:
+        if edir.name in refresh_trials:
             try:
                 import strategy_experiment
 

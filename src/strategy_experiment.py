@@ -689,7 +689,7 @@ def publish_trial_result(receipt: dict, metadata: dict) -> Path:
     return path
 
 
-def latest_refreshable_trial(root: Path, *, now: float, max_age_days: int) -> str | None:
+def refreshable_trials(root: Path, *, now: float, max_age_days: int) -> list[str]:
     candidates = []
     for edir in root.iterdir():
         if not edir.is_dir() or not (edir / "eval-maps.json").exists():
@@ -702,7 +702,12 @@ def latest_refreshable_trial(root: Path, *, now: float, max_age_days: int) -> st
             candidates.append((created, edir.name))
         except (OSError, ValueError, KeyError, TypeError):
             continue
-    return max(candidates)[1] if candidates else None
+    return [name for _, name in sorted(candidates)]
+
+
+def latest_refreshable_trial(root: Path, *, now: float, max_age_days: int) -> str | None:
+    candidates = refreshable_trials(root, now=now, max_age_days=max_age_days)
+    return candidates[-1] if candidates else None
 
 
 def record_failed_trial(exp_id: str, failures: list[dict], *, exp_dir: Path | None = None) -> None:

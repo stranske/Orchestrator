@@ -128,8 +128,9 @@ def test_subject_path_freezes_the_spec_and_prepares_two_strategy_arms_with_three
     assert out["prepared"]["exp_id"] == "subject-test"
 
 
+@pytest.mark.parametrize("claim_failure", [False, True])
 def test_prepared_subject_followup_evaluates_six_final_candidates_and_enters_promotion(
-    tmp_path, subject_harness, monkeypatch
+    tmp_path, subject_harness, monkeypatch, claim_failure
 ):
     subject = {
         "target": "o/r#44",
@@ -180,6 +181,12 @@ def test_prepared_subject_followup_evaluates_six_final_candidates_and_enters_pro
             promotion_completion_fn=lambda state: {"status": "pending"},
         )
 
+    if claim_failure:
+
+        def fail_claim(*args, **kwargs):
+            raise OSError("claim store unavailable after launch")
+
+        monkeypatch.setattr(strategy_experiment.claims, "update_metadata", fail_claim)
     first = followup()
     assert first["processed"] == [] and first["skipped"][0]["reason"] == "pair-review-pending"
     assert len(subject_harness) == 9 and not judgments and not syntheses

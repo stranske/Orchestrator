@@ -1722,10 +1722,15 @@ def format_report(rep: dict) -> str:
 
         result_path = strategy_experiment.strategy_result_path()
         result = json.loads(result_path.read_text())
+        if not isinstance(result, dict):
+            raise ValueError("strategy result must be an object")
         if result.get("status") == "completed":
-            total = sum(
-                float(row.get("cost_usd") or 0) for row in (result.get("costs") or {}).values()
-            )
+            costs = result.get("costs") or {}
+            if not isinstance(costs, dict) or any(
+                not isinstance(row, dict) for row in costs.values()
+            ):
+                raise ValueError("strategy costs must contain objects")
+            total = sum(float(row.get("cost_usd") or 0) for row in costs.values())
             lines += [
                 f"  strategy experiment: completed {result.get('exp_id')} total_cost=${total:.4f}",
                 "",

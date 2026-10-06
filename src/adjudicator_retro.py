@@ -268,8 +268,9 @@ def run(
         case_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         old = saved.get(case_id)
         if old and (old.get("decision") or not retry):
-            old["later_truth"] = later_truth(row)
-            old["cost_usd"] = measured_cost(old.get("backend_run_id"), db)
+            if old.get("decision"):
+                old["later_truth"] = later_truth(row)
+                old["cost_usd"] = measured_cost(old.get("backend_run_id"), db)
             continue
         if attempted >= max(0, limit):
             continue
