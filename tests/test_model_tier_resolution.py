@@ -270,11 +270,13 @@ def test_tiers_are_distinct_and_ordered_cheap_to_full():
         assert len(set(picks)) == 3, (agent, picks)
 
 
-def test_build_command_honours_every_tier():
+def test_build_command_honours_every_tier(tmp_path):
     """The pin must actually reach argv — a tier map nothing dispatches is dead code.
 
     Expectations are stated post-ceiling, because that is what really dispatches: claude is
     capped at `mid`, so its `full` lane sends Sonnet 5.5 (see the scarce-seat ceiling tests).
+    The workspace is the test's own directory, not the shared `/tmp`: where the state dir lives
+    under `/tmp` (CI's bare exec mirror), `/tmp` holds it and no agent may be granted it.
     """
     expected = {
         "codex": ("gpt-6-luna", "gpt-5.6-terra", "gpt-6.1-sol"),
@@ -283,7 +285,7 @@ def test_build_command_honours_every_tier():
     }
     for agent, models in expected.items():
         for tier, model in zip(adapters.MODEL_TIER_NAMES, models):
-            argv = adapters.build_command(agent, "x", mode=tier, cwd="/tmp")
+            argv = adapters.build_command(agent, "x", mode=tier, cwd=tmp_path)
             assert argv[argv.index("--model") + 1] == model, (agent, tier, argv)
             expected_tier = adapters.effective_tier(agent, tier)
             assert model == adapters.MODEL_TIERS[agent][expected_tier], (agent, tier)
@@ -302,10 +304,10 @@ def test_offload_defaults_to_the_mid_tier():
     assert adapters.DEFAULT_OFFLOAD_TIER == "mid"
 
 
-def test_non_tier_modes_do_not_pin_a_model():
+def test_non_tier_modes_do_not_pin_a_model(tmp_path):
     """'assess'/None must keep the long-standing 'never pin what we did not verify' behaviour."""
     for mode in (None, "assess"):
-        argv = adapters.build_command("codex", "x", mode=mode, cwd="/tmp")
+        argv = adapters.build_command("codex", "x", mode=mode, cwd=tmp_path)
         assert "--model" not in argv, (mode, argv)
 
 
