@@ -296,6 +296,8 @@ def test_arm_evaluate_dual_writes_exact_v2_and_parent_legacy(tmp_path, monkeypat
     # exactly what it asserted before, and now asserts it on every machine.
     monkeypatch.setenv("ORCH_MODEL_PROBE", "0")
     monkeypatch.setattr(exp_abcd.adapters, "_ADVERTISED_MEMO", {})
+    # Each evaluator gets a scratch workspace under the state dir; keep them out of the live one.
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
 
     class FakePopen:
         def __init__(self, *_args, stdout=None, **_kwargs):
