@@ -632,10 +632,11 @@ def _scrub_run_segment(log_file: str | None, run_id: str, started_ts: int | None
     A detached wrapper sends the agent's stdout straight into the file, so no Python reads it
     before it lands; this step runs right after the agent exits, the first moment the segment can
     be masked. Two experiment arms of 2026-07-09 printed the live GitHub token into exactly such a
-    log. Only this run's segment is touched (credential_redaction.scrub_file), never what earlier
-    runs wrote, and a run started before CREDENTIAL_SCRUB_SINCE (or with no start at all) is never
-    scrubbed: files that already held a token are the owner's to clean, not this step's. Returns
-    how many strings were masked; never fatal to the completion step."""
+    log. The scrub runs from this run's header to the end of the file
+    (credential_redaction.segment_span), never over what earlier runs wrote, and a run started
+    before CREDENTIAL_SCRUB_SINCE (or with no start at all) is never scrubbed: files that already
+    held a token are the owner's to clean, not this step's. Returns how many strings were masked;
+    never fatal to the completion step."""
     if not log_file:
         return 0
     if started_ts is None or started_ts < CREDENTIAL_SCRUB_SINCE:

@@ -157,11 +157,11 @@ _SHAPES: tuple[tuple[str, str], ...] = (
 _STR_SHAPES = tuple((kind, re.compile(src, re.ASCII)) for kind, src in _SHAPES)
 _BYTES_SHAPES = tuple((kind, re.compile(src.encode("ascii"))) for kind, src in _SHAPES)
 
-# A run's own header, exactly as every writer of a run log prints it:
-# `=== <UTC timestamp> <what> ... run_id=<id> ===` (dispatcher._spawn, dispatcher.offload,
-# exp_abcd, ux_review). STRICT on purpose: a segment ends only at the next REAL header, never at a
-# pytest `=====` banner, which `ledger_reconcile._log_segment` (any line starting `===`) stops at.
-_RUN_HEADER = re.compile(rb"^=== \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z [^\n]*$", re.MULTILINE)
+# A run's header, exactly as every writer of a run log prints it: `=== <UTC timestamp> <what> ...
+# run_id=<id> ===` (dispatcher._spawn, dispatcher.offload, exp_abcd, ux_review). Group 1 is the id.
+# Not anchored to a line start: when the previous run's output ended without a newline, the next
+# header is glued onto that line, and it is still this run's header.
+RUN_HEADER = re.compile(rb"=== \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z [^\n]*?\brun_id=(\S+) ===")
 
 # What the exposure scan's rg prefilter looks for. Rust regex has no lookaround; Python decides,
 # with the redactor's own two GitHub shapes, so the scan cannot count what the mask would miss.
@@ -289,31 +289,32 @@ def redact_bytes(data: bytes) -> tuple[bytes, dict[str, int], list[tuple[int, in
 
 
 def segment_span(data: bytes, run_id: str) -> tuple[int, int] | None:
-    """Byte range of `run_id`'s own segment: after its header line, up to the next real run header
-    or the end. None when the file holds no header for that run. The LAST header naming the run
-    wins, as in `ledger_reconcile._log_segment`."""
-    needle = re.compile(rb"\brun_id=" + re.escape(run_id.encode("utf-8")) + rb"(?=\s|$)")
-    headers = list(_RUN_HEADER.finditer(data))
-    own = None
-    for index, header in enumerate(headers):
-        if needle.search(header.group(0)):
-            own = index
+    """Byte range to scrub for `run_id`: from the end of its own header line to the end of `data`.
+    None when `data` holds no header for that run.
+
+    Everything before the header was written before the run started, so it is never touched.
+    Everything after it was written since: this run's output, and any run that started after it.
+    The range deliberately runs to the END, not to the next `===` line. pytest prints `=====`
+    banners, and an agent that prints a run log prints whole headers, so stopping at either would
+    leave the rest of the run's output unmasked; masking a later run's bytes too costs nothing.
+    The FIRST header naming the run is its own; a later copy is the run echoing its own log."""
+    rid = run_id.encode("utf-8")
+    own = next((m for m in RUN_HEADER.finditer(data) if m.group(1) == rid), None)
     if own is None:
         return None
-    start = headers[own].end()
+    start = own.end()
     if data[start : start + 1] == b"\n":
         start += 1
-    end = headers[own + 1].start() if own + 1 < len(headers) else len(data)
-    return start, end
+    return start, len(data)
 
 
 def scrub_file(path: str | Path, *, run_id: str | None = None) -> dict:
-    """Mask credentials IN PLACE in one run's segment of `path`, or in the whole file when
-    `run_id` is None (a file written for one run only).
+    """Mask credentials IN PLACE from one run's header to the end of `path` (`segment_span`), or
+    in the whole file when `run_id` is None (a file written for one run only).
 
     Same-length masks, written only over the masked spans, through a descriptor opened without
-    truncation: a process still appending to the file loses nothing, and no byte outside the
-    segment is touched, so what earlier runs wrote stays exactly as it was. Never raises: a
+    truncation: a process still appending to the file loses nothing, and no byte before the run's
+    header is touched, so what earlier runs wrote stays exactly as it was. Never raises: a
     completion step must survive its own safety layer, so a failure is a `status`, named."""
     result: dict = {"path": str(path), "status": "clean", "redacted": 0, "kinds": {}}
     if disabled():
@@ -716,8 +717,8 @@ def _selftest() -> None:
             else:
                 os.environ[key] = value
     print(
-        "credential_redaction selftest OK: same-length masks, idempotent, segment-only in-place "
-        "scrub, kill switch, checksum-classified exposure report"
+        "credential_redaction selftest OK: same-length masks, idempotent, in-place scrub from the "
+        "run's own header on, kill switch, checksum-classified exposure report"
     )
 
 

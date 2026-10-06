@@ -216,23 +216,47 @@ def _header(minute: int, run_id: str) -> str:
     )
 
 
-def test_the_scrub_touches_only_this_runs_segment(tmp_path):
+def test_the_scrub_never_touches_what_was_written_before_this_run(tmp_path):
     token, other = minted("o"), minted("s", "Zx9")
     earlier = _header(1, "run-1") + f"old {token}\n"
     mine = _header(2, "run-2")
-    # A pytest banner starts with `===` too; only a real run header ends a segment.
-    body = f"===== test session starts =====\nprinted {token}\n===== 3 passed =====\nand {other}\n"
+    # pytest prints `=====` banners, and an agent that prints a run log prints whole headers.
+    # Neither ends the scrub, which runs to the end of the file.
+    body = (
+        f"===== test session starts =====\nprinted {token}\n"
+        + _header(9, "a-run-the-agent-printed")
+        + f"and {other}\n"
+    )
     later = _header(3, "run-3") + f"later {token}\n"
     log = tmp_path / "o__r_9.codex.log"
     log.write_text(earlier + mine + body + later)
     inode = log.stat().st_ino
     result = cr.scrub_file(log, run_id="run-2")
     text = log.read_text()
-    assert result["status"] == "scrubbed" and result["kinds"] == {"github-token": 2}, result
+    assert result["status"] == "scrubbed" and result["kinds"] == {"github-token": 3}, result
     assert text.startswith(earlier + mine), "an earlier run's bytes are never edited"
-    assert text.endswith(later), "nor a later run's"
-    assert token not in text[len(earlier) : -len(later)] and other not in text
+    assert token not in text[len(earlier) :] and other not in text
     assert len(text) == len(earlier + mine + body + later) and log.stat().st_ino == inode
+
+
+def test_a_header_glued_to_the_previous_runs_last_line_is_still_found(tmp_path):
+    """A run whose output ended without a newline leaves the next header mid-line."""
+    token = minted("o")
+    earlier = _header(1, "run-1") + f"old {token} and no newline at the end"
+    log = tmp_path / "run.log"
+    log.write_text(earlier + _header(2, "run-2") + f"printed {token}\n")
+    assert cr.scrub_file(log, run_id="run-2")["redacted"] == 1
+    text = log.read_text()
+    assert text.startswith(earlier) and text.count(token) == 1, "only the earlier copy remains"
+
+
+def test_a_run_that_prints_its_own_header_is_masked_from_the_first(tmp_path):
+    """The FIRST header naming the run is its own; a later copy is the run echoing its log."""
+    token = minted("o")
+    log = tmp_path / "run.log"
+    log.write_text(_header(2, "run-2") + f"a {token}\n" + _header(2, "run-2") + f"b {token}\n")
+    assert cr.scrub_file(log, run_id="run-2")["redacted"] == 2
+    assert token not in log.read_text()
 
 
 def test_a_writer_still_appending_loses_nothing(tmp_path):
