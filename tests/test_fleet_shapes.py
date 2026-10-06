@@ -129,7 +129,11 @@ FACT = {
 def _fetch_recorder(calls):
     def fetch(repo, numbers):
         calls.append((repo, tuple(numbers)))
-        return {n: dict(FACT) for n in numbers if n != 404}  # 404: a PR gh cannot return
+        return {
+            n: dict(FACT, source_labels=[], source_labels_complete=True)
+            for n in numbers
+            if n != 404
+        }  # 404: a PR gh cannot return
 
     return fetch
 
