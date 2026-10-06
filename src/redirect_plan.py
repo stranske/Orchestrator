@@ -194,6 +194,49 @@ def _prompt_text(report: dict, action: str, reason: str) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
+def _decomposition(report: dict, prompt: str) -> dict:
+    """Use the existing shadow role and its validator; never dispatch generated subtasks."""
+    import roles
+
+    gate = roles._shadow_gate(None)
+    selection = roles.select_role_activation(
+        "decomposer",
+        matched=True,
+        gate_enabled=gate,
+        capacity_available=True,
+        max_invocations=roles._role_cap(None, "decomposer"),
+        target=report.get("target"),
+        record=gate,
+    )
+    try:
+        result = roles.run_decomposer_agent(
+            goal=report.get("goal") or report.get("target") or "Recover the stalled task",
+            repo=str(report.get("target") or "").partition("#")[0],
+            target=report.get("target") or "",
+            context=prompt,
+            cwd=report.get("worktree") or ".",
+            dispatch=selection["invoked"],
+        )
+        proposal = result.get("proposal")
+        errors = list(result.get("errors") or [])
+        if proposal is not None:
+            errors.extend(roles.get_role("decomposer").validate(proposal))
+        if proposal is not None and not errors:
+            return {
+                "proposal": proposal,
+                "role_run_id": result.get("role_run_id"),
+                "reason": "validated_shadow_plan",
+            }
+        return {
+            "proposal": None,
+            "reason": "; ".join(map(str, errors))
+            or selection["reason"]
+            or "role returned no valid plan",
+        }
+    except Exception as exc:  # noqa: BLE001 — retain deterministic recovery with an explicit reason
+        return {"proposal": None, "reason": f"decomposer unavailable: {exc}"}
+
+
 def _prompt_path(report: dict, action: str, prompt_file: str | None) -> str:
     if prompt_file:
         return prompt_file
@@ -253,7 +296,10 @@ def plan(
     prompt_file: str | None = None,
     prompt_override: str | None = None,
 ) -> dict[str, Any]:
-    """Return a dry-run plan for a watch report. This function has no side effects.
+    """Return a dry-run plan; generated subtasks are never dispatched here.
+
+    A decompose verdict consults the existing shadow role. Model transport stays behind
+    ORCH_ROLE_SHADOW and its per-cycle invocation cap, independently of live apply authorization.
 
     prompt_override (optional): when an agent-role (see roles.py RedirectAgent) has authored a
     corrected delegation prompt, pass it here; it replaces the deterministic _prompt_text for
@@ -275,6 +321,17 @@ def plan(
         prompt = prompt_override if prompt_override else _prompt_text(report, action, reason)
     else:
         prompt = ""
+    decomposition = None
+    if action == "decompose":
+        decomposition = _decomposition(report, prompt)
+        if decomposition["proposal"] is not None:
+            prompt += (
+                "\nValidated shadow decomposition (execute only the authorized first slice):\n"
+                + json.dumps(decomposition["proposal"], indent=2)
+                + "\n"
+            )
+        else:
+            prompt += "\nDecomposer fallback reason: " + decomposition["reason"] + "\n"
     prompt_path = _prompt_path(report, action, prompt_file) if prompt else ""
     steps: list[dict[str, Any]] = []
 
@@ -384,6 +441,7 @@ def plan(
         "requires_confirmation": requires,
         "prompt_file": prompt_path,
         "prompt_text": prompt,
+        "decomposition": decomposition,
         "steps": steps,
     }
 
