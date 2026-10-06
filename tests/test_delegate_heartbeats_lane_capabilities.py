@@ -5,11 +5,16 @@ import json
 import pytest
 
 import capabilities
+import capability_outcome_bridge as bridge
 import dispatcher
 import feedback
 import roles
 
-LANES = dispatcher.DELEGATE_LANE_CAPABILITIES
+LANES = {
+    "testgen": "testgen-lane",
+    "codemod": "codemod-campaign",
+    "cross_repo": "cross-repo-coordination",
+}
 
 
 @pytest.fixture
@@ -23,6 +28,10 @@ def world(monkeypatch, tmp_path):
     capabilities.save(rows, ledger)
     monkeypatch.setattr(capabilities, "REG", ledger)
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setattr(dispatcher.adapters, "HANDOFF", tmp_path / "handoff")
+    monkeypatch.setattr(
+        dispatcher.adapters, "LEDGER", tmp_path / "handoff" / "capacity-ledger.ndjson"
+    )
     monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
@@ -76,9 +85,50 @@ def _assert_credit(world, result, capability_id):
         ).fetchall()
         assert {tuple(e) for e in edges} == {(capability_id, f"{capability_id}@test-v1")}
 
+    # Follow the actual terminal outcome through the bridge, rather than assuming
+    # a persisted decision tag is enough to credit the lane's result.
+    feedback.record_outcome(
+        result["run_id"], adjudicated_verdict="PASS", merged=True, durability="durable"
+    )
+    report = bridge.attribute(bridge.collect(), known=set(LANES.values()))
+    assert report["unattributed"] == []
+    assert report["unknown_capability"] == []
+    assert report["links"] == [
+        {
+            "capability_id": capability_id,
+            "run_id": result["run_id"],
+            "resolver": "run_tagged",
+            "verdict": "PASS",
+            "durability": "durable",
+        }
+    ]
+    assert bridge.apply_links(report["links"], path=world)["written"] == 1
+    assert bridge.apply_links(report["links"], path=world)["already_linked"] == 1
+    rows = json.loads(world.read_text())["capabilities"]
+    outcomes = [
+        (name, event)
+        for name, row in rows.items()
+        for event in row["event_history"]
+        if event["type"] == "outcome"
+    ]
+    assert len(outcomes) == 1
+    name, event = outcomes[0]
+    assert name == capability_id
+    assert event["ref"] == result["run_id"]
+    assert event["metadata"] == {
+        "resolver": "run_tagged",
+        "verdict": "PASS",
+        "durability": "durable",
+    }
+
 
 def test_a_testgen_delegate_heartbeats_testgen_lane_and_tags_the_run(world):
     _assert_credit(world, _delegate("testgen"), "testgen-lane")
+    # The audit finding must survive declaration reconciliation on a fresh ledger.
+    for rows in (capabilities.load_declared(world), capabilities.load(world)):
+        notes = rows["testgen-lane"]["notes"]
+        for finding in ("2026-10-04", "44 testgen runs", "32 PASS", "26 durable", "dedup"):
+            assert finding in notes
 
 
 @pytest.mark.parametrize("task_type", ["codemod", "cross_repo"])
