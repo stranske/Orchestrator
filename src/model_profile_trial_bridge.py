@@ -790,7 +790,10 @@ def collect_remote_attempt(
     model_profile_trial.ensure_artifact_outside_sources(
         trial_root, [Path(row["root"]) for row in manifest["source_before"].values()]
     )
-    artifact_path = trial_root / request["profile_id"] / "model-profile-trial-attempt.json"
+    artifact_dir = trial_root / request["profile_id"]
+    if manifest.get("instances_per_profile", 1) > 1:
+        artifact_dir /= f"launch-{request['launch_ordinal']}"
+    artifact_path = artifact_dir / "model-profile-trial-attempt.json"
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
     artifact_path.write_bytes(raw)
     attempt = {key: artifact.get(key) for key in TRANSPORT_ATTEMPT_FIELDS if key in artifact}

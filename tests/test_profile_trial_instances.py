@@ -9,6 +9,7 @@ import json
 import os
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -269,6 +270,85 @@ class ProfileTrialInstancesTest(unittest.TestCase):
                 bridge.collect_remote_results(
                     self.manifest, envelope, [1000] * 6, artifact_root=self.root / "artifacts"
                 )
+
+    def test_remote_collection_retains_each_instance_artifact_and_digest(self):
+        artifact_root = self.root / "artifacts"
+        reservation = bridge._live_capacity_reservation(
+            self.manifest, {"generated_at": 1000, "agents": {"codex": {"state": "ok"}}}
+        )
+        source_sha = "3" * 40
+        envelope = bridge.build_request_envelope(
+            self.manifest,
+            artifact_root=artifact_root,
+            transport="remote",
+            preflight_result={
+                "ready": True,
+                "capacity_reservation": reservation,
+                "workflows_source_sha": source_sha,
+            },
+        )
+        responses = {}
+        archives = {}
+        run_ids = []
+        for request in envelope["requests"]:
+            run_id = 1000 + request["launch_ordinal"]
+            run_ids.append(run_id)
+            artifact_name = (
+                f"model-profile-trial-{request['profile_id']}-{run_id}-"
+                f"1-{request['launch_ordinal']}"
+            )
+            artifact = {
+                "request_id": request["request_id"],
+                "run_id": request["run_id"],
+                "profile_id": request["profile_id"],
+                "github_repository": bridge.REMOTE_REPOSITORY,
+                "github_workflow_ref": bridge.REMOTE_WORKFLOW_REF,
+                "github_workflow_sha": source_sha,
+                "github_run_id": run_id,
+                "github_run_attempt": 1,
+                "artifact_name": artifact_name,
+            }
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, "w") as archive:
+                archive.writestr("model-profile-trial-attempt.json", json.dumps(artifact))
+            archives[run_id] = buffer.getvalue()
+            endpoint = f"repos/{bridge.REMOTE_REPOSITORY}/actions/runs/{run_id}"
+            responses[endpoint] = {
+                "id": run_id,
+                "run_attempt": 1,
+                "event": "workflow_dispatch",
+                "head_branch": "main",
+                "head_sha": source_sha,
+                "path": bridge.REMOTE_WORKFLOW_PATH,
+                "status": "completed",
+                "conclusion": "success",
+            }
+            responses[endpoint + "/artifacts?per_page=100"] = {
+                "artifacts": [
+                    {
+                        "id": run_id,
+                        "name": artifact_name,
+                        "digest": "sha256:" + hashlib.sha256(archives[run_id]).hexdigest(),
+                        "workflow_run": {"head_sha": source_sha},
+                    }
+                ]
+            }
+        with (
+            patch.object(bridge, "_gh_json", side_effect=responses.__getitem__),
+            patch.object(bridge, "_gh_download_artifact", side_effect=archives.__getitem__),
+        ):
+            results = bridge.collect_remote_results(
+                self.manifest, envelope, run_ids, artifact_root=artifact_root
+            )
+        attempts = results["attempts"]
+        self.assertEqual(len({a["artifact_ref"] for a in attempts}), 6)
+        for request, attempt in zip(envelope["requests"], attempts):
+            path = Path(attempt["artifact_ref"])
+            self.assertEqual(path.parent, Path(request["artifact_dir"]))
+            self.assertEqual(json.loads(path.read_bytes())["run_id"], request["run_id"])
+            self.assertEqual(
+                attempt["artifact_sha256"], "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+            )
 
 
 if __name__ == "__main__":
