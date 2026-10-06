@@ -62,8 +62,11 @@ STATE_DIR = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orch
 SNAPSHOT_PATH = STATE_DIR / "capability-activation-history.json"
 MAX_SNAPSHOTS = 60
 
-# Modules that actually drive a tick. A directly-entered capability is only reachable if its
-# heartbeat sits on a path one of these can reach.
+# Modules that actually drive a tick, plus the terminal-merge seat. A directly-entered capability
+# is only reachable if its heartbeat sits on a path one of these can reach. `merge_guard.py` joined
+# on 2026-10-05, when the closer-PR review hooks left the tick for the merge they gate: every
+# repository-local merge goes through it (CLAUDE.md's terminal merge invariant), and it is the only
+# in-tree production caller of the adversarial panel.
 DRIVER_MODULES = (
     "tick.py",
     "dispatcher.py",
@@ -73,6 +76,7 @@ DRIVER_MODULES = (
     "capacity.py",
     "backlog.py",
     "outcomes.py",
+    "merge_guard.py",
 )
 
 ENTRY_TASK_ROUTED = "task_routed"
@@ -674,6 +678,32 @@ def _reaches(start: str, graph: dict[str, set[str]], targets: set[str]) -> bool:
     return False
 
 
+def _python_references(text: str, module_stem: str) -> tuple[set[str], set[str]] | None:
+    """(functions CALLED as `module_stem.<fn>(...)`, attributes REFERENCED as `module_stem.<x>`) in
+    a python driver's code, or None when the driver does not parse.
+
+    A comment, a docstring or a string that NAMES a call is not a caller, any more than a shell
+    comment is (the `.sh` branch of `_callers_of`). Until 2026-10-05 the python branch matched raw
+    text, and backlog.py's comment explaining why `adversarial.high_stakes_reason()` needs source
+    labels was credited as that capability's second caller; the day the tick stopped calling it,
+    the comment would have been its only one."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return None
+    calls: set[str] = set()
+    attrs: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            if node.value.id == module_stem:
+                attrs.add(node.attr)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            func = node.func
+            if isinstance(func.value, ast.Name) and func.value.id == module_stem:
+                calls.add(func.attr)
+    return calls, attrs
+
+
 def _callers_of(module_stem: str, func_names: set[str]) -> list[str]:
     """Driver modules that call `module_stem.<func>` for any func, or run it as a CLI."""
     found = []
@@ -698,13 +728,16 @@ def _callers_of(module_stem: str, func_names: set[str]) -> list[str]:
             if invoked:
                 found.append(f"{driver} (CLI)")
             continue
+        parsed = _python_references(text, module_stem)
         for fn in func_names or {"*"}:
-            if fn == "*":
-                if re.search(rf"\b{re.escape(module_stem)}\.", text):
-                    found.append(driver)
-                    break
-            elif re.search(rf"\b{re.escape(module_stem)}\.{re.escape(fn)}\s*\(", text):
-                found.append(f"{driver}:{fn}")
+            if parsed is not None:
+                hit = bool(parsed[1]) if fn == "*" else fn in parsed[0]
+            elif fn == "*":  # unparseable: the text match, so a broken driver is never silence
+                hit = bool(re.search(rf"\b{re.escape(module_stem)}\.", text))
+            else:
+                hit = bool(re.search(rf"\b{re.escape(module_stem)}\.{re.escape(fn)}\s*\(", text))
+            if hit:
+                found.append(driver if fn == "*" else f"{driver}:{fn}")
                 break
     return found
 
