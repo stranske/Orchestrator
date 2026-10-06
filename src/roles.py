@@ -2808,23 +2808,27 @@ def run_adjudicator_agent(
 
     role_run_id: str | None = None
     role_record_error: str | None = None
+    role_record: dict | None = None
     if dispatch and backend_name:
         role_run_id = f"role:adjudicator:{backend_name}:{time.time_ns()}"
+        # Keep the original identity and telemetry for record-only recovery if
+        # the Brain is temporarily unavailable after a paid backend call.
+        role_record = {
+            "run_id": role_run_id,
+            "role_name": "adjudicator",
+            "target": str(compact_case.get("target") or "adjudicator-role"),
+            "agent": backend_name,
+            "reasoning_level": role.mode,
+            "backend_run_id": backend_run_id,
+            "action": advisory_plan.get("decision"),
+            "decision_source": decision_source,
+            "proposal": proposal,
+            "model": backend_model,
+            "source": source,
+            "ts": int(time.time()),
+        }
         try:
-            feedback.record_role_run(
-                role_run_id,
-                "adjudicator",
-                str(compact_case.get("target") or "adjudicator-role"),
-                backend_name,
-                reasoning_level=role.mode,
-                backend_run_id=backend_run_id,
-                action=advisory_plan.get("decision"),
-                decision_source=decision_source,
-                proposal=proposal,
-                # Cost telemetry, not provenance; None on the replay path (see run_redirect_agent).
-                model=backend_model,
-                source=source,
-            )
+            feedback.record_role_run(**role_record)
         except Exception as exc:
             role_record_error = str(exc)
             role_run_id = None
@@ -2845,6 +2849,7 @@ def run_adjudicator_agent(
         "role_run_id": role_run_id,
         "backend_run_id": backend_run_id,
         "role_record_error": role_record_error,
+        "role_record": role_record,
         "routing": routing,
         "decision_source": decision_source,
         "prompt": prompt,

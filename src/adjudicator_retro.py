@@ -292,6 +292,23 @@ def run(
     _refresh_saved_verdicts(list(saved.values()), db)
     population = disputes(db=db)
     attempted = 0
+    # A paid verdict can outlive the replay window while its Brain write is
+    # pending. Repair only the original role record, never redispatch that case.
+    if dispatch and retry:
+        for entry in saved.values():
+            record = entry.get("role_record")
+            if not entry.get("role_record_error") or not record:
+                continue
+            if attempted >= max(0, limit):
+                break
+            attempted += 1
+            try:
+                feedback.record_role_run(**record)
+                entry["role_run_id"] = record["run_id"]
+                entry["role_record_error"] = None
+            except Exception as exc:
+                entry["role_record_error"] = str(exc)
+            _persist_report(path, list(saved.values()), len(population))
     for row in population:
         identity = {k: row[k] for k in ("run_id", "verifier_verdict", "adjudicated_verdict")}
         case_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
@@ -333,14 +350,11 @@ def run(
                             "backend",
                             "errors",
                             "role_record_error",
+                            "role_record",
                         )
                     }
                 )
-                if (
-                    result.get("proposal")
-                    and not result.get("errors")
-                    and not result.get("role_record_error")
-                ):
+                if result.get("proposal") and not result.get("errors"):
                     entry["decision"] = result["proposal"]["decision"]
                     entry["proposal"] = result["proposal"]
                     entry["disposition"] = (result.get("advisory_plan") or {}).get(
@@ -433,7 +447,9 @@ def main() -> int:
     )
     parser.add_argument("--limit", type=int, default=5)
     parser.add_argument(
-        "--retry", action="store_true", help="Retry unrecorded/failed evidence attempts"
+        "--retry",
+        action="store_true",
+        help="Repair pending Brain records without redispatch; retry failed evidence attempts",
     )
     args = parser.parse_args()
     if args.selftest:
