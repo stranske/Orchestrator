@@ -268,6 +268,17 @@ attaches its plan only after the existing epic validator accepts it. `ORCH_ROLE_
 existing per-cycle cap still govern model transport. No valid plan leaves the deterministic
 2–3-slice prompt with a concrete fallback reason. The plan retains the role-run id when present;
 this seam never dispatches subtasks or changes live-apply authorization.
+The same weekly artifact reports adversarial high-stakes demand from `fleet_shapes`' exact
+merged-agent population: workflow/metadata and auth/data paths, or the single 500-line
+size threshold, beside the independent label count. Raw paths are counted before top-three
+shape grouping, so a small auth change cannot vanish behind docs/tests/scripts. Missing
+facts stay unmeasured; measured zero is printed as zero. The production weekly caller
+records one match observation per UTC week in the existing capability ledger, never a
+review invocation or usefulness verdict. The advisor's shape probe stays unknown until
+two complete observations of the same rule are at least seven days apart and the latest
+is at most eight days old. Label matching remains a second route after that shadow gate;
+`adversarial.main`, the closer's existing label/title matcher and merge authority do not change.
+
 
 ## The feedback loop closes over both surfaces
 
