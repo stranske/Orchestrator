@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -274,16 +276,17 @@ def test_finalize_writes_measured_quality_by_profile(
 ):
     _use_temp_feedback(tmp_path, monkeypatch)
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
-    _bind_authoritative_identity(tmp_path, trial_attempt_fixture)
+    results = copy.deepcopy(trial_attempt_fixture)
+    _bind_authoritative_identity(tmp_path, results)
     quality = {
         "codex-6-astra-high": 0.82,
         "codex-5.6-terra-high": 0.76,
         "codex-5.6-luna-high": 0.79,
     }
-    trial_attempt_fixture["quality_by_profile"] = quality
+    results["quality_by_profile"] = quality
     model_profile_trial.finalize_trial(
         trial_manifest,
-        trial_attempt_fixture,
+        results,
         record_feedback=True,
         ingest_brain=True,
         now=2_000,
@@ -294,6 +297,62 @@ def test_finalize_writes_measured_quality_by_profile(
     assert summary["identity_verified"] is True
     assert summary["brain_ingest_enabled"] is True
     assert summary["quality_by_profile"] == quality
+
+
+def test_finalize_refuses_ingest_when_identity_artifact_hash_mismatches(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    results = copy.deepcopy(trial_attempt_fixture)
+    _bind_authoritative_identity(tmp_path, results)
+    artifact_path = Path(results["attempts"][0]["identity_evidence"]["artifact_ref"])
+    artifact_path.write_text('{"tampered": true}', encoding="utf-8")
+    with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+        model_profile_trial.finalize_trial(
+            trial_manifest,
+            results,
+            record_feedback=True,
+            ingest_brain=True,
+            now=2_000,
+        )
+    with feedback._conn() as conn:
+        _assert_trial_feedback_tables_empty(conn)
+
+
+def test_transport_recording_does_not_block_later_verified_ingest(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    results = copy.deepcopy(trial_attempt_fixture)
+    _bind_authoritative_identity(tmp_path, results)
+    quality = {
+        "codex-6-astra-high": 0.82,
+        "codex-5.6-terra-high": 0.76,
+        "codex-5.6-luna-high": 0.79,
+    }
+    results["quality_by_profile"] = quality
+    model_profile_trial.finalize_trial(
+        trial_manifest,
+        results,
+        record_feedback=True,
+        ingest_brain=False,
+        now=2_000,
+    )
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM profile_trial_ingests").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 3
+    verified = copy.deepcopy(results)
+    state = model_profile_trial.finalize_trial(
+        trial_manifest,
+        verified,
+        record_feedback=True,
+        ingest_brain=True,
+        now=2_001,
+    )
+    assert state["brain_ingest_enabled"] is True
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM profile_trial_ingests").fetchone()[0] == 1
 
 
 def test_transport_recording_preserves_measured_program_summary(

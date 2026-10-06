@@ -2798,6 +2798,18 @@ def _require_quarantine_feedback_db() -> None:
         )
 
 
+def _profile_trial_worker_rows_present(
+    conn: sqlite3.Connection, manifest: dict[str, Any], attempts: list[dict[str, Any]]
+) -> bool:
+    for attempt in attempts:
+        attempt_id = f"attempt:trial:{manifest['trial_id']}:{attempt['profile_id']}"
+        if not conn.execute(
+            "SELECT 1 FROM execution_attempts WHERE attempt_id=?", (attempt_id,)
+        ).fetchone():
+            return False
+    return True
+
+
 def ingest_profile_trial(
     result: dict[str, Any],
     *,
@@ -2805,11 +2817,13 @@ def ingest_profile_trial(
     attempts: list[dict[str, Any]],
     auxiliary_traces: list[dict[str, Any]] | None = None,
     ts: int | None = None,
+    commit_ingest_marker: bool = True,
 ) -> dict[str, Any]:
     """Write one trial's runs, attempts, outcomes, and traces in a single transaction.
 
-    ``trial_id`` is the idempotency key: a successful ingest is recorded in
+    ``trial_id`` is the idempotency key: a successful verified ingest is recorded in
     ``profile_trial_ingests`` and later calls return without duplicating rows.
+    Transport-only recording may omit the marker so a later verified ingest can seal it.
     """
     trial_id = str(result.get("trial_id") or manifest.get("trial_id") or "").strip()
     if not trial_id:
@@ -2831,6 +2845,18 @@ def ingest_profile_trial(
                     "trial_id": trial_id,
                     "status": "already_ingested",
                     "applied_ts": int(existing[0]),
+                    "recorded_attempt_ids": [],
+                }
+            if commit_ingest_marker and _profile_trial_worker_rows_present(c, manifest, attempts):
+                c.execute(
+                    "INSERT INTO profile_trial_ingests (trial_id, applied_ts) VALUES (?,?)",
+                    (trial_id, timestamp),
+                )
+                c.execute("COMMIT")
+                return {
+                    "trial_id": trial_id,
+                    "status": "ingested",
+                    "applied_ts": timestamp,
                     "recorded_attempt_ids": [],
                 }
             weights_before = {
@@ -2911,10 +2937,11 @@ def ingest_profile_trial(
             }
             if weights_after != weights_before:
                 raise AssertionError("instrumentation trial altered route weights")
-            c.execute(
-                "INSERT INTO profile_trial_ingests (trial_id, applied_ts) VALUES (?,?)",
-                (trial_id, timestamp),
-            )
+            if commit_ingest_marker:
+                c.execute(
+                    "INSERT INTO profile_trial_ingests (trial_id, applied_ts) VALUES (?,?)",
+                    (trial_id, timestamp),
+                )
             c.execute("COMMIT")
         except BaseException:
             if c.in_transaction:

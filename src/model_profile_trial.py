@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import random
 import re
@@ -609,6 +610,8 @@ def _validated_quality_by_profile(
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError("trial results quality_by_profile values must be numeric or n/a")
         numeric = float(value)
+        if not math.isfinite(numeric):
+            raise ValueError("trial results quality_by_profile values must be finite")
         if numeric < 0.0 or numeric > 1.0:
             raise ValueError("trial results quality_by_profile values must be between 0 and 1")
         quality_by_profile[profile_id] = numeric
@@ -700,32 +703,43 @@ def finalize_trial(
             attempts=attempts,
             auxiliary_traces=list(results.get("auxiliary_traces") or []),
             ts=timestamp,
+            commit_ingest_marker=ingest_brain,
         )
         recorded_attempt_ids = list(ingest_payload.get("recorded_attempt_ids") or [])
         brain_ingest_enabled = ingest_brain and ingest_payload.get("status") in {
             "ingested",
             "already_ingested",
         }
-        existing_summary = _load_capability_program_trial_summary()
-        if not ingest_brain and _is_measured_program_summary(existing_summary):
-            preserved = existing_summary or {}
-            _write_capability_program_trial_summary(
-                manifest,
-                attempts,
-                identity_verified=bool(preserved.get("identity_verified")),
-                brain_ingest_enabled=bool(preserved.get("brain_ingest_enabled")),
-                quality_by_profile=dict(preserved.get("quality_by_profile") or quality_by_profile),
-                timestamp=timestamp,
+        ingest_status = ingest_payload.get("status")
+        if ingest_status != "already_ingested":
+            existing_summary = _load_capability_program_trial_summary()
+            same_trial_measured = (
+                _is_measured_program_summary(existing_summary)
+                and existing_summary is not None
+                and existing_summary.get("trial_id") == manifest.get("trial_id")
             )
-        else:
-            _write_capability_program_trial_summary(
-                manifest,
-                attempts,
-                identity_verified=identity_verified,
-                brain_ingest_enabled=brain_ingest_enabled,
-                quality_by_profile=quality_by_profile,
-                timestamp=timestamp,
-            )
+            if not ingest_brain and same_trial_measured:
+                preserved = existing_summary or {}
+                preserved_quality = preserved.get("quality_by_profile")
+                if not isinstance(preserved_quality, dict):
+                    preserved_quality = quality_by_profile
+                _write_capability_program_trial_summary(
+                    manifest,
+                    attempts,
+                    identity_verified=bool(preserved.get("identity_verified")),
+                    brain_ingest_enabled=bool(preserved.get("brain_ingest_enabled")),
+                    quality_by_profile=dict(preserved_quality),
+                    timestamp=timestamp,
+                )
+            else:
+                _write_capability_program_trial_summary(
+                    manifest,
+                    attempts,
+                    identity_verified=identity_verified,
+                    brain_ingest_enabled=brain_ingest_enabled,
+                    quality_by_profile=quality_by_profile,
+                    timestamp=timestamp,
+                )
     weights_after = _weight_snapshot() if write_feedback else {}
     if weights_after != weights_before:
         raise AssertionError("instrumentation trial altered route weights")
