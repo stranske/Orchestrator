@@ -1,0 +1,35 @@
+{
+  "raw_proposals_preserved": true,
+  "shadow": true,
+  "production_report_changed": false,
+  "summary": {
+    "cases": 37,
+    "adjudicated": 0,
+    "proposed_decisions": 19,
+    "metadata_only_cases": 37,
+    "graded": 0,
+    "agree": 0,
+    "disagree": 0,
+    "agreement_rate": null,
+    "merge_rule_agreement_rate": null,
+    "cost_usd": null,
+    "cost_measured_cases": 0,
+    "cost_per_case": null
+  },
+  "proposal_comparison": {
+    "evidence_basis": "raw_metadata_proposals",
+    "cases": 37,
+    "proposed_decisions": 19,
+    "compared": 0,
+    "pending_truth": 19,
+    "missing_merge_disposition": 0,
+    "abstained": 11,
+    "unassessed": 7,
+    "agree": 0,
+    "disagree": 0,
+    "agreement_rate": null,
+    "merge_rule_agree": 0,
+    "merge_rule_disagree": 0,
+    "merge_rule_agreement_rate": null
+  }
+}

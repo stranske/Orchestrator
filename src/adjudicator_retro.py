@@ -289,7 +289,8 @@ def compare_proposals(rows: list[dict]) -> dict:
     compared = []
     proposed = pending = missing_merge = abstained = 0
     for row in rows:
-        verdict = verdicts.get(row.get("decision"))
+        decision = row.get("decision")
+        verdict = verdicts.get(decision) if isinstance(decision, str) else None
         truth = row.get("later_truth")
         baseline = row.get("merge_rule_verdict")
         comparable = (

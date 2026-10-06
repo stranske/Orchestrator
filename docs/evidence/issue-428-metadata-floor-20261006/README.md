@@ -16,3 +16,11 @@ Validation:
 Adjacent logs are verbatim. `428-controls.json` binds deliberate controls to restored source hashes before the subsequent prompt relocation. No new backend/model setting, scheduler change or merge authorization is implied.
 
 The separate Node CLI suite initially found three stale expected summaries that still graded metadata-only proposals. The final tests retain raw decision/verdict preservation, measured-cost refresh, repeated-process idempotency, weekly rendering and no-Brain-write assertions while expecting zero accepted/graded metadata cases. All three CLI tests now pass; no production code changed in this final test-only commit.
+
+## Final keeper integration and bounded CI recovery
+
+Keeper e1d652b added record-only Brain-write recovery; independent full verification executed 2,518 pytest PASS, 103 selftests and all five gates with private state deleted. Keeper4e13816 then added a separate raw-proposal correlation report and canonical durability/merge-disposition refresh. That changed behavior is not covered by the earlier full run. Its exact collection remains2,518; focused30PASS/23subtests and3CLI checks pass.
+
+The final closer repair narrows an optional decision key before dictionary lookup (reproduced mypy error), formats the test module without changing its AST, and ratchets collected/passed to2,518 with all ceilings preserved. Final `mypy src` passes all121source files; focused30PASS/23subtests and3CLI checks pass after the repair. Fresh complete hosted verification on the final pushed head is still required; no final-head full-suite PASS or merge authorization is inferred.
+
+Final private replay preserves37cases/19rawdecisiveproposals, accepts0 and grades0, with19pendingtruth and0measuredcostcases. The raw correlation is explicitly separated from accepted adjudication. Source428 staysopen for fuller inspected evidence, actual measuredcost anddurability; live report/mirror/dispatcher were not published.

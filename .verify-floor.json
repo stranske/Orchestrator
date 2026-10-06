@@ -1,13 +1,13 @@
 {
- "collected": 2517,
- "passed": 2517,
- "skipped_max": 26,
- "mirror_skipped_max": 21,
- "bare_mirror_skipped_max": 47,
- "bare_mirror_selftest_skipped_max": 7,
- "bare_mirror_gate_skipped_max": 2,
- "selftest_skipped_max": 7,
- "gate_skipped_max": 2,
- "mypy_exempt_max": 0,
- "note": "Exact main 4267123e50a59029fb63b85fb7bfa04381676fec integrated. Full private run executed2496 PASS,103 selftests and5 gates; update-floor raised prior2460 to2496 with every ceiling preserved. Final malformed empty/scalar cost guard adds2 collected nodes: exact final collection2498; all44 affected focused cases PASS. Floor2498 is the stricter union of executed nodes, not a claim that final full verification ran; fresh CI remains required.; Current keeper cost controls plus formatter repair:2503 actual pytest PASS,103 selftests and5gates (2026-10-06), ceilings unchanged; Integrated codemod review regression repair; combined collection/execution being measured, ceilings unchanged. FLOOR RECORDED by verify.py --update-floor on 2026-10-06: collected=2517, passed=2517. Ceilings preserved, never re-measured \u2014 they are edited by hand."
+  "collected": 2518,
+  "passed": 2518,
+  "skipped_max": 26,
+  "mirror_skipped_max": 21,
+  "bare_mirror_skipped_max": 47,
+  "bare_mirror_selftest_skipped_max": 7,
+  "bare_mirror_gate_skipped_max": 2,
+  "selftest_skipped_max": 7,
+  "gate_skipped_max": 2,
+  "mypy_exempt_max": 0,
+  "note": "Exact main 4267123e50a59029fb63b85fb7bfa04381676fec integrated. Full private run executed2496 PASS,103 selftests and5 gates; update-floor raised prior2460 to2496 with every ceiling preserved. Final malformed empty/scalar cost guard adds2 collected nodes: exact final collection2498; all44 affected focused cases PASS. Floor2498 is the stricter union of executed nodes, not a claim that final full verification ran; fresh CI remains required.; Current keeper cost controls plus formatter repair:2503 actual pytest PASS,103 selftests and5gates (2026-10-06), ceilings unchanged; Integrated codemod review regression repair; combined collection/execution being measured, ceilings unchanged. FLOOR RECORDED by verify.py --update-floor on 2026-10-06: collected=2517, passed=2517. Ceilings preserved, never re-measured \u2014 they are edited by hand. 2026-10-06 closer: exact e1d652b independently executed2518PASS103selftests5gates. New keeper4e13816 separately collected2518 and passed30focused+23subtests/3CLI; final typed-key/format recovery requires fresh hosted complete verification, not a claim that the prior full run covers changed behavior. Every ceiling preserved."
 }

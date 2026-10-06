@@ -118,7 +118,8 @@ class RetrospectiveEvidenceTests(unittest.TestCase):
                 assert saved["shadow_verdict"] is None
                 assert json.loads(path.read_text()) == repaired
                 assert (
-                    retro.run(dispatch=True, retry=True, path=path, db=db)["rows"] == repaired["rows"]
+                    retro.run(dispatch=True, retry=True, path=path, db=db)["rows"]
+                    == repaired["rows"]
                 )
             with sqlite3.connect(db) as conn:
                 assert conn.execute("SELECT * FROM outcomes ORDER BY run_id").fetchall() == before
