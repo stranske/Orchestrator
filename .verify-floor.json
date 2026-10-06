@@ -1,6 +1,6 @@
 {
-  "collected": 2100,
-  "passed": 2100,
+  "collected": 2109,
+  "passed": 2109,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 47,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history."
+  "note": "Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history. FLOOR 2100 -> 2109 on 2026-10-05 (read-only agents are told not to act on GitHub, branch claude/read-only-agents-github-rule): measured by pytest --collect-only on the branch rebased onto d357820; the 9 tests of tests/test_read_only_github_rule.py are the whole delta. All skip/exemption ceilings unchanged."
 }
