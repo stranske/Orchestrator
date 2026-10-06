@@ -58,13 +58,13 @@ def _manifest_profile_ids(manifest: dict[str, Any]) -> tuple[str, ...]:
     if "selected_profile_ids" in manifest:
         selected = manifest["selected_profile_ids"]
         count = manifest.get("instances_per_profile")
-        supported = set(EXPECTED_PROFILE_IDS) | set(LEGACY_PROFILE_IDS)
+        supported_ids = set(EXPECTED_PROFILE_IDS) | set(LEGACY_PROFILE_IDS)
         if (
             not isinstance(selected, list)
             or not all(isinstance(pid, str) for pid in selected)
             or len(selected) < 2
             or len(set(selected)) != len(selected)
-            or not set(selected) <= supported
+            or not set(selected) <= supported_ids
             or type(count) is not int
             or not 1 <= count <= 3
         ):
@@ -327,7 +327,9 @@ def build_trial_manifest(
         "orchestrator": source_manifest(roots[0]),
         "workflows": source_manifest(roots[1]),
     }
-    order = [(pid, instance) for pid in selected for instance in range(1, instances_per_profile + 1)]
+    order = [
+        (pid, instance) for pid in selected for instance in range(1, instances_per_profile + 1)
+    ]
     random.Random(int(seed)).shuffle(order)
     identity = {
         "created_at": timestamp,
@@ -586,7 +588,8 @@ def _validate_results(manifest: dict[str, Any], results: dict[str, Any]) -> list
     return [
         {key: by_run[request["run_id"]].get(key) for key in sorted(ATTEMPT_FIELDS)}
         for request in sorted(
-            manifest["requests"], key=lambda row: (profile_ids.index(row["profile_id"]), row["run_id"])
+            manifest["requests"],
+            key=lambda row: (profile_ids.index(row["profile_id"]), row["run_id"]),
         )
     ]
 

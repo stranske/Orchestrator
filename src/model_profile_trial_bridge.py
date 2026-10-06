@@ -1147,7 +1147,9 @@ def qualify_transport_contract(
     github_artifacts = [int(row["github_artifact_id"]) for row in sanitized]
     count = len(manifest["requests"])
     if len(set(github_runs)) != count or len(set(github_artifacts)) != count:
-        raise ValueError("transport qualification requires one distinct remote attempt per instance")
+        raise ValueError(
+            "transport qualification requires one distinct remote attempt per instance"
+        )
     source_manifest_hashes = {str(row["source_manifest_sha256_before"]) for row in sanitized}
     if len(source_manifest_hashes) != 1:
         raise ValueError("transport qualification source attestations disagree")

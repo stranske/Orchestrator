@@ -259,7 +259,10 @@ class ProfileTrialInstancesTest(unittest.TestCase):
             bridge.validate_envelope(malformed, self.manifest)
         with patch.object(bridge, "collect_remote_attempt", return_value={}) as collect:
             bridge.collect_remote_results(
-                self.manifest, envelope, list(range(1000, 1006)), artifact_root=self.root / "artifacts"
+                self.manifest,
+                envelope,
+                list(range(1000, 1006)),
+                artifact_root=self.root / "artifacts",
             )
             self.assertEqual(collect.call_count, 6)
             with self.assertRaises(ValueError):
