@@ -40,6 +40,7 @@ from typing import Any, TypedDict
 
 import adapters
 import capabilities
+import credential_redaction
 import dispatcher
 import execution_profiles
 import feedback
@@ -1318,6 +1319,9 @@ def evaluate(
             evaluator_agent, mode, run_id, target, "review", out_path, started_ts
         )
         out.close()
+        # The evaluator wrote this file itself and it is this run's alone, so it is masked whole,
+        # before the parse below carries its notes into the Brain.
+        credential_redaction.scrub_file(out_path)
         parsed = _extract_json(out_path.read_text(errors="replace"))
         matrix[ev] = parsed
         for gap in _extract_evidence_gaps(parsed):
