@@ -1,6 +1,6 @@
 {
-  "collected": 2549,
-  "passed": 2549,
+  "collected": 2554,
+  "passed": 2554,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 47,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Exact main 4267123e50a59029fb63b85fb7bfa04381676fec integrated. Full private run executed2496 PASS,103 selftests and5 gates; update-floor raised prior2460 to2496 with every ceiling preserved. Final malformed empty/scalar cost guard adds2 collected nodes: exact final collection2498; all44 affected focused cases PASS. Floor2498 is the stricter union of executed nodes, not a claim that final full verification ran; fresh CI remains required.; Current keeper cost controls plus formatter repair:2503 actual pytest PASS,103 selftests and5gates (2026-10-06), ceilings unchanged; Integrated model-profile instances; combined execution being measured, ceilings unchanged.; Keeper77a1370 collected2549 exact nodes after2546 full PASS on61fe84f; ceilings preserved; fresh full verification required after this floor ratchet."
+  "note": "Exact main 4267123e50a59029fb63b85fb7bfa04381676fec integrated. Full private run executed2496 PASS,103 selftests and5 gates; update-floor raised prior2460 to2496 with every ceiling preserved. Final malformed empty/scalar cost guard adds2 collected nodes: exact final collection2498; all44 affected focused cases PASS. Floor2498 is the stricter union of executed nodes, not a claim that final full verification ran; fresh CI remains required.; Current keeper cost controls plus formatter repair:2503 actual pytest PASS,103 selftests and5gates (2026-10-06), ceilings unchanged; Integrated model-profile instances; combined execution being measured, ceilings unchanged.; Keeper77a1370 collected2549 exact nodes after2546 full PASS on61fe84f; ceilings preserved; fresh full verification required after this floor ratchet. Merged main ce8e0335c989caea559bd6705e8a35adf82bbbfc, including codemod review regression repair and line-ending tests; combined collection measured 2554 tests, all 61 focused profile-trial and codemod cases passed, and all skip ceilings preserved. Full pytest executed: 2519 passed, 24 skipped, 11 failures; all 11 failures reproduced on the unchanged PR head (read-only runtime/handoff paths or absent coverage package). Fresh CI remains required. Full verifier: 94 selftests passed, 5 skipped, 4 failed; all four failed selftests reproduce on the unchanged PR head due to read-only runtime paths. Three capability gates passed and two reported missing prerequisites."
 }
