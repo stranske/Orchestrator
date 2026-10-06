@@ -76,7 +76,10 @@ LIVENESS:  the LAST block of a completed --active tick runs ~/.codex/bin/hc-ping
   mirror therefore fails on its PR, not at the owner's sync. This machine's
   verdict on a merged tree is one run per sync, taken before the live mirror changes by
   `scripts/verify_before_sync.sh` in a scratch mirror; the wrapper then installs that exact verified
-  snapshot instead of re-reading the mutable checkout (CLAUDE.md §1).
+  snapshot instead of re-reading the mutable checkout (CLAUDE.md §1). That verdict judges the ledger
+  the tree will run on: the tree's own first writing load runs on the scratch copy first, so a row
+  the tree declares is registered there as it will be live, and a new declaration cannot block the
+  sync that deploys it.
   A run judges a PRIVATE COPY of the ledger and the Brain, taken once when it starts, so it never
   queues behind the tick's ledger lock and the code under test cannot write production state. Its
   selftests run eight at a time, and the two gates that are test files report the verdicts pytest
@@ -134,6 +137,26 @@ passes separately. Passing a fixture never raises a capability's recommendation 
 Verdicts (ACTIVE / gated / CLI-only) reflect the 2026-07-08 dormancy re-scan; re-run that scan to
 refresh. "Gated" = code is live but a default-OFF `ORCH_*` flag holds it back — an intentional
 safety switch, not dead code.
+
+### Opener triage shadow
+
+`triage_shadow.py` extends the existing TriageAgent role. Each active cycle reads
+priority-labelled issues across the sixteen supported repos, excludes current
+scoped holds and open PR linkages, and records the model's top three beside the
+opener's priority/oldest rule. The rule and worker dispatch remain unchanged.
+`ORCH_TRIAGE_SHADOW=0` disables this observation. Search or linkage failures are
+UNKNOWN and spend no role invocation. Proposal replay is labelled and never
+scored as a production comparison. The weekly switch review prints both arms'
+merged-and-durable rates with their judged denominators; pending durability is
+unmeasured. Repeated candidate cycles are observations, not independent tasks.
+
+`python3 src/triage_shadow.py --backfill` also resolves the *current* ungraded
+triage disagreement population with the existing outcome attribution guards.
+The issue's historical count is not a target count: migrations and intervening
+delivery can change it. Rejected edges stay rejected; a merge records pending
+durability, and unavailable GitHub evidence stays pending. This observes local
+state and uses read-only GitHub calls; it never labels, claims or delegates work.
+The model role uses the existing read-only offload transport and a private cwd.
 
 ### The tick (hourly `orchestrate.sh --active`)
 1. **capacity.py** — per-seat budget/policy across 5h + weekly quota windows (steady/reserve/drain),
@@ -677,3 +700,14 @@ the dispatch-log and agent-runtime directories that hold the gh token's exact va
 GitHub-minted token, the newest first. It deletes and edits nothing; a secret file it cannot read
 is reported UNMEASURED, never as zero. `python3 src/credential_redaction.py scan --root NAME=PATH`
 runs the same report by hand.
+
+### Retrospective adjudicator shadow evidence
+
+`python3 src/adjudicator_retro.py --limit 5` collects real merge-bound verifier packets without
+calling a model. Add `--dispatch` to run the existing router-selected adjudicator in shadow;
+repeat the bounded command to resume, or add `--retry` for failed evidence/dispatch attempts.
+Only role-run evidence and the state report are written; delivery outcomes, labels and merges
+stay under the existing delivery rails. Weekly switch review reports graded agreement against
+later durability, the merged-PASS baseline, and measured versus unknown cost. At the closer
+consult seam supply `context.verifier_verdict` and `context.merge_disposition`; the adjudicator
+is offered only when those recorded values disagree.

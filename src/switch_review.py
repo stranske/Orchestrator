@@ -1525,8 +1525,11 @@ def review(
                 ],
                 "disabled": False,
             }
+    import adjudicator_retro
+
     rep = {
         "generated_at": now,
+        "adjudicator_shadow": adjudicator_retro.weekly_line(),
         "adversarial_shape": adversarial_shape_population(now=now),
         "value_chain": value_chain,
         "runtime_ac_shadow": runtime_ac_shadow,
@@ -1709,7 +1712,12 @@ def format_report(rep: dict) -> str:
         f"  due for a decision: {rep['raise_count']}",
         "",
     ]
+    if rep.get("adjudicator_shadow"):
+        lines += [rep["adjudicator_shadow"], ""]
     lines += [adversarial_shape_line(rep.get("adversarial_shape", {})), ""]
+    import triage_shadow
+
+    lines += [triage_shadow.summary_line(), ""]
     if rep.get("value_chain") and not rep["value_chain"].get("disabled"):
         import value_chain_monitor
 
@@ -2555,8 +2563,12 @@ def main(argv: list[str]) -> int:
             sources[flag] = source
             if value is not None:
                 env[flag] = value
-    # Only the production weekly caller registers the declaration; reports and
-    # branch tests never introduce a row into the shared live ledger.
+    # The row is registered by its DECLARATION, not here (2026-10-06): every writing load seeds a
+    # KNOWN_DECLARATIONS entry that declares a status (capabilities.declared_row_ids), and an active
+    # tick's first command is one, so it exists before this weekly step runs. This caller used to
+    # register it itself, and the live mirror ran this caller only once a sync deployed it, which
+    # the pre-sync verdict refused for want of the row. Reports and branch tests read with
+    # load_declared, so they still never introduce a row into the shared live ledger.
     value_chain_inputs = None
     if env.get("ORCH_VALUE_CHAIN_MONITOR", "1") != "0":
         import feedback
@@ -2576,13 +2588,6 @@ def main(argv: list[str]) -> int:
         )
 
         try:
-            if os.environ.get("ORCH_CAPABILITY_HEARTBEATS") == "1":
-                ledger = capabilities.load_declared(capabilities.REG)
-                if "value-chain-monitor" not in ledger:
-                    capabilities.register(
-                        "value-chain-monitor",
-                        capabilities.KNOWN_DECLARATIONS["value-chain-monitor"],
-                    )
             value_chain_inputs = value_chain_monitor.collect_inputs(
                 now=int(time.time()),
                 gh_fn=_gh_call,

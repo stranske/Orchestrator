@@ -51,7 +51,11 @@ SUPPORTED_REPOS = [
     "stranske/trip-planner",
     "stranske/learning-management-system",
     "stranske/Fine-Art-Archive",
-]  # 12 repos; runtime authority is ~/.codex/bin/handoff.sh SUPPORTED_REPOS. `Ready` was absent
+    "stranske/Orchestrator",
+    "stranske/Doc-Lineage",
+    "stranske/Deliverable-Render",
+    "stranske/Manager-Mosaic",
+]  # 16 repos; runtime authority is ~/.codex/bin/handoff.sh SUPPORTED_REPOS. `Ready` was absent
 # here until 2026-08-18, so its issues were invisible to the backlog entirely.
 
 READY_LABELS = {"status: ready", "status:ready", "agent-ready"}

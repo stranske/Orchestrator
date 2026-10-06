@@ -350,6 +350,15 @@ fi
 # orchestrator-owned artifacts (capacity.json/backlog.json); the legacy lanes never read them, so
 # this is safe in either mode.
 python3 "$ORCH/capacity.py"        >/dev/null 2>&1 || echo "  warn: capacity.py failed (continuing)"
+# Compare the existing shadow role with opener ordering even while dispatch is off.
+# This reads GitHub and writes observations only; never labels or delegates a worker.
+if [[ "$mode" == "active" && "${ORCH_TRIAGE_SHADOW:-1}" == "1" ]] && ! _gh_deferred; then
+  python3 "$ORCH/triage_shadow.py" --backfill >> "$STAMP_DIR/triage-shadow.log" 2>&1 \
+    || echo "  warn: triage shadow unavailable; see triage-shadow.log"
+  # Its one role invocation replaces the legacy dispatch-loop snapshot for this
+  # process, even if someone deliberately enables the tick's worker lane.
+  export ORCH_TRIAGE_ROLE_MAX_PER_CYCLE=0
+fi
 # DISCOVERY FEEDS ONLY THIS TOOL'S OWN DISPATCH LANE, and that lane is shadow by default (assessment
 # 2026-09-03, item 1). Measured 2026-09-04..15: 119 shadow ticks planned 0 dispatches; the lanes
 # read capacity.json and never backlog.json. So discovery runs only when the lane is live — the
