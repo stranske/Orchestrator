@@ -709,7 +709,7 @@ def record_failed_trial(exp_id: str, failures: list[dict], *, exp_dir: Path | No
     """Archive a terminal UNKNOWN instead of rescanning an unevaluable pair forever."""
     edir = (exp_dir or exp_abcd.EXP_DIR) / exp_id
     metadata = json.loads((edir / "strategy.json").read_text())
-    receipt = {
+    receipt: dict[str, Any] = {
         "status": "UNKNOWN",
         "acceptance_status": "UNKNOWN",
         "exp_id": exp_id,
