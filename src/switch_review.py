@@ -1683,15 +1683,24 @@ def profile_trial_summary_line() -> str | None:
     )
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, TypeError):
+        if not isinstance(payload, dict):
+            return None
+        profiles = int(payload.get("profile_count") or 0)
+        instances = int(payload.get("instance_count") or 0)
+        costs = payload.get("cost_tokens_by_profile", {})
+        quality = payload.get("quality_by_profile", {})
+        if not isinstance(costs, dict) or not isinstance(quality, dict):
+            return None
+        if any(not isinstance(row, dict) for row in costs.values()):
+            return None
+    except (OSError, json.JSONDecodeError, TypeError, ValueError, OverflowError):
         return None
-    profiles = int(payload.get("profile_count") or 0)
-    instances = int(payload.get("instance_count") or 0)
     identity = "Y" if payload.get("identity_verified") else "N"
-    costs = payload.get("cost_tokens_by_profile") or {}
-    quality = payload.get("quality_by_profile") or {}
     cost_bits = (
-        "/".join(str((costs.get(pid) or {}).get("tokens_in", "n/a")) for pid in sorted(costs))
+        "/".join(
+            f"{costs[pid].get('tokens_in', 'n/a')}in+{costs[pid].get('tokens_out', 'n/a')}out"
+            for pid in sorted(costs)
+        )
         or "n/a"
     )
     qual_bits = "/".join(str(quality.get(pid, "n/a")) for pid in sorted(quality)) or "n/a"
