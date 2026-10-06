@@ -1,19 +1,6 @@
 {
-<<<<<<< HEAD
- "collected": 2136,
- "passed": 2136,
- "skipped_max": 26,
- "mirror_skipped_max": 21,
- "bare_mirror_skipped_max": 47,
- "bare_mirror_selftest_skipped_max": 7,
- "bare_mirror_gate_skipped_max": 2,
- "selftest_skipped_max": 7,
- "gate_skipped_max": 2,
- "mypy_exempt_max": 0,
- "note": "Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history.Integrated issue428 adjudicator shadow recovery with current main ea92f54 (fixture provenance). Exact pytest collection measured on integrated tree; skip/type ceilings unchanged. Previous note histories retained in Git and closer work/20261005T1538Z/476-floor-{branch,main}.json. Round0022 integrates main35883184e72622be3f16477e7087a5a248fd3b76; preserves both acceptance seams and main history at35883184e72622be3f16477e7087a5a248fd3b76:.verify-floor.json; measured2128; ceilings unchanged. Round0022 current-main integration35537f1b24cb694f675a8977dbace2d0391f1170; main history retained at35537f1b24cb694f675a8977dbace2d0391f1170:.verify-floor.json; measured collection2136; ceiling keys unchanged."
-=======
-  "collected": 2154,
-  "passed": 2154,
+  "collected": 2166,
+  "passed": 2166,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 47,
@@ -22,6 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history.urrent-main integration for issue419; focused named tests and deliberate controls documented in docs/verification/issue-419-high-stakes-shape.md. Collected/passed measured on integrated source; existing skip/type ceilings preserved. Prior large floor notes retained in closer work/20261005T1538Z/482-floor-{branch,main}.json and Git history. 2026-10-06: +8 collected (tests/test_refusal_role_edges_migration.py), 2116 -> 2124, counted with pytest --collect-only on the merge with main 3588318. Closer-hooks placement (2026-10-05): +30 tests (tick sets closer items aside; adversarial.review_at_head once per head; merge_guard advisory panel and sandboxed selftest; audit counts no comment as a caller), 2124 -> 2154, counted with pytest --collect-only on the merge with main 35537f1; skip/type ceilings unchanged."
->>>>>>> origin/main
+  "note": "Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history.urrent-main integration for issue419; focused named tests and deliberate controls documented in docs/verification/issue-419-high-stakes-shape.md. Collected/passed measured on integrated source; existing skip/type ceilings preserved. Prior large floor notes retained in closer work/20261005T1538Z/482-floor-{branch,main}.json and Git history. 2026-10-06: +8 collected (tests/test_refusal_role_edges_migration.py), 2116 -> 2124, counted with pytest --collect-only on the merge with main 3588318. Closer-hooks placement (2026-10-05): +30 tests (tick sets closer items aside; adversarial.review_at_head once per head; merge_guard advisory panel and sandboxed selftest; audit counts no comment as a caller), 2124 -> 2154, counted with pytest --collect-only on the merge with main 35537f1; skip/type ceilings unchanged. Branch-specific retained history: Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history.Integrated issue428 adjudicator shadow recovery with current main ea92f54 (fixture provenance). Exact pytest collection measured on integrated tree; skip/type ceilings unchanged. Previous note histories retained in Git and closer work/20261005T1538Z/476-floor-{branch,main}.json. Round0022 integrates main35883184e72622be3f16477e7087a5a248fd3b76; preserves both acceptance seams and main history at35883184e72622be3f16477e7087a5a248fd3b76:.verify-floor.json; measured2128; ceilings unchanged. Round0022 current-main integration35537f1b24cb694f675a8977dbace2d0391f1170; main history retained at35537f1b24cb694f675a8977dbace2d0391f1170:.verify-floor.json; measured collection2136; ceiling keys unchanged. Opener2026-10-06 repairs literal runner merge markers at5be781e; collection measured 2166; both histories retained; ceiling keys unchanged."
 }

@@ -58,7 +58,7 @@ reports them separately in precondition.withheld. The summary describes all anno
 candidates, including the explicitly withheld population. No outcome, model default,
 shadow gate or publication authority changes.
 
-Focused retrospective tests passed12 cases including merge-null refusal, direct
+Focused retrospective tests passed 12 cases including merge-null refusal, direct
 annotation invariance, MCP forwarding and contested/unknown/equal verdict eligibility.
 Advisor, MCP and retrospective module selftests passed. Current-head CI and private
 mirror/live-state-copy validation are still required after integration and push.
