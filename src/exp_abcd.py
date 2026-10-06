@@ -1291,6 +1291,16 @@ def _extract_cited_evidence_types(parsed: dict | None) -> list[str]:
     return feedback.normalize_evidence_type_citations(parsed.get("cited_evidence_types"))
 
 
+def _eval_prompt_word(promptfile: str) -> str:
+    """The evaluator's prompt as ONE bash word: the file's text, a blank line, the read-only rule.
+
+    An evaluator judges; it must not act on GitHub (dispatcher.GH_READ_ONLY_RULE). bash joins the
+    adjacent quoted parts into the single argument the agent receives.
+    """
+    rule = shlex.quote(f"READ-ONLY EVALUATION: {dispatcher.GH_READ_ONLY_RULE}")
+    return f"\"$(cat {shlex.quote(promptfile)})\"$'\\n\\n'{rule}"
+
+
 def _eval_command(agent: str, promptfile: str, workspace: str | Path | None = None) -> str:
     """Bash command running one evaluator with the (large) prompt read from a file via
     "$(cat ...)" — shell substitution avoids embedding 270KB+ in an argv we build in Python.
@@ -1307,7 +1317,7 @@ def _eval_command(agent: str, promptfile: str, workspace: str | Path | None = No
     promptfile = os.path.abspath(promptfile)  # read after the `cd`, so never relative
     path = 'export PATH="/opt/homebrew/bin:$HOME/.local/bin:$HOME/.cursor/bin:$PATH"'
     prelude = dispatcher._agent_runtime_prelude(agent) + dispatcher._auth_prelude(agent)
-    P = f'"$(cat {shlex.quote(promptfile)})"'
+    P = _eval_prompt_word(promptfile)
     codex_sandbox_args = (
         "--dangerously-bypass-approvals-and-sandbox"
         if adapters.codex_bypass_inner_sandbox()
