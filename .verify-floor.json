@@ -1,6 +1,6 @@
 {
-  "collected": 2369,
-  "passed": 2326,
+  "collected": 2374,
+  "passed": 2330,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 47,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Round1220 combined existing strategy reporting with current main adjudicator/triage reporting. Retain supported main passed-or-skipped floor2326; actual collection measured after review repair. All quality ceilings unchanged; full merge-result CI pending. Actual measured collection2369; passed floor2326 retained from current main. Missing completion marker actualRED4failed/fresh4passed; restored/current focused suitePASS."
+  "note": "Integrates main002c65f; measured collection2374; retains supported executed passed baseline2330; all quality ceilings unchanged; exact merge-result CI pending."
 }
