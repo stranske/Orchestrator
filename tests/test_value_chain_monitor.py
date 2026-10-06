@@ -357,7 +357,8 @@ def test_new_capability_has_all_nine_admission_parts(tmp_path, monkeypatch, caps
         register(capability_id, record, path)
 
     def private_heartbeat(capability_id, event_type, **kwargs):
-        clock["now"] += 1
+        if capability_id == "value-chain-monitor":
+            clock["now"] += 1
         return heartbeat(capability_id, event_type, path=path, **kwargs)
 
     def collect_inputs(**kwargs):
