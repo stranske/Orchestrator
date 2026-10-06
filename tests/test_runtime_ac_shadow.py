@@ -603,3 +603,23 @@ def test_existing_shadow_spec_observes_new_exact_head(private_brain, monkeypatch
         head_sha="b" * 40,
     )
     assert stale["status"] != "executed"
+
+
+def test_mixed_named_nodes_preserve_rejected_obligation_as_manual():
+    body = (
+        "## Acceptance Criteria\n"
+        "- Named tests: `tests/test_safe.py::test_ok` and "
+        "`tests/test_safe.py::test_case[bad;marker]`.\n"
+    )
+    spec = runtime_ac.author_issue_spec("owner/repo#1", body)
+    criterion = spec["acceptance_criteria"][0]
+    checks = criterion["checks"]
+    commands = [check for check in checks if check["type"] == "command"]
+    assert len(commands) == 1
+    assert "test_ok" in commands[0]["command"]
+    manual = [check for check in checks if check["type"] == "manual"]
+    assert len(manual) == 1
+    assert "test_case[bad;marker]" in manual[0]["instructions"]
+    assert "manual_review" in criterion["evidence_required"]
+    results = [{"id": commands[0]["id"], "status": "PASS", "exit_code": 0}]
+    assert runtime_ac.evaluate_results(spec, {"check_results": results})["verdict"] != "PASS"

@@ -1329,7 +1329,7 @@ def _valid_spec() -> dict[str, Any]:
     return json.loads(json.dumps(RUNTIME_AC_SCHEMA_EXAMPLE))
 
 
-def _issue_named_test_nodes(line: str) -> list[str]:
+def _issue_named_test_nodes(line: str, *, include_unsafe: bool = False) -> list[str]:
     """Resolve shorthand within one obligation, never against another line's path."""
     nodes = []
     previous_path = ""
@@ -1348,7 +1348,7 @@ def _issue_named_test_nodes(line: str) -> list[str]:
             node = previous_path + match[3]
         else:
             continue
-        if not _has_shell_marker(node):
+        if include_unsafe or not _has_shell_marker(node):
             nodes.append(node)
     return list(dict.fromkeys(nodes))
 
@@ -1432,6 +1432,21 @@ def author_issue_spec(
             checks.append(
                 {
                     "id": f"{ac_id}-TASK" if is_task else f"{ac_id}-MANUAL",
+                    "type": "manual",
+                    "name": line,
+                    "instructions": line,
+                    "confidence": 0.0,
+                }
+            )
+        rejected_nodes = [
+            node
+            for node in _issue_named_test_nodes(line, include_unsafe=True)
+            if _has_shell_marker(node)
+        ]
+        if rejected_nodes and not any(check["type"] == "manual" for check in checks):
+            checks.append(
+                {
+                    "id": f"{ac_id}-REJECTED",
                     "type": "manual",
                     "name": line,
                     "instructions": line,
