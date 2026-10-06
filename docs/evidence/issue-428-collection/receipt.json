@@ -1,0 +1,31 @@
+{
+  "case_id": "dc56d3f817373c4ba91a6c6aeb86eb9bfa85865fd3c20336e753b88b0dbbebd5",
+  "finding": "https://github.com/stranske/Orchestrator/pull/458#issuecomment-5988182334",
+  "evaluated_sha": "dab4f1a4cd3663ab13cacce08783a533f9ef08d0",
+  "original_report_sha256_before_after": "d9f84a1b11ea440e2cc1568e60b9ea7e49c1f49dd88807e1c37fc76de16bcfa6",
+  "source_inventory_scope": "Only the two paths named by the finding; not a complete acceptance inventory.",
+  "sources": [
+    {
+      "path": "src/mirror_reader.py",
+      "blob_sha": "304ffbc7fdb3fe376db1965118347fce9e8f8280",
+      "byte_length": 6276,
+      "sha256": "5495a3892070ea54ad71e7c831ae8f1fc9102e2a6e7f6417e0d7547fcc4a485f",
+      "complete": true
+    },
+    {
+      "path": "tests/test_mirror_generations.py",
+      "blob_sha": "c8b9d926053889b7927fda47650200647d57e09b",
+      "byte_length": 32014,
+      "sha256": "0c7a5ce3198e53a4c67c926a143e99a17f55fc8cc354ee92c6c7814cfab58585",
+      "complete": true
+    }
+  ],
+  "complete": false,
+  "gaps": [
+    {
+      "kind": "missing_acceptance_inventory",
+      "detail": "source bytes alone cannot establish acceptance completeness"
+    }
+  ],
+  "validation": "48 focused tests + 23 subtests; 5 Node CLI tests; module selftest PASS. Full hosted verification pending."
+}
