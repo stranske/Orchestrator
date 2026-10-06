@@ -2037,6 +2037,14 @@ UNATTRIBUTED_CLOSING_PR = "unattributed_closing_pr"
 # or nobody's). Same shape as UNATTRIBUTED_CLOSING_PR: terminal, no verdict, no merge state.
 UNATTRIBUTED_DELEGATION = "unattributed_delegation"
 
+# What outcome ingest writes when a LOCAL run's own PR closed unmerged and GitHub's complete answer
+# cannot say whether a PR linked to the run's issue carries the closed PR's head commit
+# (`outcomes.judge_replacement`): several merged PRs carry it, one carries it and the run records no
+# start to place it against, or a list that could hold it was cut short. Since 2026-10-05 a single
+# merged carrier is the run's PASS (the lanes rehome a PR at the same head) and no carrier is its
+# FAIL; this class is what remains, terminal and scored by no learner.
+UNATTRIBUTED_REPLACEMENT = "unattributed_replacement"
+
 # What the durability sweep writes for a merged outcome whose merge it cannot identify as THIS run's
 # (`durability_sweep.find_merge`): no merge on the run's own branch, several, one that landed before
 # the run started, or no repository target at all. Whether such a merge HELD can never be judged, so
@@ -2058,7 +2066,8 @@ BROKE_LATER_UNCHECKED = "broke_later_unchecked"
 # Failure classes whose outcome says nothing about the agent that ran, so NO learner may score them:
 # the environment killed the run (`transient_infra`, from `mark_transient_infra`), the target
 # closed through a PR the run cannot be shown to have produced, a delegation's PR settled without
-# the delegated agent's work on it, the merge a row recorded cannot be identified as the run's
+# the delegated agent's work on it, a closed PR's replacement cannot be told apart
+# (`UNATTRIBUTED_REPLACEMENT`), the merge a row recorded cannot be identified as the run's
 # own (`UNJUDGEABLE_MERGE`), or no fix-PR read reached it (`BROKE_LATER_UNCHECKED`). ONE set:
 # relearn's SQL reads it, relearn_quality and
 # exploration_review read it through `_has_outcome_evidence`, and the capability tally reads it
@@ -2071,6 +2080,7 @@ LEARNING_EXCLUDED_FAILURE_CLASSES = frozenset(
         "transient_infra",
         UNATTRIBUTED_CLOSING_PR,
         UNATTRIBUTED_DELEGATION,
+        UNATTRIBUTED_REPLACEMENT,
         UNJUDGEABLE_MERGE,
         BROKE_LATER_UNCHECKED,
     }

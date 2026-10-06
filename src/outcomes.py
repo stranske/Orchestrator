@@ -43,6 +43,19 @@ at, and it is credited only if it is the PR the run OPENED: head == branch, crea
 run started. One that predates the run is rejected and its branch is not asked again. No record, an
 unreadable one or an empty one leaves the walk exactly as it was. The summary's `push_records`
 counts what happened (`credited`, `rejected`) and what was missing (`absent`, `unreadable`).
+
+A local run's own PR CLOSED unmerged is not yet its FAIL. The opener lane rehomes a PR keepalive
+cannot drive: it opens a replacement at the SAME head commit on a registry branch
+(`codex/issue-N-<slug>`) and closes the old one, and keepalive finishes the replacement. So before
+the FAIL, one read asks which PRs linked to the run's issue carry the closed PR's head commit
+(`judge_replacement`). Exactly one that merged after the run started is the run's PASS, named
+`replacement PR #M merged` for the durability sweep. None is the FAIL, still: a replacement with
+different commits is different work. An open carrier waits, an answer that cannot single one out
+is `feedback.UNATTRIBUTED_REPLACEMENT`, and a read that failed is unanswered. Until 2026-10-05 the
+closed PR was the FAIL: 5 of the 9 such rows of the 90 days to then, all codex, had merged that day
+in a replacement carrying their head. `recheck_replacements` re-judges the rows recorded before
+that, once each, behind a snapshot and `--undo-replacement-recheck`. The summary's `replacements`
+counts the four answers.
 `--selftest` runs fully offline (mocked PR states + temp store).
 """
 
@@ -52,10 +65,12 @@ import argparse
 import base64
 import binascii
 import json
+import os
 import re
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import feedback
 import provision
@@ -78,6 +93,7 @@ UNANSWERED_LOOKUPS = frozenset(
         "issue_lookup_failed",
         "closing_pr_lookup_failed",
         "runner_rounds_lookup_failed",
+        "replacement_lookup_failed",
     }
 )
 ISSUE_VIEW_STATES = frozenset({"OPEN", "CLOSED", "MERGED"})
@@ -104,8 +120,43 @@ CLOSING_PR_QUERY = (
 )
 # The verdict classes that mean "terminal, but not this run's work", counted as `unattributed`.
 UNATTRIBUTED_CLASSES = frozenset(
-    {feedback.UNATTRIBUTED_CLOSING_PR, feedback.UNATTRIBUTED_DELEGATION}
+    {
+        feedback.UNATTRIBUTED_CLOSING_PR,
+        feedback.UNATTRIBUTED_DELEGATION,
+        feedback.UNATTRIBUTED_REPLACEMENT,
+    }
 )
+# THE REPLACEMENT READ, made only for a LOCAL run's own PR closed unmerged (`_attach_replacement`):
+# the closed PR's head commit, and every PR linked to the run's issue with its commits, in ONE
+# answer. The opener lane rehomes a PR keepalive cannot drive, such as one on `orchestrator/issue-N`:
+# a replacement opens at the SAME head SHA on `codex/issue-N-<slug>` ("Closes #N", "Supersedes
+# #old") and the old PR is closed. GitHub lists merged and open links here and leaves closed-unmerged
+# ones out, so a replacement abandoned in turn carries nothing. A list as long as the limit may hold
+# more than it showed, and is never guessed past (`judge_replacement`). ONE constant for the query
+# and the judge. GitHub prices the read at 1 point, the same as `CLOSING_PR_QUERY`.
+REPLACEMENT_READ_LIMIT = 100
+REPLACEMENT_QUERY = (
+    "query($owner: String!, $name: String!, $issue: Int!, $pr: Int!) {"
+    " repository(owner: $owner, name: $name) {"
+    " pullRequest(number: $pr) { number headRefOid }"
+    " issueOrPullRequest(number: $issue) { ... on Issue {"
+    " closedByPullRequestsReferences(first: LIMIT) { pageInfo { hasNextPage }"
+    " nodes { number state mergedAt headRefName repository { nameWithOwner }"
+    " commits(first: LIMIT) { totalCount nodes { commit { oid } } } } } } } } }"
+).replace("LIMIT", str(REPLACEMENT_READ_LIMIT))
+HEAD_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+# Written into the notes of every verdict the replacement read decided, and into a re-judged row's
+# notes by `recheck_replacements`, whose selection skips a row that carries it: ONE string, so the
+# re-check drains to a printed zero.
+REPLACEMENT_CHECK = "replacement check"
+# `judge_replacement`'s answers -> the summary's `replacements` counts. An unanswered read has no
+# key here: it is counted in `unanswered`, like every lookup that could not answer.
+REPLACEMENT_COUNTS = {
+    "credited": "credited",
+    "open": "waiting",
+    "unattributable": "unattributable",
+    "none": "failed",
+}
 # The runs whose PR credit needs the delegation guard: the tick labelled a target for an agent.
 # Keepalive-discovered runs (`keepalive`) ARE their PR, so `_pr_state` still resolves them directly.
 DELEGATION_SOURCE = "orchestrator_remote"
@@ -600,8 +651,188 @@ def _pushed_branch_pr(
     return None, rejected
 
 
+def _unanswered_replacement(error: str) -> dict:
+    return {"status": "unanswered", "error": error[:500]}
+
+
+def _carrier_name(link: dict) -> str:
+    cut = "" if link["complete"] else f", commits cut at {REPLACEMENT_READ_LIMIT}"
+    when = f" {link['mergedAt']}" if link["state"] == "MERGED" else ""
+    return f"#{link['number']} ({link['state'].lower()}{when}{cut})"
+
+
+def judge_replacement(answer: object, *, repo: str, pr_number: int, started_ts: int | None) -> dict:
+    """Pure: does a PR linked to the run's issue carry the head commit of its closed PR #pr_number?
+
+    `answer` is what `REPLACEMENT_QUERY` printed. A link CARRIES the head when the head is in its
+    commit list; one whose list was cut at REPLACEMENT_READ_LIMIT without it MAY. Five answers:
+    - credited: exactly one MERGED link carries it, merged at or after the run started. The same
+      commit is the same work, in the wrapper the lane rehomed it into: the run's delivery.
+    - open: none merged, and an OPEN link carries it or may. The work is in flight, so the run waits
+      exactly as on its own open PR, until that PR settles.
+    - unattributable: the complete answer cannot single one out: more than one merged link carries
+      it or may, the only one that may is unread past the limit, the links run past the limit, or
+      the run records no start to place a merge against. Terminal, and scored by no learner.
+    - none: no link carries it after the run started, which is the FAIL. A link that carries it but
+      merged BEFORE the run started is named and never credited: that head predates the run, so the
+      PR the run is charged with did not carry its work (#441's window rule).
+    - unanswered: no answer: the read failed, or printed a shape this does not know.
+    """
+    data = answer.get("data") if isinstance(answer, dict) else None
+    repository = data.get("repository") if isinstance(data, dict) else None
+    if not isinstance(repository, dict):
+        return _unanswered_replacement("the replacement read printed no repository")
+    pull = repository.get("pullRequest")
+    head = pull.get("headRefOid") if isinstance(pull, dict) else None
+    if not (
+        isinstance(pull, dict)
+        and pull.get("number") == pr_number
+        and isinstance(head, str)
+        and HEAD_SHA_RE.match(head)
+    ):
+        return _unanswered_replacement(f"the closed PR #{pr_number}'s head is not in the answer")
+    issue = repository.get("issueOrPullRequest")
+    conn = issue.get("closedByPullRequestsReferences") if isinstance(issue, dict) else None
+    nodes = conn.get("nodes") if isinstance(conn, dict) else None
+    info = conn.get("pageInfo") if isinstance(conn, dict) else None
+    more = info.get("hasNextPage") if isinstance(info, dict) else None
+    if not isinstance(nodes, list) or not isinstance(more, bool):
+        return _unanswered_replacement("the replacement read has no list of the issue's links")
+    links: list[dict] = []
+    for node in nodes:
+        where = node.get("repository") if isinstance(node, dict) else None
+        commits = node.get("commits") if isinstance(node, dict) else None
+        oids = commits.get("nodes") if isinstance(commits, dict) else None
+        total = commits.get("totalCount") if isinstance(commits, dict) else None
+        shas = {
+            item["commit"].get("oid")
+            for item in oids or []
+            if isinstance(item, dict) and isinstance(item.get("commit"), dict)
+        }
+        if not (
+            isinstance(where, dict)
+            and isinstance(node.get("number"), int)
+            and isinstance(node.get("state"), str)
+            and isinstance(oids, list)
+            and isinstance(total, int)
+            and len(shas) == len(oids)
+            and all(isinstance(sha, str) for sha in shas)
+        ):
+            return _unanswered_replacement(f"a link of the issue cannot be read: {node!r}")
+        if where.get("nameWithOwner") != repo or node["number"] == pr_number:
+            continue  # another repository's PR cannot carry this one's commit; #N is the closed PR
+        state = node["state"].upper()
+        merged_ts = utc_epoch.from_iso(node.get("mergedAt")) if node.get("mergedAt") else None
+        if state == "MERGED" and merged_ts is None:
+            return _unanswered_replacement(f"merged link #{node['number']} has no merge time")
+        carries = head in shas
+        links.append(
+            {
+                "number": node["number"],
+                "state": state,
+                "mergedAt": node.get("mergedAt"),
+                "merged_ts": merged_ts,
+                "headRefName": node.get("headRefName"),
+                "carries": carries,
+                "complete": carries or len(shas) >= total,
+            }
+        )
+    verdict: dict = {"head": head}
+    if more:
+        return {
+            **verdict,
+            "status": "unattributable",
+            "reason": f"over {REPLACEMENT_READ_LIMIT} PRs link the issue, so any unread one may "
+            "carry its head",
+        }
+    may = [link for link in links if link["carries"] or not link["complete"]]
+    merged = [link for link in may if link["state"] == "MERGED"]
+    after = [
+        link for link in merged if started_ts is None or (link["merged_ts"] or 0) >= started_ts
+    ]
+    if len(after) == 1 and after[0]["carries"] and started_ts is not None:
+        return {**verdict, "status": "credited", "pr": after[0]}
+    if after:
+        reason = (
+            "the run records no start to place the merge against"
+            if started_ts is None
+            else f"{len(after)} merged PR(s) carry its head or may"
+        )
+        names = ", ".join(_carrier_name(link) for link in after)
+        return {**verdict, "status": "unattributable", "reason": f"{reason}: {names}"}
+    opened = [link for link in may if link["state"] == "OPEN"]
+    if opened:
+        return {**verdict, "status": "open", "prs": [_carrier_name(link) for link in opened]}
+    return {
+        **verdict,
+        "status": "none",
+        "before_run": [_carrier_name(link) for link in merged if link["carries"]],
+        "links": [_carrier_name(link) for link in links],
+    }
+
+
+def _replacement_read(repo: str, issue: int, pr_number: int) -> tuple[object | None, str | None]:
+    """Live: `REPLACEMENT_QUERY`, one page. (parsed, None), or (None, why) when gh did not answer."""
+    owner, _, name = repo.partition("/")
+    r = subprocess.run(
+        [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            f"query={REPLACEMENT_QUERY}",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"name={name}",
+            "-F",
+            f"issue={issue}",
+            "-F",
+            f"pr={pr_number}",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode != 0:
+        return None, (r.stderr or r.stdout or "").strip()[:500] or f"gh exited {r.returncode}"
+    try:
+        return json.loads(r.stdout), None
+    except Exception:
+        return None, "the replacement read printed no JSON"
+
+
+def _attach_replacement(pr: dict | None, repo: str, issue: int, started_ts: int | None):
+    """Before a local run's own PR, CLOSED unmerged, becomes its FAIL: the replacement read. The
+    verdict rides on the PR as `replacement` for `state_to_outcome`. A read that did not answer
+    turns the lookup unanswered, so the run is skipped and asked again: never failed on an
+    unknown. Any other PR state, or no PR, passes through untouched."""
+    if (
+        not isinstance(pr, dict)
+        or pr.get("lookup_status") != "found"
+        or str(pr.get("state") or "").upper() != "CLOSED"
+        or pr.get("mergedAt")
+        or not isinstance(pr.get("number"), int)
+    ):
+        return pr
+    answer, error = _replacement_read(repo, issue, pr["number"])
+    judged = (
+        _unanswered_replacement(error)
+        if error is not None
+        else judge_replacement(answer, repo=repo, pr_number=pr["number"], started_ts=started_ts)
+    )
+    if judged["status"] == "unanswered":
+        pr["lookup_status"] = "replacement_lookup_failed"
+        pr["error"] = judged["error"]
+    else:
+        pr["replacement"] = judged
+    return pr
+
+
 def _local_pr_state(
-    target: str, agent: str | None = None, pushes: dict | None = None
+    target: str,
+    agent: str | None = None,
+    pushes: dict | None = None,
+    started_ts: int | None = None,
 ) -> dict | None:
     """Live: a LOCAL delegate's target is an ISSUE (owner/repo#N); its agent opened a PR on the
     deterministic branch orchestrator/issue-N (provision.py), or on a branch it named itself.
@@ -611,6 +842,10 @@ def _local_pr_state(
     `pushes` is the run's push record (`feedback.run_pushes`). Its branches are asked FIRST, through
     `_pushed_branch_pr`, and are not asked again among the name-pattern candidates. Without a READ
     record that has branches, every lookup below is exactly what it was before the record existed.
+
+    The run's own PR found CLOSED unmerged is read once more before it can be the FAIL: does a PR
+    linked to issue N carry its head commit (`_attach_replacement`, after `started_ts`, the run's
+    start)? A target that is itself a PR has no issue to read, and keeps its verdict as it was.
     """
     repo, num = provision.parse_target(target)
     if num is None:
@@ -628,7 +863,7 @@ def _local_pr_state(
             pr["candidateBranches"] = pushed
             if rejected:
                 pr["pushedBranchRejected"] = rejected
-            return pr
+            return _attach_replacement(pr, repo, num, started_ts)
     candidates = [
         branch for branch in _local_candidate_branches(num, agent) if branch not in pushed
     ]
@@ -640,7 +875,7 @@ def _local_pr_state(
         pr["target"] = target
         pr["candidateBranches"] = asked
         pr.update(extra)
-        return pr
+        return _attach_replacement(pr, repo, num, started_ts)
     terminal_issue = _closed_issue_without_branch_pr(repo, num, asked[0])
     if terminal_issue is not None:
         terminal_issue["candidateBranches"] = asked
@@ -870,7 +1105,11 @@ def state_to_outcome(pr: dict | None) -> dict | None:
     GitHub about an issue that can never change, with nothing to drain it.
 
     A remote delegation's own settled PR (`delegation`) is credited, PASS or FAIL, only when its
-    `attribution` says the delegation can be shown to have produced it (`_delegation_outcome`)."""
+    `attribution` says the delegation can be shown to have produced it (`_delegation_outcome`).
+
+    A local run's own PR closed unmerged carries the replacement read (`replacement`), which
+    decides between the FAIL and the merge of a replacement that carries its head commit
+    (`_replacement_outcome`). A closed PR without one is the FAIL, as it always was."""
     if not pr or pr.get("lookup_status") in UNANSWERED_LOOKUPS:
         return None
     st = (pr.get("state") or "").upper()
@@ -951,6 +1190,10 @@ def state_to_outcome(pr: dict | None) -> dict | None:
             notes = f"{own_pr} closed unmerged {own_branch}"
         else:
             notes = "remote keepalive PR closed unmerged"
+        replacement = pr.get("replacement")
+        if isinstance(replacement, dict):
+            # Only a local run's own closed PR carries the replacement read (`_attach_replacement`).
+            return _replacement_outcome(pr, replacement, notes)
         return {
             "merged": False,
             "adjudicated_verdict": "FAIL",
@@ -958,6 +1201,57 @@ def state_to_outcome(pr: dict | None) -> dict | None:
             "notes": notes,
         }
     return None
+
+
+def _replacement_outcome(pr: dict, replacement: dict, closed_notes: str) -> dict | None:
+    """A local run's own PR closed unmerged, and the replacement read answered
+    (`judge_replacement`). A credited replacement is the run's merge, through the same write path
+    as a merge of its own PR, and the only form here that names `PR #N merged`, which the
+    durability sweep resolves the merge from (`EXPLICIT_MERGED_PR_RE`, first match): it leads the
+    notes, so nothing in `closed_notes` can stand in front of it. An open one waits. The rest are
+    the FAIL, or an outcome no learner scores; each names what the read found."""
+    status = replacement.get("status")
+    head = str(replacement.get("head") or "")[:12]
+    closed = f"closed PR #{pr.get('number')} ({pr.get('headRefName') or pr.get('branch')})"
+    if status == "credited":
+        link = replacement["pr"]
+        return {
+            "merged": True,
+            "adjudicated_verdict": "PASS",
+            "durability": "pending",
+            "notes": (
+                f"{REPLACEMENT_CHECK}: replacement PR #{link['number']} merged "
+                f"({link.get('headRefName')}) carrying the head {head} of its {closed}; "
+                f"durability pending sweep; {closed_notes}"
+            ),
+        }
+    if status == "unattributable":
+        return {
+            "merged": None,
+            "adjudicated_verdict": None,
+            "durability": "abandoned",
+            "failure_class": feedback.UNATTRIBUTED_REPLACEMENT,
+            "notes": (
+                f"{closed_notes}; {REPLACEMENT_CHECK}: whether a PR linked to its issue carries "
+                f"the head {head} of its {closed} cannot be told: {replacement.get('reason')}; "
+                "not attributed to this run"
+            ),
+        }
+    if status == "none":
+        before = replacement.get("before_run") or []
+        links = replacement.get("links") or []
+        return {
+            "merged": False,
+            "adjudicated_verdict": "FAIL",
+            "durability": "abandoned",
+            "notes": (
+                f"{closed_notes}; {REPLACEMENT_CHECK}: no PR linked to its issue carries the head "
+                f"{head} of its {closed}"
+                + (f" after the run started (only {', '.join(before)})" if before else "")
+                + (f"; links read: {', '.join(links)}" if links else "; no other PR links it")
+            ),
+        }
+    return None  # open: the run waits on that PR, as on its own open PR
 
 
 def _delegation_outcome(pr: dict) -> dict:
@@ -1003,6 +1297,9 @@ def _delegation_outcome(pr: dict) -> dict:
 def _skip_reason(pr: dict | None) -> str:
     if not pr:
         return "state_unavailable"
+    replacement = pr.get("replacement")
+    if isinstance(replacement, dict) and replacement.get("status") == "open":
+        return "open_replacement_pr"
     status = pr.get("lookup_status")
     if status and status != "found":
         return status
@@ -1038,10 +1335,18 @@ def _skip_detail(run: dict, pr: dict | None) -> dict:
         "direct_lookup_error",
         "passed_over_pr",
         "attribution",
+        "replacement",
     ):
         if pr.get(key):
             detail[key] = pr[key]
     return detail
+
+
+def _local_run_sql() -> str:
+    """`is_local_delegate` in SQL over `runs r`: the same LEGACY_LOCAL_MODES, so the two cannot
+    drift. Its parameters are LEGACY_LOCAL_MODES, in order."""
+    legacy_marks = ",".join("?" for _ in LEGACY_LOCAL_MODES)
+    return f"(r.mode='local' OR (r.mode IN ({legacy_marks}) AND instr(r.target,'#')>0))"
 
 
 def _pending_runs(mode: str) -> list[dict]:
@@ -1055,15 +1360,11 @@ def _pending_runs(mode: str) -> list[dict]:
                 (mode,),
             ).fetchall()
         else:
-            # `is_local_delegate` in SQL: the same LEGACY_LOCAL_MODES, so the two cannot drift.
-            legacy_marks = ",".join("?" for _ in LEGACY_LOCAL_MODES)
             rows = c.execute(
                 "SELECT r.run_id, r.target, r.agent, r.pr_number, "
                 "o.run_id IS NOT NULL, COALESCE(o.durability,''), r.ts, r.source "
                 "FROM runs r LEFT JOIN outcomes o ON r.run_id=o.run_id "
-                "WHERE (o.run_id IS NULL OR o.durability='pending') "
-                "AND (r.mode='local' OR "
-                f"(r.mode IN ({legacy_marks}) AND instr(r.target,'#')>0))",
+                "WHERE (o.run_id IS NULL OR o.durability='pending') AND " + _local_run_sql(),
                 LEGACY_LOCAL_MODES,
             ).fetchall()
     return [
@@ -1105,6 +1406,10 @@ def ingest_outcomes(mode: str = "remote", dry_run: bool = False, _state_fn=None)
     push_records = (
         {"credited": 0, "rejected": 0, "absent": 0, "unreadable": 0} if mode == "local" else None
     )
+    # Local runs only, for the same reason: what the replacement read answered for each own PR
+    # found closed unmerged. `waiting` is the blocking number of the one new wait (an open PR that
+    # carries the run's head), and every one of them is drainable: the next ingest asks again.
+    replacements = dict.fromkeys(REPLACEMENT_COUNTS.values(), 0) if mode == "local" else None
     for run in pending:
         if run.get("has_outcome") and run.get("existing_durability") == "pending":
             pending_durability.append(_pending_durability_detail(run))
@@ -1118,13 +1423,18 @@ def ingest_outcomes(mode: str = "remote", dry_run: bool = False, _state_fn=None)
         if _state_fn:
             pr = _state_fn(run["target"])
         elif mode == "local":
-            pr = _local_pr_state(run["target"], run.get("agent"), pushes=pushes)
+            pr = _local_pr_state(
+                run["target"], run.get("agent"), pushes=pushes, started_ts=run.get("ts")
+            )
         elif needs_delegation_guard(run.get("source")):
             pr = _delegated_pr_state(run["target"], run.get("agent"), run.get("ts"))
         else:
             pr = _pr_state(run["target"], run.get("agent"))
         if push_records is not None and pr and pr.get("pushedBranchRejected"):
             push_records["rejected"] += 1
+        replacement = pr.get("replacement") if isinstance(pr, dict) else None
+        if replacements is not None and isinstance(replacement, dict):
+            replacements[REPLACEMENT_COUNTS[replacement["status"]]] += 1
         oc = state_to_outcome(pr)
         if oc is None:
             skipped.append(_skip_detail(run, pr))
@@ -1141,6 +1451,7 @@ def ingest_outcomes(mode: str = "remote", dry_run: bool = False, _state_fn=None)
                 "durability": oc["durability"],
                 "failure_class": oc.get("failure_class"),
                 "credited_via": credited_via,
+                "replacement": replacement.get("status") if replacement else None,
             }
         )
     return {
@@ -1156,6 +1467,7 @@ def ingest_outcomes(mode: str = "remote", dry_run: bool = False, _state_fn=None)
         # it. Always present for the same reason as `unanswered`.
         "unattributed": sum(1 for row in recorded if row["failure_class"] in UNATTRIBUTED_CLASSES),
         "push_records": push_records,
+        "replacements": replacements,
         "pending_durability": len(pending_durability),
         "details": recorded,
         "skipped_details": skipped,
@@ -1193,9 +1505,264 @@ def ingest_modes(
         "push_records": next(
             (row["push_records"] for row in results if row.get("push_records") is not None), None
         ),
+        "replacements": next(
+            (row["replacements"] for row in results if row.get("replacements") is not None), None
+        ),
         "pending_durability": sum(row.get("pending_durability", 0) for row in results),
         "skipped_details": skipped_details,
         "pending_durability_details": pending_durability_details,
+    }
+
+
+# THE RE-JUDGE of the rows written before the replacement read existed. Ingest never revisits a
+# decided row, so the FAIL it wrote for a closed own PR stands unless something asks again, and this
+# does, once per row: a local run's unclassified FAIL whose notes say its PR closed unmerged and
+# carry no REPLACEMENT_CHECK. It re-reads the row with ingest's own resolver and applies the answer
+# only to the PR the FAIL was written about: closed unmerged no later than the FAIL's own time. A
+# credited replacement writes the merge through `feedback.record_outcome`, as ingest does; a FAIL
+# that stands, or an outcome no learner scores, gains its REPLACEMENT_CHECK note and leaves the
+# selection. A wait (an open carrier, a read GitHub did not answer) lasts at most
+# REPLACEMENT_RECHECK_HORIZON_DAYS from the row's first selection, then the FAIL stands with its
+# reason, so the selection drains to a printed zero. Each row's stored state is snapshotted before
+# the first write and `--undo-replacement-recheck` restores it. "0" in the switch stops the
+# selection, and so does the owner answering "decline" to the owner question whose text carries
+# REPLACEMENT_RECHECK_TOKEN (the owner-question protocol: it runs on its default until then).
+REPLACEMENT_RECHECK_SWITCH = "ORCH_REPLACEMENT_RECHECK"
+REPLACEMENT_RECHECK_UNDO = "outcomes-replacement-recheck-undo.jsonl"
+REPLACEMENT_RECHECK_HORIZON_DAYS = 7
+REPLACEMENT_RECHECK_TOKEN = "[replacement-recheck]"
+RECHECK_SNAPSHOT_FIELDS = (
+    "merged",
+    "adjudicated_verdict",
+    "durability",
+    "failure_class",
+    "failure_class_origin",
+    "notes",
+    "durability_checked_ts",
+)
+DECLINE_RE = re.compile(r"\s*(decline|no)\b", re.IGNORECASE)
+
+
+def _recheck_undo_path() -> Path:
+    state_dir = os.environ.get("ORCH_STATE_DIR") or Path.home() / ".codex" / "orchestrator"
+    return Path(state_dir) / REPLACEMENT_RECHECK_UNDO
+
+
+def _replacement_recheck_runs() -> list[dict]:
+    """The rows the re-judge may change, oldest first. Unclassified only: a classified FAIL is
+    already excluded from learning, and a patch here could not clear its class."""
+    with feedback._conn() as c:
+        rows = c.execute(
+            "SELECT r.run_id, r.target, r.agent, r.ts, "
+            + ", ".join(f"o.{field}" for field in RECHECK_SNAPSHOT_FIELDS)
+            + " FROM runs r JOIN outcomes o ON r.run_id=o.run_id WHERE "
+            + _local_run_sql()
+            + " AND o.adjudicated_verdict='FAIL' AND COALESCE(o.merged,0)=0 "
+            "AND o.durability='abandoned' AND COALESCE(o.failure_class,'')='' "
+            "AND instr(COALESCE(o.notes,''),'closed unmerged')>0 "
+            "AND instr(COALESCE(o.notes,''),?)=0 ORDER BY r.ts, r.run_id",
+            (*LEGACY_LOCAL_MODES, REPLACEMENT_CHECK),
+        ).fetchall()
+    keys = ("run_id", "target", "agent", "ts", *RECHECK_SNAPSHOT_FIELDS)
+    return [dict(zip(keys, row)) for row in rows]
+
+
+def _recheck_snapshots() -> dict[str, dict]:
+    """run_id -> its FIRST snapshot entry, the state before the re-judge first touched it."""
+    try:
+        lines = _recheck_undo_path().read_text().splitlines()
+    except OSError:
+        return {}
+    first: dict[str, dict] = {}
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict) and entry.get("run_id") and entry["run_id"] not in first:
+            first[entry["run_id"]] = entry
+    return first
+
+
+def _recheck_declined() -> dict | None:
+    """The owner's "decline", read from the owner question that carries the token."""
+    with feedback._conn() as c:
+        rows = c.execute(
+            "SELECT question_id, status, answer FROM owner_questions "
+            "WHERE instr(question, ?) > 0 ORDER BY ts DESC",
+            (REPLACEMENT_RECHECK_TOKEN,),
+        ).fetchall()
+    for question_id, status, answer in rows:
+        if status == "answered" and DECLINE_RE.match(str(answer or "")):
+            return {"question_id": question_id, "answer": answer}
+    return None
+
+
+def _recorded_pr(pr: object, run: dict) -> bool:
+    """Is `pr` the PR this row's FAIL was written about? The resolver asks a branch for its NEWEST
+    PR, so a later run's PR on the same branch can answer instead. The recorded one had closed
+    unmerged by the time the FAIL was written (`durability_checked_ts`)."""
+    if not isinstance(pr, dict) or pr.get("lookup_status") != "found":
+        return False
+    closed_ts = utc_epoch.from_iso(pr.get("closedAt")) if pr.get("closedAt") else None
+    written = run.get("durability_checked_ts")
+    return bool(
+        str(pr.get("state") or "").upper() == "CLOSED"
+        and not pr.get("mergedAt")
+        and closed_ts is not None
+        and isinstance(written, int)
+        and closed_ts <= written
+    )
+
+
+def _recheck_wait_reason(pr: object) -> str:
+    """Why a selected row cannot be decided on this run."""
+    if not isinstance(pr, dict):
+        return "GitHub did not answer"
+    if pr.get("lookup_status") in UNANSWERED_LOOKUPS:
+        return f"GitHub did not answer: {pr.get('error') or pr.get('lookup_status')}"
+    replacement = pr.get("replacement")
+    if isinstance(replacement, dict) and replacement.get("status") == "open":
+        return f"a PR carrying its head is still open: {', '.join(replacement.get('prs') or [])}"
+    return "its closed PR has no replacement read"
+
+
+def recheck_replacements(*, dry_run: bool = False, now: int | None = None, _resolve=None) -> dict:
+    """Re-judge each selected row once (see REPLACEMENT_RECHECK_SWITCH's comment). `_resolve`
+    overrides the live resolver (tests). Every count is always present: a drained run prints
+    `selected 0`, a stopped one still counts what it would select, and `waiting`, the blocking
+    number, prints beside `drains_by`, the date its last row closes, since every waiting row
+    drains either on an answer or at its horizon."""
+    now = int(now if now is not None else time.time())
+    day = time.strftime("%Y-%m-%d", time.gmtime(now))
+    runs = _replacement_recheck_runs()
+    summary: dict = {
+        "selected": len(runs),
+        "credited": 0,
+        "unattributable": 0,
+        "kept_fail": 0,
+        "not_the_recorded_pr": 0,
+        "closed_at_horizon": 0,
+        "waiting": 0,
+        "drains_by": None,
+        "snapshotted": 0,
+        "stopped": None,
+        "dry_run": dry_run,
+        "undo": "python3 src/outcomes.py --undo-replacement-recheck",
+        "details": [],
+    }
+    declined = _recheck_declined()
+    if os.environ.get(REPLACEMENT_RECHECK_SWITCH, "1") == "0":
+        summary["stopped"] = f"{REPLACEMENT_RECHECK_SWITCH}=0"
+    elif declined:
+        summary["stopped"] = f"declined: owner question {declined['question_id']}"
+    if summary["stopped"] or not runs:
+        return summary
+    snapshots = _recheck_snapshots()
+    fresh = [run for run in runs if run["run_id"] not in snapshots]
+    if fresh and not dry_run:
+        path = _recheck_undo_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as log:
+            for run in fresh:
+                entry = {field: run[field] for field in RECHECK_SNAPSHOT_FIELDS}
+                log.write(json.dumps({"run_id": run["run_id"], **entry, "selected_ts": now}) + "\n")
+        summary["snapshotted"] = len(fresh)
+        snapshots = _recheck_snapshots()
+
+    def resolve(run: dict) -> dict | None:
+        pushes = feedback.run_pushes(run["run_id"])
+        return _local_pr_state(
+            run["target"], run.get("agent"), pushes=pushes, started_ts=run.get("ts")
+        )
+
+    for run in runs:
+        found = (_resolve or resolve)(run)
+        pr = found if isinstance(found, dict) else {}
+        stored = str(run.get("notes") or "")
+        answered = bool(pr) and pr.get("lookup_status") not in UNANSWERED_LOOKUPS
+        replacement = pr.get("replacement") if answered else None
+        status = replacement.get("status") if isinstance(replacement, dict) else None
+        write: dict
+        if answered and not _recorded_pr(pr, run):
+            number = pr.get("number")
+            shown = f"#{number}" if isinstance(number, int) else pr.get("lookup_status")
+            action, write = "not_the_recorded_pr", {
+                "notes": f"{stored}; {REPLACEMENT_CHECK}: its branch now shows {shown} "
+                f"({pr.get('state')}), not the PR this FAIL was written about; FAIL kept ({day})"
+            }
+        elif isinstance(replacement, dict) and status in ("credited", "unattributable", "none"):
+            judged = _replacement_outcome(pr, replacement, stored)
+            assert judged is not None, replacement
+            notes = f"{judged['notes']} (re-judged {day}; was FAIL)"
+            if status == "credited":
+                action, write = "credited", {**judged, "notes": notes}
+            elif status == "unattributable":
+                # A patch cannot clear the stored merge state or verdict; the class is what every
+                # learner reads, the same shape `mark_transient_infra` leaves on a FAIL.
+                action = "unattributable"
+                write = {"failure_class": judged["failure_class"], "notes": notes}
+            else:
+                action, write = "kept_fail", {"notes": notes}
+        else:
+            first = snapshots.get(run["run_id"], {}).get("selected_ts")
+            started = first if isinstance(first, int) else now
+            closes = started + REPLACEMENT_RECHECK_HORIZON_DAYS * 86400
+            why = _recheck_wait_reason(found)
+            if now < closes:
+                summary["waiting"] += 1
+                summary["drains_by"] = max(filter(None, (summary["drains_by"], _iso(closes))))
+                summary["details"].append(
+                    {
+                        "run_id": run["run_id"],
+                        "target": run["target"],
+                        "action": "waiting",
+                        "reason": why,
+                    }
+                )
+                continue
+            action, write = "closed_at_horizon", {
+                "notes": f"{stored}; {REPLACEMENT_CHECK}: undecided for "
+                f"{REPLACEMENT_RECHECK_HORIZON_DAYS} days ({why}); FAIL kept ({day})"
+            }
+        summary[action] += 1
+        summary["details"].append(
+            {
+                "run_id": run["run_id"],
+                "target": run["target"],
+                "action": action,
+                "notes": write["notes"],
+            }
+        )
+        if not dry_run:
+            feedback.record_outcome(run["run_id"], **write)
+    return summary
+
+
+def undo_replacement_recheck() -> dict:
+    """Restore every row the re-judge touched to its first snapshot, and re-propagate it over its
+    accepted influence edges, which carry a target's CURRENT state, so they follow it back."""
+    path = _recheck_undo_path()
+    first = _recheck_snapshots()
+    if not first:
+        return {"restored": 0, "reason": f"no undo log at {path}"}
+    with feedback._conn() as c:
+        for run_id, entry in first.items():
+            c.execute(
+                "UPDATE outcomes SET "
+                + ", ".join(f"{field}=?" for field in RECHECK_SNAPSHOT_FIELDS)
+                + " WHERE run_id=?",
+                (*(entry.get(field) for field in RECHECK_SNAPSHOT_FIELDS), run_id),
+            )
+            feedback._propagate_outcome_lineage_in_conn(c, run_id)
+    return {
+        "restored": len(first),
+        "log": str(path),
+        "keep_it": (
+            f"export {REPLACEMENT_RECHECK_SWITCH}=0, or answer the owner question carrying "
+            f"{REPLACEMENT_RECHECK_TOKEN} with 'decline'; otherwise the next local ingest "
+            "re-judges these rows"
+        ),
     }
 
 
@@ -1475,6 +2042,7 @@ def _selftest():
         "a PR on a pushed branch that predates the run was credited to it",
         older,
     )
+    _selftest_replacement()
     import shutil
 
     shutil.rmtree(tmp, ignore_errors=True)
@@ -1486,7 +2054,8 @@ def _selftest():
         "counted and an unread merge time unanswered, a delegation credited only with its own "
         "PR and its "
         "agent's completed runner rounds, a PR the run opened on a branch it pushed credited "
-        "and one that predates the run rejected)"
+        "and one that predates the run rejected, a closed PR's replacement carrying its head "
+        "credited and a different implementation not)"
     )
 
 
@@ -1506,6 +2075,71 @@ def _closing_read(closed: str | None, *refs: tuple) -> tuple:
     conn = {"pageInfo": {"hasNextPage": False, "endCursor": "MQ"}, "nodes": nodes}
     issue = {"closedAt": closed, "closedByPullRequestsReferences": conn}
     return (0, json.dumps([{"data": {"repository": {"issueOrPullRequest": issue}}}]), "")
+
+
+def _selftest_replacement() -> None:
+    """GitHub's answers for Orchestrator#213/#214 and #199/#200, read 2026-10-05: the same-commit
+    replacement is the run's merge, the different implementation is not, and neither is nothing."""
+    repo, start = "stranske/Orchestrator", 1788481981
+    head = "282949241f3c33569c1854e2f9f91f2be387207f"
+    same = _replacement_link(219, "MERGED", "2026-09-04T06:26:24Z", [head, "9" * 40], repo=repo)
+    other = _replacement_link(208, "MERGED", "2026-09-04T06:26:24Z", ["f" * 40], repo=repo)
+    closed = {"number": 214, "state": "CLOSED", "headRefName": "orchestrator/issue-213"}
+    for links, verdict in (((same,), "PASS"), ((other,), "FAIL"), ((), "FAIL")):
+        answer = json.loads(_replacement_answer(214, head, *links)[1])
+        judged = judge_replacement(answer, repo=repo, pr_number=214, started_ts=start)
+        outcome = state_to_outcome({**closed, "replacement": judged})
+        assert outcome and outcome["adjudicated_verdict"] == verdict, (links, judged, outcome)
+    assert "replacement PR #219 merged" in str(
+        state_to_outcome(
+            {
+                **closed,
+                "replacement": judge_replacement(
+                    json.loads(_replacement_answer(214, head, same)[1]),
+                    repo=repo,
+                    pr_number=214,
+                    started_ts=start,
+                ),
+            }
+        )
+    )
+    unread = judge_replacement({"data": {}}, repo=repo, pr_number=214, started_ts=start)
+    assert unread["status"] == "unanswered", "an unread answer must never reach a verdict"
+
+
+def _replacement_link(
+    number: int,
+    state: str,
+    merged_at: str | None,
+    oids: list[str],
+    *,
+    total: int | None = None,
+    repo: str = "o/r",
+    branch: str | None = None,
+) -> dict:
+    """One node of `REPLACEMENT_QUERY`'s link list, as GitHub prints it."""
+    return {
+        "number": number,
+        "state": state,
+        "mergedAt": merged_at,
+        "headRefName": branch or f"codex/issue-{number}",
+        "repository": {"nameWithOwner": repo},
+        "commits": {
+            "totalCount": len(oids) if total is None else total,
+            "nodes": [{"commit": {"oid": oid}} for oid in oids],
+        },
+    }
+
+
+def _replacement_answer(pr_number: int, head: str, *links: dict, more: bool = False) -> tuple:
+    """What `_replacement_read`'s `gh api graphql` prints, as a stub answer: the closed PR's head
+    and the issue's links (`_replacement_link`)."""
+    refs = {"pageInfo": {"hasNextPage": more}, "nodes": list(links)}
+    repository = {
+        "pullRequest": {"number": pr_number, "headRefOid": head},
+        "issueOrPullRequest": {"closedByPullRequestsReferences": refs},
+    }
+    return (0, json.dumps({"data": {"repository": repository}}), "")
 
 
 def _runner_comment(kind: str, provider: str, pr: int, payload: dict, login: str) -> dict:
@@ -1644,11 +2278,25 @@ def main(argv):
         default="remote",
         help="remote resolves direct keepalive PR targets; local resolves orchestrator/issue-N PR branches",
     )
+    parser.add_argument(
+        "--undo-replacement-recheck",
+        action="store_true",
+        help="restore every row the replacement re-judge changed to the state it snapshotted first",
+    )
     args = parser.parse_args(argv)
     if args.selftest:
         _selftest()
         return 0
-    print(json.dumps(ingest_modes(args.mode, dry_run=args.dry_run), indent=2, default=str))
+    if args.undo_replacement_recheck:
+        print(json.dumps(undo_replacement_recheck(), indent=2))
+        return 0
+    summary = ingest_modes(args.mode, dry_run=args.dry_run)
+    # The local path re-judges the rows written before the replacement read existed: once each,
+    # then it selects nothing (`recheck_replacements`).
+    summary["replacement_recheck"] = (
+        recheck_replacements(dry_run=args.dry_run) if args.mode in ("local", "both") else None
+    )
+    print(json.dumps(summary, indent=2, default=str))
     return 0
 
 
