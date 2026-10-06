@@ -13,10 +13,14 @@ lesson in ORCHESTRATOR.md — so review() returns the blockers for the orchestra
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import sys
+import time
 from collections.abc import Mapping
+from pathlib import Path
 
 import dispatcher
 
@@ -63,6 +67,160 @@ HIGH_STAKES_TITLE_PATTERNS = (
     r"\bdatabase[- ]migration\b",
     r"\bschema[- ]migration\b",
 )
+
+# One definition shared by the population counter and (after shadow measurement) the advisor.
+HIGH_STAKES_MIN_CHANGED_LINES = 500
+HIGH_STAKES_PATH_CLASSES = {"workflows", "github-meta", "auth", "data"}
+HIGH_STAKES_PATH_PARTS = {
+    "auth",
+    "authentication",
+    "authorization",
+    "security",
+    "data",
+    "database",
+    "db",
+    "migrations",
+    "persistence",
+    "storage",
+    "schema",
+}
+SHAPE_SHADOW_WEEK_SECONDS = 7 * 86400
+SHAPE_SHADOW_REQUIRED_WEEKS = 2
+SHAPE_MEASUREMENT_REF = "switch_review.adversarial-shape"
+
+
+def shape_rule_id() -> str:
+    """A rule edit must earn its own weekly observations; old evidence cannot activate it."""
+    rule = {
+        "version": 1,
+        "classes": sorted(HIGH_STAKES_PATH_CLASSES),
+        "parts": sorted(HIGH_STAKES_PATH_PARTS),
+        "lines": HIGH_STAKES_MIN_CHANGED_LINES,
+        "docs_only_excluded": True,
+    }
+    return hashlib.sha256(json.dumps(rule, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def high_stakes_from_shape(pr_facts: dict) -> str | None:
+    """Pure, heartbeat-free shape identification. None is no positive identification.
+
+    Raw paths retain auth/data changes that fleet_shapes' top-three classes can hide.
+    A docs-only change is routine even when large. Unknown facts are diagnosed separately.
+    """
+    import fleet_shapes
+
+    paths = pr_facts.get("paths")
+    paths = paths if isinstance(paths, list) else []
+    classes = set(pr_facts.get("path_classes") or [])
+    classes.update(fleet_shapes.path_class(str(p)) for p in paths)
+    hit = sorted(classes & HIGH_STAKES_PATH_CLASSES)
+    if hit:
+        return f"high-stakes path class: {', '.join(hit)}"
+    for path in paths:
+        if fleet_shapes.path_class(str(path)) in {"docs", "tests", "bookkeeping"}:
+            continue
+        parts = set(re.split(r"[/._-]+", str(path).lower()))
+        hits = sorted(parts & HIGH_STAKES_PATH_PARTS)
+        if hits:
+            return f"high-stakes auth/data path: {path} ({', '.join(hits)})"
+    if classes == {"docs"}:
+        return None
+    adds, dels = pr_facts.get("additions"), pr_facts.get("deletions")
+    if type(adds) is int and type(dels) is int and adds >= 0 and dels >= 0:
+        if adds + dels >= HIGH_STAKES_MIN_CHANGED_LINES:
+            return f"high-stakes size: {adds + dels} changed lines"
+    return None
+
+
+def shape_facts_complete(facts: dict) -> bool:
+    paths = facts.get("paths")
+    total = facts.get("changedFiles", facts.get("files_total"))
+    return (
+        isinstance(paths, list)
+        and all(isinstance(p, str) and p for p in paths)
+        and type(total) is int
+        and total == len(paths)
+        and all(type(facts.get(k)) is int and facts[k] >= 0 for k in ("additions", "deletions"))
+    )
+
+
+def high_stakes_title_reason(facts: dict) -> str | None:
+    """Preserve the closer title signal without recording a review invocation."""
+    title = str(facts.get("title") or "")
+    for pattern in HIGH_STAKES_TITLE_PATTERNS:
+        if re.search(pattern, title, flags=re.IGNORECASE):
+            return f"high-stakes title match: {pattern}"
+    return None
+
+
+def high_stakes_label_reason(facts: dict) -> str | None:
+    """The existing label vocabulary, without matching/recording a review invocation."""
+    for label in _label_names(facts):
+        normalized = label.strip().lower().replace("_", "-")
+        if normalized in HIGH_STAKES_LABELS or normalized.replace("-", " ") in HIGH_STAKES_LABELS:
+            return f"high-stakes label: {label}"
+    return None
+
+
+def shape_shadow_readiness(*, path: Path | None = None, now: int | None = None) -> tuple[bool, str]:
+    """Two complete weekly populations, at least a week apart, in the EXISTING ledger.
+
+    This is only an advisor precondition, never review/merge authority. Missing, old, partial,
+    future or different-rule observations cannot mature the shape route.
+    """
+    import capabilities
+
+    now = int(time.time()) if now is None else now
+    try:
+        cap = capabilities.load_declared(path or capabilities.REG).get("adversarial-review", {})
+        stamps = sorted(
+            {
+                e["timestamp"]
+                for e in cap.get("event_history", [])
+                if e.get("type") == "match"
+                and e.get("ref") == SHAPE_MEASUREMENT_REF
+                and e.get("metadata", {}).get("rule") == shape_rule_id()
+                and e.get("metadata", {}).get("status") == "ok"
+                and type(e.get("timestamp")) is int
+                and e["timestamp"] <= now
+            }
+        )
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return False, f"weekly shape evidence unavailable: {exc}"
+    if len(stamps) < SHAPE_SHADOW_REQUIRED_WEEKS:
+        return False, f"weekly shape measurements {len(stamps)}/{SHAPE_SHADOW_REQUIRED_WEEKS}"
+    if stamps[-1] - stamps[0] < (SHAPE_SHADOW_REQUIRED_WEEKS - 1) * SHAPE_SHADOW_WEEK_SECONDS:
+        return False, "weekly shape measurements are less than a week apart"
+    if now - stamps[-1] > SHAPE_SHADOW_WEEK_SECONDS + 86400:
+        return False, "latest weekly shape measurement is stale"
+    return True, "two complete weekly shape measurements at least a week apart"
+
+
+def record_shape_measurement(section: dict, *, now: int, path: Path | None = None) -> bool:
+    """Production weekly match evidence, not an invocation, outcome or usefulness verdict."""
+    import capabilities
+
+    if os.environ.get("ORCH_CAPABILITY_HEARTBEATS") != "1" or section.get("status") != "ok":
+        return False
+    counts = [section.get(k) for k in ("shape_candidates", "label_candidates", "population")]
+    if (
+        section.get("rule") != shape_rule_id()
+        or any(type(n) is not int or n < 0 for n in counts)
+        or any(section[k] > section["population"] for k in ("shape_candidates", "label_candidates"))
+    ):
+        return False
+    return capabilities.heartbeat(
+        "adversarial-review",
+        "match",
+        ref=SHAPE_MEASUREMENT_REF,
+        metadata={
+            k: section[k]
+            for k in ("rule", "status", "shape_candidates", "label_candidates", "population")
+        },
+        timestamp=now,
+        path=path or capabilities.REG,
+        idempotency_key=f"adversarial-shape:{shape_rule_id()}:{now // SHAPE_SHADOW_WEEK_SECONDS}",
+    )
 
 
 def _label_names(item: dict) -> list[str]:
@@ -490,6 +648,14 @@ def _selftest():
     assert reviewers_from_env({"ORCH_ADVERSARIAL_REVIEWERS": "vibe, gemini"}) == ["vibe", "gemini"]
     assert review_enabled({"ORCH_RUN_ADVERSARIAL_REVIEW": "1"})
     assert not review_enabled({"ORCH_RUN_ADVERSARIAL_REVIEW": "0"})
+    assert high_stakes_from_shape({"paths": [".github/workflows/gate.yml"]})
+    assert high_stakes_from_shape({"paths": ["src/auth/session.py"]})
+    assert (
+        high_stakes_from_shape({"paths": ["docs/auth.md"], "additions": 1000, "deletions": 0})
+        is None
+    )
+    assert high_stakes_label_reason({"labels": ["risk:major"]})
+
     print(
         "adversarial.py selftest: OK (refute prompt, minority-veto aggregation, reviewer-shortfall "
         "and finding-coverage guards each w/ break->revert, json extract, high-stakes "
