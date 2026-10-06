@@ -1,5 +1,5 @@
 {
-  "collected": 2328,
+  "collected": 2332,
   "passed": 2326,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Round1220 integrates current main87d041f16ffb787f31154f326c8d1b3d8858e077; actual collection2328; passed floor retains max pre-integration main/head baseline2326, not collection. Focused source tests executed; full merge-result CI awaits push. Prior note histories retained in Git and round receipts; all quality ceilings unchanged."
+  "note": "Round1322 integrates current main002c65f44073d45da4e8e38abca7321c9fdb010f; actual collection2332; passed floor retains max pre-integration main/head baseline2326, not collection. Focused source tests executed; full merge-result CI awaits push. Prior note histories retained in Git and round receipts; all quality ceilings unchanged."
 }
