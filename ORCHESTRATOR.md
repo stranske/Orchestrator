@@ -303,10 +303,12 @@ cursor-agent live outside the default PATH):
   verifier/tool checks and gates results as `PASS`/`FAIL`/`NEEDS_REVIEW`; command/non-regression checks
   require the additional `--allow-command-checks` flag, and shell-control commands are refused. Use
   `python3 src/runtime_ac.py --results spec.json --result-json results.json` to gate externally collected
-  evidence, and `--record-run-id <run_id>` to patch `outcomes.verifier_verdict`. For closer PRs, `tick.py`
-  treats those same labels, or a spec at `~/.codex/orchestrator/runtime-ac/<target-slug>.json`, as a
-  required runtime-AC gate: dry-runs report it under `runtime_ac_gates`; active ticks block progression
-  until a spec exists, `ORCH_RUN_RUNTIME_AC=1` is set, and the gate returns `PASS`. Command/non-regression
+  evidence, and `--record-run-id <run_id>` to patch `outcomes.verifier_verdict`. For closer PRs,
+  `merge_guard.py` treats those same labels on the PR, or a spec at
+  `~/.codex/orchestrator/runtime-ac/<target-slug>.json`, as a required runtime-AC gate: a dry run
+  reports it; an active merge blocks until a spec exists, `ORCH_RUN_RUNTIME_AC=1` is set, and the gate
+  returns `PASS`. (`tick.py` ran the same gate before a remote delegation no closer item can reach,
+  until 2026-10-05; it no longer examines closer items.) Command/non-regression
   checks still require `ORCH_RUNTIME_AC_ALLOW_COMMANDS=1`; `ORCH_RUNTIME_AC_TIMEOUT` sets the per-check
   timeout. This is a **hard opt-in machine gate**, not an advisory review: only explicitly labeled or
   target-spec-backed closer work is eligible, but eligible active work fails closed. The adversarial
