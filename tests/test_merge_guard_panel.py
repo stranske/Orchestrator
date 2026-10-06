@@ -105,7 +105,7 @@ def test_a_source_issue_risk_label_makes_the_merge_high_stakes_and_the_panel_adv
     panel, merges = Panel("BLOCKED"), []
     out = _merge(panel, merges=merges)
     review = out["adversarial_review"]
-    assert (review["status"], review["verdict"]) == ("executed", "BLOCKED"), review
+    assert (review["status"], review.get("verdict")) == ("executed", "BLOCKED"), review
     assert review["reason"] == "high-stakes label: risk:major", review
     assert out["blocked"] is False and out["merge_executed"] is True and merges, out
     assert "risk:major" in panel.contexts[0], panel.contexts
