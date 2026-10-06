@@ -658,6 +658,10 @@ paired implementers. Existing `exp_abcd.py followup` starts each pair's reviewer
 implementer succeeds, seeds the isolated review worktree with the frozen-base delta, and evaluates
 the corrected pair once. Experiments never push or open PRs. Use `ORCH_EXP_DIR` and
 `ORCH_WORKTREE_BASE` when invoking a branch checkout so artifacts and worktrees remain on local disk.
+For this explicitly supervised experiment, invoke followup with process-local
+`ORCH_RESEARCH_ARM=1` and an `ORCH_EXP_DIR` containing only the selected trial. This admits
+evaluation through the existing usage limits without changing the recurring research setting;
+do not use the budget bypass merely to evaluate a guarded subject trial.
 Direct evaluation and followup both record `$ORCH_STATE_DIR/capability-program/strategy-experiment.json`;
 complete exact evaluator cells and measured costs are required for a completed comparison.
 Missing evidence remains UNKNOWN in the switch review. Existing synthesis promotion handles later
