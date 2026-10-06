@@ -1,5 +1,5 @@
 {
-  "collected": 2347,
+  "collected": 2351,
   "passed": 2347,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Round1220 exact integrated checkout: verify.py --floor-may-lag measured 2347 passed, 0 failed, 0 skipped, 2347 collected; 103/103 selftests and capability/admission/ledger gates pass. Counts updated from actual execution; all skip and quality ceilings unchanged. Private-copy evidence does not establish live deployment."
+  "note": "Integrates main002c65f; measured collection2351; retains supported executed passed baseline2347; all quality ceilings unchanged; exact merge-result CI pending."
 }
