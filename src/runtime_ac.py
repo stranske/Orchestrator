@@ -1329,6 +1329,12 @@ def _valid_spec() -> dict[str, Any]:
     return json.loads(json.dumps(RUNTIME_AC_SCHEMA_EXAMPLE))
 
 
+_ISSUE_TEST_NODE_PATTERN = re.compile(
+    r"(?<![\w/])(?:(tests/[\w./-]+\.py)(::[\w:]+(?:\[[^\]\n`]*\])?)?"
+    r"|(::(?:\w+::)*test_[\w:]+(?:\[[^\]\n`]*\])?))(?![\w:\[\]])"
+)
+
+
 def _issue_named_test_nodes(line: str, *, include_unsafe: bool = False) -> list[str]:
     """Resolve shorthand within one obligation, never against another line's path."""
     nodes = []
@@ -1336,11 +1342,7 @@ def _issue_named_test_nodes(line: str, *, include_unsafe: bool = False) -> list[
     # Keep parameter IDs intact: dropping [case] changes the named obligation into
     # the entire test. The final boundary also prevents malformed IDs from silently
     # falling back to an unparameterized node or just its file.
-    for match in re.finditer(
-        r"(?<![\w/])(?:(tests/[\w./-]+\.py)(::[\w:]+(?:\[[^\]\n`]*\])?)?"
-        r"|(::test_[\w:]+(?:\[[^\]\n`]*\])?))(?![\w:\[\]])",
-        line,
-    ):
+    for match in _ISSUE_TEST_NODE_PATTERN.finditer(line):
         if match[1]:
             previous_path = match[1]
             node = previous_path + (match[2] or "")
@@ -1443,7 +1445,14 @@ def author_issue_spec(
             for node in _issue_named_test_nodes(line, include_unsafe=True)
             if _has_shell_marker(node)
         ]
-        if rejected_nodes and not any(check["type"] == "manual" for check in checks):
+        matched_spans = [match.span() for match in _ISSUE_TEST_NODE_PATTERN.finditer(line)]
+        unmatched_references = any(
+            not any(start <= ref.start() < end for start, end in matched_spans)
+            for ref in re.finditer(r"tests/[\w./-]+\.py|::(?:\w+::)*test_\w+", line)
+        )
+        if (rejected_nodes or unmatched_references) and not any(
+            check["type"] == "manual" for check in checks
+        ):
             checks.append(
                 {
                     "id": f"{ac_id}-REJECTED",

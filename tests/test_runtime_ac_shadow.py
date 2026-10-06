@@ -623,3 +623,25 @@ def test_mixed_named_nodes_preserve_rejected_obligation_as_manual():
     assert "manual_review" in criterion["evidence_required"]
     results = [{"id": commands[0]["id"], "status": "PASS", "exit_code": 0}]
     assert runtime_ac.evaluate_results(spec, {"check_results": results})["verdict"] != "PASS"
+
+
+def test_class_qualified_shorthand_preserves_both_obligations():
+    body = "## Acceptance Criteria\n- Named tests: `tests/test_example.py::TestExample::test_one[one]`, `::TestExample::test_two[two]`.\n"
+    spec = runtime_ac.author_issue_spec("owner/repo#1", body)
+    commands = [
+        c["command"] for c in spec["acceptance_criteria"][0]["checks"] if c["type"] == "command"
+    ]
+    assert len(commands) == 2
+    assert "TestExample::test_one[one]" in commands[0]
+    assert "TestExample::test_two[two]" in commands[1]
+
+
+def test_unterminated_named_node_cannot_disappear_into_pass():
+    body = "## Acceptance Criteria\n- Named tests: `tests/test_safe.py::test_ok` and `tests/test_safe.py::test_case[unterminated`.\n"
+    spec = runtime_ac.author_issue_spec("owner/repo#1", body)
+    criterion = spec["acceptance_criteria"][0]
+    commands = [c for c in criterion["checks"] if c["type"] == "command"]
+    assert len(commands) == 1
+    assert any(c["type"] == "manual" for c in criterion["checks"])
+    results = [{"id": commands[0]["id"], "status": "PASS", "exit_code": 0}]
+    assert runtime_ac.evaluate_results(spec, {"check_results": results})["verdict"] != "PASS"

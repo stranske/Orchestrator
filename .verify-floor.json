@@ -1,6 +1,6 @@
 {
-  "collected": 2291,
-  "passed": 2291,
+  "collected": 2293,
+  "passed": 2293,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 47,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Round1020 integrated current main 4b37a764efda31a8cfd233d5bc29f75d12a8da3e; both prior note histories retained in Git and round487-floor receipts; actual collection measured; all quality ceilings unchanged; full suite pass awaits CI. Measured collection 2291."
+  "note": "Measured collection after two deliberate RED/GREEN runtime obligation regressions; full suite awaits CI; all ceilings unchanged."
 }
