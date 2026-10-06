@@ -65,7 +65,9 @@ def build_packet(row: dict, evidence: dict) -> dict:
         raise ValueError("packet requires merged diff summary and gate runs")
     diff = ground_truth.get("diff_summary")
     gates = ground_truth.get("gate_runs")
-    has_diff = bool(diff.strip()) if isinstance(diff, str) else isinstance(diff, list) and bool(diff)
+    has_diff = (
+        bool(diff.strip()) if isinstance(diff, str) else isinstance(diff, list) and bool(diff)
+    )
     if not has_diff:
         raise ValueError("packet requires merged diff summary")
     if not isinstance(gates, list) or not gates:
