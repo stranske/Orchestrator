@@ -2557,7 +2557,10 @@ def main(argv: list[str]) -> int:
     rep = review(env=env, sources=sources, value_chain_inputs=value_chain_inputs)
     # The production weekly caller collects the curve, rather than leaving a CLI-only instrument.
     # Pure report/selftest readers keep their no-network and no-state-write contract.
-    if "issue-size-quality" not in env.get("ORCH_DISABLE_STEPS", "").replace(",", " ").split():
+    if (
+        "issue-size-quality"
+        not in os.environ.get("ORCH_DISABLE_STEPS", "").replace(",", " ").split()
+    ):
         import issue_size_quality
 
         try:

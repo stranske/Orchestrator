@@ -44,7 +44,17 @@ def test_bands_join_to_outcomes_and_report_counts_with_zero_as_zero():
     assert cells["1-4"]["pass"] == {"n": 1, "yes": 1, "rate": 1}
     assert cells["1-4"]["broke_later"] == {"n": 1, "yes": 0, "rate": 0}
     assert cells["16+"]["pass"]["rate"] is None
-    text = "\n".join(quality.format_lines(rep))
+    text = switch_review.format_report(
+        {
+            "review_days": 14,
+            "raise_count": 0,
+            "held_off": [],
+            "on_but_idle": [],
+            "unconditioned": [],
+            "mirror_drift": {"status": "ok"},
+            "issue_size_quality": rep,
+        }
+    )
     assert "broke_later=0.0% (n=1)" in text
     assert "pass=unmeasured (n=0)" in text
     assert quality.size_band(0) == "0" and quality.size_band(8) == "5-8"
@@ -167,8 +177,19 @@ def test_missing_outcome_for_a_second_closing_pr_cannot_grade_the_issue():
         "fleet-shapes\tissue-size-quality",
     ],
 )
-def test_weekly_kill_switch_never_collects_or_writes(tmp_path, monkeypatch, capsys, disabled):
+@pytest.mark.parametrize("mode", ["process", "tick"])
+def test_weekly_kill_switch_never_collects_or_writes(tmp_path, monkeypatch, capsys, disabled, mode):
+    import adversarial
+    import capability_recurrence_check
     import fleet_shapes
+
+    monkeypatch.setattr(
+        switch_review, "env_as_the_tick_sees_it", lambda: ({"ORCH_VALUE_CHAIN_MONITOR": "0"}, {})
+    )
+    monkeypatch.setattr(
+        capability_recurrence_check, "as_the_tick_sees_it", lambda flag: (None, "unset")
+    )
+    monkeypatch.setattr(adversarial, "record_shape_measurement", lambda *a, **kw: False)
 
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ORCH_VALUE_CHAIN_MONITOR", "0")
@@ -177,7 +198,8 @@ def test_weekly_kill_switch_never_collects_or_writes(tmp_path, monkeypatch, caps
     monkeypatch.setattr(fleet_shapes, "load_facts", lambda state: {})
     calls = []
     monkeypatch.setattr(quality, "run", lambda **kw: calls.append(kw) or {})
-    assert switch_review.main(["--json", "--env", "process"]) == 0
+    args = ["--json"] if mode == "tick" else ["--json", "--env", "process"]
+    assert switch_review.main(args) == 0
     assert calls == []
     assert "issue_size_quality" not in json.loads(capsys.readouterr().out)
     assert not (tmp_path / "capability-program/size-quality.json").exists()

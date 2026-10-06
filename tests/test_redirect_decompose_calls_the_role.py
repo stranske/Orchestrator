@@ -71,7 +71,10 @@ def test_decomposer_exception_preserves_deterministic_fallback(monkeypatch):
     monkeypatch.setenv("ORCH_CAPABILITY_HEARTBEATS", "0")
     monkeypatch.setattr(roles.feedback, "record_role_selector_event", lambda *a, **kw: None)
 
+    calls = []
+
     def unavailable(**kwargs):
+        calls.append(kwargs)
         raise RuntimeError("role unavailable")
 
     monkeypatch.setattr(roles, "run_decomposer_agent", unavailable)
@@ -79,6 +82,7 @@ def test_decomposer_exception_preserves_deterministic_fallback(monkeypatch):
         rep = redirect_plan.plan(
             {"target": "o/r#1", "policy_decision": {"action": "decompose"}}, next_agent="codex"
         )
+        assert len(calls) == 1 and calls[0]["dispatch"] is True
         assert rep["decomposition"]["proposal"] is None
         assert "decomposer unavailable" in rep["prompt_text"]
         assert "split the work into 2-3" in rep["prompt_text"]
