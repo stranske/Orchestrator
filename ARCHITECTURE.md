@@ -246,6 +246,18 @@ whose argv asked for the stream, the dispatcher now reads only the agent's last 
 with no message fails as `agent returned no message`. Text output is read as before. Recorded rows
 are not rewritten. (No stage, component or surface moved; the diagram is unchanged.)
 
+**An offload's log and run_id are claimed together (2026-10-05).** `dispatcher.offload` read
+`time.time_ns()` once for its log name and again for its run_id, and on macOS that clock moves in
+whole microseconds, so two offloads started in the same microsecond in one process could share
+either name. In the capacity ledger, 4 of the 4,517 offload logs were written by two runs each, and
+3 run_ids were carried by 7 runs. A shared log holds both run headers before either run's output, so
+the reconcile pass read nothing for one run and both outputs for the other. A shared run_id is one
+Brain `runs` row, and the second run replaced the first. `dispatcher._claim_offload_log` now creates
+the log with O_EXCL, moves one nanosecond on past a name already on disk, and builds the run_id from
+the same number. The name keeps its `offload.<agent>.<ns>.log` shape, and each of the two names
+gives the other. Recorded rows are not rewritten. (No stage, component or surface moved; the
+diagram is unchanged.)
+
 **A shed seat names what clears it (2026-10-05).** A seat is shed by a marker that
 `rate_incidents.ensure_shed` writes with an expiry, an incident and a category, and until this date
 `capacity` printed "observed 429 / rate-limit shed flag set" whatever the marker held. One pure
