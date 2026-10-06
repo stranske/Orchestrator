@@ -1675,6 +1675,26 @@ def format_report(rep: dict) -> str:
         f"  due for a decision: {rep['raise_count']}",
         "",
     ]
+    try:
+        import strategy_experiment
+
+        result_path = strategy_experiment.strategy_result_path()
+        result = json.loads(result_path.read_text())
+        if result.get("status") == "completed":
+            total = sum(
+                float(row.get("cost_usd") or 0) for row in (result.get("costs") or {}).values()
+            )
+            lines += [
+                f"  strategy experiment: completed {result.get('exp_id')} total_cost=${total:.4f}",
+                "",
+            ]
+        else:
+            lines += [
+                f"  strategy experiment: UNKNOWN — {result.get('unknown_reason', 'incomplete evidence')}",
+                "",
+            ]
+    except (OSError, ValueError, TypeError):
+        lines += ["  strategy experiment: UNKNOWN — no completed scored evaluation", ""]
     lines += [adversarial_shape_line(rep.get("adversarial_shape", {})), ""]
     if rep.get("value_chain") and not rep["value_chain"].get("disabled"):
         import value_chain_monitor

@@ -43,6 +43,7 @@ import capabilities
 import dispatcher
 import execution_profiles
 import feedback
+import fleet_shapes
 import judge_reliability
 import provision
 import research_subjects
@@ -154,6 +155,12 @@ def experiment_members(meta: dict[str, Any]) -> list[dict[str, Any]]:
                     "profile_id": raw.get("profile_id"),
                     "strategy": raw.get("strategy") or "single",
                     "legacy": False,
+                    **({"role": raw["role"]} if raw.get("role") else {}),
+                    **(
+                        {"review_of_member_id": raw["review_of_member_id"]}
+                        if raw.get("review_of_member_id")
+                        else {}
+                    ),
                 }
             )
         ids = [member["member_id"] for member in members]
@@ -665,6 +672,10 @@ def _normalize_arm_members(arms: list[dict[str, Any]]) -> tuple[list[dict], list
                 "strategy": arm.get("strategy") or ("single" if len(agents) == 1 else "parallel"),
                 "ordinal": ordinal,
             }
+            if raw.get("role"):
+                member["role"] = str(raw["role"])
+            if raw.get("review_of_member_id"):
+                member["review_of_member_id"] = str(raw["review_of_member_id"])
             arm_members.append(member)
             members.append(member)
         normalized = dict(arm)
@@ -740,10 +751,15 @@ def prepare_arms(
     (edir / "meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True))
 
     launched = []
-    prompt = implement_prompt(spec)
     for member in members:
         agent = member["agent"]
         member_id = member["member_id"]
+        # Reviewers are a second stage, not a parallel implementation arm.
+        # followup launches them only after the paired implementer has a zero
+        # exit marker and seeds their isolated worktree with that exact delta.
+        if member.get("role") == "review":
+            launched.append({**member, "state": "review-pending"})
+            continue
         wt = exp_worktree(repo, exp_id, agent, member_id)
         br = exp_branch(exp_id, agent, member_id)
         if not (wt / ".git").exists():
@@ -760,6 +776,7 @@ def prepare_arms(
                     f"origin/{base}",
                 ]
             )
+        prompt = implement_prompt(spec)
         profile_id = member.get("profile_id")
         execution_profile_id = (
             profile_id if profile_id in execution_profiles.PROFILE_REGISTRY else None
@@ -830,6 +847,144 @@ def prepare_arms(
         "launched": launched,
         "arms": normalized_arms,
     }
+
+
+def launch_pending_reviews(repo: str, exp_id: str) -> dict:
+    """Launch review members only after their paired implementation completed successfully."""
+    edir = exp_paths(exp_id)
+    meta = json.loads((edir / "meta.json").read_text())
+    members = experiment_members(meta)
+    by_id = {member["member_id"]: member for member in members}
+    canon = provision.ensure_canonical(repo)
+    base = meta["base"]
+    launched, pending, failed = [], [], []
+    for reviewer in (m for m in members if m.get("role") == "review"):
+        reviewer_log = edir / exp_log_path(reviewer["agent"], reviewer["member_id"])
+        if reviewer_log.exists():
+            review_run = _member_run_id(exp_id, reviewer)
+            try:
+                reviewed = json.loads((edir / "done" / f"{review_run}.json").read_text())
+            except (OSError, ValueError):
+                pending.append(reviewer["member_id"])
+                continue
+            if (
+                reviewed.get("run_id") != review_run
+                or reviewed.get("rc_of") != "agent"
+                or reviewed.get("rc") != 0
+            ):
+                failed.append({"member_id": reviewer["member_id"], "reason": "reviewer-failed"})
+            continue
+        impl = by_id.get(str(reviewer.get("review_of_member_id") or ""))
+        if impl is None:
+            failed.append({"member_id": reviewer["member_id"], "reason": "missing-implementer"})
+            continue
+        impl_run = _member_run_id(exp_id, impl)
+        marker = edir / "done" / f"{impl_run}.json"
+        try:
+            done = json.loads(marker.read_text())
+        except (OSError, ValueError):
+            pending.append(reviewer["member_id"])
+            continue
+        if done.get("run_id") != impl_run or done.get("rc_of") != "agent" or done.get("rc") != 0:
+            failed.append({"member_id": reviewer["member_id"], "reason": "implementer-failed"})
+            continue
+        agent, member_id = reviewer["agent"], reviewer["member_id"]
+        wt = exp_worktree(repo, exp_id, agent, member_id)
+        branch = exp_branch(exp_id, agent, member_id)
+        frozen_base = meta.get("base_sha") or f"origin/{base}"
+        if not (wt / ".git").exists():
+            provision._run(
+                [
+                    "git",
+                    "-C",
+                    str(canon),
+                    "worktree",
+                    "add",
+                    "-b",
+                    branch,
+                    str(wt),
+                    frozen_base,
+                ]
+            )
+        impl_branch = exp_branch(exp_id, impl["agent"], impl["member_id"])
+        patch = provision._run(
+            ["git", "-C", str(canon), "diff", frozen_base, impl_branch], check=False
+        ).stdout
+        if not patch.strip():
+            failed.append({"member_id": member_id, "reason": "implementer-produced-no-delta"})
+            continue
+        seed = edir / f"review-seed-{_artifact_identity(agent, member_id)}.patch"
+        seed.write_text(patch)
+        applied = provision._run(["git", "-C", str(wt), "apply", str(seed)], check=False)
+        if applied.returncode:
+            failed.append({"member_id": member_id, "reason": "review-seed-apply-failed"})
+            continue
+        # Commit the complete seed, including new files, before the reviewer
+        # starts. Otherwise a no-change review can leave untracked seed files
+        # invisible to collect's committed/uncommitted Git delta.
+        provision._run(["git", "-C", str(wt), "add", "--all"])
+        provision._run(
+            ["git", "-C", str(wt), "commit", "-m", "experiment: seed paired implementation"]
+        )
+        (edir / f"review-seed-{_artifact_identity(agent, member_id)}.json").write_text(
+            json.dumps(
+                {
+                    "reviewer": member_id,
+                    "implementer": impl["member_id"],
+                    "base": frozen_base,
+                    "patch": str(seed),
+                }
+            )
+        )
+        log = edir / exp_log_path(agent, member_id)
+        run_id = _member_run_id(exp_id, reviewer)
+        mode = AGENT_MODE.get(agent, "full")
+        target = f"{repo} [exp {exp_id} review {member_id}]"
+        feedback.record_run(
+            run_id,
+            target,
+            "review",
+            agent,
+            mode=mode,
+            reasoning_level=mode,
+            model=adapters.model_identity(agent, mode),
+            experiment_id=exp_id,
+            rationale="sequential paired review of frozen implementation",
+            routing_metadata=_member_routing_metadata(reviewer),
+        )
+        prompt = (
+            "Review the seeded implementation diff in this worktree against the frozen specification below. "
+            f"Seed={seed}; implementer={impl['member_id']}; base={frozen_base}. "
+            "Make and commit only bounded corrections needed for the spec; otherwise commit a review-note.txt "
+            "describing validation performed. Do not push or open a PR.\n\nFROZEN SPECIFICATION:\n"
+            + (edir / "spec.md").read_text(encoding="utf-8")
+        )
+        pid = _spawn(
+            agent,
+            mode,
+            prompt,
+            wt,
+            log,
+            run_id=run_id,
+            target=target,
+            task_type="review",
+            causal_context={"arm_id": reviewer["arm_id"]},
+        )
+        launched.append({"member_id": member_id, "pid": pid, "seed": str(seed)})
+    subject_target = (meta.get("subject") or {}).get("target")
+    if launched and subject_target:
+        import claims
+
+        holder = claims.holder(subject_target) or {}
+        claims.update_metadata(
+            subject_target,
+            "research",
+            pid=0,
+            pids=[*holder.get("pids", []), *[row["pid"] for row in launched]],
+            refresh_ts=True,
+            experiment_id=exp_id,
+        )
+    return {"launched": launched, "pending": pending, "failed": failed}
 
 
 def prepare_arm(
@@ -977,6 +1132,11 @@ def collect(repo: str, exp_id: str) -> dict:
             "agent": agent,
             "profile_id": member.get("profile_id"),
         }
+    # The reviewed artifact is the pair's candidate.  Do not score the same
+    # implementation once before review and once after it as separate arms.
+    for member in experiment_members(meta):
+        if member.get("role") == "review" and written.get(member["member_id"], {}).get("bytes"):
+            written.pop(str(member.get("review_of_member_id") or ""), None)
     return {"exp_id": exp_id, "diffs": written}
 
 
@@ -1236,9 +1396,16 @@ def evaluate(
         )
     members = experiment_members(meta)
     member_by_id = {member["member_id"]: member for member in members}
+    reviewed_implementers = {
+        str(member.get("review_of_member_id"))
+        for member in members
+        if member.get("role") == "review" and member.get("review_of_member_id")
+    }
     implementers = []
     diffs = {}
     for member in members:
+        if member["member_id"] in reviewed_implementers:
+            continue
         artifact_member = None if member["legacy"] else member["member_id"]
         path = edir / exp_diff_path(member["agent"], artifact_member)
         if path.exists() and path.stat().st_size > 0:
@@ -1427,7 +1594,7 @@ def evaluate(
             objective = objective_anchor.anchor_experiment(exp_id)
         except Exception as exc:
             objective = {"error": str(exc)[:200]}
-    return {
+    result: dict[str, Any] = {
         "exp_id": exp_id,
         "maps": maps,
         "implementers": implementers,
@@ -1435,6 +1602,19 @@ def evaluate(
         "parsed_ok": {ev: bool(m) for ev, m in matrix.items()},
         "objective_anchors": objective,
     }
+    try:
+        import strategy_experiment
+
+        strategy_path = strategy_experiment.write_evaluation_result(exp_id, result["evaluators"])
+        if strategy_path:
+            result["strategy_result"] = str(strategy_path)
+    except Exception as exc:
+        result["strategy_result_error"] = str(exc)[:300]
+        fleet_shapes.write_json_atomic(
+            edir / "strategy-result-error.json",
+            {"status": "UNKNOWN", "phase": "evaluation", "error": str(exc)[:300]},
+        )
+    return result
 
 
 def _bind_synthesis(fn, repo: str, exp_id: str):
@@ -1762,6 +1942,18 @@ def followup(
             members = experiment_members(meta)
         except ValueError:
             continue  # malformed member metadata: skip the experiment, never guess its identity
+        if any(member.get("role") == "review" for member in members):
+            review_state = launch_pending_reviews(meta["repo"], edir.name)
+            if review_state["failed"]:
+                out["skipped"].append(
+                    {"exp_id": edir.name, "reason": "pair-review-failed", **review_state}
+                )
+                continue
+            if review_state["launched"] or review_state["pending"]:
+                out["skipped"].append(
+                    {"exp_id": edir.name, "reason": "pair-review-pending", **review_state}
+                )
+                continue
         logs = [
             edir / exp_log_path(m["agent"], None if m["legacy"] else m["member_id"])
             for m in members
@@ -1892,6 +2084,17 @@ def followup(
                 subject_lifecycle_fn(edir.name, "evaluated", reason="followup_evaluation_complete")
             except Exception:
                 pass
+            try:
+                # Strategy metadata is optional; its projection is deliberately
+                # post-evaluation and never blocks the generic ABCD lifecycle.
+                import strategy_experiment
+
+                strategy_experiment.write_evaluation_result(edir.name, ev.get("evaluators") or [])
+            except Exception as exc:
+                fleet_shapes.write_json_atomic(
+                    edir / "strategy-result-error.json",
+                    {"status": "UNKNOWN", "phase": "followup", "error": str(exc)[:300]},
+                )
             entry = {
                 "exp_id": edir.name,
                 "diffs": nonempty,
