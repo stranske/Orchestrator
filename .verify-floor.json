@@ -1,13 +1,13 @@
 {
-  "collected": 2330,
-  "passed": 2326,
-  "skipped_max": 26,
-  "mirror_skipped_max": 21,
-  "bare_mirror_skipped_max": 47,
-  "bare_mirror_selftest_skipped_max": 7,
-  "bare_mirror_gate_skipped_max": 2,
-  "selftest_skipped_max": 7,
-  "gate_skipped_max": 2,
-  "mypy_exempt_max": 0,
-  "note": "Round1220 integrates current main87d041f16ffb787f31154f326c8d1b3d8858e077; actual collection2330; passed floor retains max pre-integration main/head baseline2326, not collection. Focused source tests executed; full merge-result CI awaits push. Prior note histories retained in Git and round receipts; all quality ceilings unchanged."
+ "collected": 2330,
+ "passed": 2330,
+ "skipped_max": 26,
+ "mirror_skipped_max": 21,
+ "bare_mirror_skipped_max": 47,
+ "bare_mirror_selftest_skipped_max": 7,
+ "bare_mirror_gate_skipped_max": 2,
+ "selftest_skipped_max": 7,
+ "gate_skipped_max": 2,
+ "mypy_exempt_max": 0,
+ "note": "Round1220 integrates current main87d041f16ffb787f31154f326c8d1b3d8858e077; actual collection2330; passed floor retains max pre-integration main/head baseline2326, not collection. Focused source tests executed; full merge-result CI awaits push. Prior note histories retained in Git and round receipts; all quality ceilings unchanged. FLOOR RECORDED by verify.py --update-floor on 2026-10-06: collected=2330, passed=2330. Ceilings preserved, never re-measured \u2014 they are edited by hand."
 }
