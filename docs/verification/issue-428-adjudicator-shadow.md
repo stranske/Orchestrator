@@ -147,3 +147,37 @@ failed. No Python source changes or task-completion claims are made. The named
 pytest acceptance tests and their required faults remain pending. The checkout's
 Git directory is read-only, so this round also supplies an isolated commit, patch
 and bundle under `/tmp` for transfer.
+
+## Keepalive cost comparison regression, 2026-10-06
+
+- [x] Verify retrospective agreement rates, measured costs and case counts in the
+  saved report, including withdrawal and restoration of complete cost telemetry.
+- [ ] Run the three named pytest acceptance tests and their required outcome-write
+  and unconditional-offer faults on the current tree.
+
+The new CLI regression withdraws a complete cost source and deletes another cost
+record after both have been measured. The persisted summary and proposal comparison
+must clear those stale costs, count a measured zero in the cost denominator, retain
+the cost of an abstention and report unknown totals when no complete costs remain.
+Restoring telemetry recovers the original totals. Agreement rates, comparison case
+counts, saved role identities and the entire Brain snapshot remain unchanged by
+each refresh.
+
+`node tests/test_adjudicator_retro_cli.js`: eight tests passed.
+`PYTHONPATH=src python3 -m unittest discover -s tests -p test_adjudicator_retro_evidence.py -v`:
+five tests passed. In a temporary source copy, retaining a saved measured cost
+instead of refreshing it made the new test fail: it reported 4.5 instead of 0.5.
+The copied Python source was restored byte for byte, and the regression passed.
+Repository Python files are unchanged; no Python formatting claim is made.
+
+Pytest and Black are still unavailable. Local cache/tool searches and installation
+attempts could not supply them, so the named pytest acceptance tests and their
+specific deliberate-break controls remain pending. The checkout's Git metadata is
+read-only; the test and this note are committed through an isolated Git directory
+under `/tmp`, with a patch and bundle for transfer.
+
+PR #507 was verified open with `draft=false` at head
+`8ec62f83de2281e12d46be8e2ad61482844087c0`. Attempts to reconcile the three verified
+implementation checkboxes, add `needs-human` and post the validation/blocker comment
+were each rejected by the connector: mutations require approval, while this run's
+approval policy is `never`. Remote tracking remains unchanged.

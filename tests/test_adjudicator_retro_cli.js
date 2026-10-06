@@ -422,6 +422,85 @@ print(json.dumps(True))
   assert.deepEqual(w.brain(), changedBrain);
 });
 
+test('retro CLI withdraws stale costs without changing the comparison cohort', (t) => {
+  const w = world(t);
+  w.run(['-c', initialize]);
+  w.refresh();
+  const initial = w.report();
+  const identities = initial.rows.map((row) => [row.case_id, row.role_run_id, row.decision]);
+
+  function checkCosts(total, measured, average) {
+    const before = w.brain();
+    const summary = w.refresh();
+    const report = w.report();
+    assert.deepEqual(report.summary, summary);
+    for (const section of [summary, report.proposal_comparison]) {
+      assert.equal(section.cost_usd, total);
+      assert.equal(section.cost_measured_cases, measured);
+      assert.equal(section.cost_per_case, average);
+    }
+    const withoutCosts = (comparison) => {
+      const { cost_usd, cost_measured_cases, cost_per_case, ...counts } = comparison;
+      return counts;
+    };
+    assert.deepEqual(withoutCosts(report.proposal_comparison),
+      withoutCosts(initial.proposal_comparison), 'cost provenance must not change agreement rates');
+    assert.deepEqual(report.rows.map((row) => row.proposal_comparison),
+      initial.rows.map((row) => row.proposal_comparison));
+    assert.deepEqual(report.rows.map((row) => [row.case_id, row.role_run_id, row.decision]),
+      identities, 'refresh must preserve saved proposals without redispatch');
+    assert.deepEqual(w.brain(), before, 'cost refresh must keep Brain and outcomes read-only');
+    return report;
+  }
+
+  // Withdrawing a cost's complete source must clear its saved measured value,
+  // even if the replacement ledger value is nonzero.
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("UPDATE costs SET source='ledger' WHERE run_id='backend-0'")
+    conn.execute("DELETE FROM costs WHERE run_id='backend-1'")
+print(json.dumps(True))
+`]);
+  const partial = checkCosts(0.5, 2, 0.25);
+  assert.equal(partial.rows[0].cost_usd, null);
+  assert.equal(partial.rows[1].cost_usd, null);
+  assert.equal(partial.rows[3].cost_usd, 0, 'measured zero belongs in the cost denominator');
+  assert.equal(partial.rows[4].cost_usd, 0.5, 'abstaining still incurs a measured case cost');
+
+  // A measured zero differs from the absence of any measured costs.
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("UPDATE costs SET source='ledger' WHERE run_id='backend-4'")
+print(json.dumps(True))
+`]);
+  checkCosts(0, 1, 0);
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("UPDATE costs SET source='ledger' WHERE run_id='backend-3'")
+print(json.dumps(True))
+`]);
+  const unmeasured = checkCosts(null, 0, null);
+  assert.ok(unmeasured.rows.every((row) => row.cost_usd == null));
+
+  // Restoring complete telemetry recovers the original totals without another call.
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("UPDATE costs SET source='ccusage' WHERE run_id IN ('backend-0','backend-3','backend-4')")
+    conn.execute("INSERT INTO costs(run_id,cost_usd,source) VALUES ('backend-1',2.5,'ccusage')")
+print(json.dumps(True))
+`]);
+  const restored = checkCosts(4.5, 4, 1.125);
+  assert.deepEqual(restored.proposal_comparison, initial.proposal_comparison);
+});
+
 test('retro CLI publishes an empty report without inventing agreement or cost', (t) => {
   const w = world(t);
   w.run(['-c', 'import json, feedback; feedback._conn().close(); print(json.dumps(True))']);
