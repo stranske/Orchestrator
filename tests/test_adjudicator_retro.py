@@ -291,3 +291,18 @@ def test_weekly_line_names_unmeasured_cost_and_grade_denominator(tmp_path):
     line = retro.weekly_line(path)
     assert "cases 1, agree 0, disagree 0, cost UNKNOWN" in line
     assert "graded 0; costs measured 0" in line
+
+
+def test_saved_error_rows_do_not_gain_window_dependent_grades(private_brain, tmp_path):
+    path = tmp_path / "report.json"
+    retro.run(dispatch=False, path=path, db=private_brain, evidence_reader=evidence)
+    report = json.loads(path.read_text())
+    for row in report["rows"]:
+        row.pop("decision", None)
+        row["error"] = "retained incomplete assessment"
+        row["later_truth"] = None
+        row["cost_usd"] = None
+    path.write_text(json.dumps(report))
+    result = retro.run(dispatch=False, limit=0, path=path, db=private_brain)
+    assert result["rows"]
+    assert all(row["later_truth"] is None for row in result["rows"])

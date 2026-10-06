@@ -648,6 +648,30 @@ unique implementation agents that `exp_abcd.py prepare` can launch and records t
 research tick still refuses to auto-launch strategy arms; after a guarded launch, run the normal
 `exp_abcd` status/collect/evaluate/synthesize phases and attribute quality/cost at the strategy-arm level.
 
+For a current subject, use `ORCH_STRATEGY_EXPERIMENT=1 python3 src/strategy_experiment.py
+--subject owner/repo#N --exp-id unique-id --agent cursor --reviewer vibe --prepare
+--confirm-strategy --json`. The subject must be open and unlinked, and resemble a recurring
+fleet shape with at least three resolved outcomes. Selection ranks observed broke-later rates;
+the issue-body shape match is a prediction, not evidence of future changed paths. The command
+claims research and freezes the live body before launching three single instances and three
+paired implementers. Existing `exp_abcd.py followup` starts each pair's reviewer only after its
+implementer succeeds, seeds the isolated review worktree with the frozen-base delta, and evaluates
+the corrected pair once. Experiments never push or open PRs. Use `ORCH_EXP_DIR` and
+`ORCH_WORKTREE_BASE` when invoking a branch checkout so artifacts and worktrees remain on local disk.
+For this explicitly supervised experiment, invoke followup with process-local
+`ORCH_RESEARCH_ARM=1` and an `ORCH_EXP_DIR` containing only the selected trial. This admits
+evaluation through the existing usage limits without changing the recurring research setting;
+do not use the budget bypass merely to evaluate a guarded subject trial.
+Direct evaluation and followup both record `$ORCH_STATE_DIR/capability-program/strategy-experiment.json`;
+complete exact evaluator cells and measured costs are required for a completed comparison.
+Missing evidence remains UNKNOWN in the switch review. Existing synthesis promotion handles later
+candidate verification; guarded launch does not enable the unattended research switch or publish a mirror.
+After evaluation, followup refreshes late cost and promotion evidence without rerunning judges.
+To refresh one trial explicitly, run `python3 src/strategy_experiment.py --exp-id id
+--refresh-result --json`. It preserves `experiments/<exp_id>/strategy-receipt.json` with the
+comparison and candidate identity, commit, and verification hash. The command exits 1 while
+measured costs or a matching verified promotion candidate are missing, and 0 once both are present.
+
 ---
 
 ## Delegating well (the prompt)
