@@ -100,6 +100,14 @@ def discover_candidates(run=None) -> list[dict]:
         found = json.loads(proc.stdout)
         if not isinstance(found, list) or len(found) >= 1000:
             raise ValueError("issue search population is malformed or truncated")
+        for item in found:
+            if (
+                not isinstance(item, dict)
+                or not isinstance(item.get("repository"), dict)
+                or not isinstance(item["repository"].get("nameWithOwner"), str)
+                or not item["repository"]["nameWithOwner"]
+            ):
+                raise ValueError("issue search repository is UNKNOWN")
         rows.extend(found)
     # Map closing references, body references and branch source identifiers using
     # the existing intake resolver. A read failure never means "unlinked".
@@ -175,11 +183,21 @@ def discover_candidates(run=None) -> list[dict]:
         if proc.returncode:
             raise RuntimeError(proc.stderr.strip() or "merged linkage read failed")
         data = json.loads(proc.stdout)
+        if not isinstance(data, dict) or data.get("errors"):
+            raise ValueError("merged linkage population is UNKNOWN")
         try:
             refs = data["data"]["repository"]["issue"]["closedByPullRequestsReferences"]
-            if refs["pageInfo"]["hasNextPage"]:
+            if refs["pageInfo"]["hasNextPage"] is True:
                 raise ValueError("merged linkage population is truncated")
-            if not any(pr["state"] == "MERGED" for pr in refs["nodes"]):
+            if refs["pageInfo"]["hasNextPage"] is not False:
+                raise ValueError("merged linkage pagination is UNKNOWN")
+            nodes = refs["nodes"]
+            if not isinstance(nodes, list) or any(
+                not isinstance(pr, dict) or pr.get("state") not in {"OPEN", "CLOSED", "MERGED"}
+                for pr in nodes
+            ):
+                raise ValueError("merged linkage states are UNKNOWN")
+            if not any(pr["state"] == "MERGED" for pr in nodes):
                 eligible.append(item)
         except (KeyError, TypeError) as exc:
             raise ValueError("merged linkage population is UNKNOWN") from exc

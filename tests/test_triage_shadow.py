@@ -87,15 +87,66 @@ def test_the_step_never_mutates_labels_or_dispatches(brain, monkeypatch):
     monkeypatch.setattr(dispatcher, "delegate", refuse)
     monkeypatch.setattr(backlog, "scoped_blocker_source", lambda: "absent")
     monkeypatch.setattr(backlog, "scoped_blocker_entries", lambda: {})
+    monkeypatch.setattr(backlog, "load_scoped_blockers", lambda: set())
+    monkeypatch.setattr(roles, "_role_capability_event", lambda *a, **kw: None)
+    reads = []
 
     def read_only(argv, **kw):
-        assert argv[1:3] in (["search", "issues"], ["pr", "list"]), argv
-        return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+        reads.append(argv)
+        if argv[1:3] == ["search", "issues"]:
+            tier = argv[argv.index("--label") + 1]
+            rows = [
+                {**item, "repository": {"nameWithOwner": item["repository"]}}
+                for item in items()
+                if tier in item["labels"]
+            ]
+        elif argv[1:3] == ["pr", "list"]:
+            rows = []
+        else:
+            assert argv[1:3] == ["api", "graphql"], argv
+            query = argv[argv.index("-f") + 1]
+            assert query.startswith("query=query(") and "mutation" not in query
+            rows = {
+                "data": {
+                    "repository": {
+                        "issue": {
+                            "closedByPullRequestsReferences": {
+                                "nodes": [],
+                                "pageInfo": {"hasNextPage": False},
+                            }
+                        }
+                    }
+                }
+            }
+        return SimpleNamespace(returncode=0, stdout=json.dumps(rows), stderr="")
+
+    offloads = []
+
+    def advisory_offload(backend, prompt, **kw):
+        offloads.append(kw)
+        assert kw["mode"] == roles.ROLE_REGISTRY["triage"].mode
+        assert kw["cwd"] != "."
+        return {"run_id": "shadow-backend", "exit": 0, "output": json.dumps(proposal())}
+
+    def live_role(**kw):
+        return roles.run_triage_agent(backend="codex", cap={}, learned={}, **kw)
 
     monkeypatch.setattr(triage_shadow.subprocess, "run", read_only)
-    assert triage_shadow.discover_candidates() == []
-    result = triage_shadow.record_cycle([], path=brain / "rows.jsonl")
-    assert result["shadow"] and result["candidate_count"] == 0
+    monkeypatch.setattr(dispatcher, "offload", advisory_offload)
+    candidates = triage_shadow.discover_candidates()
+    result = triage_shadow.record_cycle(candidates, runner=live_role)
+    assert result["shadow"] and result["candidate_count"] == 4
+    assert result["live_proposal"] and result["role_run_id"]
+    assert result["backend_run_id"] == "shadow-backend"
+    assert result["triage_top_three"] == [rec["target"] for rec in proposal()["recommendations"][:3]]
+    assert json.loads(triage_shadow.corpus_path().read_text()) == result
+    assert len(offloads) == 1
+    assert [argv[argv.index("--label") + 1] for argv in reads[:3]] == [
+        "priority:high",
+        "priority:normal",
+        "priority:low",
+    ]
+    assert all("--state" in argv and "open" in argv for argv in reads[:4])
 
 
 def test_backfill_grades_an_ungraded_disagreement_from_pr_state(brain):
@@ -149,6 +200,10 @@ def test_shadow_filter_retains_supported_and_excludes_scoped_and_linked(brain):
 
 
 def test_a_failed_or_truncated_population_never_calls_the_role(brain, monkeypatch):
+    monkeypatch.setattr(
+        roles, "run_triage_agent", lambda **kw: pytest.fail("incomplete discovery called the role")
+    )
+
     def fake(*a, **kw):
         return SimpleNamespace(returncode=1, stdout="", stderr="lookup failed")
 
@@ -160,6 +215,45 @@ def test_a_failed_or_truncated_population_never_calls_the_role(brain, monkeypatc
 
     with pytest.raises(ValueError, match="truncated"):
         triage_shadow.discover_candidates(run=truncated)
+
+    for repository in (None, "stranske/Orchestrator", {}, {"nameWithOwner": None}):
+
+        def malformed_repository(*a, **kw):
+            row = {**items()[0], "repository": repository}
+            return SimpleNamespace(returncode=0, stdout=json.dumps([row]), stderr="")
+
+        with pytest.raises(ValueError, match="repository is UNKNOWN"):
+            triage_shadow.discover_candidates(run=malformed_repository)
+
+    monkeypatch.setattr(backlog, "scoped_blocker_source", lambda: "absent")
+    monkeypatch.setattr(backlog, "scoped_blocker_entries", lambda: {})
+    monkeypatch.setattr(backlog, "load_scoped_blockers", lambda: set())
+    good_refs = {"nodes": [], "pageInfo": {"hasNextPage": False}}
+    for refs, errors in (
+        (good_refs, [{"message": "partial GraphQL response"}]),
+        ({"nodes": None, "pageInfo": {"hasNextPage": False}}, []),
+        ({"nodes": [{"state": None}], "pageInfo": {"hasNextPage": False}}, []),
+        ({"nodes": [{"state": "UNKNOWN"}], "pageInfo": {"hasNextPage": False}}, []),
+        ({"nodes": [], "pageInfo": {"hasNextPage": None}}, []),
+        ({"nodes": [], "pageInfo": {"hasNextPage": True}}, []),
+        ({"nodes": []}, []),
+    ):
+
+        def incomplete_linkage(argv, **kw):
+            if argv[1:3] == ["search", "issues"]:
+                rows = [{**items()[0], "repository": {"nameWithOwner": "stranske/Orchestrator"}}]
+            elif argv[1:3] == ["pr", "list"]:
+                rows = []
+            else:
+                rows = {
+                    "errors": errors,
+                    "data": {"repository": {"issue": {"closedByPullRequestsReferences": refs}}},
+                }
+            return SimpleNamespace(returncode=0, stdout=json.dumps(rows), stderr="")
+
+        monkeypatch.setattr(triage_shadow.subprocess, "run", incomplete_linkage)
+        assert triage_shadow.main([]) == 1
+        assert not triage_shadow.corpus_path().exists()
 
 
 def test_replay_and_invalid_proposals_never_score_as_live_rankings(brain):
