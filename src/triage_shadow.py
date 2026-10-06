@@ -242,14 +242,21 @@ def record_cycle(
     if valid and (set(rec_targets) != known or len(rec_targets) != len(known)):
         valid = False
         errors.append("triage proposal did not cover the exact candidate population")
-    rank = (
-        sorted(
-            (rec for rec in recs if rec.get("action") == "work_now"),
-            key=lambda rec: (rec["priority"], rec["target"]),
-        )
-        if valid
-        else []
-    )
+    rank = []
+    if valid:
+        work_now = [rec for rec in recs if rec.get("action") == "work_now"]
+        if any(
+            not isinstance(rec.get("priority"), int)
+            or not 1 <= rec["priority"] <= 5
+            for rec in work_now
+        ):
+            valid = False
+            errors.append("triage proposal priority must be an integer from 1 to 5")
+        else:
+            rank = sorted(
+                work_now,
+                key=lambda rec: (rec["priority"], rec["target"]),
+            )
     row = {
         "schema_version": 1,
         "ts": time.time_ns(),
@@ -285,8 +292,12 @@ def summary(path: Path | None = None) -> dict:
         for line in path.read_text(encoding="utf-8").splitlines():
             try:
                 row = json.loads(line)
-                if not isinstance(row, dict) or row.get("schema_version") != 1:
-                    raise ValueError("unknown row schema")
+                if (
+                    not isinstance(row, dict)
+                    or row.get("schema_version") != 1
+                    or not isinstance(row.get("triage_top_three"), list)
+                ):
+                    raise ValueError("unknown or malformed row schema")
                 rows.append(row)
             except (ValueError, TypeError):
                 malformed += 1

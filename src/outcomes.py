@@ -181,6 +181,7 @@ def _pr_state(target: str, agent: str | None = None) -> dict | None:
         ],
         capture_output=True,
         text=True,
+        timeout=60,
     )
     if r.returncode != 0:
         direct_failure = {
@@ -215,6 +216,7 @@ def _pr_list_by_head(repo: str, branch: str) -> dict | None:
         ],
         capture_output=True,
         text=True,
+        timeout=60,
     )
     if r.returncode != 0:
         return {
@@ -412,6 +414,7 @@ def _runner_rounds(repo: str, pr_number: int, provider: str, since_ts: int) -> d
         ],
         capture_output=True,
         text=True,
+        timeout=60,
     )
     if r.returncode != 0:
         return None
@@ -486,6 +489,7 @@ def _delegated_pr_state(target: str, agent: str | None, started_ts: int | None) 
         ["gh", "pr", "view", str(num), "-R", repo, "--json", PR_VIEW_FIELDS],
         capture_output=True,
         text=True,
+        timeout=60,
     )
     if r.returncode == 0:
         try:
@@ -538,6 +542,7 @@ def _pr_view(repo: str, num: int) -> dict | None:
         ],
         capture_output=True,
         text=True,
+        timeout=60,
     )
     if r.returncode != 0:
         return None
@@ -716,6 +721,7 @@ def _closing_pr_merges(repo: str, num: int) -> dict:
         ],
         capture_output=True,
         text=True,
+        timeout=60,
     )
     if r.returncode != 0:
         return {"error": (r.stderr or r.stdout or "").strip()[:500]}
@@ -816,6 +822,7 @@ def _closed_issue_without_branch_pr(repo: str, num: int, branch: str) -> dict | 
         ],
         capture_output=True,
         text=True,
+        timeout=60,
     )
     if r.returncode != 0:
         return {**unanswered, "error": (r.stderr or r.stdout or "").strip()[:500]}
@@ -1112,16 +1119,20 @@ def backfill_triage_disagreements(*, limit: int = 100, _state_fn=None) -> dict:
         ]
     result: dict = {"source": "backfill", "candidates": len(rows), "graded": [], "pending": []}
     for row in rows:
-        if _state_fn:
-            state = _state_fn(row["target"])
-        elif is_local_delegate(row.get("mode"), row.get("target")):
-            state = _local_pr_state(
-                row["target"], row.get("agent"), pushes=feedback.run_pushes(row["run_id"])
-            )
-        elif needs_delegation_guard(row.get("source")):
-            state = _delegated_pr_state(row["target"], row.get("agent"), row.get("ts"))
-        else:
-            state = _pr_state(row["target"], row.get("agent"))
+        try:
+            if _state_fn:
+                state = _state_fn(row["target"])
+            elif is_local_delegate(row.get("mode"), row.get("target")):
+                state = _local_pr_state(
+                    row["target"], row.get("agent"), pushes=feedback.run_pushes(row["run_id"])
+                )
+            elif needs_delegation_guard(row.get("source")):
+                state = _delegated_pr_state(row["target"], row.get("agent"), row.get("ts"))
+            else:
+                state = _pr_state(row["target"], row.get("agent"))
+        except (OSError, subprocess.SubprocessError) as exc:
+            result["pending"].append({"target": row["target"], "error": str(exc)})
+            continue
         observed = state_to_outcome(state)
         if observed is None:
             result["pending"].append({"target": row["target"], "state": state})
