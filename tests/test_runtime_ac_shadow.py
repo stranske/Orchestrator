@@ -88,6 +88,32 @@ Complete these in order.
     )
     assert all(0.0 <= check["confidence"] <= 1.0 for check in checks)
 
+    # Parameterized names must select the exact case, including IDs with spaces,
+    # through both command and deliberate-break authoring.
+    parameter_node = "tests/test_example.py::TestExample::test_one[case with spaces]"
+    parameter_spec = runtime_ac.author_issue_spec(
+        "owner/repo#1",
+        f"## Tasks\n- [ ] Named test: `{parameter_node}`, `::test_two[other]`.\n"
+        "## Acceptance Criteria\n- Deliberate-break → revert: remove reader; tests FAIL; revert.\n",
+    )
+    assert runtime_ac.validate_spec(parameter_spec) == []
+    parameter_checks = parameter_spec["acceptance_criteria"][1]["checks"]
+    expected_nodes = [parameter_node, "tests/test_example.py::test_two[other]"]
+    assert [shlex.split(check["command"])[-1] for check in parameter_checks] == expected_nodes
+    break_check = parameter_spec["acceptance_criteria"][0]["checks"][0]
+    assert break_check["type"] == "deliberate_break"
+    assert shlex.split(break_check["test_cmd"])[-2:] == expected_nodes
+    assert break_check["test_paths"] == ["tests/test_example.py"]
+    for suffix in ("[unterminated", "[bad;case]"):
+        line = f"Named test: `tests/test_example.py::test_one{suffix}`."
+        manual_spec = runtime_ac.author_issue_spec(
+            "owner/repo#1", f"## Acceptance Criteria\n- {line}\n"
+        )
+        manual = manual_spec["acceptance_criteria"][0]["checks"][0]
+        assert manual["type"] == "manual"
+        assert manual["instructions"] == line
+        assert manual["confidence"] == 0.0
+
 
 def test_a_passing_named_test_under_coverage_flags_is_PASS(tmp_path, monkeypatch):
     (tmp_path / "test_one.py").write_text("def test_one():\n    assert True\n")

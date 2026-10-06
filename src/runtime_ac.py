@@ -1333,14 +1333,23 @@ def _issue_named_test_nodes(line: str) -> list[str]:
     """Resolve shorthand within one obligation, never against another line's path."""
     nodes = []
     previous_path = ""
+    # Keep parameter IDs intact: dropping [case] changes the named obligation into
+    # the entire test. The final boundary also prevents malformed IDs from silently
+    # falling back to an unparameterized node or just its file.
     for match in re.finditer(
-        r"(?<![\w/])(?:(tests/[\w./-]+\.py)(::[\w:]+)?|(::test_[\w:]+))", line
+        r"(?<![\w/])(?:(tests/[\w./-]+\.py)(::[\w:]+(?:\[[^\]\n`]*\])?)?"
+        r"|(::test_[\w:]+(?:\[[^\]\n`]*\])?))(?![\w:\[\]])",
+        line,
     ):
         if match[1]:
             previous_path = match[1]
-            nodes.append(previous_path + (match[2] or ""))
+            node = previous_path + (match[2] or "")
         elif previous_path:
-            nodes.append(previous_path + match[3])
+            node = previous_path + match[3]
+        else:
+            continue
+        if not _has_shell_marker(node):
+            nodes.append(node)
     return list(dict.fromkeys(nodes))
 
 
@@ -1391,7 +1400,7 @@ def author_issue_spec(
                     "id": f"{ac_id}-BREAK",
                     "type": "deliberate_break",
                     "name": line,
-                    "test_cmd": "python3 -m pytest -p no:cov " + " ".join(break_nodes),
+                    "test_cmd": "python3 -m pytest -p no:cov " + shlex.join(break_nodes),
                     "test_paths": sorted({node.split("::")[0] for node in break_nodes}),
                     "base_ref": "origin/main",
                     "confidence": 0.7,
@@ -1414,7 +1423,7 @@ def author_issue_spec(
                         "id": f"{ac_id}-TEST{idx + 1}",
                         "type": "command",
                         "name": node,
-                        "command": "python3 -m pytest -p no:cov " + node,
+                        "command": "python3 -m pytest -p no:cov " + shlex.quote(node),
                         "expected": "exit_0",
                         "confidence": 1.0,
                     }
@@ -1538,6 +1547,19 @@ def _selftest() -> None:
         "tests/test_task.py::test_second",
     ]
     assert _issue_named_test_nodes("::test_orphan") == []
+    parameter_node = "tests/test_task.py::TestTask::test_task[case with spaces]"
+    parameter_spec = author_issue_spec(
+        "owner/repo#1",
+        f"## Tasks\n- [ ] Named test: `{parameter_node}`, `::test_second[other]`.\n"
+        "## Acceptance Criteria\n- Deliberate-break → revert: remove reader; tests FAIL; revert.\n",
+    )
+    parameter_checks = parameter_spec["acceptance_criteria"][1]["checks"]
+    expected_nodes = [parameter_node, "tests/test_task.py::test_second[other]"]
+    assert [shlex.split(check["command"])[-1] for check in parameter_checks] == expected_nodes
+    parameter_break = parameter_spec["acceptance_criteria"][0]["checks"][0]
+    assert shlex.split(parameter_break["test_cmd"])[-2:] == expected_nodes
+    assert _issue_named_test_nodes("tests/test_task.py::test_task[unterminated") == []
+    assert _issue_named_test_nodes("tests/test_task.py::test_task[bad;case]") == []
     prompt = build_authoring_prompt(
         goal="Verify course progress end to end",
         repo="owner/repo",
