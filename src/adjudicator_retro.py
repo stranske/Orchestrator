@@ -207,6 +207,22 @@ def measured_cost(run_id: str | None, db: Path | None = None) -> float | None:
     return row[0] if row and row[1] in feedback.COMPLETE_COST_SOURCES else None
 
 
+def _refresh_saved_verdicts(rows: list[dict], db: Path | None = None) -> None:
+    """Grade saved verdicts even after their disputes leave the replay window."""
+    verdicts = [row for row in rows if row.get("decision")]
+    if not verdicts:
+        return
+    with sqlite3.connect(f"file:{(db or feedback.DB_PATH).resolve()}?mode=ro", uri=True) as conn:
+        conn.row_factory = sqlite3.Row
+        for row in verdicts:
+            outcome = conn.execute(
+                "SELECT durability,durability_checked_ts FROM outcomes WHERE run_id=?",
+                (row["run_id"],),
+            ).fetchone()
+            row["later_truth"] = later_truth(dict(outcome)) if outcome else None
+            row["cost_usd"] = measured_cost(row.get("backend_run_id"), db)
+
+
 def summarize(rows: list[dict]) -> dict:
     accepted = [r for r in rows if r.get("decision") in {"uphold_blocker", "reject_blocker"}]
     graded = [r for r in accepted if r.get("later_truth")]
@@ -243,6 +259,7 @@ def run(
     runner = runner or roles.run_adjudicator_agent
     previous = json.loads(path.read_text()) if path.exists() else {}
     saved = {r["case_id"]: r for r in previous.get("rows", [])}
+    _refresh_saved_verdicts(list(saved.values()), db)
     population = disputes(db=db)
     attempted = 0
     for row in population:
