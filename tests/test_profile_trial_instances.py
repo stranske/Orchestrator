@@ -347,7 +347,8 @@ class ProfileTrialInstancesTest(unittest.TestCase):
             self.assertEqual(path.parent, Path(request["artifact_dir"]))
             self.assertEqual(json.loads(path.read_bytes())["run_id"], request["run_id"])
             self.assertEqual(
-                attempt["artifact_sha256"], "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+                attempt["artifact_sha256"],
+                "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
             )
 
 
