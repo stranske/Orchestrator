@@ -1,6 +1,6 @@
 {
-  "collected": 2281,
-  "passed": 2281,
+  "collected": 2296,
+  "passed": 2296,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 47,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Round1020 integrated main e680751 preserving read-only evaluation prompt AND fresh guarded scratch workspaces. Prior floor histories retained in Git and round receipts; ceilings unchanged; full suite awaits CI. Round1020 measured collection 2281; focused acceptance receipt in round work; ceilings preserved; full-suite pass awaits CI."
+  "note": "Round1020 integrated current main 4b37a764efda31a8cfd233d5bc29f75d12a8da3e; both prior note histories retained in Git and round492-floor receipts; actual collection measured; all quality ceilings unchanged; full suite pass awaits CI. Measured collection 2296."
 }
