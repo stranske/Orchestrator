@@ -1,6 +1,6 @@
 # PR #501 strategy experiment blocker receipt
 
-+Keepalive attempt for PR #501 at 9bd2bbe3b756c8744de590333313ccdb7f8fafe3: live acceptance remains unchecked.
+Keepalive attempt for PR #501 at 9bd2bbe3b756c8744de590333313ccdb7f8fafe3: live acceptance remains unchecked.
 
 The live experiment strategy434-20261006 is stored on the operator's Mac at /Users/teacher/.codex/automations/pd-workloop-resume/experiments/strategy434-20261006. That path is unavailable on this Linux runner, ORCH_STATE_DIR is unset, and no strategy metadata/receipt artifacts are present locally. The latest PR receipt still reports all nine exact attempt-cost rows missing. No comparison or promotion result was fabricated, no additional experiment launched, and no research publication attempted.
 
