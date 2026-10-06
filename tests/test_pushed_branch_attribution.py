@@ -497,13 +497,24 @@ def test_an_open_pr_on_a_pushed_branch_waits_and_a_closed_one_is_this_runs_failu
     waiting = outcomes.ingest_modes("local")
     assert waiting["recorded"] == 0 and waiting["skipped_details"][0]["reason"] == "open_pr"
     closed = _merged(8, "fix/7-own-name", _iso(1_700_000_300), state="CLOSED")
-    _gh(monkeypatch, prs={"fix/7-own-name": closed})
+    # Closed unmerged, it is read once more (outcomes.judge_replacement): no PR links issue #7.
+    nothing_carries = outcomes._replacement_answer(8, "a" * 40)
+    _gh(monkeypatch, prs={"fix/7-own-name": closed}, closing=nothing_carries)
     done = outcomes.ingest_modes("local")
     assert done["push_records"]["credited"] == 1, done
+    assert done["replacements"] == {
+        "credited": 0,
+        "waiting": 0,
+        "unattributable": 0,
+        "failed": 1,
+        "not_read": 0,
+    }
     merged, verdict, durability, _failure_class, notes = _row(RUN)
     assert (merged, verdict, durability) == (0, "FAIL", "abandoned")
     assert notes == (
-        "local delegate PR #8 closed unmerged on the branch this run pushed (fix/7-own-name)"
+        "local delegate PR #8 closed unmerged on the branch this run pushed (fix/7-own-name); "
+        "replacement check: no PR linked to its issue carries the head aaaaaaaaaaaa of its closed "
+        "PR #8 (fix/7-own-name); no other PR links it"
     )
 
 
