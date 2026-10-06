@@ -77,6 +77,24 @@ def github(campaign, tmp_path, monkeypatch):
 
 def test_the_campaign_validates_and_targets_only_missing_entries(campaign, github):
     gh, calls, ignores, _ = github
+    assert campaign["campaign"]["repos"] == [
+        "stranske/Counter_Risk",
+        "stranske/Manager-Database",
+        "stranske/Inv-Man-Intake",
+        "stranske/trip-planner",
+        "stranske/learning-management-system",
+        "stranske/Pension-Data",
+    ]
+    assert campaign["ignore_entries"] == [
+        ".mypy_cache/",
+        ".pytest_cache/",
+        ".ruff_cache/",
+        "coverage.xml",
+        ".coverage",
+    ]
+    assert campaign["recipe"]["tool"] == "custom"
+    assert campaign["rollout"]["pr_strategy"] == "per_repo"
+    assert campaign["add_only"] is True
     assert lane.validate_campaign(campaign) == []
     for original in ignores.values():
         modified = lane.append_missing_ignores(original)
@@ -93,9 +111,22 @@ def test_the_campaign_validates_and_targets_only_missing_entries(campaign, githu
     assert len(creates) == 6
     assert sum(a[0] == "api" and a[1].endswith("/labels") for a in calls) == 6
     assert sum(a[0] == "api" and a[1].endswith("/comments") for a in calls) == 1
-    broken = copy.deepcopy(campaign)
-    broken["delegate_prompt"] += " Remove an existing ignore line."
-    assert lane.validate_campaign(broken)
+
+    def unexpected_github_call(args):
+        pytest.fail(f"invalid campaign reached GitHub: {args}")
+
+    for instruction in [
+        "Remove an existing ignore line.",
+        "Overwrite .gitignore with the five entries.",
+        "Truncate .gitignore before appending the entries.",
+        "Erase an existing ignore line.",
+        "Drop an existing ignore line.",
+    ]:
+        broken = copy.deepcopy(campaign)
+        broken["delegate_prompt"] += " " + instruction
+        assert "delegate_prompt contradicts the add-only contract" in lane.validate_campaign(broken)
+        with pytest.raises(ValueError, match="add-only contract"):
+            lane.file_targets(broken, gh=unexpected_github_call)
 
 
 @pytest.mark.parametrize("original", ["", "x", "x\r\n", "# note\n!keep\n", " .coverage \n"])

@@ -289,7 +289,10 @@ def validate_campaign(campaign: dict[str, Any]) -> list[str]:
             errors.append(
                 "delegate_prompt must require only missing lines and never remove existing lines"
             )
-        if re.search(r"\b(?:remove|delete|replace|rewrite)\b", prompt.replace("never remove", "")):
+        if re.search(
+            r"\b(?:remove|delete|replace|rewrite|overwrite|truncate|erase|drop)\b",
+            prompt.replace("never remove", ""),
+        ):
             errors.append("delegate_prompt contradicts the add-only contract")
         repos = meta.get("repos", [])
         if (
