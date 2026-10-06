@@ -872,9 +872,6 @@ def _exercised_capability_ids(assignment: dict, agent: str) -> list[str]:
         and str(assignment.get("exploration_mode") or "") == "thompson-hybrid"
     ):
         out.append("thompson-hybrid-routing")
-    lane_capability = DELEGATE_LANE_CAPABILITIES.get(str(assignment.get("task_type") or ""))
-    if lane_capability:
-        out.append(lane_capability)
     return out
 
 
@@ -1287,6 +1284,9 @@ def delegate(
     if "error" in d:
         claims.release(target, agent)
         return d
+    lane_capability = DELEGATE_LANE_CAPABILITIES.get(str(d.get("task_type") or ""))
+    if lane_capability:
+        d["capability_ids"] = list(dict.fromkeys([*d.get("capability_ids", []), lane_capability]))
     safe = target.replace("/", "__").replace("#", "_")
     d["pid"] = _spawn(d)
     _delegate_lane_heartbeat(d)

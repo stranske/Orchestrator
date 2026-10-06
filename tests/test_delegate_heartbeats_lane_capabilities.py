@@ -173,3 +173,41 @@ def test_a_delegate_that_does_not_start_never_invokes_the_lane(world, monkeypatc
     assert all(
         not r["last_invocation"] for r in json.loads(world.read_text())["capabilities"].values()
     )
+
+
+@pytest.mark.parametrize("task_type", list(LANES))
+def test_generic_run_does_not_credit_delegate_lane(world, task_type):
+    result = dispatcher.run(
+        {
+            "assignments": [
+                {
+                    "agent": "cursor",
+                    "target": "stranske/Test#432",
+                    "task_type": task_type,
+                    "prompt": "bounded work",
+                }
+            ]
+        },
+        heartbeat=False,
+    )
+    with feedback._conn() as db:
+        assert (
+            db.execute(
+                "SELECT COUNT(*) FROM influence_edges WHERE influence_type='capability'"
+            ).fetchone()[0]
+            == 0
+        )
+    assert all(not row["last_invocation"] for row in capabilities.load(world).values())
+    assert result["count"] == 1
+    assert not result["skipped"]
+
+
+def test_started_delegate_survives_heartbeat_write_failure(world, monkeypatch):
+    def fail(*args, **kwargs):
+        raise OSError("ledger unavailable")
+
+    monkeypatch.setattr(capabilities, "heartbeat", fail)
+    result = _delegate("testgen")
+    assert "error" not in result
+    assert result["pid"] == 1234
+    assert result["run_id"]
