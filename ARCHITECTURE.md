@@ -1565,3 +1565,14 @@ existing Brain run and versioned influence edge. Standalone delegates are observ
 even outside an active tick; prompt construction and dry-run plans only match
 work, and refused/unbuildable delegates never count as invocations. This credits
 a started worker, not a successful outcome; outcomes keep their durability gates.
+
+### Explicit codemod campaign input (issue #435)
+
+The existing codemod rail can file validated per-repo add-only ignore work orders.
+The range rollout rail accepts only that campaign's persisted, freshly revalidated targets,
+with scoped/owned and linked-PR exclusions; foreign router assignments are refused.
+Its three apply/window controls remain unchanged. Worker assignments carry the actual
+work order and existing codemod/range capability tags. A capability-program projection
+reports target PR heads/merges and attributed Brain durability/cost, preserving UNKNOWN.
+No role, stage, learning store or recurring dispatch policy is added. The diagram's
+backlog rail also represents this exact campaign input.

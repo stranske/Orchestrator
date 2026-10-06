@@ -112,6 +112,13 @@ if git -C "$SRC" rev-parse --verify -q HEAD:scripts >/dev/null 2>&1; then
   echo "scripts/ shipped from git HEAD ($(find "$MIRROR/scripts" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ') entries)"
   extra=$((extra + 1))
 fi
+# Campaign contracts are read by the campaign CLI and its acceptance tests in both shapes.
+# They are repository inputs, never the capability-program receipts in ORCH_STATE_DIR.
+rm -rf "$MIRROR/campaigns"
+if git -C "$SRC" rev-parse --verify -q HEAD:campaigns >/dev/null 2>&1; then
+  git -C "$SRC" archive --format=tar HEAD campaigns | { tar -x -C "$MIRROR" && cat >/dev/null; }
+  extra=$((extra + 1))
+fi
 # THE REPOSITORY CONFIGURATION AND docs/ TRAVEL TOO (2026-10-02), from git. PR #352's test opened
 # .github/workflows/pr-00-gate.yml with no guard, so every mirror verify was red with 19
 # FileNotFoundErrors while CI and every checkout were green; tests/test_ci_gate_config.py also needs
