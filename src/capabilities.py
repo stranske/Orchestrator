@@ -416,7 +416,13 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
     "runtime-ac-checks": {
         "notes": "dedup: runtime_ac authoring prompt, gate, ingest and weekly report already exist; "
         "extend those edges with unattended issue-derived shadow specs and coverage-free named "
-        "checks. Shadow events never update outcomes or implicitly require a merge gate.",
+        "checks. Shadow events never update outcomes or implicitly require a merge gate. "
+        "2026-10-05 placement: the tick's copy of the closer gate is removed, because no closer "
+        "item can be delegated (1,243 events for fleet PRs in 30 days, all skipped, 0 executed); "
+        "the gate's executable seat is merge_guard's terminal merge, unchanged (PR labels or a "
+        "spec). merge_guard's selftest no longer writes its o/r#5 and o/r#6 fixtures into the Brain "
+        "it is pointed at: 3,702 such rows since 2026-08-21 were read by the flow monitor as live "
+        "firing while real fleet executions were 0.",
         "status": "canary",
         "entrypoint": "runtime_ac_gate.py",
         "matcher": {"kind": "env", "name": "ORCH_RUN_RUNTIME_AC", "equals": "1"},
