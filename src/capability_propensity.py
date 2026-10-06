@@ -976,6 +976,8 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
                     },
                 )
             elif etype == "invocation":
+                if _fixture_contract_event(event):
+                    continue
                 if cap_id not in trial["triggered"]:
                     trial["triggered"].append(cap_id)
                 ts = event.get("timestamp") or 0

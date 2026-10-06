@@ -251,3 +251,15 @@ def test_formatted_corpus_report_shows_fixture_counts(tmp_path, monkeypatch):
     text = cp._fmt(cp.report(path=path))
     assert "experiments: 0 (0 resolved)" in text
     assert "fixture evidence: 2 experiments / 2 verdict events" in text
+
+
+def test_fixture_invocation_excluded_without_losing_mixed_production_trial(tmp_path):
+    path = _ledger(tmp_path)
+    cp.record_trigger("a-fixture", "advice:rail-exercise:fixture-only", path=path)
+    assert cp.report(path=path)["experiment_count"] == 0
+    cp.record_trigger("a-fixture", "advice:mixed", path=path, metadata={"source": "rail_exercise"})
+    _record(path, "z-production", "advice:mixed", "machine_observed")
+    report = cp.report(path=path)
+    assert report["experiment_count"] == report["resolved_experiment_count"] == 1
+    trial = next(row for row in cp.experiments(path=path) if row["experiment_id"] == "advice:mixed")
+    assert trial["triggered"] == ["z-production"]
