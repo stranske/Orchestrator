@@ -741,17 +741,8 @@ def write_scored_result(
     Partial rows are explicitly UNKNOWN rather than a zero-cost, completed score.
     """
     costs = strategy_arm_costs(plan, cost_rows)
-    missing = [arm_id for arm_id, row in costs.items() if row["missing_attempt_run_ids"]]
+    unmeasured = [arm_id for arm_id, row in costs.items() if row["unmeasured_attempt_run_ids"]]
     expected_arms = {arm["arm_id"] for arm in plan["arms"]}
-    expected_runs = {run_id for arm in plan["arms"] for run_id in arm.get("attempt_run_ids") or []}
-    measured_cost_runs = {
-        str(row.get("run_id"))
-        for row in cost_rows
-        if row.get("run_id")
-        and isinstance(row.get("cost_usd"), (int, float))
-        and math.isfinite(row["cost_usd"])
-        and row["cost_usd"] >= 0
-    }
     score_complete = (
         bool(expected_arms)
         and isinstance(scores, dict)
@@ -764,14 +755,7 @@ def write_scored_result(
             for key in expected_arms
         )
     )
-    status = (
-        "completed"
-        if score_complete and not missing and expected_runs <= measured_cost_runs
-        else "UNKNOWN"
-    )
-    for row in costs.values():
-        if not set(row["attempt_run_ids"]) <= measured_cost_runs:
-            row["cost_usd"] = None
+    status = "completed" if score_complete and not unmeasured else "UNKNOWN"
     comparison = {}
     if status == "completed":
         for strategy in sorted({str(arm.get("strategy", "unknown")) for arm in plan["arms"]}):
@@ -790,6 +774,7 @@ def write_scored_result(
         "scores": scores if status == "completed" else None,
         "comparison": comparison if status == "completed" else None,
         "costs": costs,
+        "cost_scale": feedback.COST_SCALE,
         "unknown_reason": (
             None
             if status == "completed"
@@ -836,7 +821,7 @@ def write_evaluation_result(
         run_ids = [run_id for arm in arms for run_id in arm.get("attempt_run_ids") or []]
         for run_id in run_ids:
             row = conn.execute(
-                "SELECT tokens_in,tokens_out,cost_usd,latency_s FROM costs WHERE run_id=?",
+                "SELECT tokens_in,tokens_out,cost_usd,latency_s,source FROM costs WHERE run_id=?",
                 (run_id,),
             ).fetchone()
             if row is not None:
@@ -847,6 +832,7 @@ def write_evaluation_result(
                         "tokens_out": row[1],
                         "cost_usd": row[2],
                         "latency_s": row[3],
+                        "source": row[4],
                     }
                 )
     means = {arm_id: sum(values) / len(values) for arm_id, values in scores.items() if values}
@@ -920,20 +906,35 @@ def refresh_evaluation_result(exp_id: str, *, exp_dir: Path | None = None) -> Pa
 def strategy_arm_costs(
     plan: dict[str, Any], cost_rows: Sequence[dict[str, Any]]
 ) -> dict[str, dict[str, Any]]:
-    """Sum observed member and synthesis attempts for each strategy arm."""
+    """Sum whole-run measured costs; preserve exact gaps for late reconciliation."""
     by_run = {str(row.get("run_id")): row for row in cost_rows if row.get("run_id")}
+    measured = {
+        run_id
+        for run_id, row in by_run.items()
+        if row.get("source") in feedback.COMPLETE_COST_SOURCES
+        and type(row.get("cost_usd")) in (int, float)
+        and math.isfinite(row["cost_usd"])
+        and row["cost_usd"] >= 0
+    }
     out: dict[str, dict[str, Any]] = {}
     for arm in plan["arms"]:
         attempt_ids = list(arm.get("attempt_run_ids") or [])
         observed = [by_run[run_id] for run_id in attempt_ids if run_id in by_run]
+        unmeasured = [run_id for run_id in attempt_ids if run_id not in measured]
         out[arm["arm_id"]] = {
             "attempt_run_ids": attempt_ids,
             "planned_attempt_count": len(attempt_ids),
             "observed_attempt_count": len(observed),
             "missing_attempt_run_ids": [run_id for run_id in attempt_ids if run_id not in by_run],
+            "unmeasured_attempt_run_ids": unmeasured,
+            "sources": {
+                run_id: by_run[run_id].get("source") for run_id in attempt_ids if run_id in by_run
+            },
             "tokens_in": sum(int(row.get("tokens_in") or 0) for row in observed),
             "tokens_out": sum(int(row.get("tokens_out") or 0) for row in observed),
-            "cost_usd": round(sum(float(row.get("cost_usd") or 0.0) for row in observed), 8),
+            "cost_usd": (
+                None if unmeasured else round(sum(float(row["cost_usd"]) for row in observed), 8)
+            ),
             "latency_s": sum(float(row.get("latency_s") or 0.0) for row in observed),
             "final_artifact_id": arm.get("final_artifact_id"),
         }
@@ -1070,6 +1071,7 @@ def _selftest() -> None:
                     "tokens_in": 10,
                     "tokens_out": 5,
                     "cost_usd": 1.0,
+                    "source": "ccusage",
                     "latency_s": 2.0,
                 }
                 for run_id in plan["arms"][1]["attempt_run_ids"]

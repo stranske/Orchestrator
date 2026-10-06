@@ -61,7 +61,7 @@ def subject_harness(tmp_path, monkeypatch):
         (done / f"{run_id}.json").write_text(
             json.dumps({"run_id": run_id, "rc_of": "agent", "rc": 0})
         )
-        feedback.record_cost(run_id, cost_usd=0.25, source="test-fixture")
+        feedback.record_cost(run_id, cost_usd=0.25, source="ccusage")
         spawned.append({"agent": agent, "worktree": wt, "prompt": prompt, **kwargs})
         return None
 

@@ -113,7 +113,10 @@ def measured(tmp_path, monkeypatch):
     with feedback._conn() as conn:
         for arm in plan["arms"]:
             for run_id in arm["attempt_run_ids"]:
-                conn.execute("INSERT INTO costs (run_id,cost_usd) VALUES (?,?)", (run_id, 0.25))
+                conn.execute(
+                    "INSERT INTO costs (run_id,cost_usd,source) VALUES (?,?,?)",
+                    (run_id, 0.25, "ccusage"),
+                )
             conn.commit()
             for judge in ("j1", "j2"):
                 feedback.record_evaluation_v2(

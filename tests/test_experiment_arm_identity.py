@@ -418,7 +418,14 @@ def test_strategy_shared_member_and_synthesis_cost_are_arm_scoped(tmp_path) -> N
     assert len(set(claude_ids)) == 2
     parallel = plan["arms"][1]
     rows = [
-        {"run_id": run_id, "tokens_in": 10, "tokens_out": 2, "cost_usd": 0.5, "latency_s": 3}
+        {
+            "run_id": run_id,
+            "tokens_in": 10,
+            "tokens_out": 2,
+            "cost_usd": 0.5,
+            "latency_s": 3,
+            "source": "ccusage",
+        }
         for run_id in parallel["attempt_run_ids"]
     ]
     cost = strategy_experiment.strategy_arm_costs(plan, rows)[parallel["arm_id"]]
