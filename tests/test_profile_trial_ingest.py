@@ -260,7 +260,14 @@ def _bind_authoritative_identity(tmp_path, trial_attempt_fixture):
     for attempt in trial_attempt_fixture["attempts"]:
         artifact_path = artifact_dir / f"{attempt['profile_id']}-identity.json"
         artifact_path.write_text(
-            json.dumps({"profile_id": attempt["profile_id"], "acknowledged": True}),
+            json.dumps(
+                {
+                    "profile_id": attempt["profile_id"],
+                    "acknowledged": True,
+                    "provider_resolved_provider": attempt["provider_resolved_provider"],
+                    "provider_resolved_model": attempt["provider_resolved_model"],
+                }
+            ),
             encoding="utf-8",
         )
         digest = "sha256:" + hashlib.sha256(artifact_path.read_bytes()).hexdigest()
@@ -391,3 +398,93 @@ def test_transport_recording_preserves_measured_program_summary(
     assert summary["brain_ingest_enabled"] is True
     assert summary["quality_by_profile"] == preserved["quality_by_profile"]
     assert summary["updated_at"] == 2_000
+
+
+def test_connection_registers_profile_trial_ingests_before_first_ingest(tmp_path, monkeypatch):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM profile_trial_ingests").fetchone()[0] == 0
+
+
+def test_verified_ingest_replaces_transport_telemetry(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    transport = copy.deepcopy(trial_attempt_fixture)
+    _bind_authoritative_identity(tmp_path, transport)
+    model_profile_trial.finalize_trial(
+        trial_manifest, transport, record_feedback=True, ingest_brain=False, now=2000
+    )
+    verified = copy.deepcopy(transport)
+    verified["attempts"][0]["tokens_in"] = 999
+    verified["attempts"][0]["tokens_out"] = 777
+    model_profile_trial.finalize_trial(
+        trial_manifest, verified, record_feedback=True, ingest_brain=True, now=2001
+    )
+    with feedback._conn() as conn:
+        row = conn.execute(
+            "SELECT tokens_in,tokens_out FROM execution_attempts WHERE attempt_id=?",
+            (
+                f"attempt:trial:{trial_manifest['trial_id']}:{verified['attempts'][0]['profile_id']}",
+            ),
+        ).fetchone()
+        assert row == (999, 777)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("provider_resolved_provider", "anthropic"),
+        ("provider_resolved_model", "wrong-model"),
+        ("profile_id", "wrong-profile"),
+        ("provider_resolved_model", None),
+    ],
+)
+def test_identity_artifact_content_must_match_attempt(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, field, value
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    results = copy.deepcopy(trial_attempt_fixture)
+    _bind_authoritative_identity(tmp_path, results)
+    attempt = results["attempts"][0]
+    artifact = Path(attempt["identity_evidence"]["artifact_ref"])
+    contents = json.loads(artifact.read_text())
+    contents[field] = value
+    artifact.write_text(json.dumps(contents))
+    attempt["identity_evidence"]["artifact_sha256"] = (
+        "sha256:" + hashlib.sha256(artifact.read_bytes()).hexdigest()
+    )
+    with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+        model_profile_trial.finalize_trial(
+            trial_manifest, results, record_feedback=True, ingest_brain=True, now=2000
+        )
+    with feedback._conn() as conn:
+        _assert_trial_feedback_tables_empty(conn)
+
+
+@pytest.mark.parametrize(
+    "quality",
+    [
+        [],
+        {"unknown": 0.5},
+        {"codex-6-astra-high": True},
+        {"codex-6-astra-high": "invalid"},
+        {"codex-6-astra-high": float("nan")},
+        {"codex-6-astra-high": float("inf")},
+        {"codex-6-astra-high": 1.5},
+    ],
+)
+def test_invalid_quality_refuses_all_trial_writes(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, quality
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    results = copy.deepcopy(trial_attempt_fixture)
+    _bind_authoritative_identity(tmp_path, results)
+    results["quality_by_profile"] = quality
+    with pytest.raises(ValueError, match="quality_by_profile"):
+        model_profile_trial.finalize_trial(
+            trial_manifest, results, record_feedback=True, ingest_brain=True, now=2000
+        )
+    with feedback._conn() as conn:
+        _assert_trial_feedback_tables_empty(conn)

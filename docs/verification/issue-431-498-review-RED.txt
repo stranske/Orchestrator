@@ -1,0 +1,161 @@
+..........FFFFFF.......                                                  [100%]
+=================================== FAILURES ===================================
+_____ test_connection_registers_profile_trial_ingests_before_first_ingest ______
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-811/test_connection_registers_prof0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1056e9040>
+
+    def test_connection_registers_profile_trial_ingests_before_first_ingest(tmp_path, monkeypatch):
+        _use_temp_feedback(tmp_path, monkeypatch)
+        with feedback._conn() as conn:
+>           assert conn.execute("SELECT COUNT(*) FROM profile_trial_ingests").fetchone()[0] == 0
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           sqlite3.OperationalError: no such table: profile_trial_ingests
+
+tests/test_profile_trial_ingest.py:401: OperationalError
+______________ test_verified_ingest_replaces_transport_telemetry _______________
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-811/test_verified_ingest_replaces_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10565b440>
+trial_manifest = {'schema': 'orchestrator.model-profile-trial', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'created_at': 1000, ...}
+trial_attempt_fixture = {'schema': 'orchestrator.model-profile-trial-results', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'packet_hash': 'sha256:343604df7f0b27aa9df5507a34fd48beffdc1627987439c7b89e72af715a7605', ...}
+
+    def test_verified_ingest_replaces_transport_telemetry(tmp_path, monkeypatch, trial_manifest,
+                                                         trial_attempt_fixture):
+        _use_temp_feedback(tmp_path, monkeypatch)
+        monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+        transport = copy.deepcopy(trial_attempt_fixture)
+        _bind_authoritative_identity(tmp_path, transport)
+        model_profile_trial.finalize_trial(trial_manifest, transport, record_feedback=True,
+                                           ingest_brain=False, now=2000)
+        verified = copy.deepcopy(transport)
+        verified["attempts"][0]["tokens_in"] = 999
+        verified["attempts"][0]["tokens_out"] = 777
+        model_profile_trial.finalize_trial(trial_manifest, verified, record_feedback=True,
+                                           ingest_brain=True, now=2001)
+        with feedback._conn() as conn:
+            row = conn.execute("SELECT tokens_in,tokens_out FROM execution_attempts WHERE attempt_id=?",
+                               (f"attempt:trial:{trial_manifest['trial_id']}:{verified['attempts'][0]['profile_id']}",)).fetchone()
+>           assert row == (999, 777)
+E           assert (12, 4) == (999, 777)
+E             
+E             At index 0 diff: 12 != 999
+E             Use -v to get more diff
+
+tests/test_profile_trial_ingest.py:420: AssertionError
+_ test_identity_artifact_content_must_match_attempt[provider_resolved_provider-anthropic] _
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-811/test_identity_artifact_content0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x105a95310>
+trial_manifest = {'schema': 'orchestrator.model-profile-trial', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'created_at': 1000, ...}
+trial_attempt_fixture = {'schema': 'orchestrator.model-profile-trial-results', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'packet_hash': 'sha256:343604df7f0b27aa9df5507a34fd48beffdc1627987439c7b89e72af715a7605', ...}
+field = 'provider_resolved_provider', value = 'anthropic'
+
+    @pytest.mark.parametrize("field,value", [("provider_resolved_provider", "anthropic"),
+                                            ("provider_resolved_model", "wrong-model"),
+                                            ("profile_id", "wrong-profile"),
+                                            ("provider_resolved_model", None)])
+    def test_identity_artifact_content_must_match_attempt(tmp_path, monkeypatch, trial_manifest,
+                                                          trial_attempt_fixture, field, value):
+        _use_temp_feedback(tmp_path, monkeypatch)
+        results = copy.deepcopy(trial_attempt_fixture)
+        _bind_authoritative_identity(tmp_path, results)
+        attempt = results["attempts"][0]
+        artifact = Path(attempt["identity_evidence"]["artifact_ref"])
+        contents = json.loads(artifact.read_text())
+        contents[field] = value
+        artifact.write_text(json.dumps(contents))
+        attempt["identity_evidence"]["artifact_sha256"] = "sha256:" + hashlib.sha256(artifact.read_bytes()).hexdigest()
+>       with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_profile_trial_ingest.py:438: Failed
+_ test_identity_artifact_content_must_match_attempt[provider_resolved_model-wrong-model] _
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-811/test_identity_artifact_content1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x105a95dc0>
+trial_manifest = {'schema': 'orchestrator.model-profile-trial', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'created_at': 1000, ...}
+trial_attempt_fixture = {'schema': 'orchestrator.model-profile-trial-results', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'packet_hash': 'sha256:343604df7f0b27aa9df5507a34fd48beffdc1627987439c7b89e72af715a7605', ...}
+field = 'provider_resolved_model', value = 'wrong-model'
+
+    @pytest.mark.parametrize("field,value", [("provider_resolved_provider", "anthropic"),
+                                            ("provider_resolved_model", "wrong-model"),
+                                            ("profile_id", "wrong-profile"),
+                                            ("provider_resolved_model", None)])
+    def test_identity_artifact_content_must_match_attempt(tmp_path, monkeypatch, trial_manifest,
+                                                          trial_attempt_fixture, field, value):
+        _use_temp_feedback(tmp_path, monkeypatch)
+        results = copy.deepcopy(trial_attempt_fixture)
+        _bind_authoritative_identity(tmp_path, results)
+        attempt = results["attempts"][0]
+        artifact = Path(attempt["identity_evidence"]["artifact_ref"])
+        contents = json.loads(artifact.read_text())
+        contents[field] = value
+        artifact.write_text(json.dumps(contents))
+        attempt["identity_evidence"]["artifact_sha256"] = "sha256:" + hashlib.sha256(artifact.read_bytes()).hexdigest()
+>       with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_profile_trial_ingest.py:438: Failed
+_ test_identity_artifact_content_must_match_attempt[profile_id-wrong-profile] __
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-811/test_identity_artifact_content2')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1041a3860>
+trial_manifest = {'schema': 'orchestrator.model-profile-trial', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'created_at': 1000, ...}
+trial_attempt_fixture = {'schema': 'orchestrator.model-profile-trial-results', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'packet_hash': 'sha256:343604df7f0b27aa9df5507a34fd48beffdc1627987439c7b89e72af715a7605', ...}
+field = 'profile_id', value = 'wrong-profile'
+
+    @pytest.mark.parametrize("field,value", [("provider_resolved_provider", "anthropic"),
+                                            ("provider_resolved_model", "wrong-model"),
+                                            ("profile_id", "wrong-profile"),
+                                            ("provider_resolved_model", None)])
+    def test_identity_artifact_content_must_match_attempt(tmp_path, monkeypatch, trial_manifest,
+                                                          trial_attempt_fixture, field, value):
+        _use_temp_feedback(tmp_path, monkeypatch)
+        results = copy.deepcopy(trial_attempt_fixture)
+        _bind_authoritative_identity(tmp_path, results)
+        attempt = results["attempts"][0]
+        artifact = Path(attempt["identity_evidence"]["artifact_ref"])
+        contents = json.loads(artifact.read_text())
+        contents[field] = value
+        artifact.write_text(json.dumps(contents))
+        attempt["identity_evidence"]["artifact_sha256"] = "sha256:" + hashlib.sha256(artifact.read_bytes()).hexdigest()
+>       with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_profile_trial_ingest.py:438: Failed
+_ test_identity_artifact_content_must_match_attempt[provider_resolved_model-None] _
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-811/test_identity_artifact_content3')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10565bb30>
+trial_manifest = {'schema': 'orchestrator.model-profile-trial', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'created_at': 1000, ...}
+trial_attempt_fixture = {'schema': 'orchestrator.model-profile-trial-results', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'packet_hash': 'sha256:343604df7f0b27aa9df5507a34fd48beffdc1627987439c7b89e72af715a7605', ...}
+field = 'provider_resolved_model', value = None
+
+    @pytest.mark.parametrize("field,value", [("provider_resolved_provider", "anthropic"),
+                                            ("provider_resolved_model", "wrong-model"),
+                                            ("profile_id", "wrong-profile"),
+                                            ("provider_resolved_model", None)])
+    def test_identity_artifact_content_must_match_attempt(tmp_path, monkeypatch, trial_manifest,
+                                                          trial_attempt_fixture, field, value):
+        _use_temp_feedback(tmp_path, monkeypatch)
+        results = copy.deepcopy(trial_attempt_fixture)
+        _bind_authoritative_identity(tmp_path, results)
+        attempt = results["attempts"][0]
+        artifact = Path(attempt["identity_evidence"]["artifact_ref"])
+        contents = json.loads(artifact.read_text())
+        contents[field] = value
+        artifact.write_text(json.dumps(contents))
+        attempt["identity_evidence"]["artifact_sha256"] = "sha256:" + hashlib.sha256(artifact.read_bytes()).hexdigest()
+>       with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_profile_trial_ingest.py:438: Failed
+=========================== short test summary info ============================
+FAILED tests/test_profile_trial_ingest.py::test_connection_registers_profile_trial_ingests_before_first_ingest
+FAILED tests/test_profile_trial_ingest.py::test_verified_ingest_replaces_transport_telemetry
+FAILED tests/test_profile_trial_ingest.py::test_identity_artifact_content_must_match_attempt[provider_resolved_provider-anthropic]
+FAILED tests/test_profile_trial_ingest.py::test_identity_artifact_content_must_match_attempt[provider_resolved_model-wrong-model]
+FAILED tests/test_profile_trial_ingest.py::test_identity_artifact_content_must_match_attempt[profile_id-wrong-profile]
+FAILED tests/test_profile_trial_ingest.py::test_identity_artifact_content_must_match_attempt[provider_resolved_model-None]
+6 failed, 17 passed in 0.86s

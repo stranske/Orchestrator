@@ -1,0 +1,17 @@
+# verify.py
+
+  tree:       checkout
+  state:      private copy, deleted after the run — ledger 20.0 MB; Brain 82.9 MB
+  time:       pytest 8m49s, selftests 43s (8 at a time), gates 51s
+  pytest:     2366 passed, 0 failed, 0/26 max skipped (2366 collected; floor 2366)
+  selftests:  103 of 103 modules ran, 0/7 max skipped
+  activation audit   ok  CAN FIRE:   48 of 48 live  (100%)
+  recurrence replay  ok  WOULD FIRE:  48 of 53
+  set coverage       ok  all 10 capability-set coverage checks passed over ALL 49 ledger capabilities (--roster for the per-capability table); 10 of 10 verdicts from this run's pytest
+  admission          ok  all 13 admission checks passed — 12 enforced, 3 legacy debt, commitments clean (13 of 13 verdicts from this run's pytest)
+  ledger validate    ok  "valid": true
+  declared:   all 18 rows this tree declares are registered in the ledger judged
+  mypy ratchet: 0/0 max of 121 module(s) exempt, 121 checked — fully drained
+
+  VERIFIED — 2366 tests actually executed and passed, 103 selftests spoke, 5 of 5 gates green
+  floor updated: collected=2366 passed=2366 (ceilings preserved)

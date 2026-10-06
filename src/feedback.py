@@ -63,6 +63,12 @@ AGENT_SWITCHES_COLUMNS = """
   PRIMARY KEY (pr_ref, switched_ts, source)
 """
 
+PROFILE_TRIAL_INGESTS_TABLE = (
+    "CREATE TABLE IF NOT EXISTS profile_trial_ingests "
+    "(trial_id TEXT PRIMARY KEY, applied_ts INTEGER NOT NULL)"
+)
+
+
 SCHEMA = (
     """
 CREATE TABLE IF NOT EXISTS runs (
@@ -188,6 +194,8 @@ CREATE TABLE IF NOT EXISTS run_pushes (
   branches_json TEXT NOT NULL, recorded_ts INTEGER NOT NULL
 );
 """
+    + PROFILE_TRIAL_INGESTS_TABLE
+    + ";"
 )
 
 # Effort sensitivity for the quality-weighted score. Multipliers are exponential so zero cost/tokens/latency
@@ -2783,12 +2791,6 @@ def _record_run_in_conn(
         )
 
 
-PROFILE_TRIAL_INGESTS_TABLE = (
-    "CREATE TABLE IF NOT EXISTS profile_trial_ingests "
-    "(trial_id TEXT PRIMARY KEY, applied_ts INTEGER NOT NULL)"
-)
-
-
 def _require_quarantine_feedback_db() -> None:
     selected_db = Path(DB_PATH).expanduser().resolve()
     live_db = (Path.home() / ".codex" / "orchestrator" / "feedback" / "orchestrator.db").resolve()
@@ -2796,18 +2798,6 @@ def _require_quarantine_feedback_db() -> None:
         raise ValueError(
             "trial feedback recording is allowed only in an explicitly named quarantine database"
         )
-
-
-def _profile_trial_worker_rows_present(
-    conn: sqlite3.Connection, manifest: dict[str, Any], attempts: list[dict[str, Any]]
-) -> bool:
-    for attempt in attempts:
-        attempt_id = f"attempt:trial:{manifest['trial_id']}:{attempt['profile_id']}"
-        if not conn.execute(
-            "SELECT 1 FROM execution_attempts WHERE attempt_id=?", (attempt_id,)
-        ).fetchone():
-            return False
-    return True
 
 
 def ingest_profile_trial(
@@ -2833,7 +2823,6 @@ def ingest_profile_trial(
     traces = list(auxiliary_traces or [])
 
     with _conn() as c:
-        c.execute(PROFILE_TRIAL_INGESTS_TABLE)
         c.execute("BEGIN IMMEDIATE")
         try:
             existing = c.execute(
@@ -2845,18 +2834,6 @@ def ingest_profile_trial(
                     "trial_id": trial_id,
                     "status": "already_ingested",
                     "applied_ts": int(existing[0]),
-                    "recorded_attempt_ids": [],
-                }
-            if commit_ingest_marker and _profile_trial_worker_rows_present(c, manifest, attempts):
-                c.execute(
-                    "INSERT INTO profile_trial_ingests (trial_id, applied_ts) VALUES (?,?)",
-                    (trial_id, timestamp),
-                )
-                c.execute("COMMIT")
-                return {
-                    "trial_id": trial_id,
-                    "status": "ingested",
-                    "applied_ts": timestamp,
                     "recorded_attempt_ids": [],
                 }
             weights_before = {

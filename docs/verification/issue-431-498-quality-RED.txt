@@ -1,0 +1,174 @@
+FFFFFFF                                                                  [100%]
+=================================== FAILURES ===================================
+___________ test_invalid_quality_refuses_all_trial_writes[quality0] ____________
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-813/test_invalid_quality_refuses_a0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1069a2690>
+trial_manifest = {'schema': 'orchestrator.model-profile-trial', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'created_at': 1000, ...}
+trial_attempt_fixture = {'schema': 'orchestrator.model-profile-trial-results', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'packet_hash': 'sha256:343604df7f0b27aa9df5507a34fd48beffdc1627987439c7b89e72af715a7605', ...}
+quality = []
+
+    @pytest.mark.parametrize("quality", [[], {"unknown": .5}, {"codex-6-astra-high": True},
+                                         {"codex-6-astra-high": "invalid"},
+                                         {"codex-6-astra-high": float("nan")},
+                                         {"codex-6-astra-high": float("inf")},
+                                         {"codex-6-astra-high": 1.5}])
+    def test_invalid_quality_refuses_all_trial_writes(tmp_path, monkeypatch, trial_manifest,
+                                                    trial_attempt_fixture, quality):
+        _use_temp_feedback(tmp_path, monkeypatch)
+        results = copy.deepcopy(trial_attempt_fixture)
+        _bind_authoritative_identity(tmp_path, results)
+        results["quality_by_profile"] = quality
+>       with pytest.raises(ValueError, match="quality_by_profile"):
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_profile_trial_ingest.py:456: Failed
+___________ test_invalid_quality_refuses_all_trial_writes[quality1] ____________
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-813/test_invalid_quality_refuses_a1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1069e7c50>
+trial_manifest = {'schema': 'orchestrator.model-profile-trial', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'created_at': 1000, ...}
+trial_attempt_fixture = {'schema': 'orchestrator.model-profile-trial-results', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'packet_hash': 'sha256:343604df7f0b27aa9df5507a34fd48beffdc1627987439c7b89e72af715a7605', ...}
+quality = {'unknown': 0.5}
+
+    @pytest.mark.parametrize("quality", [[], {"unknown": .5}, {"codex-6-astra-high": True},
+                                         {"codex-6-astra-high": "invalid"},
+                                         {"codex-6-astra-high": float("nan")},
+                                         {"codex-6-astra-high": float("inf")},
+                                         {"codex-6-astra-high": 1.5}])
+    def test_invalid_quality_refuses_all_trial_writes(tmp_path, monkeypatch, trial_manifest,
+                                                    trial_attempt_fixture, quality):
+        _use_temp_feedback(tmp_path, monkeypatch)
+        results = copy.deepcopy(trial_attempt_fixture)
+        _bind_authoritative_identity(tmp_path, results)
+        results["quality_by_profile"] = quality
+>       with pytest.raises(ValueError, match="quality_by_profile"):
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_profile_trial_ingest.py:456: Failed
+___________ test_invalid_quality_refuses_all_trial_writes[quality2] ____________
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-813/test_invalid_quality_refuses_a2')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1069e67e0>
+trial_manifest = {'schema': 'orchestrator.model-profile-trial', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'created_at': 1000, ...}
+trial_attempt_fixture = {'schema': 'orchestrator.model-profile-trial-results', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'packet_hash': 'sha256:343604df7f0b27aa9df5507a34fd48beffdc1627987439c7b89e72af715a7605', ...}
+quality = {'codex-6-astra-high': True}
+
+    @pytest.mark.parametrize("quality", [[], {"unknown": .5}, {"codex-6-astra-high": True},
+                                         {"codex-6-astra-high": "invalid"},
+                                         {"codex-6-astra-high": float("nan")},
+                                         {"codex-6-astra-high": float("inf")},
+                                         {"codex-6-astra-high": 1.5}])
+    def test_invalid_quality_refuses_all_trial_writes(tmp_path, monkeypatch, trial_manifest,
+                                                    trial_attempt_fixture, quality):
+        _use_temp_feedback(tmp_path, monkeypatch)
+        results = copy.deepcopy(trial_attempt_fixture)
+        _bind_authoritative_identity(tmp_path, results)
+        results["quality_by_profile"] = quality
+>       with pytest.raises(ValueError, match="quality_by_profile"):
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_profile_trial_ingest.py:456: Failed
+___________ test_invalid_quality_refuses_all_trial_writes[quality3] ____________
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-813/test_invalid_quality_refuses_a3')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1069e6cf0>
+trial_manifest = {'schema': 'orchestrator.model-profile-trial', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'created_at': 1000, ...}
+trial_attempt_fixture = {'schema': 'orchestrator.model-profile-trial-results', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'packet_hash': 'sha256:343604df7f0b27aa9df5507a34fd48beffdc1627987439c7b89e72af715a7605', ...}
+quality = {'codex-6-astra-high': 'invalid'}
+
+    @pytest.mark.parametrize("quality", [[], {"unknown": .5}, {"codex-6-astra-high": True},
+                                         {"codex-6-astra-high": "invalid"},
+                                         {"codex-6-astra-high": float("nan")},
+                                         {"codex-6-astra-high": float("inf")},
+                                         {"codex-6-astra-high": 1.5}])
+    def test_invalid_quality_refuses_all_trial_writes(tmp_path, monkeypatch, trial_manifest,
+                                                    trial_attempt_fixture, quality):
+        _use_temp_feedback(tmp_path, monkeypatch)
+        results = copy.deepcopy(trial_attempt_fixture)
+        _bind_authoritative_identity(tmp_path, results)
+        results["quality_by_profile"] = quality
+>       with pytest.raises(ValueError, match="quality_by_profile"):
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_profile_trial_ingest.py:456: Failed
+___________ test_invalid_quality_refuses_all_trial_writes[quality4] ____________
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-813/test_invalid_quality_refuses_a4')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x106a771a0>
+trial_manifest = {'schema': 'orchestrator.model-profile-trial', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'created_at': 1000, ...}
+trial_attempt_fixture = {'schema': 'orchestrator.model-profile-trial-results', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'packet_hash': 'sha256:343604df7f0b27aa9df5507a34fd48beffdc1627987439c7b89e72af715a7605', ...}
+quality = {'codex-6-astra-high': nan}
+
+    @pytest.mark.parametrize("quality", [[], {"unknown": .5}, {"codex-6-astra-high": True},
+                                         {"codex-6-astra-high": "invalid"},
+                                         {"codex-6-astra-high": float("nan")},
+                                         {"codex-6-astra-high": float("inf")},
+                                         {"codex-6-astra-high": 1.5}])
+    def test_invalid_quality_refuses_all_trial_writes(tmp_path, monkeypatch, trial_manifest,
+                                                    trial_attempt_fixture, quality):
+        _use_temp_feedback(tmp_path, monkeypatch)
+        results = copy.deepcopy(trial_attempt_fixture)
+        _bind_authoritative_identity(tmp_path, results)
+        results["quality_by_profile"] = quality
+>       with pytest.raises(ValueError, match="quality_by_profile"):
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_profile_trial_ingest.py:456: Failed
+___________ test_invalid_quality_refuses_all_trial_writes[quality5] ____________
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-813/test_invalid_quality_refuses_a5')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x106a75730>
+trial_manifest = {'schema': 'orchestrator.model-profile-trial', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'created_at': 1000, ...}
+trial_attempt_fixture = {'schema': 'orchestrator.model-profile-trial-results', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'packet_hash': 'sha256:343604df7f0b27aa9df5507a34fd48beffdc1627987439c7b89e72af715a7605', ...}
+quality = {'codex-6-astra-high': inf}
+
+    @pytest.mark.parametrize("quality", [[], {"unknown": .5}, {"codex-6-astra-high": True},
+                                         {"codex-6-astra-high": "invalid"},
+                                         {"codex-6-astra-high": float("nan")},
+                                         {"codex-6-astra-high": float("inf")},
+                                         {"codex-6-astra-high": 1.5}])
+    def test_invalid_quality_refuses_all_trial_writes(tmp_path, monkeypatch, trial_manifest,
+                                                    trial_attempt_fixture, quality):
+        _use_temp_feedback(tmp_path, monkeypatch)
+        results = copy.deepcopy(trial_attempt_fixture)
+        _bind_authoritative_identity(tmp_path, results)
+        results["quality_by_profile"] = quality
+>       with pytest.raises(ValueError, match="quality_by_profile"):
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_profile_trial_ingest.py:456: Failed
+___________ test_invalid_quality_refuses_all_trial_writes[quality6] ____________
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-813/test_invalid_quality_refuses_a6')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10509e5a0>
+trial_manifest = {'schema': 'orchestrator.model-profile-trial', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'created_at': 1000, ...}
+trial_attempt_fixture = {'schema': 'orchestrator.model-profile-trial-results', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'packet_hash': 'sha256:343604df7f0b27aa9df5507a34fd48beffdc1627987439c7b89e72af715a7605', ...}
+quality = {'codex-6-astra-high': 1.5}
+
+    @pytest.mark.parametrize("quality", [[], {"unknown": .5}, {"codex-6-astra-high": True},
+                                         {"codex-6-astra-high": "invalid"},
+                                         {"codex-6-astra-high": float("nan")},
+                                         {"codex-6-astra-high": float("inf")},
+                                         {"codex-6-astra-high": 1.5}])
+    def test_invalid_quality_refuses_all_trial_writes(tmp_path, monkeypatch, trial_manifest,
+                                                    trial_attempt_fixture, quality):
+        _use_temp_feedback(tmp_path, monkeypatch)
+        results = copy.deepcopy(trial_attempt_fixture)
+        _bind_authoritative_identity(tmp_path, results)
+        results["quality_by_profile"] = quality
+>       with pytest.raises(ValueError, match="quality_by_profile"):
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_profile_trial_ingest.py:456: Failed
+=========================== short test summary info ============================
+FAILED tests/test_profile_trial_ingest.py::test_invalid_quality_refuses_all_trial_writes[quality0]
+FAILED tests/test_profile_trial_ingest.py::test_invalid_quality_refuses_all_trial_writes[quality1]
+FAILED tests/test_profile_trial_ingest.py::test_invalid_quality_refuses_all_trial_writes[quality2]
+FAILED tests/test_profile_trial_ingest.py::test_invalid_quality_refuses_all_trial_writes[quality3]
+FAILED tests/test_profile_trial_ingest.py::test_invalid_quality_refuses_all_trial_writes[quality4]
+FAILED tests/test_profile_trial_ingest.py::test_invalid_quality_refuses_all_trial_writes[quality5]
+FAILED tests/test_profile_trial_ingest.py::test_invalid_quality_refuses_all_trial_writes[quality6]
+7 failed in 0.61s
+
+EXIT 1

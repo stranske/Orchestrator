@@ -574,9 +574,23 @@ def _authoritative_identity_verified(attempts: list[dict[str, Any]]) -> bool:
         expected_hash = str(evidence.get("artifact_sha256") or "")
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_hash):
             return False
-        actual_hash = "sha256:" + hashlib.sha256(artifact_path.read_bytes()).hexdigest()
-        if actual_hash != expected_hash:
+        try:
+            raw = artifact_path.read_bytes()
+            if len(raw) > 64 * 1024:
+                return False
+            actual_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
+            if actual_hash != expected_hash:
+                return False
+            artifact = json.loads(raw)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return False
+        if not isinstance(artifact, dict):
+            return False
+        # A digest alone binds bytes, not worker identity. Require the recorded
+        # identity content to agree with every provider-resolved attempt field.
+        for field in ("profile_id", "provider_resolved_provider", "provider_resolved_model"):
+            if not attempt.get(field) or artifact.get(field) != attempt[field]:
+                return False
     return True
 
 
