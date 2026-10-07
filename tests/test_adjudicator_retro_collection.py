@@ -494,3 +494,49 @@ def test_acceptance_ignores_git_replacement_objects(repository):
     )
     assert result["complete"] is True
     assert result["acceptance_artifacts"][0]["bytes_utf8"] == "answer = 'evaluated'\n"
+
+
+@pytest.mark.parametrize(
+    "variable",
+    [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_NAMESPACE",
+    ],
+)
+def test_git_location_environment_cannot_redirect_collection(monkeypatch, tmp_path, variable):
+    """Keep inherited repository locations out of the local Git child."""
+    monkeypatch.setenv(variable, "foreign-location")
+    monkeypatch.setenv("COLLECTOR_TEST_PRESERVE", "yes")
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(kwargs)
+        return subprocess.CompletedProcess(argv, 0, stdout=b"ok")
+
+    monkeypatch.setattr(retro.subprocess, "run", run)
+    retro._local_git(tmp_path, "rev-parse", "HEAD")
+    assert variable not in calls[0]["env"]
+    assert calls[0]["env"]["COLLECTOR_TEST_PRESERVE"] == "yes"
+    assert calls[0]["env"]["GIT_NO_LAZY_FETCH"] == "1"
+    assert calls[0]["env"]["GIT_NO_REPLACE_OBJECTS"] == "1"
+
+
+def test_actual_inherited_git_dir_cannot_change_recorded_repository(
+    repository, monkeypatch, tmp_path
+):
+    """Read the supplied repository even when a hook exports a foreign GIT_DIR."""
+    repo, evaluated = repository
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    git(foreign, "init", "-q")
+    monkeypatch.setenv("GIT_DIR", str(foreign / ".git"))
+    result = retro.collect_case_evidence(
+        acceptance_case(evaluated, ["git-path:src/subject.py"]), repository=repo
+    )
+    assert result["complete"] is True
+    assert result["acceptance_artifacts"][0]["bytes_utf8"] == "answer = 'evaluated'\n"

@@ -410,6 +410,19 @@ def _case_evaluated_sha(case: dict) -> str | None:
     )
 
 
+_GIT_LOCATION_VARS = frozenset(
+    {
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_NAMESPACE",
+    }
+)
+
+
 def _local_git(repo: Path, *args: str) -> bytes:
     """Read only local object data; callers must not turn this into a fetch path."""
     return subprocess.run(
@@ -417,7 +430,11 @@ def _local_git(repo: Path, *args: str) -> bytes:
         capture_output=True,
         check=True,
         timeout=30,
-        env={**os.environ, "GIT_NO_LAZY_FETCH": "1", "GIT_NO_REPLACE_OBJECTS": "1"},
+        env={
+            **{key: value for key, value in os.environ.items() if key not in _GIT_LOCATION_VARS},
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+        },
     ).stdout
 
 
