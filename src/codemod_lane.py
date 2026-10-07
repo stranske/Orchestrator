@@ -594,21 +594,33 @@ def campaign_measure(target: str, merged_prs: list[dict[str, Any]]) -> dict[str,
     """Project delivery durability and all target attempt costs from Brain evidence."""
     import feedback
 
-    result: dict[str, Any] = {"durable": None, "cost_usd": None, "measurement": "UNKNOWN"}
+    result: dict[str, Any] = {
+        "durable": None,
+        "cost_usd": None,
+        "observed_complete_cost_usd": None,
+        "measurement": "UNKNOWN",
+    }
     if not feedback.DB_PATH.exists():
         return result
     numbers = {p["number"] for p in merged_prs}
+    repo = target.rsplit("#", 1)[0]
+    targets = sorted({target, *(f"{repo}#{number}" for number in numbers)})
     try:
         with closing(
             sqlite3.connect(feedback.DB_PATH.resolve().as_uri() + "?mode=ro", uri=True)
         ) as conn:
             rows = conn.execute(
-                "SELECT r.pr_number,o.merged,o.durability,c.cost_usd,c.source "
+                "SELECT r.pr_number,o.merged,o.durability,c.cost_usd,c.source,r.target "
                 "FROM runs r LEFT JOIN outcomes o ON o.run_id=r.run_id "
-                "LEFT JOIN costs c ON c.run_id=r.run_id WHERE r.target=?",
-                (target,),
+                "LEFT JOIN costs c ON c.run_id=r.run_id WHERE r.target IN ("
+                + ",".join("?" for _ in targets)
+                + ")",
+                targets,
             ).fetchall()
         if not rows:
+            return result
+        if any(r[5] != target and r[0] != int(r[5].rsplit("#", 1)[1]) for r in rows):
+            result["measurement"] = "UNKNOWN: linked PR target/number mismatch"
             return result
         attributed = [r for r in rows if r[0] in numbers]
         if {r[0] for r in attributed} != numbers or any(r[1] != 1 for r in attributed):
@@ -628,9 +640,16 @@ def campaign_measure(target: str, merged_prs: list[dict[str, Any]]) -> dict[str,
             for r in rows
             if r[1] is not None and r[3] and r[3] > 0 and r[4] in feedback.COMPLETE_COST_SOURCES
         ]
-        if len(costs) == len(rows):
+        if costs:
+            result["observed_complete_cost_usd"] = sum(costs)
+        source_attempts_seen = any(r[5] == target for r in rows)
+        if source_attempts_seen and len(costs) == len(rows):
             result["cost_usd"] = sum(costs)
-        result["measurement"] = "attributed Brain outcomes; missing fields UNKNOWN"
+        result["measurement"] = (
+            "attributed Brain outcomes; missing fields UNKNOWN"
+            if source_attempts_seen
+            else "attributed linked PR outcomes; source attempts unavailable, total cost UNKNOWN"
+        )
     except sqlite3.Error as exc:
         result["measurement"] = "UNKNOWN: " + str(exc)
     return result

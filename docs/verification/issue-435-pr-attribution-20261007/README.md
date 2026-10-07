@@ -1,0 +1,11 @@
+# Campaign PR receipt attribution
+
+The live campaign refresh found six merged children but zero source-issue-keyed Brain rows. An expanded read found five authenticated existing keepalive rows keyed to the exact linked PRs. These were silently excluded from `campaign_measure` by its source-only query.
+
+The reader now includes the source target and exact same-repository linked PR targets, rejects PR target/number disagreement and excludes cross-repository same-number rows. Pending durability stays UNKNOWN. `observed_complete_cost_usd` reports only observed completed costs from an existing approved complete source; `cost_usd` remains UNKNOWN without source-attempt coverage or when any known attempt has missing/incomplete costs. Partial keepalive cost is never substituted for whole-delivery cost.
+
+Four new real-SQLite regressions fail on the original production source at `2cf8592` and pass after repair; all 27 campaign tests pass. Cases cover PR-only pending/durable outcomes with absent source-attempt evidence, source+PR+failed-attempt aggregation and incomplete-cost rejection, cross-repo collisions, and PR identity disagreement. The source/test hashes and raw RED/GREEN logs are retained. Existing complete source 2623 pytest / 103 selftests / five gates receipt is separate. The new union floor 2627 adds these four executed nodes and preserves every ceiling; full current local verifier is running and hosted verification remains required.
+
+Native record-campaign updated existing ledger to 6/6 merged before this repair, without apply/dispatch. Five native partial costs are visible only in the expanded read; all six total costs and durability remain UNKNOWN. This repair does not fabricate missing opener cost/attempt receipts, change complete-cost admission, run a paid experiment, activate a dispatcher or close broad source #435. Next: fresh full verification, expected topology, unchanged head, zero active threads, seven-minute review floor, guarded squash and actual compare.
+
+Related campaign, outcome and line-ending validation: 40 passed and 11 subtests passed. The failed exploratory command naming nonexistent `tests/test_range_lane_rollout.py` is retained in the lane receipt only; it is not validation evidence. Exact formatted test bytes fail four cases on original production and pass all 27 on the repaired production source.

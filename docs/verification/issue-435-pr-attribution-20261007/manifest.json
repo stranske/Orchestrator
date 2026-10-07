@@ -1,0 +1,17 @@
+{
+  "src/codemod_lane.py": "2cd3b358fc866e98bec9ae5ead8717720e790e1fa881838efa6ffa00693546b0",
+  "tests/test_codemod_campaign.py": "542c91bda33c89123e38a99ac1ccc4f7ccd88762a9a88a226fd6d29bf1508717",
+  ".verify-floor.json": "b2d89f1750cc7fd46b783603d1a0ae4afaec88690756ca5129e7a44bedbe7263",
+  "docs/verification/issue-435-pr-attribution-20261007/435-red-exact.log.gz": "35ef356a4a5f23014ddff032cf72603f6ba6e3d687ebc94997d49649bfbb5831",
+  "docs/verification/issue-435-pr-attribution-20261007/435-exact-proof.json.gz": "04e6d92a7d3b3ab8035cab322ddf66fee261e464dd8a426d4904d759cf326a9e",
+  "docs/verification/issue-435-pr-attribution-20261007/435-green.log.gz": "285ecf0c54427a8a0bb61e4f345456902fca97be6f23e281182bef4dee28bf21",
+  "docs/verification/issue-435-pr-attribution-20261007/435-expanded-attribution.json.gz": "82224993bcd26bb606b443c9126656aca4d0ae4c3f49a073b4b4d2fe3ff1c369",
+  "docs/verification/issue-435-pr-attribution-20261007/435-mypy.log.gz": "b7b3744425ec7812f48491bdae047f55f17494f5b37aac98048efd9131215b93",
+  "docs/verification/issue-435-pr-attribution-20261007/435-red-exact.xml.gz": "46ba797c044404b29e3edcafbd711a9b9f4fe2c55fd93178c35b27d2a56420d6",
+  "docs/verification/issue-435-pr-attribution-20261007/README.md": "19b82730e6b06a1d2c5c404676435ec21348f7c7f7ba3624fd3e19369361d404",
+  "docs/verification/issue-435-pr-attribution-20261007/435-repaired-reader-live.json.gz": "72192c9b0e66871ce4726265d0537b95d81c78767f85d82e1bc8f18037ac28a4",
+  "docs/verification/issue-435-pr-attribution-20261007/435-green-exact.xml.gz": "79ee58823770669dd64e244105371bbba0a617f73975a72aa9e6b356dd9bc805",
+  "docs/verification/issue-435-pr-attribution-20261007/435-red.log.gz": "7ca8d6f84e8736d90479ea303bff58a2aa2d90830a902859ef7f76afd764474a",
+  "docs/verification/issue-435-pr-attribution-20261007/435-related-tests.log.gz": "67c4f5d62b01cfc1afcb87e1fa449f7b337ece00a1202220a642796e5efe4a45",
+  "docs/verification/issue-435-pr-attribution-20261007/435-green-exact.log.gz": "996d20c112111ffc3394461e962494aa7126fcb54d0b00d4e20ddb99416ee429"
+}
