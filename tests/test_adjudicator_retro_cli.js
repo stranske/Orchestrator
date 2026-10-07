@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { createHash } = require('node:crypto');
 const { test } = require('node:test');
 
 const repo = path.resolve(__dirname, '..');
@@ -114,6 +115,95 @@ function world(t) {
     refresh: () => run([path.join(modules, 'adjudicator_retro.py'), '--dispatch', '--limit', '0']),
     brain: () => run(['-c', snapshot]),
   };
+}
+
+for (const [name, artifactPath, content, executable] of [
+  ['empty', 'artifacts/empty.log', '', false],
+  ['unicode', 'artifacts/résumé\tresult\n.log', 'résultat: réussi ✓\n', false],
+  ['CRLF', 'artifacts/windows.log', 'first\r\nsecond\r\n', false],
+  ['executable without final newline', 'artifacts/check.sh', '#!/bin/sh\nexit 0', true],
+  ['embedded NUL', 'artifacts/nul.log', 'first\0second\n', false],
+]) {
+  test(`collection CLI preserves exact ${name} artifact bytes and provenance`, (t) => {
+    const w = world(t);
+    const checkout = path.join(w.root, 'checkout');
+    fs.mkdirSync(path.join(checkout, 'artifacts'), { recursive: true });
+    function git(...args) {
+      const output = path.join(w.root, 'git-stdout');
+      const errors = path.join(w.root, 'git-stderr');
+      const stdout = fs.openSync(output, 'w');
+      const stderr = fs.openSync(errors, 'w');
+      try {
+        const result = spawnSync('git', ['-C', checkout, ...args], {
+          env: { PATH: process.env.PATH }, stdio: ['ignore', stdout, stderr], timeout: 10000,
+        });
+        assert.ifError(result.error);
+        assert.equal(result.status, 0, fs.readFileSync(errors, 'utf8'));
+        return fs.readFileSync(output, 'utf8').trim();
+      } finally {
+        fs.closeSync(stdout);
+        fs.closeSync(stderr);
+        fs.rmSync(output);
+        fs.rmSync(errors);
+      }
+    }
+    git('init', '-q');
+    git('config', 'user.name', 'Collector Test');
+    git('config', 'user.email', 'collector@example.com');
+    // Prevent inherited text conversion rules from changing our expected Git bytes.
+    git('config', 'core.autocrlf', 'false');
+    const raw = Buffer.from(content, 'utf8');
+    fs.writeFileSync(path.join(checkout, artifactPath), raw);
+    git('add', '--', artifactPath);
+    if (executable) git('update-index', '--chmod=+x', '--', artifactPath);
+    git('commit', '-qm', 'evaluated artifact');
+    const evaluated = git('rev-parse', 'HEAD');
+    const blob = git('rev-parse', `${evaluated}:${artifactPath}`);
+    assert.ok(git('ls-tree', evaluated, '--', artifactPath).startsWith(
+      executable ? '100755 blob ' : '100644 blob ',
+    ));
+    // Neither the current branch nor a dirty worktree may supply acceptance bytes.
+    fs.writeFileSync(path.join(checkout, artifactPath), 'new HEAD\n');
+    git('commit', '-am', 'new artifact', '-q');
+    fs.unlinkSync(path.join(checkout, artifactPath));
+    const report = path.join(w.root, 'saved.json');
+    const output = path.join(w.root, 'collection.json');
+    const location = `git-path:${artifactPath}`;
+    const criterion = 'declared artifact';
+    const saved = JSON.stringify({ rows: [{
+      case_id: 'exact-artifact', decision: 'uphold_blocker', cost_usd: 1.5,
+      packet: { disputed_finding: { decision: { evaluated_sha: evaluated } } },
+      collection_requirements: {
+        source_paths: [], acceptance: [{ criterion, location }],
+      },
+    }] });
+    fs.writeFileSync(report, saved);
+    const summary = w.run([
+      path.join(modules, 'adjudicator_retro.py'), '--collect-case', 'exact-artifact',
+      '--report', report, '--output', output, '--repository', checkout,
+      '--byte-limit', String(Math.max(1, raw.length)),
+    ]);
+    const result = JSON.parse(fs.readFileSync(output, 'utf8'));
+    assert.equal(summary.complete, true);
+    assert.equal(result.complete, true);
+    assert.deepEqual(result.gaps, []);
+    assert.equal(result.repository, fs.realpathSync(checkout));
+    assert.equal(result.evaluated_sha, evaluated);
+    assert.deepEqual(result.sources, []);
+    assert.equal(result.acceptance_artifacts.length, 1);
+    assert.deepEqual(result.acceptance_artifacts[0], {
+      path: artifactPath, evaluated_sha: evaluated, complete: true,
+      blob_sha: blob, byte_length: raw.length,
+      sha256: createHash('sha256').update(raw).digest('hex'), bytes_utf8: content,
+      criterion, location, inventory_index: 0,
+    });
+    assert.deepEqual(Buffer.from(result.acceptance_artifacts[0].bytes_utf8, 'utf8'), raw);
+    assert.equal(result.completeness_scope, 'supplied_inventory_only');
+    assert.equal(result.inventory_exhaustiveness, 'unverified');
+    assert.equal(result.acceptance_semantics, 'unassessed');
+    assert.equal(fs.readFileSync(report, 'utf8'), saved);
+    assert.equal(fs.existsSync(path.join(w.root, 'brain.db')), false);
+  });
 }
 
 const initializeDisputes = `

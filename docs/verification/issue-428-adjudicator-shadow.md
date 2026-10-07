@@ -291,3 +291,20 @@ The existing CLI takes the explicit inventory already saved in its report input:
 Validation: 82 focused tests plus 23 subtests, 10 CLI tests, and all six module self-test checks pass. Exact collection is 2570; the floor adds 27 exercised nodes to the previous 2543 union, with every ceiling preserved. This does not claim a new full-suite run. Two deliberate faults (reading HEAD instead of the evaluated commit, and letting inventory fields overwrite provenance) each fail the targeted regression; byte-identical restoration passes. Black, Ruff and mypy pass. A supplied partial real inventory independently retrieved 12515 bytes whose SHA-256 and Git blob identity matched the evaluated commit; this demonstrates transport only, not exhaustive or semantic acceptance.
 
 Same-round PR508 review found inherited Git repository-location variables could override the supplied repository. The child environment now removes GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES, GIT_COMMON_DIR and GIT_NAMESPACE while retaining ordinary environment and the offline/identity fences. An actual foreign-GIT_DIR regression fails on705a17e and passes after repair; seven additional environment cases verify stripping. Final focused gate90PASS/23subtests; exact collection2578 with every ceiling preserved, not a new full-suite execution claim.
+
+Keepalive CLI verification adds five end-to-end acceptance collection regressions: empty content,
+Unicode content and a Unicode/tab/newline path, CRLF content, an executable file without a final
+newline, and valid UTF-8 containing a NUL byte. Each invokes the production `--collect-case` CLI
+after moving HEAD and deleting the working file, then independently checks the saved JSON content,
+byte length, Git blob identity and SHA-256. The nonempty cases use an exact byte-length limit.
+Every case also checks inventory identity, the collection-only scope markers, an unchanged saved
+report and no Brain database creation. `node tests/test_adjudicator_retro_cli.js` passes all 15
+tests; `python3 src/adjudicator_retro.py --selftest` passes all six checks. JavaScript syntax and
+diff whitespace checks pass. No Python files or pytest collection counts change. The Python
+suite and Black were unavailable in this runner, and package installation was blocked by network
+access; the earlier full hosted verification requirement remains outstanding.
+
+Verified keepalive task:
+
+- [x] Retrospective collection can now capture acceptance artifacts stored at literal Git paths
+  in the evaluated revision, recording their content and provenance.
