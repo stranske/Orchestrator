@@ -181,3 +181,32 @@ PR #507 was verified open with `draft=false` at head
 implementation checkboxes, add `needs-human` and post the validation/blocker comment
 were each rejected by the connector: mutations require approval, while this run's
 approval policy is `never`. Remote tracking remains unchanged.
+
+## Keepalive mixed-disposition comparison, 2026-10-07
+
+Reviewed the recent collector and keepalive commits before continuing. The report,
+contested-verdict closer binding and switch-review line already exist. All eight
+existing CLI regressions passed before changes, supporting reconciliation of those
+three implementation checkboxes; the two named pytest acceptance checkboxes remain
+unchecked. The connector rejected the PR-body update, `needs-human` label and blocker
+comment because mutations require approval and this run's approval policy is `never`. The proposed
+reconciled body is retained in `/tmp/orchestrator-pr507-reconciled-body.md`.
+
+The added JavaScript regression compares raw proposals against later truth across
+merged, unmerged and unknown merge dispositions, including a reworked outcome.
+An unknown merge disposition excludes its case from both agreement denominators;
+when that fact arrives, both denominators admit it. Measured costs retain their
+independent population, including an abstention and a measured zero. Saved proposal
+identities, effective evidence floors and complete Brain snapshots remain unchanged.
+
+All nine CLI tests, all five evidence unittest tests and the three module selftest
+checks passed. In temporary source copies, forcing known merge dispositions to PASS
+and admitting unknown merge dispositions each made the new regression fail. Both
+copies were restored byte for byte; repository Python source is unchanged.
+
+Pytest and Black are unavailable in both Python environments checked; an installation
+attempt could not resolve a pytest distribution. The named pytest acceptance tests
+and their specific outcome-write/unconditional-offer faults remain pending. This
+round changes JavaScript tests and this note only. Git cannot create `index.lock` in
+the read-only checkout metadata; an isolated Git directory holds the commit and a
+bundle for transfer.

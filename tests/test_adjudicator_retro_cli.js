@@ -501,6 +501,67 @@ print(json.dumps(True))
   assert.deepEqual(restored.proposal_comparison, initial.proposal_comparison);
 });
 
+test('retro CLI compares both rules on the same cases with mixed merge dispositions', (t) => {
+  const w = world(t);
+  w.run(['-c', initialize]);
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("UPDATE outcomes SET merged=0 WHERE run_id='original-1'")
+    conn.execute("UPDATE outcomes SET merged=NULL WHERE run_id='original-2'")
+    conn.execute("UPDATE outcomes SET durability='reworked' WHERE run_id='original-3'")
+print(json.dumps(True))
+`]);
+  const before = w.brain();
+  const summary = w.refresh();
+  const initial = w.report();
+  assert.deepEqual(initial.summary, summary);
+  assert.deepEqual(initial.proposal_comparison, {
+    evidence_basis: 'raw_metadata_proposals', cases: 6, proposed_decisions: 4,
+    compared: 3, pending_truth: 0, missing_merge_disposition: 1, abstained: 1, unassessed: 1,
+    agree: 3, disagree: 0, agreement_rate: 1,
+    merge_rule_agree: 2, merge_rule_disagree: 1, merge_rule_agreement_rate: 2 / 3,
+    cost_usd: 4.5, cost_measured_cases: 4, cost_per_case: 1.125,
+  });
+  assert.deepEqual(initial.rows.map((row) => row.proposal_comparison), [
+    { verdict: 'PASS', agrees: true, merge_rule_agrees: true },
+    { verdict: 'FAIL', agrees: true, merge_rule_agrees: true },
+    { verdict: 'PASS', agrees: null, merge_rule_agrees: null },
+    { verdict: 'FAIL', agrees: true, merge_rule_agrees: false },
+    { verdict: null, agrees: null, merge_rule_agrees: null },
+    { verdict: null, agrees: null, merge_rule_agrees: null },
+  ]);
+  assert.deepEqual(w.brain(), before);
+
+  // Clearing the last missing merge fact admits the case to BOTH denominators.
+  // Its zero-dollar ledger entry must still stay outside measured-cost counts.
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("UPDATE outcomes SET merged=0 WHERE run_id='original-2'")
+print(json.dumps(True))
+`]);
+  const changedBrain = w.brain();
+  w.refresh();
+  const compared = w.report();
+  assert.deepEqual(compared.proposal_comparison, {
+    ...initial.proposal_comparison,
+    compared: 4, missing_merge_disposition: 0,
+    agree: 3, disagree: 1, agreement_rate: 0.75,
+    merge_rule_agree: 3, merge_rule_disagree: 1, merge_rule_agreement_rate: 0.75,
+  });
+  assert.deepEqual(compared.rows[2].proposal_comparison, {
+    verdict: 'PASS', agrees: false, merge_rule_agrees: true,
+  });
+  assert.deepEqual(compared.rows.map((row) => [row.case_id, row.role_run_id, row.decision]),
+    initial.rows.map((row) => [row.case_id, row.role_run_id, row.decision]));
+  assert.deepEqual(compared.summary, initial.summary,
+    'raw proposal comparisons must not upgrade effective verdicts or change costs');
+  assert.deepEqual(w.brain(), changedBrain, 'comparison refresh must not write any Brain table');
+});
+
 test('retro CLI publishes an empty report without inventing agreement or cost', (t) => {
   const w = world(t);
   w.run(['-c', 'import json, feedback; feedback._conn().close(); print(json.dumps(True))']);
