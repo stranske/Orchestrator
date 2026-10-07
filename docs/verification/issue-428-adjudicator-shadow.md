@@ -3,6 +3,30 @@
 This extends the existing AdjudicatorAgent and Brain role-run recorder. Source implementation
 and local replay are distinct from runtime publication, which remains manual.
 
+## Keepalive switch-review reconciliation, 2026-10-07
+
+- [x] Verify `adjudicator shadow: cases N, agree A, disagree D, cost C` through
+  `switch_review.review()` and `format_report()` using the persisted report.
+
+The implementation already existed; the remaining PR checkbox was stale. A new Node
+regression covers measured, unmeasured, missing, malformed and incomplete saved summaries.
+Each line renders exactly once, the shadow evidence raises no owner decision, and the
+review neither changes saved state nor calls replay, dispute collection, evidence fetching,
+adjudication or the Brain connection.
+
+Validation: Node CLI suite 37 passed; evidence unittest suite 5 passed; JavaScript syntax
+and `git diff --check` passed. In isolated source copies, disconnecting the reader,
+disconnecting the renderer and invoking replay from review each failed the new test;
+restoration passed. Repository Python source was unchanged. Pytest/Black are unavailable
+and installation failed, so the named pytest acceptance tests were not rerun here.
+
+PR #511 was confirmed open and ready. The connector rejected the reconciled PR-body
+update, blocker label and comment because approval is required and this run's policy is
+`never`. The checked body
+and mutation evidence are saved under `/tmp/issue-428-switch-review-verification/`.
+Git metadata is read-only; the focused test and note are committed in an isolated Git
+directory with a patch and bundle for transfer.
+
 ## Keepalive gate-page evidence validation, 2026-10-07
 
 - [x] Verify packet construction from the merge-bound verifier comment, merged diff
