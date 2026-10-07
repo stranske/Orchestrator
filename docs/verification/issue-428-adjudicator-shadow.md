@@ -256,3 +256,108 @@ entry); byte-identical candidate restoration returns 25 collector tests GREEN.
 This establishes sensitivity to the source behavior, rather than a fixture-only
 failure. The broader issue #428 remains open for its remaining evidence transport,
 acceptance inventories, measured cost and later-truth requirements.
+
+
+## Explicit evaluated-revision acceptance artifact transport
+
+Dedup: the existing collector and its CLI already own immutable source byte collection.
+The previous validator unconditionally marked every acceptance location missing. Concept searches,
+current capability inventory, historical dormancy scan and the improvement-log accessor were
+checked; this extends that collector rather than creating a second role, report or transport.
+Sol6.1Medium assessment d517c8b91366feef94b24c035c4c1875032c1019f425cb057052f63bc345f2e2
+confirmed this narrow increment and identified offline/lazy-fetch and replacement-object fences.
+The assessed topic files at its a921fa7 checkout are byte-identical to merged main80c26f1; this
+was independently checked after fetching main. The assessment is design evidence, not a test result.
+
+An explicit saved requirement may now use `{"criterion":"named transcript",
+"location":"git-path:docs/evidence/result.log"}`. The collector resolves that literal regular
+blob only at the case's evaluated SHA; it retains the full UTF-8 bytes, Git blob ID, size and
+SHA256, plus the exact criterion/location and inventory slot. Unsupported transports, unsafe or
+invalid paths, missing or nonregular objects, invalid UTF-8, oversized and contradictory content
+remain incomplete. Metadata from the requirement cannot overwrite collector provenance. Git
+reads disable lazy fetching and replacement objects, preserving the no-network boundary.
+
+`complete` means only complete byte collection for the supplied inventory, as explicitly recorded
+by `completeness_scope=supplied_inventory_only`, `inventory_exhaustiveness=unverified` and
+`acceptance_semantics=unassessed`. Possessing a test file or log does not prove the required
+controls ran successfully. Empty/missing acceptance inventories still block collection. No
+original saved report, metadata floor, outcomes, costs or accepted adjudications are changed.
+Machine-local and hosted artifact transports remain unresolved; source428 stays OPEN.
+
+The existing CLI takes the explicit inventory already saved in its report input:
+`python3 src/adjudicator_retro.py --collect-case CASE --report saved.json --output collected.json
+--repository /local/repo`. The output must remain separate from the saved report.
+
+Validation: 82 focused tests plus 23 subtests, 10 CLI tests, and all six module self-test checks pass. Exact collection is 2570; the floor adds 27 exercised nodes to the previous 2543 union, with every ceiling preserved. This does not claim a new full-suite run. Two deliberate faults (reading HEAD instead of the evaluated commit, and letting inventory fields overwrite provenance) each fail the targeted regression; byte-identical restoration passes. Black, Ruff and mypy pass. A supplied partial real inventory independently retrieved 12515 bytes whose SHA-256 and Git blob identity matched the evaluated commit; this demonstrates transport only, not exhaustive or semantic acceptance.
+
+Same-round PR508 review found inherited Git repository-location variables could override the supplied repository. The child environment now removes GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES, GIT_COMMON_DIR and GIT_NAMESPACE while retaining ordinary environment and the offline/identity fences. An actual foreign-GIT_DIR regression fails on 705a17e and passes after repair; seven additional environment cases verify stripping. Final focused gate 90 PASS / 23 subtests; exact collection 2578 with every ceiling preserved, not a new full-suite execution claim.
+
+Keepalive CLI verification adds five end-to-end acceptance collection regressions: empty content,
+Unicode content and a Unicode/tab/newline path, CRLF content, an executable file without a final
+newline, and valid UTF-8 containing a NUL byte. Each invokes the production `--collect-case` CLI
+after moving HEAD and deleting the working file, then independently checks the saved JSON content,
+byte length, Git blob identity and SHA-256. The nonempty cases use an exact byte-length limit.
+Every case also checks inventory identity, the collection-only scope markers, an unchanged saved
+report and no Brain database creation. `node tests/test_adjudicator_retro_cli.js` passes all 15
+tests; `python3 src/adjudicator_retro.py --selftest` passes all six checks. JavaScript syntax and
+diff whitespace checks pass. No Python files or pytest collection counts change. The Python
+suite and Black were unavailable in this runner, and package installation was blocked by network
+access; the earlier full hosted verification requirement remains outstanding.
+
+Verified keepalive task:
+
+- [x] Retrospective collection can now capture acceptance artifacts stored at literal Git paths
+  in the evaluated revision, recording their content and provenance.
+
+Keepalive gap verification adds an end-to-end CLI regression with two identical valid acceptance
+declarations and eleven unresolved locations in one supplied inventory. It verifies separate
+inventory indices, preserved valid source/artifact bytes, and an exact missing-evidence gap for
+each unavailable, unsafe, oversized, non-UTF-8, symlink, directory, gitlink, literal glob or
+unsupported transport location. The oversized record retains its size without content or a
+content hash. Both CLI output and the saved collection agree on the gaps; scope markers, the
+original report and the absence of a Brain database are checked. The shared Git fixture helper
+retains the existing isolated child environment and file-based output capture.
+
+Validation in this round: all 16 CLI tests and all six collector self-test checks pass, as do
+JavaScript syntax and diff whitespace checks. No Python files or pytest collection counts change.
+Pytest and Black are unavailable in this runner; full hosted verification remains outstanding.
+Recent commits 705a17e, 199a9a9 and 47e63d1 were reviewed before this follow-up. The GitHub
+connector rejected the PR checklist reconciliation because its approval policy is `never`, so
+the verified task state below has not been applied to the PR body in this round.
+
+- [x] **New Features**
+  - [x] Retrospective collection can capture acceptance artifacts at literal Git paths in the
+    evaluated revision, recording their content and provenance.
+  - [x] Collection checks artifacts against the supplied inventory and reports gaps for
+    unavailable, unsafe, oversized, or invalid content.
+  - [x] Results clarify that collection covers only the supplied inventory and does not verify
+    its completeness or acceptance success.
+- [x] **Documentation**
+  - [x] Added guidance on acceptance-artifact collection and its limitations.
+
+Further keepalive verification adds a CLI regression supplying false completeness, evaluated
+revision, path, blob identity, byte length, content hash, content and inventory-index fields for
+valid, missing and unsupported artifacts. Collected provenance remains authoritative, and the
+unresolved entries retain their inventory gaps. All 17 CLI tests pass; the baseline six module
+self-test checks, JavaScript syntax and diff whitespace checks pass. No Python files or pytest
+collection counts change; pytest and Black remain unavailable. PR508 was verified open and ready
+for review. Checklist reconciliation was attempted again, but the connector rejected the PR-body
+update because approval policy is `never`; the checked local list above remains the verified state.
+The local commit attempt was also blocked: `.git/index.lock` cannot be created because the Git
+directory is mounted read-only. The test and this validation note remain uncommitted in the workspace.
+
+The collection CLI summary now exposes the same `completeness_scope=supplied_inventory_only`,
+`inventory_exhaustiveness=unverified` and `acceptance_semantics=unassessed` fields as the saved
+collection, for both complete and incomplete results. A new end-to-end regression collects a
+failure transcript from a partial inventory: byte collection succeeds while acceptance stays
+unassessed, even when the saved case and inventory claim otherwise. An undeclared artifact is
+not collected; saved verdicts/costs remain unchanged and no Brain database is created.
+
+This round reviewed commits 705a17e through 2d96f20 before continuing and verified the existing
+17 CLI tests and six self-test checks. After the summary change, all 18 CLI tests and six self-test
+checks pass; JavaScript syntax and diff whitespace checks pass. Pytest and Black remain unavailable,
+including after an unsuccessful installation attempt. Both required Black commands were attempted
+and could not run, so these Python changes are not committed or pushed. No pytest nodes were added
+and the collection floor is unchanged. Full hosted verification remains required. The PR checklist
+reconciliation was attempted before implementation, but the connector required approval while the
+run's approval policy is `never`; the verified local checklist above remains the task record.

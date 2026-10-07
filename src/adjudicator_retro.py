@@ -6,8 +6,11 @@ missing verifier, diff, gate or later durability evidence stays unmeasured.
 
 ``--collect-case`` is intentionally separate from replay: it reads complete
 UTF-8 source blobs from one locally available evaluated commit and writes a
-separate collection record. It cannot fetch remotes, adjudicate, dispatch,
-write Brain/outcomes/role records, or claim acceptance evidence is complete.
+separate collection record. Explicit git-path: acceptance locations reuse the
+same bounded evaluated-revision blob reader. Complete means only complete for
+the supplied inventory; exhaustiveness and acceptance semantics remain unverified.
+It cannot fetch remotes, adjudicate, dispatch,
+write Brain/outcomes/role records, or claim semantic acceptance passed.
 
 Usage: ``python src/adjudicator_retro.py --collect-case CASE_ID --report
 saved.json --output collection.json --repository /local/git/checkout``.  The
@@ -407,14 +410,41 @@ def _case_evaluated_sha(case: dict) -> str | None:
     )
 
 
+_GIT_LOCATION_VARS = frozenset(
+    {
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_NAMESPACE",
+    }
+)
+
+
 def _local_git(repo: Path, *args: str) -> bytes:
     """Read only local object data; callers must not turn this into a fetch path."""
     return subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, check=True, timeout=30
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        check=True,
+        timeout=30,
+        env={
+            **{key: value for key, value in os.environ.items() if key not in _GIT_LOCATION_VARS},
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+        },
     ).stdout
 
 
 def _safe_source_path(path: str) -> bool:
+    if "\0" in path:
+        return False
+    try:
+        path.encode("utf-8")
+    except UnicodeError:
+        return False
     candidate = Path(path)
     return bool(path) and not candidate.is_absolute() and ".." not in candidate.parts
 
@@ -442,10 +472,19 @@ def validate_collected_evidence(result: dict) -> list[dict]:
                     "detail": "source bytes alone cannot establish acceptance completeness",
                 }
             )
-        # This first batch deliberately cannot fetch acceptance transports.  It
-        # records every required criterion as unresolved rather than implying it.
-        for criterion in requirements.get("acceptance", []):
-            gaps.append({"kind": "missing_acceptance_evidence", "criterion": criterion})
+        # Exact declared identity matters: one artifact must not satisfy another
+        # inventory slot merely because its criterion or path happens to match.
+        for index, criterion in enumerate(requirements.get("acceptance", [])):
+            covered = any(
+                record.get("complete") is True
+                and record.get("inventory_index") == index
+                and record.get("criterion") == criterion["criterion"]
+                and record.get("location") == criterion["location"]
+                and record.get("evaluated_sha") == result.get("evaluated_sha")
+                for record in result.get("acceptance_artifacts", [])
+            )
+            if not covered:
+                gaps.append({"kind": "missing_acceptance_evidence", "criterion": criterion})
     unique = []
     seen = set()
     for gap in gaps:
@@ -454,6 +493,86 @@ def validate_collected_evidence(result: dict) -> list[dict]:
             unique.append(gap)
             seen.add(encoded)
     return unique
+
+
+def _collect_git_blob(
+    repository: Path, evaluated_sha: str, path: str, byte_limit: int
+) -> tuple[dict[str, Any], list[dict]]:
+    """Read one regular evaluated-revision blob without lazy fetch or replacements."""
+    gaps: list[dict] = []
+    record: dict[str, Any] = {
+        "path": path,
+        "evaluated_sha": evaluated_sha,
+        "complete": False,
+    }
+    if not _safe_source_path(path):
+        gaps.append({"kind": "unsafe_source_path", "path": path})
+        return record, gaps
+    try:
+        # ``ls-tree -- <path>`` still interprets its final argument as a
+        # pathspec.  Keep it literal, then require its NUL-delimited
+        # response to name exactly one regular-file entry.  A directory
+        # or a glob/pathspec must never silently select its first child.
+        tree_entry = _local_git(
+            repository,
+            "--literal-pathspecs",
+            "ls-tree",
+            "-z",
+            evaluated_sha,
+            "--",
+            path,
+        )
+        entries = tree_entry.split(b"\0")
+        expected_name = path.encode("utf-8")
+        if len(entries) != 2 or not entries[0] or entries[1]:
+            raise ValueError("source path did not resolve to exactly one Git entry")
+        metadata_and_name = entries[0].split(b"\t", 1)
+        if len(metadata_and_name) != 2 or metadata_and_name[1] != expected_name:
+            raise ValueError("source path did not resolve to the requested Git entry")
+        metadata = metadata_and_name[0].split()
+        if (
+            len(metadata) != 3
+            or metadata[0] not in {b"100644", b"100755"}
+            or metadata[1] != b"blob"
+            or len(metadata[2]) != 40
+            or any(c not in b"0123456789abcdef" for c in metadata[2])
+        ):
+            raise ValueError("source path is not a regular Git blob")
+        blob = metadata[2].decode("ascii")
+        byte_length = int(_local_git(repository, "cat-file", "-s", blob))
+        record.update({"blob_sha": blob, "byte_length": byte_length})
+        if byte_length < 0:
+            raise ValueError("negative Git blob size")
+        if byte_length > byte_limit:
+            gaps.append(
+                {
+                    "kind": "source_byte_limit_exceeded",
+                    "path": path,
+                    "limit": byte_limit,
+                    "actual": byte_length,
+                }
+            )
+            return record, gaps
+        data = _local_git(repository, "cat-file", "blob", blob)
+    except (
+        OSError,
+        UnicodeDecodeError,
+        ValueError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+    ):
+        gaps.append({"kind": "missing_source_object", "path": path, "sha": evaluated_sha})
+        return record, gaps
+    if len(data) != record["byte_length"]:
+        gaps.append({"kind": "source_length_mismatch", "path": path})
+    record["sha256"] = hashlib.sha256(data).hexdigest()
+    try:
+        record["bytes_utf8"] = data.decode("utf-8")
+    except UnicodeDecodeError:
+        gaps.append({"kind": "unsupported_source_encoding", "path": path})
+    else:
+        record["complete"] = len(data) == record["byte_length"]
+    return record, gaps
 
 
 def collect_case_evidence(
@@ -474,6 +593,10 @@ def collect_case_evidence(
         "evaluated_sha": _case_evaluated_sha(case),
         "requirements": None,
         "sources": [],
+        "acceptance_artifacts": [],
+        "completeness_scope": "supplied_inventory_only",
+        "inventory_exhaustiveness": "unverified",
+        "acceptance_semantics": "unassessed",
         "gaps": [],
     }
     requirements, gaps = _collection_requirements(case)
@@ -494,80 +617,22 @@ def collect_case_evidence(
             evaluated_sha = None
     if requirements and evaluated_sha:
         for path in requirements["source_paths"]:
-            record: dict[str, Any] = {
-                "path": path,
-                "evaluated_sha": evaluated_sha,
-                "complete": False,
-            }
-            if not _safe_source_path(path):
-                result["gaps"].append({"kind": "unsafe_source_path", "path": path})
-                result["sources"].append(record)
-                continue
-            try:
-                # ``ls-tree -- <path>`` still interprets its final argument as a
-                # pathspec.  Keep it literal, then require its NUL-delimited
-                # response to name exactly one regular-file entry.  A directory
-                # or a glob/pathspec must never silently select its first child.
-                tree_entry = _local_git(
-                    repository,
-                    "--literal-pathspecs",
-                    "ls-tree",
-                    "-z",
-                    evaluated_sha,
-                    "--",
-                    path,
-                )
-                entries = tree_entry.split(b"\0")
-                expected_name = path.encode("utf-8")
-                if len(entries) != 2 or not entries[0] or entries[1]:
-                    raise ValueError("source path did not resolve to exactly one Git entry")
-                metadata_and_name = entries[0].split(b"\t", 1)
-                if len(metadata_and_name) != 2 or metadata_and_name[1] != expected_name:
-                    raise ValueError("source path did not resolve to the requested Git entry")
-                metadata = metadata_and_name[0].split()
-                if (
-                    len(metadata) != 3
-                    or metadata[0] not in {b"100644", b"100755"}
-                    or metadata[1] != b"blob"
-                ):
-                    raise ValueError("source path is not a regular Git blob")
-                blob = metadata[2].decode("ascii")
-                byte_length = int(_local_git(repository, "cat-file", "-s", blob))
-                record.update({"blob_sha": blob, "byte_length": byte_length})
-                if byte_length > byte_limit:
-                    result["gaps"].append(
-                        {
-                            "kind": "source_byte_limit_exceeded",
-                            "path": path,
-                            "limit": byte_limit,
-                            "actual": byte_length,
-                        }
-                    )
-                    result["sources"].append(record)
-                    continue
-                data = _local_git(repository, "cat-file", "blob", blob)
-            except (
-                OSError,
-                UnicodeDecodeError,
-                ValueError,
-                subprocess.CalledProcessError,
-                subprocess.TimeoutExpired,
-            ):
-                result["gaps"].append(
-                    {"kind": "missing_source_object", "path": path, "sha": evaluated_sha}
-                )
-                result["sources"].append(record)
-                continue
-            if len(data) != record["byte_length"]:
-                result["gaps"].append({"kind": "source_length_mismatch", "path": path})
-            record["sha256"] = hashlib.sha256(data).hexdigest()
-            try:
-                record["bytes_utf8"] = data.decode("utf-8")
-            except UnicodeDecodeError:
-                result["gaps"].append({"kind": "unsupported_source_encoding", "path": path})
-            else:
-                record["complete"] = len(data) == record["byte_length"]
+            record, gaps = _collect_git_blob(repository, evaluated_sha, path, byte_limit)
             result["sources"].append(record)
+            result["gaps"].extend(gaps)
+        for index, item in enumerate(requirements["acceptance"]):
+            location = item["location"]
+            if location.startswith("git-path:"):
+                record, gaps = _collect_git_blob(
+                    repository, evaluated_sha, location.removeprefix("git-path:"), byte_limit
+                )
+            else:
+                record = {"complete": False, "evaluated_sha": evaluated_sha}
+                gaps = [{"kind": "unsupported_acceptance_transport", "location": location}]
+            record.update({"criterion": item["criterion"], "location": item["location"]})
+            record["inventory_index"] = index
+            result["acceptance_artifacts"].append(record)
+            result["gaps"].extend(gaps)
     result["gaps"] = validate_collected_evidence(result)
     result["complete"] = not result["gaps"]
     return result
@@ -767,7 +832,19 @@ def _selftest() -> None:
         raise AssertionError("absent evidence was accepted")
     assert summarize([])["agreement_rate"] is None
     assert later_truth({"durability": "pending"}) is None
-    print("adjudicator_retro selftest: 3 checks passed")
+    assert not _safe_source_path("bad\0path")
+    criterion = {"criterion": "named artifact", "location": "git-path:proof.txt"}
+    result: dict[str, Any] = {
+        "evaluated_sha": "a" * 40,
+        "requirements": {"source_paths": [], "acceptance": [criterion]},
+        "acceptance_artifacts": [
+            {**criterion, "inventory_index": 0, "evaluated_sha": "a" * 40, "complete": True}
+        ],
+    }
+    assert validate_collected_evidence(result) == []
+    result["acceptance_artifacts"][0]["inventory_index"] = 1
+    assert validate_collected_evidence(result)[0]["kind"] == "missing_acceptance_evidence"
+    print("adjudicator_retro selftest: 6 checks passed")
 
 
 def main() -> int:
@@ -821,6 +898,9 @@ def main() -> int:
                 {
                     "case_id": result["case_id"],
                     "complete": result["complete"],
+                    "completeness_scope": result["completeness_scope"],
+                    "inventory_exhaustiveness": result["inventory_exhaustiveness"],
+                    "acceptance_semantics": result["acceptance_semantics"],
                     "gaps": result["gaps"],
                 },
                 indent=2,

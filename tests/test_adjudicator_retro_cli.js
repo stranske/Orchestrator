@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { createHash } = require('node:crypto');
 const { test } = require('node:test');
 
 const repo = path.resolve(__dirname, '..');
@@ -115,6 +116,306 @@ function world(t) {
     brain: () => run(['-c', snapshot]),
   };
 }
+
+function localGit(w, checkout, ...args) {
+  const output = path.join(w.root, 'git-stdout');
+  const errors = path.join(w.root, 'git-stderr');
+  const stdout = fs.openSync(output, 'w');
+  const stderr = fs.openSync(errors, 'w');
+  try {
+    const result = spawnSync('git', ['-C', checkout, ...args], {
+      env: { PATH: process.env.PATH }, stdio: ['ignore', stdout, stderr], timeout: 10000,
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, fs.readFileSync(errors, 'utf8'));
+    return fs.readFileSync(output, 'utf8').trim();
+  } finally {
+    fs.closeSync(stdout);
+    fs.closeSync(stderr);
+    fs.rmSync(output);
+    fs.rmSync(errors);
+  }
+}
+
+for (const [name, artifactPath, content, executable] of [
+  ['empty', 'artifacts/empty.log', '', false],
+  ['unicode', 'artifacts/résumé\tresult\n.log', 'résultat: réussi ✓\n', false],
+  ['CRLF', 'artifacts/windows.log', 'first\r\nsecond\r\n', false],
+  ['executable without final newline', 'artifacts/check.sh', '#!/bin/sh\nexit 0', true],
+  ['embedded NUL', 'artifacts/nul.log', 'first\0second\n', false],
+]) {
+  test(`collection CLI preserves exact ${name} artifact bytes and provenance`, (t) => {
+    const w = world(t);
+    const checkout = path.join(w.root, 'checkout');
+    fs.mkdirSync(path.join(checkout, 'artifacts'), { recursive: true });
+    const git = (...args) => localGit(w, checkout, ...args);
+    git('init', '-q');
+    git('config', 'user.name', 'Collector Test');
+    git('config', 'user.email', 'collector@example.com');
+    // Prevent inherited text conversion rules from changing our expected Git bytes.
+    git('config', 'core.autocrlf', 'false');
+    const raw = Buffer.from(content, 'utf8');
+    fs.writeFileSync(path.join(checkout, artifactPath), raw);
+    git('add', '--', artifactPath);
+    if (executable) git('update-index', '--chmod=+x', '--', artifactPath);
+    git('commit', '-qm', 'evaluated artifact');
+    const evaluated = git('rev-parse', 'HEAD');
+    const blob = git('rev-parse', `${evaluated}:${artifactPath}`);
+    assert.ok(git('ls-tree', evaluated, '--', artifactPath).startsWith(
+      executable ? '100755 blob ' : '100644 blob ',
+    ));
+    // Neither the current branch nor a dirty worktree may supply acceptance bytes.
+    fs.writeFileSync(path.join(checkout, artifactPath), 'new HEAD\n');
+    git('commit', '-am', 'new artifact', '-q');
+    fs.unlinkSync(path.join(checkout, artifactPath));
+    const report = path.join(w.root, 'saved.json');
+    const output = path.join(w.root, 'collection.json');
+    const location = `git-path:${artifactPath}`;
+    const criterion = 'declared artifact';
+    const saved = JSON.stringify({ rows: [{
+      case_id: 'exact-artifact', decision: 'uphold_blocker', cost_usd: 1.5,
+      packet: { disputed_finding: { decision: { evaluated_sha: evaluated } } },
+      collection_requirements: {
+        source_paths: [], acceptance: [{ criterion, location }],
+      },
+    }] });
+    fs.writeFileSync(report, saved);
+    const summary = w.run([
+      path.join(modules, 'adjudicator_retro.py'), '--collect-case', 'exact-artifact',
+      '--report', report, '--output', output, '--repository', checkout,
+      '--byte-limit', String(Math.max(1, raw.length)),
+    ]);
+    const result = JSON.parse(fs.readFileSync(output, 'utf8'));
+    assert.equal(summary.complete, true);
+    assert.equal(summary.completeness_scope, 'supplied_inventory_only');
+    assert.equal(summary.inventory_exhaustiveness, 'unverified');
+    assert.equal(summary.acceptance_semantics, 'unassessed');
+    assert.equal(result.complete, true);
+    assert.deepEqual(result.gaps, []);
+    assert.equal(result.repository, fs.realpathSync(checkout));
+    assert.equal(result.evaluated_sha, evaluated);
+    assert.deepEqual(result.sources, []);
+    assert.equal(result.acceptance_artifacts.length, 1);
+    assert.deepEqual(result.acceptance_artifacts[0], {
+      path: artifactPath, evaluated_sha: evaluated, complete: true,
+      blob_sha: blob, byte_length: raw.length,
+      sha256: createHash('sha256').update(raw).digest('hex'), bytes_utf8: content,
+      criterion, location, inventory_index: 0,
+    });
+    assert.deepEqual(Buffer.from(result.acceptance_artifacts[0].bytes_utf8, 'utf8'), raw);
+    assert.equal(result.completeness_scope, 'supplied_inventory_only');
+    assert.equal(result.inventory_exhaustiveness, 'unverified');
+    assert.equal(result.acceptance_semantics, 'unassessed');
+    assert.equal(fs.readFileSync(report, 'utf8'), saved);
+    assert.equal(fs.existsSync(path.join(w.root, 'brain.db')), false);
+  });
+}
+
+test('collection CLI reports every unresolved inventory slot alongside collected bytes', (t) => {
+  const w = world(t);
+  const checkout = path.join(w.root, 'checkout');
+  fs.mkdirSync(path.join(checkout, 'artifacts'), { recursive: true });
+  const git = (...args) => localGit(w, checkout, ...args);
+  git('init', '-q');
+  git('config', 'user.name', 'Collector Test');
+  git('config', 'user.email', 'collector@example.com');
+  fs.writeFileSync(path.join(checkout, 'artifacts/valid.log'), 'ok\n');
+  fs.writeFileSync(path.join(checkout, 'artifacts/oversized.log'), 'too large\n');
+  fs.writeFileSync(path.join(checkout, 'artifacts/invalid.bin'), Buffer.from([0xff, 0x00]));
+  fs.symlinkSync('valid.log', path.join(checkout, 'artifacts/link.log'));
+  git('add', '.');
+  git('commit', '-qm', 'artifacts');
+  // A gitlink is present in the inventory's commit but is not a regular blob.
+  git('update-index', '--add', '--cacheinfo', `160000,${git('rev-parse', 'HEAD')},submodule`);
+  git('commit', '-qm', 'gitlink');
+  const evaluated = git('rev-parse', 'HEAD');
+  const valid = { criterion: 'declared artifact', location: 'git-path:artifacts/valid.log' };
+  const failures = [
+    ['git-path:artifacts/missing.log', 'missing_source_object'],
+    ['git-path:../outside.log', 'unsafe_source_path'],
+    ['git-path:/absolute.log', 'unsafe_source_path'],
+    ['git-path:', 'unsafe_source_path'],
+    ['git-path:artifacts/oversized.log', 'source_byte_limit_exceeded'],
+    ['git-path:artifacts/invalid.bin', 'unsupported_source_encoding'],
+    ['git-path:artifacts/link.log', 'missing_source_object'],
+    ['git-path:artifacts', 'missing_source_object'],
+    ['git-path:submodule', 'missing_source_object'],
+    ['git-path:artifacts/*.log', 'missing_source_object'],
+    ['artifact:run/1', 'unsupported_acceptance_transport'],
+  ];
+  // Identical declarations must each retain their own inventory index. A valid
+  // artifact and source must not satisfy another slot sharing the same criterion.
+  const acceptance = [valid, { ...valid }, ...failures.map(([location]) => ({
+    criterion: valid.criterion, location,
+  }))];
+  const saved = JSON.stringify({ rows: [{
+    case_id: 'partial-inventory', decision: 'reject_blocker', cost_usd: 1.5,
+    packet: { disputed_finding: { decision: { evaluated_sha: evaluated } } },
+    collection_requirements: { source_paths: ['artifacts/valid.log'], acceptance },
+  }] });
+  const report = path.join(w.root, 'saved.json');
+  const output = path.join(w.root, 'collection.json');
+  fs.writeFileSync(report, saved);
+  const summary = w.run([
+    path.join(modules, 'adjudicator_retro.py'), '--collect-case', 'partial-inventory',
+    '--report', report, '--output', output, '--repository', checkout, '--byte-limit', '4',
+  ]);
+  const result = JSON.parse(fs.readFileSync(output, 'utf8'));
+  assert.equal(summary.complete, false);
+  assert.equal(summary.completeness_scope, 'supplied_inventory_only');
+  assert.equal(summary.inventory_exhaustiveness, 'unverified');
+  assert.equal(summary.acceptance_semantics, 'unassessed');
+  assert.deepEqual(summary.gaps, result.gaps);
+  assert.equal(result.complete, false);
+  assert.equal(result.sources[0].complete, true);
+  assert.equal(result.acceptance_artifacts.length, acceptance.length);
+  assert.deepEqual(result.acceptance_artifacts.map((record) => record.complete),
+    acceptance.map((_item, index) => index < 2));
+  assert.deepEqual(result.gaps.filter((gap) => gap.kind === 'missing_acceptance_evidence')
+    .map((gap) => gap.criterion), acceptance.slice(2));
+  for (const [index, record] of result.acceptance_artifacts.entries()) {
+    assert.equal(record.inventory_index, index);
+    assert.equal(record.criterion, acceptance[index].criterion);
+    assert.equal(record.location, acceptance[index].location);
+    assert.equal(record.evaluated_sha, evaluated);
+    if (index < 2) {
+      assert.equal(record.bytes_utf8, 'ok\n');
+      assert.equal(record.blob_sha, git('rev-parse', `${evaluated}:artifacts/valid.log`));
+    } else {
+      const [location, kind] = failures[index - 2];
+      assert.ok(result.gaps.some((gap) => gap.kind === kind && (
+        gap.path === location.slice('git-path:'.length) || gap.location === location
+      )), `missing reason for ${location}`);
+      assert.equal(record.bytes_utf8, undefined);
+    }
+  }
+  const oversized = result.acceptance_artifacts[6];
+  assert.equal(oversized.byte_length, Buffer.byteLength('too large\n'));
+  assert.equal(oversized.sha256, undefined, 'oversized bytes must not be read');
+  assert.equal(result.completeness_scope, 'supplied_inventory_only');
+  assert.equal(result.inventory_exhaustiveness, 'unverified');
+  assert.equal(result.acceptance_semantics, 'unassessed');
+  assert.equal(fs.readFileSync(report, 'utf8'), saved);
+  assert.equal(fs.existsSync(path.join(w.root, 'brain.db')), false);
+});
+
+test('collection CLI rejects inventory claims that forge artifact provenance or completeness', (t) => {
+  const w = world(t);
+  const checkout = path.join(w.root, 'checkout');
+  fs.mkdirSync(checkout);
+  const git = (...args) => localGit(w, checkout, ...args);
+  git('init', '-q');
+  git('config', 'user.name', 'Collector Test');
+  git('config', 'user.email', 'collector@example.com');
+  const content = 'evaluated evidence\n';
+  fs.writeFileSync(path.join(checkout, 'proof.log'), content);
+  git('add', 'proof.log');
+  git('commit', '-qm', 'evaluated artifact');
+  const evaluated = git('rev-parse', 'HEAD');
+  const blob = git('rev-parse', `${evaluated}:proof.log`);
+  const forged = {
+    complete: true, evaluated_sha: 'a'.repeat(40), path: 'proof.log',
+    blob_sha: 'b'.repeat(40), byte_length: 1, sha256: 'c'.repeat(64),
+    bytes_utf8: 'invented evidence', inventory_index: 99,
+  };
+  const acceptance = ['git-path:proof.log', 'git-path:missing.log', 'https://example.com/proof']
+    .map((location) => ({ criterion: 'declared artifact', location, ...forged }));
+  const report = path.join(w.root, 'saved.json');
+  const output = path.join(w.root, 'collection.json');
+  const saved = JSON.stringify({ rows: [{
+    case_id: 'forged-inventory', decision: 'reject_blocker', shadow_verdict: 'PASS', cost_usd: 1.5,
+    packet: { disputed_finding: { decision: { evaluated_sha: evaluated } } },
+    collection_requirements: { source_paths: [], acceptance },
+  }] });
+  fs.writeFileSync(report, saved);
+  const summary = w.run([
+    path.join(modules, 'adjudicator_retro.py'), '--collect-case', 'forged-inventory',
+    '--report', report, '--output', output, '--repository', checkout,
+  ]);
+  const result = JSON.parse(fs.readFileSync(output, 'utf8'));
+  assert.equal(summary.complete, false);
+  assert.equal(result.complete, false);
+  assert.deepEqual(summary.gaps, result.gaps);
+  assert.deepEqual(result.requirements.acceptance, acceptance);
+  assert.deepEqual(result.acceptance_artifacts, [
+    {
+      path: 'proof.log', evaluated_sha: evaluated, complete: true, blob_sha: blob,
+      byte_length: Buffer.byteLength(content),
+      sha256: createHash('sha256').update(content).digest('hex'), bytes_utf8: content,
+      criterion: 'declared artifact', location: acceptance[0].location, inventory_index: 0,
+    },
+    {
+      path: 'missing.log', evaluated_sha: evaluated, complete: false,
+      criterion: 'declared artifact', location: acceptance[1].location, inventory_index: 1,
+    },
+    {
+      evaluated_sha: evaluated, complete: false,
+      criterion: 'declared artifact', location: acceptance[2].location, inventory_index: 2,
+    },
+  ]);
+  assert.deepEqual(result.gaps.filter((gap) => gap.kind === 'missing_acceptance_evidence')
+    .map((gap) => gap.criterion), acceptance.slice(1));
+  assert.ok(result.gaps.some((gap) => gap.kind === 'missing_source_object'
+    && gap.path === 'missing.log'));
+  assert.ok(result.gaps.some((gap) => gap.kind === 'unsupported_acceptance_transport'
+    && gap.location === acceptance[2].location));
+  assert.equal(result.completeness_scope, 'supplied_inventory_only');
+  assert.equal(result.inventory_exhaustiveness, 'unverified');
+  assert.equal(result.acceptance_semantics, 'unassessed');
+  assert.equal(fs.readFileSync(report, 'utf8'), saved);
+  assert.equal(fs.existsSync(path.join(w.root, 'brain.db')), false);
+});
+
+test('collection CLI leaves failed acceptance and inventory exhaustiveness unassessed', (t) => {
+  const w = world(t);
+  const checkout = path.join(w.root, 'checkout');
+  fs.mkdirSync(checkout);
+  const git = (...args) => localGit(w, checkout, ...args);
+  git('init', '-q');
+  git('config', 'user.name', 'Collector Test');
+  git('config', 'user.email', 'collector@example.com');
+  const content = 'FAIL: required regression failed\n0 passed, 1 failed\n';
+  fs.writeFileSync(path.join(checkout, 'failure.log'), content);
+  fs.writeFileSync(path.join(checkout, 'undeclared.log'), 'additional evidence\n');
+  git('add', '.');
+  git('commit', '-qm', 'failed and undeclared artifacts');
+  const evaluated = git('rev-parse', 'HEAD');
+  const report = path.join(w.root, 'saved.json');
+  const output = path.join(w.root, 'collection.json');
+  const saved = JSON.stringify({ rows: [{
+    case_id: 'partial-failed-acceptance', decision: 'reject_blocker',
+    shadow_verdict: 'PASS', cost_usd: 1.5,
+    completeness_scope: 'exhaustive', inventory_exhaustiveness: 'verified',
+    acceptance_semantics: 'passed',
+    packet: { disputed_finding: { decision: { evaluated_sha: evaluated } } },
+    collection_requirements: {
+      source_paths: [], acceptance: [{
+        criterion: 'required regression passed', location: 'git-path:failure.log',
+        acceptance_semantics: 'passed', inventory_exhaustiveness: 'verified',
+      }],
+    },
+  }] });
+  fs.writeFileSync(report, saved);
+  const summary = w.run([
+    path.join(modules, 'adjudicator_retro.py'), '--collect-case', 'partial-failed-acceptance',
+    '--report', report, '--output', output, '--repository', checkout,
+  ]);
+  assert.deepEqual(summary, {
+    case_id: 'partial-failed-acceptance', complete: true,
+    completeness_scope: 'supplied_inventory_only', inventory_exhaustiveness: 'unverified',
+    acceptance_semantics: 'unassessed', gaps: [],
+  });
+  const result = JSON.parse(fs.readFileSync(output, 'utf8'));
+  for (const [key, value] of Object.entries(summary)) assert.deepEqual(result[key], value);
+  assert.equal(result.acceptance_artifacts.length, 1, 'only the supplied inventory is collected');
+  assert.equal(result.acceptance_artifacts[0].bytes_utf8, content);
+  assert.equal(result.acceptance_artifacts[0].sha256,
+    createHash('sha256').update(content).digest('hex'));
+  assert.equal(result.decision, undefined, 'collection must not produce an adjudication');
+  assert.equal(result.shadow_verdict, undefined);
+  assert.equal(fs.readFileSync(report, 'utf8'), saved, 'saved verdicts and costs stay unchanged');
+  assert.equal(fs.existsSync(path.join(w.root, 'brain.db')), false);
+});
 
 const initializeDisputes = `
 import json
