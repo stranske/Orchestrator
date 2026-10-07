@@ -3,6 +3,70 @@
 This extends the existing AdjudicatorAgent and Brain role-run recorder. Source implementation
 and local replay are distinct from runtime publication, which remains manual.
 
+## Keepalive stale comparison cache regression, 2026-10-07
+
+Reviewed `459a5ae`, `b0a5c5e` and `8a0debe` before continuing. Current CLI verification
+supports the following reconciliation of the PR's six checkboxes:
+
+- [x] Build merge-bound packets and record router-chosen retrospective role runs without outcome writes.
+- [ ] Complete comparison reporting: late costs for saved paid invalid responses still need repair.
+- [x] Offer `role-adjudicator` on `closer-lane` only with a contested verdict.
+- [x] Read and render the adjudicator shadow line in switch review.
+- [ ] Run all three named pytest acceptance tests on this tree.
+- [ ] Run their specified outcome-write and unconditional-offer faults and revert.
+
+The new CLI regression corrupts saved verdict mirrors, per-case comparisons, aggregate
+rates, costs and metadata flags. Refresh must rebuild comparisons from the original
+proposal decisions and current Brain evidence, preserve paid role identities and the
+legacy evidence, and retain the metadata evidence floor without writing any Brain table.
+The fixture's disputes have left the replay window, so no new adjudication is involved.
+
+Validation: all 45 CLI tests pass with no skips; five evidence unittest tests and seven
+module self-checks pass. JavaScript syntax and diff whitespace checks pass. An isolated
+production-source fault that prefers the legacy verdict mirror fails the new comparison
+assertion; byte-identical restoration passes. This control does not replace the required
+named pytest acceptance faults. Python source and pytest collection counts are unchanged.
+
+Pytest and Black are unavailable; package installation and both required Black commands
+failed. The comparison repair therefore remains blocked by the Python formatting gate.
+The PR-body reconciliation, blocker comment and `needs-human` label were rejected because
+connector mutations require approval while this run prohibits approval. The reconciled
+body is retained at `/tmp/adjudicator-retro-pr512-body.md`. Checkout Git metadata is
+read-only, so this JavaScript test and note are preserved as an isolated commit and patch
+under `/tmp/orch-adjudicator-stale-cache`. PR #512 was confirmed open and ready for review.
+
+## Keepalive verifier selection validation, 2026-10-07
+
+- [x] Verify the first implementation task: per-dispute packets use the selected
+  merge-bound verifier comment, diff summary and complete Gate evidence; the
+  router selects the shadow backend, the Brain records `source=retrospective`,
+  and replay preserves all outcomes.
+- [ ] Run the named pytest acceptance tests and their required outcome-write and
+  unconditional-offer faults on this tree.
+
+Six new JavaScript regressions exercise the real verifier selector, packet builder,
+router and role recorder. Workflow run IDs and attempt IDs sort numerically; a
+later PASS attempt resolves the dispute. Invalid PASS markers, untrusted authors
+and comments with another repository's URL cannot replace the trusted finding.
+The successful packets retain the selected finding's URL, body and decision.
+
+`node tests/test_adjudicator_retro_cli.js`: 43 passed, zero failures or skips.
+The existing evidence unittest suite: five passed. JavaScript syntax and
+`git diff --check` passed. In isolated source copies, lexical run ordering,
+lexical attempt ordering, ignoring attempts, trusting invalid PASS markers and
+accepting another repository's comment URL each failed the intended new
+regression (exit 1); byte-identical restoration passed (exit 0).
+Raw fault/restoration logs are under
+`/tmp/adjudicator-selection-faults-_ewdprnj/`; the full Node receipt is
+`/tmp/adjudicator-retro-node.log`. These are local verification artifacts.
+
+Pytest and Black are absent, and isolated package installation failed. No
+checkout Python source changed, and the named pytest acceptance criteria remain
+unchecked. Checkout Git metadata is read-only; the focused JavaScript change and
+this note are preserved in an isolated commit, patch and bundle under
+`/tmp/adjudicator-retro-selection/`. PR #512 was confirmed open and ready through
+the GitHub connector after the CLI could not connect. Source #428 remains open.
+
 ## Keepalive switch-review reconciliation, 2026-10-07
 
 - [x] Verify `adjudicator shadow: cases N, agree A, disagree D, cost C` through
@@ -534,3 +598,31 @@ formatting gate. Git metadata is read-only, so this tested JavaScript change is
 preserved in an isolated commit and patch under `/tmp/adjudicator-retro-evidence-review`.
 GitHub API access also fails, preventing PR updates and readiness verification.
 No acceptance checkbox is advanced by this round.
+
+## Late abstention telemetry regression, 2026-10-07
+
+- [x] Verify that late measured abstention costs survive removal of the original
+  outcome after the dispute ages out of the replay population.
+- [ ] Refresh late cost telemetry for saved paid invalid responses without a decision.
+- [ ] Run the named pytest acceptance tests and their specified deliberate faults.
+
+The new JavaScript CLI regression starts with an incomplete ledger cost, removes
+the abstention's outcome, then supplies complete telemetry with costs of zero and
+three dollars. Both saved report sections update their total and measured-case
+denominator. Neither binary agreement denominator changes; case and role identities
+remain stable, and all Brain tables remain unchanged. All 44 CLI tests pass with
+zero skips, alongside five evidence unittest tests and seven retrospective selftest
+checks. JavaScript syntax and diff whitespace checks pass. In an isolated source
+copy, excluding abstentions from the saved-cost refresh makes this exact test fail
+with `null !== 0`; byte-identical source restoration passes.
+
+The broader comparison task remains open: `_refresh_saved_verdicts` excludes rows
+without a decision, so complete cost telemetry arriving after a paid invalid response
+is never refreshed. A private Brain reproduction has a measured backend cost of
+two dollars while the refreshed report still returns an unknown total. Pytest and
+Black are absent from all five installed Python versions, and PyPI installation
+fails on DNS resolution. No Python files change in this round. Git metadata is
+read-only; the JavaScript change and this note are preserved as a commit and patch
+under `/tmp/orch-adjudicator-late-costs`. PR #512 was confirmed open and ready for
+review through the GitHub connector. These CLI checks do not replace the named
+pytest acceptance checks, and no broad task checkbox is advanced.

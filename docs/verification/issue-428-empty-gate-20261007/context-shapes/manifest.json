@@ -1,0 +1,17 @@
+{
+  "src/adjudicator_retro.py": "1bfda2ac958572ebd6e370725d716d504781a841c49c5ffb49b4b881e952eaff",
+  "tests/test_adjudicator_retro.py": "620b1af0c6b6f42c635cb155f2bc13b589913f8503c154c20c2285be740f3d72",
+  ".verify-floor.json": "aca104a7269ad75437d033f5e1715575001cae6004e9d6ea5af26de699c00e3c",
+  "docs/verification/issue-428-empty-gate-20261007/README.md": "5828429e7b5fd0673762e49a311aa07941654a79a1a286e7d367d8d16612fe28",
+  "docs/verification/issue-428-empty-gate-20261007/manifest.json": "b7c6f88c260161317a35d2147e0cde6d0f200b8fcc164a74b0e147438340f65b",
+  "docs/verification/issue-428-empty-gate-20261007/context-shapes/512-collection.log.gz": "dcb8b2d5cd4312b84b979747899748248cf0ad5833a398f9359d7b92dac9b767",
+  "docs/verification/issue-428-empty-gate-20261007/context-shapes/512-context-green.log.gz": "dbd0fff0abfc2e360e39e09e0e461c63ddbd65d8f5f69a71292513f93cfd9245",
+  "docs/verification/issue-428-empty-gate-20261007/context-shapes/512-context-red.log.gz": "58128f578bc0cbd85606be6a53e50d32b53d3df77e95f53a912d0359441880a4",
+  "docs/verification/issue-428-empty-gate-20261007/context-shapes/512-mutation-green.log.gz": "c3c71acc3d12cfa913c72b7217f800dda1cb4f303bc2f67f49f768377e80c458",
+  "docs/verification/issue-428-empty-gate-20261007/context-shapes/512-mutation-red.log.gz": "b3842f216a4e864a62f3b439412ee458b9dcda4bdd1b1bccb7b6a12aefb33659",
+  "docs/verification/issue-428-empty-gate-20261007/context-shapes/512-mypy.log.gz": "b7b3744425ec7812f48491bdae047f55f17494f5b37aac98048efd9131215b93",
+  "docs/verification/issue-428-empty-gate-20261007/context-shapes/README.md": "f34c5eb5015b4f487673dad17b89dd120ddb858e27c4aa1d0fe584a87d244677",
+  "docs/verification/issue-428-empty-gate-20261007/context-shapes/mutation-proof.json": "5a803d21877184bc0e9894acf8ca87b5514fea1760f750a21768ae5136a676b3",
+  "docs/verification/issue-428-empty-gate-20261007/context-shapes/original-README.md": "9560bf01f82424d1b3eb1a2effe19dc82686b49704851a733e221a1fd29daf55",
+  "docs/verification/issue-428-empty-gate-20261007/context-shapes/original-manifest.json": "79cddbe04269ed0876a4913abc62a4efc586705fec9eaeebe8593b2619046b8a"
+}

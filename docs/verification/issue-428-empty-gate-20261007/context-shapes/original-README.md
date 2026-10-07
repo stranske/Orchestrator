@@ -1,0 +1,3 @@
+Empty initial or paginated commit lists must become a ValueError evidence gap, preserving the batch caller's existing recovery path. Raw actual original-source RED2, candidate focused40PASS and collection2607 are retained losslessly. Broader issue428 acceptance and original511 provider CONCERNS remain open. Full private verification receipt is recorded separately when complete.
+
+Full private verifier executed2607pytestPASS,103/103selftests andall5capabilitygates. It exited1 solely because startingfloor2605 lagged new2607 collection; --update-floor correctedfloor2607 preserving everyceiling. Original exit1/rawlog is retained; no rerunexit0 orliveactivation isclaimed. FreshhostedCI remainsrequired.
