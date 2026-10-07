@@ -427,3 +427,42 @@ def test_legacy_false_flag_and_saved_decisions_resume_without_redispatch(private
     assert saved["disposition"] == "needs_more_evidence"
     assert resumed["summary"]["cost_usd"] == 2
     assert resumed["summary"]["adjudicated"] == resumed["summary"]["graded"] == 0
+
+
+@pytest.mark.parametrize("paginated", [False, True])
+def test_missing_gate_commit_is_evidence_gap(monkeypatch, paginated):
+    decision = {"verdict": "NON_PASS"}
+    pr = {
+        "state": "MERGED",
+        "headRefOid": "b" * 40,
+        "mergeCommit": {"oid": "a" * 40},
+        "files": {"pageInfo": {"hasNextPage": False}, "nodes": []},
+        "comments": {
+            "pageInfo": {"hasPreviousPage": False},
+            "nodes": [{"body": "Finding", "url": "finding"}],
+        },
+        "commits": {"nodes": []},
+    }
+    fresh = {"headRefOid": pr["headRefOid"], "commits": {"nodes": []}}
+    if paginated:
+        pr["commits"] = {
+            "nodes": [
+                {
+                    "commit": {
+                        "statusCheckRollup": {
+                            "contexts": {
+                                "pageInfo": {"hasNextPage": True, "endCursor": "next"},
+                                "nodes": [],
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+    replies = iter([pr, fresh])
+    monkeypatch.setattr(retro.verifier_evidence, "decision_from_pr", lambda *_: decision)
+    monkeypatch.setattr(
+        retro, "_gh_json", lambda _: {"data": {"repository": {"pullRequest": next(replies)}}}
+    )
+    with pytest.raises(ValueError, match="complete gate evidence unavailable"):
+        retro.fetch_evidence({"target": "owner/repo#1", "verifier_verdict": "NON_PASS"})

@@ -1,0 +1,42 @@
+{
+  "baseline": "actual production9c84b8f RED2 IndexError (initial and paginated empty commit nodes)",
+  "source": "src/adjudicator_retro.py",
+  "baseline_sha256": "bf82359682db3ec029f8b1a14e2ae556dc6945e84d2e6cc4c4df72bd5c86efc3",
+  "candidate_sha256": "fa0bde245249a225a9637ad5ed1ccdf08cc353a9b6848b236e36ce9b75370755",
+  "test_sha256": "2555e187d7e54fba9e1bc65f377adc61d5457901a202bc212deb808a8b2fd335",
+  "cwd": "/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch-509-compare-0821",
+  "regression_argv": [
+    "/opt/anaconda3/bin/python3",
+    "-m",
+    "pytest",
+    "tests/test_adjudicator_retro.py::test_missing_gate_commit_is_evidence_gap",
+    "-q",
+    "-o",
+    "addopts="
+  ],
+  "candidate": "40 focused PASS;2607 actually collected; full private verify running",
+  "disclosure": "Initial related-tests command named nonexistent tests/test_verifier_evidence.py and executed no tests; corrected command retained. Current main9c84 already fixed original floor2605; this patch adds2actual regressions, not duplicate old-floor repair.",
+  "baseline_revision": "9c84b8fc066a4d34f7d0fb318133c012deb38f9d",
+  "actual_full_pytest": {
+    "nodes": 2607,
+    "passed": 2607,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "raw_junit": "full-pytest.xml.gz"
+  },
+  "mypy": "Success no issues in1sourcefile; dependency notes retained",
+  "full_private_verifier": {
+    "argv": [
+      "/opt/anaconda3/bin/python3",
+      "src/verify.py",
+      "--update-floor"
+    ],
+    "exit": 1,
+    "pytest": "2607PASS0fail0skip",
+    "selftests": "103/103 ran0skip",
+    "gates": "activation48/48;recurrence48/53;setcoverage10/10;admission13/13;ledger valid",
+    "sole_problem": "previous floor2605 behind newcollection2607; command updatedfloor2607 preservingceilings; no exit0 rerunclaimed",
+    "boundary": "privatecopiedledgerBrain only; notliveactivation/publication"
+  }
+}

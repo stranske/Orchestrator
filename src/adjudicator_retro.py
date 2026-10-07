@@ -124,6 +124,17 @@ def _gh_json(args: list[str]) -> dict:
     return json.loads(proc.stdout)
 
 
+def _gate_rollup(pr: dict) -> dict:
+    """Turn unavailable gate pages into a recoverable evidence gap."""
+    try:
+        rollup = pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
+        if not rollup:
+            raise ValueError("complete gate evidence unavailable")
+        return rollup
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ValueError("complete gate evidence unavailable") from exc
+
+
 def fetch_evidence(row: dict) -> dict:
     repo, sep, number = str(row.get("target") or "").partition("#")
     if not sep or not number.isdigit() or repo.count("/") != 1:
@@ -175,9 +186,7 @@ def fetch_evidence(row: dict) -> dict:
     )
     if finding is None:
         raise ValueError("merge-bound verifier finding comment unavailable")
-    rollup = pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
-    if not rollup:
-        raise ValueError("complete gate evidence unavailable")
+    rollup = _gate_rollup(pr)
     contexts = rollup["contexts"]
     pages = 1
     while contexts["pageInfo"]["hasNextPage"]:
@@ -206,7 +215,7 @@ def fetch_evidence(row: dict) -> dict:
         )["data"]["repository"]["pullRequest"]
         if fresh["headRefOid"] != pr["headRefOid"]:
             raise ValueError("PR head changed while reading gate evidence")
-        page = fresh["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]
+        page = _gate_rollup(fresh)["contexts"]
         contexts["nodes"].extend(page["nodes"])
         contexts["pageInfo"] = page["pageInfo"]
         pages += 1
