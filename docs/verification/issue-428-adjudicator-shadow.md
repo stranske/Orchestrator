@@ -389,3 +389,29 @@ and could not run, so these Python changes are not committed or pushed. No pytes
 and the collection floor is unchanged. Full hosted verification remains required. The PR checklist
 reconciliation was attempted before implementation, but the connector required approval while the
 run's approval policy is `never`; the verified local checklist above remains the task record.
+
+## Keepalive bounded-batch comparison regression, 2026-10-07
+
+- [x] Verify agreement against the merge rule, measured cost per case and counts for
+  a bounded shadow batch containing binary proposals, an abstention and an invalid response.
+- [ ] Run the three named pytest acceptance tests and their required outcome-write
+  and unconditional-offer faults on the current tree.
+
+The new CLI test uses the real adjudicator role with mocked routing and transport. Two
+successive two-call batches preserve the four-case dispute population. Only two binary
+proposals enter the comparison: proposal agreement is 50% and merge-rule agreement is
+0%. All four measured calls, including the zero-cost abstention and paid invalid response,
+contribute to the $4.75 total and $1.1875 cost per measured case. The saved report matches
+the returned report; resuming repeats no calls, preserves original runs and outcomes,
+and records exactly four retrospective role runs. Effective verdicts remain ungraded.
+
+Validation: `node tests/test_adjudicator_retro_cli.js` passes all 26 tests. The five
+existing evidence unittest tests pass. In temporary production-source copies, excluding
+paid invalid responses from measured costs and admitting abstentions to the binary
+comparison each fail the new test; restoring the source makes it pass. These controls
+do not replace the named pytest acceptance faults. Diff whitespace checks pass.
+
+Pytest and Black are absent from every installed Python interpreter; the attempted
+PyPI installation failed on DNS resolution. No Python files change in this round.
+The checkout's Git directory is read-only, so the tested JavaScript change and this
+note are preserved as an isolated commit, patch and bundle under `/tmp` for transfer.
