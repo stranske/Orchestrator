@@ -67,5 +67,14 @@
     "durable": null,
     "cost_usd": null,
     "follow_up": "https://github.com/stranske/Orchestrator/pull/513"
+  },
+  "scope_exception": {
+    "constraint": "Only .gitignore changes",
+    "additional_changed_files": [
+      "tests/test_repo_hygiene.py"
+    ],
+    "disposition": "Recorded exception; .gitignore-only compliance is not established.",
+    "rationale": "The additional regression protects ignore behavior but does not waive the campaign constraint.",
+    "campaign_acceptance": "incomplete"
   }
 }
