@@ -1,0 +1,139 @@
+{
+  "evaluated_revision": "6ed980924ec1d7d83a06f9b6a181dc76ba5eb910",
+  "at": "2026-10-07T08:44:10.750700+00:00",
+  "focused_tests": {
+    "argv": [
+      "/opt/anaconda3/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_adjudicator_retro.py",
+      "tests/test_adjudicator_collected_input.py",
+      "-q",
+      "-o",
+      "addopts="
+    ],
+    "actual_exit": 0,
+    "passed": 39
+  },
+  "required_mutations": [
+    {
+      "mutation": "outcomes",
+      "source": "src/adjudicator_retro.py",
+      "node": "tests/test_adjudicator_retro.py::test_retro_records_verdicts_without_changing_outcomes",
+      "before": "    population = disputes(db=db)\n",
+      "after": "    with sqlite3.connect(db) as corruption:\n        corruption.execute(\"UPDATE outcomes SET merged=0\")\n    population = disputes(db=db)\n",
+      "original_sha256": "b3375ca80e6f69476db2d543ba0a83f4d5fa235ba92152e05c548ad0300ea234",
+      "mutated_sha256": "b82557645621e9b742e133358052d90a3c7a7502066a6d63733236f4b7402b48",
+      "phases": [
+        {
+          "phase": "red",
+          "exit": 1,
+          "argv": [
+            "/opt/anaconda3/bin/python3",
+            "-m",
+            "pytest",
+            "tests/test_adjudicator_retro.py::test_retro_records_verdicts_without_changing_outcomes",
+            "-q",
+            "-o",
+            "addopts=",
+            "--junitxml=/Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261007T0821Z/509-required-mutations/outcomes-red.xml"
+          ],
+          "cwd": "/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch-509-compare-0821",
+          "testcases": 1,
+          "failed": 1,
+          "errors": 0,
+          "skipped": 0
+        },
+        {
+          "phase": "green",
+          "exit": 0,
+          "argv": [
+            "/opt/anaconda3/bin/python3",
+            "-m",
+            "pytest",
+            "tests/test_adjudicator_retro.py::test_retro_records_verdicts_without_changing_outcomes",
+            "-q",
+            "-o",
+            "addopts=",
+            "--junitxml=/Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261007T0821Z/509-required-mutations/outcomes-green.xml"
+          ],
+          "cwd": "/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch-509-compare-0821",
+          "testcases": 1,
+          "failed": 0,
+          "errors": 0,
+          "skipped": 0
+        }
+      ],
+      "restored_sha256": "b3375ca80e6f69476db2d543ba0a83f4d5fa235ba92152e05c548ad0300ea234"
+    },
+    {
+      "mutation": "unconditional-offer",
+      "source": "src/capability_advisor.py",
+      "node": "tests/test_adjudicator_retro.py::test_closer_lane_offers_the_adjudicator_only_on_a_contested_verdict",
+      "before": "        and entry.get(\"pr_requirement_met\") is not True\n",
+      "after": "        and False\n",
+      "original_sha256": "f5449f93dca6020ebd579d221d0551181ca041a4d69227a9d11b123ebba38028",
+      "mutated_sha256": "9a4a4606c60fca5b2e55d3b649641497bd617260681f08f138f389ecd4138434",
+      "phases": [
+        {
+          "phase": "red",
+          "exit": 1,
+          "argv": [
+            "/opt/anaconda3/bin/python3",
+            "-m",
+            "pytest",
+            "tests/test_adjudicator_retro.py::test_closer_lane_offers_the_adjudicator_only_on_a_contested_verdict",
+            "-q",
+            "-o",
+            "addopts=",
+            "--junitxml=/Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261007T0821Z/509-required-mutations/unconditional-offer-red.xml"
+          ],
+          "cwd": "/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch-509-compare-0821",
+          "testcases": 5,
+          "failed": 3,
+          "errors": 0,
+          "skipped": 0
+        },
+        {
+          "phase": "green",
+          "exit": 0,
+          "argv": [
+            "/opt/anaconda3/bin/python3",
+            "-m",
+            "pytest",
+            "tests/test_adjudicator_retro.py::test_closer_lane_offers_the_adjudicator_only_on_a_contested_verdict",
+            "-q",
+            "-o",
+            "addopts=",
+            "--junitxml=/Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261007T0821Z/509-required-mutations/unconditional-offer-green.xml"
+          ],
+          "cwd": "/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch-509-compare-0821",
+          "testcases": 5,
+          "failed": 0,
+          "errors": 0,
+          "skipped": 0
+        }
+      ],
+      "restored_sha256": "f5449f93dca6020ebd579d221d0551181ca041a4d69227a9d11b123ebba38028"
+    }
+  ],
+  "evaluated_blob_hashes": {
+    "src/adjudicator_retro.py": "b3375ca80e6f69476db2d543ba0a83f4d5fa235ba92152e05c548ad0300ea234",
+    "src/capability_advisor.py": "f5449f93dca6020ebd579d221d0551181ca041a4d69227a9d11b123ebba38028",
+    "src/switch_review.py": "7c5a0d9ce8de1de6aacafcb8e349535630a73a4416b8fb6cde646eec2e5800a1",
+    "tests/test_adjudicator_retro.py": "aacd1536fe29b165b0c348d02f6e224377b977e49bcf92c386ba94f36ba1d2ee",
+    "tests/test_adjudicator_collected_input.py": "70347aa423fb10896b93b6e5e3e321f4028c3e8b20efdb0ea8526bebe4821042"
+  },
+  "actual_provider_compare": {
+    "run_id": 37594509162,
+    "pr": 509,
+    "merge": "6ed980924ec1d7d83a06f9b6a181dc76ba5eb910",
+    "verdicts": [
+      "CONCERNS",
+      "CONCERNS"
+    ],
+    "input_hashes_verified": true,
+    "report": "https://github.com/stranske/Orchestrator/pull/509#issuecomment-6034234140"
+  },
+  "scope": "Named tests and two required source faults only; no actual semantic adjudication/nativecost/latertruth or whole428completion"
+}
