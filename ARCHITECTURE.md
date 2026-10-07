@@ -1530,6 +1530,11 @@ Its separate `--collect-case` rail reads only local evaluated-revision Git blobs
 with lazy fetching and replacement objects disabled. Complete collection covers only the supplied
 inventory; inventory exhaustiveness and semantic acceptance remain unverified. Collection never
 promotes a shadow packet, writes the Brain, or dispatches adjudication.
+The explicit `--prepare-collected-case` extension recollects those same immutable inputs and
+places their complete typed contents inside the existing role case's ground-truth field.
+It refuses incomplete inventories, existing outputs and oversized whole packets without truncation.
+The existing retrospective evidence floor stays in force; this is transport to the existing role,
+not semantic admission or a new role/feedback surface. Preparation never dispatches.
 
 ### CLI
 

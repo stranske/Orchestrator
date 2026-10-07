@@ -663,6 +663,60 @@ def collect_saved_case(
     return result
 
 
+def prepare_collected_case(
+    report: Path,
+    case_id: str,
+    output: Path,
+    repository: Path,
+    *,
+    byte_limit: int = MAX_COLLECTION_SOURCE_BYTES,
+    packet_byte_limit: int = MAX_COLLECTION_SOURCE_BYTES,
+) -> dict:
+    """Prepare complete collected bytes for the existing role, without dispatch/admission.
+
+    Recollect immutable Git objects instead of trusting caller-written collection
+    flags/hashes. The legacy retrospective evidence floor remains in force: byte
+    transport is not an exhaustive inventory or a semantic acceptance decision.
+    """
+    if byte_limit < 1 or packet_byte_limit < 1:
+        raise ValueError("collection and packet byte limits must be positive")
+    # Exclusive output also rejects symlink/hardlink aliases and historical receipts.
+    if output.exists() or output.is_symlink() or output.resolve() == report.resolve():
+        raise ValueError("prepared case output must be new and separate from saved report")
+    saved = json.loads(report.read_text(encoding="utf-8"))
+    if not isinstance(saved, dict) or not isinstance(saved.get("rows"), list):
+        raise ValueError("saved report must contain a rows list")
+    cases = [
+        row for row in saved["rows"] if isinstance(row, dict) and row.get("case_id") == case_id
+    ]
+    if len(cases) != 1:
+        raise ValueError("saved report must contain exactly one matching case_id")
+    row = cases[0]
+    raw_packet = row.get("packet")
+    if not isinstance(raw_packet, dict) or raw_packet.get("target") != row.get("target"):
+        raise ValueError("saved packet target must match the case target")
+    packet = build_packet(row, raw_packet)
+    collection = collect_case_evidence(row, repository=repository, byte_limit=byte_limit)
+    if not collection["complete"] or not (collection.get("requirements") or {}).get("source_paths"):
+        raise ValueError("incomplete collected case: " + json.dumps(collection["gaps"]))
+    # Keep the nested dict: the role compacts strings, but preserves typed evidence.
+    packet["ground_truth_evidence"] = {
+        **packet["ground_truth_evidence"],
+        "collected_evidence": collection,
+    }
+    encoded = (json.dumps(packet, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    # The role renders JSON with ASCII escapes; Unicode can expand substantially.
+    # Bound both the stored UTF-8 case and that actual case rendering.
+    role_case_bytes = len(json.dumps(packet, indent=2, sort_keys=True).encode("utf-8"))
+    if max(len(encoded), role_case_bytes) > packet_byte_limit:
+        raise ValueError("prepared case exceeds packet byte limit; evidence was not truncated")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # Never replace an output created concurrently after the initial check.
+    with output.open("xb") as stream:
+        stream.write(encoded)
+    return packet
+
+
 def run(
     *,
     dispatch: bool = False,
@@ -844,7 +898,13 @@ def _selftest() -> None:
     assert validate_collected_evidence(result) == []
     result["acceptance_artifacts"][0]["inventory_index"] = 1
     assert validate_collected_evidence(result)[0]["kind"] == "missing_acceptance_evidence"
-    print("adjudicator_retro selftest: 6 checks passed")
+    try:
+        prepare_collected_case(Path("absent"), "case", Path("out"), Path("."), byte_limit=0)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("nonpositive preparation budget was accepted")
+    print("adjudicator_retro selftest: 7 checks passed")
 
 
 def main() -> int:
@@ -856,7 +916,13 @@ def main() -> int:
         help="collect local immutable-commit evidence for one saved case; never adjudicates or dispatches",
     )
     parser.add_argument(
-        "--report", type=Path, help="saved retrospective report used by --collect-case"
+        "--prepare-collected-case",
+        metavar="CASE_ID",
+        help="prepare source-bound case JSON for the existing role; no dispatch or admission",
+    )
+    parser.add_argument("--packet-byte-limit", type=int, default=MAX_COLLECTION_SOURCE_BYTES)
+    parser.add_argument(
+        "--report", type=Path, help="saved retrospective report used by collection/preparation"
     )
     parser.add_argument(
         "--output", type=Path, help="separate collection output used by --collect-case"
@@ -877,6 +943,38 @@ def main() -> int:
     args = parser.parse_args()
     if args.selftest:
         _selftest()
+        return 0
+    if args.prepare_collected_case:
+        if (
+            args.collect_case
+            or args.dispatch
+            or not all((args.report, args.output, args.repository))
+        ):
+            parser.error(
+                "--prepare-collected-case requires --report, --output, --repository; "
+                "it cannot collect-only or dispatch"
+            )
+        try:
+            packet = prepare_collected_case(
+                args.report,
+                args.prepare_collected_case,
+                args.output,
+                args.repository,
+                byte_limit=args.byte_limit,
+                packet_byte_limit=args.packet_byte_limit,
+            )
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            parser.error(str(exc))
+        print(
+            json.dumps(
+                {
+                    "target": packet["target"],
+                    "metadata_only": True,
+                    "output": str(args.output),
+                    "dispatched": False,
+                }
+            )
+        )
         return 0
     if args.collect_case:
         if not args.report or not args.output or not args.repository or args.byte_limit < 1:
