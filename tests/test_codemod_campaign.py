@@ -425,3 +425,118 @@ def test_whitespace_decoy_does_not_replace_effective_exact_ignore(tmp_path, camp
     repo = campaign["campaign"]["repos"][0]
     ignores[repo] += original
     assert ".coverage" in lane.file_targets(campaign, gh=gh)["repos"][repo]["missing"]
+
+
+@pytest.mark.parametrize("durability", ["pending", "durable"])
+def test_pr_target_receipts_preserve_unobserved_source_attempt_cost(
+    tmp_path, monkeypatch, durability
+):
+    import sqlite3
+
+    import feedback
+
+    path = tmp_path / "brain.db"
+    monkeypatch.setattr(feedback, "DB_PATH", path)
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            "CREATE TABLE runs(run_id TEXT, target TEXT, pr_number INTEGER);"
+            "CREATE TABLE outcomes(run_id TEXT, merged INTEGER, durability TEXT);"
+            "CREATE TABLE costs(run_id TEXT,cost_usd REAL,source TEXT);"
+        )
+        conn.execute("INSERT INTO runs VALUES ('keeper','owner/repo#91',91)")
+        conn.execute("INSERT INTO outcomes VALUES ('keeper',1,?)", (durability,))
+        conn.execute(
+            "INSERT INTO costs VALUES ('keeper',1.25,?)",
+            (next(iter(feedback.COMPLETE_COST_SOURCES)),),
+        )
+        conn.execute("INSERT INTO runs VALUES ('decoy','other/repo#91',91)")
+        conn.execute("INSERT INTO outcomes VALUES ('decoy',1,'broke_later')")
+        conn.execute(
+            "INSERT INTO costs VALUES ('decoy',500,?)",
+            (next(iter(feedback.COMPLETE_COST_SOURCES)),),
+        )
+    result = lane.campaign_measure("owner/repo#7", [{"number": 91}])
+    assert result["durable"] is (True if durability == "durable" else None)
+    assert result["observed_complete_cost_usd"] == 1.25
+    assert result["cost_usd"] is None
+    assert "source" in result["measurement"].lower()
+
+
+def test_campaign_measure_combines_source_and_linked_pr_attempts(tmp_path, monkeypatch):
+    import sqlite3
+
+    import feedback
+
+    path = tmp_path / "brain.db"
+    monkeypatch.setattr(feedback, "DB_PATH", path)
+    source = next(iter(feedback.COMPLETE_COST_SOURCES))
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            "CREATE TABLE runs(run_id TEXT, target TEXT, pr_number INTEGER);"
+            "CREATE TABLE outcomes(run_id TEXT, merged INTEGER, durability TEXT);"
+            "CREATE TABLE costs(run_id TEXT,cost_usd REAL,source TEXT);"
+        )
+        for run, target, pr, merged, cost in [
+            ("opener", "owner/repo#7", 91, 1, 2.5),
+            ("keeper", "owner/repo#91", 91, 1, 1.25),
+            ("failed", "owner/repo#7", None, 0, 0.5),
+        ]:
+            conn.execute("INSERT INTO runs VALUES (?,?,?)", (run, target, pr))
+            conn.execute("INSERT INTO outcomes VALUES (?,?,'durable')", (run, merged))
+            conn.execute("INSERT INTO costs VALUES (?,?,?)", (run, cost, source))
+    result = lane.campaign_measure("owner/repo#7", [{"number": 91}])
+    assert result["durable"] is True
+    assert result["cost_usd"] == 4.25
+    assert result["observed_complete_cost_usd"] == 4.25
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE costs SET source='ledger' WHERE run_id='failed'")
+    assert lane.campaign_measure("owner/repo#7", [{"number": 91}])["cost_usd"] is None
+
+
+def test_campaign_measure_rejects_pr_target_number_mismatch(tmp_path, monkeypatch):
+    import sqlite3
+
+    import feedback
+
+    path = tmp_path / "brain.db"
+    monkeypatch.setattr(feedback, "DB_PATH", path)
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            "CREATE TABLE runs(run_id TEXT, target TEXT, pr_number INTEGER);"
+            "CREATE TABLE outcomes(run_id TEXT, merged INTEGER, durability TEXT);"
+            "CREATE TABLE costs(run_id TEXT,cost_usd REAL,source TEXT);"
+        )
+        conn.execute("INSERT INTO runs VALUES ('wrong','owner/repo#91',92)")
+        conn.execute("INSERT INTO outcomes VALUES ('wrong',1,'durable')")
+        conn.execute(
+            "INSERT INTO costs VALUES ('wrong',5,?)", (next(iter(feedback.COMPLETE_COST_SOURCES)),)
+        )
+    result = lane.campaign_measure("owner/repo#7", [{"number": 91}])
+    assert result["durable"] is None and result["cost_usd"] is None
+    assert "mismatch" in result["measurement"]
+
+
+def test_observed_cost_survives_missing_merged_pr_receipt(tmp_path, monkeypatch):
+    import sqlite3
+
+    import feedback
+
+    path = tmp_path / "brain.db"
+    monkeypatch.setattr(feedback, "DB_PATH", path)
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            "CREATE TABLE runs(run_id TEXT, target TEXT, pr_number INTEGER);"
+            "CREATE TABLE outcomes(run_id TEXT, merged INTEGER, durability TEXT);"
+            "CREATE TABLE costs(run_id TEXT,cost_usd REAL,source TEXT);"
+        )
+        conn.execute("INSERT INTO runs VALUES ('keeper','owner/repo#91',91)")
+        conn.execute("INSERT INTO outcomes VALUES ('keeper',1,'durable')")
+        conn.execute(
+            "INSERT INTO costs VALUES ('keeper',1.25,?)",
+            (next(iter(feedback.COMPLETE_COST_SOURCES)),),
+        )
+    result = lane.campaign_measure("owner/repo#7", [{"number": 91}, {"number": 92}])
+    assert result["observed_complete_cost_usd"] == 1.25
+    assert result["cost_usd"] is None
+    assert result["durable"] is None
+    assert "incomplete Brain attribution" in result["measurement"]
