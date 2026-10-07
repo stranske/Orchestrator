@@ -447,3 +447,34 @@ and `needs-human` label were rejected because connector mutations require approv
 this run's approval policy is `never`. The checkout's Git directory is read-only, so the
 change is preserved as an isolated commit and patch under `/tmp`. PR #509 was confirmed
 open and ready for review. The two pytest acceptance checkboxes remain unchecked.
+
+## Evaluated merge6ed9809: named pytest acceptance revalidated
+
+[Fresh named acceptance receipt](issue-428-named-acceptance-20261007/README.md)
+retains39passed and actual outcome-write/unconditional-offer faults with exact
+restoration. It supersedes earlier pytest-unavailable notes for these exact
+current tests, while preserving actual509compareCONCERNS and the source428
+inventory/adjudication/cost/later-truth remainder. No whole-issuePASS is claimed.
+
+## Persisted-dispute replay regression coverage
+
+The CLI dispatch witness now exercises two persisted disputes on the same PR in
+both recency orders. Each dispute retains a distinct case identity and a distinct
+router-chosen retrospective Brain role run. One-case batches and resumes preserve
+all original outcomes and costs without repeating successful paid calls.
+
+A new capacity-recovery witness verifies that unavailable routing produces neither
+a backend invocation nor a Brain verdict record. An explicit bounded retry uses
+the recovered router choice, preserves the case identity, records exactly one
+retrospective role run and leaves outcomes unchanged. All backends are stubbed and
+all databases are private fixtures.
+
+Validation: `node tests/test_adjudicator_retro_cli.js` passes 31 tests with no skips;
+the five evidence unittest tests and seven retrospective selftest checks pass.
+JavaScript syntax and diff whitespace checks pass. Python source is unchanged:
+pytest and Black are unavailable, and PyPI name resolution fails. These CLI
+results do not replace the named pytest acceptance tests or establish a complete
+real dispute inventory. Packet validation still needs follow-up for nonempty
+diff/gate lists containing blank or malformed entries. The broad task checkboxes
+remain unchanged. The checkout's Git directory is read-only; the changes are
+preserved in an isolated commit and patch under `/tmp/adjudicator-retro-review`.
