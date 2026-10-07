@@ -1,0 +1,50 @@
+{
+  "mutation": "disable the new member-validation guards by restoring evaluated47156fb source, then restore candidate byte-for-byte",
+  "candidate_sha256": "bf82359682db3ec029f8b1a14e2ae556dc6945e84d2e6cc4c4df72bd5c86efc3",
+  "records": [
+    {
+      "phase": "guards-disabled-red",
+      "argv": [
+        "/opt/anaconda3/bin/python3",
+        "-m",
+        "pytest",
+        "tests/test_adjudicator_retro.py::test_packet_rejects_blank_or_malformed_evidence_members",
+        "-q",
+        "-o",
+        "addopts=",
+        "--junitxml=/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch-509-compare-0821/docs/verification/issue-428-packet-members-20261007/guards-disabled-red.xml"
+      ],
+      "cwd": "/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch-509-compare-0821",
+      "exit": 1,
+      "junit": {
+        "tests": 12,
+        "failures": 12,
+        "errors": 0,
+        "skips": 0
+      },
+      "source_sha256": "b3375ca80e6f69476db2d543ba0a83f4d5fa235ba92152e05c548ad0300ea234"
+    },
+    {
+      "phase": "restored-green",
+      "argv": [
+        "/opt/anaconda3/bin/python3",
+        "-m",
+        "pytest",
+        "tests/test_adjudicator_retro.py::test_packet_rejects_blank_or_malformed_evidence_members",
+        "-q",
+        "-o",
+        "addopts=",
+        "--junitxml=/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch-509-compare-0821/docs/verification/issue-428-packet-members-20261007/restored-green.xml"
+      ],
+      "cwd": "/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch-509-compare-0821",
+      "exit": 0,
+      "junit": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0
+      },
+      "source_sha256": "bf82359682db3ec029f8b1a14e2ae556dc6945e84d2e6cc4c4df72bd5c86efc3"
+    }
+  ]
+}

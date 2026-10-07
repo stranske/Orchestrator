@@ -424,12 +424,13 @@ import time
 import feedback
 now = int(time.time())
 newest = int(sys.argv[1]) if len(sys.argv) > 1 else 1
+same_target = len(sys.argv) > 2 and sys.argv[2] == "same-target"
 with feedback._conn() as conn:
     for index in (1, 2):
         run_id = f"original-{index}"
         conn.execute(
             "INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)",
-            (run_id, now - (index != newest), f"owner/repo#{index}"),
+            (run_id, now - (index != newest), f"owner/repo#{1 if same_target else index}"),
         )
         conn.execute(
             "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
@@ -438,9 +439,9 @@ with feedback._conn() as conn:
 print(json.dumps(True))
 `;
 
-function testShadowDispatch(t, newest) {
+function testShadowDispatch(t, newest, sameTarget = false) {
   const w = world(t);
-  w.run(['-c', initializeDisputes, String(newest)]);
+  w.run(['-c', initializeDisputes, String(newest), sameTarget ? 'same-target' : 'distinct-targets']);
   const before = w.brain();
   const result = w.run(['-c', `
 import json
@@ -505,10 +506,16 @@ print(json.dumps({
   assert.deepEqual(result.resumed.rows, result.second.rows);
   assert.deepEqual(result.routes.map((call) => call.args), [['adjudicator'], ['adjudicator']]);
   assert.deepEqual(result.calls.map((call) => call.args[0]), ['gemini', 'codex']);
+  assert.deepEqual(result.second.rows.map((row) => row.run_id),
+    [`original-${newest}`, `original-${3 - newest}`]);
+  assert.equal(new Set(result.second.rows.map((row) => row.case_id)).size, 2,
+    'persisted disputes need separate case identities even when they share a PR');
   assert.deepEqual(result.second.rows.map((row) => row.target),
-    [`owner/repo#${newest}`, `owner/repo#${3 - newest}`], 'replay follows dispute recency');
+    sameTarget ? ['owner/repo#1', 'owner/repo#1'] :
+      [`owner/repo#${newest}`, `owner/repo#${3 - newest}`], 'replay follows dispute recency');
   assert.deepEqual(result.records.map((record) => record.target),
-    ['owner/repo#1', 'owner/repo#2'], 'Brain query sorts by target, independently of replay');
+    sameTarget ? ['owner/repo#1', 'owner/repo#1'] : ['owner/repo#1', 'owner/repo#2'],
+    'Brain query sorts by target, independently of replay');
   const recordsById = new Map(result.records.map((record) => [record.run_id, record]));
   assert.equal(recordsById.size, 2, 'each paid invocation must have a distinct role run');
   for (const [index, call] of result.calls.entries()) {
@@ -547,7 +554,96 @@ print(json.dumps({
 for (const newest of [1, 2]) {
   test(`retro dispatch records shadow roles without writing outcomes (newest PR #${newest})`,
     (t) => testShadowDispatch(t, newest));
+  test(`retro replays each persisted dispute on the same PR (newest run ${newest})`,
+    (t) => testShadowDispatch(t, newest, true));
 }
+
+test('retro retries unavailable routing without recording a verdict or changing outcomes', (t) => {
+  const w = world(t);
+  w.run(['-c', initializeDisputes]);
+  const before = w.brain();
+  const result = w.run(['-c', `
+import json
+from unittest.mock import Mock, patch
+import adjudicator_retro as retro
+import feedback
+import roles
+
+reader = Mock(return_value={
+    "disputed_finding": {"body": "Missing acceptance test"},
+    "ground_truth_evidence": {"diff_summary": "Added test", "gate_runs": ["gate-run"]},
+})
+proposal = {
+    "decision": "needs_more_evidence", "confidence": "low",
+    "rationale": "Inspect the acceptance evidence.",
+    "evidence_assessment": [{"claim": "Missing test", "status": "insufficient",
+                             "evidence_ref": "gate-run", "reason": "Inspect source"}],
+    "ground_truth_refs": ["gate-run"], "recommended_next_step": "Inspect source",
+    "evidence_gaps": ["Source unavailable"],
+}
+with (
+    patch.object(roles, "route_role", side_effect=[None, {"agent": "gemini"}]) as route,
+    patch.object(roles, "_role_capability_event"),
+    patch.object(roles.dispatcher, "offload", return_value={
+        "run_id": "backend-recovered", "output": json.dumps(proposal), "exit": 0,
+    }) as transport,
+):
+    unavailable = retro.run(dispatch=True, limit=1, evidence_reader=reader)
+    with feedback._conn() as conn:
+        unavailable_roles = conn.execute(
+            "SELECT run_id FROM runs WHERE role_name='adjudicator'").fetchall()
+    unavailable_calls = transport.call_count
+    # Explicit retry, with one case, must retry this saved failure before the next dispute.
+    recovered = retro.run(dispatch=True, retry=True, limit=1, evidence_reader=reader)
+    stable = retro.run(dispatch=True, retry=True, limit=0, evidence_reader=reader)
+    routes = [call.args for call in route.call_args_list]
+    calls = [{"args": call.args, "kwargs": call.kwargs} for call in transport.call_args_list]
+with feedback._conn() as conn:
+    records = conn.execute(
+        "SELECT run_id,target,agent,source,decomposition FROM runs "
+        "WHERE role_name='adjudicator'").fetchall()
+print(json.dumps({
+    "unavailable": unavailable, "unavailable_roles": unavailable_roles,
+    "unavailable_calls": unavailable_calls, "recovered": recovered, "stable": stable,
+    "routes": routes, "calls": calls, "reads": reader.call_count, "records": records,
+}))
+`]);
+  const failed = result.unavailable.rows[0];
+  assert.equal(result.unavailable.population, 2);
+  assert.equal(result.unavailable.rows.length, 1);
+  assert.ok(failed.errors.some((error) => error.includes('no eligible backend')));
+  assert.equal(failed.role_run_id, null);
+  assert.equal(failed.backend_run_id, null);
+  assert.equal(failed.decision, undefined);
+  assert.deepEqual(result.unavailable_roles, []);
+  assert.equal(result.unavailable_calls, 0);
+  assert.deepEqual(result.routes, [['adjudicator'], ['adjudicator']]);
+  assert.equal(result.reads, 2);
+  assert.equal(result.calls.length, 1, 'only capacity recovery may invoke the backend');
+  assert.equal(result.calls[0].args[0], 'gemini');
+  assert.equal(result.calls[0].kwargs.isolate, true);
+  const recovered = result.recovered.rows[0];
+  assert.equal(result.recovered.rows.length, 1, 'retry must respect the one-case limit');
+  assert.equal(recovered.case_id, failed.case_id, 'recovery preserves persisted dispute identity');
+  assert.equal(recovered.run_id, failed.run_id);
+  assert.deepEqual(recovered.errors, []);
+  assert.equal(recovered.decision, 'needs_more_evidence');
+  assert.equal(recovered.backend_run_id, 'backend-recovered');
+  assert.deepEqual(result.stable.rows, result.recovered.rows);
+  assert.equal(result.records.length, 1);
+  const [runId, target, agent, source, decomposition] = result.records[0];
+  assert.equal(runId, recovered.role_run_id);
+  assert.equal(target, recovered.target);
+  assert.equal(agent, 'gemini');
+  assert.equal(source, 'retrospective');
+  assert.deepEqual(JSON.parse(decomposition).proposal, recovered.proposal);
+  const after = w.brain();
+  assert.deepEqual(after.outcomes, before.outcomes);
+  assert.deepEqual(after.costs, before.costs);
+  assert.deepEqual(after.runs.filter((row) => row[0].startsWith('original-')), before.runs);
+  assert.equal(after.runs.length, before.runs.length + 1);
+  assert.deepEqual(w.report(), result.stable);
+});
 
 test('retro bounded batches count paid abstentions and invalid responses outside agreement rates', (t) => {
   const w = world(t);
@@ -698,6 +794,12 @@ def response(args):
             "run_id": "123", "run_attempt": "1", "provider_verdicts": ["FAIL"],
             "ci_failed": False, "verdict": "NON_PASS",
         }
+        if scenario == "stale-verifier-head":
+            decision["head_sha"] = "c" * 40
+        if scenario == "stale-verifier-merge":
+            decision["evaluated_sha"] = "c" * 40
+        if scenario == "wrong-verifier-pr":
+            decision["pr"] = number + 1
         pr.update({
             "number": number, "state": "MERGED", "mergeCommit": {"oid": "b" * 40},
             "files": {"pageInfo": {"hasNextPage": scenario == "truncated-files"},
@@ -712,6 +814,19 @@ def response(args):
                 }],
             },
         })
+        if scenario == "untrusted-verifier-author":
+            pr["comments"]["nodes"][0]["author"]["login"] = "contributor"
+        if scenario == "newer-verifier-pass":
+            # The newest run wins even when comments arrive out of run order.
+            # The old NON_PASS marker must not revive a resolved dispute.
+            newer = {**decision, "run_id": "124", "provider_verdicts": ["PASS"],
+                     "verdict": "PASS"}
+            original = pr["comments"]["nodes"][0]
+            pr["comments"]["nodes"].insert(0, {
+                **original, "url": original["url"].replace("issuecomment-1", "issuecomment-2"),
+                "body": "Acceptance test is now present\\n"
+                        f"<!-- {verifier_evidence.MARKER} {json.dumps(newer)} -->",
+            })
     return {"data": {"repository": {"pullRequest": pr}}}
 
 proposal = {
@@ -749,6 +864,11 @@ for (const [scenario, reads, error] of [
   ['unbounded', 20, /bounded 20-page read/],
   ['truncated-comments', 1, /truncated verifier comment or diff evidence/],
   ['truncated-files', 1, /truncated verifier comment or diff evidence/],
+  ['stale-verifier-head', 1, /current merge-bound verifier decision missing or changed/],
+  ['stale-verifier-merge', 1, /current merge-bound verifier decision missing or changed/],
+  ['wrong-verifier-pr', 1, /current merge-bound verifier decision missing or changed/],
+  ['untrusted-verifier-author', 1, /current merge-bound verifier decision missing or changed/],
+  ['newer-verifier-pass', 1, /current merge-bound verifier decision missing or changed/],
 ]) {
   test(`retro collects complete gate pages before shadow dispatch: ${scenario}`, (t) => {
     const w = world(t);
@@ -922,6 +1042,88 @@ print(json.dumps({"line": line, "rendered": rendered}))
   assert.equal(line, 'adjudicator shadow: cases 6, agree 0, disagree 0, cost 4.5 '
     + '(graded 0; costs measured 4)');
   assert.equal(rendered.split('\n').filter((text) => text === line).length, 1);
+});
+
+test('switch review reads and renders saved adjudicator evidence without replay or writes', (t) => {
+  const w = world(t);
+  const results = w.run(['-c', `
+import json
+from contextlib import ExitStack
+from unittest.mock import patch
+import adjudicator_retro as retro
+import feedback
+import roles
+import runtime_ac_gate
+import switch_review
+
+path = retro.report_path()
+path.parent.mkdir(parents=True)
+summary = {
+    "cases": 4, "agree": 2, "disagree": 1, "cost_usd": 1.25,
+    "graded": 3, "cost_measured_cases": 4,
+}
+fixtures = [
+    ("measured", json.dumps({"summary": summary})),
+    ("unmeasured", json.dumps({"summary": {
+        **summary, "cases": 0, "agree": 0, "disagree": 0,
+        "graded": 0, "cost_usd": None, "cost_measured_cases": 0,
+    }})),
+    ("missing", None),
+    ("malformed", "{broken"),
+    ("incomplete", json.dumps({"summary": {"cases": 4}})),
+]
+
+def snapshot():
+    return {str(p): p.read_bytes() for p in path.parent.parent.rglob("*") if p.is_file()}
+
+results = []
+with ExitStack() as stack:
+    # Isolate unrelated weekly readers; leave the real retro reader and renderer active.
+    stack.enter_context(patch.object(switch_review, "_capability_heartbeat"))
+    stack.enter_context(patch.object(switch_review, "switch_states", return_value={
+        "held_off": [], "on_but_idle": [],
+    }))
+    stack.enter_context(patch.object(runtime_ac_gate, "shadow_summary", return_value=None))
+    for name, value in {
+        "stale_runners": [], "adversarial_shape_population": {},
+        "mirror_drift": {"status": "ok"}, "fleet_gates": {},
+        "firing_regressions": {}, "_exploration_gate": {},
+        "gate_expiry": None, "capacity_shed": None,
+    }.items():
+        stack.enter_context(patch.object(switch_review, name, return_value=value))
+    # Record forbidden calls as well as raising: a swallowed exception cannot hide them.
+    forbidden = [stack.enter_context(patch.object(module, name,
+        side_effect=AssertionError("weekly summary must only read the saved report")))
+        for module, name in [
+            (retro, "run"), (retro, "disputes"), (retro, "fetch_evidence"),
+            (roles, "run_adjudicator_agent"), (feedback, "_conn"),
+        ]]
+    for name, payload in fixtures:
+        if payload is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(payload)
+        before = snapshot()
+        report = switch_review.review(now=1800000000, env={"ORCH_VALUE_CHAIN_MONITOR": "0"})
+        rendered = switch_review.format_report(report)
+        assert snapshot() == before, "weekly review changed saved state"
+        assert all(mock.call_count == 0 for mock in forbidden), "weekly review replayed evidence"
+        results.append({"fixture": name, "line": report["adjudicator_shadow"],
+                        "rendered": rendered, "raise_count": report["raise_count"]})
+print(json.dumps(results))
+`]);
+  assert.equal(results.length, 5);
+  for (const result of results) {
+    const expected = result.fixture === 'measured'
+      ? 'adjudicator shadow: cases 4, agree 2, disagree 1, cost 1.25 (graded 3; costs measured 4)'
+      : result.fixture === 'unmeasured'
+        ? 'adjudicator shadow: cases 0, agree 0, disagree 0, cost UNKNOWN (graded 0; costs measured 0)'
+        : 'adjudicator shadow: cases UNKNOWN, agree UNKNOWN, disagree UNKNOWN, cost UNKNOWN';
+    assert.equal(result.line, expected, result.fixture);
+    assert.equal(result.rendered.split('\n').filter((line) => line === expected).length, 1,
+      result.fixture);
+    assert.equal(result.raise_count, 0, 'shadow evidence must remain informational');
+  }
 });
 
 test('retro CLI reuses saved cases when later durability and costs arrive', (t) => {

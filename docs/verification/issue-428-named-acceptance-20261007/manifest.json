@@ -1,0 +1,23 @@
+{
+  "schema": "revision-bound-evidence/v1",
+  "entries": [
+    {
+      "path": "docs/verification/issue-428-named-acceptance-20261007/README.md",
+      "revision": "47156fb2e640b6f6421190293a17b4bb60f66b75",
+      "bytes": 1882,
+      "sha256": "34679f8ec708a11b8808b2df50947207a8295d6432819c2140afb0e7cd40b61d"
+    },
+    {
+      "path": "docs/verification/issue-428-named-acceptance-20261007/validation.json",
+      "revision": "47156fb2e640b6f6421190293a17b4bb60f66b75",
+      "bytes": 5616,
+      "sha256": "e1a460caed06c543e8e290cb25c202afae30276da649100da72c7b221ce406d5"
+    },
+    {
+      "path": "docs/verification/issue-428-named-acceptance-20261007/phase-artifacts.json.gz",
+      "revision": "47156fb2e640b6f6421190293a17b4bb60f66b75",
+      "bytes": 7416,
+      "sha256": "8b22c31eae8d632ada8f1cf4affb2e11b28a58f75a7007b8d4af6b5342318541"
+    }
+  ]
+}

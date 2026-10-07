@@ -3,6 +3,30 @@
 This extends the existing AdjudicatorAgent and Brain role-run recorder. Source implementation
 and local replay are distinct from runtime publication, which remains manual.
 
+## Keepalive switch-review reconciliation, 2026-10-07
+
+- [x] Verify `adjudicator shadow: cases N, agree A, disagree D, cost C` through
+  `switch_review.review()` and `format_report()` using the persisted report.
+
+The implementation already existed; the remaining PR checkbox was stale. A new Node
+regression covers measured, unmeasured, missing, malformed and incomplete saved summaries.
+Each line renders exactly once, the shadow evidence raises no owner decision, and the
+review neither changes saved state nor calls replay, dispute collection, evidence fetching,
+adjudication or the Brain connection.
+
+Validation: Node CLI suite 37 passed; evidence unittest suite 5 passed; JavaScript syntax
+and `git diff --check` passed. In isolated source copies, disconnecting the reader,
+disconnecting the renderer and invoking replay from review each failed the new test;
+restoration passed. Repository Python source was unchanged. Pytest/Black are unavailable
+and installation failed, so the named pytest acceptance tests were not rerun here.
+
+PR #511 was confirmed open and ready. The connector rejected the reconciled PR-body
+update, blocker label and comment because approval is required and this run's policy is
+`never`. The checked body
+and mutation evidence are saved under `/tmp/issue-428-switch-review-verification/`.
+Git metadata is read-only; the focused test and note are committed in an isolated Git
+directory with a patch and bundle for transfer.
+
 ## Keepalive gate-page evidence validation, 2026-10-07
 
 - [x] Verify packet construction from the merge-bound verifier comment, merged diff
@@ -447,3 +471,66 @@ and `needs-human` label were rejected because connector mutations require approv
 this run's approval policy is `never`. The checkout's Git directory is read-only, so the
 change is preserved as an isolated commit and patch under `/tmp`. PR #509 was confirmed
 open and ready for review. The two pytest acceptance checkboxes remain unchecked.
+
+## Evaluated merge6ed9809: named pytest acceptance revalidated
+
+[Fresh named acceptance receipt](issue-428-named-acceptance-20261007/README.md)
+retains39passed and actual outcome-write/unconditional-offer faults with exact
+restoration. It supersedes earlier pytest-unavailable notes for these exact
+current tests, while preserving actual509compareCONCERNS and the source428
+inventory/adjudication/cost/later-truth remainder. No whole-issuePASS is claimed.
+
+## Persisted-dispute replay regression coverage
+
+The CLI dispatch witness now exercises two persisted disputes on the same PR in
+both recency orders. Each dispute retains a distinct case identity and a distinct
+router-chosen retrospective Brain role run. One-case batches and resumes preserve
+all original outcomes and costs without repeating successful paid calls.
+
+A new capacity-recovery witness verifies that unavailable routing produces neither
+a backend invocation nor a Brain verdict record. An explicit bounded retry uses
+the recovered router choice, preserves the case identity, records exactly one
+retrospective role run and leaves outcomes unchanged. All backends are stubbed and
+all databases are private fixtures.
+
+Validation: `node tests/test_adjudicator_retro_cli.js` passes 31 tests with no skips;
+the five evidence unittest tests and seven retrospective selftest checks pass.
+JavaScript syntax and diff whitespace checks pass. Python source is unchanged:
+pytest and Black are unavailable, and PyPI name resolution fails. These CLI
+results do not replace the named pytest acceptance tests or establish a complete
+real dispute inventory. Packet validation still needs follow-up for nonempty
+diff/gate lists containing blank or malformed entries. The broad task checkboxes
+remain unchanged. The checkout's Git directory is read-only; the changes are
+preserved in an isolated commit and patch under `/tmp/adjudicator-retro-review`.
+
+## Packet member follow-up, 2026-10-07
+
+The bounded packet-members receipt now supersedes the preceding blank/malformed
+list-entry gap: twelve actual old-source failures become twelve restored passes,
+and complete textual/diff/CheckRun/StatusContext shapes remain accepted. Current
+related Python validation is57PASS plus23PASS subtests; Node CLI31PASS. See
+`issue-428-packet-members-20261007/` for full argv/cwd/JUnit/source hashes and the
+revision-bound repair of the prior named-acceptance README manifest. Broad
+inventory, semantic adjudication, native costs and later-truth claims remain open.
+
+## Merge-bound verifier replay regressions, 2026-10-07
+
+Added five CLI cases to the persisted-dispute evidence witness: stale head,
+stale evaluated merge, wrong PR, untrusted comment author, and a newer PASS
+decision whose comment precedes the older NON_PASS comment. Each must stop
+before routing or offload, save the evidence gap, and leave the entire Brain
+unchanged. The complete CLI suite passes 36 tests without skips. Existing
+evidence unittest tests (five) and retrospective selftests (seven checks) pass.
+In isolated source copies, removing head matching or the persisted-verdict
+comparison fails the corresponding new witness; restoring the exact source
+makes it pass. These controls do not replace the named pytest acceptance faults.
+
+The first task remains open. Empty `commits.nodes` in either gate read raises
+`IndexError` instead of saving an evidence gap and continuing the batch; the
+initial and paginated extraction paths need guarded validation and regression
+tests. No Python files change: Black and pytest are unavailable and installation
+fails because PyPI cannot resolve, preventing a Python commit under the required
+formatting gate. Git metadata is read-only, so this tested JavaScript change is
+preserved in an isolated commit and patch under `/tmp/adjudicator-retro-evidence-review`.
+GitHub API access also fails, preventing PR updates and readiness verification.
+No acceptance checkbox is advanced by this round.
