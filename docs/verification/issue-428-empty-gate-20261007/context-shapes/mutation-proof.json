@@ -1,0 +1,17 @@
+{
+  "cwd": "/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch-512-contexts-1321",
+  "argv": [
+    "/opt/anaconda3/bin/python3",
+    "-m",
+    "pytest",
+    "tests/test_adjudicator_retro.py",
+    "-q",
+    "-k",
+    "malformed_gate_contexts"
+  ],
+  "candidate_sha256": "1bfda2ac958572ebd6e370725d716d504781a841c49c5ffb49b4b881e952eaff",
+  "mutant_sha256": "fa0bde245249a225a9637ad5ed1ccdf08cc353a9b6848b236e36ce9b75370755",
+  "red_exit": 1,
+  "restored_sha256": "1bfda2ac958572ebd6e370725d716d504781a841c49c5ffb49b4b881e952eaff",
+  "green_exit": 0
+}

@@ -827,6 +827,44 @@ def response(args):
                 "body": "Acceptance test is now present\\n"
                         f"<!-- {verifier_evidence.MARKER} {json.dumps(newer)} -->",
             })
+        if scenario == "newer-attempt-pass":
+            # A rerun resolves the dispute even when its workflow run id is unchanged.
+            newer = {**decision, "run_attempt": "2", "provider_verdicts": ["PASS"],
+                     "verdict": "PASS"}
+            original = pr["comments"]["nodes"][0]
+            pr["comments"]["nodes"].append({
+                **original, "url": original["url"].replace("issuecomment-1", "issuecomment-2"),
+                "body": "Acceptance test is now present\\n"
+                        f"<!-- {verifier_evidence.MARKER} {json.dumps(newer)} -->",
+            })
+        if scenario in ("numeric-run-order", "numeric-attempt-order", "invalid-newer-pass",
+                        "untrusted-newer-pass", "wrong-url-newer-pass"):
+            original = pr["comments"]["nodes"][0]
+            if scenario == "numeric-attempt-order":
+                decision["run_attempt"] = "10"
+                original["body"] = "Missing acceptance test\\n" + (
+                    f"<!-- {verifier_evidence.MARKER} {json.dumps(decision)} -->"
+                )
+            other = {**decision, "provider_verdicts": ["PASS"], "verdict": "PASS"}
+            if scenario == "numeric-run-order":
+                other["run_id"] = "99"
+            elif scenario == "numeric-attempt-order":
+                other["run_attempt"] = "9"
+            else:
+                other["run_id"] = "124"
+            if scenario == "invalid-newer-pass":
+                # A claimed PASS contradicting failed CI is not a verifier decision.
+                other["ci_failed"] = True
+            comment = {
+                **original, "url": original["url"].replace("issuecomment-1", "issuecomment-2"),
+                "body": "Unrelated apparent PASS\\n"
+                        f"<!-- {verifier_evidence.MARKER} {json.dumps(other)} -->",
+            }
+            if scenario == "untrusted-newer-pass":
+                comment["author"] = {"login": "contributor"}
+            if scenario == "wrong-url-newer-pass":
+                comment["url"] = f"https://github.com/other/repo/pull/{number}#issuecomment-2"
+            pr["comments"]["nodes"].append(comment)
     return {"data": {"repository": {"pullRequest": pr}}}
 
 proposal = {
@@ -869,6 +907,12 @@ for (const [scenario, reads, error] of [
   ['wrong-verifier-pr', 1, /current merge-bound verifier decision missing or changed/],
   ['untrusted-verifier-author', 1, /current merge-bound verifier decision missing or changed/],
   ['newer-verifier-pass', 1, /current merge-bound verifier decision missing or changed/],
+  ['newer-attempt-pass', 1, /current merge-bound verifier decision missing or changed/],
+  ['numeric-run-order', 3, null],
+  ['numeric-attempt-order', 3, null],
+  ['invalid-newer-pass', 3, null],
+  ['untrusted-newer-pass', 3, null],
+  ['wrong-url-newer-pass', 3, null],
 ]) {
   test(`retro collects complete gate pages before shadow dispatch: ${scenario}`, (t) => {
     const w = world(t);
@@ -890,6 +934,14 @@ for (const [scenario, reads, error] of [
     } else {
       assert.equal(row.error, undefined);
       const packet = row.packet;
+      assert.equal(packet.disputed_finding.ref,
+        `https://github.com/${row.target.replace('#', '/pull/')}#issuecomment-1`,
+        'the selected verifier decision must supply its own finding comment');
+      assert.ok(packet.disputed_finding.body.startsWith('Missing acceptance test\n'));
+      assert.equal(packet.disputed_finding.decision.run_id, '123');
+      assert.equal(packet.disputed_finding.decision.run_attempt,
+        scenario === 'numeric-attempt-order' ? '10' : '1');
+      assert.equal(packet.disputed_finding.decision.verdict, 'NON_PASS');
       assert.equal(packet.ground_truth_evidence.head_sha, 'a'.repeat(40));
       assert.equal(packet.ground_truth_evidence.merge_sha, 'b'.repeat(40));
       assert.deepEqual(packet.ground_truth_evidence.gate_runs, [
@@ -1186,6 +1238,66 @@ print(json.dumps(True))
   assert.deepEqual(w.brain(), changedBrain);
 });
 
+test('retro CLI refreshes late abstention costs after its outcome leaves the Brain', (t) => {
+  const w = world(t);
+  w.run(['-c', initialize]);
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("UPDATE costs SET source='ledger' WHERE run_id='backend-4'")
+print(json.dumps(True))
+`]);
+  w.refresh();
+  const initial = w.report();
+  const identities = initial.rows.map((row) => [row.case_id, row.role_run_id, row.decision]);
+  assert.equal(initial.rows[4].decision, 'needs_more_evidence');
+  assert.equal(initial.rows[4].cost_usd, null, 'an incomplete ledger cost stays unmeasured');
+  assert.equal(initial.summary.cost_usd, 4);
+  assert.equal(initial.summary.cost_measured_cases, 3);
+
+  // The original dispute has already aged out of the replay window. Losing
+  // its outcome must not stop late telemetry for the paid abstention.
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("DELETE FROM outcomes WHERE run_id='original-4'")
+print(json.dumps(True))
+`]);
+  for (const cost of [0, 3]) {
+    w.run(['-c', `
+import json
+import sys
+import feedback
+with feedback._conn() as conn:
+    conn.execute("UPDATE costs SET cost_usd=?,source='ccusage' WHERE run_id='backend-4'",
+                 (float(sys.argv[1]),))
+print(json.dumps(True))
+`, String(cost)]);
+    const before = w.brain();
+    w.refresh();
+    const report = w.report();
+    const abstention = report.rows[4];
+    assert.equal(abstention.cost_usd, cost);
+    assert.equal(abstention.later_truth, null);
+    assert.equal(abstention.merge_rule_verdict, null);
+    assert.deepEqual(abstention.proposal_comparison,
+      { verdict: null, agrees: null, merge_rule_agrees: null });
+    const expectedCosts = {
+      cost_usd: 4 + cost, cost_measured_cases: 4, cost_per_case: (4 + cost) / 4,
+    };
+    assert.deepEqual(report.summary, { ...initial.summary, ...expectedCosts });
+    assert.deepEqual(report.proposal_comparison,
+      { ...initial.proposal_comparison, ...expectedCosts },
+      'late abstention telemetry must not enter either binary agreement denominator');
+    assert.deepEqual(report.rows.map((row) => [row.case_id, row.role_run_id, row.decision]),
+      identities, 'refresh preserves paid role identities and raw proposals');
+    assert.deepEqual(w.brain(), before, 'refresh must not recreate outcomes or role runs');
+    assert.equal(report.population, 0, 'saved telemetry refresh outlives the replay population');
+  }
+});
+
 test('retro CLI withdraws stale costs without changing the comparison cohort', (t) => {
   const w = world(t);
   w.run(['-c', initialize]);
@@ -1263,6 +1375,53 @@ print(json.dumps(True))
 `]);
   const restored = checkCosts(4.5, 4, 1.125);
   assert.deepEqual(restored.proposal_comparison, initial.proposal_comparison);
+});
+
+test('retro CLI rebuilds stale comparison caches from decisions and current Brain evidence', (t) => {
+  const w = world(t);
+  w.run(['-c', initialize]);
+  w.refresh();
+  const initial = w.report();
+  const before = w.brain();
+  const identities = initial.rows.map((row) => [row.case_id, row.role_run_id, row.decision]);
+  w.run(['-c', `
+import json
+import adjudicator_retro as retro
+report_path = retro.report_path()
+report = json.loads(report_path.read_text())
+for row in report["rows"]:
+    if row.get("decision"):
+        # Legacy mirrors and cached comparisons disagree with the saved proposal.
+        stale = "FAIL" if row["decision"] == "reject_blocker" else "PASS"
+        row.update(raw_shadow_verdict=stale, shadow_verdict=stale,
+                   later_truth="PASS", merge_rule_verdict="FAIL", cost_usd=999,
+                   disposition="reject_blocker", metadata_only=False,
+                   proposal_comparison={"verdict": stale, "agrees": True,
+                                        "merge_rule_agrees": True})
+report["summary"] = {"cases": 999, "agree": 999, "cost_usd": 999}
+report["proposal_comparison"] = {"compared": 999, "agreement_rate": 1}
+report_path.write_text(json.dumps(report))
+print(json.dumps(True))
+`]);
+  w.refresh();
+  const refreshed = w.report();
+  assert.deepEqual(refreshed.summary, initial.summary);
+  assert.deepEqual(refreshed.proposal_comparison, initial.proposal_comparison,
+    'both rates and measured costs must be rebuilt rather than trusting saved aggregates');
+  assert.deepEqual(refreshed.rows.map((row) => row.proposal_comparison),
+    initial.rows.map((row) => row.proposal_comparison),
+    'proposal decisions must override contradictory legacy verdict mirrors');
+  assert.deepEqual(refreshed.rows.map((row) => [row.later_truth, row.merge_rule_verdict, row.cost_usd]),
+    initial.rows.map((row) => [row.later_truth, row.merge_rule_verdict, row.cost_usd]),
+    'judged durability, merge disposition and complete costs come from the current Brain');
+  assert.deepEqual(refreshed.rows.map((row) => [row.case_id, row.role_run_id, row.decision]),
+    identities, 'refresh must retain the original proposals and paid role identities');
+  assert.equal(refreshed.rows[0].raw_shadow_verdict, 'FAIL', 'legacy evidence stays inspectable');
+  assert.ok(refreshed.rows.every((row) => row.shadow_verdict === null));
+  assert.ok(refreshed.rows.every((row) => row.metadata_only === true));
+  assert.ok(refreshed.rows.every((row) => row.disposition === 'needs_more_evidence'));
+  assert.equal(refreshed.population, 0, 'cache repair must work after disputes leave replay');
+  assert.deepEqual(w.brain(), before, 'refresh must not rewrite outcomes, costs or role records');
 });
 
 test('retro CLI compares both rules on the same cases with mixed merge dispositions', (t) => {

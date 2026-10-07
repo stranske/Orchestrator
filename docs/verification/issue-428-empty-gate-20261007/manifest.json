@@ -1,0 +1,10 @@
+{
+  "428-empty-collect.txt.gz": "d70bc5fbac903c472a2389db64e3a4e4474b9cdcfc71f9689e6f1a3d895ee195",
+  "428-empty-green.txt.gz": "561875784839b7894cb6afd96ed16bdadffdde57b25b3fa7fabad46f9720023b",
+  "428-empty-red.txt.gz": "da40aa578c546c0a1e1ec73ede74f74fd32948012f8765908ae098a90edd1eba",
+  "README.md": "5828429e7b5fd0673762e49a311aa07941654a79a1a286e7d367d8d16612fe28",
+  "full-private-verifier.txt.gz": "76639b1b853f0fbc3f8a48ebef50729046b50c9664934ce054eb99099a67c304",
+  "full-pytest.xml.gz": "4012cbd28b7f3a631e90a656db9105a16a01b833773ac555b7bd547dc36b6a37",
+  "mypy.txt.gz": "b7b3744425ec7812f48491bdae047f55f17494f5b37aac98048efd9131215b93",
+  "validation.json": "a8d64ca8e7fa8956c232d73511e8256da6a9b3790d0c36a8ac8de14192dd6eae"
+}
