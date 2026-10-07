@@ -419,14 +419,17 @@ test('collection CLI leaves failed acceptance and inventory exhaustiveness unass
 
 const initializeDisputes = `
 import json
+import sys
 import time
 import feedback
+now = int(time.time())
+newest = int(sys.argv[1]) if len(sys.argv) > 1 else 1
 with feedback._conn() as conn:
     for index in (1, 2):
         run_id = f"original-{index}"
         conn.execute(
             "INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)",
-            (run_id, int(time.time()), f"owner/repo#{index}"),
+            (run_id, now - (index != newest), f"owner/repo#{index}"),
         )
         conn.execute(
             "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
@@ -435,9 +438,9 @@ with feedback._conn() as conn:
 print(json.dumps(True))
 `;
 
-test('retro dispatch routes each case and records shadow roles without writing outcomes', (t) => {
+function testShadowDispatch(t, newest) {
   const w = world(t);
-  w.run(['-c', initializeDisputes]);
+  w.run(['-c', initializeDisputes, String(newest)]);
   const before = w.brain();
   const result = w.run(['-c', `
 import json
@@ -502,6 +505,12 @@ print(json.dumps({
   assert.deepEqual(result.resumed.rows, result.second.rows);
   assert.deepEqual(result.routes.map((call) => call.args), [['adjudicator'], ['adjudicator']]);
   assert.deepEqual(result.calls.map((call) => call.args[0]), ['gemini', 'codex']);
+  assert.deepEqual(result.second.rows.map((row) => row.target),
+    [`owner/repo#${newest}`, `owner/repo#${3 - newest}`], 'replay follows dispute recency');
+  assert.deepEqual(result.records.map((record) => record.target),
+    ['owner/repo#1', 'owner/repo#2'], 'Brain query sorts by target, independently of replay');
+  const recordsById = new Map(result.records.map((record) => [record.run_id, record]));
+  assert.equal(recordsById.size, 2, 'each paid invocation must have a distinct role run');
   for (const [index, call] of result.calls.entries()) {
     const packet = result.second.rows[index].packet;
     assert.ok(call.args[1].includes(packet.disputed_finding.body));
@@ -514,7 +523,8 @@ print(json.dumps({
       w.root, 'state/capability-program/adjudicator-retro.json',
     )));
     const row = result.second.rows[index];
-    const record = result.records[index];
+    const record = recordsById.get(row.role_run_id);
+    assert.ok(record, 'every saved verdict must identify its own Brain role run');
     const metadata = JSON.parse(record.metadata);
     assert.equal(record.run_id, row.role_run_id);
     assert.equal(record.target, row.target);
@@ -532,7 +542,12 @@ print(json.dumps({
   assert.deepEqual(after.runs.filter((row) => row[0].startsWith('original-')), before.runs);
   assert.equal(after.runs.length, before.runs.length + 2);
   assert.deepEqual(w.report(), result.resumed);
-});
+}
+
+for (const newest of [1, 2]) {
+  test(`retro dispatch records shadow roles without writing outcomes (newest PR #${newest})`,
+    (t) => testShadowDispatch(t, newest));
+}
 
 test('retro bounded batches count paid abstentions and invalid responses outside agreement rates', (t) => {
   const w = world(t);
@@ -1185,6 +1200,38 @@ test('retro CLI publishes an empty report without inventing agreement or cost', 
     cost_usd: null, cost_measured_cases: 0, cost_per_case: null,
   });
   assert.deepEqual(w.brain(), before);
+});
+
+test('retro CLI withdraws saved comparisons when their outcome is missing', (t) => {
+  const w = world(t);
+  w.run(['-c', initialize]);
+  w.refresh();
+  const initial = w.report();
+  const identities = initial.rows.map((row) => [row.case_id, row.role_run_id, row.decision]);
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("DELETE FROM outcomes WHERE run_id='original-0'")
+print(json.dumps(True))
+`]);
+  const before = w.brain();
+  w.refresh();
+  const report = w.report();
+  assert.equal(report.rows[0].later_truth, null, 'a missing outcome cannot retain durable truth');
+  assert.equal(report.rows[0].merge_rule_verdict, null, 'a missing outcome has no merge baseline');
+  assert.deepEqual(report.rows[0].proposal_comparison, {
+    verdict: 'PASS', agrees: null, merge_rule_agrees: null,
+  });
+  assert.deepEqual(report.proposal_comparison, {
+    ...initial.proposal_comparison,
+    compared: 2, pending_truth: 2, agree: 1, disagree: 1, agreement_rate: 0.5,
+    merge_rule_agree: 0, merge_rule_disagree: 2, merge_rule_agreement_rate: 0,
+  }, 'both agreement rates must remove the missing case from their denominator');
+  assert.deepEqual(report.summary, initial.summary, 'paid costs survive loss of later truth');
+  assert.deepEqual(report.rows.map((row) => [row.case_id, row.role_run_id, row.decision]),
+    identities, 'withdrawal preserves saved proposals and role-run identities');
+  assert.deepEqual(w.brain(), before, 'report refresh must not recreate the missing outcome');
 });
 
 test('retro CLI removes stale comparisons until durability is judged again', (t) => {

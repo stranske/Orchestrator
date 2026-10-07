@@ -415,3 +415,35 @@ Pytest and Black are absent from every installed Python interpreter; the attempt
 PyPI installation failed on DNS resolution. No Python files change in this round.
 The checkout's Git directory is read-only, so the tested JavaScript change and this
 note are preserved as an isolated commit, patch and bundle under `/tmp` for transfer.
+
+## Keepalive comparison and role-record reconciliation, 2026-10-07
+
+Reviewed commits `8434b0f`, `008e003` and `0d2fa18` before continuing. Current-run CLI
+verification supports these existing implementations:
+
+- [x] Compare saved raw proposals with judged later truth and the merge-rule baseline;
+  persist agreement rates, measured cost per case and counts in the state report.
+- [x] Bind `role-adjudicator` on `closer-lane` with `requires_pr: contested_verdict`.
+- [x] Render the adjudicator shadow cases/agreement/cost line in switch review.
+- [ ] Run the three named pytest acceptance tests on the current tree.
+- [ ] Run the outcome-write and unconditional-offer faults against those named pytest tests.
+
+The initial CLI run passed 25/26 tests: the dispatch witness incorrectly paired report
+rows ordered by dispute recency with Brain records ordered by target. It now joins by
+role-run ID and explicitly verifies both recency orders, retaining all outcome, routing,
+metadata and resume assertions. A new comparison regression removes one saved outcome:
+both rules withdraw that case from their denominator, preserve paid costs and role-run
+identities, and refresh the report without recreating the outcome.
+
+Validation: all 28 CLI tests, five evidence unittest tests and seven retrospective selftest
+checks pass. JavaScript syntax and diff whitespace checks pass. Isolated production-source
+faults that write outcomes, offer unconditionally or retain truth for a missing outcome
+each fail the corresponding CLI witness; byte-identical restoration passes. These CLI
+controls do not replace the explicitly named pytest acceptance checks. No Python files or
+pytest collection counts change.
+
+Pytest and Black are absent; installing them into `/tmp` failed. The PR-body reconciliation
+and `needs-human` label were rejected because connector mutations require approval and
+this run's approval policy is `never`. The checkout's Git directory is read-only, so the
+change is preserved as an isolated commit and patch under `/tmp`. PR #509 was confirmed
+open and ready for review. The two pytest acceptance checkboxes remain unchecked.
