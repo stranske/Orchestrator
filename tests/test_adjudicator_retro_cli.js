@@ -794,6 +794,12 @@ def response(args):
             "run_id": "123", "run_attempt": "1", "provider_verdicts": ["FAIL"],
             "ci_failed": False, "verdict": "NON_PASS",
         }
+        if scenario == "stale-verifier-head":
+            decision["head_sha"] = "c" * 40
+        if scenario == "stale-verifier-merge":
+            decision["evaluated_sha"] = "c" * 40
+        if scenario == "wrong-verifier-pr":
+            decision["pr"] = number + 1
         pr.update({
             "number": number, "state": "MERGED", "mergeCommit": {"oid": "b" * 40},
             "files": {"pageInfo": {"hasNextPage": scenario == "truncated-files"},
@@ -808,6 +814,19 @@ def response(args):
                 }],
             },
         })
+        if scenario == "untrusted-verifier-author":
+            pr["comments"]["nodes"][0]["author"]["login"] = "contributor"
+        if scenario == "newer-verifier-pass":
+            # The newest run wins even when comments arrive out of run order.
+            # The old NON_PASS marker must not revive a resolved dispute.
+            newer = {**decision, "run_id": "124", "provider_verdicts": ["PASS"],
+                     "verdict": "PASS"}
+            original = pr["comments"]["nodes"][0]
+            pr["comments"]["nodes"].insert(0, {
+                **original, "url": original["url"].replace("issuecomment-1", "issuecomment-2"),
+                "body": "Acceptance test is now present\\n"
+                        f"<!-- {verifier_evidence.MARKER} {json.dumps(newer)} -->",
+            })
     return {"data": {"repository": {"pullRequest": pr}}}
 
 proposal = {
@@ -845,6 +864,11 @@ for (const [scenario, reads, error] of [
   ['unbounded', 20, /bounded 20-page read/],
   ['truncated-comments', 1, /truncated verifier comment or diff evidence/],
   ['truncated-files', 1, /truncated verifier comment or diff evidence/],
+  ['stale-verifier-head', 1, /current merge-bound verifier decision missing or changed/],
+  ['stale-verifier-merge', 1, /current merge-bound verifier decision missing or changed/],
+  ['wrong-verifier-pr', 1, /current merge-bound verifier decision missing or changed/],
+  ['untrusted-verifier-author', 1, /current merge-bound verifier decision missing or changed/],
+  ['newer-verifier-pass', 1, /current merge-bound verifier decision missing or changed/],
 ]) {
   test(`retro collects complete gate pages before shadow dispatch: ${scenario}`, (t) => {
     const w = world(t);
@@ -1018,6 +1042,88 @@ print(json.dumps({"line": line, "rendered": rendered}))
   assert.equal(line, 'adjudicator shadow: cases 6, agree 0, disagree 0, cost 4.5 '
     + '(graded 0; costs measured 4)');
   assert.equal(rendered.split('\n').filter((text) => text === line).length, 1);
+});
+
+test('switch review reads and renders saved adjudicator evidence without replay or writes', (t) => {
+  const w = world(t);
+  const results = w.run(['-c', `
+import json
+from contextlib import ExitStack
+from unittest.mock import patch
+import adjudicator_retro as retro
+import feedback
+import roles
+import runtime_ac_gate
+import switch_review
+
+path = retro.report_path()
+path.parent.mkdir(parents=True)
+summary = {
+    "cases": 4, "agree": 2, "disagree": 1, "cost_usd": 1.25,
+    "graded": 3, "cost_measured_cases": 4,
+}
+fixtures = [
+    ("measured", json.dumps({"summary": summary})),
+    ("unmeasured", json.dumps({"summary": {
+        **summary, "cases": 0, "agree": 0, "disagree": 0,
+        "graded": 0, "cost_usd": None, "cost_measured_cases": 0,
+    }})),
+    ("missing", None),
+    ("malformed", "{broken"),
+    ("incomplete", json.dumps({"summary": {"cases": 4}})),
+]
+
+def snapshot():
+    return {str(p): p.read_bytes() for p in path.parent.parent.rglob("*") if p.is_file()}
+
+results = []
+with ExitStack() as stack:
+    # Isolate unrelated weekly readers; leave the real retro reader and renderer active.
+    stack.enter_context(patch.object(switch_review, "_capability_heartbeat"))
+    stack.enter_context(patch.object(switch_review, "switch_states", return_value={
+        "held_off": [], "on_but_idle": [],
+    }))
+    stack.enter_context(patch.object(runtime_ac_gate, "shadow_summary", return_value=None))
+    for name, value in {
+        "stale_runners": [], "adversarial_shape_population": {},
+        "mirror_drift": {"status": "ok"}, "fleet_gates": {},
+        "firing_regressions": {}, "_exploration_gate": {},
+        "gate_expiry": None, "capacity_shed": None,
+    }.items():
+        stack.enter_context(patch.object(switch_review, name, return_value=value))
+    # Record forbidden calls as well as raising: a swallowed exception cannot hide them.
+    forbidden = [stack.enter_context(patch.object(module, name,
+        side_effect=AssertionError("weekly summary must only read the saved report")))
+        for module, name in [
+            (retro, "run"), (retro, "disputes"), (retro, "fetch_evidence"),
+            (roles, "run_adjudicator_agent"), (feedback, "_conn"),
+        ]]
+    for name, payload in fixtures:
+        if payload is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(payload)
+        before = snapshot()
+        report = switch_review.review(now=1800000000, env={"ORCH_VALUE_CHAIN_MONITOR": "0"})
+        rendered = switch_review.format_report(report)
+        assert snapshot() == before, "weekly review changed saved state"
+        assert all(mock.call_count == 0 for mock in forbidden), "weekly review replayed evidence"
+        results.append({"fixture": name, "line": report["adjudicator_shadow"],
+                        "rendered": rendered, "raise_count": report["raise_count"]})
+print(json.dumps(results))
+`]);
+  assert.equal(results.length, 5);
+  for (const result of results) {
+    const expected = result.fixture === 'measured'
+      ? 'adjudicator shadow: cases 4, agree 2, disagree 1, cost 1.25 (graded 3; costs measured 4)'
+      : result.fixture === 'unmeasured'
+        ? 'adjudicator shadow: cases 0, agree 0, disagree 0, cost UNKNOWN (graded 0; costs measured 0)'
+        : 'adjudicator shadow: cases UNKNOWN, agree UNKNOWN, disagree UNKNOWN, cost UNKNOWN';
+    assert.equal(result.line, expected, result.fixture);
+    assert.equal(result.rendered.split('\n').filter((line) => line === expected).length, 1,
+      result.fixture);
+    assert.equal(result.raise_count, 0, 'shadow evidence must remain informational');
+  }
 });
 
 test('retro CLI reuses saved cases when later durability and costs arrive', (t) => {

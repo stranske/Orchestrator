@@ -32,6 +32,46 @@ def test_packet_builder_needs_target_finding_and_ground_truth():
         retro.build_packet({}, evidence(row))
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("diff_summary", [None]),
+        ("diff_summary", [" "]),
+        ("diff_summary", [17]),
+        ("diff_summary", [{}]),
+        ("diff_summary", [{"path": " "}]),
+        ("diff_summary", [{"path": "tests/valid.py"}, None]),
+        ("gate_runs", [None]),
+        ("gate_runs", [" "]),
+        ("gate_runs", [17]),
+        ("gate_runs", [{}]),
+        ("gate_runs", [{"name": "Gate", "conclusion": "SUCCESS"}]),
+        ("gate_runs", ["gate-run", None]),
+    ],
+)
+def test_packet_rejects_blank_or_malformed_evidence_members(field, value):
+    row = {"target": "owner/repo#1"}
+    packet = evidence(row)
+    packet["ground_truth_evidence"][field] = value
+    with pytest.raises(ValueError):
+        retro.build_packet(row, packet)
+
+
+def test_packet_accepts_complete_diff_and_both_gate_context_shapes():
+    row = {"target": "owner/repo#1"}
+    packet = evidence(row)
+    packet["ground_truth_evidence"] = {
+        "diff_summary": [{"path": "tests/valid.py", "additions": 1, "deletions": 0}],
+        "gate_runs": [
+            {"name": "Gate", "conclusion": "SUCCESS", "detailsUrl": "gate-run"},
+            {"context": "Gate", "state": "SUCCESS", "targetUrl": "gate-status"},
+        ],
+    }
+    assert (
+        retro.build_packet(row, packet)["ground_truth_evidence"] == packet["ground_truth_evidence"]
+    )
+
+
 @pytest.fixture
 def private_brain(tmp_path, monkeypatch):
     db = tmp_path / "brain.db"
