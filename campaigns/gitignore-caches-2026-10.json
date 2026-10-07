@@ -40,7 +40,7 @@
     "language": "text",
     "summary": "Append only absent tool cache and coverage entries",
     "risk_level": "low",
-    "command_template": "python3 -c 'from pathlib import Path; p=Path('\"'\"'.gitignore'\"'\"'); s=p.read_text().splitlines(); print('\"'\"'\\n'\"'\"'.join(e for e in ['\"'\"'.mypy_cache/'\"'\"', '\"'\"'.pytest_cache/'\"'\"', '\"'\"'.ruff_cache/'\"'\"', '\"'\"'coverage.xml'\"'\"', '\"'\"'.coverage'\"'\"'] if e not in s))' --dry-run"
+    "command_template": "python3 -c 'from pathlib import Path; p=Path('\"'\"'.gitignore'\"'\"'); s={line.removesuffix('\"'\"'\\r'\"'\"') for line in p.read_bytes().decode('\"'\"'utf-8'\"'\"').split('\"'\"'\\n'\"'\"')}; print('\"'\"'\\n'\"'\"'.join(e for e in ['\"'\"'.mypy_cache/'\"'\"', '\"'\"'.pytest_cache/'\"'\"', '\"'\"'.ruff_cache/'\"'\"', '\"'\"'coverage.xml'\"'\"', '\"'\"'.coverage'\"'\"'] if e not in s))' --dry-run"
   },
   "rollout": {
     "batch_size": 2,

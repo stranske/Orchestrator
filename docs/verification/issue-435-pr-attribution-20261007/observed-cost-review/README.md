@@ -1,0 +1,5 @@
+# Observed partial cost review
+
+At historical PR head c7d2cafcb3a374d6e7f05cff02f475f33cffe4a9, an absent receipt for one of two merged delivery PRs returned before observed complete cost was assigned. The new real-SQLite regression fails on that exact production source (None versus 1.25) and passes with the cost projection moved after identity validation and before the incomplete-attribution return. All28campaign cases pass; total cost and durability stay UNKNOWN for incomplete attribution, and target/number disagreement still fails closed. Ruff/Black/diffcheck pass. Full local verifier is running; no final full-suite claim yet.
+
+The parent manifest's source/test/floor and README entries are historical bindings to c7d2cafcb3a374d6e7f05cff02f475f33cffe4a9; preserve that manifest and its raw proof. This directory binds current source/test/floor and fresh RED/GREEN receipts separately. The earlier2627 full-suite result applies to the historical source, not this change. No paid run, Brain write, complete-cost-source admission or broad source435 completion.
