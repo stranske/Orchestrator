@@ -117,6 +117,26 @@ function world(t) {
   };
 }
 
+function localGit(w, checkout, ...args) {
+  const output = path.join(w.root, 'git-stdout');
+  const errors = path.join(w.root, 'git-stderr');
+  const stdout = fs.openSync(output, 'w');
+  const stderr = fs.openSync(errors, 'w');
+  try {
+    const result = spawnSync('git', ['-C', checkout, ...args], {
+      env: { PATH: process.env.PATH }, stdio: ['ignore', stdout, stderr], timeout: 10000,
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, fs.readFileSync(errors, 'utf8'));
+    return fs.readFileSync(output, 'utf8').trim();
+  } finally {
+    fs.closeSync(stdout);
+    fs.closeSync(stderr);
+    fs.rmSync(output);
+    fs.rmSync(errors);
+  }
+}
+
 for (const [name, artifactPath, content, executable] of [
   ['empty', 'artifacts/empty.log', '', false],
   ['unicode', 'artifacts/résumé\tresult\n.log', 'résultat: réussi ✓\n', false],
@@ -128,25 +148,7 @@ for (const [name, artifactPath, content, executable] of [
     const w = world(t);
     const checkout = path.join(w.root, 'checkout');
     fs.mkdirSync(path.join(checkout, 'artifacts'), { recursive: true });
-    function git(...args) {
-      const output = path.join(w.root, 'git-stdout');
-      const errors = path.join(w.root, 'git-stderr');
-      const stdout = fs.openSync(output, 'w');
-      const stderr = fs.openSync(errors, 'w');
-      try {
-        const result = spawnSync('git', ['-C', checkout, ...args], {
-          env: { PATH: process.env.PATH }, stdio: ['ignore', stdout, stderr], timeout: 10000,
-        });
-        assert.ifError(result.error);
-        assert.equal(result.status, 0, fs.readFileSync(errors, 'utf8'));
-        return fs.readFileSync(output, 'utf8').trim();
-      } finally {
-        fs.closeSync(stdout);
-        fs.closeSync(stderr);
-        fs.rmSync(output);
-        fs.rmSync(errors);
-      }
-    }
+    const git = (...args) => localGit(w, checkout, ...args);
     git('init', '-q');
     git('config', 'user.name', 'Collector Test');
     git('config', 'user.email', 'collector@example.com');
@@ -205,6 +207,91 @@ for (const [name, artifactPath, content, executable] of [
     assert.equal(fs.existsSync(path.join(w.root, 'brain.db')), false);
   });
 }
+
+test('collection CLI reports every unresolved inventory slot alongside collected bytes', (t) => {
+  const w = world(t);
+  const checkout = path.join(w.root, 'checkout');
+  fs.mkdirSync(path.join(checkout, 'artifacts'), { recursive: true });
+  const git = (...args) => localGit(w, checkout, ...args);
+  git('init', '-q');
+  git('config', 'user.name', 'Collector Test');
+  git('config', 'user.email', 'collector@example.com');
+  fs.writeFileSync(path.join(checkout, 'artifacts/valid.log'), 'ok\n');
+  fs.writeFileSync(path.join(checkout, 'artifacts/oversized.log'), 'too large\n');
+  fs.writeFileSync(path.join(checkout, 'artifacts/invalid.bin'), Buffer.from([0xff, 0x00]));
+  fs.symlinkSync('valid.log', path.join(checkout, 'artifacts/link.log'));
+  git('add', '.');
+  git('commit', '-qm', 'artifacts');
+  // A gitlink is present in the inventory's commit but is not a regular blob.
+  git('update-index', '--add', '--cacheinfo', `160000,${git('rev-parse', 'HEAD')},submodule`);
+  git('commit', '-qm', 'gitlink');
+  const evaluated = git('rev-parse', 'HEAD');
+  const valid = { criterion: 'declared artifact', location: 'git-path:artifacts/valid.log' };
+  const failures = [
+    ['git-path:artifacts/missing.log', 'missing_source_object'],
+    ['git-path:../outside.log', 'unsafe_source_path'],
+    ['git-path:/absolute.log', 'unsafe_source_path'],
+    ['git-path:', 'unsafe_source_path'],
+    ['git-path:artifacts/oversized.log', 'source_byte_limit_exceeded'],
+    ['git-path:artifacts/invalid.bin', 'unsupported_source_encoding'],
+    ['git-path:artifacts/link.log', 'missing_source_object'],
+    ['git-path:artifacts', 'missing_source_object'],
+    ['git-path:submodule', 'missing_source_object'],
+    ['git-path:artifacts/*.log', 'missing_source_object'],
+    ['artifact:run/1', 'unsupported_acceptance_transport'],
+  ];
+  // Identical declarations must each retain their own inventory index. A valid
+  // artifact and source must not satisfy another slot sharing the same criterion.
+  const acceptance = [valid, { ...valid }, ...failures.map(([location]) => ({
+    criterion: valid.criterion, location,
+  }))];
+  const saved = JSON.stringify({ rows: [{
+    case_id: 'partial-inventory', decision: 'reject_blocker', cost_usd: 1.5,
+    packet: { disputed_finding: { decision: { evaluated_sha: evaluated } } },
+    collection_requirements: { source_paths: ['artifacts/valid.log'], acceptance },
+  }] });
+  const report = path.join(w.root, 'saved.json');
+  const output = path.join(w.root, 'collection.json');
+  fs.writeFileSync(report, saved);
+  const summary = w.run([
+    path.join(modules, 'adjudicator_retro.py'), '--collect-case', 'partial-inventory',
+    '--report', report, '--output', output, '--repository', checkout, '--byte-limit', '4',
+  ]);
+  const result = JSON.parse(fs.readFileSync(output, 'utf8'));
+  assert.equal(summary.complete, false);
+  assert.deepEqual(summary.gaps, result.gaps);
+  assert.equal(result.complete, false);
+  assert.equal(result.sources[0].complete, true);
+  assert.equal(result.acceptance_artifacts.length, acceptance.length);
+  assert.deepEqual(result.acceptance_artifacts.map((record) => record.complete),
+    acceptance.map((_item, index) => index < 2));
+  assert.deepEqual(result.gaps.filter((gap) => gap.kind === 'missing_acceptance_evidence')
+    .map((gap) => gap.criterion), acceptance.slice(2));
+  for (const [index, record] of result.acceptance_artifacts.entries()) {
+    assert.equal(record.inventory_index, index);
+    assert.equal(record.criterion, acceptance[index].criterion);
+    assert.equal(record.location, acceptance[index].location);
+    assert.equal(record.evaluated_sha, evaluated);
+    if (index < 2) {
+      assert.equal(record.bytes_utf8, 'ok\n');
+      assert.equal(record.blob_sha, git('rev-parse', `${evaluated}:artifacts/valid.log`));
+    } else {
+      const [location, kind] = failures[index - 2];
+      assert.ok(result.gaps.some((gap) => gap.kind === kind && (
+        gap.path === location.slice('git-path:'.length) || gap.location === location
+      )), `missing reason for ${location}`);
+      assert.equal(record.bytes_utf8, undefined);
+    }
+  }
+  const oversized = result.acceptance_artifacts[6];
+  assert.equal(oversized.byte_length, Buffer.byteLength('too large\n'));
+  assert.equal(oversized.sha256, undefined, 'oversized bytes must not be read');
+  assert.equal(result.completeness_scope, 'supplied_inventory_only');
+  assert.equal(result.inventory_exhaustiveness, 'unverified');
+  assert.equal(result.acceptance_semantics, 'unassessed');
+  assert.equal(fs.readFileSync(report, 'utf8'), saved);
+  assert.equal(fs.existsSync(path.join(w.root, 'brain.db')), false);
+});
 
 const initializeDisputes = `
 import json

@@ -308,3 +308,29 @@ Verified keepalive task:
 
 - [x] Retrospective collection can now capture acceptance artifacts stored at literal Git paths
   in the evaluated revision, recording their content and provenance.
+
+Keepalive gap verification adds an end-to-end CLI regression with two identical valid acceptance
+declarations and eleven unresolved locations in one supplied inventory. It verifies separate
+inventory indices, preserved valid source/artifact bytes, and an exact missing-evidence gap for
+each unavailable, unsafe, oversized, non-UTF-8, symlink, directory, gitlink, literal glob or
+unsupported transport location. The oversized record retains its size without content or a
+content hash. Both CLI output and the saved collection agree on the gaps; scope markers, the
+original report and the absence of a Brain database are checked. The shared Git fixture helper
+retains the existing isolated child environment and file-based output capture.
+
+Validation in this round: all 16 CLI tests and all six collector self-test checks pass, as do
+JavaScript syntax and diff whitespace checks. No Python files or pytest collection counts change.
+Pytest and Black are unavailable in this runner; full hosted verification remains outstanding.
+Recent commits 705a17e, 199a9a9 and 47e63d1 were reviewed before this follow-up. The GitHub
+connector rejected the PR checklist reconciliation because its approval policy is `never`, so
+the verified task state below has not been applied to the PR body in this round.
+
+- [x] **New Features**
+  - [x] Retrospective collection can capture acceptance artifacts at literal Git paths in the
+    evaluated revision, recording their content and provenance.
+  - [x] Collection checks artifacts against the supplied inventory and reports gaps for
+    unavailable, unsafe, oversized, or invalid content.
+  - [x] Results clarify that collection covers only the supplied inventory and does not verify
+    its completeness or acceptance success.
+- [x] **Documentation**
+  - [x] Added guidance on acceptance-artifact collection and its limitations.
