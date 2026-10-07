@@ -562,6 +562,61 @@ print(json.dumps(True))
   assert.deepEqual(w.brain(), changedBrain, 'comparison refresh must not write any Brain table');
 });
 
+test('retro CLI regrades saved durable cases when later failure signals arrive', (t) => {
+  const w = world(t);
+  w.run(['-c', initialize]);
+  w.refresh();
+  const initial = w.report();
+  const identities = initial.rows.map((row) => [row.case_id, row.role_run_id, row.decision]);
+
+  // A prior PASS observation must not mask a subsequent failure. Exercise each
+  // fleet failure signal independently, retaining the merge disposition and costs.
+  for (const durability of ['reverted', 'broke_later', 'reopened', 'abandoned', 'reworked']) {
+    w.run(['-c', `
+import json
+import sys
+import feedback
+with feedback._conn() as conn:
+    conn.execute(
+        "UPDATE outcomes SET durability=? WHERE run_id='original-0'",
+        (sys.argv[1],),
+    )
+print(json.dumps(True))
+`, durability]);
+    const changedBrain = w.brain();
+    w.refresh();
+    const failed = w.report();
+    assert.equal(failed.rows[0].later_truth, 'FAIL', durability);
+    assert.deepEqual(failed.rows[0].proposal_comparison, {
+      verdict: 'PASS', agrees: false, merge_rule_agrees: false,
+    });
+    assert.deepEqual(failed.proposal_comparison, {
+      ...initial.proposal_comparison,
+      agree: 1, disagree: 2, agreement_rate: 1 / 3,
+      merge_rule_agree: 0, merge_rule_disagree: 3, merge_rule_agreement_rate: 0,
+    }, durability);
+    assert.deepEqual(failed.summary, initial.summary);
+    assert.deepEqual(failed.rows.map((row) => [row.case_id, row.role_run_id, row.decision]),
+      identities);
+    assert.ok(failed.rows.every((row) => row.shadow_verdict === null));
+    assert.deepEqual(w.brain(), changedBrain, 'regrading must leave the entire Brain unchanged');
+  }
+
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("UPDATE outcomes SET durability='durable' WHERE run_id='original-0'")
+print(json.dumps(True))
+`]);
+  const restoredBrain = w.brain();
+  w.refresh();
+  assert.deepEqual(w.report().proposal_comparison, initial.proposal_comparison);
+  assert.deepEqual(w.report().rows.map((row) => [row.case_id, row.role_run_id, row.decision]),
+    identities);
+  assert.deepEqual(w.brain(), restoredBrain, 'recovering truth must not redispatch saved cases');
+});
+
 test('retro CLI publishes an empty report without inventing agreement or cost', (t) => {
   const w = world(t);
   w.run(['-c', 'import json, feedback; feedback._conn().close(); print(json.dumps(True))']);

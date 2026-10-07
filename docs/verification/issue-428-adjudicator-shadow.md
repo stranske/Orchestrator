@@ -3,6 +3,25 @@
 This extends the existing AdjudicatorAgent and Brain role-run recorder. Source implementation
 and local replay are distinct from runtime publication, which remains manual.
 
+## Keepalive later-failure comparison, 2026-10-07
+
+The new CLI regression replaces a saved durable observation with each fleet failure signal
+(`reverted`, `broke_later`, `reopened`, `abandoned`, `reworked`). Both comparison rates must
+refresh against the new truth while preserving the cohort, costs, proposal identities,
+metadata evidence floor and complete Brain snapshot. Restoring durability recovers the
+original comparison without redispatch.
+
+All ten Node CLI tests and five unittest evidence tests passed. A temporary source copy
+deliberately reused cached later truth: the new regression failed with PASS instead of FAIL.
+Byte-identical restoration passed. No repository Python source was changed.
+
+Recent commits and the passing CLI suite support checking the report, closer binding and
+switch-review implementation tasks. The named pytest acceptance tests and their two required
+faults remain pending: pytest and Black are unavailable, and installation failed. The connector
+rejected the PR-body update, blocker label and comment because approval is required while this
+run's policy is `never`. The reconciled body is saved under `/tmp`. Git metadata is read-only;
+the focused changes are committed in an isolated Git directory with a patch and bundle for transfer.
+
 ## Validation
 
 - Named suite `python3 -m pytest tests/test_adjudicator_retro.py -q`: 8 passed.
