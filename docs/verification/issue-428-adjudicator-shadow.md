@@ -3,6 +3,25 @@
 This extends the existing AdjudicatorAgent and Brain role-run recorder. Source implementation
 and local replay are distinct from runtime publication, which remains manual.
 
+## Keepalive later-failure comparison, 2026-10-07
+
+The new CLI regression replaces a saved durable observation with each fleet failure signal
+(`reverted`, `broke_later`, `reopened`, `abandoned`, `reworked`). Both comparison rates must
+refresh against the new truth while preserving the cohort, costs, proposal identities,
+metadata evidence floor and complete Brain snapshot. Restoring durability recovers the
+original comparison without redispatch.
+
+All ten Node CLI tests and five unittest evidence tests passed. A temporary source copy
+deliberately reused cached later truth: the new regression failed with PASS instead of FAIL.
+Byte-identical restoration passed. No repository Python source was changed.
+
+Recent commits and the passing CLI suite support checking the report, closer binding and
+switch-review implementation tasks. The named pytest acceptance tests and their two required
+faults remain pending: pytest and Black are unavailable, and installation failed. The connector
+rejected the PR-body update, blocker label and comment because approval is required while this
+run's policy is `never`. The reconciled body is saved under `/tmp`. Git metadata is read-only;
+the focused changes are committed in an isolated Git directory with a patch and bundle for transfer.
+
 ## Validation
 
 - Named suite `python3 -m pytest tests/test_adjudicator_retro.py -q`: 8 passed.
@@ -122,3 +141,118 @@ JavaScript witnesses.
 The checkout's `.git` directory is read-only: `git add` cannot create `index.lock`.
 The changes are committed using an isolated Git directory under `/tmp`, with a
 single-commit bundle and patch for transfer; the shared checkout retains the edits.
+
+## Keepalive shadow-dispatch regression, 2026-10-06
+
+Added two JavaScript regressions for the first task's packet and dispatch boundaries.
+They use private Brain databases and the real packet builder and AdjudicatorAgent,
+with mocked routing and transport. Two persisted disputes follow different router
+choices, retain verifier/diff/gate evidence in the prompts, dispatch in isolation,
+and record proposals as `source=retrospective` role runs. A one-case limit bounds
+each dispatch, and resuming saved decisions neither recollects nor dispatches them.
+Eight incomplete-packet variants fail before routing, transport or role recording;
+a repaired dry packet clears its previous error without writing to the Brain.
+Full outcome snapshots include both original rows and possible new rows.
+
+`node tests/test_adjudicator_retro_cli.js`: seven tests passed.
+`PYTHONPATH=src python3 -m unittest discover -s tests -p test_adjudicator_retro_evidence.py -v`:
+five tests passed. In temporary source copies, writing `outcomes.merged`, disabling
+retrospective isolation and forcing a backend each made the new dispatch regression
+fail (exit 1). Both copied modules were restored byte for byte; all seven Node tests
+passed afterward (exit 0). These controls do not replace the named pytest controls.
+
+Pytest and Black are absent from both Python environments, and PyPI name resolution
+failed. No Python source changes or task-completion claims are made. The named
+pytest acceptance tests and their required faults remain pending. The checkout's
+Git directory is read-only, so this round also supplies an isolated commit, patch
+and bundle under `/tmp` for transfer.
+
+## Keepalive cost comparison regression, 2026-10-06
+
+- [x] Verify retrospective agreement rates, measured costs and case counts in the
+  saved report, including withdrawal and restoration of complete cost telemetry.
+- [ ] Run the three named pytest acceptance tests and their required outcome-write
+  and unconditional-offer faults on the current tree.
+
+The new CLI regression withdraws a complete cost source and deletes another cost
+record after both have been measured. The persisted summary and proposal comparison
+must clear those stale costs, count a measured zero in the cost denominator, retain
+the cost of an abstention and report unknown totals when no complete costs remain.
+Restoring telemetry recovers the original totals. Agreement rates, comparison case
+counts, saved role identities and the entire Brain snapshot remain unchanged by
+each refresh.
+
+`node tests/test_adjudicator_retro_cli.js`: eight tests passed.
+`PYTHONPATH=src python3 -m unittest discover -s tests -p test_adjudicator_retro_evidence.py -v`:
+five tests passed. In a temporary source copy, retaining a saved measured cost
+instead of refreshing it made the new test fail: it reported 4.5 instead of 0.5.
+The copied Python source was restored byte for byte, and the regression passed.
+Repository Python files are unchanged; no Python formatting claim is made.
+
+Pytest and Black are still unavailable. Local cache/tool searches and installation
+attempts could not supply them, so the named pytest acceptance tests and their
+specific deliberate-break controls remain pending. The checkout's Git metadata is
+read-only; the test and this note are committed through an isolated Git directory
+under `/tmp`, with a patch and bundle for transfer.
+
+PR #507 was verified open with `draft=false` at head
+`8ec62f83de2281e12d46be8e2ad61482844087c0`. Attempts to reconcile the three verified
+implementation checkboxes, add `needs-human` and post the validation/blocker comment
+were each rejected by the connector: mutations require approval, while this run's
+approval policy is `never`. Remote tracking remains unchanged.
+
+## Keepalive mixed-disposition comparison, 2026-10-07
+
+Reviewed the recent collector and keepalive commits before continuing. The report,
+contested-verdict closer binding and switch-review line already exist. All eight
+existing CLI regressions passed before changes, supporting reconciliation of those
+three implementation checkboxes; the two named pytest acceptance checkboxes remain
+unchecked. The connector rejected the PR-body update, `needs-human` label and blocker
+comment because mutations require approval and this run's approval policy is `never`. The proposed
+reconciled body is retained in `/tmp/orchestrator-pr507-reconciled-body.md`.
+
+The added JavaScript regression compares raw proposals against later truth across
+merged, unmerged and unknown merge dispositions, including a reworked outcome.
+An unknown merge disposition excludes its case from both agreement denominators;
+when that fact arrives, both denominators admit it. Measured costs retain their
+independent population, including an abstention and a measured zero. Saved proposal
+identities, effective evidence floors and complete Brain snapshots remain unchanged.
+
+All nine CLI tests, all five evidence unittest tests and the three module selftest
+checks passed. In temporary source copies, forcing known merge dispositions to PASS
+and admitting unknown merge dispositions each made the new regression fail. Both
+copies were restored byte for byte; repository Python source is unchanged.
+
+Pytest and Black are unavailable in both Python environments checked; an installation
+attempt could not resolve a pytest distribution. The named pytest acceptance tests
+and their specific outcome-write/unconditional-offer faults remain pending. This
+round changes JavaScript tests and this note only. Git cannot create `index.lock` in
+the read-only checkout metadata; an isolated Git directory holds the commit and a
+bundle for transfer.
+
+
+## Closer recovery: exact Git entry binding (PR #507)
+
+The offline collector now treats inventory paths as literal Git paths. It accepts
+exactly one NUL-terminated `ls-tree` entry whose filename exactly matches the
+requested path, then reads size and content using that validated immutable blob
+SHA. Directories, pathspec ambiguity, mismatched names, multiple entries and
+unterminated output stay incomplete before blob reads. Literal metacharacters in
+an existing filename remain supported. This changes no shadow adjudication,
+report-write authority, Brain admission or retrospective cost policy.
+
+Validation at the existing PR head plus this bounded repair: 50 affected Python
+tests pass (including 25 collector cases), 10 Node CLI tests pass, module selftest
+3 checks pass, Mypy and Ruff pass, and the full repository Black check leaves
+368 files unchanged. Exact collection is 2543. The 2536 prior executed-node floor plus
+7 new exercised nodes establishes the conservative union; every existing ceiling
+is preserved. Hosted complete verification remains required; no new local full
+suite execution is claimed.
+
+Actual production control: with final tests held fixed, replace only the
+collector source with the original 1c9266d version. Four regression executions fail
+(trailing-slash directory, mismatched name, multiple entries and unterminated
+entry); byte-identical candidate restoration returns 25 collector tests GREEN.
+This establishes sensitivity to the source behavior, rather than a fixture-only
+failure. The broader issue #428 remains open for its remaining evidence transport,
+acceptance inventories, measured cost and later-truth requirements.

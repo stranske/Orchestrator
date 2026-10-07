@@ -3,6 +3,20 @@
 
 Only role-run evidence and the report are written. Outcomes remain read-only;
 missing verifier, diff, gate or later durability evidence stays unmeasured.
+
+``--collect-case`` is intentionally separate from replay: it reads complete
+UTF-8 source blobs from one locally available evaluated commit and writes a
+separate collection record. It cannot fetch remotes, adjudicate, dispatch,
+write Brain/outcomes/role records, or claim acceptance evidence is complete.
+
+Usage: ``python src/adjudicator_retro.py --collect-case CASE_ID --report
+saved.json --output collection.json --repository /local/git/checkout``.  The
+saved row must contain ``collection_requirements`` with ``source_paths`` (a
+list of repository-relative regular files) and ``acceptance`` (a list of
+``{"criterion": "...", "location": "..."}`` objects). An empty acceptance
+list is explicit evidence that the acceptance inventory remains unresolved,
+so collection succeeds with ``complete: false`` and prints its gaps; this is
+an exit-0 collection result, not an acceptance result.
 """
 
 from __future__ import annotations
@@ -17,11 +31,16 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 import feedback
 import fleet_shapes
 import roles
 import verifier_evidence
+
+# This collector deliberately has no GitHub, Brain, role-routing, or artifact
+# transport dependency.  It is a local, immutable-commit evidence boundary.
+MAX_COLLECTION_SOURCE_BYTES = 1_048_576
 
 
 def report_path() -> Path:
@@ -331,6 +350,254 @@ def compare_proposals(rows: list[dict]) -> dict:
     }
 
 
+def _collection_requirements(case: dict) -> tuple[dict | None, list[dict]]:
+    """Return only an explicitly saved inventory; never infer acceptance claims."""
+    inventory = case.get("collection_requirements")
+    if not isinstance(inventory, dict):
+        return None, [
+            {
+                "kind": "missing_requirements_inventory",
+                "detail": "saved case has no explicit inventory",
+            }
+        ]
+    source_paths = inventory.get("source_paths")
+    acceptance = inventory.get("acceptance")
+    if not isinstance(source_paths, list) or not all(
+        isinstance(path, str) for path in source_paths
+    ):
+        return None, [
+            {
+                "kind": "invalid_requirements_inventory",
+                "detail": "source_paths must be a list of paths",
+            }
+        ]
+    if not isinstance(acceptance, list) or not all(
+        isinstance(item, dict)
+        and isinstance(item.get("criterion"), str)
+        and item["criterion"].strip()
+        and isinstance(item.get("location"), str)
+        and item["location"].strip()
+        for item in acceptance
+    ):
+        return None, [
+            {
+                "kind": "invalid_requirements_inventory",
+                "detail": "acceptance must be a list of criterion/location objects",
+            }
+        ]
+    return {"source_paths": source_paths, "acceptance": acceptance}, []
+
+
+def _case_evaluated_sha(case: dict) -> str | None:
+    raw_packet = case.get("packet")
+    packet: dict[Any, Any] = raw_packet if isinstance(raw_packet, dict) else {}
+    raw_finding = packet.get("disputed_finding")
+    finding: dict[Any, Any] = raw_finding if isinstance(raw_finding, dict) else {}
+    raw_decision = finding.get("decision")
+    decision: dict[Any, Any] = raw_decision if isinstance(raw_decision, dict) else {}
+    raw_ground_truth = packet.get("ground_truth_evidence")
+    ground_truth: dict[Any, Any] = raw_ground_truth if isinstance(raw_ground_truth, dict) else {}
+    sha = decision.get("evaluated_sha") or ground_truth.get("merge_sha")
+    return (
+        sha
+        if isinstance(sha, str)
+        and len(sha) == 40
+        and all(c in "0123456789abcdef" for c in sha.lower())
+        else None
+    )
+
+
+def _local_git(repo: Path, *args: str) -> bytes:
+    """Read only local object data; callers must not turn this into a fetch path."""
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, check=True, timeout=30
+    ).stdout
+
+
+def _safe_source_path(path: str) -> bool:
+    candidate = Path(path)
+    return bool(path) and not candidate.is_absolute() and ".." not in candidate.parts
+
+
+def validate_collected_evidence(result: dict) -> list[dict]:
+    """Fail closed: byte integrity is distinct from acceptance completeness."""
+    gaps = list(result.get("gaps", []))
+    requirements = result.get("requirements")
+    records = result.get("sources", [])
+    if not isinstance(requirements, dict):
+        if not any(gap.get("kind") == "missing_requirements_inventory" for gap in gaps):
+            gaps.append(
+                {"kind": "missing_requirements_inventory", "detail": "requirements unavailable"}
+            )
+    else:
+        expected = requirements.get("source_paths", [])
+        observed = {record.get("path") for record in records if record.get("complete")}
+        for path in expected:
+            if path not in observed:
+                gaps.append({"kind": "missing_source_coverage", "path": path})
+        if not requirements.get("acceptance"):
+            gaps.append(
+                {
+                    "kind": "missing_acceptance_inventory",
+                    "detail": "source bytes alone cannot establish acceptance completeness",
+                }
+            )
+        # This first batch deliberately cannot fetch acceptance transports.  It
+        # records every required criterion as unresolved rather than implying it.
+        for criterion in requirements.get("acceptance", []):
+            gaps.append({"kind": "missing_acceptance_evidence", "criterion": criterion})
+    unique = []
+    seen = set()
+    for gap in gaps:
+        encoded = json.dumps(gap, sort_keys=True, default=str)
+        if encoded not in seen:
+            unique.append(gap)
+            seen.add(encoded)
+    return unique
+
+
+def collect_case_evidence(
+    case: dict,
+    *,
+    repository: Path,
+    byte_limit: int = MAX_COLLECTION_SOURCE_BYTES,
+) -> dict:
+    """Collect source bytes from the case's evaluated commit, without side effects.
+
+    This is collection only.  It neither changes the supplied saved report nor
+    calls the adjudicator, feedback database, role records, or remote services.
+    """
+    result: dict[str, Any] = {
+        "schema": "adjudicator-retro-collection/v1",
+        "case_id": case.get("case_id"),
+        "repository": str(repository.resolve()),
+        "evaluated_sha": _case_evaluated_sha(case),
+        "requirements": None,
+        "sources": [],
+        "gaps": [],
+    }
+    requirements, gaps = _collection_requirements(case)
+    result["requirements"] = requirements
+    result["gaps"].extend(gaps)
+    evaluated_sha = result["evaluated_sha"]
+    if not evaluated_sha:
+        result["gaps"].append(
+            {"kind": "missing_evaluated_sha", "detail": "case has no exact evaluated revision"}
+        )
+    elif not repository.is_dir():
+        result["gaps"].append({"kind": "missing_local_repository", "detail": str(repository)})
+    else:
+        try:
+            _local_git(repository, "cat-file", "-e", evaluated_sha + "^{commit}")
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            result["gaps"].append({"kind": "missing_evaluated_commit", "sha": evaluated_sha})
+            evaluated_sha = None
+    if requirements and evaluated_sha:
+        for path in requirements["source_paths"]:
+            record: dict[str, Any] = {
+                "path": path,
+                "evaluated_sha": evaluated_sha,
+                "complete": False,
+            }
+            if not _safe_source_path(path):
+                result["gaps"].append({"kind": "unsafe_source_path", "path": path})
+                result["sources"].append(record)
+                continue
+            try:
+                # ``ls-tree -- <path>`` still interprets its final argument as a
+                # pathspec.  Keep it literal, then require its NUL-delimited
+                # response to name exactly one regular-file entry.  A directory
+                # or a glob/pathspec must never silently select its first child.
+                tree_entry = _local_git(
+                    repository,
+                    "--literal-pathspecs",
+                    "ls-tree",
+                    "-z",
+                    evaluated_sha,
+                    "--",
+                    path,
+                )
+                entries = tree_entry.split(b"\0")
+                expected_name = path.encode("utf-8")
+                if len(entries) != 2 or not entries[0] or entries[1]:
+                    raise ValueError("source path did not resolve to exactly one Git entry")
+                metadata_and_name = entries[0].split(b"\t", 1)
+                if len(metadata_and_name) != 2 or metadata_and_name[1] != expected_name:
+                    raise ValueError("source path did not resolve to the requested Git entry")
+                metadata = metadata_and_name[0].split()
+                if (
+                    len(metadata) != 3
+                    or metadata[0] not in {b"100644", b"100755"}
+                    or metadata[1] != b"blob"
+                ):
+                    raise ValueError("source path is not a regular Git blob")
+                blob = metadata[2].decode("ascii")
+                byte_length = int(_local_git(repository, "cat-file", "-s", blob))
+                record.update({"blob_sha": blob, "byte_length": byte_length})
+                if byte_length > byte_limit:
+                    result["gaps"].append(
+                        {
+                            "kind": "source_byte_limit_exceeded",
+                            "path": path,
+                            "limit": byte_limit,
+                            "actual": byte_length,
+                        }
+                    )
+                    result["sources"].append(record)
+                    continue
+                data = _local_git(repository, "cat-file", "blob", blob)
+            except (
+                OSError,
+                UnicodeDecodeError,
+                ValueError,
+                subprocess.CalledProcessError,
+                subprocess.TimeoutExpired,
+            ):
+                result["gaps"].append(
+                    {"kind": "missing_source_object", "path": path, "sha": evaluated_sha}
+                )
+                result["sources"].append(record)
+                continue
+            if len(data) != record["byte_length"]:
+                result["gaps"].append({"kind": "source_length_mismatch", "path": path})
+            record["sha256"] = hashlib.sha256(data).hexdigest()
+            try:
+                record["bytes_utf8"] = data.decode("utf-8")
+            except UnicodeDecodeError:
+                result["gaps"].append({"kind": "unsupported_source_encoding", "path": path})
+            else:
+                record["complete"] = len(data) == record["byte_length"]
+            result["sources"].append(record)
+    result["gaps"] = validate_collected_evidence(result)
+    result["complete"] = not result["gaps"]
+    return result
+
+
+def collect_saved_case(
+    report: Path,
+    case_id: str,
+    output: Path,
+    repository: Path,
+    *,
+    byte_limit: int = MAX_COLLECTION_SOURCE_BYTES,
+) -> dict:
+    """Write a separate collection record for exactly one immutable saved case."""
+    try:
+        aliases_report = report.resolve() == output.resolve() or os.path.samefile(report, output)
+    except OSError:
+        aliases_report = report.resolve() == output.resolve()
+    if aliases_report:
+        raise ValueError("collection output must be separate from the saved report")
+    saved = json.loads(report.read_text())
+    cases = [row for row in saved.get("rows", []) if row.get("case_id") == case_id]
+    if len(cases) != 1:
+        raise ValueError("saved report must contain exactly one matching case_id")
+    result = collect_case_evidence(cases[0], repository=repository, byte_limit=byte_limit)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(result, indent=2) + "\n")
+    return result
+
+
 def run(
     *,
     dispatch: bool = False,
@@ -507,6 +774,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument(
+        "--collect-case",
+        metavar="CASE_ID",
+        help="collect local immutable-commit evidence for one saved case; never adjudicates or dispatches",
+    )
+    parser.add_argument(
+        "--report", type=Path, help="saved retrospective report used by --collect-case"
+    )
+    parser.add_argument(
+        "--output", type=Path, help="separate collection output used by --collect-case"
+    )
+    parser.add_argument("--repository", type=Path, help="local Git checkout used by --collect-case")
+    parser.add_argument("--byte-limit", type=int, default=MAX_COLLECTION_SOURCE_BYTES)
+    parser.add_argument(
         "--dispatch",
         action="store_true",
         help="Run router-chosen shadow role; never apply verdicts",
@@ -520,6 +800,32 @@ def main() -> int:
     args = parser.parse_args()
     if args.selftest:
         _selftest()
+        return 0
+    if args.collect_case:
+        if not args.report or not args.output or not args.repository or args.byte_limit < 1:
+            parser.error(
+                "--collect-case requires --report, --output, --repository, and a positive --byte-limit"
+            )
+        try:
+            result = collect_saved_case(
+                args.report,
+                args.collect_case,
+                args.output,
+                args.repository,
+                byte_limit=args.byte_limit,
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            parser.error(str(exc))
+        print(
+            json.dumps(
+                {
+                    "case_id": result["case_id"],
+                    "complete": result["complete"],
+                    "gaps": result["gaps"],
+                },
+                indent=2,
+            )
+        )
         return 0
     result = run(dispatch=args.dispatch, limit=args.limit, retry=args.retry)
     print(json.dumps(result["summary"], indent=2))
