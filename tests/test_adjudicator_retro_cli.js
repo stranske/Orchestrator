@@ -534,6 +534,153 @@ print(json.dumps({
   assert.deepEqual(w.report(), result.resumed);
 });
 
+const paginatedGateEvidence = `
+import json
+import subprocess
+import sys
+from unittest.mock import patch
+import adjudicator_retro as retro
+import feedback
+import roles
+import verifier_evidence
+
+scenario = sys.argv[1]
+requests = []
+first_gate = {"name": "Gate / initial", "conclusion": "SUCCESS", "detailsUrl": "first-gate"}
+last_gate = {"context": "gate / final", "state": "SUCCESS", "targetUrl": "last-gate"}
+
+def response(args):
+    fields = dict(arg.split("=", 1) for arg in args if "=" in arg)
+    requests.append({key: fields[key] for key in ("owner", "name", "n", "cursor") if key in fields})
+    assert fields["owner"] == "owner" and fields["name"] == "repo"
+    number = int(fields["n"])
+    head = "a" * 40
+    index = len(requests)
+    if index > 1:
+        assert fields["cursor"] == f"page-{index - 1}"
+        assert "after:$cursor" in fields["query"]
+        if scenario == "timeout":
+            raise subprocess.TimeoutExpired("gh", 120)
+        if scenario == "head-changed":
+            head = "c" * 40
+    nodes = [{"name": f"unrelated-check-{index}", "conclusion": "SUCCESS"}]
+    if scenario != "no-gate":
+        if index == 1:
+            nodes.append(first_gate)
+        if index == 3:
+            nodes.append(last_gate)
+    pr = {
+        "headRefOid": head,
+        "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {
+            "pageInfo": {"hasNextPage": scenario == "unbounded" or index < 3,
+                         "endCursor": f"page-{index}"},
+            "nodes": nodes,
+        }}}}]},
+    }
+    if index == 1:
+        decision = {
+            "schema": verifier_evidence.MARKER, "repo": "owner/repo", "pr": number,
+            "head_sha": head, "evaluated_sha": "b" * 40,
+            "run_id": "123", "run_attempt": "1", "provider_verdicts": ["FAIL"],
+            "ci_failed": False, "verdict": "NON_PASS",
+        }
+        pr.update({
+            "number": number, "state": "MERGED", "mergeCommit": {"oid": "b" * 40},
+            "files": {"pageInfo": {"hasNextPage": scenario == "truncated-files"},
+                      "nodes": [{"path": "tests/test_acceptance.py", "additions": 10, "deletions": 0}]},
+            "comments": {
+                "pageInfo": {"hasPreviousPage": scenario == "truncated-comments"},
+                "nodes": [{
+                    "body": "Missing acceptance test\\n"
+                            f"<!-- {verifier_evidence.MARKER} {json.dumps(decision)} -->",
+                    "url": f"https://github.com/owner/repo/pull/{number}#issuecomment-1",
+                    "author": {"login": "github-actions[bot]"},
+                }],
+            },
+        })
+    return {"data": {"repository": {"pullRequest": pr}}}
+
+proposal = {
+    "decision": "needs_more_evidence", "confidence": "low",
+    "rationale": "Gate statuses alone do not prove acceptance.",
+    "evidence_assessment": [{"claim": "Missing test", "status": "unknown",
+                             "evidence_ref": "last-gate", "reason": "Inspect source"}],
+    "ground_truth_refs": ["first-gate", "last-gate"],
+    "recommended_next_step": "Inspect acceptance artifacts", "evidence_gaps": ["Source unavailable"],
+}
+with (
+    patch.object(retro, "_gh_json", side_effect=response),
+    patch.object(roles, "route_role", return_value={"agent": "gemini"}) as route,
+    patch.object(roles, "_role_capability_event"),
+    patch.object(roles.dispatcher, "offload", return_value={
+        "run_id": "backend-pages", "output": json.dumps(proposal), "exit": 0,
+    }) as transport,
+):
+    report = retro.run(dispatch=True, limit=1)
+with feedback._conn() as conn:
+    records = conn.execute(
+        "SELECT run_id,source,decomposition FROM runs WHERE role_name='adjudicator'"
+    ).fetchall()
+print(json.dumps({
+    "report": report, "requests": requests, "routes": route.call_count, "records": records,
+    "calls": [{"args": c.args, "kwargs": c.kwargs} for c in transport.call_args_list],
+}))
+`;
+
+for (const [scenario, reads, error] of [
+  ['complete', 3, null],
+  ['head-changed', 2, /head changed/],
+  ['timeout', 2, /timed out/],
+  ['no-gate', 3, /no gate run/],
+  ['unbounded', 20, /bounded 20-page read/],
+  ['truncated-comments', 1, /truncated verifier comment or diff evidence/],
+  ['truncated-files', 1, /truncated verifier comment or diff evidence/],
+]) {
+  test(`retro collects complete gate pages before shadow dispatch: ${scenario}`, (t) => {
+    const w = world(t);
+    w.run(['-c', initializeDisputes]);
+    const before = w.brain();
+    const result = w.run(['-c', paginatedGateEvidence, scenario]);
+    const row = result.report.rows[0];
+    assert.equal(result.report.rows.length, 1);
+    assert.equal(result.requests.length, reads);
+    assert.ok(result.requests.every((request) => request.n === row.target.split('#')[1]));
+    assert.deepEqual(w.report(), result.report);
+    assert.deepEqual(w.brain().outcomes, before.outcomes, 'evidence reads never change outcomes');
+    if (error) {
+      assert.match(row.error, error);
+      assert.equal(result.routes, 0, 'incomplete evidence must fail before backend selection');
+      assert.deepEqual(result.calls, []);
+      assert.deepEqual(result.records, []);
+      assert.deepEqual(w.brain(), before, 'incomplete evidence must leave the entire Brain unchanged');
+    } else {
+      assert.equal(row.error, undefined);
+      const packet = row.packet;
+      assert.equal(packet.ground_truth_evidence.head_sha, 'a'.repeat(40));
+      assert.equal(packet.ground_truth_evidence.merge_sha, 'b'.repeat(40));
+      assert.deepEqual(packet.ground_truth_evidence.gate_runs, [
+        { name: 'Gate / initial', conclusion: 'SUCCESS', detailsUrl: 'first-gate' },
+        { context: 'gate / final', state: 'SUCCESS', targetUrl: 'last-gate' },
+      ], 'both CheckRun and StatusContext gate evidence must survive pagination');
+      assert.equal(result.routes, 1);
+      assert.equal(result.calls.length, 1);
+      const call = result.calls[0];
+      assert.equal(call.args[0], 'gemini');
+      for (const text of ['Missing acceptance test', 'tests/test_acceptance.py', 'first-gate', 'last-gate']) {
+        assert.ok(call.args[1].includes(text), `actual role prompt must include ${text}`);
+      }
+      assert.equal(call.kwargs.isolate, true);
+      assert.equal(result.records.length, 1);
+      assert.equal(result.records[0][0], row.role_run_id);
+      assert.equal(result.records[0][1], 'retrospective');
+      assert.deepEqual(JSON.parse(result.records[0][2]).proposal, row.proposal);
+      assert.equal(row.disposition, 'needs_more_evidence');
+      assert.equal(row.shadow_verdict, null);
+      assert.equal(w.brain().runs.length, before.runs.length + 1);
+    }
+  });
+}
+
 test('retro packet failures never reach routing, dispatch or Brain role recording', (t) => {
   const w = world(t);
   w.run(['-c', initializeDisputes]);

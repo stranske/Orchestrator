@@ -3,6 +3,34 @@
 This extends the existing AdjudicatorAgent and Brain role-run recorder. Source implementation
 and local replay are distinct from runtime publication, which remains manual.
 
+## Keepalive gate-page evidence validation, 2026-10-07
+
+- [x] Verify packet construction from the merge-bound verifier comment, merged diff
+  summary and complete gate pages, router-chosen shadow dispatch, retrospective Brain
+  role recording and unchanged outcomes using the existing collector and role.
+- [ ] Run the three named pytest acceptance tests and their required outcome-write
+  and unconditional-offer fault checks on the current tree.
+
+Seven new Node regressions exercise the real `fetch_evidence`, packet builder and
+AdjudicatorAgent with private persisted disputes and mocked GitHub reads/transport.
+Both CheckRun and StatusContext gate entries reach the actual role prompt after a
+three-page read. Head changes, timeouts, absent gates, the 20-page read bound and
+truncated comment/diff inventories prevent routing, dispatch and Brain writes.
+The complete case records `source=retrospective`; every case preserves all outcomes.
+
+`node tests/test_adjudicator_retro_cli.js`: 25 passed, no skips. The five existing
+evidence unittest tests also passed. In temporary source copies, dropping later
+page entries, allowing a changed head and increasing the read bound to 21 each
+failed its new regression (exit 1). All copies were restored byte for byte; the
+checkout's Python source remained unchanged. Pytest and Black are absent;
+isolated installation from PyPI failed. These Node checks do not substitute for
+the pending named pytest acceptance checks.
+
+GitHub access failed, preventing PR checkbox, blocker-label and readiness updates.
+The checkout's Git metadata is read-only, so the focused test change and this note
+are committed using an isolated Git directory under `/tmp`, with a patch and
+bundle for transfer. The shared checkout retains the edits.
+
 ## Keepalive later-failure comparison, 2026-10-07
 
 The new CLI regression replaces a saved durable observation with each fleet failure signal
