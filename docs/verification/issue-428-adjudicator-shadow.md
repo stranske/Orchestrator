@@ -566,3 +566,31 @@ formatting gate. Git metadata is read-only, so this tested JavaScript change is
 preserved in an isolated commit and patch under `/tmp/adjudicator-retro-evidence-review`.
 GitHub API access also fails, preventing PR updates and readiness verification.
 No acceptance checkbox is advanced by this round.
+
+## Late abstention telemetry regression, 2026-10-07
+
+- [x] Verify that late measured abstention costs survive removal of the original
+  outcome after the dispute ages out of the replay population.
+- [ ] Refresh late cost telemetry for saved paid invalid responses without a decision.
+- [ ] Run the named pytest acceptance tests and their specified deliberate faults.
+
+The new JavaScript CLI regression starts with an incomplete ledger cost, removes
+the abstention's outcome, then supplies complete telemetry with costs of zero and
+three dollars. Both saved report sections update their total and measured-case
+denominator. Neither binary agreement denominator changes; case and role identities
+remain stable, and all Brain tables remain unchanged. All 44 CLI tests pass with
+zero skips, alongside five evidence unittest tests and seven retrospective selftest
+checks. JavaScript syntax and diff whitespace checks pass. In an isolated source
+copy, excluding abstentions from the saved-cost refresh makes this exact test fail
+with `null !== 0`; byte-identical source restoration passes.
+
+The broader comparison task remains open: `_refresh_saved_verdicts` excludes rows
+without a decision, so complete cost telemetry arriving after a paid invalid response
+is never refreshed. A private Brain reproduction has a measured backend cost of
+two dollars while the refreshed report still returns an unknown total. Pytest and
+Black are absent from all five installed Python versions, and PyPI installation
+fails on DNS resolution. No Python files change in this round. Git metadata is
+read-only; the JavaScript change and this note are preserved as a commit and patch
+under `/tmp/orch-adjudicator-late-costs`. PR #512 was confirmed open and ready for
+review through the GitHub connector. These CLI checks do not replace the named
+pytest acceptance checks, and no broad task checkbox is advanced.

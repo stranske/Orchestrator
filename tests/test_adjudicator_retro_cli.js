@@ -1238,6 +1238,66 @@ print(json.dumps(True))
   assert.deepEqual(w.brain(), changedBrain);
 });
 
+test('retro CLI refreshes late abstention costs after its outcome leaves the Brain', (t) => {
+  const w = world(t);
+  w.run(['-c', initialize]);
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("UPDATE costs SET source='ledger' WHERE run_id='backend-4'")
+print(json.dumps(True))
+`]);
+  w.refresh();
+  const initial = w.report();
+  const identities = initial.rows.map((row) => [row.case_id, row.role_run_id, row.decision]);
+  assert.equal(initial.rows[4].decision, 'needs_more_evidence');
+  assert.equal(initial.rows[4].cost_usd, null, 'an incomplete ledger cost stays unmeasured');
+  assert.equal(initial.summary.cost_usd, 4);
+  assert.equal(initial.summary.cost_measured_cases, 3);
+
+  // The original dispute has already aged out of the replay window. Losing
+  // its outcome must not stop late telemetry for the paid abstention.
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("DELETE FROM outcomes WHERE run_id='original-4'")
+print(json.dumps(True))
+`]);
+  for (const cost of [0, 3]) {
+    w.run(['-c', `
+import json
+import sys
+import feedback
+with feedback._conn() as conn:
+    conn.execute("UPDATE costs SET cost_usd=?,source='ccusage' WHERE run_id='backend-4'",
+                 (float(sys.argv[1]),))
+print(json.dumps(True))
+`, String(cost)]);
+    const before = w.brain();
+    w.refresh();
+    const report = w.report();
+    const abstention = report.rows[4];
+    assert.equal(abstention.cost_usd, cost);
+    assert.equal(abstention.later_truth, null);
+    assert.equal(abstention.merge_rule_verdict, null);
+    assert.deepEqual(abstention.proposal_comparison,
+      { verdict: null, agrees: null, merge_rule_agrees: null });
+    const expectedCosts = {
+      cost_usd: 4 + cost, cost_measured_cases: 4, cost_per_case: (4 + cost) / 4,
+    };
+    assert.deepEqual(report.summary, { ...initial.summary, ...expectedCosts });
+    assert.deepEqual(report.proposal_comparison,
+      { ...initial.proposal_comparison, ...expectedCosts },
+      'late abstention telemetry must not enter either binary agreement denominator');
+    assert.deepEqual(report.rows.map((row) => [row.case_id, row.role_run_id, row.decision]),
+      identities, 'refresh preserves paid role identities and raw proposals');
+    assert.deepEqual(w.brain(), before, 'refresh must not recreate outcomes or role runs');
+    assert.equal(report.population, 0, 'saved telemetry refresh outlives the replay population');
+  }
+});
+
 test('retro CLI withdraws stale costs without changing the comparison cohort', (t) => {
   const w = world(t);
   w.run(['-c', initialize]);
