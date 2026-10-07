@@ -2,7 +2,7 @@
 
 - Adds `docs/evidence/issue-435-campaign/` with per-repo merged delivery receipts for all six filed targets (issues #1145, #1755, #1005, #748, #1887, #948).
 - Retains the historical 23-pass pytest report and adds five passing CLI regression tests for campaign validation, filing, linking, retries, and rollout guards.
-- Records merged child delivery after rails in #502; live rollout evidence, named pytest verification, and Brain cost/durability follow-up remain incomplete.
+- Records merged child delivery after rails in #502; live rollout evidence and authentic whole-delivery cost/durability remain incomplete.
 
 Refs #435
 
@@ -14,7 +14,6 @@ Refs #435
 - [x] `python3 -m pytest tests/test_codemod_campaign.py -q`
 
 <!-- pr-preamble:start -->
-<!-- meta:issue:435 -->
 > **Source:** Issue #435
 
 Refs #435
