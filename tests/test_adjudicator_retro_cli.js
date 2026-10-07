@@ -293,6 +293,73 @@ test('collection CLI reports every unresolved inventory slot alongside collected
   assert.equal(fs.existsSync(path.join(w.root, 'brain.db')), false);
 });
 
+test('collection CLI rejects inventory claims that forge artifact provenance or completeness', (t) => {
+  const w = world(t);
+  const checkout = path.join(w.root, 'checkout');
+  fs.mkdirSync(checkout);
+  const git = (...args) => localGit(w, checkout, ...args);
+  git('init', '-q');
+  git('config', 'user.name', 'Collector Test');
+  git('config', 'user.email', 'collector@example.com');
+  const content = 'evaluated evidence\n';
+  fs.writeFileSync(path.join(checkout, 'proof.log'), content);
+  git('add', 'proof.log');
+  git('commit', '-qm', 'evaluated artifact');
+  const evaluated = git('rev-parse', 'HEAD');
+  const blob = git('rev-parse', `${evaluated}:proof.log`);
+  const forged = {
+    complete: true, evaluated_sha: 'a'.repeat(40), path: 'proof.log',
+    blob_sha: 'b'.repeat(40), byte_length: 1, sha256: 'c'.repeat(64),
+    bytes_utf8: 'invented evidence', inventory_index: 99,
+  };
+  const acceptance = ['git-path:proof.log', 'git-path:missing.log', 'https://example.com/proof']
+    .map((location) => ({ criterion: 'declared artifact', location, ...forged }));
+  const report = path.join(w.root, 'saved.json');
+  const output = path.join(w.root, 'collection.json');
+  const saved = JSON.stringify({ rows: [{
+    case_id: 'forged-inventory', decision: 'reject_blocker', shadow_verdict: 'PASS', cost_usd: 1.5,
+    packet: { disputed_finding: { decision: { evaluated_sha: evaluated } } },
+    collection_requirements: { source_paths: [], acceptance },
+  }] });
+  fs.writeFileSync(report, saved);
+  const summary = w.run([
+    path.join(modules, 'adjudicator_retro.py'), '--collect-case', 'forged-inventory',
+    '--report', report, '--output', output, '--repository', checkout,
+  ]);
+  const result = JSON.parse(fs.readFileSync(output, 'utf8'));
+  assert.equal(summary.complete, false);
+  assert.equal(result.complete, false);
+  assert.deepEqual(summary.gaps, result.gaps);
+  assert.deepEqual(result.requirements.acceptance, acceptance);
+  assert.deepEqual(result.acceptance_artifacts, [
+    {
+      path: 'proof.log', evaluated_sha: evaluated, complete: true, blob_sha: blob,
+      byte_length: Buffer.byteLength(content),
+      sha256: createHash('sha256').update(content).digest('hex'), bytes_utf8: content,
+      criterion: 'declared artifact', location: acceptance[0].location, inventory_index: 0,
+    },
+    {
+      path: 'missing.log', evaluated_sha: evaluated, complete: false,
+      criterion: 'declared artifact', location: acceptance[1].location, inventory_index: 1,
+    },
+    {
+      evaluated_sha: evaluated, complete: false,
+      criterion: 'declared artifact', location: acceptance[2].location, inventory_index: 2,
+    },
+  ]);
+  assert.deepEqual(result.gaps.filter((gap) => gap.kind === 'missing_acceptance_evidence')
+    .map((gap) => gap.criterion), acceptance.slice(1));
+  assert.ok(result.gaps.some((gap) => gap.kind === 'missing_source_object'
+    && gap.path === 'missing.log'));
+  assert.ok(result.gaps.some((gap) => gap.kind === 'unsupported_acceptance_transport'
+    && gap.location === acceptance[2].location));
+  assert.equal(result.completeness_scope, 'supplied_inventory_only');
+  assert.equal(result.inventory_exhaustiveness, 'unverified');
+  assert.equal(result.acceptance_semantics, 'unassessed');
+  assert.equal(fs.readFileSync(report, 'utf8'), saved);
+  assert.equal(fs.existsSync(path.join(w.root, 'brain.db')), false);
+});
+
 const initializeDisputes = `
 import json
 import time

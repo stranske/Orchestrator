@@ -334,3 +334,14 @@ the verified task state below has not been applied to the PR body in this round.
     its completeness or acceptance success.
 - [x] **Documentation**
   - [x] Added guidance on acceptance-artifact collection and its limitations.
+
+Further keepalive verification adds a CLI regression supplying false completeness, evaluated
+revision, path, blob identity, byte length, content hash, content and inventory-index fields for
+valid, missing and unsupported artifacts. Collected provenance remains authoritative, and the
+unresolved entries retain their inventory gaps. All 17 CLI tests pass; the baseline six module
+self-test checks, JavaScript syntax and diff whitespace checks pass. No Python files or pytest
+collection counts change; pytest and Black remain unavailable. PR508 was verified open and ready
+for review. Checklist reconciliation was attempted again, but the connector rejected the PR-body
+update because approval policy is `never`; the checked local list above remains the verified state.
+The local commit attempt was also blocked: `.git/index.lock` cannot be created because the Git
+directory is mounted read-only. The test and this validation note remain uncommitted in the workspace.
