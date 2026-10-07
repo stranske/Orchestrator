@@ -24,7 +24,7 @@ The earlier runner lacked pytest and did not rerun it. Independent opener replay
 2026-10-07 used `/opt/anaconda3/bin/python3 -m pytest tests/test_codemod_campaign.py -q -o addopts=`
 and observed 23 passed. The existing combined CLI/receipt Node suite passed 13 tests.
 The new receipt validation passes eight tests and rejects four evidence-corruption
-controls. Campaign validation and 30 combined new/existing Node tests pass.
+controls. The existing combined CLI/receipt Node suite passes 13 tests.
 
 Delivery completion does not establish a live range-dispatch trial, whole-delivery
 cost or time-based durability. Brain attribution/cost/durability follow-up remains

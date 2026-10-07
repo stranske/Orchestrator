@@ -1,10 +1,11 @@
+<!-- workflow-source:review_followup -->
 ## Summary
 
 - Adds `docs/evidence/issue-435-campaign/` with per-repo merged delivery receipts for all six filed targets (issues #1145, #1755, #1005, #748, #1887, #948).
 - Retains the historical 23-pass pytest report and adds five passing CLI regression tests for campaign validation, filing, linking, retries, and rollout guards.
 - Records merged child delivery after rails in #502; live rollout evidence and authentic whole-delivery cost/durability remain incomplete.
 
-Refs #435
+Related campaign: https://github.com/stranske/Orchestrator/issues/435
 
 ## Test plan
 
@@ -14,9 +15,9 @@ Refs #435
 - [x] `python3 -m pytest tests/test_codemod_campaign.py -q`
 
 <!-- pr-preamble:start -->
-> **Source:** Issue #435
+> **Source:** https://github.com/stranske/Orchestrator/issues/435
 
-Refs #435
+Related campaign: https://github.com/stranske/Orchestrator/issues/435
 
 <!-- pr-preamble:end -->
 
@@ -43,4 +44,6 @@ _Scope section missing from source issue._
 
 Reconciliation: campaign configuration and filing implementation are verified. All six filed issues retain the required title and codemod label; the parent links them in [the original target receipts comment](https://github.com/stranske/Orchestrator/issues/435#issuecomment-6024002384). Independent opener replay on 2026-10-07 ran `/opt/anaconda3/bin/python3 -m pytest tests/test_codemod_campaign.py -q -o addopts=`: 23 passed, including the two named acceptance tests. Earlier runner inability to load pytest is historical. The new CLI tests exercise the real issue-format subprocess with a local gh fixture and verify issue titles, labels, per-repo missing-entry plans, printed URLs, parent links, retries and rollout guards. They do not substitute for a live dispatch trial. The named Python tests passed independently; the deliberate-break acceptance below remains unchecked by this documentation correction. Total cost and durability remain unknown.
 
-Earlier connector writes were rejected by its approval boundary. This PR retains a non-closing reference to #435. The learning-management-system delivery changed `tests/test_repo_hygiene.py` as well as `.gitignore`; its explicit scope exception is preserved in the receipt and is not claimed compliant with the campaign's .gitignore-only constraint. Live range dispatch, authentic whole-delivery cost, durability, and scope-exception reconciliation remain incomplete.
+Earlier connector writes were rejected by its approval boundary. This PR retains a non-closing reference to the campaign parent. The learning-management-system delivery changed `tests/test_repo_hygiene.py` as well as `.gitignore`; its explicit scope exception is preserved in the receipt and is not claimed compliant with the campaign's .gitignore-only constraint. Live range dispatch, authentic whole-delivery cost, durability, and scope-exception reconciliation remain incomplete.
+
+The review-followup declaration preserves this PR's non-closing relationship to the campaign parent during automated metadata refresh. Parent acceptance remains explicit in the unchecked items above.

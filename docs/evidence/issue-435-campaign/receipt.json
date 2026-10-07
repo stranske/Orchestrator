@@ -70,7 +70,15 @@
   "closure": {
     "state": "pending",
     "issue_url": "https://github.com/stranske/Orchestrator/issues/435",
-    "blocker": "GitHub comment and issue-close tools require approval; this run has approval policy never.",
-    "prepared_note": "closure-note.md"
+    "blocker": "Parent acceptance incomplete: live range dispatch, authentic whole-delivery cost, time-based durability, and recorded LMS scope exception reconciliation.",
+    "prepared_note": "closure-note.md",
+    "historical_runner_blocker": "GitHub comment and issue-close tools require approval; this run has approval policy never."
+  },
+  "independent_replay": {
+    "command": "/opt/anaconda3/bin/python3 -m pytest tests/test_codemod_campaign.py -q -o addopts=",
+    "result": "23 passed; exit 0",
+    "source_commit": "cd47d7cba38597045fa753fa198426e3412e97ea",
+    "observed_on": "2026-10-07",
+    "scope": "Tests and runtime code unchanged by the review documentation correction; original author provenance above is historical."
   }
 }
