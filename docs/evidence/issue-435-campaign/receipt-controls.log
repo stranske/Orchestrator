@@ -1,0 +1,187 @@
+CONTROL: missing target; exit 1
+✖ closure receipt covers exactly the six filed campaign targets (1.836307ms)
+✔ campaign rails have a merged source receipt (0.658011ms)
+✔ stranske/Counter_Risk retains merged delivery and effective add-only ignores (12.208ms)
+✔ stranske/Manager-Database retains merged delivery and effective add-only ignores (7.656836ms)
+✔ stranske/Inv-Man-Intake retains merged delivery and effective add-only ignores (7.614778ms)
+✔ stranske/learning-management-system retains merged delivery and effective add-only ignores (7.959651ms)
+✔ stranske/trip-planner retains merged delivery and effective add-only ignores (7.926847ms)
+✔ stranske/Pension-Data retains merged delivery and effective add-only ignores (7.568563ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 7
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 71.743273
+
+✖ failing tests:
+
+test at tests/test_codemod_campaign_receipts.js:44:1
+✖ closure receipt covers exactly the six filed campaign targets (1.836307ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  5 !== 6
+  
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_codemod_campaign_receipts.js:48:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 5,
+    expected: 6,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+
+CONTROL: unmerged child; exit 1
+✔ closure receipt covers exactly the six filed campaign targets (2.935466ms)
+✔ campaign rails have a merged source receipt (0.511639ms)
+✖ stranske/Counter_Risk retains merged delivery and effective add-only ignores (1.104589ms)
+✔ stranske/Manager-Database retains merged delivery and effective add-only ignores (10.096813ms)
+✔ stranske/Inv-Man-Intake retains merged delivery and effective add-only ignores (7.624045ms)
+✔ stranske/learning-management-system retains merged delivery and effective add-only ignores (7.704408ms)
+✔ stranske/trip-planner retains merged delivery and effective add-only ignores (7.877506ms)
+✔ stranske/Pension-Data retains merged delivery and effective add-only ignores (7.748135ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 7
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 63.711432
+
+✖ failing tests:
+
+test at tests/test_codemod_campaign_receipts.js:71:3
+✖ stranske/Counter_Risk retains merged delivery and effective add-only ignores (1.104589ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  false !== true
+  
+      at merged (/home/runner/work/Orchestrator/Orchestrator/tests/test_codemod_campaign_receipts.js:35:10)
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_codemod_campaign_receipts.js:80:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+
+CONTROL: changed original bytes; exit 1
+✔ closure receipt covers exactly the six filed campaign targets (2.841192ms)
+✔ campaign rails have a merged source receipt (0.47964ms)
+✔ stranske/Counter_Risk retains merged delivery and effective add-only ignores (10.107012ms)
+✖ stranske/Manager-Database retains merged delivery and effective add-only ignores (1.193334ms)
+✔ stranske/Inv-Man-Intake retains merged delivery and effective add-only ignores (7.479838ms)
+✔ stranske/learning-management-system retains merged delivery and effective add-only ignores (7.650845ms)
+✔ stranske/trip-planner retains merged delivery and effective add-only ignores (7.903474ms)
+✔ stranske/Pension-Data retains merged delivery and effective add-only ignores (7.695578ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 7
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 63.44773
+
+✖ failing tests:
+
+test at tests/test_codemod_campaign_receipts.js:71:3
+✖ stranske/Manager-Database retains merged delivery and effective add-only ignores (1.193334ms)
+  AssertionError [ERR_ASSERTION]: original bytes match the GitHub blob
+  + actual - expected
+  
+  + '2d7221c5a750c8585d72441db83e64c2fb6f3b08'
+  - '93bde9467438e153af9f26efd021e13dd9db96bb'
+  
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_codemod_campaign_receipts.js:90:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: '2d7221c5a750c8585d72441db83e64c2fb6f3b08',
+    expected: '93bde9467438e153af9f26efd021e13dd9db96bb',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+
+CONTROL: fabricated measured cost; exit 1
+✔ closure receipt covers exactly the six filed campaign targets (2.81385ms)
+✔ campaign rails have a merged source receipt (0.473809ms)
+✔ stranske/Counter_Risk retains merged delivery and effective add-only ignores (10.185088ms)
+✔ stranske/Manager-Database retains merged delivery and effective add-only ignores (7.489506ms)
+✔ stranske/Inv-Man-Intake retains merged delivery and effective add-only ignores (7.621831ms)
+✔ stranske/learning-management-system retains merged delivery and effective add-only ignores (7.799531ms)
+✔ stranske/trip-planner retains merged delivery and effective add-only ignores (7.818236ms)
+✖ stranske/Pension-Data retains merged delivery and effective add-only ignores (1.154222ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 7
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 63.782972
+
+✖ failing tests:
+
+test at tests/test_codemod_campaign_receipts.js:71:3
+✖ stranske/Pension-Data retains merged delivery and effective add-only ignores (1.154222ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  0 !== null
+  
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_codemod_campaign_receipts.js:111:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: null,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+
+RESTORED RECEIPTS: exit 0
+✔ closure receipt covers exactly the six filed campaign targets (2.889051ms)
+✔ campaign rails have a merged source receipt (0.470824ms)
+✔ stranske/Counter_Risk retains merged delivery and effective add-only ignores (10.156895ms)
+✔ stranske/Manager-Database retains merged delivery and effective add-only ignores (7.542835ms)
+✔ stranske/Inv-Man-Intake retains merged delivery and effective add-only ignores (7.57226ms)
+✔ stranske/learning-management-system retains merged delivery and effective add-only ignores (7.776098ms)
+✔ stranske/trip-planner retains merged delivery and effective add-only ignores (8.308986ms)
+✔ stranske/Pension-Data retains merged delivery and effective add-only ignores (7.892584ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 70.147581
+
