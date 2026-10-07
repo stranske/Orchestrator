@@ -27,3 +27,10 @@ adjudication, actual per-case costs or later-truth analysis. Existing #428 recov
 owns those remaining claims. The earlier verification note is chronological;
 this dated receipt supersedes its repeated current-pytest-unavailable statements
 only for the evaluated revision and tests named here.
+
+The current manifest binds each named file to immutable evaluated merge
+`47156fb2e640b6f6421190293a17b4bb60f66b75`, including the README after its
+readability repair. Verify `git show <revision>:<path>` bytes, length and SHA256;
+this README has since gained this explanation. The earlier unqualified manifest
+is preserved verbatim as `manifest-before-readability-repair.json`. Its README
+hash predates the formatting repair and must not be applied to later bytes.

@@ -1,0 +1,12 @@
+{
+  "guards-disabled-red.stdout.gz": "791d5619e33f9124724bfb62f8cec85735d6e3801a105eda1d974d6257aede90",
+  "packet-green.txt.gz": "daf9844c7439efdf1030d77bc1f64d9e8c137f3ea81a57bfed998ebd62479acd",
+  "restored-green.stdout.gz": "29ed3c7bc8de56c2a28480e713e5c7b6cd2b9753373815dfbc22475821447a86",
+  "README.md": "f977a271197ac91f58be92e62c0bf7071d7b29ccf138cd785d204816b8bb8a1f",
+  "validation.json": "1884e5d3664c121b3689bb4e74a92fe15b8f25193f00b687474ec759d4d38353",
+  "restored-green.xml.gz": "68da8b382a06da28d9779fa534db4d7076535d1acf6483f4e8ae7582c0237480",
+  "guards-disabled-red.xml.gz": "d7aa6141994d66ca0b6e98919f561d9d41b76d5de0662b9e8fe69ffeb05efc45",
+  "restored-green.stderr.gz": "f1b651238a58fe290baec6c5e32f3bdb1943dd2bd582f02569231f7a757c7837",
+  "node-cli.txt.gz": "03364d5f3ab8d31fa282049461e3797bdf592f4b491a961f28a7960cfc5ef88e",
+  "guards-disabled-red.stderr.gz": "f1b651238a58fe290baec6c5e32f3bdb1943dd2bd582f02569231f7a757c7837"
+}

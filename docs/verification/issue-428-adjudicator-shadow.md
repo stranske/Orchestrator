@@ -478,3 +478,13 @@ real dispute inventory. Packet validation still needs follow-up for nonempty
 diff/gate lists containing blank or malformed entries. The broad task checkboxes
 remain unchanged. The checkout's Git directory is read-only; the changes are
 preserved in an isolated commit and patch under `/tmp/adjudicator-retro-review`.
+
+## Packet member follow-up, 2026-10-07
+
+The bounded packet-members receipt now supersedes the preceding blank/malformed
+list-entry gap: twelve actual old-source failures become twelve restored passes,
+and complete textual/diff/CheckRun/StatusContext shapes remain accepted. Current
+related Python validation is57PASS plus23PASS subtests; Node CLI31PASS. See
+`issue-428-packet-members-20261007/` for full argv/cwd/JUnit/source hashes and the
+revision-bound repair of the prior named-acceptance README manifest. Broad
+inventory, semantic adjudication, native costs and later-truth claims remain open.

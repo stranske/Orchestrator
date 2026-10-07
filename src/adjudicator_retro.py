@@ -90,12 +90,28 @@ def build_packet(row: dict, evidence: dict) -> dict:
         raise ValueError("packet requires merged diff summary and gate runs")
     diff = ground_truth.get("diff_summary")
     gates = ground_truth.get("gate_runs")
-    has_diff = (
-        bool(diff.strip()) if isinstance(diff, str) else isinstance(diff, list) and bool(diff)
+
+    def nonblank(value):
+        return isinstance(value, str) and bool(value.strip())
+
+    def diff_entry(value):
+        return nonblank(value) or isinstance(value, dict) and nonblank(value.get("path"))
+
+    def gate_entry(value):
+        if nonblank(value):
+            return True
+        if not isinstance(value, dict):
+            return False
+        return all(nonblank(value.get(key)) for key in ("name", "conclusion", "detailsUrl")) or all(
+            nonblank(value.get(key)) for key in ("context", "state", "targetUrl")
+        )
+
+    has_diff = nonblank(diff) or (
+        isinstance(diff, list) and bool(diff) and all(diff_entry(value) for value in diff)
     )
     if not has_diff:
         raise ValueError("packet requires merged diff summary")
-    if not isinstance(gates, list) or not gates:
+    if not isinstance(gates, list) or not gates or not all(gate_entry(value) for value in gates):
         raise ValueError("packet requires gate runs")
     return case
 
