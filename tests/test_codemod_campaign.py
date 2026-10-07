@@ -514,3 +514,29 @@ def test_campaign_measure_rejects_pr_target_number_mismatch(tmp_path, monkeypatc
     result = lane.campaign_measure("owner/repo#7", [{"number": 91}])
     assert result["durable"] is None and result["cost_usd"] is None
     assert "mismatch" in result["measurement"]
+
+
+def test_observed_cost_survives_missing_merged_pr_receipt(tmp_path, monkeypatch):
+    import sqlite3
+
+    import feedback
+
+    path = tmp_path / "brain.db"
+    monkeypatch.setattr(feedback, "DB_PATH", path)
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            "CREATE TABLE runs(run_id TEXT, target TEXT, pr_number INTEGER);"
+            "CREATE TABLE outcomes(run_id TEXT, merged INTEGER, durability TEXT);"
+            "CREATE TABLE costs(run_id TEXT,cost_usd REAL,source TEXT);"
+        )
+        conn.execute("INSERT INTO runs VALUES ('keeper','owner/repo#91',91)")
+        conn.execute("INSERT INTO outcomes VALUES ('keeper',1,'durable')")
+        conn.execute(
+            "INSERT INTO costs VALUES ('keeper',1.25,?)",
+            (next(iter(feedback.COMPLETE_COST_SOURCES)),),
+        )
+    result = lane.campaign_measure("owner/repo#7", [{"number": 91}, {"number": 92}])
+    assert result["observed_complete_cost_usd"] == 1.25
+    assert result["cost_usd"] is None
+    assert result["durable"] is None
+    assert "incomplete Brain attribution" in result["measurement"]

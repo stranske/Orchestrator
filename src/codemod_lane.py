@@ -622,6 +622,15 @@ def campaign_measure(target: str, merged_prs: list[dict[str, Any]]) -> dict[str,
         if any(r[5] != target and r[0] != int(r[5].rsplit("#", 1)[1]) for r in rows):
             result["measurement"] = "UNKNOWN: linked PR target/number mismatch"
             return result
+        # Preserve identity-validated observed spend even when another merged PR
+        # has no attributable receipt. Total cost and durability remain unknown.
+        costs = [
+            r[3]
+            for r in rows
+            if r[1] is not None and r[3] and r[3] > 0 and r[4] in feedback.COMPLETE_COST_SOURCES
+        ]
+        if costs:
+            result["observed_complete_cost_usd"] = sum(costs)
         attributed = [r for r in rows if r[0] in numbers]
         if {r[0] for r in attributed} != numbers or any(r[1] != 1 for r in attributed):
             result["measurement"] = "UNKNOWN: incomplete Brain attribution for merged delivery PRs"
@@ -635,13 +644,6 @@ def campaign_measure(target: str, merged_prs: list[dict[str, Any]]) -> dict[str,
             result["durable"] = all(d == "durable" for d in known)
         # Failed and PR-less attempts also spent resources on this exact target.
         # A still-running attempt or an incomplete cost source leaves the total unknown.
-        costs = [
-            r[3]
-            for r in rows
-            if r[1] is not None and r[3] and r[3] > 0 and r[4] in feedback.COMPLETE_COST_SOURCES
-        ]
-        if costs:
-            result["observed_complete_cost_usd"] = sum(costs)
         source_attempts_seen = any(r[5] == target for r in rows)
         if source_attempts_seen and len(costs) == len(rows):
             result["cost_usd"] = sum(costs)

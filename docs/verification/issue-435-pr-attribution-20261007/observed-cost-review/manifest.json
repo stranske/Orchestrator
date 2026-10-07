@@ -1,0 +1,13 @@
+{
+  "historical_revision": "c7d2cafcb3a374d6e7f05cff02f475f33cffe4a9",
+  "historical_manifest": "docs/verification/issue-435-pr-attribution-20261007/manifest.json",
+  "current_files": {
+    "src/codemod_lane.py": "c0fb6b3968505d6f6a7e0e6ab1fe62f313b22921c6bdf0952c08501916b17d89",
+    "tests/test_codemod_campaign.py": "acec4f0760d261238188be2a8238a7b487670bfac1089268c55cf1b8353660d5",
+    ".verify-floor.json": "2c127553bf1ada664dcb7557322710f9b0250b44898b85cb2f9e1315f5764edf",
+    "docs/verification/issue-435-pr-attribution-20261007/observed-cost-review/historical-manifest.json": "5d82c51ab0b47381f14e531893cd5115c629b2f390d26cc69b5ea83a486a17e1",
+    "docs/verification/issue-435-pr-attribution-20261007/observed-cost-review/README.md": "cf5e5c051f8f2bc549a1cc2186882c311919ab944b42ebede876e9ab26325a51",
+    "docs/verification/issue-435-pr-attribution-20261007/observed-cost-review/513-red.log.gz": "f9140411de3f3de4a45add7f0e052e8d3a7b2243b64cd48e830a9faa80115d13",
+    "docs/verification/issue-435-pr-attribution-20261007/observed-cost-review/513-green.log.gz": "56b87d47902843a9ddfe906137ebe5308a4c9eb3807a494d5ff7519217a071c8"
+  }
+}
