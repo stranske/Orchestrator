@@ -128,7 +128,22 @@ def _gate_rollup(pr: dict) -> dict:
     """Turn unavailable gate pages into a recoverable evidence gap."""
     try:
         rollup = pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
-        if not rollup:
+        if not isinstance(rollup, dict):
+            raise ValueError("complete gate evidence unavailable")
+        contexts = rollup["contexts"]
+        if not isinstance(contexts, dict):
+            raise ValueError("complete gate evidence unavailable")
+        nodes, page = contexts["nodes"], contexts["pageInfo"]
+        if (
+            not isinstance(nodes, list)
+            or any(not isinstance(node, dict) for node in nodes)
+            or not isinstance(page, dict)
+            or not isinstance(page.get("hasNextPage"), bool)
+            or (
+                page["hasNextPage"]
+                and (not isinstance(page.get("endCursor"), str) or not page["endCursor"])
+            )
+        ):
             raise ValueError("complete gate evidence unavailable")
         return rollup
     except (KeyError, IndexError, TypeError) as exc:

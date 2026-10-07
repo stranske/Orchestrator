@@ -1,3 +1,17 @@
-Empty initial or paginated commit lists must become a ValueError evidence gap, preserving the batch caller's existing recovery path. Raw actual original-source RED2, candidate focused40PASS and collection2607 are retained losslessly. Broader issue428 acceptance and original511 provider CONCERNS remain open. Full private verification receipt is recorded separately when complete.
+# Empty Gate evidence recovery
 
-Full private verifier executed2607pytestPASS,103/103selftests andall5capabilitygates. It exited1 solely because startingfloor2605 lagged new2607 collection; --update-floor correctedfloor2607 preserving everyceiling. Original exit1/rawlog is retained; no rerunexit0 orliveactivation isclaimed. FreshhostedCI remainsrequired.
+Empty initial or paginated commit lists must become a `ValueError` evidence gap,
+preserving the batch caller's existing recovery path. Raw original-source results
+(two failing tests), candidate focused results (40 passing tests), and the 2,607-test
+collection are retained losslessly. Broader issue #428 acceptance and the original
+#511 provider CONCERNS remain open.
+
+The full private verifier executed 2,607 passing pytest tests, 103 of 103 selftests,
+and all five capability gates. It exited 1 solely because the starting floor of
+2,605 lagged the new collection of 2,607. `--update-floor` corrected the floor to
+2,607 while preserving every ceiling. The original exit 1 and raw log are retained;
+no repeat exit 0 or live activation is claimed. Fresh hosted CI remains required.
+
+The later context-shape repair and its current-head regression proof are recorded
+separately in `context-shapes/`. The historical results above describe their original
+revision and are not a full-suite claim for that later change.
