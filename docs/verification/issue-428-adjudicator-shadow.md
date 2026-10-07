@@ -3,6 +3,38 @@
 This extends the existing AdjudicatorAgent and Brain role-run recorder. Source implementation
 and local replay are distinct from runtime publication, which remains manual.
 
+## Keepalive verifier selection validation, 2026-10-07
+
+- [x] Verify the first implementation task: per-dispute packets use the selected
+  merge-bound verifier comment, diff summary and complete Gate evidence; the
+  router selects the shadow backend, the Brain records `source=retrospective`,
+  and replay preserves all outcomes.
+- [ ] Run the named pytest acceptance tests and their required outcome-write and
+  unconditional-offer faults on this tree.
+
+Six new JavaScript regressions exercise the real verifier selector, packet builder,
+router and role recorder. Workflow run IDs and attempt IDs sort numerically; a
+later PASS attempt resolves the dispute. Invalid PASS markers, untrusted authors
+and comments with another repository's URL cannot replace the trusted finding.
+The successful packets retain the selected finding's URL, body and decision.
+
+`node tests/test_adjudicator_retro_cli.js`: 43 passed, zero failures or skips.
+The existing evidence unittest suite: five passed. JavaScript syntax and
+`git diff --check` passed. In isolated source copies, lexical run ordering,
+lexical attempt ordering, ignoring attempts, trusting invalid PASS markers and
+accepting another repository's comment URL each failed the intended new
+regression (exit 1); byte-identical restoration passed (exit 0).
+Raw fault/restoration logs are under
+`/tmp/adjudicator-selection-faults-_ewdprnj/`; the full Node receipt is
+`/tmp/adjudicator-retro-node.log`. These are local verification artifacts.
+
+Pytest and Black are absent, and isolated package installation failed. No
+checkout Python source changed, and the named pytest acceptance criteria remain
+unchecked. Checkout Git metadata is read-only; the focused JavaScript change and
+this note are preserved in an isolated commit, patch and bundle under
+`/tmp/adjudicator-retro-selection/`. PR #512 was confirmed open and ready through
+the GitHub connector after the CLI could not connect. Source #428 remains open.
+
 ## Keepalive switch-review reconciliation, 2026-10-07
 
 - [x] Verify `adjudicator shadow: cases N, agree A, disagree D, cost C` through

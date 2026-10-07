@@ -827,6 +827,44 @@ def response(args):
                 "body": "Acceptance test is now present\\n"
                         f"<!-- {verifier_evidence.MARKER} {json.dumps(newer)} -->",
             })
+        if scenario == "newer-attempt-pass":
+            # A rerun resolves the dispute even when its workflow run id is unchanged.
+            newer = {**decision, "run_attempt": "2", "provider_verdicts": ["PASS"],
+                     "verdict": "PASS"}
+            original = pr["comments"]["nodes"][0]
+            pr["comments"]["nodes"].append({
+                **original, "url": original["url"].replace("issuecomment-1", "issuecomment-2"),
+                "body": "Acceptance test is now present\\n"
+                        f"<!-- {verifier_evidence.MARKER} {json.dumps(newer)} -->",
+            })
+        if scenario in ("numeric-run-order", "numeric-attempt-order", "invalid-newer-pass",
+                        "untrusted-newer-pass", "wrong-url-newer-pass"):
+            original = pr["comments"]["nodes"][0]
+            if scenario == "numeric-attempt-order":
+                decision["run_attempt"] = "10"
+                original["body"] = "Missing acceptance test\\n" + (
+                    f"<!-- {verifier_evidence.MARKER} {json.dumps(decision)} -->"
+                )
+            other = {**decision, "provider_verdicts": ["PASS"], "verdict": "PASS"}
+            if scenario == "numeric-run-order":
+                other["run_id"] = "99"
+            elif scenario == "numeric-attempt-order":
+                other["run_attempt"] = "9"
+            else:
+                other["run_id"] = "124"
+            if scenario == "invalid-newer-pass":
+                # A claimed PASS contradicting failed CI is not a verifier decision.
+                other["ci_failed"] = True
+            comment = {
+                **original, "url": original["url"].replace("issuecomment-1", "issuecomment-2"),
+                "body": "Unrelated apparent PASS\\n"
+                        f"<!-- {verifier_evidence.MARKER} {json.dumps(other)} -->",
+            }
+            if scenario == "untrusted-newer-pass":
+                comment["author"] = {"login": "contributor"}
+            if scenario == "wrong-url-newer-pass":
+                comment["url"] = f"https://github.com/other/repo/pull/{number}#issuecomment-2"
+            pr["comments"]["nodes"].append(comment)
     return {"data": {"repository": {"pullRequest": pr}}}
 
 proposal = {
@@ -869,6 +907,12 @@ for (const [scenario, reads, error] of [
   ['wrong-verifier-pr', 1, /current merge-bound verifier decision missing or changed/],
   ['untrusted-verifier-author', 1, /current merge-bound verifier decision missing or changed/],
   ['newer-verifier-pass', 1, /current merge-bound verifier decision missing or changed/],
+  ['newer-attempt-pass', 1, /current merge-bound verifier decision missing or changed/],
+  ['numeric-run-order', 3, null],
+  ['numeric-attempt-order', 3, null],
+  ['invalid-newer-pass', 3, null],
+  ['untrusted-newer-pass', 3, null],
+  ['wrong-url-newer-pass', 3, null],
 ]) {
   test(`retro collects complete gate pages before shadow dispatch: ${scenario}`, (t) => {
     const w = world(t);
@@ -890,6 +934,14 @@ for (const [scenario, reads, error] of [
     } else {
       assert.equal(row.error, undefined);
       const packet = row.packet;
+      assert.equal(packet.disputed_finding.ref,
+        `https://github.com/${row.target.replace('#', '/pull/')}#issuecomment-1`,
+        'the selected verifier decision must supply its own finding comment');
+      assert.ok(packet.disputed_finding.body.startsWith('Missing acceptance test\n'));
+      assert.equal(packet.disputed_finding.decision.run_id, '123');
+      assert.equal(packet.disputed_finding.decision.run_attempt,
+        scenario === 'numeric-attempt-order' ? '10' : '1');
+      assert.equal(packet.disputed_finding.decision.verdict, 'NON_PASS');
       assert.equal(packet.ground_truth_evidence.head_sha, 'a'.repeat(40));
       assert.equal(packet.ground_truth_evidence.merge_sha, 'b'.repeat(40));
       assert.deepEqual(packet.ground_truth_evidence.gate_runs, [
