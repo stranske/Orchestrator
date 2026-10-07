@@ -106,6 +106,7 @@ function world(t) {
     }
   }
   return {
+    root,
     run,
     report: () => JSON.parse(fs.readFileSync(
       path.join(env.ORCH_STATE_DIR, 'capability-program', 'adjudicator-retro.json'), 'utf8',
@@ -114,6 +115,194 @@ function world(t) {
     brain: () => run(['-c', snapshot]),
   };
 }
+
+const initializeDisputes = `
+import json
+import time
+import feedback
+with feedback._conn() as conn:
+    for index in (1, 2):
+        run_id = f"original-{index}"
+        conn.execute(
+            "INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)",
+            (run_id, int(time.time()), f"owner/repo#{index}"),
+        )
+        conn.execute(
+            "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+            "VALUES (?,'NON_PASS','PASS',1)", (run_id,),
+        )
+print(json.dumps(True))
+`;
+
+test('retro dispatch routes each case and records shadow roles without writing outcomes', (t) => {
+  const w = world(t);
+  w.run(['-c', initializeDisputes]);
+  const before = w.brain();
+  const result = w.run(['-c', `
+import json
+from unittest.mock import Mock, patch
+import adjudicator_retro as retro
+import feedback
+import roles
+
+def evidence(row):
+    return {
+        "disputed_finding": {"body": f"Missing acceptance test for {row['target']}"},
+        "ground_truth_evidence": {
+            "diff_summary": f"Added test for {row['target']}",
+            "gate_runs": [{"name": "Gate", "conclusion": "SUCCESS", "detailsUrl": "gate-run"}],
+        },
+    }
+
+def offload(backend, prompt, **kwargs):
+    proposal = {
+        "decision": "uphold_blocker",
+        "confidence": "high",
+        "rationale": "The finding needs inspection.",
+        "evidence_assessment": [{
+            "claim": "Missing test", "status": "supported", "evidence_ref": "gate-run",
+            "reason": "Inspect the gate evidence",
+        }],
+        "ground_truth_refs": ["gate-run"],
+        "recommended_next_step": "Inspect the regression evidence",
+        "evidence_gaps": [],
+    }
+    return {"run_id": f"backend-{backend}", "output": json.dumps(proposal), "exit": 0}
+
+reader = Mock(side_effect=evidence)
+with (
+    patch.object(roles, "route_role", side_effect=[{"agent": "gemini"}, {"agent": "codex"}]) as route,
+    patch.object(roles, "_role_capability_event"),
+    patch.object(roles.dispatcher, "offload", side_effect=offload) as transport,
+):
+    dry = retro.run(dispatch=False, limit=1, evidence_reader=reader)
+    with feedback._conn() as conn:
+        dry_roles = conn.execute("SELECT run_id FROM runs WHERE role_name='adjudicator'").fetchall()
+    first = retro.run(dispatch=True, retry=True, limit=1, evidence_reader=reader)
+    second = retro.run(dispatch=True, limit=1, evidence_reader=reader)
+    resumed = retro.run(dispatch=True, limit=2, evidence_reader=reader)
+    routes = [{"args": call.args, "kwargs": call.kwargs} for call in route.call_args_list]
+    calls = [{"args": call.args, "kwargs": call.kwargs} for call in transport.call_args_list]
+with feedback._conn() as conn:
+    records = [dict(zip(("run_id", "target", "agent", "source", "metadata"), row))
+               for row in conn.execute(
+                   "SELECT run_id,target,agent,source,decomposition FROM runs "
+                   "WHERE role_name='adjudicator' ORDER BY target")]
+print(json.dumps({
+    "dry": dry, "dry_roles": dry_roles, "first": first, "second": second, "resumed": resumed,
+    "routes": routes, "calls": calls, "reads": reader.call_count, "records": records,
+}))
+`]);
+  assert.deepEqual(result.dry_roles, [], 'packet preparation must not record an invocation');
+  assert.equal(result.dry.rows.length, 1);
+  assert.equal(result.first.rows.length, 1, 'the invocation limit must bound paid calls');
+  assert.equal(result.second.rows.length, 2);
+  assert.equal(result.reads, 3, 'saved verdicts must not be collected or dispatched again');
+  assert.deepEqual(result.resumed.rows, result.second.rows);
+  assert.deepEqual(result.routes.map((call) => call.args), [['adjudicator'], ['adjudicator']]);
+  assert.deepEqual(result.calls.map((call) => call.args[0]), ['gemini', 'codex']);
+  for (const [index, call] of result.calls.entries()) {
+    const packet = result.second.rows[index].packet;
+    assert.ok(call.args[1].includes(packet.disputed_finding.body));
+    assert.ok(call.args[1].includes(packet.ground_truth_evidence.diff_summary));
+    assert.ok(call.args[1].includes('gate-run'));
+    assert.equal(call.kwargs.isolate, true, 'retrospective transport must isolate execution');
+    assert.equal(call.kwargs.mode, 'full');
+    assert.equal(call.kwargs.timeout, 180);
+    assert.equal(call.kwargs.cwd, path.dirname(path.join(
+      w.root, 'state/capability-program/adjudicator-retro.json',
+    )));
+    const row = result.second.rows[index];
+    const record = result.records[index];
+    const metadata = JSON.parse(record.metadata);
+    assert.equal(record.run_id, row.role_run_id);
+    assert.equal(record.target, row.target);
+    assert.equal(record.agent, call.args[0]);
+    assert.equal(record.source, 'retrospective');
+    assert.equal(metadata.source, 'retrospective');
+    assert.equal(metadata.backend_run_id, row.backend_run_id);
+    assert.deepEqual(metadata.proposal, row.proposal);
+    assert.equal(metadata.action, 'needs_more_evidence');
+    assert.equal(row.shadow_verdict, null);
+  }
+  const after = w.brain();
+  assert.deepEqual(after.outcomes, before.outcomes, 'no original or new outcome may be written');
+  assert.deepEqual(after.costs, before.costs);
+  assert.deepEqual(after.runs.filter((row) => row[0].startsWith('original-')), before.runs);
+  assert.equal(after.runs.length, before.runs.length + 2);
+  assert.deepEqual(w.report(), result.resumed);
+});
+
+test('retro packet failures never reach routing, dispatch or Brain role recording', (t) => {
+  const w = world(t);
+  w.run(['-c', initializeDisputes]);
+  const before = w.brain();
+  const result = w.run(['-c', `
+import json
+from unittest.mock import patch
+import adjudicator_retro as retro
+import feedback
+import roles
+
+row = {"target": "owner/repo#1"}
+valid = {
+    "disputed_finding": {"body": "Missing acceptance test"},
+    "ground_truth_evidence": {"diff_summary": "Added test", "gate_runs": ["gate-run"]},
+}
+invalid = [
+    {key: value for key, value in valid.items() if key != missing}
+    for missing in ("disputed_finding", "ground_truth_evidence")
+]
+invalid.extend({**valid, "disputed_finding": finding} for finding in (
+    {"ref": "verifier-comment"}, {"body": " "},
+    {"body": '<!-- verifier-corpus-decision/v1 {"verdict":"NON_PASS"} -->'},
+))
+invalid.extend({**valid, "ground_truth_evidence": ground} for ground in (
+    "merge=PASS", {"diff_summary": "Added test", "gate_runs": []},
+    {"diff_summary": [], "gate_runs": ["gate-run"]},
+))
+errors = []
+with (
+    patch.object(roles, "route_role", side_effect=AssertionError("invalid packet reached router")),
+    patch.object(roles.dispatcher, "offload", side_effect=AssertionError("invalid packet dispatched")),
+    patch.object(feedback, "record_role_run", side_effect=AssertionError("invalid packet recorded")),
+):
+    try:
+        retro.build_packet({}, valid)
+    except ValueError as exc:
+        missing_target = str(exc)
+    else:
+        raise AssertionError("missing target accepted")
+    for packet in invalid:
+        try:
+            retro.build_packet(row, packet)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("incomplete evidence accepted")
+        report = retro.run(
+            dispatch=True, retry=True, limit=1, evidence_reader=lambda _row: packet,
+        )
+        errors.append(report["rows"][0].get("error"))
+    prepared = retro.run(
+        dispatch=False, retry=True, limit=1, evidence_reader=lambda _row: valid,
+    )
+print(json.dumps({"missing_target": missing_target, "errors": errors, "prepared": prepared}))
+`]);
+  assert.match(result.missing_target, /target/);
+  assert.equal(result.errors.length, 8);
+  assert.ok(result.errors.every((error) => typeof error === 'string' && error.length));
+  assert.ok(result.errors.some((error) => error.includes('finding comment text')));
+  assert.ok(result.errors.some((error) => error.includes('merged diff summary')));
+  assert.ok(result.errors.some((error) => error.includes('gate runs')));
+  assert.equal(result.prepared.rows.length, 1);
+  assert.equal(result.prepared.rows[0].error, undefined, 'a repaired packet clears the old error');
+  assert.equal(result.prepared.rows[0].packet.source, 'retrospective');
+  assert.equal(result.prepared.rows[0].packet.metadata_only, true);
+  assert.equal(result.prepared.summary.adjudicated, 0);
+  assert.deepEqual(w.brain(), before, 'invalid attempts and dry preparation must leave Brain unchanged');
+  assert.deepEqual(w.report(), result.prepared);
+});
 
 test('retro CLI preserves raw proposals without grading metadata and refreshes measured costs', (t) => {
   const w = world(t);
@@ -231,6 +420,201 @@ print(json.dumps(True))
   assert.equal(w.report().rows[1].merge_rule_verdict, 'FAIL');
   assert.equal(w.report().rows[2].later_truth, null);
   assert.deepEqual(w.brain(), changedBrain);
+});
+
+test('retro CLI withdraws stale costs without changing the comparison cohort', (t) => {
+  const w = world(t);
+  w.run(['-c', initialize]);
+  w.refresh();
+  const initial = w.report();
+  const identities = initial.rows.map((row) => [row.case_id, row.role_run_id, row.decision]);
+
+  function checkCosts(total, measured, average) {
+    const before = w.brain();
+    const summary = w.refresh();
+    const report = w.report();
+    assert.deepEqual(report.summary, summary);
+    for (const section of [summary, report.proposal_comparison]) {
+      assert.equal(section.cost_usd, total);
+      assert.equal(section.cost_measured_cases, measured);
+      assert.equal(section.cost_per_case, average);
+    }
+    const withoutCosts = (comparison) => {
+      const { cost_usd, cost_measured_cases, cost_per_case, ...counts } = comparison;
+      return counts;
+    };
+    assert.deepEqual(withoutCosts(report.proposal_comparison),
+      withoutCosts(initial.proposal_comparison), 'cost provenance must not change agreement rates');
+    assert.deepEqual(report.rows.map((row) => row.proposal_comparison),
+      initial.rows.map((row) => row.proposal_comparison));
+    assert.deepEqual(report.rows.map((row) => [row.case_id, row.role_run_id, row.decision]),
+      identities, 'refresh must preserve saved proposals without redispatch');
+    assert.deepEqual(w.brain(), before, 'cost refresh must keep Brain and outcomes read-only');
+    return report;
+  }
+
+  // Withdrawing a cost's complete source must clear its saved measured value,
+  // even if the replacement ledger value is nonzero.
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("UPDATE costs SET source='ledger' WHERE run_id='backend-0'")
+    conn.execute("DELETE FROM costs WHERE run_id='backend-1'")
+print(json.dumps(True))
+`]);
+  const partial = checkCosts(0.5, 2, 0.25);
+  assert.equal(partial.rows[0].cost_usd, null);
+  assert.equal(partial.rows[1].cost_usd, null);
+  assert.equal(partial.rows[3].cost_usd, 0, 'measured zero belongs in the cost denominator');
+  assert.equal(partial.rows[4].cost_usd, 0.5, 'abstaining still incurs a measured case cost');
+
+  // A measured zero differs from the absence of any measured costs.
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("UPDATE costs SET source='ledger' WHERE run_id='backend-4'")
+print(json.dumps(True))
+`]);
+  checkCosts(0, 1, 0);
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("UPDATE costs SET source='ledger' WHERE run_id='backend-3'")
+print(json.dumps(True))
+`]);
+  const unmeasured = checkCosts(null, 0, null);
+  assert.ok(unmeasured.rows.every((row) => row.cost_usd == null));
+
+  // Restoring complete telemetry recovers the original totals without another call.
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("UPDATE costs SET source='ccusage' WHERE run_id IN ('backend-0','backend-3','backend-4')")
+    conn.execute("INSERT INTO costs(run_id,cost_usd,source) VALUES ('backend-1',2.5,'ccusage')")
+print(json.dumps(True))
+`]);
+  const restored = checkCosts(4.5, 4, 1.125);
+  assert.deepEqual(restored.proposal_comparison, initial.proposal_comparison);
+});
+
+test('retro CLI compares both rules on the same cases with mixed merge dispositions', (t) => {
+  const w = world(t);
+  w.run(['-c', initialize]);
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("UPDATE outcomes SET merged=0 WHERE run_id='original-1'")
+    conn.execute("UPDATE outcomes SET merged=NULL WHERE run_id='original-2'")
+    conn.execute("UPDATE outcomes SET durability='reworked' WHERE run_id='original-3'")
+print(json.dumps(True))
+`]);
+  const before = w.brain();
+  const summary = w.refresh();
+  const initial = w.report();
+  assert.deepEqual(initial.summary, summary);
+  assert.deepEqual(initial.proposal_comparison, {
+    evidence_basis: 'raw_metadata_proposals', cases: 6, proposed_decisions: 4,
+    compared: 3, pending_truth: 0, missing_merge_disposition: 1, abstained: 1, unassessed: 1,
+    agree: 3, disagree: 0, agreement_rate: 1,
+    merge_rule_agree: 2, merge_rule_disagree: 1, merge_rule_agreement_rate: 2 / 3,
+    cost_usd: 4.5, cost_measured_cases: 4, cost_per_case: 1.125,
+  });
+  assert.deepEqual(initial.rows.map((row) => row.proposal_comparison), [
+    { verdict: 'PASS', agrees: true, merge_rule_agrees: true },
+    { verdict: 'FAIL', agrees: true, merge_rule_agrees: true },
+    { verdict: 'PASS', agrees: null, merge_rule_agrees: null },
+    { verdict: 'FAIL', agrees: true, merge_rule_agrees: false },
+    { verdict: null, agrees: null, merge_rule_agrees: null },
+    { verdict: null, agrees: null, merge_rule_agrees: null },
+  ]);
+  assert.deepEqual(w.brain(), before);
+
+  // Clearing the last missing merge fact admits the case to BOTH denominators.
+  // Its zero-dollar ledger entry must still stay outside measured-cost counts.
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("UPDATE outcomes SET merged=0 WHERE run_id='original-2'")
+print(json.dumps(True))
+`]);
+  const changedBrain = w.brain();
+  w.refresh();
+  const compared = w.report();
+  assert.deepEqual(compared.proposal_comparison, {
+    ...initial.proposal_comparison,
+    compared: 4, missing_merge_disposition: 0,
+    agree: 3, disagree: 1, agreement_rate: 0.75,
+    merge_rule_agree: 3, merge_rule_disagree: 1, merge_rule_agreement_rate: 0.75,
+  });
+  assert.deepEqual(compared.rows[2].proposal_comparison, {
+    verdict: 'PASS', agrees: false, merge_rule_agrees: true,
+  });
+  assert.deepEqual(compared.rows.map((row) => [row.case_id, row.role_run_id, row.decision]),
+    initial.rows.map((row) => [row.case_id, row.role_run_id, row.decision]));
+  assert.deepEqual(compared.summary, initial.summary,
+    'raw proposal comparisons must not upgrade effective verdicts or change costs');
+  assert.deepEqual(w.brain(), changedBrain, 'comparison refresh must not write any Brain table');
+});
+
+test('retro CLI regrades saved durable cases when later failure signals arrive', (t) => {
+  const w = world(t);
+  w.run(['-c', initialize]);
+  w.refresh();
+  const initial = w.report();
+  const identities = initial.rows.map((row) => [row.case_id, row.role_run_id, row.decision]);
+
+  // A prior PASS observation must not mask a subsequent failure. Exercise each
+  // fleet failure signal independently, retaining the merge disposition and costs.
+  for (const durability of ['reverted', 'broke_later', 'reopened', 'abandoned', 'reworked']) {
+    w.run(['-c', `
+import json
+import sys
+import feedback
+with feedback._conn() as conn:
+    conn.execute(
+        "UPDATE outcomes SET durability=? WHERE run_id='original-0'",
+        (sys.argv[1],),
+    )
+print(json.dumps(True))
+`, durability]);
+    const changedBrain = w.brain();
+    w.refresh();
+    const failed = w.report();
+    assert.equal(failed.rows[0].later_truth, 'FAIL', durability);
+    assert.deepEqual(failed.rows[0].proposal_comparison, {
+      verdict: 'PASS', agrees: false, merge_rule_agrees: false,
+    });
+    assert.deepEqual(failed.proposal_comparison, {
+      ...initial.proposal_comparison,
+      agree: 1, disagree: 2, agreement_rate: 1 / 3,
+      merge_rule_agree: 0, merge_rule_disagree: 3, merge_rule_agreement_rate: 0,
+    }, durability);
+    assert.deepEqual(failed.summary, initial.summary);
+    assert.deepEqual(failed.rows.map((row) => [row.case_id, row.role_run_id, row.decision]),
+      identities);
+    assert.ok(failed.rows.every((row) => row.shadow_verdict === null));
+    assert.deepEqual(w.brain(), changedBrain, 'regrading must leave the entire Brain unchanged');
+  }
+
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("UPDATE outcomes SET durability='durable' WHERE run_id='original-0'")
+print(json.dumps(True))
+`]);
+  const restoredBrain = w.brain();
+  w.refresh();
+  assert.deepEqual(w.report().proposal_comparison, initial.proposal_comparison);
+  assert.deepEqual(w.report().rows.map((row) => [row.case_id, row.role_run_id, row.decision]),
+    identities);
+  assert.deepEqual(w.brain(), restoredBrain, 'recovering truth must not redispatch saved cases');
 });
 
 test('retro CLI publishes an empty report without inventing agreement or cost', (t) => {
