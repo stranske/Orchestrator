@@ -274,13 +274,18 @@ def measured_cost(run_id: str | None, db: Path | None = None) -> float | None:
 
 
 def _refresh_saved_verdicts(rows: list[dict], db: Path | None = None) -> None:
-    """Grade saved verdicts even after their disputes leave the replay window."""
-    verdicts = [row for row in rows if row.get("decision")]
-    if not verdicts:
+    """Refresh every paid attempt; grade only saved decisions outside the replay window."""
+    refreshable = [row for row in rows if row.get("decision") or row.get("backend_run_id")]
+    if not refreshable:
         return
     with sqlite3.connect(f"file:{(db or feedback.DB_PATH).resolve()}?mode=ro", uri=True) as conn:
         conn.row_factory = sqlite3.Row
-        for row in verdicts:
+        for row in refreshable:
+            # Invalid responses still incur costs. Their late receipts and cost
+            # withdrawals must refresh without admitting a decision or a grade.
+            row["cost_usd"] = measured_cost(row.get("backend_run_id"), db)
+            if not row.get("decision"):
+                continue
             outcome = conn.execute(
                 "SELECT merged,durability,durability_checked_ts FROM outcomes WHERE run_id=?",
                 (row["run_id"],),
@@ -290,7 +295,6 @@ def _refresh_saved_verdicts(rows: list[dict], db: Path | None = None) -> None:
             row["merge_rule_verdict"] = (
                 ("PASS" if merged else "FAIL") if merged is not None else None
             )
-            row["cost_usd"] = measured_cost(row.get("backend_run_id"), db)
 
 
 def _apply_evidence_floor(row: dict) -> None:

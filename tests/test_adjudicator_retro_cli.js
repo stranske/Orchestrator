@@ -1404,6 +1404,99 @@ print(json.dumps(True))
   }
 });
 
+test('retro CLI refreshes late invalid-response costs without grading or redispatch', (t) => {
+  const w = world(t);
+  w.run(['-c', `
+import json
+import time
+from unittest.mock import patch
+import adjudicator_retro as retro
+import feedback
+import roles
+
+with feedback._conn() as conn:
+    conn.execute("INSERT INTO runs(run_id,ts,target) VALUES ('original',?,'owner/repo#1')",
+                 (int(time.time()),))
+    conn.execute("INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged,"
+                 "durability,durability_checked_ts) VALUES "
+                 "('original','NON_PASS','PASS',1,'reverted',?)", (int(time.time()),))
+    conn.execute("INSERT INTO costs(run_id,cost_usd,source) VALUES ('backend-invalid',0,'ledger')")
+
+with (
+    patch.object(roles, "route_role", return_value={"agent": "gemini"}),
+    patch.object(roles, "_role_capability_event"),
+    patch.object(roles.dispatcher, "offload", return_value={
+        "run_id": "backend-invalid", "exit": 0, "output": "malformed response",
+    }) as offload,
+):
+    result = retro.run(dispatch=True, evidence_reader=lambda row: {
+        "disputed_finding": {"body": "Missing acceptance test"},
+        "ground_truth_evidence": {"diff_summary": "Added test", "gate_runs": ["gate-run"]},
+    })
+    assert offload.call_count == 1
+print(json.dumps(result))
+`]);
+  const initial = w.report();
+  const invalid = initial.rows[0];
+  assert.equal(invalid.decision, undefined);
+  assert.ok(invalid.errors.some((error) => error.includes('could not parse')));
+  assert.ok(invalid.role_run_id, 'the paid invalid response has a retrospective Brain record');
+  assert.equal(invalid.backend_run_id, 'backend-invalid');
+  assert.equal(invalid.cost_usd, null);
+  const identity = [invalid.case_id, invalid.role_run_id, invalid.backend_run_id];
+  const withoutCosts = ({ cost_usd, cost_measured_cases, cost_per_case, ...counts }) => counts;
+
+  // No replay population remains. Refresh must still account for paid attempts
+  // with no usable decision, even after the original outcome disappears.
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("DELETE FROM outcomes WHERE run_id='original'")
+print(json.dumps(True))
+`]);
+  for (const [cost, source, expected] of [
+    [0, 'ccusage', 0],
+    [2, 'ccusage', 2],
+    [7, 'ledger', null],
+    [null, null, null],
+    [3, 'ccusage', 3],
+  ]) {
+    w.run(['-c', `
+import json
+import sys
+import feedback
+cost, source = json.loads(sys.argv[1])
+with feedback._conn() as conn:
+    conn.execute("DELETE FROM costs WHERE run_id='backend-invalid'")
+    if source is not None:
+        conn.execute("INSERT INTO costs(run_id,cost_usd,source) VALUES ('backend-invalid',?,?)",
+                     (cost, source))
+print(json.dumps(True))
+`, JSON.stringify([cost, source])]);
+    const before = w.brain();
+    w.refresh();
+    const report = w.report();
+    const saved = report.rows[0];
+    assert.equal(saved.cost_usd, expected, `late cost source ${source} with value ${cost}`);
+    for (const section of ['summary', 'proposal_comparison']) {
+      assert.equal(report[section].cost_usd, expected);
+      assert.equal(report[section].cost_per_case, expected);
+      assert.equal(report[section].cost_measured_cases, expected === null ? 0 : 1);
+      assert.deepEqual(withoutCosts(report[section]), withoutCosts(initial[section]),
+        'invalid responses must stay outside both agreement denominators');
+    }
+    assert.deepEqual([saved.case_id, saved.role_run_id, saved.backend_run_id], identity);
+    assert.equal(saved.decision, undefined);
+    assert.equal(saved.shadow_verdict, null);
+    assert.deepEqual(saved.errors, invalid.errors);
+    assert.deepEqual(saved.proposal_comparison,
+      { verdict: null, agrees: null, merge_rule_agrees: null });
+    assert.deepEqual(w.brain(), before, 'refresh must not redispatch or recreate the outcome');
+    assert.equal(report.population, 0);
+  }
+});
+
 test('retro CLI withdraws stale costs without changing the comparison cohort', (t) => {
   const w = world(t);
   w.run(['-c', initialize]);
