@@ -3,6 +3,34 @@
 This extends the existing AdjudicatorAgent and Brain role-run recorder. Source implementation
 and local replay are distinct from runtime publication, which remains manual.
 
+## Keepalive gate-page evidence validation, 2026-10-07
+
+- [x] Verify packet construction from the merge-bound verifier comment, merged diff
+  summary and complete gate pages, router-chosen shadow dispatch, retrospective Brain
+  role recording and unchanged outcomes using the existing collector and role.
+- [ ] Run the three named pytest acceptance tests and their required outcome-write
+  and unconditional-offer fault checks on the current tree.
+
+Seven new Node regressions exercise the real `fetch_evidence`, packet builder and
+AdjudicatorAgent with private persisted disputes and mocked GitHub reads/transport.
+Both CheckRun and StatusContext gate entries reach the actual role prompt after a
+three-page read. Head changes, timeouts, absent gates, the 20-page read bound and
+truncated comment/diff inventories prevent routing, dispatch and Brain writes.
+The complete case records `source=retrospective`; every case preserves all outcomes.
+
+`node tests/test_adjudicator_retro_cli.js`: 25 passed, no skips. The five existing
+evidence unittest tests also passed. In temporary source copies, dropping later
+page entries, allowing a changed head and increasing the read bound to 21 each
+failed its new regression (exit 1). All copies were restored byte for byte; the
+checkout's Python source remained unchanged. Pytest and Black are absent;
+isolated installation from PyPI failed. These Node checks do not substitute for
+the pending named pytest acceptance checks.
+
+GitHub access failed, preventing PR checkbox, blocker-label and readiness updates.
+The checkout's Git metadata is read-only, so the focused test change and this note
+are committed using an isolated Git directory under `/tmp`, with a patch and
+bundle for transfer. The shared checkout retains the edits.
+
 ## Keepalive later-failure comparison, 2026-10-07
 
 The new CLI regression replaces a saved durable observation with each fleet failure signal
@@ -361,3 +389,61 @@ and could not run, so these Python changes are not committed or pushed. No pytes
 and the collection floor is unchanged. Full hosted verification remains required. The PR checklist
 reconciliation was attempted before implementation, but the connector required approval while the
 run's approval policy is `never`; the verified local checklist above remains the task record.
+
+## Keepalive bounded-batch comparison regression, 2026-10-07
+
+- [x] Verify agreement against the merge rule, measured cost per case and counts for
+  a bounded shadow batch containing binary proposals, an abstention and an invalid response.
+- [ ] Run the three named pytest acceptance tests and their required outcome-write
+  and unconditional-offer faults on the current tree.
+
+The new CLI test uses the real adjudicator role with mocked routing and transport. Two
+successive two-call batches preserve the four-case dispute population. Only two binary
+proposals enter the comparison: proposal agreement is 50% and merge-rule agreement is
+0%. All four measured calls, including the zero-cost abstention and paid invalid response,
+contribute to the $4.75 total and $1.1875 cost per measured case. The saved report matches
+the returned report; resuming repeats no calls, preserves original runs and outcomes,
+and records exactly four retrospective role runs. Effective verdicts remain ungraded.
+
+Validation: `node tests/test_adjudicator_retro_cli.js` passes all 26 tests. The five
+existing evidence unittest tests pass. In temporary production-source copies, excluding
+paid invalid responses from measured costs and admitting abstentions to the binary
+comparison each fail the new test; restoring the source makes it pass. These controls
+do not replace the named pytest acceptance faults. Diff whitespace checks pass.
+
+Pytest and Black are absent from every installed Python interpreter; the attempted
+PyPI installation failed on DNS resolution. No Python files change in this round.
+The checkout's Git directory is read-only, so the tested JavaScript change and this
+note are preserved as an isolated commit, patch and bundle under `/tmp` for transfer.
+
+## Keepalive comparison and role-record reconciliation, 2026-10-07
+
+Reviewed commits `8434b0f`, `008e003` and `0d2fa18` before continuing. Current-run CLI
+verification supports these existing implementations:
+
+- [x] Compare saved raw proposals with judged later truth and the merge-rule baseline;
+  persist agreement rates, measured cost per case and counts in the state report.
+- [x] Bind `role-adjudicator` on `closer-lane` with `requires_pr: contested_verdict`.
+- [x] Render the adjudicator shadow cases/agreement/cost line in switch review.
+- [ ] Run the three named pytest acceptance tests on the current tree.
+- [ ] Run the outcome-write and unconditional-offer faults against those named pytest tests.
+
+The initial CLI run passed 25/26 tests: the dispatch witness incorrectly paired report
+rows ordered by dispute recency with Brain records ordered by target. It now joins by
+role-run ID and explicitly verifies both recency orders, retaining all outcome, routing,
+metadata and resume assertions. A new comparison regression removes one saved outcome:
+both rules withdraw that case from their denominator, preserve paid costs and role-run
+identities, and refresh the report without recreating the outcome.
+
+Validation: all 28 CLI tests, five evidence unittest tests and seven retrospective selftest
+checks pass. JavaScript syntax and diff whitespace checks pass. Isolated production-source
+faults that write outcomes, offer unconditionally or retain truth for a missing outcome
+each fail the corresponding CLI witness; byte-identical restoration passes. These CLI
+controls do not replace the explicitly named pytest acceptance checks. No Python files or
+pytest collection counts change.
+
+Pytest and Black are absent; installing them into `/tmp` failed. The PR-body reconciliation
+and `needs-human` label were rejected because connector mutations require approval and
+this run's approval policy is `never`. The checkout's Git directory is read-only, so the
+change is preserved as an isolated commit and patch under `/tmp`. PR #509 was confirmed
+open and ready for review. The two pytest acceptance checkboxes remain unchecked.
