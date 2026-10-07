@@ -6,7 +6,7 @@ import fcntl
 import json
 import os
 import py_compile
-import select
+import selectors
 import shutil
 import signal
 import subprocess
@@ -22,6 +22,14 @@ from unittest.mock import patch
 from scripts import install_verified_snapshot as installer
 
 import paths
+
+
+def _readable(stream, timeout: float) -> bool:
+    """Wait for pipe readiness without select's platform descriptor ceiling."""
+    with selectors.DefaultSelector() as selector:
+        selector.register(stream, selectors.EVENT_READ)
+        return bool(selector.select(timeout))
+
 
 REPO = Path(__file__).resolve().parents[1]
 # The MODULES, wherever this tree keeps them: src/ in a checkout, the root of the flat exec mirror.
@@ -144,7 +152,7 @@ installer.install(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
             start_new_session=True,
         )
         try:
-            ready, _, _ = select.select([publisher.stderr], [], [], 10)
+            ready = _readable(publisher.stderr, 10)
             self.assertTrue(ready, "publisher did not reach the exclusive lock")
             self.assertEqual(publisher.stderr.readline().strip(), "PUBLICATION-ATTEMPTED")
             _, error = publisher.communicate(timeout=timeout)
@@ -334,7 +342,7 @@ print(json.dumps([
             start_new_session=True,
         )
         try:
-            ready, _, _ = select.select([reader.stdout], [], [], 15)
+            ready = _readable(reader.stdout, 15)
             self.assertTrue(ready, "reader did not report its inherited import paths")
             paths = json.loads(reader.stdout.readline())
             (self.snapshot / "later_only.py").write_text("VALUE = 'new generation only'\n")
@@ -462,7 +470,7 @@ mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
                     start_new_session=True,
                 )
                 try:
-                    ready, _, _ = select.select([reader.stderr], [], [], 10)
+                    ready = _readable(reader.stderr, 10)
                     self.assertTrue(ready, "reader did not select a generation")
                     self.assertEqual(reader.stderr.readline().strip(), "SELECTED")
                     self.set_value("new")
@@ -603,7 +611,7 @@ installer.install(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
 """
                 publisher = None
                 try:
-                    ready, _, _ = select.select([reader.stderr], [], [], 15)
+                    ready = _readable(reader.stderr, 15)
                     self.assertTrue(ready, "first startup module did not rendezvous")
                     self.assertEqual(reader.stderr.readline().strip(), "STARTUP-READY")
                     self.set_value("new")
@@ -622,7 +630,7 @@ installer.install(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
                         text=True,
                         start_new_session=True,
                     )
-                    ready, _, _ = select.select([publisher.stderr], [], [], 10)
+                    ready = _readable(publisher.stderr, 10)
                     self.assertTrue(ready, "publisher did not reach the exclusive lock")
                     self.assertEqual(publisher.stderr.readline().strip(), "PUBLICATION-ATTEMPTED")
                     if exit_shell:
