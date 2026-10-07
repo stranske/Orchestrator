@@ -711,3 +711,22 @@ stay under the existing delivery rails. Weekly switch review reports graded agre
 later durability, the merged-PASS baseline, and measured versus unknown cost. At the closer
 consult seam supply `context.verifier_verdict` and `context.merge_disposition`; the adjudicator
 is offered only when those recorded values disagree.
+
+
+To prepare the complete collected bytes as input to the existing adjudicator role:
+
+```sh
+python3 src/adjudicator_retro.py --prepare-collected-case CASE_ID --report saved.json \
+  --repository /local/checkout --output new-case.json
+```
+
+This recollects the explicit source and `git-path:` acceptance inventories at the evaluated
+revision. Missing files, empty inventories, invalid packets or a packet exceeding the total
+UTF-8 byte budget fail before output; evidence is never silently truncated. Output must be new.
+`--packet-byte-limit` defaults to 1 MiB and bounds both the saved UTF-8 JSON and the role's
+ASCII-escaped case rendering, independently of the per-file `--byte-limit`.
+The resulting case is accepted by `roles.py adjudicate --case-json new-case.json`; preparation
+itself does not call that role, write the Brain, or change the saved report. Collection covers
+only the supplied inventory. The existing retrospective metadata-only floor remains in force,
+so complete byte transport does not admit semantic acceptance, change historical NON_PASS,
+or establish measured cost/later truth. Explicit role dispatch remains a separate operator action.

@@ -542,7 +542,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "flags_defaults": {"dispatch": False, "ORCH_ROLE_SHADOW": "1"},
         "output_artifact": "validated blocker adjudication; capability-program/adjudicator-retro.json",
         "downstream_consumer": "switch_review weekly agreement/cost; closer dispute-only advice; tick remains shadow",
-        "notes": "dedup 2026-10-05: existing roles.run_adjudicator_agent and feedback.record_role_run reused; extend retrospective evidence and closer eligibility, no new capability or outcome store",
+        "notes": "dedup 2026-10-05: existing roles.run_adjudicator_agent and feedback.record_role_run reused; extend retrospective evidence and closer eligibility, no new capability or outcome store; 2026-10-07: collector and role case JSON already exist; extend immutable collected-byte input preparation with whole-packet budget, retain semantic admission floor",
         "learning_sink": "feedback role runs and linked outcomes",
         "gate_reason": "adjudication remains advisory",
         "gate_evidence": "role cannot directly merge, close, or relabel",
