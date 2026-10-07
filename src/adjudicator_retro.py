@@ -28,6 +28,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -580,7 +581,9 @@ def _collect_git_blob(
             raise ValueError("source path is not a regular Git blob")
         blob = metadata[2].decode("ascii")
         byte_length = int(_local_git(repository, "cat-file", "-s", blob))
-        record.update({"blob_sha": blob, "byte_length": byte_length})
+        record.update(
+            {"blob_sha": blob, "byte_length": byte_length, "git_mode": metadata[0].decode("ascii")}
+        )
         if byte_length < 0:
             raise ValueError("negative Git blob size")
         if byte_length > byte_limit:
@@ -755,6 +758,172 @@ def prepare_collected_case(
     with output.open("xb") as stream:
         stream.write(encoded)
     return packet
+
+
+def _criterion_texts(body: str) -> list[str]:
+    """Read explicit one-line Markdown acceptance items; never invent a contract."""
+    criteria: list[str] = []
+    active = False
+    for line in body.splitlines():
+        heading = re.match(r"^\s*#{1,6}\s+(.+?)\s*$", line)
+        if heading:
+            active = heading[1].strip().lower() == "acceptance criteria"
+        elif active:
+            item = re.match(r"^\s*[-*]\s+(?:\[[ xX]\]\s*)?(.+)$", line)
+            if item:
+                text = item[1].strip()
+                if text not in criteria:
+                    criteria.append(text)
+            elif line.strip().startswith("<!--"):
+                active = False
+            elif line.strip():
+                raise ValueError("unsupported multiline acceptance criterion; qualify explicitly")
+    if not criteria:
+        raise ValueError("full provenance has no explicit acceptance criteria")
+    return criteria
+
+
+def qualify_collected_case(
+    row: dict,
+    repository: Path,
+    qualification: dict,
+    *,
+    byte_limit: int = MAX_COLLECTION_SOURCE_BYTES,
+    prompt_byte_limit: int = MAX_COLLECTION_SOURCE_BYTES,
+) -> roles.CollectedAdjudicationCase:
+    """Issue semantic-judgment input after fresh collection and inventory checks.
+
+    The local saved snapshot's authenticity remains unverified. Git proves the
+    complete first-parent squash diff and actual immutable contents, not external
+    inventory exhaustiveness or acceptance semantics. JSON flags grant nothing.
+    """
+    if byte_limit < 1 or prompt_byte_limit < 1:
+        raise ValueError("collection and prompt byte limits must be positive")
+    raw = row.get("packet")
+    if not isinstance(raw, dict) or raw.get("target") != row.get("target"):
+        raise ValueError("saved packet target must match the case target")
+    packet = build_packet(row, raw)
+    sha = _case_evaluated_sha(row)
+    if sha is None:
+        raise ValueError("qualification requires an exact evaluated commit")
+    # Squash comparison semantics are explicit. A PR's moving baseRefOid is
+    # not the evaluated merge's first parent and cannot substitute for it.
+    parent = _local_git(repository, "rev-parse", sha + "^1").decode().strip()
+    if qualification.get("comparison_base") != parent:
+        raise ValueError("qualification base must be evaluated commit's first parent")
+    if packet["ground_truth_evidence"].get("merge_sha") != sha:
+        raise ValueError("finding and merge evidence revisions disagree")
+    changed = (
+        _local_git(
+            repository, "diff-tree", "--no-renames", "--name-status", "-r", "-z", parent, sha
+        )
+        .decode("utf-8")
+        .split("\0")
+    )
+    if changed[-1] != "" or (len(changed) - 1) % 2:
+        raise ValueError("malformed complete Git diff inventory")
+    entries = list(zip(changed[:-1:2], changed[1:-1:2]))
+    if not entries or any(status not in {"A", "M"} for status, _path in entries):
+        raise ValueError(
+            "qualification supports add/modify regular blobs only; deletion/type change refused"
+        )
+    actual_paths = [path for _status, path in entries]
+    requirements, gaps = _collection_requirements(row)
+    declared = (requirements or {}).get("source_paths", [])
+    diff = packet["ground_truth_evidence"].get("diff_summary")
+    if (
+        gaps
+        or len(set(declared)) != len(declared)
+        or not isinstance(diff, list)
+        or any(not isinstance(item, dict) for item in diff)
+        or len({item.get("path") for item in diff}) != len(diff)
+        or set(declared) != set(actual_paths)
+        or {item.get("path") for item in diff} != set(actual_paths)
+    ):
+        raise ValueError("declared, saved PR and complete Git diff inventories must match exactly")
+    provenance = row.get("inventory_provenance") or {}
+    snapshot = qualification.get("snapshot") or {}
+    body = provenance.get("source_criterion_tasks")
+    if (
+        not isinstance(body, str)
+        or not body.strip()
+        or hashlib.sha256(body.encode()).hexdigest() != provenance.get("pr_body_sha256")
+        or snapshot.get("body") != body
+        or str(snapshot.get("number")) != str(row["target"]).rsplit("#", 1)[-1]
+        or snapshot.get("headRefOid") != packet["ground_truth_evidence"].get("head_sha")
+    ):
+        raise ValueError(
+            "complete criterion provenance must match the saved target/head/body snapshot"
+        )
+    criteria = _criterion_texts(body)
+    mappings = qualification.get("criterion_mapping")
+    if not isinstance(mappings, list) or len(mappings) != len(criteria):
+        raise ValueError("every explicit acceptance criterion needs one evidence/UNKNOWN mapping")
+    collection = collect_case_evidence(row, repository=repository, byte_limit=byte_limit)
+    if not collection["complete"]:
+        raise ValueError("incomplete collected case: " + json.dumps(collection["gaps"]))
+    before_sources = []
+    for status, path in entries:
+        if status == "M":
+            before, before_gaps = _collect_git_blob(repository, parent, path, byte_limit)
+            if before_gaps or not before["complete"]:
+                raise ValueError("incomplete before-source evidence: " + json.dumps(before_gaps))
+            before_sources.append(before)
+    collection["before_sources"] = before_sources
+    locations = {item["location"] for item in collection["acceptance_artifacts"]}
+    for criterion, mapping in zip(criteria, mappings):
+        if not isinstance(mapping, dict) or mapping.get("criterion") != criterion:
+            raise ValueError(
+                "criterion mappings must preserve the full ordered acceptance contract"
+            )
+        refs, unknowns = mapping.get("evidence_locations", []), mapping.get("unknowns", [])
+        if (
+            not isinstance(refs, list)
+            or any(ref not in locations for ref in refs)
+            or not isinstance(unknowns, list)
+            or not (refs or unknowns)
+            or any(
+                not isinstance(item, dict)
+                or any(
+                    not isinstance(item.get(key), str) or not item[key].strip()
+                    for key in ("evidence_ref", "owner", "next_action")
+                )
+                for item in unknowns
+            )
+        ):
+            raise ValueError("criterion mapping needs collected artifacts or named owned UNKNOWNs")
+    refs = set(actual_paths) | locations
+    for mapping in mappings:
+        refs.update(item["evidence_ref"] for item in mapping.get("unknowns", []))
+    packet["ground_truth_evidence"] = {
+        **packet["ground_truth_evidence"],
+        "collected_evidence": collection,
+        "criterion_provenance": {
+            "body": body,
+            "sha256": provenance["pr_body_sha256"],
+            "snapshot": snapshot,
+        },
+        "criterion_mapping": mappings,
+        "qualified_ground_truth_refs": sorted(refs),
+        "qualification": {
+            "case_id": row.get("case_id"),
+            "comparison_base": parent,
+            "diff_entries": entries,
+            "scope": "semantic_judgment_only",
+            "snapshot_authenticity": "unverified",
+            "external_exhaustiveness": "unverified",
+            "acceptance_semantics": "unassessed",
+            "persisted_admission": False,
+        },
+    }
+    packet["metadata_only"] = False
+    result = roles._issue_collected_case(packet, prompt_byte_limit)
+    prompt = roles.ROLE_REGISTRY["adjudicator"].build_prompt(
+        {"case": roles._collected_snapshot(result), "complete_collected_case": True}
+    )
+    if len(prompt.encode("utf-8")) > prompt_byte_limit:
+        raise ValueError("qualified prompt exceeds byte limit; evidence was not truncated")
+    return result
 
 
 def run(
@@ -962,6 +1131,16 @@ def main() -> int:
     )
     parser.add_argument("--packet-byte-limit", type=int, default=MAX_COLLECTION_SOURCE_BYTES)
     parser.add_argument(
+        "--judge-collected-case",
+        metavar="CASE_ID",
+        help="qualify fresh collected input for the existing shadow role",
+    )
+    parser.add_argument(
+        "--qualification",
+        type=Path,
+        help="explicit squash comparison, full PR snapshot and criterion mappings",
+    )
+    parser.add_argument(
         "--report", type=Path, help="saved retrospective report used by collection/preparation"
     )
     parser.add_argument(
@@ -983,6 +1162,57 @@ def main() -> int:
     args = parser.parse_args()
     if args.selftest:
         _selftest()
+        return 0
+    if args.judge_collected_case:
+        if (
+            args.collect_case
+            or args.prepare_collected_case
+            or not all((args.report, args.repository, args.qualification, args.output))
+        ):
+            parser.error(
+                "--judge-collected-case requires report, repository, qualification and new output"
+            )
+        if args.output.exists() or args.output.is_symlink():
+            parser.error("judgment output must be new; saved reports/receipts cannot be replaced")
+        try:
+            saved = json.loads(args.report.read_text())
+            rows = [row for row in saved["rows"] if row.get("case_id") == args.judge_collected_case]
+            if len(rows) != 1:
+                raise ValueError("saved report must contain exactly one matching case_id")
+            case = qualify_collected_case(
+                rows[0],
+                args.repository,
+                json.loads(args.qualification.read_text()),
+                byte_limit=args.byte_limit,
+                prompt_byte_limit=args.packet_byte_limit,
+            )
+            result = roles.run_adjudicator_agent(
+                case=case,
+                dispatch=args.dispatch,
+                source="retrospective",
+                cwd=str(args.repository),
+                timeout=180,
+            )
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            with args.output.open("x") as stream:
+                stream.write(json.dumps(result, indent=2) + "\n")
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+            parser.error(str(exc))
+        print(
+            json.dumps(
+                {
+                    key: result[key]
+                    for key in (
+                        "shadow",
+                        "decision_source",
+                        "backend_run_id",
+                        "evidence_qualification",
+                        "errors",
+                    )
+                },
+                indent=2,
+            )
+        )
         return 0
     if args.prepare_collected_case:
         if (

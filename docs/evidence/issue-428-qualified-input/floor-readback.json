@@ -1,0 +1,17 @@
+{
+  "observed_full_run": "/Users/teacher/.codex/automations/pd-workloop-resume/evidence/20261007T1701Z/orch-private-verify.log",
+  "initial_exit": 1,
+  "sole_initial_problem": "old floor2628 lagged observed2651; --update-floor wrote2651",
+  "actual": {
+    "collected": 2651,
+    "passed": 2651,
+    "skipped": 0
+  },
+  "current_floor": {
+    "collected": 2651,
+    "passed": 2651
+  },
+  "production_floor_problems": [],
+  "all_unmeasured_values_unchanged": true,
+  "floor_sha256": "f2529d1b463d748b4ed9d6391743a8949730f4c7b5bdc5c3024682434c48b826"
+}
