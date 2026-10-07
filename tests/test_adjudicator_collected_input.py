@@ -19,7 +19,10 @@ def saved(tmp_path):
     repo.mkdir()
 
     def git(*args):
-        return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+        env = {
+            key: value for key, value in os.environ.items() if key not in retro._GIT_LOCATION_VARS
+        }
+        return subprocess.check_output(["git", "-C", str(repo), *args], text=True, env=env).strip()
 
     git("init", "-q")
     git("config", "user.email", "test@example.com")
