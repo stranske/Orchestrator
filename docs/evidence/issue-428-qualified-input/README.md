@@ -48,3 +48,19 @@ snapshot authenticity and external inventory exhaustiveness remain UNKNOWN.
 The direct CLI requires new output paths and never promotes serialized reports.
 Private checkout and scratch mirror verification are recorded separately in
 the PR; passing these checks does not publish the installed mirror.
+
+## Final JSON-shape review recovery
+
+The full checkout and mirror results above belong to fd9a5c6. Two subsequent
+CodeRabbit threads requested explicit object/report-row validation to prevent
+AttributeError tracebacks. The same PR now rejects non-object qualification,
+provenance and snapshot fields and malformed report rows with explicit errors.
+Twelve new shape controls produce seven assertion failures against the actual
+pre-fix production source (five already fail gracefully), then all pass after
+the candidate fix. The final affected gate passes170 tests plus23 subtests;
+module selftest, mypy, Ruff and Black pass. Exact final collection2663 equals
+the floor, with all ceilings unchanged. This unions the2651 previously executed
+nodes with12 newly executed nodes; final hosted full verification is required.
+Raw logs, JUnit, prior/candidate hashes and collection are bound by
+`json-shape-recovery.tar.gz` and `json-shape-recovery-index.json`.
+Historical eight-mutant and full-suite proofs retain their original revisions.

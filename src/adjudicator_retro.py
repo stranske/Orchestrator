@@ -799,6 +799,8 @@ def qualify_collected_case(
     """
     if byte_limit < 1 or prompt_byte_limit < 1:
         raise ValueError("collection and prompt byte limits must be positive")
+    if not isinstance(row, dict) or not isinstance(qualification, dict):
+        raise ValueError("saved case and qualification must be JSON objects")
     raw = row.get("packet")
     if not isinstance(raw, dict) or raw.get("target") != row.get("target"):
         raise ValueError("saved packet target must match the case target")
@@ -841,8 +843,10 @@ def qualify_collected_case(
         or {item.get("path") for item in diff} != set(actual_paths)
     ):
         raise ValueError("declared, saved PR and complete Git diff inventories must match exactly")
-    provenance = row.get("inventory_provenance") or {}
-    snapshot = qualification.get("snapshot") or {}
+    provenance = row.get("inventory_provenance")
+    snapshot = qualification.get("snapshot")
+    if not isinstance(provenance, dict) or not isinstance(snapshot, dict):
+        raise ValueError("inventory_provenance and snapshot must be JSON objects")
     body = provenance.get("source_criterion_tasks")
     if (
         not isinstance(body, str)
@@ -1175,7 +1179,11 @@ def main() -> int:
         if args.output.exists() or args.output.is_symlink():
             parser.error("judgment output must be new; saved reports/receipts cannot be replaced")
         try:
-            saved = json.loads(args.report.read_text())
+            saved = json.loads(args.report.read_text(encoding="utf-8"))
+            if not isinstance(saved, dict) or not isinstance(saved.get("rows"), list):
+                raise ValueError("saved report must contain a rows list")
+            if any(not isinstance(row, dict) for row in saved["rows"]):
+                raise ValueError("saved report rows must all be JSON objects")
             rows = [row for row in saved["rows"] if row.get("case_id") == args.judge_collected_case]
             if len(rows) != 1:
                 raise ValueError("saved report must contain exactly one matching case_id")

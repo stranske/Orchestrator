@@ -312,3 +312,52 @@ def test_cli_qualified_dry_run_preserves_saved_report_and_refuses_output_reuse(
         retro.main()
     assert caught.value.code == 2
     assert json.loads(output.read_text()) == result
+
+
+@pytest.mark.parametrize("field", ["qualification", "inventory_provenance", "snapshot"])
+@pytest.mark.parametrize("value", [[1], "invalid"])
+def test_qualification_rejects_non_object_json_fields(qualified_input, field, value):
+    repo, row, qualification, _ = qualified_input
+    if field == "qualification":
+        qualification = value
+    elif field == "inventory_provenance":
+        row[field] = value
+    else:
+        qualification[field] = value
+    with pytest.raises(ValueError, match="object"):
+        retro.qualify_collected_case(row, repo, qualification)
+
+
+@pytest.mark.parametrize(
+    "saved", [None, [], "invalid", {"rows": None}, {"rows": {}}, {"rows": [None]}]
+)
+def test_cli_rejects_malformed_report_shapes_without_traceback(
+    qualified_input, tmp_path, monkeypatch, capsys, saved
+):
+    repo, _, qualification, _ = qualified_input
+    report, qual, output = (
+        tmp_path / name for name in ("saved.json", "qualification.json", "new.json")
+    )
+    report.write_text(json.dumps(saved))
+    qual.write_text(json.dumps(qualification))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "adjudicator_retro",
+            "--judge-collected-case",
+            "one",
+            "--report",
+            str(report),
+            "--qualification",
+            str(qual),
+            "--repository",
+            str(repo),
+            "--output",
+            str(output),
+        ],
+    )
+    with pytest.raises(SystemExit) as caught:
+        retro.main()
+    assert caught.value.code == 2
+    assert "error:" in capsys.readouterr().err
+    assert not output.exists()
