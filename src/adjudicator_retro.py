@@ -898,6 +898,9 @@ def main() -> int:
                 {
                     "case_id": result["case_id"],
                     "complete": result["complete"],
+                    "completeness_scope": result["completeness_scope"],
+                    "inventory_exhaustiveness": result["inventory_exhaustiveness"],
+                    "acceptance_semantics": result["acceptance_semantics"],
                     "gaps": result["gaps"],
                 },
                 indent=2,

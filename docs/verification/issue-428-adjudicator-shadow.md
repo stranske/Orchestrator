@@ -345,3 +345,19 @@ for review. Checklist reconciliation was attempted again, but the connector reje
 update because approval policy is `never`; the checked local list above remains the verified state.
 The local commit attempt was also blocked: `.git/index.lock` cannot be created because the Git
 directory is mounted read-only. The test and this validation note remain uncommitted in the workspace.
+
+The collection CLI summary now exposes the same `completeness_scope=supplied_inventory_only`,
+`inventory_exhaustiveness=unverified` and `acceptance_semantics=unassessed` fields as the saved
+collection, for both complete and incomplete results. A new end-to-end regression collects a
+failure transcript from a partial inventory: byte collection succeeds while acceptance stays
+unassessed, even when the saved case and inventory claim otherwise. An undeclared artifact is
+not collected; saved verdicts/costs remain unchanged and no Brain database is created.
+
+This round reviewed commits 705a17e through 2d96f20 before continuing and verified the existing
+17 CLI tests and six self-test checks. After the summary change, all 18 CLI tests and six self-test
+checks pass; JavaScript syntax and diff whitespace checks pass. Pytest and Black remain unavailable,
+including after an unsuccessful installation attempt. Both required Black commands were attempted
+and could not run, so these Python changes are not committed or pushed. No pytest nodes were added
+and the collection floor is unchanged. Full hosted verification remains required. The PR checklist
+reconciliation was attempted before implementation, but the connector required approval while the
+run's approval policy is `never`; the verified local checklist above remains the task record.

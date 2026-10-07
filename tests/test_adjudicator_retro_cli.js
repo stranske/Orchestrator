@@ -187,6 +187,9 @@ for (const [name, artifactPath, content, executable] of [
     ]);
     const result = JSON.parse(fs.readFileSync(output, 'utf8'));
     assert.equal(summary.complete, true);
+    assert.equal(summary.completeness_scope, 'supplied_inventory_only');
+    assert.equal(summary.inventory_exhaustiveness, 'unverified');
+    assert.equal(summary.acceptance_semantics, 'unassessed');
     assert.equal(result.complete, true);
     assert.deepEqual(result.gaps, []);
     assert.equal(result.repository, fs.realpathSync(checkout));
@@ -259,6 +262,9 @@ test('collection CLI reports every unresolved inventory slot alongside collected
   ]);
   const result = JSON.parse(fs.readFileSync(output, 'utf8'));
   assert.equal(summary.complete, false);
+  assert.equal(summary.completeness_scope, 'supplied_inventory_only');
+  assert.equal(summary.inventory_exhaustiveness, 'unverified');
+  assert.equal(summary.acceptance_semantics, 'unassessed');
   assert.deepEqual(summary.gaps, result.gaps);
   assert.equal(result.complete, false);
   assert.equal(result.sources[0].complete, true);
@@ -357,6 +363,57 @@ test('collection CLI rejects inventory claims that forge artifact provenance or 
   assert.equal(result.inventory_exhaustiveness, 'unverified');
   assert.equal(result.acceptance_semantics, 'unassessed');
   assert.equal(fs.readFileSync(report, 'utf8'), saved);
+  assert.equal(fs.existsSync(path.join(w.root, 'brain.db')), false);
+});
+
+test('collection CLI leaves failed acceptance and inventory exhaustiveness unassessed', (t) => {
+  const w = world(t);
+  const checkout = path.join(w.root, 'checkout');
+  fs.mkdirSync(checkout);
+  const git = (...args) => localGit(w, checkout, ...args);
+  git('init', '-q');
+  git('config', 'user.name', 'Collector Test');
+  git('config', 'user.email', 'collector@example.com');
+  const content = 'FAIL: required regression failed\n0 passed, 1 failed\n';
+  fs.writeFileSync(path.join(checkout, 'failure.log'), content);
+  fs.writeFileSync(path.join(checkout, 'undeclared.log'), 'additional evidence\n');
+  git('add', '.');
+  git('commit', '-qm', 'failed and undeclared artifacts');
+  const evaluated = git('rev-parse', 'HEAD');
+  const report = path.join(w.root, 'saved.json');
+  const output = path.join(w.root, 'collection.json');
+  const saved = JSON.stringify({ rows: [{
+    case_id: 'partial-failed-acceptance', decision: 'reject_blocker',
+    shadow_verdict: 'PASS', cost_usd: 1.5,
+    completeness_scope: 'exhaustive', inventory_exhaustiveness: 'verified',
+    acceptance_semantics: 'passed',
+    packet: { disputed_finding: { decision: { evaluated_sha: evaluated } } },
+    collection_requirements: {
+      source_paths: [], acceptance: [{
+        criterion: 'required regression passed', location: 'git-path:failure.log',
+        acceptance_semantics: 'passed', inventory_exhaustiveness: 'verified',
+      }],
+    },
+  }] });
+  fs.writeFileSync(report, saved);
+  const summary = w.run([
+    path.join(modules, 'adjudicator_retro.py'), '--collect-case', 'partial-failed-acceptance',
+    '--report', report, '--output', output, '--repository', checkout,
+  ]);
+  assert.deepEqual(summary, {
+    case_id: 'partial-failed-acceptance', complete: true,
+    completeness_scope: 'supplied_inventory_only', inventory_exhaustiveness: 'unverified',
+    acceptance_semantics: 'unassessed', gaps: [],
+  });
+  const result = JSON.parse(fs.readFileSync(output, 'utf8'));
+  for (const [key, value] of Object.entries(summary)) assert.deepEqual(result[key], value);
+  assert.equal(result.acceptance_artifacts.length, 1, 'only the supplied inventory is collected');
+  assert.equal(result.acceptance_artifacts[0].bytes_utf8, content);
+  assert.equal(result.acceptance_artifacts[0].sha256,
+    createHash('sha256').update(content).digest('hex'));
+  assert.equal(result.decision, undefined, 'collection must not produce an adjudication');
+  assert.equal(result.shadow_verdict, undefined);
+  assert.equal(fs.readFileSync(report, 'utf8'), saved, 'saved verdicts and costs stay unchanged');
   assert.equal(fs.existsSync(path.join(w.root, 'brain.db')), false);
 });
 
