@@ -1377,6 +1377,53 @@ print(json.dumps(True))
   assert.deepEqual(restored.proposal_comparison, initial.proposal_comparison);
 });
 
+test('retro CLI rebuilds stale comparison caches from decisions and current Brain evidence', (t) => {
+  const w = world(t);
+  w.run(['-c', initialize]);
+  w.refresh();
+  const initial = w.report();
+  const before = w.brain();
+  const identities = initial.rows.map((row) => [row.case_id, row.role_run_id, row.decision]);
+  w.run(['-c', `
+import json
+import adjudicator_retro as retro
+report_path = retro.report_path()
+report = json.loads(report_path.read_text())
+for row in report["rows"]:
+    if row.get("decision"):
+        # Legacy mirrors and cached comparisons disagree with the saved proposal.
+        stale = "FAIL" if row["decision"] == "reject_blocker" else "PASS"
+        row.update(raw_shadow_verdict=stale, shadow_verdict=stale,
+                   later_truth="PASS", merge_rule_verdict="FAIL", cost_usd=999,
+                   disposition="reject_blocker", metadata_only=False,
+                   proposal_comparison={"verdict": stale, "agrees": True,
+                                        "merge_rule_agrees": True})
+report["summary"] = {"cases": 999, "agree": 999, "cost_usd": 999}
+report["proposal_comparison"] = {"compared": 999, "agreement_rate": 1}
+report_path.write_text(json.dumps(report))
+print(json.dumps(True))
+`]);
+  w.refresh();
+  const refreshed = w.report();
+  assert.deepEqual(refreshed.summary, initial.summary);
+  assert.deepEqual(refreshed.proposal_comparison, initial.proposal_comparison,
+    'both rates and measured costs must be rebuilt rather than trusting saved aggregates');
+  assert.deepEqual(refreshed.rows.map((row) => row.proposal_comparison),
+    initial.rows.map((row) => row.proposal_comparison),
+    'proposal decisions must override contradictory legacy verdict mirrors');
+  assert.deepEqual(refreshed.rows.map((row) => [row.later_truth, row.merge_rule_verdict, row.cost_usd]),
+    initial.rows.map((row) => [row.later_truth, row.merge_rule_verdict, row.cost_usd]),
+    'judged durability, merge disposition and complete costs come from the current Brain');
+  assert.deepEqual(refreshed.rows.map((row) => [row.case_id, row.role_run_id, row.decision]),
+    identities, 'refresh must retain the original proposals and paid role identities');
+  assert.equal(refreshed.rows[0].raw_shadow_verdict, 'FAIL', 'legacy evidence stays inspectable');
+  assert.ok(refreshed.rows.every((row) => row.shadow_verdict === null));
+  assert.ok(refreshed.rows.every((row) => row.metadata_only === true));
+  assert.ok(refreshed.rows.every((row) => row.disposition === 'needs_more_evidence'));
+  assert.equal(refreshed.population, 0, 'cache repair must work after disputes leave replay');
+  assert.deepEqual(w.brain(), before, 'refresh must not rewrite outcomes, costs or role records');
+});
+
 test('retro CLI compares both rules on the same cases with mixed merge dispositions', (t) => {
   const w = world(t);
   w.run(['-c', initialize]);

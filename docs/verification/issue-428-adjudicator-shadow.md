@@ -3,6 +3,38 @@
 This extends the existing AdjudicatorAgent and Brain role-run recorder. Source implementation
 and local replay are distinct from runtime publication, which remains manual.
 
+## Keepalive stale comparison cache regression, 2026-10-07
+
+Reviewed `459a5ae`, `b0a5c5e` and `8a0debe` before continuing. Current CLI verification
+supports the following reconciliation of the PR's six checkboxes:
+
+- [x] Build merge-bound packets and record router-chosen retrospective role runs without outcome writes.
+- [ ] Complete comparison reporting: late costs for saved paid invalid responses still need repair.
+- [x] Offer `role-adjudicator` on `closer-lane` only with a contested verdict.
+- [x] Read and render the adjudicator shadow line in switch review.
+- [ ] Run all three named pytest acceptance tests on this tree.
+- [ ] Run their specified outcome-write and unconditional-offer faults and revert.
+
+The new CLI regression corrupts saved verdict mirrors, per-case comparisons, aggregate
+rates, costs and metadata flags. Refresh must rebuild comparisons from the original
+proposal decisions and current Brain evidence, preserve paid role identities and the
+legacy evidence, and retain the metadata evidence floor without writing any Brain table.
+The fixture's disputes have left the replay window, so no new adjudication is involved.
+
+Validation: all 45 CLI tests pass with no skips; five evidence unittest tests and seven
+module self-checks pass. JavaScript syntax and diff whitespace checks pass. An isolated
+production-source fault that prefers the legacy verdict mirror fails the new comparison
+assertion; byte-identical restoration passes. This control does not replace the required
+named pytest acceptance faults. Python source and pytest collection counts are unchanged.
+
+Pytest and Black are unavailable; package installation and both required Black commands
+failed. The comparison repair therefore remains blocked by the Python formatting gate.
+The PR-body reconciliation, blocker comment and `needs-human` label were rejected because
+connector mutations require approval while this run prohibits approval. The reconciled
+body is retained at `/tmp/adjudicator-retro-pr512-body.md`. Checkout Git metadata is
+read-only, so this JavaScript test and note are preserved as an isolated commit and patch
+under `/tmp/orch-adjudicator-stale-cache`. PR #512 was confirmed open and ready for review.
+
 ## Keepalive verifier selection validation, 2026-10-07
 
 - [x] Verify the first implementation task: per-dispute packets use the selected
