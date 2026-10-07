@@ -256,3 +256,36 @@ entry); byte-identical candidate restoration returns 25 collector tests GREEN.
 This establishes sensitivity to the source behavior, rather than a fixture-only
 failure. The broader issue #428 remains open for its remaining evidence transport,
 acceptance inventories, measured cost and later-truth requirements.
+
+
+## Explicit evaluated-revision acceptance artifact transport
+
+Dedup: the existing collector and its CLI already own immutable source byte collection.
+The previous validator unconditionally marked every acceptance location missing. Concept searches,
+current capability inventory, historical dormancy scan and the improvement-log accessor were
+checked; this extends that collector rather than creating a second role, report or transport.
+Sol6.1Medium assessment d517c8b91366feef94b24c035c4c1875032c1019f425cb057052f63bc345f2e2
+confirmed this narrow increment and identified offline/lazy-fetch and replacement-object fences.
+The assessed topic files at its a921fa7 checkout are byte-identical to merged main80c26f1; this
+was independently checked after fetching main. The assessment is design evidence, not a test result.
+
+An explicit saved requirement may now use `{"criterion":"named transcript",
+"location":"git-path:docs/evidence/result.log"}`. The collector resolves that literal regular
+blob only at the case's evaluated SHA; it retains the full UTF-8 bytes, Git blob ID, size and
+SHA256, plus the exact criterion/location and inventory slot. Unsupported transports, unsafe or
+invalid paths, missing or nonregular objects, invalid UTF-8, oversized and contradictory content
+remain incomplete. Metadata from the requirement cannot overwrite collector provenance. Git
+reads disable lazy fetching and replacement objects, preserving the no-network boundary.
+
+`complete` means only complete byte collection for the supplied inventory, as explicitly recorded
+by `completeness_scope=supplied_inventory_only`, `inventory_exhaustiveness=unverified` and
+`acceptance_semantics=unassessed`. Possessing a test file or log does not prove the required
+controls ran successfully. Empty/missing acceptance inventories still block collection. No
+original saved report, metadata floor, outcomes, costs or accepted adjudications are changed.
+Machine-local and hosted artifact transports remain unresolved; source428 stays OPEN.
+
+The existing CLI takes the explicit inventory already saved in its report input:
+`python3 src/adjudicator_retro.py --collect-case CASE --report saved.json --output collected.json
+--repository /local/repo`. The output must remain separate from the saved report.
+
+Validation: 82 focused tests plus 23 subtests, 10 CLI tests, and all six module self-test checks pass. Exact collection is 2570; the floor adds 27 exercised nodes to the previous 2543 union, with every ceiling preserved. This does not claim a new full-suite run. Two deliberate faults (reading HEAD instead of the evaluated commit, and letting inventory fields overwrite provenance) each fail the targeted regression; byte-identical restoration passes. Black, Ruff and mypy pass. A supplied partial real inventory independently retrieved 12515 bytes whose SHA-256 and Git blob identity matched the evaluated commit; this demonstrates transport only, not exhaustive or semantic acceptance.

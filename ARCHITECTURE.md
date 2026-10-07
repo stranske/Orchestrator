@@ -1525,6 +1525,12 @@ unmeasured costs. The closer-lane advisor offers this role only when the caller'
 review consumes the saved report and prints its case, agreement, disagreement and cost counts.
 This extends the existing role and reporting rails; it does not re-enable tick adjudication.
 
+Its separate `--collect-case` rail reads only local evaluated-revision Git blobs. Explicit
+`git-path:` acceptance locations use the same bounded literal-path reader as source files,
+with lazy fetching and replacement objects disabled. Complete collection covers only the supplied
+inventory; inventory exhaustiveness and semantic acceptance remain unverified. Collection never
+promotes a shadow packet, writes the Brain, or dispatches adjudication.
+
 ### CLI
 
 ```bash
