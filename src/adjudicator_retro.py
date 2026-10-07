@@ -504,8 +504,27 @@ def collect_case_evidence(
                 result["sources"].append(record)
                 continue
             try:
-                tree_entry = _local_git(repository, "ls-tree", "-z", evaluated_sha, "--", path)
-                metadata = tree_entry.split(b"\t", 1)[0].split()
+                # ``ls-tree -- <path>`` still interprets its final argument as a
+                # pathspec.  Keep it literal, then require its NUL-delimited
+                # response to name exactly one regular-file entry.  A directory
+                # or a glob/pathspec must never silently select its first child.
+                tree_entry = _local_git(
+                    repository,
+                    "--literal-pathspecs",
+                    "ls-tree",
+                    "-z",
+                    evaluated_sha,
+                    "--",
+                    path,
+                )
+                entries = tree_entry.split(b"\0")
+                expected_name = path.encode("utf-8")
+                if len(entries) != 2 or not entries[0] or entries[1]:
+                    raise ValueError("source path did not resolve to exactly one Git entry")
+                metadata_and_name = entries[0].split(b"\t", 1)
+                if len(metadata_and_name) != 2 or metadata_and_name[1] != expected_name:
+                    raise ValueError("source path did not resolve to the requested Git entry")
+                metadata = metadata_and_name[0].split()
                 if (
                     len(metadata) != 3
                     or metadata[0] not in {b"100644", b"100755"}
@@ -513,9 +532,7 @@ def collect_case_evidence(
                 ):
                     raise ValueError("source path is not a regular Git blob")
                 blob = metadata[2].decode("ascii")
-                byte_length = int(
-                    _local_git(repository, "cat-file", "-s", f"{evaluated_sha}:{path}")
-                )
+                byte_length = int(_local_git(repository, "cat-file", "-s", blob))
                 record.update({"blob_sha": blob, "byte_length": byte_length})
                 if byte_length > byte_limit:
                     result["gaps"].append(
@@ -528,7 +545,7 @@ def collect_case_evidence(
                     )
                     result["sources"].append(record)
                     continue
-                data = _local_git(repository, "show", f"{evaluated_sha}:{path}")
+                data = _local_git(repository, "cat-file", "blob", blob)
             except (
                 OSError,
                 UnicodeDecodeError,

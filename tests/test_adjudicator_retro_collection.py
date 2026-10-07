@@ -65,6 +65,24 @@ def test_source_bytes_length_blob_and_sha256_match(repository):
     assert source["sha256"] == hashlib.sha256(raw).hexdigest()
 
 
+def test_collection_reads_literal_glob_metacharacter_filename(repository):
+    repo, _evaluated = repository
+    path = "src/[literal]*.py"
+    raw = b"answer = 'literal path'\n"
+    (repo / path).write_bytes(raw)
+    git(repo, "add", path)
+    git(repo, "commit", "-qm", "add literal glob path")
+    evaluated = git(repo, "rev-parse", "HEAD")
+    entry = case(
+        evaluated,
+        collection_requirements={"source_paths": [path], "acceptance": []},
+    )
+    result = retro.collect_case_evidence(entry, repository=repo)
+    source = result["sources"][0]
+    assert source["bytes_utf8"] == raw.decode("utf-8")
+    assert source["blob_sha"] == git(repo, "rev-parse", f"{evaluated}:{path}")
+
+
 @pytest.mark.parametrize(
     "paths,limit,kind",
     [
@@ -80,21 +98,21 @@ def test_missing_object_or_oversize_source_stays_incomplete(repository, paths, l
     assert any(gap["kind"] == kind for gap in result["gaps"])
 
 
-def test_oversize_blob_is_sized_before_git_show(repository, monkeypatch):
+def test_oversize_blob_is_sized_before_blob_read(repository, monkeypatch):
     repo, evaluated = repository
     original = retro._local_git
     calls = []
 
     def reader(*args):
         calls.append(args)
-        if args[1] == "show":
+        if args[1:3] == ("cat-file", "blob"):
             pytest.fail("oversize source must not be read")
         return original(*args)
 
     monkeypatch.setattr(retro, "_local_git", reader)
     result = retro.collect_case_evidence(case(evaluated), repository=repo, byte_limit=2)
     assert any(gap["kind"] == "source_byte_limit_exceeded" for gap in result["gaps"])
-    assert not any(args[1] == "show" for args in calls)
+    assert not any(args[1:3] == ("cat-file", "blob") for args in calls)
 
 
 def test_non_utf8_source_stays_incomplete(repository):
@@ -135,7 +153,7 @@ def test_symlink_source_stays_incomplete(repository):
     assert any(gap["kind"] == "missing_source_object" for gap in result["gaps"])
 
 
-@pytest.mark.parametrize("path", ["src", "src/submodule"])
+@pytest.mark.parametrize("path", ["src", "src/", "src/submodule"])
 def test_directory_or_submodule_stays_incomplete(repository, path):
     repo, _evaluated = repository
     gitlink = git(repo, "rev-parse", "HEAD")
@@ -149,6 +167,53 @@ def test_directory_or_submodule_stays_incomplete(repository, path):
     result = retro.collect_case_evidence(entry, repository=repo)
     assert result["complete"] is False
     assert any(gap["kind"] == "missing_source_object" for gap in result["gaps"])
+
+
+@pytest.mark.parametrize("path", ["src/*.py", ":(glob)src/*.py"])
+def test_source_pathspecs_are_literal_and_stay_incomplete(repository, path):
+    repo, evaluated = repository
+    entry = case(
+        evaluated,
+        collection_requirements={"source_paths": [path], "acceptance": []},
+    )
+    result = retro.collect_case_evidence(entry, repository=repo)
+    assert result["complete"] is False
+    assert any(gap["kind"] == "missing_source_object" for gap in result["gaps"])
+
+
+@pytest.mark.parametrize(
+    "tree_entry",
+    [
+        b"100644 blob " + b"a" * 40 + b"\tsrc/other.py\0",
+        (
+            b"100644 blob "
+            + b"a" * 40
+            + b"\tsrc/subject.py\0"
+            + b"100644 blob "
+            + b"b" * 40
+            + b"\tsrc/other.py\0"
+        ),
+        b"100644 blob " + b"a" * 40 + b"\tsrc/subject.py",
+    ],
+)
+def test_mismatched_or_multiple_ls_tree_entries_stay_incomplete(
+    repository, monkeypatch, tree_entry
+):
+    repo, evaluated = repository
+    original = retro._local_git
+    calls = []
+
+    def reader(repo_path, *args):
+        calls.append(args)
+        if args[0:2] == ("--literal-pathspecs", "ls-tree"):
+            return tree_entry
+        return original(repo_path, *args)
+
+    monkeypatch.setattr(retro, "_local_git", reader)
+    result = retro.collect_case_evidence(case(evaluated), repository=repo)
+    assert result["complete"] is False
+    assert any(gap["kind"] == "missing_source_object" for gap in result["gaps"])
+    assert not any(args[0] == "cat-file" and args[1] != "-e" for args in calls)
 
 
 def test_source_present_without_acceptance_inventory_stays_incomplete(repository):

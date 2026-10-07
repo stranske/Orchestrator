@@ -229,3 +229,30 @@ and their specific outcome-write/unconditional-offer faults remain pending. This
 round changes JavaScript tests and this note only. Git cannot create `index.lock` in
 the read-only checkout metadata; an isolated Git directory holds the commit and a
 bundle for transfer.
+
+
+## Closer recovery: exact Git entry binding (PR #507)
+
+The offline collector now treats inventory paths as literal Git paths. It accepts
+exactly one NUL-terminated `ls-tree` entry whose filename exactly matches the
+requested path, then reads size and content using that validated immutable blob
+SHA. Directories, pathspec ambiguity, mismatched names, multiple entries and
+unterminated output stay incomplete before blob reads. Literal metacharacters in
+an existing filename remain supported. This changes no shadow adjudication,
+report-write authority, Brain admission or retrospective cost policy.
+
+Validation at the existing PR head plus this bounded repair: 50 affected Python
+tests pass (including 25 collector cases), 10 Node CLI tests pass, module selftest
+3 checks pass, Mypy and Ruff pass, and the full repository Black check leaves
+368 files unchanged. Exact collection is 2543. The 2536 prior executed-node floor plus
+7 new exercised nodes establishes the conservative union; every existing ceiling
+is preserved. Hosted complete verification remains required; no new local full
+suite execution is claimed.
+
+Actual production control: with final tests held fixed, replace only the
+collector source with the original 1c9266d version. Four regression executions fail
+(trailing-slash directory, mismatched name, multiple entries and unterminated
+entry); byte-identical candidate restoration returns 25 collector tests GREEN.
+This establishes sensitivity to the source behavior, rather than a fixture-only
+failure. The broader issue #428 remains open for its remaining evidence transport,
+acceptance inventories, measured cost and later-truth requirements.
