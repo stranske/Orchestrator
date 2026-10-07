@@ -116,7 +116,7 @@ function trialWorld(t) {
     packet_hash: manifest.packet_hash,
     acknowledged: true,
     identity_verified: true,
-    quality_by_profile: quality,
+    quality_by_profile: { ...quality },
     attempts,
   };
   const statePath = path.join(env.ORCH_STATE_DIR, 'trial-state.json');
@@ -189,9 +189,16 @@ test('six-instance CLI trial writes the program receipt and remains idempotent o
 
 for (const reason of [
   'unverified', 'provider-unavailable', 'artifact-changed', 'source-changed', 'missing-instance',
+  'invalid-quality', 'invalid-usage', 'identity-content-mismatch',
 ]) {
-  test(`six-instance CLI refuses ${reason} evidence before recording any trial rows`, (t) => {
+  test(`six-instance CLI refuses ${reason} evidence and accepts a corrected retry`, (t) => {
     const w = trialWorld(t);
+    const originalResults = structuredClone(w.results);
+    const originalSources = w.sourceFiles.map((file) => fs.readFileSync(file));
+    const originalArtifacts = w.results.attempts.map((attempt) => ({
+      path: attempt.identity_evidence.artifact_ref,
+      bytes: fs.readFileSync(attempt.identity_evidence.artifact_ref),
+    }));
     let message;
     if (reason === 'unverified') {
       w.results.identity_verified = false;
@@ -207,9 +214,25 @@ for (const reason of [
     } else if (reason === 'source-changed') {
       fs.writeFileSync(w.sourceFiles[1], 'VALUE = 2\n');
       message = /source integrity changed/;
-    } else {
+    } else if (reason === 'missing-instance') {
       w.results.attempts.pop();
       message = /exactly one attempt per instance/;
+    } else if (reason === 'invalid-quality') {
+      w.results.quality_by_profile[profiles[1]] = 1.1;
+      message = /quality_by_profile values must be between 0 and 1/;
+    } else if (reason === 'invalid-usage') {
+      w.results.attempts[5].tokens_out = '12';
+      message = /tokens_out must be a nonnegative integer or null/;
+    } else {
+      const evidence = w.results.attempts[5].identity_evidence;
+      const identity = JSON.parse(fs.readFileSync(evidence.artifact_ref, 'utf8'));
+      identity.provider_resolved_model = 'wrong-model';
+      const bytes = JSON.stringify(identity);
+      fs.writeFileSync(evidence.artifact_ref, bytes);
+      // A matching digest proves the bytes, but their identity must also agree
+      // with the provider-resolved model recorded for this specific attempt.
+      evidence.artifact_sha256 = `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
+      message = /identity evidence is not authoritative/;
     }
     w.finalize(message);
     assert.equal(fs.existsSync(w.statePath), false);
@@ -218,5 +241,42 @@ for (const reason of [
       runs: 0, execution_attempts: 0, outcomes: 0, profile_trial_ingests: 0,
       route_weights: 0, route_weights_v2: 0,
     });
+
+    // Retry the same frozen trial after correcting the evidence. Rejection must
+    // leave no ingest marker that could silently suppress the operator's retry.
+    Object.assign(w.results, originalResults);
+    w.sourceFiles.forEach((file, index) => fs.writeFileSync(file, originalSources[index]));
+    for (const artifact of originalArtifacts) fs.writeFileSync(artifact.path, artifact.bytes);
+    const state = w.finalize();
+    assert.equal(state.trial_id, w.manifest.trial_id);
+    assert.equal(state.brain_ingest_enabled, true);
+    assert.equal(state.source_integrity.unchanged, true);
+    const summary = w.summary();
+    assert.equal(summary.trial_id, w.manifest.trial_id);
+    assert.equal(summary.profile_count, 2);
+    assert.equal(summary.instance_count, 6);
+    assert.equal(summary.identity_verified, true);
+    assert.equal(summary.brain_ingest_enabled, true);
+    assert.deepEqual(summary.quality_by_profile, quality);
+    assert.equal(summary.aggregate_tokens_in, 210);
+    assert.equal(summary.aggregate_tokens_out, 21);
+    for (const profile of profiles) {
+      const attempts = originalResults.attempts.filter((attempt) => attempt.profile_id === profile);
+      assert.deepEqual(summary.cost_tokens_by_profile[profile], {
+        tokens_in: attempts.reduce((total, attempt) => total + attempt.tokens_in, 0),
+        tokens_out: attempts.reduce((total, attempt) => total + attempt.tokens_out, 0),
+      });
+      assert.deepEqual(summary.provider_resolved_identity_by_profile[profile], {
+        provider: attempts[0].provider_resolved_provider,
+        model: attempts[0].provider_resolved_model,
+      });
+    }
+    assert.deepEqual(w.counts(), {
+      runs: 6, execution_attempts: 6, outcomes: 6, profile_trial_ingests: 1,
+      route_weights: 0, route_weights_v2: 0,
+    });
+    const receipt = fs.readFileSync(w.summaryPath);
+    assert.equal(w.finalize().brain_ingest_enabled, true);
+    assert.deepEqual(fs.readFileSync(w.summaryPath), receipt);
   });
 }
