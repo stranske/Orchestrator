@@ -794,6 +794,12 @@ def response(args):
             "run_id": "123", "run_attempt": "1", "provider_verdicts": ["FAIL"],
             "ci_failed": False, "verdict": "NON_PASS",
         }
+        if scenario == "stale-verifier-head":
+            decision["head_sha"] = "c" * 40
+        if scenario == "stale-verifier-merge":
+            decision["evaluated_sha"] = "c" * 40
+        if scenario == "wrong-verifier-pr":
+            decision["pr"] = number + 1
         pr.update({
             "number": number, "state": "MERGED", "mergeCommit": {"oid": "b" * 40},
             "files": {"pageInfo": {"hasNextPage": scenario == "truncated-files"},
@@ -808,6 +814,19 @@ def response(args):
                 }],
             },
         })
+        if scenario == "untrusted-verifier-author":
+            pr["comments"]["nodes"][0]["author"]["login"] = "contributor"
+        if scenario == "newer-verifier-pass":
+            # The newest run wins even when comments arrive out of run order.
+            # The old NON_PASS marker must not revive a resolved dispute.
+            newer = {**decision, "run_id": "124", "provider_verdicts": ["PASS"],
+                     "verdict": "PASS"}
+            original = pr["comments"]["nodes"][0]
+            pr["comments"]["nodes"].insert(0, {
+                **original, "url": original["url"].replace("issuecomment-1", "issuecomment-2"),
+                "body": "Acceptance test is now present\\n"
+                        f"<!-- {verifier_evidence.MARKER} {json.dumps(newer)} -->",
+            })
     return {"data": {"repository": {"pullRequest": pr}}}
 
 proposal = {
@@ -845,6 +864,11 @@ for (const [scenario, reads, error] of [
   ['unbounded', 20, /bounded 20-page read/],
   ['truncated-comments', 1, /truncated verifier comment or diff evidence/],
   ['truncated-files', 1, /truncated verifier comment or diff evidence/],
+  ['stale-verifier-head', 1, /current merge-bound verifier decision missing or changed/],
+  ['stale-verifier-merge', 1, /current merge-bound verifier decision missing or changed/],
+  ['wrong-verifier-pr', 1, /current merge-bound verifier decision missing or changed/],
+  ['untrusted-verifier-author', 1, /current merge-bound verifier decision missing or changed/],
+  ['newer-verifier-pass', 1, /current merge-bound verifier decision missing or changed/],
 ]) {
   test(`retro collects complete gate pages before shadow dispatch: ${scenario}`, (t) => {
     const w = world(t);

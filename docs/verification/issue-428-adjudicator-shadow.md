@@ -488,3 +488,25 @@ related Python validation is57PASS plus23PASS subtests; Node CLI31PASS. See
 `issue-428-packet-members-20261007/` for full argv/cwd/JUnit/source hashes and the
 revision-bound repair of the prior named-acceptance README manifest. Broad
 inventory, semantic adjudication, native costs and later-truth claims remain open.
+
+## Merge-bound verifier replay regressions, 2026-10-07
+
+Added five CLI cases to the persisted-dispute evidence witness: stale head,
+stale evaluated merge, wrong PR, untrusted comment author, and a newer PASS
+decision whose comment precedes the older NON_PASS comment. Each must stop
+before routing or offload, save the evidence gap, and leave the entire Brain
+unchanged. The complete CLI suite passes 36 tests without skips. Existing
+evidence unittest tests (five) and retrospective selftests (seven checks) pass.
+In isolated source copies, removing head matching or the persisted-verdict
+comparison fails the corresponding new witness; restoring the exact source
+makes it pass. These controls do not replace the named pytest acceptance faults.
+
+The first task remains open. Empty `commits.nodes` in either gate read raises
+`IndexError` instead of saving an evidence gap and continuing the batch; the
+initial and paginated extraction paths need guarded validation and regression
+tests. No Python files change: Black and pytest are unavailable and installation
+fails because PyPI cannot resolve, preventing a Python commit under the required
+formatting gate. Git metadata is read-only, so this tested JavaScript change is
+preserved in an isolated commit and patch under `/tmp/adjudicator-retro-evidence-review`.
+GitHub API access also fails, preventing PR updates and readiness verification.
+No acceptance checkbox is advanced by this round.
