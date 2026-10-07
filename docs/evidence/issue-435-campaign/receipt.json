@@ -2,19 +2,75 @@
   "issue": "stranske/Orchestrator#435",
   "campaign_id": "gitignore-caches-2026-10",
   "rails_pr": "stranske/Orchestrator#502",
+  "rails_receipt": "rails.json",
   "recorded_at": "2026-10-07T15:20:00Z",
+  "verified_at": "2026-10-07 15:23:51 UTC",
   "targets": [
-    {"repo": "stranske/Counter_Risk", "issue": 1145, "merged_pr": 1146, "merged_at": "2026-10-06T20:44:51Z"},
-    {"repo": "stranske/Manager-Database", "issue": 1755, "merged_pr": 1756, "merged_at": "2026-10-06T20:46:50Z"},
-    {"repo": "stranske/Inv-Man-Intake", "issue": 1005, "merged_pr": 1006, "merged_at": "2026-10-07T00:24:05Z"},
-    {"repo": "stranske/learning-management-system", "issue": 748, "merged_pr": 749, "merged_at": "2026-10-07T00:35:00Z"},
-    {"repo": "stranske/trip-planner", "issue": 1887, "merged_pr": 1888, "merged_at": "2026-10-07T01:25:17Z"},
-    {"repo": "stranske/Pension-Data", "issue": 948, "merged_pr": 950, "merged_at": "2026-10-07T14:31:46Z"}
+    {
+      "repo": "stranske/Counter_Risk",
+      "issue": 1145,
+      "merged_pr": 1146,
+      "merged_at": "2026-10-06T20:44:51Z",
+      "merge_commit_sha": "8e00fc33d5b8174946db9ea1bb99faece3e64149",
+      "receipt": "Counter_Risk.json"
+    },
+    {
+      "repo": "stranske/Manager-Database",
+      "issue": 1755,
+      "merged_pr": 1756,
+      "merged_at": "2026-10-06T20:46:50Z",
+      "merge_commit_sha": "0c192d9b9f7f867a72aa30f687b3082cb1d2b6f6",
+      "receipt": "Manager-Database.json"
+    },
+    {
+      "repo": "stranske/Inv-Man-Intake",
+      "issue": 1005,
+      "merged_pr": 1006,
+      "merged_at": "2026-10-07T00:24:05Z",
+      "merge_commit_sha": "29e5238bacab64528b57a5fc69a12673e80027a0",
+      "receipt": "Inv-Man-Intake.json"
+    },
+    {
+      "repo": "stranske/learning-management-system",
+      "issue": 748,
+      "merged_pr": 749,
+      "merged_at": "2026-10-07T00:35:00Z",
+      "merge_commit_sha": "16906b32525c8a0fb5ac49b2939d5343828611bb",
+      "receipt": "learning-management-system.json"
+    },
+    {
+      "repo": "stranske/trip-planner",
+      "issue": 1887,
+      "merged_pr": 1888,
+      "merged_at": "2026-10-07T01:25:17Z",
+      "merge_commit_sha": "f737895f295b84e3e189980cfb170d6579acdd49",
+      "receipt": "trip-planner.json"
+    },
+    {
+      "repo": "stranske/Pension-Data",
+      "issue": 948,
+      "merged_pr": 950,
+      "merged_at": "2026-10-07T14:31:46Z",
+      "merge_commit_sha": "b554240a64d6e5cda869a4efc96143bc65baf780",
+      "receipt": "Pension-Data.json"
+    }
   ],
   "acceptance": {
     "command": "python3 -m pytest tests/test_codemod_campaign.py -q",
     "result": "23 passed",
-    "head": "origin/main at closure branch base"
+    "head": "origin/main at closure branch base (as originally reported)",
+    "provenance": "Historical result reported by the closure branch author; not rerun in this restricted runner because pytest is unavailable.",
+    "reported_by_commit": "49fe4ccd03b52b4e3aa0183b07affd96fea785a0"
   },
-  "ledger_note": "ORCH_STATE_DIR capability-program/codemod-campaign.json is operator-runtime; not duplicated in git."
+  "receipt_validation": {
+    "command": "node --test --test-isolation=none tests/test_codemod_campaign_receipts.js",
+    "result": "8 passed; zero failures or skips"
+  },
+  "ledger_note": "ORCH_STATE_DIR capability-program/codemod-campaign.json is operator-runtime; not duplicated in git.",
+  "closure": {
+    "state": "pending",
+    "issue_url": "https://github.com/stranske/Orchestrator/issues/435",
+    "blocker": "GitHub comment and issue-close tools require approval; this run has approval policy never.",
+    "prepared_note": "closure-note.md"
+  }
 }

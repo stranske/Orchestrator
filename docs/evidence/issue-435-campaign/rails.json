@@ -1,0 +1,14 @@
+{
+  "repo": "stranske/Orchestrator",
+  "verified_at": "2026-10-07 15:23:51 UTC",
+  "pull_request": {
+    "number": 502,
+    "url": "https://github.com/stranske/Orchestrator/pull/502",
+    "state": "closed",
+    "merged": true,
+    "draft": false,
+    "head_sha": "5f71d3f1cc86443fa7daa0f8ff8ec2dab7531ecd",
+    "merge_commit_sha": "4267123e50a59029fb63b85fb7bfa04381676fec",
+    "merged_at": "2026-10-06T17:51:13Z"
+  }
+}
