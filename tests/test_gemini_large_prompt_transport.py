@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 
@@ -14,6 +15,9 @@ import rate_incidents
 
 
 def _isolate_offload(monkeypatch, tmp_path):
+    # Model discovery is a separate subprocess boundary; a cold hosted cache must not
+    # reach the transport failure stub before the prompt file has been created.
+    monkeypatch.setattr(adapters, "_model_probe_enabled", lambda: False)
     monkeypatch.setattr(dispatcher, "DISPATCH_LOG_DIR", tmp_path / "logs")
     monkeypatch.setattr(dispatcher, "_default_offload_timeout", lambda *_: 20)
     monkeypatch.setattr(dispatcher, "_offload_prompt", lambda prompt, *_: prompt)
@@ -113,3 +117,55 @@ def test_compact_gemini_prompt_retains_the_established_argv_shape(tmp_path):
 
     assert "-p=" not in argv and "--input-format" not in argv
     assert argv[argv.index("--print") + 1] == compact
+
+
+@pytest.mark.parametrize("byte_length", [65_536, 65_537])
+def test_dispatcher_selects_transport_at_utf8_byte_boundary(tmp_path, monkeypatch, byte_length):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _isolate_offload(monkeypatch, tmp_path)
+    prompt = "α" * (byte_length // 2) + ("x" if byte_length % 2 else "")
+    seen = {}
+
+    def complete(argv, **kwargs):
+        seen["stream"] = "--input-format" in argv[-1]
+        files = list((tmp_path / "logs").glob("offload-prompt.*.ndjson"))
+        if seen["stream"]:
+            assert len(files) == 1
+            assert json.loads(files[0].read_text())["message"]["content"] == prompt
+            output = json.dumps({"event": "result", "result": {"response": "complete"}})
+        else:
+            assert not files
+            output = "complete"
+        return subprocess.CompletedProcess(argv, 0, output, "")
+
+    monkeypatch.setattr(dispatcher.subprocess, "run", complete)
+    result = dispatcher.offload("gemini", prompt, cwd=str(workspace), timeout=20)
+    assert result["exit"] == 0, result
+    assert seen["stream"] is (byte_length > 65_536)
+    assert result["output"] == "complete"
+    assert not list((tmp_path / "logs").glob("offload-prompt.*.ndjson"))
+
+
+@pytest.mark.parametrize(
+    "stream",
+    [
+        {"event": "init"},
+        {"event": "result", "result": {"response": None}},
+        {"event": "result", "result": {"response": {"text": "unfinished"}}},
+    ],
+)
+def test_stream_without_final_string_response_is_incomplete(tmp_path, monkeypatch, stream):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _isolate_offload(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        dispatcher.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, json.dumps(stream), ""),
+    )
+    result = dispatcher.offload("gemini", "α" * 40_000, cwd=str(workspace), timeout=20)
+    assert result["exit"] == 70, result
+    assert result["output"] == "", result
+    assert "no final string response" in result["error"]
+    assert not list((tmp_path / "logs").glob("offload-prompt.*.ndjson"))

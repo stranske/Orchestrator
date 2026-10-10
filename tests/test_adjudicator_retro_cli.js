@@ -685,7 +685,9 @@ attempts = []
 def unavailable(**record):
     attempts.append(record)
     if partial_write:
-        recorder(**record)
+        with patch.object(feedback, "record_completion_event",
+                          side_effect=sqlite3.OperationalError("Brain temporarily unavailable")):
+            recorder(**record)
     raise sqlite3.OperationalError("Brain temporarily unavailable")
 with (
     patch.object(roles, "route_role", return_value={"agent": "gemini"}) as route,
@@ -697,6 +699,10 @@ with (
 ):
     with patch.object(feedback, "record_role_run", side_effect=unavailable):
         first = retro.run(dispatch=True, limit=1, evidence_reader=reader)
+        with feedback._conn() as conn:
+            first_event_count = conn.execute(
+                "SELECT count(*) FROM completion_events WHERE producer='feedback.record_role_run'"
+            ).fetchone()[0]
         # Age out the real persisted dispute instead of mocking the population reader.
         with feedback._conn() as conn:
             conn.execute("UPDATE runs SET ts=? WHERE run_id='original'",
@@ -709,8 +715,15 @@ with (
         attempts_before_retry = len(attempts)
         failed = retro.run(dispatch=True, retry=True, limit=1, evidence_reader=reader)
     repaired = retro.run(dispatch=True, retry=True, limit=1, evidence_reader=reader)
+    with feedback._conn() as conn:
+        repaired_event_count = conn.execute(
+            "SELECT count(*) FROM completion_events WHERE producer='feedback.record_role_run'"
+        ).fetchone()[0]
     stable = retro.run(dispatch=True, retry=True, limit=1, evidence_reader=reader)
 with feedback._conn() as conn:
+    stable_event_count = conn.execute(
+        "SELECT count(*) FROM completion_events WHERE producer='feedback.record_role_run'"
+    ).fetchone()[0]
     after = conn.execute("SELECT * FROM outcomes ORDER BY run_id").fetchall()
     records = conn.execute(
         "SELECT run_id,ts,target,agent,source,model,decomposition FROM runs "
@@ -720,6 +733,7 @@ print(json.dumps({
     "stable": stable, "attempts": attempts, "attempts_before_retry": attempts_before_retry,
     "reads": reader.call_count, "routes": route.call_count, "calls": transport.call_count,
     "before": before, "after": after, "records": records,
+    "event_counts": [first_event_count, repaired_event_count, stable_event_count],
 }))
 `]);
       const original = result.first.rows[0];
@@ -746,6 +760,8 @@ print(json.dumps({
       assert.equal(result.reads, 1, 'record recovery must not recollect evidence');
       assert.equal(result.routes, 1, 'record recovery must not reroute a paid case');
       assert.equal(result.calls, 1, 'record recovery must not repeat the paid backend call');
+      assert.deepEqual(result.event_counts, [0, 1, 1],
+        'repair creates the missing completion event exactly once');
       assert.equal(result.records.length, 1, 'partial writes and repairs must stay idempotent');
       const [runId, ts, target, agent, source, model, decomposition] = result.records[0];
       assert.equal(runId, repaired.role_run_id);

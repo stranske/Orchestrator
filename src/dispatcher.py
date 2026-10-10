@@ -2090,10 +2090,16 @@ def offload(
         # offload return contract by handing callers its final text response, as print mode does.
         if prompt_via_stdin:
             response = adapters.gemini_stream_response(proc.stdout or "")
-            if response is not None:
-                proc = subprocess.CompletedProcess(
-                    getattr(proc, "args", argv), proc.returncode, response, proc.stderr
-                )
+            proc = subprocess.CompletedProcess(
+                getattr(proc, "args", argv),
+                proc.returncode if response is not None or proc.returncode else 70,
+                response if response is not None else "",
+                (
+                    proc.stderr
+                    if response is not None
+                    else ((proc.stderr or "") + "\nGemini stream has no final string response")
+                ),
+            )
         if proc.stdout and '"subtype":"init"' in proc.stdout:
             stream = adapters.observed_model_from_stream(proc.stdout)
             label = stream.get("model_label")
@@ -2120,7 +2126,11 @@ def offload(
         error = None
         exit_code = raw_exit
         if raw_exit != 0:
-            error = f"agent exited {raw_exit}"
+            error = (
+                "Gemini stream has no final string response"
+                if prompt_via_stdin and response is None
+                else f"agent exited {raw_exit}"
+            )
         else:
             incomplete = _offload_incomplete_reason(
                 proc.stdout or "",
