@@ -27,6 +27,7 @@ def _isolate_offload(monkeypatch, tmp_path):
     monkeypatch.setattr(dispatcher, "_agent_runtime_prelude", lambda *_: "")
     monkeypatch.setattr(dispatcher, "_auth_prelude", lambda *_: "")
     monkeypatch.setattr(dispatcher.adapters, "model_identity", lambda *_: "test-model")
+    monkeypatch.setattr(dispatcher.adapters, "resolve_model", lambda *_: "test-model")
     monkeypatch.setattr(dispatcher.adapters, "record_ledger", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(dispatcher.adapters, "can_report_cli_identity", lambda *_: (False, "test"))
     monkeypatch.setattr(dispatcher.feedback, "record_run", lambda *_args, **_kwargs: None)
