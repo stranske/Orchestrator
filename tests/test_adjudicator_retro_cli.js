@@ -647,6 +647,133 @@ print(json.dumps({
   assert.deepEqual(w.report(), result.stable);
 });
 
+for (const partialWrite of [false, true]) {
+  for (const validProposal of [false, true]) {
+    test(`retro repairs aged-out Brain records without redispatch (partial ${partialWrite}, valid ${validProposal})`, (t) => {
+      const w = world(t);
+      const result = w.run(['-c', `
+import json
+import sqlite3
+import time
+from unittest.mock import Mock, patch
+import adjudicator_retro as retro
+import feedback
+import roles
+
+partial_write = ${partialWrite ? 'True' : 'False'}
+valid_proposal = ${validProposal ? 'True' : 'False'}
+with feedback._conn() as conn:
+    conn.execute("INSERT INTO runs(run_id,ts,target) VALUES ('original',?,'owner/repo#1')",
+                 (int(time.time()),))
+    conn.execute("INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+                 "VALUES ('original','NON_PASS','PASS',1)")
+    before = conn.execute("SELECT * FROM outcomes ORDER BY run_id").fetchall()
+reader = Mock(return_value={
+    "disputed_finding": {"body": "Missing acceptance test"},
+    "ground_truth_evidence": {"diff_summary": "Added test", "gate_runs": ["gate-run"]},
+})
+proposal = {
+    "decision": "uphold_blocker", "confidence": "high",
+    "rationale": "The finding needs inspection.",
+    "evidence_assessment": [{"claim": "Missing test", "status": "supported",
+                             "evidence_ref": "gate-run", "reason": "Inspect source"}],
+    "ground_truth_refs": ["gate-run"], "recommended_next_step": "Inspect source",
+    "evidence_gaps": [],
+}
+recorder = feedback.record_role_run
+attempts = []
+def unavailable(**record):
+    attempts.append(record)
+    if partial_write:
+        recorder(**record)
+    raise sqlite3.OperationalError("Brain temporarily unavailable")
+with (
+    patch.object(roles, "route_role", return_value={"agent": "gemini"}) as route,
+    patch.object(roles, "_role_capability_event"),
+    patch.object(roles.dispatcher, "offload", return_value={
+        "run_id": "backend-paid", "model": "gemini-test-model", "exit": 0,
+        "output": json.dumps(proposal) if valid_proposal else "invalid response",
+    }) as transport,
+):
+    with patch.object(feedback, "record_role_run", side_effect=unavailable):
+        first = retro.run(dispatch=True, limit=1, evidence_reader=reader)
+        # Age out the real persisted dispute instead of mocking the population reader.
+        with feedback._conn() as conn:
+            conn.execute("UPDATE runs SET ts=? WHERE run_id='original'",
+                         (int(time.time()) - 100 * 86400,))
+        pending = [retro.run(evidence_reader=reader, **options) for options in (
+            {"dispatch": False, "retry": True},
+            {"dispatch": True},
+            {"dispatch": True, "retry": True, "limit": 0},
+        )]
+        attempts_before_retry = len(attempts)
+        failed = retro.run(dispatch=True, retry=True, limit=1, evidence_reader=reader)
+    repaired = retro.run(dispatch=True, retry=True, limit=1, evidence_reader=reader)
+    stable = retro.run(dispatch=True, retry=True, limit=1, evidence_reader=reader)
+with feedback._conn() as conn:
+    after = conn.execute("SELECT * FROM outcomes ORDER BY run_id").fetchall()
+    records = conn.execute(
+        "SELECT run_id,ts,target,agent,source,model,decomposition FROM runs "
+        "WHERE role_name='adjudicator'").fetchall()
+print(json.dumps({
+    "first": first, "pending": pending, "failed": failed, "repaired": repaired,
+    "stable": stable, "attempts": attempts, "attempts_before_retry": attempts_before_retry,
+    "reads": reader.call_count, "routes": route.call_count, "calls": transport.call_count,
+    "before": before, "after": after, "records": records,
+}))
+`]);
+      const original = result.first.rows[0];
+      assert.deepEqual(result.after, result.before, 'no existing or new outcomes may be written');
+      assert.equal(original.role_run_id, null);
+      assert.equal(original.backend_run_id, 'backend-paid');
+      assert.equal(original.role_record_error, 'Brain temporarily unavailable');
+      assert.equal(result.attempts_before_retry, 1,
+        'dry runs, ordinary resume and zero-limit retry must leave the record pending');
+      assert.equal(result.attempts.length, 2);
+      assert.deepEqual(result.attempts[0], original.role_record);
+      assert.deepEqual(result.attempts[1], original.role_record,
+        'a failed repair must reuse the paid call identity and telemetry');
+      for (const pending of [...result.pending, result.failed]) {
+        assert.equal(pending.population, 0, 'the dispute really left the replay window');
+        assert.deepEqual(pending.rows, result.first.rows);
+      }
+      const repaired = result.repaired.rows[0];
+      assert.equal(result.repaired.population, 0);
+      assert.deepEqual(result.repaired.rows, [{
+        ...original, role_run_id: original.role_record.run_id, role_record_error: null,
+      }], 'repair may change only the role record receipt');
+      assert.deepEqual(result.stable.rows, result.repaired.rows);
+      assert.equal(result.reads, 1, 'record recovery must not recollect evidence');
+      assert.equal(result.routes, 1, 'record recovery must not reroute a paid case');
+      assert.equal(result.calls, 1, 'record recovery must not repeat the paid backend call');
+      assert.equal(result.records.length, 1, 'partial writes and repairs must stay idempotent');
+      const [runId, ts, target, agent, source, model, decomposition] = result.records[0];
+      assert.equal(runId, repaired.role_run_id);
+      assert.equal(ts, original.role_record.ts);
+      assert.equal(target, original.target);
+      assert.equal(agent, 'gemini');
+      assert.equal(source, 'retrospective');
+      assert.equal(model, 'gemini-test-model');
+      const metadata = JSON.parse(decomposition);
+      assert.equal(metadata.backend_run_id, 'backend-paid');
+      assert.equal(metadata.source, 'retrospective');
+      assert.equal(metadata.action, 'needs_more_evidence');
+      assert.deepEqual(metadata.proposal ?? null, original.role_record.proposal);
+      if (validProposal) {
+        assert.equal(repaired.decision, 'uphold_blocker');
+        assert.deepEqual(metadata.proposal, repaired.proposal);
+      } else {
+        assert.equal(repaired.decision, undefined);
+        assert.equal(metadata.proposal, undefined);
+        assert.ok(repaired.errors.some((error) => error.includes('could not parse')));
+      }
+      assert.equal(result.repaired.summary.adjudicated, 0);
+      assert.equal(result.repaired.summary.graded, 0);
+      assert.deepEqual(w.report(), result.stable);
+    });
+  }
+}
+
 test('retro bounded batches count paid abstentions and invalid responses outside agreement rates', (t) => {
   const w = world(t);
   w.run(['-c', `
