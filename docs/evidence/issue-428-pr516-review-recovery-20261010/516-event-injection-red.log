@@ -1,0 +1,66 @@
+✔ retro repairs aged-out Brain records without redispatch (partial false, valid false) (175.855666ms)
+✔ retro repairs aged-out Brain records without redispatch (partial false, valid true) (153.462333ms)
+✖ retro repairs aged-out Brain records without redispatch (partial true, valid false) (170.613041ms)
+✖ retro repairs aged-out Brain records without redispatch (partial true, valid true) (178.398375ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 2
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 766.997
+
+✖ failing tests:
+
+test at tests/test_adjudicator_retro_cli.js:652:5
+✖ retro repairs aged-out Brain records without redispatch (partial true, valid false) (170.613041ms)
+  AssertionError [ERR_ASSERTION]: repair creates the missing completion event exactly once
+  + actual - expected
+  
+    [
+  -   0,
+      1,
+      1,
+  +   1
+    ]
+  
+      at TestContext.<anonymous> (/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch-428-collected-admission-20261010/tests/test_adjudicator_retro_cli.js:761:14)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1062:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+      at Test.postRun (node:internal/test_runner/test:1191:19)
+      at Test.run (node:internal/test_runner/test:1119:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ 1, 1, 1 ],
+    expected: [ 0, 1, 1 ],
+    operator: 'deepStrictEqual'
+  }
+
+test at tests/test_adjudicator_retro_cli.js:652:5
+✖ retro repairs aged-out Brain records without redispatch (partial true, valid true) (178.398375ms)
+  AssertionError [ERR_ASSERTION]: repair creates the missing completion event exactly once
+  + actual - expected
+  
+    [
+  -   0,
+      1,
+      1,
+  +   1
+    ]
+  
+      at TestContext.<anonymous> (/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch-428-collected-admission-20261010/tests/test_adjudicator_retro_cli.js:761:14)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1062:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+      at Test.postRun (node:internal/test_runner/test:1191:19)
+      at Test.run (node:internal/test_runner/test:1119:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ 1, 1, 1 ],
+    expected: [ 0, 1, 1 ],
+    operator: 'deepStrictEqual'
+  }

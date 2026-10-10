@@ -1,0 +1,6 @@
+{
+  "launched": [],
+  "skipped": [],
+  "patched": true
+}
+dispatcher.py selftest: OK (plan→argv via adapters, task-type prompts, claim-release wrapper, worktree-seam fallback, offload no-commit guard + isolation, offload run_id ledger reconciliation + Gemini progress-only/log-tail fail-closed, heartbeat, bogus-agent skip, delegate_remote label + guards (an unread label list refuses), proxy-env scrub + ORCH_KEEP_PROXY + stdin=DEVNULL, offload profile selection, help/typo never dispatches)

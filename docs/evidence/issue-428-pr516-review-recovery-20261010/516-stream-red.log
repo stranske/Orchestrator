@@ -1,0 +1,76 @@
+......FFF                                                                [100%]
+=================================== FAILURES ===================================
+_______ test_stream_without_final_string_response_is_incomplete[stream0] _______
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-207/test_stream_without_final_stri0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x108869700>
+stream = {'event': 'init'}
+
+    @pytest.mark.parametrize("stream", [
+        {"event": "init"},
+        {"event": "result", "result": {"response": None}},
+        {"event": "result", "result": {"response": {"text": "unfinished"}}},
+    ])
+    def test_stream_without_final_string_response_is_incomplete(tmp_path, monkeypatch, stream):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        _isolate_offload(monkeypatch, tmp_path)
+        monkeypatch.setattr(dispatcher.subprocess, "run", lambda argv, **kwargs:
+                            subprocess.CompletedProcess(argv, 0, json.dumps(stream), ""))
+        result = dispatcher.offload("gemini", "α" * 40_000, cwd=str(workspace), timeout=20)
+>       assert result["exit"] == 70, result
+E       AssertionError: {'agent': 'gemini', 'exit': 0, 'output': '{"event": "init"}', 'model': 'test-model', ...}
+E       assert 0 == 70
+
+tests/test_gemini_large_prompt_transport.py:162: AssertionError
+_______ test_stream_without_final_string_response_is_incomplete[stream1] _______
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-207/test_stream_without_final_stri1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10859d8e0>
+stream = {'event': 'result', 'result': {'response': None}}
+
+    @pytest.mark.parametrize("stream", [
+        {"event": "init"},
+        {"event": "result", "result": {"response": None}},
+        {"event": "result", "result": {"response": {"text": "unfinished"}}},
+    ])
+    def test_stream_without_final_string_response_is_incomplete(tmp_path, monkeypatch, stream):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        _isolate_offload(monkeypatch, tmp_path)
+        monkeypatch.setattr(dispatcher.subprocess, "run", lambda argv, **kwargs:
+                            subprocess.CompletedProcess(argv, 0, json.dumps(stream), ""))
+        result = dispatcher.offload("gemini", "α" * 40_000, cwd=str(workspace), timeout=20)
+>       assert result["exit"] == 70, result
+E       AssertionError: {'agent': 'gemini', 'exit': 0, 'output': '{"event": "result", "result": {"response": null}}', 'model': 'test-model', ...}
+E       assert 0 == 70
+
+tests/test_gemini_large_prompt_transport.py:162: AssertionError
+_______ test_stream_without_final_string_response_is_incomplete[stream2] _______
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-207/test_stream_without_final_stri2')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10859fb90>
+stream = {'event': 'result', 'result': {'response': {'text': 'unfinished'}}}
+
+    @pytest.mark.parametrize("stream", [
+        {"event": "init"},
+        {"event": "result", "result": {"response": None}},
+        {"event": "result", "result": {"response": {"text": "unfinished"}}},
+    ])
+    def test_stream_without_final_string_response_is_incomplete(tmp_path, monkeypatch, stream):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        _isolate_offload(monkeypatch, tmp_path)
+        monkeypatch.setattr(dispatcher.subprocess, "run", lambda argv, **kwargs:
+                            subprocess.CompletedProcess(argv, 0, json.dumps(stream), ""))
+        result = dispatcher.offload("gemini", "α" * 40_000, cwd=str(workspace), timeout=20)
+>       assert result["exit"] == 70, result
+E       AssertionError: {'agent': 'gemini', 'exit': 0, 'output': '{"event": "result", "result": {"response": {"text": "unfinished"}}}', 'model': 'test-model', ...}
+E       assert 0 == 70
+
+tests/test_gemini_large_prompt_transport.py:162: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_gemini_large_prompt_transport.py::test_stream_without_final_string_response_is_incomplete[stream0]
+FAILED tests/test_gemini_large_prompt_transport.py::test_stream_without_final_string_response_is_incomplete[stream1]
+FAILED tests/test_gemini_large_prompt_transport.py::test_stream_without_final_string_response_is_incomplete[stream2]
+3 failed, 6 passed in 1.73s

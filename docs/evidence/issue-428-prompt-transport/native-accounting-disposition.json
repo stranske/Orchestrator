@@ -1,0 +1,20 @@
+{
+  "role_backend_run_ids": [
+    "offload:gemini:1791664611072767000",
+    "role:adjudicator:gemini:1791664726681583000"
+  ],
+  "costs": [
+    {
+      "run_id": "offload:gemini:1791664611072767000",
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "cost_usd": 0.0,
+      "latency_s": 115.0,
+      "source": "ledger",
+      "pulled_ts": 1791664726
+    }
+  ],
+  "native_run_outcomes": [],
+  "cost_disposition": "Zero-token/zero-dollar ledger row with115s latency is partial execution accounting, not measured free cost or complete provider usage. Keep UNKNOWN.",
+  "independent_later_truth": "UNKNOWN; no outcome synthesized."
+}

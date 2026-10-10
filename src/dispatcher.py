@@ -25,6 +25,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -1501,6 +1502,10 @@ def _select_offload_profile(agent: str, mode: str | None) -> dict | None:
 # only by a file already on disk and each retry moves one nanosecond on, so reaching this needs that
 # many consecutive names to exist.
 OFFLOAD_LOG_CLAIM_ATTEMPTS = 1000
+# A shell wrapper repeats an inline prompt in its ``bash -lc`` argument. Keep normal Gemini print
+# mode for compact, already-qualified prompts, but transport a large collected packet through agy's
+# documented NDJSON stdin protocol before either exec boundary approaches ARG_MAX.
+GEMINI_STREAM_PROMPT_THRESHOLD_BYTES = 64 * 1024
 
 
 def _claim_offload_log(agent: str) -> tuple[str, Path]:
@@ -1682,19 +1687,29 @@ def offload(
     # Set from the run's OWN stream-json output when the tool reports it; the completion path below
     # prefers it over any store probe. Declared here so both live in the same scope.
     observed_model: str | None = None
+    # Gemini has a documented NDJSON prompt transport. Keep a potentially megabyte-scale packet
+    # out of bash's ``-lc`` argument and the provider's argv while leaving the established compact
+    # print-mode transport untouched. Other adapters retain their qualified transport until their
+    # own stdin protocol is covered by an equivalent regression.
+    prompt_via_stdin = (
+        agent == "gemini"
+        and len(prepared_prompt.encode("utf-8")) > GEMINI_STREAM_PROMPT_THRESHOLD_BYTES
+    )
+    command_prompt = "" if prompt_via_stdin else prepared_prompt
     argv = (
         adapters.build_command(
             agent,
-            prepared_prompt,
+            command_prompt,
             mode,
             cwd=run_cwd,
             profile=profile,
             transport="offload",
+            prompt_via_stdin=prompt_via_stdin,
         )
         if profile
         else adapters.build_command(
             agent,
-            prepared_prompt,
+            command_prompt,
             mode,
             cwd=run_cwd,
             transport="offload",
@@ -1705,6 +1720,7 @@ def offload(
                 if agent == "codex"
                 else None
             ),
+            prompt_via_stdin=prompt_via_stdin,
         )
     )  # raises ValueError on unknown agent
     if agent == "gemini" and "--add-dir" in argv:
@@ -1734,6 +1750,7 @@ def offload(
     wrapped = (
         f"{_path_prefix()}; {_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)}"
     )
+    stream_prompt = adapters.gemini_stream_prompt(prepared_prompt) if prompt_via_stdin else None
     target = f"offload:{run_cwd}"
     task_type = task_type or "offload"
     model = adapters.model_identity(agent, mode, profile)
@@ -1942,14 +1959,34 @@ def offload(
         nonlocal attempt_stderr
         error: str | None
         attempt_stderr = ""
+        stream_path: Path | None = None
         try:
-            # stdin=DEVNULL (matches _spawn): never let an agent CLI block reading an inherited pipe/TTY.
+            attempt_wrapped = wrapped
+            if stream_prompt is not None:
+                # mkstemp creates mode 0600. The shell only receives this controlled path as a
+                # redirection target, so prompt bytes never become shell syntax or argv bytes.
+                fd, raw_path = tempfile.mkstemp(
+                    prefix=f"offload-prompt.{agent}.", suffix=".ndjson", dir=DISPATCH_LOG_DIR
+                )
+                stream_path = Path(raw_path)
+                with os.fdopen(fd, "w", encoding="utf-8", newline="") as prompt_file:
+                    prompt_file.write(stream_prompt)
             proc = subprocess.run(
-                ["bash", "-lc", wrapped],
+                [
+                    "bash",
+                    "-lc",
+                    (
+                        f"{attempt_wrapped} < {shlex.quote(str(stream_path))}"
+                        if stream_path is not None
+                        else attempt_wrapped
+                    ),
+                ],
                 cwd=str(proc_cwd),
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                # The shell redirection above replaces this with the private NDJSON file for a
+                # large Gemini packet. Every other adapter must still never inherit a caller TTY.
                 stdin=subprocess.DEVNULL,
             )
         except subprocess.TimeoutExpired:
@@ -2012,6 +2049,12 @@ def offload(
             with logf.open("a") as fh:
                 fh.write(f"[orchestrator] offload marked failed: {error}\n")
             raise
+        finally:
+            if stream_path is not None:
+                try:
+                    stream_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
         # MASKED BEFORE ANYTHING READS IT. Everything below -- the stream parse, the log, the
         # incident classifier and the dict handed back to the caller -- sees only this text. A vibe
         # offload of 2026-09-06 printed the live GitHub token, and this function wrote it to a
@@ -2043,6 +2086,20 @@ def offload(
             agy_label = adapters.model_label_from_agy_log(agy_text)
             if agy_label:
                 observed_model = adapters.model_id_for_label(agent, agy_label)
+        # The large-prompt transport uses agy's matching NDJSON output. Preserve the existing
+        # offload return contract by handing callers its final text response, as print mode does.
+        if prompt_via_stdin:
+            response = adapters.gemini_stream_response(proc.stdout or "")
+            proc = subprocess.CompletedProcess(
+                getattr(proc, "args", argv),
+                proc.returncode if response is not None or proc.returncode else 70,
+                response if response is not None else "",
+                (
+                    proc.stderr
+                    if response is not None
+                    else ((proc.stderr or "") + "\nGemini stream has no final string response")
+                ),
+            )
         if proc.stdout and '"subtype":"init"' in proc.stdout:
             stream = adapters.observed_model_from_stream(proc.stdout)
             label = stream.get("model_label")
@@ -2069,7 +2126,11 @@ def offload(
         error = None
         exit_code = raw_exit
         if raw_exit != 0:
-            error = f"agent exited {raw_exit}"
+            error = (
+                "Gemini stream has no final string response"
+                if prompt_via_stdin and response is None
+                else f"agent exited {raw_exit}"
+            )
         else:
             incomplete = _offload_incomplete_reason(
                 proc.stdout or "",
