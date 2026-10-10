@@ -1536,6 +1536,20 @@ It refuses incomplete inventories, existing outputs and oversized whole packets 
 The existing retrospective evidence floor stays in force; this is transport to the existing role,
 not semantic admission or a new role/feedback surface. Preparation never dispatches.
 
+The explicit `--judge-collected-case` seam extends this same collection rail. It freshly
+collects an exact first-parent squash diff, requires the declared and saved inventories to
+match the entire Git diff, and includes before/after regular blobs for modifications. Full
+saved criterion text, its body digest, target/head snapshot and ordered artifact-or-owned-UNKNOWN
+mappings accompany the contents. Unsupported changes, incomplete collection and oversized
+complete prompts fail closed. The collector issues an opaque, digest-bound in-process case to
+the existing role; serialized JSON, copied flags and caller-created objects cannot issue one.
+Qualified input permits shadow semantic judgment only. Retrospective isolation and source
+tagging remain in force, while snapshot authenticity, external exhaustiveness, native cost and
+later truth stay independently unverified. Persisted reports retain their evidence floor:
+neither this input nor its serialized result authenticates a historical native execution or
+changes historical NON_PASS. Default invocation is a dry run; only explicit `--dispatch` calls
+the existing role backend and records its native role receipt. This creates no role or ledger.
+
 ### CLI
 
 ```bash

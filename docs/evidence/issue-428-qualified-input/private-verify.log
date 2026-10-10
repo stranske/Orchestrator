@@ -1,0 +1,18 @@
+# verify.py
+
+  tree:       checkout
+  state:      private copy, deleted after the run — ledger 20.7 MB; Brain 84.9 MB
+  time:       pytest 8m50s, selftests 26s (8 at a time), gates 36s
+  pytest:     2651 passed, 0 failed, 0/26 max skipped (2651 collected; floor 2628 — 23 BEHIND)
+  selftests:  103 of 103 modules ran, 0/7 max skipped
+  activation audit   ok  CAN FIRE:   48 of 48 live  (100%)
+  recurrence replay  ok  WOULD FIRE:  48 of 53
+  set coverage       ok  all 10 capability-set coverage checks passed over ALL 49 ledger capabilities (--roster for the per-capability table); 10 of 10 verdicts from this run's pytest
+  admission          ok  all 13 admission checks passed — 12 enforced, 3 legacy debt, commitments clean (13 of 13 verdicts from this run's pytest)
+  ledger validate    ok  "valid": true
+  declared:   all 18 rows this tree declares are registered in the ledger judged
+  mypy ratchet: 0/0 max of 121 module(s) exempt, 121 checked — fully drained
+
+  PROBLEMS:
+    - floor is BEHIND reality: 2651 collected > floor 2628 — the floor is 23 test(s) permissive, so that many could silently stop being collected and still read as green. Set "collected": 2651 and "passed": 2651 in .verify-floor.json, keeping the existing note, or run `python3 verify.py --update-floor`. If a branch merged under you, REBASE FIRST: the number must be measured on the merge result.
+  floor updated: collected=2651 passed=2651 (ceilings preserved)

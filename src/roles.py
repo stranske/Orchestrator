@@ -30,6 +30,7 @@ import re
 import sys
 import time
 import uuid
+import weakref
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -751,17 +752,58 @@ def _compact_adjudication_case(case: dict) -> dict:
     return compact
 
 
-def adjudication_metadata_only(case: dict) -> bool:
+_COLLECTED_CASES: weakref.WeakSet = weakref.WeakSet()
+
+
+class CollectedAdjudicationCase:
+    """Collector-issued immutable input, never reconstructible from report JSON.
+
+    This guards untrusted data inside trusted Python execution, not hostile code
+    executing in the same process. Only the existing collection rail issues it.
+    """
+
+    __slots__ = ("_encoded", "_digest", "_prompt_byte_limit", "__weakref__")
+    _encoded: bytes
+    _digest: str
+    _prompt_byte_limit: int
+
+    def __init__(self):
+        raise TypeError("collected cases must be issued by the collection rail")
+
+
+def _issue_collected_case(packet: dict, prompt_byte_limit: int) -> CollectedAdjudicationCase:
+    case = object.__new__(CollectedAdjudicationCase)
+    case._encoded = json.dumps(packet, sort_keys=True, ensure_ascii=True).encode("utf-8")
+    case._digest = hashlib.sha256(case._encoded).hexdigest()
+    case._prompt_byte_limit = prompt_byte_limit
+    _COLLECTED_CASES.add(case)
+    return case
+
+
+def _collected_snapshot(case: CollectedAdjudicationCase) -> dict:
+    if case not in _COLLECTED_CASES or hashlib.sha256(case._encoded).hexdigest() != case._digest:
+        raise ValueError("unissued or changed collected case")
+    return json.loads(case._encoded)
+
+
+def adjudication_metadata_only(case: dict | CollectedAdjudicationCase) -> bool:
     """The retrospective producer supplies counts/statuses, not inspected contents.
 
     A caller's false flag cannot upgrade this producer's evidence contract.
     Non-retrospective cases retain their existing evidence-specific behavior.
     """
+    if isinstance(case, CollectedAdjudicationCase):
+        _collected_snapshot(case)
+        return False
     return case.get("source") == "retrospective" or case.get("metadata_only") is True
 
 
 def _adjudicator_prompt(ctx: dict) -> str:
-    case = _compact_adjudication_case(ctx.get("case") or {})
+    case = (
+        ctx.get("case") or {}
+        if ctx.get("complete_collected_case")
+        else _compact_adjudication_case(ctx.get("case") or {})
+    )
     context = (ctx.get("context") or "").strip() or "(none provided)"
     return "\n".join(
         [
@@ -773,9 +815,13 @@ def _adjudicator_prompt(ctx: dict) -> str:
             "stand only when the supplied ground truth supports it. Reject bare, convention-blind, or contradicted",
             "claims. Use needs_more_evidence when the evidence is insufficient to prove or disprove the claim.",
             "",
-            "Evidence boundary: retrospective packets contain file-change counts and gate statuses only.",
+            "Evidence boundary: unqualified retrospective packets contain counts/statuses only.",
             "Equal change counts do not prove byte parity; green CI does not establish artifact completeness.",
             "For metadata-only evidence, use needs_more_evidence; do not infer inspected source or artifacts.",
+            "Collector-issued cases supply immutable contents, the full criterion provenance and explicit mappings.",
+            "Their qualification admits semantic judgment only: external exhaustiveness, historical authenticity",
+            "and acceptance semantics remain unverified. Preserve named UNKNOWNs and the stated judgment scope.",
+            "For qualified cases, cite only the supplied qualified_ground_truth_refs verbatim.",
             "",
             "Rails you must not cross:",
             "- Do NOT emit PASS, FAIL, BLOCKED, verifier_verdict, merge, label, claim, or worker-selection fields.",
@@ -2710,7 +2756,7 @@ def run_triage_agent(
 
 def run_adjudicator_agent(
     *,
-    case: dict,
+    case: dict | CollectedAdjudicationCase,
     context: str = "",
     source: str | None = None,
     cap: dict | None = None,
@@ -2725,13 +2771,27 @@ def run_adjudicator_agent(
 ) -> dict:
     """SHADOW ONLY. Assess a disputed blocker/veto; never mutates or emits final panel verdicts."""
     role = ROLE_REGISTRY["adjudicator"]
+    certified = case if isinstance(case, CollectedAdjudicationCase) else None
+    qualified = certified is not None
+    snapshot: dict = (
+        _collected_snapshot(case) if isinstance(case, CollectedAdjudicationCase) else case
+    )
+    metadata_only = adjudication_metadata_only(case)
     if dispatch:
         _role_capability_event(
-            "adjudicator", "match", metadata={"target": (case or {}).get("target")}
+            "adjudicator", "match", metadata={"target": (snapshot or {}).get("target")}
         )
-    compact_case = _compact_adjudication_case(case or {})
+    compact_case = snapshot if qualified else _compact_adjudication_case(snapshot or {})
     case_errors = _validate_adjudication_case(compact_case)
-    prompt = role.build_prompt({"case": compact_case, "context": context})
+    prompt = role.build_prompt(
+        {"case": compact_case, "context": context, "complete_collected_case": qualified}
+    )
+    if certified is not None:
+        if len(prompt.encode("utf-8")) > certified._prompt_byte_limit:
+            raise ValueError("qualified prompt exceeds byte limit; evidence was not truncated")
+    retrospective_origin = (
+        compact_case.get("source") == "retrospective" or source == "retrospective"
+    )
 
     routing = None
     backend_name = backend
@@ -2762,13 +2822,17 @@ def run_adjudicator_agent(
             errors.append("case validation failed; refusing live dispatch")
         else:
             _role_capability_event("adjudicator", "invocation", metadata={"backend": backend_name})
+            if certified is not None:
+                _collected_snapshot(
+                    certified
+                )  # recheck issuance/digest immediately before dispatch
             res = dispatcher.offload(
                 backend_name,
                 prompt,
                 cwd=cwd,
                 mode=role.mode,
                 timeout=timeout,
-                isolate=source == "retrospective",
+                isolate=retrospective_origin,
             )
             backend_run_id = res.get("run_id")
             backend_model = res.get("model")
@@ -2784,6 +2848,16 @@ def run_adjudicator_agent(
 
     if proposal is not None:
         verrs = role.validate(proposal)
+        if qualified and not verrs:
+            supplied = set(compact_case["ground_truth_evidence"]["qualified_ground_truth_refs"])
+            refs = [*proposal.get("ground_truth_refs", [])]
+            refs.extend(
+                entry["evidence_ref"]
+                for entry in proposal.get("evidence_assessment", [])
+                if entry.get("evidence_ref") is not None
+            )
+            if any(ref not in supplied for ref in refs):
+                verrs.append("qualified proposal cites evidence absent from the collected case")
         if verrs:
             errors.extend(verrs)
             proposal = None
@@ -2795,7 +2869,7 @@ def run_adjudicator_agent(
         decision_source = "baseline_needs_more_evidence"
         advisory_plan = baseline
 
-    if adjudication_metadata_only(compact_case):
+    if metadata_only:
         decision_source = "metadata_only_needs_more_evidence"
         advisory_plan = {
             **baseline,
@@ -2824,7 +2898,7 @@ def run_adjudicator_agent(
             "decision_source": decision_source,
             "proposal": proposal,
             "model": backend_model,
-            "source": source,
+            "source": "retrospective" if retrospective_origin else source,
             "ts": int(time.time()),
         }
         try:
@@ -2860,6 +2934,15 @@ def run_adjudicator_agent(
         "case": compact_case,
         "raw_output": raw_output,
         "backend_error_detail": backend_error_detail,
+        "evidence_qualification": (
+            {
+                "packet_sha256": certified._digest,
+                "scope": "semantic_judgment_only",
+                "persisted_admission": False,
+            }
+            if certified is not None
+            else None
+        ),
     }
 
 
@@ -3592,6 +3675,25 @@ def _selftest() -> None:
         assert (
             adjudicated["role_run_id"] is None and adjudicated["backend_run_id"] is None
         ), adjudicated
+
+        retrospective_packet = {
+            **adjudication_case,
+            "source": "retrospective",
+            "metadata_only": False,
+        }
+        floored = run_adjudicator_agent(
+            case=retrospective_packet, proposal_json=good_adjudication, backend="gemini"
+        )
+        assert floored["decision_source"] == "metadata_only_needs_more_evidence", floored
+        collected = _issue_collected_case(adjudication_case, 1_048_576)
+        assert adjudication_metadata_only(collected) is False
+        collected._encoded += b" "
+        try:
+            _collected_snapshot(collected)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("changed collector input was admitted")
 
         bad_adjudication = dict(good_adjudication)
         bad_adjudication["verdict"] = "PASS"

@@ -730,3 +730,27 @@ itself does not call that role, write the Brain, or change the saved report. Col
 only the supplied inventory. The existing retrospective metadata-only floor remains in force,
 so complete byte transport does not admit semantic acceptance, change historical NON_PASS,
 or establish measured cost/later truth. Explicit role dispatch remains a separate operator action.
+
+To qualify complete contents for shadow semantic judgment through the existing role:
+
+```sh
+python3 src/adjudicator_retro.py --judge-collected-case CASE_ID --report saved.json \
+  --repository /local/checkout --qualification qualification.json --output new-judgment.json
+```
+
+The qualification file names `comparison_base` (the evaluated commit's first parent),
+`snapshot` (`number`, `headRefOid`, complete `body`), and ordered `criterion_mapping` entries.
+Each entry preserves one full acceptance criterion and supplies `evidence_locations` drawn
+from the collected acceptance inventory, `unknowns`, or both. Each UNKNOWN names
+`evidence_ref`, `owner` and `next_action`. The saved row's `inventory_provenance` must contain
+the complete `source_criterion_tasks` body and matching `pr_body_sha256`. The entire local
+Git diff, saved PR inventory and declared source inventory must match; only additions and
+modifications of regular UTF-8 files are supported. Modified files include both revisions.
+
+This is a dry run unless `--dispatch` is explicit. The full prompt, including escaped Unicode
+and caller context, must fit `--packet-byte-limit` (default 1 MiB); increase that explicit
+budget only when the selected backend can accept the complete evidence. Nothing is truncated.
+Output must be new and the saved report remains unchanged. Qualification permits semantic
+judgment only: snapshot authenticity, external inventory exhaustiveness, native execution/cost
+and later truth remain separate UNKNOWNs. JSON input to `roles.py` and persisted retrospective
+report results retain their evidence floor, even if their fields claim qualification.

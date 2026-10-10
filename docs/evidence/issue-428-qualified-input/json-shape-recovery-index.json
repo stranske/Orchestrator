@@ -1,0 +1,30 @@
+{
+  "base_head": "fd9a5c648502bb03e190db9d7403b185c27eaaf1",
+  "production_before_sha256": "586ff4ee91d2199c359316351c79e2782d2d75d2c134bc09b5ad2a00f5562293",
+  "production_after_sha256": "1ac2ea8e14fbdd0f7b325b6b3f12934b6d659d2be2c217b2853bcb581a83c7b7",
+  "tests_sha256": "25cebfbe048f0eef8e05be0db56e1c4d46b4be7972c8e29026367df756d9ca92",
+  "archive_sha256": "2f07cd5e715b1511fbf22f5973aecc2b695a92f96187080ce4d9dddfa94b9005",
+  "members": {
+    "orch-json-shape-red.log": "392c4474308ea272c7c446867924d0741f21571b876c0868686349256da614dc",
+    "orch-json-shape-red.xml": "22d0e4ed04582b235ffd3b11a95128feeb51ac0f13649fb08234e3a6ec6a1b2f",
+    "orch-json-shape-green.log": "aab8e623d112b957f7ed41dd5e9dfc64b56f9248960107a0c93757e88ee33bb7",
+    "orch-json-shape-green.xml": "1af15f54810124c356261a9157e6853875675ec3267c9c62984bd62333721712",
+    "orch-json-retro-selftest.log": "ca2f891b54a3e3802a3c0246dd5989538812fedad12e14881b33c72e79802aed",
+    "orch-json-mypy.log": "949c3e16402f1a1eb97fa9ebde71cb936318d1ae86ebca15a9938257d937e99d",
+    "orch-json-ruff.log": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+    "orch-json-collected.log": "92ae36e4574ec936b292d7c0004f0f6e6f10d5e8775c1270bd747ead9e4662fe"
+  },
+  "prior_production_control": {
+    "failed": 7,
+    "passed": 5,
+    "exit": 1
+  },
+  "candidate_focused": {
+    "passed": 170,
+    "subtests": 23,
+    "exit": 0
+  },
+  "final_collected": 2663,
+  "floor_scope": "2651 actually executed at fd9 plus12 newly executed regressions; not a final full-suite execution claim",
+  "ceilings_unchanged": true
+}

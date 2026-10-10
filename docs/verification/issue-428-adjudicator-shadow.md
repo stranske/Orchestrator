@@ -3,6 +3,34 @@
 This extends the existing AdjudicatorAgent and Brain role-run recorder. Source implementation
 and local replay are distinct from runtime publication, which remains manual.
 
+## Keepalive Gate-gap batch recovery, 2026-10-07
+
+- [x] Verify persisted-dispute batch continuation and explicit retry after missing
+  initial/paginated Gate commits or null initial/paginated check rollups.
+- [ ] Run the named pytest acceptance tests and their specified deliberate faults
+  on this checkout; pytest is unavailable and PyPI name resolution fails.
+
+Four new CLI regressions exercise the real evidence selector, packet builder,
+router and retrospective Brain recorder. A failed collection saves its gap before
+the next dispute runs. Ordinary resume and zero-limit retry preserve both cases;
+bounded retry recollects only the failed case and preserves successful role identities.
+Every checkpoint retains the original outcomes. All transports and GitHub reads are
+mocked, so these checks establish no native model verdict, cost or later truth.
+
+Validation: all 49 CLI tests pass with no skips, the five evidence unittest tests
+pass, both module selftests pass, and JavaScript syntax and diff whitespace checks
+pass. Updated stale CLI fixtures to require the collector's Git file mode and use
+the supported `insufficient` assessment status. Python source is unchanged.
+
+Isolated production-source faults for unguarded Gate extraction, implicit gap retry
+and outcome writes each fail all four new tests (exit 1); byte-identical restoration
+passes all four (exit 0). These controls do not replace the named pytest faults.
+Raw logs and source/test hash bindings are in
+`/tmp/adjudicator-gate-recovery-validation/receipt.json`. The checkout Git metadata is
+read-only; the tested change is committed in `/tmp/adjudicator-gate-recovery-commit.git`
+with a patch and bundle for transfer. PR #515 was confirmed open and ready for review.
+The broad task and named acceptance checkboxes remain unchanged.
+
 ## Keepalive stale comparison cache regression, 2026-10-07
 
 Reviewed `459a5ae`, `b0a5c5e` and `8a0debe` before continuing. Current CLI verification
