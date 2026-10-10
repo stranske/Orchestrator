@@ -1365,6 +1365,14 @@ summary = {
 }
 fixtures = [
     ("measured", json.dumps({"summary": summary})),
+    ("measured_zero", json.dumps({"summary": retro.summarize([
+        {"decision": "needs_more_evidence", "cost_usd": 0},
+    ])})),
+    ("partial_cost", json.dumps({"summary": retro.summarize([
+        {"decision": "reject_blocker", "later_truth": "PASS", "cost_usd": 1.25},
+        {"decision": "uphold_blocker", "later_truth": "FAIL", "cost_usd": 0},
+        {"decision": "needs_more_evidence", "cost_usd": None},
+    ])})),
     ("unmeasured", json.dumps({"summary": {
         **summary, "cases": 0, "agree": 0, "disagree": 0,
         "graded": 0, "cost_usd": None, "cost_measured_cases": 0,
@@ -1372,6 +1380,9 @@ fixtures = [
     ("missing", None),
     ("malformed", "{broken"),
     ("incomplete", json.dumps({"summary": {"cases": 4}})),
+    ("null_report", "null"),
+    ("null_summary", json.dumps({"summary": None})),
+    ("list_summary", json.dumps({"summary": []})),
 ]
 
 def snapshot():
@@ -1413,13 +1424,20 @@ with ExitStack() as stack:
                         "rendered": rendered, "raise_count": report["raise_count"]})
 print(json.dumps(results))
 `]);
-  assert.equal(results.length, 5);
+  assert.equal(results.length, 10);
+  const knownLines = {
+    measured: 'adjudicator shadow: cases 4, agree 2, disagree 1, cost 1.25 '
+      + '(graded 3; costs measured 4)',
+    measured_zero: 'adjudicator shadow: cases 1, agree 0, disagree 0, cost 0 '
+      + '(graded 0; costs measured 1)',
+    partial_cost: 'adjudicator shadow: cases 3, agree 0, disagree 0, cost 1.25 '
+      + '(graded 0; costs measured 2)',
+    unmeasured: 'adjudicator shadow: cases 0, agree 0, disagree 0, cost UNKNOWN '
+      + '(graded 0; costs measured 0)',
+  };
   for (const result of results) {
-    const expected = result.fixture === 'measured'
-      ? 'adjudicator shadow: cases 4, agree 2, disagree 1, cost 1.25 (graded 3; costs measured 4)'
-      : result.fixture === 'unmeasured'
-        ? 'adjudicator shadow: cases 0, agree 0, disagree 0, cost UNKNOWN (graded 0; costs measured 0)'
-        : 'adjudicator shadow: cases UNKNOWN, agree UNKNOWN, disagree UNKNOWN, cost UNKNOWN';
+    const expected = knownLines[result.fixture]
+      ?? 'adjudicator shadow: cases UNKNOWN, agree UNKNOWN, disagree UNKNOWN, cost UNKNOWN';
     assert.equal(result.line, expected, result.fixture);
     assert.equal(result.rendered.split('\n').filter((line) => line === expected).length, 1,
       result.fixture);
