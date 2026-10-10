@@ -1,0 +1,45 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_large_gemini_prompt_uses_lossless_private_ndjson_stdin __________
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-203/test_large_gemini_prompt_uses_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x108bb7c50>
+
+    def test_large_gemini_prompt_uses_lossless_private_ndjson_stdin(tmp_path, monkeypatch):
+        """A real shell/provider-stub boundary proves the production E2BIG shape stays bounded.
+    
+        The former path embedded this packet in ``bash -lc`` and then in agy's argv.  This stub fails
+        if either boundary receives a large argv and returns the digest of the exact Unicode prompt it
+        decoded from stdin.  It does not contact a provider.
+        """
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        stub = bin_dir / "agy"
+        stub.write_text(
+            "#!/usr/bin/env python3\n"
+            "import hashlib, json, sys\n"
+            "assert max(map(len, sys.argv)) < 16384, 'large prompt leaked into provider argv'\n"
+            "row = json.loads(sys.stdin.buffer.read().decode('utf-8'))\n"
+            "assert row['event'] == 'user' and row['message']['role'] == 'user'\n"
+            "print(json.dumps({'event': 'result', 'result': {'response': 'transport-sha256=' + hashlib.sha256(row['message']['content'].encode('utf-8')).hexdigest()}}))\n",
+            encoding="utf-8",
+        )
+        stub.chmod(0o755)
+        packet = ("native \u03b1 $() ` ; ' \\\" \\n\U0001f642\n" * 50_000) + "terminal \u2603"
+        expected = hashlib.sha256(packet.encode("utf-8")).hexdigest()
+    
+        _isolate_offload(monkeypatch, tmp_path)
+        monkeypatch.setattr(dispatcher, "_path_prefix", lambda: f"export PATH={bin_dir}:$PATH")
+    
+        result = dispatcher.offload("gemini", packet, cwd=str(workspace), timeout=20)
+    
+>       assert result["exit"] == 0, result
+E       AssertionError: {'agent': 'gemini', 'exit': 126, 'output': '', 'error': "process start failed: [Errno 7] Argument list too long: 'bash'", ...}
+E       assert 126 == 0
+
+tests/test_gemini_large_prompt_transport.py:66: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_gemini_large_prompt_transport.py::test_large_gemini_prompt_uses_lossless_private_ndjson_stdin
+1 failed in 0.27s

@@ -1604,6 +1604,7 @@ def build_command(
     reasoning_effort: str | None = None,
     requested_model: str | None = None,
     commits_in_worktree: bool = False,
+    prompt_via_stdin: bool = False,
 ):
     """Construct the CLI argv for one agent. `mode` is agent-specific.
 
@@ -1791,18 +1792,62 @@ def build_command(
         model = requested_model or _tier_model("gemini", mode) or gemini_model()
         if model:
             cmd += ["--model", model]
-        return cmd + [
-            "--print",
-            prompt,
-            "--dangerously-skip-permissions",
-            "--add-dir",
-            str(workspace),
-            "--print-timeout",
-            "40m",
-            "--log-file",
-            log_file,
-        ]
+        # Antigravity's print-mode NDJSON protocol is the native transport that keeps a large
+        # prompt out of both the wrapper shell argv and agy's argv.  `-p=` enables print mode
+        # without supplying a positional prompt; the dispatcher supplies the one user message
+        # through stdin instead.
+        print_args = (
+            ["-p=", "--input-format", "stream-json", "--output-format", "stream-json"]
+            if prompt_via_stdin
+            else ["--print", prompt]
+        )
+        return (
+            cmd
+            + print_args
+            + [
+                "--dangerously-skip-permissions",
+                "--add-dir",
+                str(workspace),
+                "--print-timeout",
+                "40m",
+                "--log-file",
+                log_file,
+            ]
+        )
     raise ValueError(f"unknown agent: {agent}")
+
+
+def gemini_stream_prompt(prompt: str) -> str:
+    """One lossless Antigravity ``stream-json`` user message.
+
+    The final newline terminates the NDJSON record rather than becoming part of the user's
+    content. JSON escaping leaves shell metacharacters inert and ``ensure_ascii=False`` preserves
+    the prompt's Unicode values in the UTF-8 stream written by the dispatcher.
+    """
+    return (
+        json.dumps(
+            {"event": "user", "message": {"role": "user", "content": prompt}},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        + "\n"
+    )
+
+
+def gemini_stream_response(text: str) -> str | None:
+    """The final response from Antigravity's NDJSON output, if a terminal event supplied one."""
+    response: str | None = None
+    for line in (text or "").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or event.get("event") != "result":
+            continue
+        result = event.get("result")
+        if isinstance(result, dict) and isinstance(result.get("response"), str):
+            response = result["response"]
+    return response
 
 
 def record_ledger(agent: str, count: int = 1, cost_usd: float = 0.0, **extra) -> None:

@@ -1,0 +1,10 @@
+{
+  "original_exit": 1,
+  "candidate_restored_byte_identically": true,
+  "hashes": {
+    "src/adapters.py": "fb6ecc9fe8606b3089fa27045c29b70758e9ad161218e0dd1f706375aaca5d10",
+    "src/dispatcher.py": "d3667980c6b50c80b8c32d6b1ebdf6c280a6395a3a37d38c0f7051f22cdc8f71"
+  },
+  "candidate_exit": 0,
+  "original_source": "7aed5cf7cd028b980d1e325fd82c464e217c8230"
+}

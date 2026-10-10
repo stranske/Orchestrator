@@ -106,6 +106,13 @@ bounded offload or delegation chooses that exact profile; it does not create a n
 change the feedback loop. Operator `ORCH_CODEX_MODEL_*` pins and `ORCH_CODEX_MAX_TIER` ceilings
 continue through the tier adapter for automatic routes; the explicit profile stays exact.
 
+Complete collected evidence also crosses the existing dispatch transport rail. Gemini
+offloads can carry the full prompt as one native NDJSON user message on stdin, using
+a private temporary file rather than embedding evidence in shell or provider argv.
+The adapter preserves the selected model, workspace isolation and timeout; transport
+never truncates the packet or grants acceptance. The file is removed after each attempt,
+including start failures and timeouts. Other agent transports retain their existing contract.
+
 Determinism here is load-bearing: the claims/capacity/provision rails are what the "0 unsafe
 delegations" guarantee rests on, and the gates guard terminal merges and must stay auditable. An
 LLM verifier (a review panel) is a *supplement* to a gate, never a replacement for it.
