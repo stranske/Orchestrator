@@ -1,0 +1,653 @@
+Held descriptors through 1100
+.                                                                  [100%]
+=================================== FAILURES ===================================
+_ MirrorGenerationTests.test_startup_modules_share_the_tick_generation (mode='active', retain_lock=False, exit_shell=False) _
+
+self = <test_mirror_generations.MirrorGenerationTests testMethod=test_startup_modules_share_the_tick_generation>
+
+        def test_startup_modules_share_the_tick_generation(self):
+            """Publication during the first startup module cannot change later tick reads."""
+            text = (REPO / "orchestrate.sh").read_text()
+            prologue = text.split("# ORCH-ANCHOR: heartbeat-export", 1)[0]
+            record = self.root / "startup-observations.jsonl"
+            observe = (
+                "import json, sys\nfrom pathlib import Path\nimport module, paths\n"
+                f"record = Path({str(record)!r})\n"
+                "def observe():\n"
+                "    with record.open('a') as output:\n"
+                "        output.write(json.dumps([module.VALUE, str(paths.REPO_ROOT)]) + '\\n')\n"
+                "observe()\n"
+            )
+            pause = (
+                "print('STARTUP-READY', file=sys.stderr, flush=True)\n"
+                "assert sys.stdin.readline() == 'resume\\n'\n"
+                "observe()\n"
+            )
+            footer = (
+                "import json\nfrom pathlib import Path\n"
+                f"print(json.dumps([json.loads(line) for line in Path({str(record)!r})"
+                ".read_text().splitlines()]))\n"
+            )
+            (self.snapshot / "observer.py").write_text(observe + footer)
+            (self.snapshot / "gh_capacity.py").write_text(observe + "print('fixture authenticated')\n")
+            for mode, (retain_lock, exit_shell) in product(
+                ("active", "shadow"), ((False, False), (True, False), (True, True))
+            ):
+                with self.subTest(mode=mode, retain_lock=retain_lock, exit_shell=exit_shell):
+                    record.unlink(missing_ok=True)
+                    startup_pause = pause
+                    if retain_lock:
+                        # Negative control: reproduce a reader that forgets to release
+                        # shared mode before pausing in a retained generation. Ignore
+                        # stdin EOF so cleanup must terminate the child, not just its shell.
+                        startup_pause = (
+                            "import fcntl, threading\n"
+                            f"reader_lock = open({str(self.root / '.mirror.publish.lock')!r}, 'a')\n"
+                            "fcntl.flock(reader_lock.fileno(), fcntl.LOCK_SH)\n"
+                            "print('STARTUP-READY', file=sys.stderr, flush=True)\n"
+                            "threading.Event().wait()\n"
+                        )
+                    (self.snapshot / "tick_watchdog.py").write_text(observe + startup_pause)
+                    (self.snapshot / "cadence_registry.py").write_text(
+                        observe + (startup_pause if mode == "shadow" else "") + "print(':')\n"
+                    )
+                    (self.snapshot / "orchestrate.sh").write_text(
+                        prologue + 'python3 "$ORCH/observer.py"\n'
+                    )
+                    self.set_value("old")
+                    self.publish()
+                    pinned = self.mirror.resolve()
+                    env = dict(
+                        os.environ,
+                        ORCH_DIR=str(self.mirror),
+                        HOME=str(self.root),
+                        ORCH_STATE_DIR=str(self.root / "state"),
+                        PYTHONPATH=str(self.mirror),
+                    )
+                    for name in (
+                        "ORCH_PUBLICATION_READER_FD",
+                        "ORCH_PUBLICATION_ROOT",
+                        "ORCH_PUBLICATION_GENERATION",
+                        "ORCH_WATCHDOG_TICK_PID",
+                    ):
+                        env.pop(name, None)
+                    reader = subprocess.Popen(
+                        [
+                            "/bin/bash",
+                            str(self.mirror / "orchestrate.sh"),
+                            *(["--active"] if mode == "active" else []),
+                        ],
+                        cwd=self.root,
+                        env=env,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        start_new_session=True,
+                    )
+                    # Isolate the publisher so a regression cannot leave a blocked
+                    # daemon thread (or its flock patch) alive in the test runner.
+                    publisher_code = """
+    import fcntl
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, sys.argv[1])
+    import install_verified_snapshot as installer
+    flock = fcntl.flock
+    def observed_flock(fd, operation):
+        if operation == fcntl.LOCK_EX:
+            print('PUBLICATION-ATTEMPTED', file=sys.stderr, flush=True)
+        return flock(fd, operation)
+    installer.fcntl.flock = observed_flock
+    installer.install(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
+    """
+                    publisher = None
+                    try:
+>                       ready, _, _ = select.select([reader.stderr], [], [], 15)
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E                       ValueError: filedescriptor out of range in select()
+
+tests/test_mirror_generations.py:606: ValueError
+_ MirrorGenerationTests.test_startup_modules_share_the_tick_generation (mode='active', retain_lock=True, exit_shell=False) _
+
+self = <test_mirror_generations.MirrorGenerationTests testMethod=test_startup_modules_share_the_tick_generation>
+
+        def test_startup_modules_share_the_tick_generation(self):
+            """Publication during the first startup module cannot change later tick reads."""
+            text = (REPO / "orchestrate.sh").read_text()
+            prologue = text.split("# ORCH-ANCHOR: heartbeat-export", 1)[0]
+            record = self.root / "startup-observations.jsonl"
+            observe = (
+                "import json, sys\nfrom pathlib import Path\nimport module, paths\n"
+                f"record = Path({str(record)!r})\n"
+                "def observe():\n"
+                "    with record.open('a') as output:\n"
+                "        output.write(json.dumps([module.VALUE, str(paths.REPO_ROOT)]) + '\\n')\n"
+                "observe()\n"
+            )
+            pause = (
+                "print('STARTUP-READY', file=sys.stderr, flush=True)\n"
+                "assert sys.stdin.readline() == 'resume\\n'\n"
+                "observe()\n"
+            )
+            footer = (
+                "import json\nfrom pathlib import Path\n"
+                f"print(json.dumps([json.loads(line) for line in Path({str(record)!r})"
+                ".read_text().splitlines()]))\n"
+            )
+            (self.snapshot / "observer.py").write_text(observe + footer)
+            (self.snapshot / "gh_capacity.py").write_text(observe + "print('fixture authenticated')\n")
+            for mode, (retain_lock, exit_shell) in product(
+                ("active", "shadow"), ((False, False), (True, False), (True, True))
+            ):
+                with self.subTest(mode=mode, retain_lock=retain_lock, exit_shell=exit_shell):
+                    record.unlink(missing_ok=True)
+                    startup_pause = pause
+                    if retain_lock:
+                        # Negative control: reproduce a reader that forgets to release
+                        # shared mode before pausing in a retained generation. Ignore
+                        # stdin EOF so cleanup must terminate the child, not just its shell.
+                        startup_pause = (
+                            "import fcntl, threading\n"
+                            f"reader_lock = open({str(self.root / '.mirror.publish.lock')!r}, 'a')\n"
+                            "fcntl.flock(reader_lock.fileno(), fcntl.LOCK_SH)\n"
+                            "print('STARTUP-READY', file=sys.stderr, flush=True)\n"
+                            "threading.Event().wait()\n"
+                        )
+                    (self.snapshot / "tick_watchdog.py").write_text(observe + startup_pause)
+                    (self.snapshot / "cadence_registry.py").write_text(
+                        observe + (startup_pause if mode == "shadow" else "") + "print(':')\n"
+                    )
+                    (self.snapshot / "orchestrate.sh").write_text(
+                        prologue + 'python3 "$ORCH/observer.py"\n'
+                    )
+                    self.set_value("old")
+                    self.publish()
+                    pinned = self.mirror.resolve()
+                    env = dict(
+                        os.environ,
+                        ORCH_DIR=str(self.mirror),
+                        HOME=str(self.root),
+                        ORCH_STATE_DIR=str(self.root / "state"),
+                        PYTHONPATH=str(self.mirror),
+                    )
+                    for name in (
+                        "ORCH_PUBLICATION_READER_FD",
+                        "ORCH_PUBLICATION_ROOT",
+                        "ORCH_PUBLICATION_GENERATION",
+                        "ORCH_WATCHDOG_TICK_PID",
+                    ):
+                        env.pop(name, None)
+                    reader = subprocess.Popen(
+                        [
+                            "/bin/bash",
+                            str(self.mirror / "orchestrate.sh"),
+                            *(["--active"] if mode == "active" else []),
+                        ],
+                        cwd=self.root,
+                        env=env,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        start_new_session=True,
+                    )
+                    # Isolate the publisher so a regression cannot leave a blocked
+                    # daemon thread (or its flock patch) alive in the test runner.
+                    publisher_code = """
+    import fcntl
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, sys.argv[1])
+    import install_verified_snapshot as installer
+    flock = fcntl.flock
+    def observed_flock(fd, operation):
+        if operation == fcntl.LOCK_EX:
+            print('PUBLICATION-ATTEMPTED', file=sys.stderr, flush=True)
+        return flock(fd, operation)
+    installer.fcntl.flock = observed_flock
+    installer.install(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
+    """
+                    publisher = None
+                    try:
+>                       ready, _, _ = select.select([reader.stderr], [], [], 15)
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E                       ValueError: filedescriptor out of range in select()
+
+tests/test_mirror_generations.py:606: ValueError
+_ MirrorGenerationTests.test_startup_modules_share_the_tick_generation (mode='active', retain_lock=True, exit_shell=True) _
+
+self = <test_mirror_generations.MirrorGenerationTests testMethod=test_startup_modules_share_the_tick_generation>
+
+        def test_startup_modules_share_the_tick_generation(self):
+            """Publication during the first startup module cannot change later tick reads."""
+            text = (REPO / "orchestrate.sh").read_text()
+            prologue = text.split("# ORCH-ANCHOR: heartbeat-export", 1)[0]
+            record = self.root / "startup-observations.jsonl"
+            observe = (
+                "import json, sys\nfrom pathlib import Path\nimport module, paths\n"
+                f"record = Path({str(record)!r})\n"
+                "def observe():\n"
+                "    with record.open('a') as output:\n"
+                "        output.write(json.dumps([module.VALUE, str(paths.REPO_ROOT)]) + '\\n')\n"
+                "observe()\n"
+            )
+            pause = (
+                "print('STARTUP-READY', file=sys.stderr, flush=True)\n"
+                "assert sys.stdin.readline() == 'resume\\n'\n"
+                "observe()\n"
+            )
+            footer = (
+                "import json\nfrom pathlib import Path\n"
+                f"print(json.dumps([json.loads(line) for line in Path({str(record)!r})"
+                ".read_text().splitlines()]))\n"
+            )
+            (self.snapshot / "observer.py").write_text(observe + footer)
+            (self.snapshot / "gh_capacity.py").write_text(observe + "print('fixture authenticated')\n")
+            for mode, (retain_lock, exit_shell) in product(
+                ("active", "shadow"), ((False, False), (True, False), (True, True))
+            ):
+                with self.subTest(mode=mode, retain_lock=retain_lock, exit_shell=exit_shell):
+                    record.unlink(missing_ok=True)
+                    startup_pause = pause
+                    if retain_lock:
+                        # Negative control: reproduce a reader that forgets to release
+                        # shared mode before pausing in a retained generation. Ignore
+                        # stdin EOF so cleanup must terminate the child, not just its shell.
+                        startup_pause = (
+                            "import fcntl, threading\n"
+                            f"reader_lock = open({str(self.root / '.mirror.publish.lock')!r}, 'a')\n"
+                            "fcntl.flock(reader_lock.fileno(), fcntl.LOCK_SH)\n"
+                            "print('STARTUP-READY', file=sys.stderr, flush=True)\n"
+                            "threading.Event().wait()\n"
+                        )
+                    (self.snapshot / "tick_watchdog.py").write_text(observe + startup_pause)
+                    (self.snapshot / "cadence_registry.py").write_text(
+                        observe + (startup_pause if mode == "shadow" else "") + "print(':')\n"
+                    )
+                    (self.snapshot / "orchestrate.sh").write_text(
+                        prologue + 'python3 "$ORCH/observer.py"\n'
+                    )
+                    self.set_value("old")
+                    self.publish()
+                    pinned = self.mirror.resolve()
+                    env = dict(
+                        os.environ,
+                        ORCH_DIR=str(self.mirror),
+                        HOME=str(self.root),
+                        ORCH_STATE_DIR=str(self.root / "state"),
+                        PYTHONPATH=str(self.mirror),
+                    )
+                    for name in (
+                        "ORCH_PUBLICATION_READER_FD",
+                        "ORCH_PUBLICATION_ROOT",
+                        "ORCH_PUBLICATION_GENERATION",
+                        "ORCH_WATCHDOG_TICK_PID",
+                    ):
+                        env.pop(name, None)
+                    reader = subprocess.Popen(
+                        [
+                            "/bin/bash",
+                            str(self.mirror / "orchestrate.sh"),
+                            *(["--active"] if mode == "active" else []),
+                        ],
+                        cwd=self.root,
+                        env=env,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        start_new_session=True,
+                    )
+                    # Isolate the publisher so a regression cannot leave a blocked
+                    # daemon thread (or its flock patch) alive in the test runner.
+                    publisher_code = """
+    import fcntl
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, sys.argv[1])
+    import install_verified_snapshot as installer
+    flock = fcntl.flock
+    def observed_flock(fd, operation):
+        if operation == fcntl.LOCK_EX:
+            print('PUBLICATION-ATTEMPTED', file=sys.stderr, flush=True)
+        return flock(fd, operation)
+    installer.fcntl.flock = observed_flock
+    installer.install(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
+    """
+                    publisher = None
+                    try:
+>                       ready, _, _ = select.select([reader.stderr], [], [], 15)
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E                       ValueError: filedescriptor out of range in select()
+
+tests/test_mirror_generations.py:606: ValueError
+_ MirrorGenerationTests.test_startup_modules_share_the_tick_generation (mode='shadow', retain_lock=False, exit_shell=False) _
+
+self = <test_mirror_generations.MirrorGenerationTests testMethod=test_startup_modules_share_the_tick_generation>
+
+        def test_startup_modules_share_the_tick_generation(self):
+            """Publication during the first startup module cannot change later tick reads."""
+            text = (REPO / "orchestrate.sh").read_text()
+            prologue = text.split("# ORCH-ANCHOR: heartbeat-export", 1)[0]
+            record = self.root / "startup-observations.jsonl"
+            observe = (
+                "import json, sys\nfrom pathlib import Path\nimport module, paths\n"
+                f"record = Path({str(record)!r})\n"
+                "def observe():\n"
+                "    with record.open('a') as output:\n"
+                "        output.write(json.dumps([module.VALUE, str(paths.REPO_ROOT)]) + '\\n')\n"
+                "observe()\n"
+            )
+            pause = (
+                "print('STARTUP-READY', file=sys.stderr, flush=True)\n"
+                "assert sys.stdin.readline() == 'resume\\n'\n"
+                "observe()\n"
+            )
+            footer = (
+                "import json\nfrom pathlib import Path\n"
+                f"print(json.dumps([json.loads(line) for line in Path({str(record)!r})"
+                ".read_text().splitlines()]))\n"
+            )
+            (self.snapshot / "observer.py").write_text(observe + footer)
+            (self.snapshot / "gh_capacity.py").write_text(observe + "print('fixture authenticated')\n")
+            for mode, (retain_lock, exit_shell) in product(
+                ("active", "shadow"), ((False, False), (True, False), (True, True))
+            ):
+                with self.subTest(mode=mode, retain_lock=retain_lock, exit_shell=exit_shell):
+                    record.unlink(missing_ok=True)
+                    startup_pause = pause
+                    if retain_lock:
+                        # Negative control: reproduce a reader that forgets to release
+                        # shared mode before pausing in a retained generation. Ignore
+                        # stdin EOF so cleanup must terminate the child, not just its shell.
+                        startup_pause = (
+                            "import fcntl, threading\n"
+                            f"reader_lock = open({str(self.root / '.mirror.publish.lock')!r}, 'a')\n"
+                            "fcntl.flock(reader_lock.fileno(), fcntl.LOCK_SH)\n"
+                            "print('STARTUP-READY', file=sys.stderr, flush=True)\n"
+                            "threading.Event().wait()\n"
+                        )
+                    (self.snapshot / "tick_watchdog.py").write_text(observe + startup_pause)
+                    (self.snapshot / "cadence_registry.py").write_text(
+                        observe + (startup_pause if mode == "shadow" else "") + "print(':')\n"
+                    )
+                    (self.snapshot / "orchestrate.sh").write_text(
+                        prologue + 'python3 "$ORCH/observer.py"\n'
+                    )
+                    self.set_value("old")
+                    self.publish()
+                    pinned = self.mirror.resolve()
+                    env = dict(
+                        os.environ,
+                        ORCH_DIR=str(self.mirror),
+                        HOME=str(self.root),
+                        ORCH_STATE_DIR=str(self.root / "state"),
+                        PYTHONPATH=str(self.mirror),
+                    )
+                    for name in (
+                        "ORCH_PUBLICATION_READER_FD",
+                        "ORCH_PUBLICATION_ROOT",
+                        "ORCH_PUBLICATION_GENERATION",
+                        "ORCH_WATCHDOG_TICK_PID",
+                    ):
+                        env.pop(name, None)
+                    reader = subprocess.Popen(
+                        [
+                            "/bin/bash",
+                            str(self.mirror / "orchestrate.sh"),
+                            *(["--active"] if mode == "active" else []),
+                        ],
+                        cwd=self.root,
+                        env=env,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        start_new_session=True,
+                    )
+                    # Isolate the publisher so a regression cannot leave a blocked
+                    # daemon thread (or its flock patch) alive in the test runner.
+                    publisher_code = """
+    import fcntl
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, sys.argv[1])
+    import install_verified_snapshot as installer
+    flock = fcntl.flock
+    def observed_flock(fd, operation):
+        if operation == fcntl.LOCK_EX:
+            print('PUBLICATION-ATTEMPTED', file=sys.stderr, flush=True)
+        return flock(fd, operation)
+    installer.fcntl.flock = observed_flock
+    installer.install(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
+    """
+                    publisher = None
+                    try:
+>                       ready, _, _ = select.select([reader.stderr], [], [], 15)
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E                       ValueError: filedescriptor out of range in select()
+
+tests/test_mirror_generations.py:606: ValueError
+_ MirrorGenerationTests.test_startup_modules_share_the_tick_generation (mode='shadow', retain_lock=True, exit_shell=False) _
+
+self = <test_mirror_generations.MirrorGenerationTests testMethod=test_startup_modules_share_the_tick_generation>
+
+        def test_startup_modules_share_the_tick_generation(self):
+            """Publication during the first startup module cannot change later tick reads."""
+            text = (REPO / "orchestrate.sh").read_text()
+            prologue = text.split("# ORCH-ANCHOR: heartbeat-export", 1)[0]
+            record = self.root / "startup-observations.jsonl"
+            observe = (
+                "import json, sys\nfrom pathlib import Path\nimport module, paths\n"
+                f"record = Path({str(record)!r})\n"
+                "def observe():\n"
+                "    with record.open('a') as output:\n"
+                "        output.write(json.dumps([module.VALUE, str(paths.REPO_ROOT)]) + '\\n')\n"
+                "observe()\n"
+            )
+            pause = (
+                "print('STARTUP-READY', file=sys.stderr, flush=True)\n"
+                "assert sys.stdin.readline() == 'resume\\n'\n"
+                "observe()\n"
+            )
+            footer = (
+                "import json\nfrom pathlib import Path\n"
+                f"print(json.dumps([json.loads(line) for line in Path({str(record)!r})"
+                ".read_text().splitlines()]))\n"
+            )
+            (self.snapshot / "observer.py").write_text(observe + footer)
+            (self.snapshot / "gh_capacity.py").write_text(observe + "print('fixture authenticated')\n")
+            for mode, (retain_lock, exit_shell) in product(
+                ("active", "shadow"), ((False, False), (True, False), (True, True))
+            ):
+                with self.subTest(mode=mode, retain_lock=retain_lock, exit_shell=exit_shell):
+                    record.unlink(missing_ok=True)
+                    startup_pause = pause
+                    if retain_lock:
+                        # Negative control: reproduce a reader that forgets to release
+                        # shared mode before pausing in a retained generation. Ignore
+                        # stdin EOF so cleanup must terminate the child, not just its shell.
+                        startup_pause = (
+                            "import fcntl, threading\n"
+                            f"reader_lock = open({str(self.root / '.mirror.publish.lock')!r}, 'a')\n"
+                            "fcntl.flock(reader_lock.fileno(), fcntl.LOCK_SH)\n"
+                            "print('STARTUP-READY', file=sys.stderr, flush=True)\n"
+                            "threading.Event().wait()\n"
+                        )
+                    (self.snapshot / "tick_watchdog.py").write_text(observe + startup_pause)
+                    (self.snapshot / "cadence_registry.py").write_text(
+                        observe + (startup_pause if mode == "shadow" else "") + "print(':')\n"
+                    )
+                    (self.snapshot / "orchestrate.sh").write_text(
+                        prologue + 'python3 "$ORCH/observer.py"\n'
+                    )
+                    self.set_value("old")
+                    self.publish()
+                    pinned = self.mirror.resolve()
+                    env = dict(
+                        os.environ,
+                        ORCH_DIR=str(self.mirror),
+                        HOME=str(self.root),
+                        ORCH_STATE_DIR=str(self.root / "state"),
+                        PYTHONPATH=str(self.mirror),
+                    )
+                    for name in (
+                        "ORCH_PUBLICATION_READER_FD",
+                        "ORCH_PUBLICATION_ROOT",
+                        "ORCH_PUBLICATION_GENERATION",
+                        "ORCH_WATCHDOG_TICK_PID",
+                    ):
+                        env.pop(name, None)
+                    reader = subprocess.Popen(
+                        [
+                            "/bin/bash",
+                            str(self.mirror / "orchestrate.sh"),
+                            *(["--active"] if mode == "active" else []),
+                        ],
+                        cwd=self.root,
+                        env=env,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        start_new_session=True,
+                    )
+                    # Isolate the publisher so a regression cannot leave a blocked
+                    # daemon thread (or its flock patch) alive in the test runner.
+                    publisher_code = """
+    import fcntl
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, sys.argv[1])
+    import install_verified_snapshot as installer
+    flock = fcntl.flock
+    def observed_flock(fd, operation):
+        if operation == fcntl.LOCK_EX:
+            print('PUBLICATION-ATTEMPTED', file=sys.stderr, flush=True)
+        return flock(fd, operation)
+    installer.fcntl.flock = observed_flock
+    installer.install(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
+    """
+                    publisher = None
+                    try:
+>                       ready, _, _ = select.select([reader.stderr], [], [], 15)
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E                       ValueError: filedescriptor out of range in select()
+
+tests/test_mirror_generations.py:606: ValueError
+_ MirrorGenerationTests.test_startup_modules_share_the_tick_generation (mode='shadow', retain_lock=True, exit_shell=True) _
+
+self = <test_mirror_generations.MirrorGenerationTests testMethod=test_startup_modules_share_the_tick_generation>
+
+        def test_startup_modules_share_the_tick_generation(self):
+            """Publication during the first startup module cannot change later tick reads."""
+            text = (REPO / "orchestrate.sh").read_text()
+            prologue = text.split("# ORCH-ANCHOR: heartbeat-export", 1)[0]
+            record = self.root / "startup-observations.jsonl"
+            observe = (
+                "import json, sys\nfrom pathlib import Path\nimport module, paths\n"
+                f"record = Path({str(record)!r})\n"
+                "def observe():\n"
+                "    with record.open('a') as output:\n"
+                "        output.write(json.dumps([module.VALUE, str(paths.REPO_ROOT)]) + '\\n')\n"
+                "observe()\n"
+            )
+            pause = (
+                "print('STARTUP-READY', file=sys.stderr, flush=True)\n"
+                "assert sys.stdin.readline() == 'resume\\n'\n"
+                "observe()\n"
+            )
+            footer = (
+                "import json\nfrom pathlib import Path\n"
+                f"print(json.dumps([json.loads(line) for line in Path({str(record)!r})"
+                ".read_text().splitlines()]))\n"
+            )
+            (self.snapshot / "observer.py").write_text(observe + footer)
+            (self.snapshot / "gh_capacity.py").write_text(observe + "print('fixture authenticated')\n")
+            for mode, (retain_lock, exit_shell) in product(
+                ("active", "shadow"), ((False, False), (True, False), (True, True))
+            ):
+                with self.subTest(mode=mode, retain_lock=retain_lock, exit_shell=exit_shell):
+                    record.unlink(missing_ok=True)
+                    startup_pause = pause
+                    if retain_lock:
+                        # Negative control: reproduce a reader that forgets to release
+                        # shared mode before pausing in a retained generation. Ignore
+                        # stdin EOF so cleanup must terminate the child, not just its shell.
+                        startup_pause = (
+                            "import fcntl, threading\n"
+                            f"reader_lock = open({str(self.root / '.mirror.publish.lock')!r}, 'a')\n"
+                            "fcntl.flock(reader_lock.fileno(), fcntl.LOCK_SH)\n"
+                            "print('STARTUP-READY', file=sys.stderr, flush=True)\n"
+                            "threading.Event().wait()\n"
+                        )
+                    (self.snapshot / "tick_watchdog.py").write_text(observe + startup_pause)
+                    (self.snapshot / "cadence_registry.py").write_text(
+                        observe + (startup_pause if mode == "shadow" else "") + "print(':')\n"
+                    )
+                    (self.snapshot / "orchestrate.sh").write_text(
+                        prologue + 'python3 "$ORCH/observer.py"\n'
+                    )
+                    self.set_value("old")
+                    self.publish()
+                    pinned = self.mirror.resolve()
+                    env = dict(
+                        os.environ,
+                        ORCH_DIR=str(self.mirror),
+                        HOME=str(self.root),
+                        ORCH_STATE_DIR=str(self.root / "state"),
+                        PYTHONPATH=str(self.mirror),
+                    )
+                    for name in (
+                        "ORCH_PUBLICATION_READER_FD",
+                        "ORCH_PUBLICATION_ROOT",
+                        "ORCH_PUBLICATION_GENERATION",
+                        "ORCH_WATCHDOG_TICK_PID",
+                    ):
+                        env.pop(name, None)
+                    reader = subprocess.Popen(
+                        [
+                            "/bin/bash",
+                            str(self.mirror / "orchestrate.sh"),
+                            *(["--active"] if mode == "active" else []),
+                        ],
+                        cwd=self.root,
+                        env=env,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        start_new_session=True,
+                    )
+                    # Isolate the publisher so a regression cannot leave a blocked
+                    # daemon thread (or its flock patch) alive in the test runner.
+                    publisher_code = """
+    import fcntl
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, sys.argv[1])
+    import install_verified_snapshot as installer
+    flock = fcntl.flock
+    def observed_flock(fd, operation):
+        if operation == fcntl.LOCK_EX:
+            print('PUBLICATION-ATTEMPTED', file=sys.stderr, flush=True)
+        return flock(fd, operation)
+    installer.fcntl.flock = observed_flock
+    installer.install(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
+    """
+                    publisher = None
+                    try:
+>                       ready, _, _ = select.select([reader.stderr], [], [], 15)
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E                       ValueError: filedescriptor out of range in select()
+
+tests/test_mirror_generations.py:606: ValueError
+=========================== short test summary info ============================
+SUBFAILED(mode='active', retain_lock=False, exit_shell=False) tests/test_mirror_generations.py::MirrorGenerationTests::test_startup_modules_share_the_tick_generation
+SUBFAILED(mode='active', retain_lock=True, exit_shell=False) tests/test_mirror_generations.py::MirrorGenerationTests::test_startup_modules_share_the_tick_generation
+SUBFAILED(mode='active', retain_lock=True, exit_shell=True) tests/test_mirror_generations.py::MirrorGenerationTests::test_startup_modules_share_the_tick_generation
+SUBFAILED(mode='shadow', retain_lock=False, exit_shell=False) tests/test_mirror_generations.py::MirrorGenerationTests::test_startup_modules_share_the_tick_generation
+SUBFAILED(mode='shadow', retain_lock=True, exit_shell=False) tests/test_mirror_generations.py::MirrorGenerationTests::test_startup_modules_share_the_tick_generation
+SUBFAILED(mode='shadow', retain_lock=True, exit_shell=True) tests/test_mirror_generations.py::MirrorGenerationTests::test_startup_modules_share_the_tick_generation
+6 failed, 1 passed in 0.48s

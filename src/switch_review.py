@@ -1709,6 +1709,42 @@ def not_counted_phrase(row: dict) -> str:
     return "; ".join(parts)
 
 
+def profile_trial_summary_line() -> str | None:
+    """One-line profile-trial status from the capability-program artifact, when present."""
+    path = (
+        Path(os.environ.get("ORCH_STATE_DIR", str(Path.home() / ".codex" / "orchestrator")))
+        / "capability-program"
+        / "profile-trial.json"
+    )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return None
+        profiles = int(payload.get("profile_count") or 0)
+        instances = int(payload.get("instance_count") or 0)
+        costs = payload.get("cost_tokens_by_profile", {})
+        quality = payload.get("quality_by_profile", {})
+        if not isinstance(costs, dict) or not isinstance(quality, dict):
+            return None
+        if any(not isinstance(row, dict) for row in costs.values()):
+            return None
+    except (OSError, json.JSONDecodeError, TypeError, ValueError, OverflowError):
+        return None
+    identity = "Y" if payload.get("identity_verified") else "N"
+    cost_bits = (
+        "/".join(
+            f"{costs[pid].get('tokens_in', 'n/a')}in+{costs[pid].get('tokens_out', 'n/a')}out"
+            for pid in sorted(costs)
+        )
+        or "n/a"
+    )
+    qual_bits = "/".join(str(quality.get(pid, "n/a")) for pid in sorted(quality)) or "n/a"
+    return (
+        f"profile trial: profiles {profiles}, instances {instances}, "
+        f"identity verified {identity}, quality {qual_bits}, cost {cost_bits}"
+    )
+
+
 def format_report(rep: dict) -> str:
     lines = [
         "# Switch review — held switches must be revisited, not forgotten",
@@ -1747,6 +1783,9 @@ def format_report(rep: dict) -> str:
     if rep.get("adjudicator_shadow"):
         lines += [rep["adjudicator_shadow"], ""]
     lines += [adversarial_shape_line(rep.get("adversarial_shape", {})), ""]
+    trial_line = profile_trial_summary_line()
+    if trial_line:
+        lines += [trial_line, ""]
     import triage_shadow
 
     lines += [triage_shadow.summary_line(), ""]

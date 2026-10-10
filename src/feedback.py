@@ -34,6 +34,7 @@ import sqlite3
 import sys
 import time
 from collections.abc import Callable
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,12 @@ AGENT_SWITCHES_COLUMNS = """
   source TEXT NOT NULL DEFAULT 'label', delegation_source TEXT,
   PRIMARY KEY (pr_ref, switched_ts, source)
 """
+
+PROFILE_TRIAL_INGESTS_TABLE = (
+    "CREATE TABLE IF NOT EXISTS profile_trial_ingests "
+    "(trial_id TEXT PRIMARY KEY, applied_ts INTEGER NOT NULL)"
+)
+
 
 SCHEMA = (
     """
@@ -187,6 +194,8 @@ CREATE TABLE IF NOT EXISTS run_pushes (
   branches_json TEXT NOT NULL, recorded_ts INTEGER NOT NULL
 );
 """
+    + PROFILE_TRIAL_INGESTS_TABLE
+    + ";"
 )
 
 # Effort sensitivity for the quality-weighted score. Multipliers are exponential so zero cost/tokens/latency
@@ -2512,203 +2521,426 @@ def record_run(
     capability_ids=None,
     capability_version_ids=None,
     acceptance_gate_ids=None,
+    *,
+    conn: sqlite3.Connection | None = None,
 ):
+    if conn is not None:
+        _record_run_in_conn(
+            conn,
+            run_id,
+            target,
+            task_type,
+            agent,
+            mode=mode,
+            reasoning_level=reasoning_level,
+            decomposition=decomposition,
+            rationale=rationale,
+            pr_number=pr_number,
+            experiment_id=experiment_id,
+            ts=ts,
+            model=model,
+            source=source,
+            assignment=assignment,
+            work_type=work_type,
+            role_name=role_name,
+            routing_metadata=routing_metadata,
+            influenced_by_role_run_ids=influenced_by_role_run_ids,
+            influenced_by_skill_event_ids=influenced_by_skill_event_ids,
+            influenced_by_workflow_ids=influenced_by_workflow_ids,
+            capability_ids=capability_ids,
+            capability_version_ids=capability_version_ids,
+            acceptance_gate_ids=acceptance_gate_ids,
+        )
+        return
     with _conn() as c:
-        existing = c.execute(
-            "SELECT model, source, work_type, role_name, routing_metadata FROM runs WHERE run_id=?",
-            (run_id,),
-        ).fetchone()
-        run_model = model or (existing[0] if existing and existing[0] else None)
-        run_source = _derive_source(run_id, mode, source) or (
-            existing[1] if existing and existing[1] else None
-        )
-        run_assignment = _derive_assignment(run_source, assignment)
-        run_work_type = work_type or (existing[2] if existing and existing[2] else None)
-        run_role = role_name or (existing[3] if existing and existing[3] else None)
-        run_routing_metadata = _json_or_none(routing_metadata) or (
-            existing[4] if existing and existing[4] else None
-        )
-        c.execute(
-            "INSERT OR REPLACE INTO runs "
-            "(run_id, ts, target, task_type, agent, mode, reasoning_level, model, "
-            "decomposition, rationale, pr_number, experiment_id, source, assignment, work_type, role_name, "
-            "routing_metadata) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                run_id,
-                ts or int(time.time()),
-                target,
-                task_type,
-                agent,
-                mode,
-                reasoning_level,
-                run_model,
-                json.dumps(decomposition) if decomposition else None,
-                rationale,
-                pr_number,
-                experiment_id,
-                run_source,
-                run_assignment,
-                run_work_type,
-                run_role,
-                run_routing_metadata,
-            ),
-        )
-        # feedback.py IS the Brain — exercised by every recorded run, never selected for a task.
-        # Coalesced daily: at ~48 runs/day a per-invocation heartbeat would add ~17,500 events a
-        # year to one record, and `heartbeat` scans that list on every call. (2026-08-09)
-        _capability_daily_heartbeat("feedback-store", "invocation", ref="record_run")
-        capability_ids = list(capability_ids or [])
-        capability_version_ids = list(capability_version_ids or [])
-        if capability_version_ids and len(capability_ids) != len(capability_version_ids):
-            raise ValueError("capability identity/version lineage length mismatch")
-        # Resolve versions from the ledger when the caller supplied ids without them. Callers
-        # legitimately know WHICH capabilities they used but not the version hash; before lineage
-        # adoption (2026-08-09) no capability had one, so this always fell through and attribution
-        # was dropped. Never invents a version: a capability without lineage stays unresolved.
-        if capability_ids and not capability_version_ids:
-            capability_version_ids = _resolve_capability_versions(capability_ids)
-        direct_capability_id = (
-            capability_ids[0]
-            if len(capability_ids) == 1 and len(capability_version_ids) == 1
-            else None
-        )
-        direct_capability_version_id = (
-            capability_version_ids[0] if len(capability_version_ids) == 1 else None
-        )
-        payload = {
-            "capability_ids": capability_ids,
-            "acceptance_gate_ids": list(acceptance_gate_ids or []),
-            "role_ids": list(influenced_by_role_run_ids or []),
-            "skill_ids": list(influenced_by_skill_event_ids or []),
-            "workflow_ids": list(influenced_by_workflow_ids or []),
-            "delivery": {
-                "pr_number": pr_number,
-                "target_id": target,
-                "task_type": task_type,
-                "experiment_id": experiment_id,
-            },
-        }
-        _record_completion_event_in_conn(
+        _record_run_in_conn(
             c,
             run_id,
-            event_type="decision",
-            phase="trigger",
-            producer=run_source or "feedback.record_run",
-            capability_id=direct_capability_id,
-            capability_version_id=direct_capability_version_id,
-            status="recorded",
-            payload=payload,
-            timestamp=ts,
+            target,
+            task_type,
+            agent,
+            mode=mode,
+            reasoning_level=reasoning_level,
+            decomposition=decomposition,
+            rationale=rationale,
+            pr_number=pr_number,
+            experiment_id=experiment_id,
+            ts=ts,
+            model=model,
+            source=source,
+            assignment=assignment,
+            work_type=work_type,
+            role_name=role_name,
+            routing_metadata=routing_metadata,
+            influenced_by_role_run_ids=influenced_by_role_run_ids,
+            influenced_by_skill_event_ids=influenced_by_skill_event_ids,
+            influenced_by_workflow_ids=influenced_by_workflow_ids,
+            capability_ids=capability_ids,
+            capability_version_ids=capability_version_ids,
+            acceptance_gate_ids=acceptance_gate_ids,
         )
-        event = _record_completion_event_in_conn(
-            c,
+
+
+def _record_run_in_conn(
+    c: sqlite3.Connection,
+    run_id,
+    target,
+    task_type,
+    agent,
+    mode=None,
+    reasoning_level=None,
+    decomposition=None,
+    rationale=None,
+    pr_number=None,
+    experiment_id=None,
+    ts=None,
+    model=None,
+    source=None,
+    assignment=None,
+    work_type=None,
+    role_name=None,
+    routing_metadata=None,
+    influenced_by_role_run_ids=None,
+    influenced_by_skill_event_ids=None,
+    influenced_by_workflow_ids=None,
+    capability_ids=None,
+    capability_version_ids=None,
+    acceptance_gate_ids=None,
+):
+    existing = c.execute(
+        "SELECT model, source, work_type, role_name, routing_metadata FROM runs WHERE run_id=?",
+        (run_id,),
+    ).fetchone()
+    run_model = model or (existing[0] if existing and existing[0] else None)
+    run_source = _derive_source(run_id, mode, source) or (
+        existing[1] if existing and existing[1] else None
+    )
+    run_assignment = _derive_assignment(run_source, assignment)
+    run_work_type = work_type or (existing[2] if existing and existing[2] else None)
+    run_role = role_name or (existing[3] if existing and existing[3] else None)
+    run_routing_metadata = _json_or_none(routing_metadata) or (
+        existing[4] if existing and existing[4] else None
+    )
+    c.execute(
+        "INSERT OR REPLACE INTO runs "
+        "(run_id, ts, target, task_type, agent, mode, reasoning_level, model, "
+        "decomposition, rationale, pr_number, experiment_id, source, assignment, work_type, role_name, "
+        "routing_metadata) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
             run_id,
-            event_type="decision",
-            phase="decision",
-            producer=run_source or "feedback.record_run",
-            capability_id=direct_capability_id,
-            capability_version_id=direct_capability_version_id,
-            status="recorded",
-            payload=payload,
-            timestamp=ts,
-        )
-        # ONE EDGE PER CAPABILITY. A work process routinely uses several capabilities, but the
-        # completion event carries a single capability_id column, so `direct_capability_id` is set
-        # only in the one-capability case — which meant a run declaring TWO capabilities recorded
-        # attribution for NEITHER (the multi-capability case was the worst-served one, 2026-08-09).
-        # Edges are the many-to-many surface, and `capability` is already a valid influence type.
-        if len(capability_ids) == len(capability_version_ids):
-            for cap_id, cap_version in zip(capability_ids, capability_version_ids):
-                _record_influence_edge_in_conn(
-                    c,
-                    target_run_id=run_id,
-                    target_event_id=event["event_id"],
-                    influence_type="capability",
-                    influence_id=str(cap_id),
-                    accepted=True,
-                    capability_id=str(cap_id),
-                    capability_version_id=str(cap_version),
-                    acceptance_gate_id=(list(acceptance_gate_ids or []) or [None])[0],
-                )
-        for role_run_id in influenced_by_role_run_ids or []:
+            ts or int(time.time()),
+            target,
+            task_type,
+            agent,
+            mode,
+            reasoning_level,
+            run_model,
+            json.dumps(decomposition) if decomposition else None,
+            rationale,
+            pr_number,
+            experiment_id,
+            run_source,
+            run_assignment,
+            run_work_type,
+            run_role,
+            run_routing_metadata,
+        ),
+    )
+    # feedback.py IS the Brain — exercised by every recorded run, never selected for a task.
+    # Coalesced daily: at ~48 runs/day a per-invocation heartbeat would add ~17,500 events a
+    # year to one record, and `heartbeat` scans that list on every call. (2026-08-09)
+    _capability_daily_heartbeat("feedback-store", "invocation", ref="record_run")
+    capability_ids = list(capability_ids or [])
+    capability_version_ids = list(capability_version_ids or [])
+    if capability_version_ids and len(capability_ids) != len(capability_version_ids):
+        raise ValueError("capability identity/version lineage length mismatch")
+    # Resolve versions from the ledger when the caller supplied ids without them. Callers
+    # legitimately know WHICH capabilities they used but not the version hash; before lineage
+    # adoption (2026-08-09) no capability had one, so this always fell through and attribution
+    # was dropped. Never invents a version: a capability without lineage stays unresolved.
+    if capability_ids and not capability_version_ids:
+        capability_version_ids = _resolve_capability_versions(capability_ids)
+    direct_capability_id = (
+        capability_ids[0] if len(capability_ids) == 1 and len(capability_version_ids) == 1 else None
+    )
+    direct_capability_version_id = (
+        capability_version_ids[0] if len(capability_version_ids) == 1 else None
+    )
+    payload = {
+        "capability_ids": capability_ids,
+        "acceptance_gate_ids": list(acceptance_gate_ids or []),
+        "role_ids": list(influenced_by_role_run_ids or []),
+        "skill_ids": list(influenced_by_skill_event_ids or []),
+        "workflow_ids": list(influenced_by_workflow_ids or []),
+        "delivery": {
+            "pr_number": pr_number,
+            "target_id": target,
+            "task_type": task_type,
+            "experiment_id": experiment_id,
+        },
+    }
+    _record_completion_event_in_conn(
+        c,
+        run_id,
+        event_type="decision",
+        phase="trigger",
+        producer=run_source or "feedback.record_run",
+        capability_id=direct_capability_id,
+        capability_version_id=direct_capability_version_id,
+        status="recorded",
+        payload=payload,
+        timestamp=ts,
+    )
+    event = _record_completion_event_in_conn(
+        c,
+        run_id,
+        event_type="decision",
+        phase="decision",
+        producer=run_source or "feedback.record_run",
+        capability_id=direct_capability_id,
+        capability_version_id=direct_capability_version_id,
+        status="recorded",
+        payload=payload,
+        timestamp=ts,
+    )
+    # ONE EDGE PER CAPABILITY. A work process routinely uses several capabilities, but the
+    # completion event carries a single capability_id column, so `direct_capability_id` is set
+    # only in the one-capability case — which meant a run declaring TWO capabilities recorded
+    # attribution for NEITHER (the multi-capability case was the worst-served one, 2026-08-09).
+    # Edges are the many-to-many surface, and `capability` is already a valid influence type.
+    if len(capability_ids) == len(capability_version_ids):
+        for cap_id, cap_version in zip(capability_ids, capability_version_ids):
             _record_influence_edge_in_conn(
                 c,
                 target_run_id=run_id,
                 target_event_id=event["event_id"],
-                influence_type="role",
-                influence_id=str(role_run_id),
+                influence_type="capability",
+                influence_id=str(cap_id),
+                accepted=True,
+                capability_id=str(cap_id),
+                capability_version_id=str(cap_version),
+                acceptance_gate_id=(list(acceptance_gate_ids or []) or [None])[0],
+            )
+    for role_run_id in influenced_by_role_run_ids or []:
+        _record_influence_edge_in_conn(
+            c,
+            target_run_id=run_id,
+            target_event_id=event["event_id"],
+            influence_type="role",
+            influence_id=str(role_run_id),
+            source_run_id=str(role_run_id),
+            accepted=True,
+            acceptance_gate_id=(list(acceptance_gate_ids or []) or [None])[0],
+        )
+        # INHERIT the role run's capability attribution onto THIS run.
+        #
+        # Why this is required for measurement. A role run is advisory: it proposes and never
+        # produces a PR, so no `outcomes` row is ever written for it. Its own capability edge is
+        # therefore permanently unresolvable — measured 2026-08-18, all 170 capability edges
+        # targeted `role:triage:*` runs and 0 carried a verdict or durability, so
+        # capability_effectiveness reported `not_yet_measurable` forever with a populated
+        # numerator and no denominator.
+        #
+        # The run that ACTS on the proposal does terminate, and `_record_outcome_in_conn`
+        # already back-propagates over accepted edges. So re-attributing the capability to the
+        # acting run is the whole fix: no new table, no second store, and outcome resolution
+        # arrives for free on the existing path. `source_run_id` preserves the provenance chain
+        # back to the proposal, so this adds a claim about WHERE the capability was used, not a
+        # stronger claim than the evidence supports.
+        for inherited_id, inherited_version in _capability_attribution_of(c, str(role_run_id)):
+            if inherited_id in capability_ids:
+                continue  # the run declared it directly; don't double-count
+            _record_influence_edge_in_conn(
+                c,
+                target_run_id=run_id,
+                target_event_id=event["event_id"],
+                influence_type="capability",
+                influence_id=str(inherited_version),
                 source_run_id=str(role_run_id),
                 accepted=True,
+                capability_id=str(inherited_id),
+                capability_version_id=str(inherited_version),
                 acceptance_gate_id=(list(acceptance_gate_ids or []) or [None])[0],
             )
-            # INHERIT the role run's capability attribution onto THIS run.
-            #
-            # Why this is required for measurement. A role run is advisory: it proposes and never
-            # produces a PR, so no `outcomes` row is ever written for it. Its own capability edge is
-            # therefore permanently unresolvable — measured 2026-08-18, all 170 capability edges
-            # targeted `role:triage:*` runs and 0 carried a verdict or durability, so
-            # capability_effectiveness reported `not_yet_measurable` forever with a populated
-            # numerator and no denominator.
-            #
-            # The run that ACTS on the proposal does terminate, and `_record_outcome_in_conn`
-            # already back-propagates over accepted edges. So re-attributing the capability to the
-            # acting run is the whole fix: no new table, no second store, and outcome resolution
-            # arrives for free on the existing path. `source_run_id` preserves the provenance chain
-            # back to the proposal, so this adds a claim about WHERE the capability was used, not a
-            # stronger claim than the evidence supports.
-            for inherited_id, inherited_version in _capability_attribution_of(c, str(role_run_id)):
-                if inherited_id in capability_ids:
-                    continue  # the run declared it directly; don't double-count
-                _record_influence_edge_in_conn(
-                    c,
-                    target_run_id=run_id,
-                    target_event_id=event["event_id"],
-                    influence_type="capability",
-                    influence_id=str(inherited_version),
-                    source_run_id=str(role_run_id),
-                    accepted=True,
-                    capability_id=str(inherited_id),
-                    capability_version_id=str(inherited_version),
-                    acceptance_gate_id=(list(acceptance_gate_ids or []) or [None])[0],
-                )
-        for skill_event_id in influenced_by_skill_event_ids or []:
-            source = c.execute(
-                "SELECT run_id FROM completion_events WHERE event_id=?", (skill_event_id,)
+    for skill_event_id in influenced_by_skill_event_ids or []:
+        source = c.execute(
+            "SELECT run_id FROM completion_events WHERE event_id=?", (skill_event_id,)
+        ).fetchone()
+        _record_influence_edge_in_conn(
+            c,
+            target_run_id=run_id,
+            target_event_id=event["event_id"],
+            influence_type="skill",
+            influence_id=str(skill_event_id),
+            source_run_id=source[0] if source else None,
+            source_event_id=str(skill_event_id),
+            accepted=True,
+            acceptance_gate_id=(list(acceptance_gate_ids or []) or [None])[0],
+        )
+    for workflow_id in influenced_by_workflow_ids or []:
+        source_run = f"workflow:{workflow_id}"
+        source_event = _record_completion_event_in_conn(
+            c,
+            source_run,
+            event_type="workflow",
+            phase="trigger",
+            producer="feedback.record_run",
+            status="accepted",
+            payload={"workflow_ids": [workflow_id]},
+        )
+        _record_influence_edge_in_conn(
+            c,
+            target_run_id=run_id,
+            target_event_id=event["event_id"],
+            influence_type="workflow",
+            influence_id=str(workflow_id),
+            source_run_id=source_run,
+            source_event_id=source_event["event_id"],
+            accepted=True,
+            acceptance_gate_id=(list(acceptance_gate_ids or []) or [None])[0],
+        )
+
+
+def _require_quarantine_feedback_db() -> None:
+    selected_db = Path(DB_PATH).expanduser().resolve()
+    live_db = (Path.home() / ".codex" / "orchestrator" / "feedback" / "orchestrator.db").resolve()
+    if selected_db == live_db or "quarantine" not in selected_db.name.lower():
+        raise ValueError(
+            "trial feedback recording is allowed only in an explicitly named quarantine database"
+        )
+
+
+def ingest_profile_trial(
+    result: dict[str, Any],
+    *,
+    manifest: dict[str, Any],
+    attempts: list[dict[str, Any]],
+    auxiliary_traces: list[dict[str, Any]] | None = None,
+    ts: int | None = None,
+    commit_ingest_marker: bool = True,
+) -> dict[str, Any]:
+    """Write one trial's runs, attempts, outcomes, and traces in a single transaction.
+
+    ``trial_id`` is the idempotency key: a successful verified ingest is recorded in
+    ``profile_trial_ingests`` and later calls return without duplicating rows.
+    Transport-only recording may omit the marker so a later verified ingest can seal it.
+    """
+    trial_id = str(result.get("trial_id") or manifest.get("trial_id") or "").strip()
+    if not trial_id:
+        raise ValueError("profile trial ingest requires trial_id")
+    _require_quarantine_feedback_db()
+    timestamp = int(ts if ts is not None else time.time())
+    traces = list(auxiliary_traces or [])
+
+    with _conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            existing = c.execute(
+                "SELECT applied_ts FROM profile_trial_ingests WHERE trial_id=?", (trial_id,)
             ).fetchone()
-            _record_influence_edge_in_conn(
-                c,
-                target_run_id=run_id,
-                target_event_id=event["event_id"],
-                influence_type="skill",
-                influence_id=str(skill_event_id),
-                source_run_id=source[0] if source else None,
-                source_event_id=str(skill_event_id),
-                accepted=True,
-                acceptance_gate_id=(list(acceptance_gate_ids or []) or [None])[0],
-            )
-        for workflow_id in influenced_by_workflow_ids or []:
-            source_run = f"workflow:{workflow_id}"
-            source_event = _record_completion_event_in_conn(
-                c,
-                source_run,
-                event_type="workflow",
-                phase="trigger",
-                producer="feedback.record_run",
-                status="accepted",
-                payload={"workflow_ids": [workflow_id]},
-            )
-            _record_influence_edge_in_conn(
-                c,
-                target_run_id=run_id,
-                target_event_id=event["event_id"],
-                influence_type="workflow",
-                influence_id=str(workflow_id),
-                source_run_id=source_run,
-                source_event_id=source_event["event_id"],
-                accepted=True,
-                acceptance_gate_id=(list(acceptance_gate_ids or []) or [None])[0],
-            )
+            if existing:
+                c.execute("COMMIT")
+                return {
+                    "trial_id": trial_id,
+                    "status": "already_ingested",
+                    "applied_ts": int(existing[0]),
+                    "recorded_attempt_ids": [],
+                }
+            weights_before = {
+                "v1": c.execute("SELECT COUNT(*) FROM route_weights").fetchone()[0],
+                "v2": c.execute("SELECT COUNT(*) FROM route_weights_v2").fetchone()[0],
+            }
+            recorded_attempt_ids: list[str] = []
+            for attempt in attempts:
+                profile = execution_profiles.get_profile(attempt["profile_id"])
+                record_run(
+                    attempt["run_id"],
+                    manifest["trial_id"],
+                    "instrumentation:model_profile_trial",
+                    "codex",
+                    mode="trial",
+                    reasoning_level="high",
+                    source="instrumentation",
+                    assignment="instrumentation",
+                    work_type="model_profile_trial",
+                    routing_metadata={
+                        "trial_id": manifest["trial_id"],
+                        "profile_id": attempt["profile_id"],
+                        "packet_hash": manifest["packet_hash"],
+                        "learning_enabled": False,
+                    },
+                    ts=timestamp,
+                    conn=c,
+                )
+                provider_resolved_model = attempt.get("provider_resolved_model")
+                recorded_attempt_ids.append(
+                    record_execution_attempt(
+                        attempt["run_id"],
+                        attempt_id=f"attempt:trial:{attempt['run_id']}",
+                        attempt_ordinal=int(attempt.get("attempt_ordinal") or 1),
+                        operation_role="worker",
+                        profile_id=attempt["profile_id"],
+                        requested_provider=profile["provider"],
+                        requested_model=attempt["requested_model"],
+                        selected_model=attempt.get("selected_model"),
+                        reported_model=attempt.get("reported_model"),
+                        resolved_provider=(
+                            attempt.get("provider_resolved_provider")
+                            if provider_resolved_model
+                            else None
+                        ),
+                        resolved_model=provider_resolved_model,
+                        fallback_reason=attempt.get("fallback_reason"),
+                        runner_version=attempt.get("runner_version"),
+                        cli_version=attempt.get("cli_version"),
+                        status=attempt.get("status"),
+                        tokens_in=int(attempt.get("tokens_in") or 0),
+                        tokens_out=int(attempt.get("tokens_out") or 0),
+                        latency_s=float(attempt.get("latency_s") or 0.0),
+                        source="model-profile-trial",
+                        raw_ref=attempt.get("artifact_ref"),
+                        completed_ts=timestamp,
+                        conn=c,
+                    )
+                )
+                # Worker execution success is not an adjudicated quality or durability
+                # verdict. Retain a pending outcome until that evidence arrives.
+                _record_outcome_in_conn(c, attempt["run_id"])
+            for index, trace in enumerate(traces, start=1):
+                record_execution_trace(
+                    trace.get("run_id") or attempts[0]["run_id"],
+                    trace_id=trace.get("trace_id") or f"trial-evaluator-{index}",
+                    provider=trace.get("provider"),
+                    model=trace.get("model"),
+                    operation=trace.get("operation") or "evaluate_pr_compare",
+                    operation_role=trace.get("operation_role"),
+                    status=trace.get("status"),
+                    source="model-profile-trial",
+                    conn=c,
+                )
+            weights_after = {
+                "v1": c.execute("SELECT COUNT(*) FROM route_weights").fetchone()[0],
+                "v2": c.execute("SELECT COUNT(*) FROM route_weights_v2").fetchone()[0],
+            }
+            if weights_after != weights_before:
+                raise AssertionError("instrumentation trial altered route weights")
+            if commit_ingest_marker:
+                c.execute(
+                    "INSERT INTO profile_trial_ingests (trial_id, applied_ts) VALUES (?,?)",
+                    (trial_id, timestamp),
+                )
+            c.execute("COMMIT")
+        except BaseException:
+            if c.in_transaction:
+                c.execute("ROLLBACK")
+            raise
+    return {
+        "trial_id": trial_id,
+        "status": "ingested",
+        "applied_ts": timestamp,
+        "recorded_attempt_ids": recorded_attempt_ids,
+    }
 
 
 def record_outcome(
@@ -4327,6 +4559,8 @@ def record_execution_trace(
     tokens_out=0,
     started_ts=None,
     completed_ts=None,
+    *,
+    conn: sqlite3.Connection | None = None,
 ):
     """Retain a trace plus its causally scoped attempt provenance.
 
@@ -4343,7 +4577,7 @@ def record_execution_trace(
             ordinal = None
     except (TypeError, ValueError):
         ordinal = None
-    with _conn() as c:
+    with nullcontext(conn) if conn is not None else _conn() as c:
         if ordinal is None:
             existing_ordinal = c.execute(
                 "SELECT attempt_ordinal FROM execution_attempts "
@@ -4606,6 +4840,7 @@ def record_execution_attempt(
     raw_ref: str | None = None,
     started_ts: int | None = None,
     completed_ts: int | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> str:
     """Record a non-trace or trace-linked execution attempt additively."""
     role = validate_operation_role(operation_role)
@@ -4619,6 +4854,35 @@ def record_execution_attempt(
         ).hexdigest()[:24]
     )
     key = key if str(key).startswith("attempt:") else f"attempt:{key}"
+    if conn is not None:
+        _record_execution_attempt_in_conn(
+            conn,
+            run_id=run_id,
+            attempt_id=key,
+            attempt_ordinal=attempt_ordinal,
+            operation_role=role,
+            profile_id=profile_id,
+            requested_provider=requested_provider,
+            requested_model=requested_model,
+            selected_model=selected_model,
+            reported_model=reported_model,
+            resolved_provider=resolved_provider,
+            resolved_model=resolved_model,
+            fallback_reason=fallback_reason,
+            runner_version=runner_version,
+            cli_version=cli_version,
+            status=status,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            latency_s=latency_s,
+            cost_usd=cost_usd,
+            trace_key=trace_key,
+            source=source,
+            raw_ref=raw_ref,
+            started_ts=started_ts,
+            completed_ts=completed_ts,
+        )
+        return key
     with _conn() as c:
         _record_execution_attempt_in_conn(
             c,

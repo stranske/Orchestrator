@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Guarded, read-only Astra/Terra/Luna worker-profile plumbing trial.
+"""Guarded, read-only worker-profile trial preparation and evidence ingestion.
 
 The trial is instrumentation, not a benchmark: one frozen packet, one shared
-Codex capacity snapshot, randomized launch order, and three exact profiles. It
+Codex capacity snapshot, randomized launch order, and exact registered profiles. It
 never executes a worker itself. ``prepare`` emits launch requests for a guarded
 transport bridge; ``finalize`` validates returned telemetry and proves source
-integrity. Live Brain recording remains disabled at the CLI boundary until the
-multi-row feedback write has a single atomic transaction.
+integrity. An explicit layout supports repeated instances of selected profiles;
+verified evidence can be ingested atomically into a quarantine feedback database.
 ``--selftest`` exercises prepare, validation, and reporting fully offline.
 """
 
@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import random
 import re
@@ -52,6 +53,27 @@ LEGACY_PROFILE_IDS = (
 def _manifest_profile_ids(manifest: dict[str, Any]) -> tuple[str, ...]:
     requests = manifest.get("requests") or []
     actual = {item.get("profile_id") for item in requests}
+    if "instances_per_profile" in manifest and "selected_profile_ids" not in manifest:
+        raise ValueError("trial instance layout requires selected profiles")
+    if "selected_profile_ids" in manifest:
+        selected = manifest["selected_profile_ids"]
+        count = manifest.get("instances_per_profile")
+        supported_ids = set(EXPECTED_PROFILE_IDS) | set(LEGACY_PROFILE_IDS)
+        if (
+            not isinstance(selected, list)
+            or not all(isinstance(pid, str) for pid in selected)
+            or len(selected) < 2
+            or len(set(selected)) != len(selected)
+            or not set(selected) <= supported_ids
+            or type(count) is not int
+            or not 1 <= count <= 3
+        ):
+            raise ValueError("trial requires supported profiles and one to three instances")
+        if actual != set(selected) or any(
+            sum(item.get("profile_id") == pid for item in requests) != count for pid in selected
+        ):
+            raise ValueError("trial requests do not match the selected profile instance counts")
+        return tuple(selected)
     for supported in (EXPECTED_PROFILE_IDS, LEGACY_PROFILE_IDS):
         if actual == set(supported) and len(requests) == len(supported):
             return supported
@@ -130,6 +152,8 @@ RESULT_FIELDS = {
     "acknowledged",
     "attempts",
     "auxiliary_traces",
+    "identity_verified",
+    "quality_by_profile",
 }
 ATTEMPT_FIELDS = {
     "run_id",
@@ -265,11 +289,27 @@ def build_trial_manifest(
     now: int | None = None,
     capacity_state: str = "unknown",
     packet: dict[str, Any] | None = None,
+    profile_ids: Iterable[str] | None = None,
+    instances_per_profile: int = 1,
 ) -> dict[str, Any]:
     """Build a frozen, randomized, source-integrity-bound trial plan."""
     timestamp = int(time.time()) if now is None else int(now)
     roots = (orchestrator_root.resolve(), workflows_root.resolve())
-    profiles = [execution_profiles.get_profile(profile_id) for profile_id in EXPECTED_PROFILE_IDS]
+    selected = tuple(EXPECTED_PROFILE_IDS if profile_ids is None else profile_ids)
+    if type(instances_per_profile) is not int or not 1 <= instances_per_profile <= 3:
+        raise ValueError("trial requires one to three instances per profile")
+    custom_layout = profile_ids is not None or instances_per_profile != 1
+    if custom_layout:
+        _manifest_profile_ids(
+            {
+                "selected_profile_ids": list(selected),
+                "instances_per_profile": instances_per_profile,
+                "requests": [
+                    {"profile_id": pid} for pid in selected for _ in range(instances_per_profile)
+                ],
+            }
+        )
+    profiles = [execution_profiles.get_profile(profile_id) for profile_id in selected]
     pool_ids = {pool_id for profile in profiles for pool_id in profile["capacity_pool_ids"]}
     stop_reasons = []
     if pool_ids != {"codex-subscription"}:
@@ -281,29 +321,34 @@ def build_trial_manifest(
     if any(profile["reasoning_effort"] != "high" for profile in profiles):
         stop_reasons.append("reasoning_effort_not_fixed")
 
-    frozen_packet = json.loads(json.dumps(packet or FROZEN_PACKET))
+    frozen_packet = json.loads(json.dumps(FROZEN_PACKET if packet is None else packet))
     packet_hash = _sha256(frozen_packet)
     source_before = {
         "orchestrator": source_manifest(roots[0]),
         "workflows": source_manifest(roots[1]),
     }
-    order = list(EXPECTED_PROFILE_IDS)
+    order = [
+        (pid, instance) for pid in selected for instance in range(1, instances_per_profile + 1)
+    ]
     random.Random(int(seed)).shuffle(order)
     identity = {
         "created_at": timestamp,
         "packet_hash": packet_hash,
-        "profile_ids": list(EXPECTED_PROFILE_IDS),
+        "profile_ids": list(selected),
         "seed": int(seed),
         "source_hashes": {key: value["aggregate_sha256"] for key, value in source_before.items()},
     }
+    if custom_layout:
+        identity["instances_per_profile"] = instances_per_profile
     trial_id = "model-profile-trial:" + _sha256(identity).split(":", 1)[1][:24]
     pool_snapshot = _shared_pool_snapshot(state=capacity_state, captured_at=timestamp)
     requests = []
-    for launch_ordinal, profile_id in enumerate(order, start=1):
+    for launch_ordinal, (profile_id, instance) in enumerate(order, start=1):
         profile = execution_profiles.get_profile(profile_id)
         requests.append(
             {
-                "run_id": f"{trial_id}:{profile_id}",
+                "run_id": f"{trial_id}:{profile_id}"
+                + (f":instance:{instance}" if instances_per_profile > 1 else ""),
                 "launch_ordinal": launch_ordinal,
                 "profile_id": profile_id,
                 "provider": profile["provider"],
@@ -319,7 +364,7 @@ def build_trial_manifest(
                 "capacity_pool_ids": ["codex-subscription"],
             }
         )
-    return {
+    manifest = {
         "schema": TRIAL_SCHEMA,
         "version": SCHEMA_VERSION,
         "trial_id": trial_id,
@@ -331,7 +376,7 @@ def build_trial_manifest(
         "frozen_packet": frozen_packet,
         "packet_hash": packet_hash,
         "seed": int(seed),
-        "launch_order": order,
+        "launch_order": [pid for pid, _ in order],
         "requests": requests,
         "capacity_snapshot": pool_snapshot,
         "source_before": source_before,
@@ -340,6 +385,10 @@ def build_trial_manifest(
             "reasons": stop_reasons,
         },
     }
+    if custom_layout:
+        manifest["selected_profile_ids"] = list(selected)
+        manifest["instances_per_profile"] = instances_per_profile
+    return manifest
 
 
 def validate_trial_manifest(manifest: dict[str, Any]) -> None:
@@ -370,7 +419,8 @@ def validate_trial_manifest(manifest: dict[str, Any]) -> None:
         ):
             raise ValueError("trial source manifest is incomplete")
     profile_ids = _manifest_profile_ids(manifest)
-    expected_count = len(profile_ids)
+    instances = manifest.get("instances_per_profile", 1)
+    expected_count = len(profile_ids) * instances
     identity = {
         "created_at": manifest.get("created_at"),
         "packet_hash": manifest.get("packet_hash"),
@@ -380,6 +430,8 @@ def validate_trial_manifest(manifest: dict[str, Any]) -> None:
             key: source_before[key]["aggregate_sha256"] for key in ("orchestrator", "workflows")
         },
     }
+    if "selected_profile_ids" in manifest:
+        identity["instances_per_profile"] = instances
     expected_trial_id = "model-profile-trial:" + _sha256(identity).split(":", 1)[1][:24]
     if manifest.get("trial_id") != expected_trial_id:
         raise ValueError("trial identity is not reproducible")
@@ -388,11 +440,11 @@ def validate_trial_manifest(manifest: dict[str, Any]) -> None:
     if {item.get("profile_id") for item in requests} != set(profile_ids):
         raise ValueError("trial requires an exact supported profile set")
     if len({item.get("run_id") for item in requests}) != expected_count:
-        raise ValueError("trial requires one distinct run identity per profile")
+        raise ValueError("trial requires one distinct run identity per instance")
     if manifest.get("capacity_snapshot", {}).get("snapshot_count") != 1:
         raise ValueError("trial requires one shared-pool snapshot")
     launch_order = manifest.get("launch_order") or []
-    if sorted(launch_order) != sorted(profile_ids) or len(set(launch_order)) != len(profile_ids):
+    if sorted(launch_order) != sorted(pid for pid in profile_ids for _ in range(instances)):
         raise ValueError("trial launch order is not an exact profile permutation")
     by_ordinal = sorted(requests, key=lambda item: int(item.get("launch_ordinal") or 0))
     if [item.get("profile_id") for item in by_ordinal] != launch_order:
@@ -401,10 +453,21 @@ def validate_trial_manifest(manifest: dict[str, Any]) -> None:
         range(1, expected_count + 1)
     ):
         raise ValueError("trial launch ordinals must cover the selected profile set")
+    expected_run_ids = {
+        f"{manifest['trial_id']}:{pid}" + (f":instance:{i}" if instances > 1 else "")
+        for pid in profile_ids
+        for i in range(1, instances + 1)
+    }
+    if {item.get("run_id") for item in requests} != expected_run_ids:
+        raise ValueError("trial request run identity is not reproducible")
     for request in requests:
         profile = execution_profiles.get_profile(request["profile_id"])
-        expected_run_id = f"{manifest['trial_id']}:{request['profile_id']}"
-        if request.get("run_id") != expected_run_id:
+        profile_run_ids = {
+            f"{manifest['trial_id']}:{request['profile_id']}"
+            + (f":instance:{i}" if instances > 1 else "")
+            for i in range(1, instances + 1)
+        }
+        if request.get("run_id") not in profile_run_ids:
             raise ValueError("trial request run identity is not reproducible")
         if profile.get("lifecycle_status") != "active":
             raise ValueError("trial profile is not active in the authoritative registry")
@@ -456,16 +519,16 @@ def _validate_results(manifest: dict[str, Any], results: dict[str, Any]) -> list
     ):
         raise ValueError("trial results did not acknowledge the frozen packet")
     attempts = results.get("attempts") or []
-    by_profile = {item.get("profile_id"): item for item in attempts}
-    if set(by_profile) != set(profile_ids) or len(attempts) != len(profile_ids):
-        raise ValueError("trial results require exactly one attempt per profile")
-    request_by_profile = {item["profile_id"]: item for item in manifest["requests"]}
-    for profile_id, attempt in by_profile.items():
+    by_run = {item.get("run_id"): item for item in attempts}
+    request_by_run = {item["run_id"]: item for item in manifest["requests"]}
+    if set(by_run) != set(request_by_run) or len(attempts) != len(request_by_run):
+        raise ValueError("trial results require exactly one attempt per instance")
+    for run_id, attempt in by_run.items():
         unknown_attempt = sorted(set(attempt) - ATTEMPT_FIELDS)
         if unknown_attempt:
             raise ValueError(f"trial attempt contains unsupported fields: {unknown_attempt}")
-        request = request_by_profile[profile_id]
-        if attempt.get("run_id") != request["run_id"]:
+        request = request_by_run[run_id]
+        if attempt.get("profile_id") != request["profile_id"]:
             raise ValueError("trial attempt run/profile join mismatch")
         if attempt.get("operation_role") != "worker":
             raise ValueError("trial profile attempt must be a worker")
@@ -494,6 +557,10 @@ def _validate_results(manifest: dict[str, Any], results: dict[str, Any]) -> list
             raise ValueError("trial attempt missing runner version")
         if not str(attempt.get("cli_version") or "").strip():
             raise ValueError("trial attempt missing CLI version")
+        for field in ("tokens_in", "tokens_out"):
+            value = attempt.get(field)
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError(f"trial attempt {field} must be a nonnegative integer or null")
         evidence = attempt.get("identity_evidence")
         if not isinstance(evidence, dict):
             raise ValueError("trial attempt missing authoritative identity evidence")
@@ -523,9 +590,171 @@ def _validate_results(manifest: dict[str, Any], results: dict[str, Any]) -> list
     # Return only the strict allowlist so state artifacts cannot retain a
     # caller-supplied secret or raw provider response by accident.
     return [
-        {key: by_profile[profile_id].get(key) for key in sorted(ATTEMPT_FIELDS)}
-        for profile_id in profile_ids
+        {key: by_run[request["run_id"]].get(key) for key in sorted(ATTEMPT_FIELDS)}
+        for request in sorted(
+            manifest["requests"],
+            key=lambda row: (profile_ids.index(row["profile_id"]), row["run_id"]),
+        )
     ]
+
+
+def _capability_program_summary_path() -> Path:
+    state_root = Path(
+        os.environ.get("ORCH_STATE_DIR", str(Path.home() / ".codex" / "orchestrator"))
+    )
+    return state_root / "capability-program" / "profile-trial.json"
+
+
+def _load_capability_program_trial_summary() -> dict[str, Any] | None:
+    path = _capability_program_summary_path()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _is_measured_program_summary(payload: dict[str, Any] | None) -> bool:
+    if not payload:
+        return False
+    if payload.get("brain_ingest_enabled"):
+        return True
+    if payload.get("identity_verified"):
+        return True
+    quality = payload.get("quality_by_profile")
+    if isinstance(quality, dict) and any(value != "n/a" for value in quality.values()):
+        return True
+    return False
+
+
+def _authoritative_identity_verified(attempts: list[dict[str, Any]]) -> bool:
+    for attempt in attempts:
+        evidence = attempt.get("identity_evidence")
+        if not isinstance(evidence, dict):
+            return False
+        ref = str(evidence.get("artifact_ref") or attempt.get("artifact_ref") or "").strip()
+        if not ref:
+            return False
+        artifact_path = Path(ref).expanduser()
+        if not artifact_path.is_file():
+            return False
+        expected_hash = str(evidence.get("artifact_sha256") or "")
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_hash):
+            return False
+        try:
+            raw = artifact_path.read_bytes()
+            if len(raw) > 64 * 1024:
+                return False
+            actual_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
+            if actual_hash != expected_hash:
+                return False
+            artifact = json.loads(raw)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        if not isinstance(artifact, dict):
+            return False
+        # A digest alone binds bytes, not worker identity. Require the recorded
+        # identity content to agree with every provider-resolved attempt field.
+        for field in ("profile_id", "provider_resolved_provider", "provider_resolved_model"):
+            if not attempt.get(field) or artifact.get(field) != attempt[field]:
+                return False
+    return True
+
+
+def _require_verified_identity_for_ingest(
+    results: dict[str, Any], attempts: list[dict[str, Any]]
+) -> None:
+    if results.get("identity_verified") is not True:
+        raise ValueError("trial ingest refused: worker identity is unverified")
+    if not _authoritative_identity_verified(attempts):
+        raise ValueError("trial ingest refused: identity evidence is not authoritative")
+
+
+def _validated_quality_by_profile(
+    results: dict[str, Any], attempts: list[dict[str, Any]]
+) -> dict[str, Any]:
+    profile_ids = sorted({item["profile_id"] for item in attempts})
+    supplied = results.get("quality_by_profile")
+    if supplied is None:
+        return {profile_id: "n/a" for profile_id in profile_ids}
+    if not isinstance(supplied, dict):
+        raise ValueError("trial results quality_by_profile must be a mapping")
+    unknown = sorted(set(supplied) - set(profile_ids))
+    if unknown:
+        raise ValueError(f"trial results quality_by_profile has unknown profiles: {unknown}")
+    quality_by_profile: dict[str, Any] = {}
+    for profile_id in profile_ids:
+        value = supplied.get(profile_id, "n/a")
+        if value in (None, "n/a"):
+            quality_by_profile[profile_id] = "n/a"
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("trial results quality_by_profile values must be numeric or n/a")
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            raise ValueError("trial results quality_by_profile values must be finite")
+        if numeric < 0.0 or numeric > 1.0:
+            raise ValueError("trial results quality_by_profile values must be between 0 and 1")
+        quality_by_profile[profile_id] = numeric
+    return quality_by_profile
+
+
+def _trial_token_total(attempts: list[dict[str, Any]], field: str) -> int | str:
+    """Sum measured usage only when every instance supplied that direction."""
+    values = [attempt.get(field) for attempt in attempts]
+    if not values or any(value is None for value in values):
+        return "n/a"
+    return sum(value for value in values if value is not None)
+
+
+def _write_capability_program_trial_summary(
+    manifest: dict[str, Any],
+    attempts: list[dict[str, Any]],
+    *,
+    identity_verified: bool,
+    brain_ingest_enabled: bool,
+    quality_by_profile: dict[str, Any],
+    timestamp: int,
+) -> None:
+    """Persist a one-line-friendly trial summary for switch review and program tracking."""
+    state_root = Path(
+        os.environ.get("ORCH_STATE_DIR", str(Path.home() / ".codex" / "orchestrator"))
+    )
+    out_dir = state_root / "capability-program"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    profile_ids = sorted({item["profile_id"] for item in attempts})
+    tokens_in = _trial_token_total(attempts, "tokens_in")
+    tokens_out = _trial_token_total(attempts, "tokens_out")
+    payload = {
+        "trial_id": manifest["trial_id"],
+        "updated_at": timestamp,
+        "profile_count": len(profile_ids),
+        "instance_count": len(attempts),
+        "identity_verified": bool(identity_verified),
+        "brain_ingest_enabled": bool(brain_ingest_enabled),
+        "quality_by_profile": {pid: quality_by_profile.get(pid, "n/a") for pid in profile_ids},
+        "cost_tokens_by_profile": {
+            pid: {
+                field: _trial_token_total([a for a in attempts if a["profile_id"] == pid], field)
+                for field in ("tokens_in", "tokens_out")
+            }
+            for pid in profile_ids
+        },
+        "provider_resolved_identity_by_profile": {
+            pid: {
+                "provider": next(a for a in attempts if a["profile_id"] == pid)[
+                    "provider_resolved_provider"
+                ],
+                "model": next(a for a in attempts if a["profile_id"] == pid)[
+                    "provider_resolved_model"
+                ],
+            }
+            for pid in profile_ids
+        },
+        "aggregate_tokens_in": tokens_in,
+        "aggregate_tokens_out": tokens_out,
+    }
+    _atomic_json(out_dir / "profile-trial.json", payload)
 
 
 def finalize_trial(
@@ -534,6 +763,7 @@ def finalize_trial(
     *,
     state_path: Path | None = None,
     record_feedback: bool = False,
+    ingest_brain: bool = False,
     now: int | None = None,
 ) -> dict[str, Any]:
     """Validate source integrity, record instrumentation, and prove no learning writes."""
@@ -551,80 +781,62 @@ def finalize_trial(
     if not source_unchanged:
         raise ValueError("source integrity changed during read-only trial")
 
-    if record_feedback:
-        selected_db = Path(feedback.DB_PATH).expanduser().resolve()
-        live_db = (
-            Path.home() / ".codex" / "orchestrator" / "feedback" / "orchestrator.db"
-        ).resolve()
-        if selected_db == live_db or "quarantine" not in selected_db.name.lower():
-            raise ValueError(
-                "trial feedback recording is allowed only in an explicitly named quarantine database"
+    if ingest_brain:
+        _require_verified_identity_for_ingest(results, attempts)
+    identity_verified = results.get(
+        "identity_verified"
+    ) is True and _authoritative_identity_verified(attempts)
+    quality_by_profile = _validated_quality_by_profile(results, attempts)
+
+    write_feedback = record_feedback or ingest_brain
+    weights_before = _weight_snapshot() if write_feedback else {}
+    recorded_attempt_ids: list[str] = []
+    brain_ingest_enabled = False
+    if write_feedback:
+        ingest_payload = feedback.ingest_profile_trial(
+            results,
+            manifest=manifest,
+            attempts=attempts,
+            auxiliary_traces=list(results.get("auxiliary_traces") or []),
+            ts=timestamp,
+            commit_ingest_marker=ingest_brain,
+        )
+        recorded_attempt_ids = list(ingest_payload.get("recorded_attempt_ids") or [])
+        brain_ingest_enabled = ingest_brain and ingest_payload.get("status") in {
+            "ingested",
+            "already_ingested",
+        }
+        ingest_status = ingest_payload.get("status")
+        if ingest_status != "already_ingested":
+            existing_summary = _load_capability_program_trial_summary()
+            same_trial_measured = (
+                _is_measured_program_summary(existing_summary)
+                and existing_summary is not None
+                and existing_summary.get("trial_id") == manifest.get("trial_id")
             )
-    weights_before = _weight_snapshot() if record_feedback else {}
-    recorded_attempt_ids = []
-    if record_feedback:
-        for attempt in attempts:
-            profile = execution_profiles.get_profile(attempt["profile_id"])
-            feedback.record_run(
-                attempt["run_id"],
-                manifest["trial_id"],
-                "instrumentation:model_profile_trial",
-                "codex",
-                mode="trial",
-                reasoning_level="high",
-                source="instrumentation",
-                assignment="instrumentation",
-                work_type="model_profile_trial",
-                routing_metadata={
-                    "trial_id": manifest["trial_id"],
-                    "profile_id": attempt["profile_id"],
-                    "packet_hash": manifest["packet_hash"],
-                    "learning_enabled": False,
-                },
-                ts=timestamp,
-            )
-            provider_resolved_model = attempt.get("provider_resolved_model")
-            recorded_attempt_ids.append(
-                feedback.record_execution_attempt(
-                    attempt["run_id"],
-                    attempt_id=f"attempt:trial:{manifest['trial_id']}:{attempt['profile_id']}",
-                    attempt_ordinal=int(attempt.get("attempt_ordinal") or 1),
-                    operation_role="worker",
-                    profile_id=attempt["profile_id"],
-                    requested_provider=profile["provider"],
-                    requested_model=attempt["requested_model"],
-                    selected_model=attempt.get("selected_model"),
-                    reported_model=attempt.get("reported_model"),
-                    resolved_provider=(
-                        attempt.get("provider_resolved_provider")
-                        if provider_resolved_model
-                        else None
-                    ),
-                    resolved_model=provider_resolved_model,
-                    fallback_reason=attempt.get("fallback_reason"),
-                    runner_version=attempt.get("runner_version"),
-                    cli_version=attempt.get("cli_version"),
-                    status=attempt.get("status"),
-                    tokens_in=int(attempt.get("tokens_in") or 0),
-                    tokens_out=int(attempt.get("tokens_out") or 0),
-                    latency_s=float(attempt.get("latency_s") or 0.0),
-                    source="model-profile-trial",
-                    raw_ref=attempt.get("artifact_ref"),
-                    completed_ts=timestamp,
+            if not ingest_brain and same_trial_measured:
+                preserved = existing_summary or {}
+                preserved_quality = preserved.get("quality_by_profile")
+                if not isinstance(preserved_quality, dict):
+                    preserved_quality = quality_by_profile
+                _write_capability_program_trial_summary(
+                    manifest,
+                    attempts,
+                    identity_verified=bool(preserved.get("identity_verified")),
+                    brain_ingest_enabled=bool(preserved.get("brain_ingest_enabled")),
+                    quality_by_profile=dict(preserved_quality),
+                    timestamp=timestamp,
                 )
-            )
-        for index, trace in enumerate(results.get("auxiliary_traces") or [], start=1):
-            feedback.record_execution_trace(
-                trace.get("run_id") or attempts[0]["run_id"],
-                trace_id=trace.get("trace_id") or f"trial-evaluator-{index}",
-                provider=trace.get("provider"),
-                model=trace.get("model"),
-                operation=trace.get("operation") or "evaluate_pr_compare",
-                operation_role=trace.get("operation_role"),
-                status=trace.get("status"),
-                source="model-profile-trial",
-            )
-    weights_after = _weight_snapshot() if record_feedback else {}
+            else:
+                _write_capability_program_trial_summary(
+                    manifest,
+                    attempts,
+                    identity_verified=identity_verified,
+                    brain_ingest_enabled=brain_ingest_enabled,
+                    quality_by_profile=quality_by_profile,
+                    timestamp=timestamp,
+                )
+    weights_after = _weight_snapshot() if write_feedback else {}
     if weights_after != weights_before:
         raise AssertionError("instrumentation trial altered route weights")
 
@@ -669,6 +881,7 @@ def finalize_trial(
             "before": weights_before,
             "after": weights_after,
         },
+        "brain_ingest_enabled": brain_ingest_enabled,
         "next_action": "retain_shadow_and_collect_only_productive_outcomes",
     }
     if state_path:
@@ -876,6 +1089,9 @@ def main(argv: list[str] | None = None) -> int:
     prepare.add_argument("--workflows-root", type=Path, required=True)
     prepare.add_argument("--output", type=Path, required=True)
     prepare.add_argument("--seed", type=int, default=56014)
+    prepare.add_argument("--profile-id", action="append", help="repeat for each selected profile")
+    prepare.add_argument("--instances-per-profile", type=int, default=1)
+    prepare.add_argument("--packet", type=Path, help="frozen recurring-work packet as JSON")
     prepare.add_argument(
         "--capacity-state", choices=("ok", "warn", "shed", "unknown"), default="unknown"
     )
@@ -884,6 +1100,11 @@ def main(argv: list[str] | None = None) -> int:
     finalize.add_argument("--results", type=Path, required=True)
     finalize.add_argument("--state", type=Path, required=True)
     finalize.add_argument("--confirm-instrumentation", action="store_true")
+    finalize.add_argument(
+        "--ingest",
+        action="store_true",
+        help="atomically record verified trial rows in the quarantine Brain",
+    )
     report = sub.add_parser("report")
     report.add_argument("--state", type=Path, default=DEFAULT_STATE_PATH)
     args = parser.parse_args(argv)
@@ -902,6 +1123,9 @@ def main(argv: list[str] | None = None) -> int:
             args.workflows_root,
             seed=args.seed,
             capacity_state=args.capacity_state,
+            profile_ids=args.profile_id,
+            instances_per_profile=args.instances_per_profile,
+            packet=json.loads(args.packet.read_text(encoding="utf-8")) if args.packet else None,
         )
         _atomic_json(args.output, payload)
     elif args.command == "finalize":
@@ -911,7 +1135,8 @@ def main(argv: list[str] | None = None) -> int:
             json.loads(args.manifest.read_text(encoding="utf-8")),
             json.loads(args.results.read_text(encoding="utf-8")),
             state_path=args.state,
-            record_feedback=False,
+            record_feedback=bool(args.ingest),
+            ingest_brain=bool(args.ingest),
         )
     else:
         payload = build_report(args.state)
