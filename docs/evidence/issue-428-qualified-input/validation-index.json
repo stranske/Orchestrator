@@ -1,0 +1,253 @@
+{
+  "archive_sha256": "e3ba90e7cafd19cdb6f2a3488488c8c288feb73859f91e94e2172c2a7c8d2ebd",
+  "sources": {
+    "src/roles.py": "b719f9db06b963ec5c69336548e2da26bcaee546ab69a4cc911cfbfb32ea64a9",
+    "src/adjudicator_retro.py": "586ff4ee91d2199c359316351c79e2782d2d75d2c134bc09b5ad2a00f5562293",
+    "tests/test_adjudicator_qualified_input.py": "4fb07fb3637b049b797fec7670e58e4b9a61765744afcfa39c6358193eae6e57"
+  },
+  "focused_passed": 158,
+  "subtests_passed": 23,
+  "mutations": [
+    {
+      "name": "digest",
+      "production_file": "src/roles.py",
+      "node": "tests/test_adjudicator_qualified_input.py::test_collector_capability_digest_is_rechecked_before_use",
+      "original_sha256": "b719f9db06b963ec5c69336548e2da26bcaee546ab69a4cc911cfbfb32ea64a9",
+      "mutant_sha256": "30bce875de47a0407c0445e4834594f4161a7c36e0fb804e2a31451253330b54",
+      "red": {
+        "argv": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_adjudicator_qualified_input.py::test_collector_capability_digest_is_rechecked_before_use",
+          "--junitxml=/Users/teacher/.codex/automations/pd-workloop-resume/evidence/20261007T1701Z/qualified-mutations-second/digest-red.xml"
+        ],
+        "exit": 1
+      },
+      "green": {
+        "argv": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_adjudicator_qualified_input.py::test_collector_capability_digest_is_rechecked_before_use",
+          "--junitxml=/Users/teacher/.codex/automations/pd-workloop-resume/evidence/20261007T1701Z/qualified-mutations-second/digest-green.xml"
+        ],
+        "exit": 0
+      },
+      "restored_sha256": "b719f9db06b963ec5c69336548e2da26bcaee546ab69a4cc911cfbfb32ea64a9"
+    },
+    {
+      "name": "inventory",
+      "production_file": "src/adjudicator_retro.py",
+      "node": "tests/test_adjudicator_qualified_input.py::test_unqualified_inventory_or_provenance_never_issues_case[missing-path]",
+      "original_sha256": "586ff4ee91d2199c359316351c79e2782d2d75d2c134bc09b5ad2a00f5562293",
+      "mutant_sha256": "386ba82c633fe8d4570b4efc4dd1937f921af7b80f052621333bae608183d58c",
+      "red": {
+        "argv": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_adjudicator_qualified_input.py::test_unqualified_inventory_or_provenance_never_issues_case[missing-path]",
+          "--junitxml=/Users/teacher/.codex/automations/pd-workloop-resume/evidence/20261007T1701Z/qualified-mutations-second/inventory-red.xml"
+        ],
+        "exit": 1
+      },
+      "green": {
+        "argv": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_adjudicator_qualified_input.py::test_unqualified_inventory_or_provenance_never_issues_case[missing-path]",
+          "--junitxml=/Users/teacher/.codex/automations/pd-workloop-resume/evidence/20261007T1701Z/qualified-mutations-second/inventory-green.xml"
+        ],
+        "exit": 0
+      },
+      "restored_sha256": "586ff4ee91d2199c359316351c79e2782d2d75d2c134bc09b5ad2a00f5562293"
+    },
+    {
+      "name": "provenance",
+      "production_file": "src/adjudicator_retro.py",
+      "node": "tests/test_adjudicator_qualified_input.py::test_unqualified_inventory_or_provenance_never_issues_case[altered-body-hash]",
+      "original_sha256": "586ff4ee91d2199c359316351c79e2782d2d75d2c134bc09b5ad2a00f5562293",
+      "mutant_sha256": "2f288a97d4885b19a5af67be26fe302f8091fe9c68623d2b44382a97661f58f5",
+      "red": {
+        "argv": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_adjudicator_qualified_input.py::test_unqualified_inventory_or_provenance_never_issues_case[altered-body-hash]",
+          "--junitxml=/Users/teacher/.codex/automations/pd-workloop-resume/evidence/20261007T1701Z/qualified-mutations-second/provenance-red.xml"
+        ],
+        "exit": 1
+      },
+      "green": {
+        "argv": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_adjudicator_qualified_input.py::test_unqualified_inventory_or_provenance_never_issues_case[altered-body-hash]",
+          "--junitxml=/Users/teacher/.codex/automations/pd-workloop-resume/evidence/20261007T1701Z/qualified-mutations-second/provenance-green.xml"
+        ],
+        "exit": 0
+      },
+      "restored_sha256": "586ff4ee91d2199c359316351c79e2782d2d75d2c134bc09b5ad2a00f5562293"
+    },
+    {
+      "name": "isolation",
+      "production_file": "src/roles.py",
+      "node": "tests/test_adjudicator_qualified_input.py::test_collector_issued_input_reaches_existing_native_runner_without_truncation",
+      "original_sha256": "b719f9db06b963ec5c69336548e2da26bcaee546ab69a4cc911cfbfb32ea64a9",
+      "mutant_sha256": "0c8ab2560cf7778f90405c3df3d8f8f05e8c7ccb1a170f773feedf7863f42d0e",
+      "red": {
+        "argv": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_adjudicator_qualified_input.py::test_collector_issued_input_reaches_existing_native_runner_without_truncation",
+          "--junitxml=/Users/teacher/.codex/automations/pd-workloop-resume/evidence/20261007T1701Z/qualified-mutations-second/isolation-red.xml"
+        ],
+        "exit": 1
+      },
+      "green": {
+        "argv": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_adjudicator_qualified_input.py::test_collector_issued_input_reaches_existing_native_runner_without_truncation",
+          "--junitxml=/Users/teacher/.codex/automations/pd-workloop-resume/evidence/20261007T1701Z/qualified-mutations-second/isolation-green.xml"
+        ],
+        "exit": 0
+      },
+      "restored_sha256": "b719f9db06b963ec5c69336548e2da26bcaee546ab69a4cc911cfbfb32ea64a9"
+    },
+    {
+      "name": "full-prompt",
+      "production_file": "src/roles.py",
+      "node": "tests/test_adjudicator_qualified_input.py::test_collector_issued_input_reaches_existing_native_runner_without_truncation",
+      "original_sha256": "b719f9db06b963ec5c69336548e2da26bcaee546ab69a4cc911cfbfb32ea64a9",
+      "mutant_sha256": "6c492d0be7eb81cbbaaf554ff53bc43e308ba6fac8fcb37046c76244ed940c11",
+      "red": {
+        "argv": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_adjudicator_qualified_input.py::test_collector_issued_input_reaches_existing_native_runner_without_truncation",
+          "--junitxml=/Users/teacher/.codex/automations/pd-workloop-resume/evidence/20261007T1701Z/qualified-mutations-second/full-prompt-red.xml"
+        ],
+        "exit": 1
+      },
+      "green": {
+        "argv": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_adjudicator_qualified_input.py::test_collector_issued_input_reaches_existing_native_runner_without_truncation",
+          "--junitxml=/Users/teacher/.codex/automations/pd-workloop-resume/evidence/20261007T1701Z/qualified-mutations-second/full-prompt-green.xml"
+        ],
+        "exit": 0
+      },
+      "restored_sha256": "b719f9db06b963ec5c69336548e2da26bcaee546ab69a4cc911cfbfb32ea64a9"
+    },
+    {
+      "name": "prompt-budget",
+      "production_file": "src/adjudicator_retro.py",
+      "node": "tests/test_adjudicator_qualified_input.py::test_complete_prompt_budget_includes_unicode_and_context",
+      "original_sha256": "586ff4ee91d2199c359316351c79e2782d2d75d2c134bc09b5ad2a00f5562293",
+      "mutant_sha256": "69cd5403fe64ae9e43a51984f50064dcd96b8f3ff0aab7659ff558f62fdd1595",
+      "red": {
+        "argv": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_adjudicator_qualified_input.py::test_complete_prompt_budget_includes_unicode_and_context",
+          "--junitxml=/Users/teacher/.codex/automations/pd-workloop-resume/evidence/20261007T1701Z/qualified-mutations-second/prompt-budget-red.xml"
+        ],
+        "exit": 1
+      },
+      "green": {
+        "argv": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_adjudicator_qualified_input.py::test_complete_prompt_budget_includes_unicode_and_context",
+          "--junitxml=/Users/teacher/.codex/automations/pd-workloop-resume/evidence/20261007T1701Z/qualified-mutations-second/prompt-budget-green.xml"
+        ],
+        "exit": 0
+      },
+      "restored_sha256": "586ff4ee91d2199c359316351c79e2782d2d75d2c134bc09b5ad2a00f5562293"
+    },
+    {
+      "name": "evidence-refs",
+      "production_file": "src/roles.py",
+      "node": "tests/test_adjudicator_qualified_input.py::test_qualified_proposal_cannot_cite_absent_evidence",
+      "original_sha256": "b719f9db06b963ec5c69336548e2da26bcaee546ab69a4cc911cfbfb32ea64a9",
+      "mutant_sha256": "423d68c78fabe77f36d0b57b914d612cc7bbac083a19a6a67b4bd099ac850b77",
+      "red": {
+        "argv": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_adjudicator_qualified_input.py::test_qualified_proposal_cannot_cite_absent_evidence",
+          "--junitxml=/Users/teacher/.codex/automations/pd-workloop-resume/evidence/20261007T1701Z/qualified-mutations-second/evidence-refs-red.xml"
+        ],
+        "exit": 1
+      },
+      "green": {
+        "argv": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_adjudicator_qualified_input.py::test_qualified_proposal_cannot_cite_absent_evidence",
+          "--junitxml=/Users/teacher/.codex/automations/pd-workloop-resume/evidence/20261007T1701Z/qualified-mutations-second/evidence-refs-green.xml"
+        ],
+        "exit": 0
+      },
+      "restored_sha256": "b719f9db06b963ec5c69336548e2da26bcaee546ab69a4cc911cfbfb32ea64a9"
+    },
+    {
+      "name": "before-blobs",
+      "production_file": "src/adjudicator_retro.py",
+      "node": "tests/test_adjudicator_qualified_input.py::test_modified_sources_include_complete_before_and_after_blobs",
+      "original_sha256": "586ff4ee91d2199c359316351c79e2782d2d75d2c134bc09b5ad2a00f5562293",
+      "mutant_sha256": "02b25b3960eeb6cfc001e1b6b29d9a7eef32927ff60887ef7b47b1739a87302f",
+      "red": {
+        "argv": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_adjudicator_qualified_input.py::test_modified_sources_include_complete_before_and_after_blobs",
+          "--junitxml=/Users/teacher/.codex/automations/pd-workloop-resume/evidence/20261007T1701Z/qualified-mutations-second/before-blobs-red.xml"
+        ],
+        "exit": 1
+      },
+      "green": {
+        "argv": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_adjudicator_qualified_input.py::test_modified_sources_include_complete_before_and_after_blobs",
+          "--junitxml=/Users/teacher/.codex/automations/pd-workloop-resume/evidence/20261007T1701Z/qualified-mutations-second/before-blobs-green.xml"
+        ],
+        "exit": 0
+      },
+      "restored_sha256": "586ff4ee91d2199c359316351c79e2782d2d75d2c134bc09b5ad2a00f5562293"
+    }
+  ],
+  "incomplete_attempt": "First attempt used a compaction mutation that preserved nested finding contents and remained GREEN; retained without claiming proof. Second attempt explicitly removed finding contents and produced assertion RED, restored GREEN."
+}

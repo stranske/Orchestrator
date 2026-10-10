@@ -199,6 +199,7 @@ for (const [name, artifactPath, content, executable] of [
     assert.deepEqual(result.acceptance_artifacts[0], {
       path: artifactPath, evaluated_sha: evaluated, complete: true,
       blob_sha: blob, byte_length: raw.length,
+      git_mode: executable ? '100755' : '100644',
       sha256: createHash('sha256').update(raw).digest('hex'), bytes_utf8: content,
       criterion, location, inventory_index: 0,
     });
@@ -340,6 +341,7 @@ test('collection CLI rejects inventory claims that forge artifact provenance or 
   assert.deepEqual(result.acceptance_artifacts, [
     {
       path: 'proof.log', evaluated_sha: evaluated, complete: true, blob_sha: blob,
+      git_mode: '100644',
       byte_length: Buffer.byteLength(content),
       sha256: createHash('sha256').update(content).digest('hex'), bytes_utf8: content,
       criterion: 'declared artifact', location: acceptance[0].location, inventory_index: 0,
@@ -754,7 +756,8 @@ import feedback
 import roles
 import verifier_evidence
 
-scenario = sys.argv[1]
+requested_scenario = sys.argv[1]
+recovery = len(sys.argv) > 2 and sys.argv[2] == "recover"
 requests = []
 first_gate = {"name": "Gate / initial", "conclusion": "SUCCESS", "detailsUrl": "first-gate"}
 last_gate = {"context": "gate / final", "state": "SUCCESS", "targetUrl": "last-gate"}
@@ -764,8 +767,9 @@ def response(args):
     requests.append({key: fields[key] for key in ("owner", "name", "n", "cursor") if key in fields})
     assert fields["owner"] == "owner" and fields["name"] == "repo"
     number = int(fields["n"])
+    scenario = requested_scenario if not recovery or number == 1 else "complete"
     head = "a" * 40
-    index = len(requests)
+    index = int(fields["cursor"].removeprefix("page-")) + 1 if "cursor" in fields else 1
     if index > 1:
         assert fields["cursor"] == f"page-{index - 1}"
         assert "after:$cursor" in fields["query"]
@@ -865,16 +869,36 @@ def response(args):
             if scenario == "wrong-url-newer-pass":
                 comment["url"] = f"https://github.com/other/repo/pull/{number}#issuecomment-2"
             pr["comments"]["nodes"].append(comment)
+    if scenario == "missing-initial-commit" and index == 1 or (
+        scenario == "missing-paginated-commit" and index == 2
+    ):
+        pr["commits"]["nodes"] = []
+    if scenario == "null-initial-rollup" and index == 1 or (
+        scenario == "null-paginated-rollup" and index == 2
+    ):
+        pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"] = None
     return {"data": {"repository": {"pullRequest": pr}}}
 
 proposal = {
     "decision": "needs_more_evidence", "confidence": "low",
     "rationale": "Gate statuses alone do not prove acceptance.",
-    "evidence_assessment": [{"claim": "Missing test", "status": "unknown",
+    "evidence_assessment": [{"claim": "Missing test", "status": "insufficient",
                              "evidence_ref": "last-gate", "reason": "Inspect source"}],
     "ground_truth_refs": ["first-gate", "last-gate"],
     "recommended_next_step": "Inspect acceptance artifacts", "evidence_gaps": ["Source unavailable"],
 }
+lifecycle = []
+
+def checkpoint(report, route, transport):
+    with feedback._conn() as conn:
+        lifecycle.append({
+            "report": report, "routes": route.call_count, "calls": transport.call_count,
+            "outcomes": conn.execute("SELECT * FROM outcomes ORDER BY run_id").fetchall(),
+            "role_ids": [row[0] for row in conn.execute(
+                "SELECT run_id FROM runs WHERE role_name='adjudicator' ORDER BY run_id"
+            )],
+        })
+
 with (
     patch.object(retro, "_gh_json", side_effect=response),
     patch.object(roles, "route_role", return_value={"agent": "gemini"}) as route,
@@ -883,13 +907,22 @@ with (
         "run_id": "backend-pages", "output": json.dumps(proposal), "exit": 0,
     }) as transport,
 ):
-    report = retro.run(dispatch=True, limit=1)
+    report = retro.run(dispatch=True, limit=2 if recovery else 1)
+    if recovery:
+        checkpoint(report, route, transport)
+        checkpoint(retro.run(dispatch=True, limit=2), route, transport)
+        requested_scenario = "complete"
+        checkpoint(retro.run(dispatch=True, retry=True, limit=0), route, transport)
+        checkpoint(retro.run(dispatch=True, retry=True, limit=1), route, transport)
+        report = retro.run(dispatch=True, retry=True, limit=2)
+        checkpoint(report, route, transport)
 with feedback._conn() as conn:
     records = conn.execute(
         "SELECT run_id,source,decomposition FROM runs WHERE role_name='adjudicator'"
     ).fetchall()
 print(json.dumps({
     "report": report, "requests": requests, "routes": route.call_count, "records": records,
+    "lifecycle": lifecycle,
     "calls": [{"args": c.args, "kwargs": c.kwargs} for c in transport.call_args_list],
 }))
 `;
@@ -964,6 +997,79 @@ for (const [scenario, reads, error] of [
       assert.equal(row.shadow_verdict, null);
       assert.equal(w.brain().runs.length, before.runs.length + 1);
     }
+  });
+}
+
+for (const [scenario, reads] of [
+  ['missing-initial-commit', 1],
+  ['missing-paginated-commit', 2],
+  ['null-initial-rollup', 1],
+  ['null-paginated-rollup', 2],
+]) {
+  test(`retro saves Gate gaps, continues the batch and recovers only on retry: ${scenario}`, (t) => {
+    const w = world(t);
+    w.run(['-c', initializeDisputes, '1']);
+    const before = w.brain();
+    const result = w.run(['-c', paginatedGateEvidence, scenario, 'recover']);
+    assert.equal(result.lifecycle.length, 5);
+    const initial = result.lifecycle[0];
+    assert.equal(initial.report.rows.length, 2, 'a Gate gap must not abort the next dispute');
+    const [failed, successful] = initial.report.rows;
+    assert.equal(failed.target, 'owner/repo#1');
+    assert.match(failed.error, /complete gate evidence unavailable/);
+    assert.equal(failed.packet, undefined, 'partial Gate evidence must not create a packet');
+    assert.equal(failed.backend_run_id, undefined);
+    assert.equal(failed.role_run_id, undefined);
+    assert.equal(failed.decision, undefined);
+    assert.equal(successful.target, 'owner/repo#2');
+    assert.equal(successful.error, undefined);
+    assert.equal(successful.decision, 'needs_more_evidence', JSON.stringify(successful));
+    assert.equal(initial.routes, 1);
+    assert.equal(initial.calls, 1);
+    assert.deepEqual(initial.role_ids, [successful.role_run_id]);
+    for (const checkpoint of result.lifecycle.slice(1, 3)) {
+      assert.deepEqual(checkpoint.report.rows, initial.report.rows,
+        'ordinary resume and zero-limit retry must preserve both cases');
+      assert.equal(checkpoint.routes, 1);
+      assert.equal(checkpoint.calls, 1);
+      assert.deepEqual(checkpoint.role_ids, initial.role_ids);
+    }
+    const recovered = result.lifecycle[3];
+    const repaired = recovered.report.rows[0];
+    assert.equal(repaired.case_id, failed.case_id);
+    assert.equal(repaired.error, undefined);
+    assert.equal(repaired.decision, 'needs_more_evidence');
+    assert.ok(repaired.role_run_id);
+    assert.notEqual(repaired.role_run_id, successful.role_run_id);
+    assert.deepEqual(recovered.report.rows[1], successful,
+      'retry must not replace a successful paid role run');
+    assert.equal(recovered.routes, 2);
+    assert.equal(recovered.calls, 2);
+    assert.equal(recovered.role_ids.length, 2);
+    assert.deepEqual(result.lifecycle[4].report.rows, recovered.report.rows);
+    assert.equal(result.routes, 2);
+    assert.equal(result.calls.length, 2);
+    assert.equal(result.records.length, 2);
+    assert.deepEqual(result.requests.map((request) => request.n), [
+      ...Array(reads).fill('1'), ...Array(3).fill('2'), ...Array(3).fill('1'),
+    ], 'only the failed dispute may recollect its Gate evidence');
+    for (const checkpoint of result.lifecycle) {
+      assert.deepEqual(checkpoint.outcomes, before.outcomes);
+      assert.equal(checkpoint.report.summary.adjudicated, 0);
+      assert.equal(checkpoint.report.summary.graded, 0);
+    }
+    for (const [runId, source, decomposition] of result.records) {
+      const row = result.report.rows.find((entry) => entry.role_run_id === runId);
+      assert.ok(row);
+      assert.equal(source, 'retrospective');
+      assert.deepEqual(JSON.parse(decomposition).proposal, row.proposal);
+    }
+    assert.ok(result.calls.every((call) => call.args[0] === 'gemini' && call.kwargs.isolate));
+    assert.deepEqual(w.report(), result.report);
+    const after = w.brain();
+    assert.deepEqual(after.outcomes, before.outcomes);
+    assert.deepEqual(after.costs, before.costs);
+    assert.equal(after.runs.length, before.runs.length + 2);
   });
 }
 
@@ -1295,6 +1401,99 @@ print(json.dumps(True))
       identities, 'refresh preserves paid role identities and raw proposals');
     assert.deepEqual(w.brain(), before, 'refresh must not recreate outcomes or role runs');
     assert.equal(report.population, 0, 'saved telemetry refresh outlives the replay population');
+  }
+});
+
+test('retro CLI refreshes late invalid-response costs without grading or redispatch', (t) => {
+  const w = world(t);
+  w.run(['-c', `
+import json
+import time
+from unittest.mock import patch
+import adjudicator_retro as retro
+import feedback
+import roles
+
+with feedback._conn() as conn:
+    conn.execute("INSERT INTO runs(run_id,ts,target) VALUES ('original',?,'owner/repo#1')",
+                 (int(time.time()),))
+    conn.execute("INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged,"
+                 "durability,durability_checked_ts) VALUES "
+                 "('original','NON_PASS','PASS',1,'reverted',?)", (int(time.time()),))
+    conn.execute("INSERT INTO costs(run_id,cost_usd,source) VALUES ('backend-invalid',0,'ledger')")
+
+with (
+    patch.object(roles, "route_role", return_value={"agent": "gemini"}),
+    patch.object(roles, "_role_capability_event"),
+    patch.object(roles.dispatcher, "offload", return_value={
+        "run_id": "backend-invalid", "exit": 0, "output": "malformed response",
+    }) as offload,
+):
+    result = retro.run(dispatch=True, evidence_reader=lambda row: {
+        "disputed_finding": {"body": "Missing acceptance test"},
+        "ground_truth_evidence": {"diff_summary": "Added test", "gate_runs": ["gate-run"]},
+    })
+    assert offload.call_count == 1
+print(json.dumps(result))
+`]);
+  const initial = w.report();
+  const invalid = initial.rows[0];
+  assert.equal(invalid.decision, undefined);
+  assert.ok(invalid.errors.some((error) => error.includes('could not parse')));
+  assert.ok(invalid.role_run_id, 'the paid invalid response has a retrospective Brain record');
+  assert.equal(invalid.backend_run_id, 'backend-invalid');
+  assert.equal(invalid.cost_usd, null);
+  const identity = [invalid.case_id, invalid.role_run_id, invalid.backend_run_id];
+  const withoutCosts = ({ cost_usd, cost_measured_cases, cost_per_case, ...counts }) => counts;
+
+  // No replay population remains. Refresh must still account for paid attempts
+  // with no usable decision, even after the original outcome disappears.
+  w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("DELETE FROM outcomes WHERE run_id='original'")
+print(json.dumps(True))
+`]);
+  for (const [cost, source, expected] of [
+    [0, 'ccusage', 0],
+    [2, 'ccusage', 2],
+    [7, 'ledger', null],
+    [null, null, null],
+    [3, 'ccusage', 3],
+  ]) {
+    w.run(['-c', `
+import json
+import sys
+import feedback
+cost, source = json.loads(sys.argv[1])
+with feedback._conn() as conn:
+    conn.execute("DELETE FROM costs WHERE run_id='backend-invalid'")
+    if source is not None:
+        conn.execute("INSERT INTO costs(run_id,cost_usd,source) VALUES ('backend-invalid',?,?)",
+                     (cost, source))
+print(json.dumps(True))
+`, JSON.stringify([cost, source])]);
+    const before = w.brain();
+    w.refresh();
+    const report = w.report();
+    const saved = report.rows[0];
+    assert.equal(saved.cost_usd, expected, `late cost source ${source} with value ${cost}`);
+    for (const section of ['summary', 'proposal_comparison']) {
+      assert.equal(report[section].cost_usd, expected);
+      assert.equal(report[section].cost_per_case, expected);
+      assert.equal(report[section].cost_measured_cases, expected === null ? 0 : 1);
+      assert.deepEqual(withoutCosts(report[section]), withoutCosts(initial[section]),
+        'invalid responses must stay outside both agreement denominators');
+    }
+    assert.deepEqual([saved.case_id, saved.role_run_id, saved.backend_run_id], identity);
+    assert.equal(saved.decision, undefined);
+    assert.equal(saved.shadow_verdict, null);
+    assert.deepEqual(saved.errors, invalid.errors);
+    assert.deepEqual(saved.proposal_comparison,
+      { verdict: null, agrees: null, merge_rule_agrees: null });
+    assert.deepEqual(w.brain(), before, 'refresh must not redispatch or recreate the outcome');
+    assert.equal(report.population, 0);
   }
 });
 
