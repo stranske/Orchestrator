@@ -1,0 +1,66 @@
+{
+  "role": "adjudicator",
+  "shadow": true,
+  "mutates_state": false,
+  "backend": "gemini",
+  "role_run_id": "role:adjudicator:gemini:1791664726681583000",
+  "backend_run_id": "offload:gemini:1791664611072767000",
+  "decision_source": "adjudicator_agent",
+  "errors": [],
+  "proposal": {
+    "decision": "reject_blocker",
+    "confidence": "high",
+    "rationale": "The verifier panel CONCERNS verdict is an artifact of input truncation and incomplete context retrieval during automated review rather than a demonstrated product defect. The supplied immutable ground-truth evidence confirms complete exact-head source-to-blob bindings, authenticated logs for both deliberate-break runs, passing contract witnesses, and explicit preservation of named UNKNOWN items per repository conventions.",
+    "evidence_assessment": [
+      {
+        "claim": "Acceptance evidence is unavailable and truncated patch prevents confirming historical-break, provisioned-machine, reviewer-disposition, and exact-head evidence deliverables.",
+        "status": "contradicted",
+        "evidence_ref": "git-path:docs/reviews/pr-438-disposition.md",
+        "reason": "Full immutable acceptance artifacts are supplied in the ground truth, including complete exact-head source bindings, authenticated deliberate-break logs, and passing contract witness receipts with explicitly documented UNKNOWN evidence items and owners."
+      },
+      {
+        "claim": "Deliberate-break evidence is historical on commit 57a828d and only the first run was visible to the reviewer.",
+        "status": "contradicted",
+        "evidence_ref": "git-path:docs/reviews/pr-438-break-evidence.json",
+        "reason": "The break evidence artifact retains complete authenticated run records, job status, and log excerpts for both deliberate-break runs (37228770087 and 37228771698), explicitly scoping them as historical refusal tests rather than final head tests."
+      },
+      {
+        "claim": "Retained historical blobs under paths like blobs/<sha>.blob create a durability and reproducibility risk if local Git objects are unavailable.",
+        "status": "contradicted",
+        "evidence_ref": "git-path:docs/reviews/pr-438-source-evidence.json",
+        "reason": "The source evidence manifest binds all 14 changed paths and 8 supporting paths to immutable Git blob IDs, file modes, byte lengths, SHA-256 digests, and exact-head source URLs verified against the exported tree."
+      },
+      {
+        "claim": "The PR checks every acceptance criterion box while disposition text leaves tasks unchecked and reports UNKNOWN evidence.",
+        "status": "contradicted",
+        "evidence_ref": "git-path:docs/reviews/pr-438-disposition.md",
+        "reason": "The disposition document explicitly preserves named UNKNOWN evidence with assigned owners and next actions in compliance with repo acceptance conventions, and the later Sol closeout section documents full-suite verification (1,566 passed) and copy equivalence."
+      },
+      {
+        "claim": "Focused contract witnesses and truncated implementation code prevent assessing full edge-case coverage and installation behavior.",
+        "status": "contradicted",
+        "evidence_ref": "git-path:docs/reviews/pr-438-install-witness.json",
+        "reason": "The installation witness proves 6 passed contract tests with 0 failures/skips, validating builder byte/mode preservation, stale file cleanup, snapshot mutation refusal, and pre-sync identity tracking against the bound inputs."
+      }
+    ],
+    "ground_truth_refs": [
+      "git-path:docs/reviews/pr-438-break-evidence.json",
+      "git-path:docs/reviews/pr-438-contract-witness.json",
+      "git-path:docs/reviews/pr-438-disposition.md",
+      "git-path:docs/reviews/pr-438-install-source-evidence.json",
+      "git-path:docs/reviews/pr-438-install-witness.json",
+      "git-path:docs/reviews/pr-438-source-evidence.json"
+    ],
+    "recommended_next_step": "Inspect the complete ground-truth source evidence manifests, authenticated deliberate-break logs, and Sol closeout disposition records to verify that all required acceptance evidence is satisfied.",
+    "evidence_gaps": [
+      "External inventory exhaustiveness and historical snapshot authenticity remain unverified outside the supplied immutable Git objects."
+    ]
+  },
+  "evidence_qualification": {
+    "packet_sha256": "86aa221208658cb828501c8ad725e90dfd2d93f8bbbef1af54a8476759520eea",
+    "scope": "semantic_judgment_only",
+    "persisted_admission": false
+  },
+  "observed_model": "gemini-3.7-flash-high",
+  "reviewer_disposition": "Native execution and lossless transport demonstrated. Reject-blocker advice does not resolve explicit historical final-head, renewed reviewer acknowledgment, provisioned witness, publication, cost and later-truth gaps. Keep source428 OPEN; no outcome mutation or admission."
+}

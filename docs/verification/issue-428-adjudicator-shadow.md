@@ -654,3 +654,20 @@ read-only; the JavaScript change and this note are preserved as a commit and pat
 under `/tmp/orch-adjudicator-late-costs`. PR #512 was confirmed open and ready for
 review through the GitHub connector. These CLI checks do not replace the named
 pytest acceptance checks, and no broad task checkbox is advanced.
+
+## Keepalive weekly summary verification, 2026-10-10
+
+- [x] `src/switch_review.py` renders `adjudicator shadow: cases N, agree A,
+  disagree D, cost C` from the saved retrospective report.
+
+The existing reader and renderer already implement the remaining task. The Node
+integration regression now covers ten saved-report fixtures, adding measured-zero
+cost, partially measured costs, and null or list-shaped report data. It verifies
+the exact summary line appears once, unknown evidence stays UNKNOWN, metadata-only
+proposals remain ungraded, and reporting neither replays cases nor writes state.
+The targeted integration check and all 54 retrospective CLI tests pass with no
+skips. JavaScript syntax and diff whitespace checks pass. Python files are
+unchanged; pytest and Black are unavailable and PyPI cannot resolve in this runner.
+Git metadata is read-only, so the changes are preserved as a commit in
+`/tmp/orch-switch-review-commit.git` and a patch at
+`/tmp/orch-switch-review-summary.patch`, with the workspace edits left in place.

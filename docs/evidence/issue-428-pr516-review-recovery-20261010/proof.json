@@ -1,0 +1,66 @@
+{
+  "base_head": "7227dd3ebe63b1b042536f0f614251cda3cabf8d",
+  "production_red": {
+    "command": "python3 -m pytest tests/test_gemini_large_prompt_transport.py -q",
+    "result": "3 failed,6 passed on actual pre-fix dispatcher: init-only/null/object final responses incorrectly succeeded"
+  },
+  "hosted_failure_reproduced": {
+    "command": "python3 -m pytest tests/test_gemini_large_prompt_transport.py -q -k boundary_failure",
+    "result": "2 failed with cold model cache and original probing fixture; model discovery reached transport stub before prompt-file creation"
+  },
+  "completion_event_control": {
+    "command": "node --test --test-name-pattern=\"retro repairs aged-out\" tests/test_adjudicator_retro_cli.js",
+    "result": "original injection fails two partial-write cases: event counts [1,1,1] vs required[0,1,1]"
+  },
+  "candidate_green": {
+    "python": "29 passed/23subtests",
+    "cli": "54 passed",
+    "dispatcher_selftest": "OK",
+    "mypy": "1source noissues",
+    "floor": {
+      "collected": 2672,
+      "passed": 2672,
+      "all_ceilings_preserved": true
+    },
+    "full_verifier": {
+      "command": "python3 src/verify.py --floor-may-lag",
+      "exit": 0,
+      "pytest_passed": 2672,
+      "pytest_failed": 0,
+      "pytest_skipped": 0,
+      "selftests_passed": 103,
+      "gates_passed": 5,
+      "mypy_checked": 121,
+      "private_state": true
+    }
+  },
+  "source_hashes": {
+    "src/dispatcher.py": "3529ddf40e739b6f9ed06f57e3e77f0f6e665a95f1e976bab882fe80066a3e60",
+    "tests/test_gemini_large_prompt_transport.py": "e3dc7276f60732cae39341126f4ee3440bbb222c976f4b90e81dc2deeba8749d",
+    "tests/test_adjudicator_retro_cli.js": "6ae08c4938830e017d9e847ca20d7adae5e7dbd1451a3b2b6e0d5604925b4bc0"
+  },
+  "evidence_hashes": {
+    "516-stream-red.log": "4bfd3801646c26e55647477b346c30b14de52b6efcd7b284474bb3bdfd99ea45",
+    "516-stream-green.xml": "0330655c13227ef9c4173c3186360e7395bea33406a3da0579e094b81e8ce792",
+    "516-cold-cache-red.log": "eb7f2ec8cfbc3db78c0bf271b6a846f5aa0ea3dbca88d7627659c3358e2b4cea",
+    "516-event-injection-red.log": "5899e2e4f9be9b5a8351e2dc39c1840ed5adcfdd21c7f0e4515be69ac2755399",
+    "516-focused.log": "6a46a96e4a77d7b05cc677ed9436beefac58906858c23ac8c97864af77a860b5",
+    "516-focused.xml": "1c3aa039cd2f17a76e1db1093b4b293831f50fcda3c258a734fbb2f1947d6198",
+    "516-cli-green.log": "29e4f036beea622df66babd87fa6c319dcae0a699f7d3df3ea714a71d319fc76",
+    "516-dispatcher-selftest.log": "7986d9e70cc60f9562b6547aec78e4e8e87e27193ba66e46639b49f1cf609841",
+    "516-mypy.log": "5d4b6d285b77932e3d08212c3b4974d0a803f98ec60408ac6ccf6a063fa6c19e",
+    "516-final-transport.log": "3a3e1ebdeba3b589219ecad261a48439cfd0a02727f7c44ca4d9968d97e26dc2",
+    "516-event-final-green.log": "eae4483e5a611ba317025149e3a06ac5ce840ab4a3931d564c1e6ce08cc7f7f3",
+    "516-verify.log": "13a5c65c7b2eadd95ebe908ac26e8e42925a0a4299f6c8fc3436df4b63fdb3c4"
+  },
+  "limits": [
+    "No provider request or replacement paid trial",
+    "Source428 native cost/historical/later-truth acceptance remains OPEN",
+    "Full current-head hosted normal and flat verification and review gates remain required"
+  ],
+  "original_dispatcher_sha256": "d3667980c6b50c80b8c32d6b1ebdf6c280a6395a3a37d38c0f7051f22cdc8f71",
+  "restored_fixture_hashes": {
+    "tests/test_adjudicator_retro_cli.js": "6ae08c4938830e017d9e847ca20d7adae5e7dbd1451a3b2b6e0d5604925b4bc0",
+    "tests/test_gemini_large_prompt_transport.py": "e3dc7276f60732cae39341126f4ee3440bbb222c976f4b90e81dc2deeba8749d"
+  }
+}

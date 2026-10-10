@@ -1,0 +1,146 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_ test_large_gemini_prompt_file_is_private_and_removed_on_boundary_failure[timeout] _
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-210/test_large_gemini_prompt_file_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x104cb9010>
+failure = <function <lambda> at 0x104c8a840>, expected_exit = 124
+
+    @pytest.mark.parametrize(
+        ("failure", "expected_exit"),
+        [
+            (lambda argv: subprocess.TimeoutExpired(argv, 20), 124),
+            (lambda _argv: OSError("simulated process-start failure"), 126),
+        ],
+        ids=["timeout", "process-start-failure"],
+    )
+    def test_large_gemini_prompt_file_is_private_and_removed_on_boundary_failure(
+        tmp_path, monkeypatch, failure, expected_exit
+    ):
+        """The short-lived prompt file survives long enough for the subprocess, then is removed."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        _isolate_offload(monkeypatch, tmp_path)
+        packet = "\u03b1$()\n" * 20_000
+        seen = {}
+    
+        def fail_at_boundary(argv, **kwargs):
+            prompt_files = list((tmp_path / "logs").glob("offload-prompt.*.ndjson"))
+            assert len(prompt_files) == 1
+            prompt_file = prompt_files[0]
+            seen["mode"] = os.stat(prompt_file).st_mode & 0o777
+            seen["payload"] = prompt_file.read_text(encoding="utf-8")
+            seen["stdin"] = kwargs["stdin"]
+            raise failure(argv)
+    
+        monkeypatch.setattr(dispatcher.subprocess, "run", fail_at_boundary)
+>       result = dispatcher.offload("gemini", packet, cwd=str(workspace), timeout=20)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_gemini_large_prompt_transport.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/dispatcher.py:1710: in offload
+    else adapters.build_command(
+src/adapters.py:1792: in build_command
+    model = requested_model or _tier_model("gemini", mode) or gemini_model()
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/adapters.py:911: in _tier_model
+    return resolve_model(agent, effective_tier(agent, mode))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/adapters.py:881: in resolve_model
+    return model_health(agent, tier)["model"]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+src/adapters.py:812: in model_health
+    advertised = advertised_models(agent, refresh=refresh)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/adapters.py:668: in advertised_models
+    return _advertised_catalog(agent, refresh=refresh, timeout_s=timeout_s, need_pairs=False)[
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/adapters.py:620: in _advertised_catalog
+    proc = subprocess.run(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+argv = ['agy', 'models']
+kwargs = {'capture_output': True, 'text': True, 'env': None, 'timeout': 30, ...}
+
+    def fail_at_boundary(argv, **kwargs):
+        prompt_files = list((tmp_path / "logs").glob("offload-prompt.*.ndjson"))
+>       assert len(prompt_files) == 1
+E       assert 0 == 1
+E        +  where 0 = len([])
+
+tests/test_gemini_large_prompt_transport.py:98: AssertionError
+_ test_large_gemini_prompt_file_is_private_and_removed_on_boundary_failure[process-start-failure] _
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-210/test_large_gemini_prompt_file_1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1049e73e0>
+failure = <function <lambda> at 0x104c8a8e0>, expected_exit = 126
+
+    @pytest.mark.parametrize(
+        ("failure", "expected_exit"),
+        [
+            (lambda argv: subprocess.TimeoutExpired(argv, 20), 124),
+            (lambda _argv: OSError("simulated process-start failure"), 126),
+        ],
+        ids=["timeout", "process-start-failure"],
+    )
+    def test_large_gemini_prompt_file_is_private_and_removed_on_boundary_failure(
+        tmp_path, monkeypatch, failure, expected_exit
+    ):
+        """The short-lived prompt file survives long enough for the subprocess, then is removed."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        _isolate_offload(monkeypatch, tmp_path)
+        packet = "\u03b1$()\n" * 20_000
+        seen = {}
+    
+        def fail_at_boundary(argv, **kwargs):
+            prompt_files = list((tmp_path / "logs").glob("offload-prompt.*.ndjson"))
+            assert len(prompt_files) == 1
+            prompt_file = prompt_files[0]
+            seen["mode"] = os.stat(prompt_file).st_mode & 0o777
+            seen["payload"] = prompt_file.read_text(encoding="utf-8")
+            seen["stdin"] = kwargs["stdin"]
+            raise failure(argv)
+    
+        monkeypatch.setattr(dispatcher.subprocess, "run", fail_at_boundary)
+>       result = dispatcher.offload("gemini", packet, cwd=str(workspace), timeout=20)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_gemini_large_prompt_transport.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/dispatcher.py:1710: in offload
+    else adapters.build_command(
+src/adapters.py:1792: in build_command
+    model = requested_model or _tier_model("gemini", mode) or gemini_model()
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/adapters.py:911: in _tier_model
+    return resolve_model(agent, effective_tier(agent, mode))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/adapters.py:881: in resolve_model
+    return model_health(agent, tier)["model"]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+src/adapters.py:812: in model_health
+    advertised = advertised_models(agent, refresh=refresh)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/adapters.py:668: in advertised_models
+    return _advertised_catalog(agent, refresh=refresh, timeout_s=timeout_s, need_pairs=False)[
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/adapters.py:620: in _advertised_catalog
+    proc = subprocess.run(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+argv = ['agy', 'models']
+kwargs = {'capture_output': True, 'text': True, 'env': None, 'timeout': 30, ...}
+
+    def fail_at_boundary(argv, **kwargs):
+        prompt_files = list((tmp_path / "logs").glob("offload-prompt.*.ndjson"))
+>       assert len(prompt_files) == 1
+E       assert 0 == 1
+E        +  where 0 = len([])
+
+tests/test_gemini_large_prompt_transport.py:98: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_gemini_large_prompt_transport.py::test_large_gemini_prompt_file_is_private_and_removed_on_boundary_failure[timeout]
+FAILED tests/test_gemini_large_prompt_transport.py::test_large_gemini_prompt_file_is_private_and_removed_on_boundary_failure[process-start-failure]
+2 failed, 7 deselected in 0.47s

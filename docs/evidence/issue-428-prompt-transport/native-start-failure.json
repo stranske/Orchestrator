@@ -1,0 +1,20 @@
+{
+  "role": "adjudicator",
+  "shadow": true,
+  "mutates_state": false,
+  "backend": "gemini",
+  "role_run_id": "role:adjudicator:gemini:1791663997928981000",
+  "backend_run_id": "offload:gemini:1791663997756856000",
+  "decision_source": "baseline_needs_more_evidence",
+  "errors": [
+    "backend exit=126 process start failed: [Errno 7] Argument list too long: 'bash'",
+    "could not parse a JSON adjudication proposal from the backend output"
+  ],
+  "metadata_only": null,
+  "target": "stranske/Orchestrator#445",
+  "packet_digest": "86aa221208658cb828501c8ad725e90dfd2d93f8bbbef1af54a8476759520eea",
+  "prompt_utf8_bytes": 1211243,
+  "provider_started": false,
+  "qualification_scope": "semantic judgment only; no acceptance admission",
+  "failed_source": "7aed5cf7cd028b980d1e325fd82c464e217c8230"
+}
