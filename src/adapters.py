@@ -1592,6 +1592,107 @@ def refuse_broad_workspace(agent: str, workspace: str | Path | None) -> None:
         )
 
 
+# A CALLER'S WRITE BOUNDARY: directories an offload may not write (`protect`) and the directories
+# inside them it may (`allow`). Built for the research program (2026-10-11), whose driver handed
+# every worker the program's own code directory as its cwd. From 2026-09-06 to 10-04, 232 workers
+# ran there (cursor 144, gemini 50, codex 36, vibe 2): codex could write it because `--cd` is a
+# write entry, and cursor, agy and vibe have no sandbox at all, so 232 of 232 could rewrite
+# driver.py and program.py, which launchd runs every 15 minutes outside any sandbox, and the briefs,
+# queue and owner notes the next worker obeys. Opt-in: no boundary leaves every argv byte-identical.
+SANDBOX_EXEC = "/usr/bin/sandbox-exec"
+
+
+def write_boundary_roots(
+    protect: list[str | Path] | tuple[str | Path, ...],
+    allow: list[str | Path] | tuple[str | Path, ...],
+    cwd: str | Path,
+    *,
+    agent: str,
+) -> tuple[list[str], list[str]]:
+    """Resolve a write boundary to (protect, allow), allow led by the run's own cwd.
+
+    Paths are resolved because seatbelt and codex both match the RESOLVED path: /tmp is
+    /private/tmp on macOS, and an unresolved spelling would grant or protect nothing. Every allow
+    root passes the same broad-workspace backstop as a workspace: a grant of `/`, the home dir or
+    the control plane would undo the boundary it belongs to. An empty `protect` is refused, because
+    a boundary that protects nothing would read as one that holds."""
+    protected = list(dict.fromkeys(str(Path(p).expanduser().resolve()) for p in protect))
+    if not protected:
+        raise WorkspaceRefused(f"refusing {agent} a write boundary that protects nothing")
+    granted: list[str] = []
+    for root in [cwd, *allow]:
+        resolved = str(Path(root).expanduser().resolve())
+        refuse_broad_workspace(agent, resolved)
+        if resolved not in granted:
+            granted.append(resolved)
+    return protected, granted
+
+
+def _seatbelt_quote(path: str) -> str:
+    return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def seatbelt_write_profile(protect: list[str], allow: list[str]) -> str:
+    """The sandbox-exec profile for an agent with no sandbox of its own.
+
+    Everything is allowed except writes under `protect`; the `allow` roots inside them are writable
+    again, but never a `.git` beneath one, matching what codex's own sandbox does to a writable root:
+    a clone's `config` and `hooks/` run later, outside any sandbox, in whoever pulls it next. Seatbelt
+    applies the LAST rule that matches, so the order is deny, allow, deny-git. It covers the agent's
+    whole process tree (its shell tool included), and also refuses rename and unlink. Measured
+    2026-10-11: a write, a rename and an `rm -rf` under a protected dir were refused, a write to a
+    granted dir and to /tmp succeeded, and cursor-agent, agy and vibe each started under it."""
+    rules = ["(version 1)", "(allow default)"]
+    rules += [f"(deny file-write* (subpath {_seatbelt_quote(p)}))" for p in protect]
+    rules += [f"(allow file-write* (subpath {_seatbelt_quote(a)}))" for a in allow]
+    rules += [f'(deny file-write* (regex #"^{re.escape(a)}/(.*/)?\\.git(/|$)"))' for a in allow]
+    return "".join(rules)
+
+
+def write_boundary_unenforceable(agent: str) -> str | None:
+    """Why `agent` cannot be held to a write boundary on this machine, or None when it can.
+
+    One predicate for the dispatcher's early refusal and `apply_write_boundary`'s backstop, so the
+    two cannot disagree about which runs are bounded."""
+    if agent == "codex":
+        if codex_bypass_inner_sandbox():
+            return (
+                "refusing codex: a write boundary was requested and the inner sandbox is "
+                "bypassed (ORCH_CODEX_BYPASS_INNER_SANDBOX / CODEX_SANDBOX)"
+            )
+        return None
+    if not Path(SANDBOX_EXEC).exists():
+        return f"refusing {agent}: a write boundary was requested and {SANDBOX_EXEC} is absent"
+    if os.environ.get("CODEX_SANDBOX"):
+        return (
+            f"refusing {agent}: a write boundary was requested inside a codex sandbox, which "
+            "refuses a nested seatbelt profile"
+        )
+    return None
+
+
+def apply_write_boundary(
+    agent: str, argv: list[str], protect: list[str], allow: list[str]
+) -> list[str]:
+    """Enforce a resolved boundary on an agent that has no sandbox of its own.
+
+    codex is enforced by its own sandbox and is not touched here (`build_command(write_roots=)`
+    grants its roots). cursor-agent and agy also confine their file TOOLS to a workspace, so each
+    allow root beyond the cwd joins it with `--add-dir`; the seatbelt profile is what holds against
+    their shells. Fails closed: with no sandbox-exec, or inside another seatbelt (which refuses a
+    nested profile at start), the run is refused rather than run unbounded."""
+    reason = write_boundary_unenforceable(agent)
+    if reason:
+        raise WorkspaceRefused(reason)
+    if agent == "codex":
+        return list(argv)
+    out = list(argv)
+    if agent in ("cursor", "gemini"):
+        for root in allow[1:]:
+            out += ["--add-dir", root]
+    return [SANDBOX_EXEC, "-p", seatbelt_write_profile(protect, allow), *out]
+
+
 def build_command(
     agent: str,
     prompt: str,
@@ -1606,8 +1707,13 @@ def build_command(
     requested_model: str | None = None,
     commits_in_worktree: bool = False,
     prompt_via_stdin: bool = False,
+    write_roots: list[str] | None = None,
 ):
     """Construct the CLI argv for one agent. `mode` is agent-specific.
+
+    write_roots: a codex run under a caller's write boundary (`write_boundary_roots`) also gets
+    exactly these directories, each with `--add-dir`. A run that cannot honour them refuses: the
+    seat bypass has no sandbox to bound. Other agents ignore it here (`apply_write_boundary`).
 
     cursor: mode None/'composer' -> Composer/Auto (free, no --model);
             'frontier:<model>'   -> draws the metered mid-tier pool with that frontier model.
@@ -1669,6 +1775,13 @@ def build_command(
         if commits_in_worktree and sandbox == "workspace-write":
             for root in codex_worktree_git_roots(cwd):
                 cmd += ["--add-dir", root]
+        if write_roots is not None:
+            if sandbox is None:
+                raise WorkspaceRefused(write_boundary_unenforceable("codex") or "bypassed")
+            if sandbox == "workspace-write":
+                for root in write_roots:
+                    refuse_broad_workspace(agent, root)
+                    cmd += ["--add-dir", str(root)]
         if mode != "assess":
             cmd += ["--json"]
         if requested_model:
