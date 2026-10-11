@@ -1,0 +1,292 @@
+"""`capability_effectiveness` counts an outcome the way `capability_causal_evidence` does, and scores
+nothing a role run holds.
+
+THE DEFECTS (2026-10-11, after #529). Two readers of the same edges and the same `outcomes` rows
+wrote their own predicates and disagreed:
+
+- An edge onto a ROLE run counted the role run's outcome. That outcome is a copy of the acting run's
+  (`feedback._propagate_outcome_lineage_in_conn`), and the acting run carries the same capability's
+  own edge, so one delivery counted twice, and `_target_of` pooled every `role:<name>:*` run into a
+  single subject `<name>`. On a copy of the live Brain all 27 outcome-bearing role-run edges were
+  such copies, and role-redirect's 762 edges, all on its own role runs, read "awaiting outcomes"
+  although nothing will ever give them one.
+- PASS with `pending` durability counted as a terminal non-durable result. A merge stays pending
+  until `durability_sweep` judges it, so every merge in its grace window lowered every rate; and an
+  unmerged run is selected by no sweep, so its pending is permanent (38 agy-runtime-isolation
+  offload runs).
+- A merge the fleet verifier marked NON_PASS was a durable success here and a failure in
+  `capability_causal_evidence`. 42 of deliberate-break-verifier's 47 pending merges carry one.
+
+THE RULE THIS PINS. Terminal and durable success are `feedback.outcome_is_terminal` and
+`feedback.outcome_is_durable_success`, which `capability_causal_evidence` also calls. An edge onto a
+role run is an association (`feedback.role_target_kind`), counted and never scored. A merge the
+sweep has not judged is `awaiting_sweep`; a pending run no sweep selects is `unresolvable`. An arm
+none of whose edges can ever be scored reads `unscoreable`, never `not_yet_measurable`.
+
+Every row is written by the production writers: `record_role_run` and `record_run`'s role
+inheritance for role advice, `record_capability_consumption` for a consumed capability (as
+`capability_lifecycle` does), and `record_outcome` for what became of a run."""
+
+from __future__ import annotations
+
+import time
+
+import pytest
+
+import capabilities
+import capability_effectiveness as effectiveness
+import durability_sweep
+import feedback
+
+T0 = 1_791_756_000  # 2026-10-11T23:20:00Z
+VERSIONS = {
+    "role-triage": "cv:triage",
+    "role-redirect": "cv:redirect",
+    "offload": "cv:offload",
+    "deliberate-break-verifier": "cv:dbv",
+}
+
+
+@pytest.fixture
+def brain(monkeypatch, tmp_path):
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "t.db")
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(feedback, "_capability_daily_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(
+        feedback,
+        "_resolve_capability_versions",
+        lambda ids: [VERSIONS[i] for i in ids] if all(i in VERSIONS for i in ids) else [],
+    )
+    monkeypatch.setattr(time, "time", lambda: float(T0))
+    ledger = tmp_path / "capabilities.json"
+    rows = {}
+    for cap_id in VERSIONS:
+        rows[cap_id] = capabilities._blank_capability(cap_id)
+        rows[cap_id]["status"] = "shadow"
+    capabilities.save(rows, ledger)
+    return ledger
+
+
+def _advised(n: int, role: str = "triage") -> tuple[str, str]:
+    """A role run an offload produced, and the run that acted on its advice."""
+    role_run, run = f"role:{role}:gemini:{n}", f"remote:o/r#{n}:gemini"
+    feedback.record_role_run(role_run, role, f"o/r#{n}", "gemini", backend_run_id=f"offload:{n}")
+    feedback.record_run(
+        run,
+        f"o/r#{n}",
+        "implement",
+        "gemini",
+        mode="remote",
+        pr_number=n,
+        influenced_by_role_run_ids=[role_run],
+    )
+    return role_run, run
+
+
+def _consumed(run: str, cap_id: str = "deliberate-break-verifier", **outcome) -> str:
+    """What `capability_lifecycle` records when a capability's output is accepted into a run."""
+    n = run.split("#")[-1].split(":")[0] if "#" in run else run
+    feedback.record_run(run, f"o/r#{n}", "implement", "codex", mode="remote")
+    feedback.record_capability_consumption(
+        capability_id=cap_id,
+        capability_version_id=VERSIONS[cap_id],
+        source_run_id=f"capability-producer:{cap_id}:{run}",
+        target_run_id=run,
+        accepted=True,
+    )
+    if outcome:
+        feedback.record_outcome(run, **outcome)
+    return run
+
+
+def _report(ledger) -> dict:
+    return effectiveness.measure(path=ledger)
+
+
+def _row(rep: dict, cap_id: str) -> dict:
+    return next(row for row in rep["rows"] if row["capability_id"] == cap_id)
+
+
+def _outcome_of(run: str) -> tuple | None:
+    with feedback._conn() as c:
+        return c.execute(
+            "SELECT adjudicated_verdict, durability FROM outcomes WHERE run_id=?", (run,)
+        ).fetchone()
+
+
+MERGED_DURABLE = {"adjudicated_verdict": "PASS", "merged": 1, "durability": "durable"}
+
+
+# ---- edges onto role runs ---------------------------------------------------------------------
+
+
+def test_a_role_runs_copied_outcome_is_an_association_not_a_second_delivery(brain):
+    role_run, run = _advised(1)
+    feedback.record_outcome(run, **MERGED_DURABLE)
+    # The precondition the defect needs: propagation gave the role run a copy of the outcome.
+    assert _outcome_of(role_run) == ("PASS", "durable")
+    rep = _report(brain)
+    for cap_id, kind in (("role-triage", "advisory_self"), ("offload", "role_association")):
+        arm = _row(rep, cap_id)["accepted"]
+        assert (arm["attributed"], arm["terminal"], arm["durable"]) == (2, 1, 1), (cap_id, arm)
+        assert (arm["associations"], arm["terminal_subjects"]) == (1, 1), (cap_id, arm)
+        assert arm["advisory_self"] == (1 if kind == "advisory_self" else 0), (cap_id, arm)
+
+
+def test_role_runs_never_pool_into_one_subject(brain):
+    # Before: `role:triage:gemini:<n>` folded into the subject `triage` for every n, so five
+    # deliveries counted five subjects plus one pooled `triage` holding all five copies.
+    for n in range(1, 6):
+        _, run = _advised(n)
+        feedback.record_outcome(run, **MERGED_DURABLE)
+    arm = _row(_report(brain), "role-triage")["accepted"]
+    assert (arm["terminal"], arm["terminal_subjects"], arm["associations"]) == (5, 5, 5), arm
+    assert arm["durable_rate"] == 1.0 and arm["status"] == "measured", arm
+
+
+def test_a_capability_whose_edges_are_all_on_its_own_role_runs_is_unscoreable(brain):
+    # role-redirect: its role runs are recorded, and no run is ever joined to their advice.
+    for n in range(1, 4):
+        feedback.record_role_run(f"role:redirect:cursor:{n}", "redirect", f"o/r#{n}", "cursor")
+    rep = _report(brain)
+    row = _row(rep, "role-redirect")
+    assert row["accepted"]["associations"] == 3, row
+    assert row["verdict"] == (
+        "unscoreable (3 edges, none can be scored: 3 associations onto role runs)"
+    ), row["verdict"]
+    assert "role-redirect" not in rep["awaiting_outcomes"]
+    assert "role-redirect" in rep["unscoreable"]
+    text = effectiveness.format_report(rep)
+    assert "3 assoc" in text and "can ever be scored" in text, text
+
+
+def test_associations_do_not_turn_excluded_only_into_unscoreable(brain):
+    _, run = _advised(1)
+    feedback.record_outcome(
+        run, adjudicated_verdict=None, durability="abandoned", failure_class="transient_infra"
+    )
+    arm = _row(_report(brain), "role-triage")["accepted"]
+    assert (arm["excluded"], arm["associations"]) == (1, 1), arm
+    assert arm["status"].startswith("excluded_only (1 attempts on 1 subjects"), arm["status"]
+
+
+# ---- PASS with pending durability ---------------------------------------------------------------
+
+
+def test_a_merge_the_sweep_has_not_judged_waits_and_then_scores(brain):
+    run = _consumed("remote:o/r#7:codex", adjudicated_verdict="PASS", merged=1, durability="pending")
+    # The sweep's own selector picks it up: this is the population that resolves.
+    assert run in {r["run_id"] for r in durability_sweep._pending_merged_runs()}
+    rep = _report(brain)
+    arm = _row(rep, "deliberate-break-verifier")["accepted"]
+    assert (arm["terminal"], arm["awaiting_sweep"], arm["unresolvable"]) == (0, 1, 0), arm
+    assert arm["status"] == "not_yet_measurable", arm
+    assert "deliberate-break-verifier" in rep["awaiting_outcomes"]
+    feedback.record_outcome(run, durability="durable")  # the sweep's verdict
+    arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+    assert (arm["terminal"], arm["durable"], arm["awaiting_sweep"]) == (1, 1, 0), arm
+
+
+def test_an_unmerged_pending_run_is_unresolvable_never_awaiting(brain):
+    # An offload run: a verdict, no PR, durability left at its default. No sweep selects it.
+    run = _consumed(
+        "offload:gemini:9",
+        verifier_verdict="PASS",
+        adjudicated_verdict="PASS",
+        durability="pending",
+    )
+    assert run not in {r["run_id"] for r in durability_sweep._pending_merged_runs()}
+    rep = _report(brain)
+    arm = _row(rep, "deliberate-break-verifier")["accepted"]
+    assert (arm["terminal"], arm["awaiting_sweep"], arm["unresolvable"]) == (0, 0, 1), arm
+    assert arm["status"] == (
+        "unscoreable (1 edges, none can be scored: 1 never resolvable)"
+    ), arm["status"]
+    assert "deliberate-break-verifier" not in rep["awaiting_outcomes"]
+    assert "1 unres" in effectiveness.format_report(rep)
+
+
+def test_pending_merges_no_longer_lower_the_rate(brain):
+    for n in range(1, 6):
+        _consumed(f"remote:o/r#{n}:codex", **MERGED_DURABLE)
+    for n in range(6, 9):
+        _consumed(f"remote:o/r#{n}:codex", adjudicated_verdict="PASS", merged=1)
+    arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+    assert (arm["terminal"], arm["awaiting_sweep"], arm["durable_rate"]) == (5, 3, 1.0), arm
+
+
+def test_a_small_sample_names_what_is_still_waiting_and_what_never_will(brain):
+    _consumed("remote:o/r#1:codex", **MERGED_DURABLE)
+    _consumed("remote:o/r#2:codex", adjudicated_verdict="PASS", merged=1, durability="pending")
+    _consumed("offload:gemini:3", adjudicated_verdict="PASS", durability="pending")
+    status = _row(_report(brain), "deliberate-break-verifier")["accepted"]["status"]
+    assert status == (
+        "insufficient_evidence (1/5 distinct subjects from 1 attempts; "
+        "1 awaiting the durability sweep; 1 never resolvable)"
+    ), status
+
+
+def test_a_failure_verdict_is_final_whatever_the_durability(brain):
+    _consumed("offload:gemini:4", verifier_verdict="FAIL", adjudicated_verdict="FAIL")
+    arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+    assert (arm["terminal"], arm["durable"], arm["unresolvable"]) == (1, 0, 0), arm
+
+
+# ---- the verifier's NON_PASS --------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("durability", ["durable", "pending"])
+def test_a_verifier_non_pass_is_terminal_and_never_a_durable_success(brain, durability):
+    _consumed(
+        "remote:o/r#5:codex",
+        verifier_verdict="NON_PASS",
+        adjudicated_verdict="PASS",
+        merged=1,
+        durability=durability,
+    )
+    arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+    assert (arm["terminal"], arm["durable"], arm["awaiting_sweep"]) == (1, 0, 0), arm
+
+
+# ---- one definition, two readers ----------------------------------------------------------------
+
+
+def test_this_reader_and_capability_causal_evidence_agree(brain):
+    """Every outcome shape seen on the live Brain, written through the production writers. The
+    lifecycle tally and this reader must agree on what is terminal and what is a durable success."""
+    shapes = [
+        MERGED_DURABLE,
+        {"adjudicated_verdict": "PASS", "merged": 1, "durability": "pending"},
+        {"adjudicated_verdict": "PASS", "merged": 1},
+        {"verifier_verdict": "PASS", "adjudicated_verdict": "PASS", "durability": "pending"},
+        {"verifier_verdict": "FAIL", "adjudicated_verdict": "FAIL", "durability": "pending"},
+        {"verifier_verdict": "NON_PASS", "adjudicated_verdict": "PASS", "merged": 1},
+        {
+            "verifier_verdict": "NON_PASS",
+            "adjudicated_verdict": "PASS",
+            "merged": 1,
+            "durability": "durable",
+        },
+        {"adjudicated_verdict": "PASS", "merged": 1, "durability": "broke_later"},
+        {"adjudicated_verdict": "FAIL", "merged": 0, "durability": "abandoned"},
+    ]
+    for n, outcome in enumerate(shapes, 1):
+        _consumed(f"remote:o/r#{n}:codex", **outcome)
+    _consumed(f"remote:o/r#{len(shapes) + 1}:codex")  # no outcome yet
+    lifecycle = feedback.capability_causal_evidence(
+        "deliberate-break-verifier", VERSIONS["deliberate-break-verifier"]
+    )
+    assert len(lifecycle) == len(shapes) + 1
+    arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+    assert arm["terminal"] == sum(r["terminal_outcome"] for r in lifecycle) == 6, arm
+    assert arm["durable"] == sum(r["tally_class"] == "success" for r in lifecycle) == 1, arm
+    assert (arm["awaiting_sweep"], arm["unresolvable"]) == (2, 1), arm
+
+
+def test_role_target_kind_is_the_lifecycles_advisory_self(brain):
+    _advised(1)
+    for row in feedback.capability_causal_evidence("role-triage", VERSIONS["role-triage"]):
+        kind = feedback.role_target_kind("role-triage", row["target_role_name"])
+        assert (kind == "advisory_self") == (row["tally_class"] == "advisory_self"), row
+    assert feedback.role_target_kind("offload", "triage") == "role_association"
+    assert feedback.role_target_kind("offload", None) == ""
