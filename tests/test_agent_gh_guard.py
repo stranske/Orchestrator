@@ -193,3 +193,30 @@ def test_guard_files_are_rewritten_only_when_they_differ(world):
     dispatcher._ensure_gh_guard()
     assert wrapper.stat().st_mtime_ns == first - 10**9, "an unchanged guard file was rewritten"
     assert os.access(wrapper, os.X_OK)
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        "-R o/r auth logout",
+        "auth --hostname github.com logout",
+        "--repo o/r config set git_protocol ssh",
+        "alias --clobber set co 'pr checkout'",
+    ],
+)
+def test_options_before_or_inside_the_command_do_not_get_it_past_the_guard(world, args):
+    for command in (f"exec gh {args}", f"exec bash -lc {shlex.quote('gh ' + args)}"):
+        ran = _agent(world, command)
+        assert ran.returncode == dispatcher.GH_GUARD_EXIT, (command, ran.stderr)
+    assert _logged(world) == ""
+
+
+def test_a_failed_guard_write_leaves_no_temp_file(world, monkeypatch):
+    def boom(*_args):
+        raise OSError("simulated")
+
+    monkeypatch.setattr(dispatcher.os, "replace", boom)
+    with pytest.raises(OSError):
+        dispatcher._ensure_gh_guard()
+    leftovers = list((dispatcher.AGENT_RUNTIME_DIR / "gh-guard").rglob("*.tmp"))
+    assert leftovers == [], leftovers

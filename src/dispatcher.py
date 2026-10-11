@@ -663,15 +663,28 @@ def agent_gh_guard_disabled() -> bool:
 
 
 def _gh_guard_check(leave: str) -> str:
-    """The refusal, as POSIX shell that sh, bash and zsh all read. `leave` is exit or return."""
+    """The refusal, as POSIX shell that sh, bash and zsh all read. `leave` is exit or return.
+
+    It scans EVERY argument rather than `$1 $2`: options may come first (`gh -R o/r auth logout`)
+    or between the group and its subcommand (`gh auth --hostname h logout`). A decided subcommand
+    anywhere after its group refuses; a false refusal is cheap, a missed one is not.
+    """
+    groups = sorted({pair.split()[0] for pair in GH_GUARD_REFUSED})
     pattern = "|".join(f'"{pair}"' for pair in GH_GUARD_REFUSED)
     return (
-        f'case "${{1:-}} ${{2:-}}" in\n'
-        f"  {pattern})\n"
-        "    printf '%s\\n' \"orchestrator gh guard: 'gh $1 $2' is refused inside a dispatched "
-        "agent: it would change the owner's gh login or config for the whole machine.\" >&2\n"
-        f"    {leave} {GH_GUARD_EXIT} ;;\n"
-        "esac\n"
+        "__orch_gh_group=; __orch_gh_hit=\n"
+        'for __orch_gh_arg in "$@"; do\n'
+        f'  case "$__orch_gh_group $__orch_gh_arg" in {pattern}) '
+        '__orch_gh_hit="$__orch_gh_group $__orch_gh_arg"; break ;; esac\n'
+        f'  case "$__orch_gh_arg" in {"|".join(groups)}) '
+        '[ -n "$__orch_gh_group" ] || __orch_gh_group="$__orch_gh_arg" ;; esac\n'
+        "done\n"
+        'if [ -n "$__orch_gh_hit" ]; then\n'
+        "  printf '%s\\n' \"orchestrator gh guard: 'gh $__orch_gh_hit' is refused inside a "
+        "dispatched agent: it would change the owner's gh login or config for the whole machine.\" >&2\n"
+        f"  unset __orch_gh_group __orch_gh_hit __orch_gh_arg; {leave} {GH_GUARD_EXIT}\n"
+        "fi\n"
+        "unset __orch_gh_group __orch_gh_hit __orch_gh_arg\n"
     )
 
 
@@ -725,10 +738,17 @@ def _ensure_gh_guard() -> Path:
             pass
         # One temp file per writer: concurrent offloads in one process share a pid.
         fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-        with os.fdopen(fd, "w") as fh:
-            fh.write(text)
-        os.chmod(tmp, 0o755 if path.name == "gh" else 0o644)
-        os.replace(tmp, path)
+        try:
+            with os.fdopen(fd, "w") as fh:
+                fh.write(text)
+            os.chmod(tmp, 0o755 if path.name == "gh" else 0o644)
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
     return guard
 
 
