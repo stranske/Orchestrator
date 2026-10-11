@@ -204,7 +204,12 @@ clear path, which is removing the worktree and re-provisioning it. A match runs 
 `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE` pinned to those known paths and with
 `core.fsmonitor` and `core.hooksPath` disabled; other paths (offload cwds, `local_verify`) get the
 two `-c` flags only. `ORCH_WORKTREE_GIT_GUARD_DISABLED=1` restores the old commands. It is a rail
-hardening inside existing stages, so the diagram is unchanged.
+hardening inside existing stages, so the diagram is unchanged. Each refusal is also appended, best-effort and
+without changing it, to `$ORCH_STATE_DIR/worktree-git-refusals.jsonl` (time, worktree, pointer file,
+reason, caller), and the weekly `switch_review` prints the window's count and latest worktrees as an
+FYI line, zero included, beside the `skip-git` lines the out-of-repo `lane-worktree-gc.sh` now writes
+when a removed worktree's `.git` names a canonical outside the known homes (2026-10-11); that is a
+feedback surface on an existing sweep, so the diagram is still unchanged.
 
 **An offload's caller can bound where it writes, whichever agent runs it (2026-10-11).**
 `dispatcher.offload(write_boundary={"protect": [...], "allow": [...]})` lets the run write nowhere

@@ -24,6 +24,12 @@ and GIT_WORK_TREE pinned to those known paths, so git reads no pointer file at a
 `-c core.fsmonitor=false -c core.hooksPath=/dev/null`. A path that is not a provisioned worktree
 (an offload cwd, a local-verify checkout, a scratch clone) gets the `-c` flags only.
 
+THE RECORD (2026-10-11). Each refusal is also appended, best-effort, as one JSON line to
+`$ORCH_STATE_DIR/worktree-git-refusals.jsonl` (`refusal_log_path`): UTC time, worktree, the pointer
+file named, the reason, and the calling function. The weekly `switch_review` prints the count for
+its window and the latest worktrees, FYI only. A failed write prints one line to stderr and never
+changes the refusal; the file is append-only and nothing in the guard reads it.
+
 WHAT CLEARS A REFUSAL. Removing the worktree (`git -C <clone> worktree remove --force <wt>`, or
 deleting it and `git worktree prune`) and letting `provision.provision` create it again. Nothing in
 the refusal path writes the worktree, so that clear path is always open.
@@ -33,9 +39,11 @@ Kill switch: ORCH_WORKTREE_GIT_GUARD_DISABLED=1 runs `git -C <path> ...` exactly
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import provision
@@ -48,6 +56,68 @@ HARDENING_FLAGS = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null
 REFUSED_RC = 97
 REFUSAL_PREFIX = "worktree_git refused"
 _CLEAR = "remove the worktree and re-provision it (git worktree remove --force, then provision)"
+REFUSAL_LOG_NAME = "worktree-git-refusals.jsonl"
+
+
+class Refusal(str):
+    """A refusal reason (a plain `str` to every existing caller) that also names the file."""
+
+    file: str | None
+
+    def __new__(cls, reason: str, file: str | Path | None = None) -> "Refusal":
+        obj = super().__new__(cls, reason)
+        obj.file = None if file is None else str(file)
+        return obj
+
+
+REFUSAL_LOG_ENV = "ORCH_WORKTREE_GIT_REFUSAL_LOG"  # an explicit file path; the test suite sets it
+
+
+def refusal_log_path() -> Path:
+    """Where refusals are recorded: under ORCH_STATE_DIR, resolved at call time."""
+    explicit = os.environ.get(REFUSAL_LOG_ENV)
+    if explicit:
+        return Path(explicit)
+    state = os.environ.get("ORCH_STATE_DIR") or str(Path.home() / ".codex" / "orchestrator")
+    return Path(state) / REFUSAL_LOG_NAME
+
+
+def _caller() -> str:
+    """`module.function` of whoever called `run` (best-effort; never raises)."""
+    try:
+        frame = sys._getframe(2)
+        return f"{frame.f_globals.get('__name__', '?')}.{frame.f_code.co_name}"
+    except Exception:  # noqa: BLE001 — a missing frame only loses the caller field
+        return "unknown"
+
+
+def record_refusal(
+    worktree: str | Path, reason: str, *, args=(), caller: str = "unknown", now: float | None = None
+) -> bool:
+    """Append one refusal row. Best-effort: any failure prints to stderr and returns False."""
+    ts = int(time.time() if now is None else now)
+    row = {
+        "ts": ts,
+        "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts)),
+        "worktree": str(worktree),
+        "file": getattr(reason, "file", None),
+        "reason": str(reason),
+        "caller": caller,
+        "git": str(args[0]) if args else None,
+    }
+    try:
+        path = refusal_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        line = (json.dumps(row, sort_keys=True) + "\n").encode("utf-8")
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            os.write(fd, line)  # one write on an O_APPEND fd: concurrent rows do not interleave
+        finally:
+            os.close(fd)
+        return True
+    except Exception as exc:  # noqa: BLE001 — recording must never change the refusal
+        print(f"worktree_git: refusal not recorded ({type(exc).__name__}: {exc})", file=sys.stderr)
+        return False
 
 
 def disabled() -> bool:
@@ -84,37 +154,49 @@ def expected_pins(worktree: str | Path, repo: str | None = None) -> tuple[Path, 
     try:
         key, colon, value = _read_pointer(dotgit).partition(":")
         if not colon or key.strip() != "gitdir" or not value.strip():
-            return f"{dotgit} does not contain a 'gitdir:' line; {_CLEAR}"
+            return Refusal(f"{dotgit} does not contain a 'gitdir:' line; {_CLEAR}", dotgit)
         git_dir = _real(wt / value.strip())
         worktrees = git_dir.parent
         clone = worktrees.parent.parent
         if worktrees.name != "worktrees" or worktrees.parent.name != ".git":
-            return f"{dotgit} names {git_dir}, which is not a linked-worktree git dir; {_CLEAR}"
+            return Refusal(
+                f"{dotgit} names {git_dir}, which is not a linked-worktree git dir; {_CLEAR}",
+                dotgit,
+            )
         if repo is not None:
             # The caller knows the repo: its canonical clone is the only acceptable owner.
             expected = _real(provision.canonical_path(repo))
             if clone != expected:
-                return f"{dotgit} names a git dir of {clone}, not of {expected}; {_CLEAR}"
+                return Refusal(
+                    f"{dotgit} names a git dir of {clone}, not of {expected}; {_CLEAR}", dotgit
+                )
         elif clone.parent != repos or not wt.name.startswith(clone.name + "__"):
             # Otherwise the worktree's own name says which canonical clone it belongs to.
-            return (
+            return Refusal(
                 f"{dotgit} names {git_dir}, which is not under "
-                f"{repos}/<the clone {wt.name} was named for>/.git/worktrees/; {_CLEAR}"
+                f"{repos}/<the clone {wt.name} was named for>/.git/worktrees/; {_CLEAR}",
+                dotgit,
             )
         if git_dir.is_symlink() or not git_dir.is_dir():
-            return f"{git_dir} (named by {dotgit}) is not a directory; {_CLEAR}"
+            return Refusal(f"{git_dir} (named by {dotgit}) is not a directory; {_CLEAR}", git_dir)
         common = clone / ".git"
         back = _real(Path(_read_pointer(git_dir / "gitdir")))
         if back != dotgit:
-            return f"{git_dir / 'gitdir'} points at {back}, not {dotgit}; {_CLEAR}"
+            return Refusal(
+                f"{git_dir / 'gitdir'} points at {back}, not {dotgit}; {_CLEAR}", git_dir / "gitdir"
+            )
         named_common = _real(git_dir / _read_pointer(git_dir / "commondir"))
         if named_common != common:
-            return f"{git_dir / 'commondir'} resolves to {named_common}, not {common}; {_CLEAR}"
+            return Refusal(
+                f"{git_dir / 'commondir'} resolves to {named_common}, not {common}; {_CLEAR}",
+                git_dir / "commondir",
+            )
         extra = git_dir / "config.worktree"
         if extra.exists() or extra.is_symlink():
-            return f"{extra} exists; a dispatch worktree never has one; {_CLEAR}"
+            return Refusal(f"{extra} exists; a dispatch worktree never has one; {_CLEAR}", extra)
     except (OSError, UnicodeDecodeError, ValueError) as exc:
-        return f"cannot read the git pointer files of {wt}: {exc}; {_CLEAR}"
+        # Which file failed is in `exc`; do not guess it.
+        return Refusal(f"cannot read the git pointer files of {wt}: {exc}; {_CLEAR}")
     return git_dir, common, wt
 
 
@@ -153,6 +235,7 @@ def run(
     if isinstance(planned, str):
         reason = f"{REFUSAL_PREFIX}: {planned}"
         print(reason, file=sys.stderr)
+        record_refusal(worktree, planned, args=args, caller=_caller())
         argv = ["git", "-C", str(worktree), *args]
         empty = "" if text else b""
         err = reason if text else reason.encode()
@@ -182,9 +265,10 @@ def _selftest() -> None:
         subprocess.run(
             ["git", "-C", str(clone), "worktree", "add", "-q", "-b", "b1", str(wt)], check=True
         )
+        state = root / "state"
         with mock.patch.object(provision, "REPOS_DIR", repos), mock.patch.object(
             provision, "WORKTREES_DIR", wts
-        ):
+        ), mock.patch.dict(os.environ, {"ORCH_STATE_DIR": str(state), REFUSAL_LOG_ENV: ""}):
             ok = run(wt, ["rev-parse", "--is-inside-work-tree"])
             assert ok.returncode == 0 and ok.stdout.strip() == "true", ok
             commondir = clone / ".git" / "worktrees" / wt.name / "commondir"
@@ -192,9 +276,15 @@ def _selftest() -> None:
             commondir.write_text(str(root) + "\n")
             refused = run(wt, ["status"])
             assert refused.returncode == REFUSED_RC and "commondir" in refused.stderr, refused
+            rows = [json.loads(x) for x in refusal_log_path().read_text().splitlines()]
+            assert len(rows) == 1 and rows[0]["file"].endswith("commondir"), rows
+            assert rows[0]["worktree"] == str(wt) and rows[0]["caller"].endswith("_selftest"), rows
             commondir.write_text(original)
             assert run(wt, ["status"]).returncode == 0
-    print("worktree_git.py selftest: OK (pinned run, tampered commondir refused, restore clears)")
+    print(
+        "worktree_git.py selftest: OK (pinned run, tampered commondir refused and recorded, "
+        "restore clears)"
+    )
 
 
 if __name__ == "__main__":
