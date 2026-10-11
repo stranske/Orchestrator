@@ -440,6 +440,12 @@ Do not create a second event log, model registry, or capability inventory.
   (`outcomes.judge_replacement`). Never by branch name (#411 measured that), and never a replacement
   with different commits: that is different work, and the FAIL stands. An answer that cannot single
   one out, or a closed PR older than the run, is `unattributed_replacement`, excluded like the rest.
+  A KEEPALIVE run IS its PR, so the same read decides its closed PR differently: the carrier is
+  recorded as its own keepalive run with its own verdict, and crediting the closed PR too would count
+  one delivery twice. A PR linked to its issue that carries its head (merged after it opened, merged
+  before it opened, or open) ends the run with no verdict, `carried_by_other_pr`
+  (`outcomes.judge_keepalive_replacement`); an answer that cannot single one out is
+  `unattributed_replacement`, as for a local run; no carrier, or no linked issue, keeps the FAIL.
   An issue was closed through a PR only if that PR MERGED by the time the issue closed
   (`outcomes.CLOSING_PR_MERGE_SLACK_SECONDS`). GitHub also lists every PR that links the issue
   later, which cannot have closed it: those are named in the notes and never counted, and a
