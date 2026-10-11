@@ -338,7 +338,7 @@ def test_the_headline_prints_each_bound_beside_its_count_and_blocking_beside_dra
         "TICK-PLAN: delegations 0/3 would apply (shadow); 12 refused; examined 12/12; "
         "0 closer set aside; "
         "label reads 12 answered, 0 unanswered (refused); 0 no capacity, 0 blocked; "
-        "deferred 8 (delegable 8, drainable 0) -> PLAN"
+        "deferred 8 (delegable 8, drainable 0); backlog age ? -> PLAN"
     )
 
 
@@ -357,7 +357,7 @@ def test_the_fully_drained_line_is_one_an_empty_backlog_produces(gh, sandbox):
         "TICK-PLAN: delegations 0/3 would apply (shadow); 0 refused; examined 0/12; "
         "0 closer set aside; "
         "label reads 0 answered, 0 unanswered (refused); 0 no capacity, 0 blocked; "
-        "deferred 0 (delegable 0, drainable 0) -> PLAN"
+        "deferred 0 (delegable 0, drainable 0); backlog age ? -> PLAN"
     )
 
 
@@ -380,3 +380,52 @@ def test_a_plan_without_the_counts_prints_unknown_never_zero():
     assert "delegations ?/? would apply (shadow); ? refused; examined ?/?;" in line, line
     assert "? closer set aside;" in line, line  # a plan from before 2026-10-05
     assert "deferred 0 (delegable ?, drainable ?)" in line, line
+
+
+# ------------------------------------------------------------------ the backlog's age on the line
+
+
+def _headline_with(backlog):
+    return tick.plan_headline({"chosen": [], "backlog": backlog}, "PLAN", lane_live=False)
+
+
+def test_a_fresh_backlog_prints_its_age_unmarked():
+    line = _headline_with({"generated_at": 1, "age_seconds": 3600, "stale_after_seconds": 172800})
+    assert "; backlog age 0.0d -> PLAN" in line and "STALE" not in line, line
+
+
+def test_a_stale_backlog_is_marked_with_its_horizon():
+    age = 17 * 86400
+    line = _headline_with({"generated_at": 1, "age_seconds": age, "stale_after_seconds": 172800})
+    assert "; backlog age 17.0d STALE (>2d) -> PLAN" in line, line
+
+
+def test_the_horizon_itself_is_not_stale_and_one_second_past_is():
+    horizon = tick.BACKLOG_STALE_AFTER_SECONDS
+    at = _headline_with({"age_seconds": horizon, "stale_after_seconds": horizon})
+    past = _headline_with({"age_seconds": horizon + 1, "stale_after_seconds": horizon})
+    assert "STALE" not in at and "STALE" in past, (at, past)
+
+
+def test_an_unreadable_age_prints_unknown_never_zero():
+    for info in (None, {}, {"age_seconds": None}, {"age_seconds": "x"}):
+        line = _headline_with(info)
+        assert "; backlog age ? -> PLAN" in line and "STALE" not in line, (info, line)
+
+
+def test_backlog_age_reads_the_files_generated_at(tmp_path, monkeypatch):
+    import router
+
+    path = tmp_path / "backlog.json"
+    monkeypatch.setattr(router, "BACKLOG_JSON", path)
+    assert tick.backlog_age(now=100)["age_seconds"] is None  # absent file
+    path.write_text(json.dumps({"items": [], "generated_at": 1000}))
+    info = tick.backlog_age(now=1000 + 3 * 86400)
+    assert info["generated_at"] == 1000 and info["age_seconds"] == 3 * 86400, info
+    assert "STALE" in tick.plan_headline({"backlog": info}, "PLAN", lane_live=False)
+    path.write_text(json.dumps([{"target": "o/r"}]))  # bare list carries no stamp
+    assert tick.backlog_age(now=5)["age_seconds"] is None
+    path.write_text(json.dumps({"items": [], "generated_at": True}))
+    assert tick.backlog_age(now=5)["age_seconds"] is None
+    path.write_text("not json")
+    assert tick.backlog_age(now=5)["age_seconds"] is None
