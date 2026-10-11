@@ -37,6 +37,7 @@ import execution_profiles
 import feedback
 import provision
 import repo_knowledge
+import worktree_git
 
 ORCH_DIR = Path(__file__).resolve().parent
 REAL_HOME = Path.home()
@@ -254,7 +255,7 @@ def build_prompt(
 
 def _is_git_worktree(cwd: str | Path) -> bool:
     res = subprocess.run(
-        ["git", "-C", str(cwd), "rev-parse", "--is-inside-work-tree"],
+        worktree_git.hardened_argv(cwd, ["rev-parse", "--is-inside-work-tree"]),
         capture_output=True,
         text=True,
     )

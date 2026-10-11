@@ -193,6 +193,19 @@ worktree's git dir, plus the canonical clone's `objects/`, `refs/` and `logs/`
 in place. Offloads, read-only runs and the outer-seat bypass get nothing, and the clone's `config`
 and `hooks/` are never granted. No stage, component or surface moved, so the diagram is unchanged.
 
+That grant leaves one residue: the private git dir's `commondir` and `gitdir` pointer files are
+writable by the run, and the tool later runs git in that worktree itself, outside any sandbox
+(the push record, the redirect sweep's `watch`, `exp_abcd.collect`, `provision`'s reuse check and
+`dispatch`'s status). Those reads go through `worktree_git.run` (2026-10-11). For a worktree under
+`provision.WORKTREES_DIR` it checks the `.git` file, `gitdir`, `commondir` and the absence of
+`config.worktree` against the clone `provision` derives (`canonical_path(repo)`, or the clone the
+worktree's name belongs to). A mismatch refuses without starting git and names the file and the
+clear path, which is removing the worktree and re-provisioning it. A match runs git with
+`GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE` pinned to those known paths and with
+`core.fsmonitor` and `core.hooksPath` disabled; other paths (offload cwds, `local_verify`) get the
+two `-c` flags only. `ORCH_WORKTREE_GIT_GUARD_DISABLED=1` restores the old commands. It is a rail
+hardening inside existing stages, so the diagram is unchanged.
+
 **No agent run is given a workspace that is or holds `/`, the home dir or the control plane
 (2026-10-05).** A run's workspace is where it may write. codex makes `--cd` a write entry of the
 run's own permission profile, so `writable_roots` cannot narrow it. agy's `--add-dir` is its write

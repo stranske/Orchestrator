@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 import execution_profiles
+import worktree_git
 
 HOME = Path.home()
 HANDOFF = Path(os.environ.get("HANDOFF_DIR", HOME / ".codex" / "handoff"))
@@ -1949,9 +1950,8 @@ def dispatch(
         requested_model=requested_model,
     )
     proc = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
-    status = subprocess.run(
-        ["git", "-C", cwd, "status", "--porcelain"], capture_output=True, text=True
-    ).stdout.strip()
+    # The run could write its worktree git dir (#452), so this read pins the repository locations.
+    status = worktree_git.run(cwd, ["status", "--porcelain"]).stdout.strip()
     selected = execution_profiles.get_profile(profile) if profile is not None else None
     # Telemetry is fail-open, but return its structured classification to callers.
     combined_output = f"{proc.stderr or ''}"
