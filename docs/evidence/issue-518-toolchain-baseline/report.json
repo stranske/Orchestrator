@@ -1,0 +1,158 @@
+{
+  "pins": {
+    "BLACK_VERSION": "26.10.0",
+    "RUFF_VERSION": "0.16.10",
+    "ISORT_VERSION": "9.0.2",
+    "DOCFORMATTER_VERSION": "1.7.8",
+    "MYPY_VERSION": "2.4.0",
+    "PYTEST_VERSION": "9.1.1",
+    "PYTEST_COV_VERSION": "7.1.0",
+    "PYTEST_XDIST_VERSION": "3.8.0",
+    "COVERAGE_VERSION": "7.16.2"
+  },
+  "checks": [
+    {
+      "check": "lint-ruff",
+      "command": "ruff check --extend-exclude .workflows-lib --output-format concise .",
+      "blocking": 0,
+      "blocking_unit": "findings",
+      "drainable": 0,
+      "drain": "`ruff check --fix` for the mechanical share; hand edits for the rest",
+      "by_code": {}
+    },
+    {
+      "check": "lint-format",
+      "command": "black --check --line-length 100 --exclude (\\.venv|\\.workflows-lib|node_modules) .",
+      "blocking": 0,
+      "blocking_unit": "files",
+      "drainable": 0,
+      "drain": "one `black --line-length 100 .` run",
+      "by_code": {}
+    },
+    {
+      "check": "typecheck-mypy",
+      "command": "mypy --config-file pyproject.toml --exclude .workflows-lib src",
+      "blocking": 0,
+      "blocking_unit": "errors",
+      "behind_exempt_list": 0,
+      "exempt_modules": 0,
+      "drainable": 0,
+      "drain": "typed modules landing incrementally; there is no mechanical fixer",
+      "files": null,
+      "setup_abort": false,
+      "by_code": {}
+    },
+    {
+      "check": "coverage",
+      "command": "pytest --cov --cov-config=pyproject.toml (arguments built by the reusable workflow)",
+      "blocking": 0,
+      "blocking_unit": "startup errors",
+      "drainable": 0,
+      "drain": "nothing to drain while this reads 0. It was 1 until stranske/Workflows#3202 (merged 2026-08-23) made `--cov-config` conditional on the file existing and gated the editable install on real packaging metadata; if it goes back to 1, the drain is upstream again",
+      "by_code": {}
+    }
+  ],
+  "problems": [],
+  "raw_commands": [
+    {
+      "command": [
+        "ruff",
+        "check",
+        "--extend-exclude",
+        ".workflows-lib",
+        "--output-format",
+        "concise",
+        "."
+      ],
+      "cwd": "/Users/teacher/.codex/automations/sync-dependency-pr-closer/worktrees/orch519-baseline-20261011",
+      "exit": 0,
+      "stdout": "All checks passed!\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "ruff",
+        "check",
+        "--fix",
+        "--exit-zero",
+        "."
+      ],
+      "cwd": "/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/ci-lint-baseline-unwpmso9",
+      "exit": 0,
+      "stdout": "All checks passed!\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "ruff",
+        "check",
+        "--fix",
+        "--exit-zero",
+        "--unsafe-fixes",
+        "."
+      ],
+      "cwd": "/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/ci-lint-baseline-unwpmso9",
+      "exit": 0,
+      "stdout": "All checks passed!\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "ruff",
+        "check",
+        "--extend-exclude",
+        ".workflows-lib",
+        "--output-format",
+        "concise",
+        "."
+      ],
+      "cwd": "/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/ci-lint-baseline-unwpmso9",
+      "exit": 0,
+      "stdout": "All checks passed!\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "black",
+        "--check",
+        "--line-length",
+        "100",
+        "--exclude",
+        "(\\.venv|\\.workflows-lib|node_modules)",
+        "."
+      ],
+      "cwd": "/Users/teacher/.codex/automations/sync-dependency-pr-closer/worktrees/orch519-baseline-20261011",
+      "exit": 0,
+      "stdout": "",
+      "stderr": "All done! \u2728 \ud83c\udf70 \u2728\n372 files would be left unchanged.\n"
+    },
+    {
+      "command": [
+        "mypy",
+        "--config-file",
+        "pyproject.toml",
+        "--exclude",
+        ".workflows-lib",
+        "src"
+      ],
+      "cwd": "/Users/teacher/.codex/automations/sync-dependency-pr-closer/worktrees/orch519-baseline-20261011",
+      "exit": 0,
+      "stdout": "src/gh_capacity.py:951: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nsrc/gh_capacity.py:1081: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nsrc/feedback.py:5996: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nsrc/capability_propensity.py:5073: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nsrc/capability_propensity.py:5082: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nsrc/exp_abcd.py:2880: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nSuccess: no issues found in 121 source files\n",
+      "stderr": ""
+    }
+  ],
+  "head": "7728066fa679ff8941a696d4b52c5b7e460f4607",
+  "script_sha256": "4d9c5bca4696e40a8a800715a51e529954399f2c935b73cf34b2affb136e62e6",
+  "pins_sha256": "cebc748767c5d6fa4a2e8797afb483bd27d7740ecd47f8173031c63cbc5cd47b",
+  "generated_pr": "stranske/Orchestrator#517@c93fe39be4fa497475fdb915ffe10631b4cb186e",
+  "time": "2026-10-11T21:37:40.591992+00:00",
+  "versions": {
+    "ruff": "ruff 0.16.10",
+    "black": "black, 26.10.0 (compiled: yes)\nPython (CPython) 3.12.2",
+    "mypy": "mypy 2.4.0 (compiled: yes)",
+    "pytest": "pytest 9.1.1",
+    "coverage": "Coverage.py, version 7.16.2 with C extension\nFull documentation is at https://coverage.readthedocs.io/en/7.16.2",
+    "isort": "_                 _\n                (_) ___  ___  _ __| |_\n                | |/ _/ / _ \\/ '__  _/\n                | |\\__ \\/\\_\\/| |  | |_\n                |_|\\___/\\___/\\_/   \\_/\n\n      isort your imports, so you don't have to.\n\n                    VERSION 9.0.2 (compiled yes)",
+    "docformatter": "docformatter 1.7.8"
+  }
+}
