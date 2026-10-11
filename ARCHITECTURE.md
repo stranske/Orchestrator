@@ -514,10 +514,42 @@ The rest are the `offload` association edges on advisory role runs kept on 2026-
 `dry_seam_audit` still fails on them.
 
 The control arm starts at 2 subjects each for role-triage and offload, short of
-`capability_effectiveness.MIN_SAMPLE` (5). It grows only when a delegation goes ahead against
-triage, and the dispatch lane has been shadow since 2026-09-03. No stage, component or surface
-moved: the counterfactual arm was already a column of the edge table and the comparison
-`capability_effectiveness` makes. The loop diagram is unchanged.
+`capability_effectiveness.MIN_SAMPLE` (5), and every one of them is learning-excluded, so none is
+scored (next paragraph). It grows only when a delegation goes ahead against triage, and the dispatch
+lane has been shadow since 2026-09-03. No stage, component or surface moved: the counterfactual arm
+was already a column of the edge table and the comparison `capability_effectiveness` makes. The
+loop diagram is unchanged.
+
+**`capability_effectiveness` reads what became of a run from `outcomes`, and scores no outcome a
+learner may not (2026-10-11).** An influence edge says which capability touched which run, and in
+which arm. Its `outcome_verdict` and `durability` columns are only a copy of the target's `outcomes`
+row, taken when the edge was last propagated, and nothing keeps that copy current:
+- propagation runs only when a writer re-records the target, and only over accepted edges;
+- the triage grader writes a counterfactual edge's grade once;
+- `durability_sweep`'s truncated-recheck restore, `feedback.mark_transient_infra` and the data
+  migrations write `outcomes` directly.
+
+The three 2026-10-04 relabels moved 53 outcomes into excluded classes and refreshed none of the 54
+accepted capability edges on them. So the reader takes the verdict (adjudicated, else the verifier's)
+and the durability from `outcomes` when the report is made, as `capability_causal_evidence` already
+does. A target whose `failure_class` is in `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES` is counted
+in `excluded`, beside `terminal`, in either arm, and is never scored. An arm whose
+outcomes are all excluded reads `excluded_only`; an arm with unresolved nonexcluded attempts remains
+`not_yet_measurable` and visible in `awaiting_outcomes`. The report qualifies its summary as
+accepted-arm-only, because the control arm can still have a measured rate. Waiting cannot change
+the excluded subset; those outcomes need attribution.
+
+Measured on a copy of the live Brain after #525:
+
+| Arm | Before | After |
+|---|---|---|
+| role-triage, accepted | 22 terminal on 12 subjects, durable rate 0.167 | none scored; 24 excluded on 12 subjects |
+| offload, accepted | 73 terminal on 60 subjects, 0.633 | 46 on 46 subjects, 0.783; 30 excluded on 14 |
+| both control arms | 2 terminal each | none scored; 2 and 3 excluded |
+
+Both durable subjects behind role-triage's 0.167 were edges still reading PASS/durable on outcomes
+since relabelled `unattributed_delegation`. No stage, component or surface moved, so the loop
+diagram is unchanged.
 
 The one place two LLMs touch the same task is an `agent:auto` switch, where the keepalive delegation
 policy replaces a stalled agent. `agent_switches.py` (rail, daily) records each such pair in the Brain
