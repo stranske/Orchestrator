@@ -312,3 +312,189 @@ def test_a_case_variant_of_home_is_still_home(tmp_path, monkeypatch):
         assert reason and "is the user's home" in reason, reason
     else:
         assert reason is None, reason
+
+
+# ---------------------------------------------------------------------------------------------
+# The spawners outside offload/plan_dispatch, and the predicate's edges (review of #495).
+#
+# HERMETIC BY CONSTRUCTION. These run in-process, so a guard that regresses would otherwise reach
+# the real spawn and the real stores. That happened while these tests were written: with the arm
+# and resume guards deliberately removed, they started real cursor-agent processes (one in `/` with
+# --force) and wrote live Brain and ledger rows. `_forbid_side_effects` turns every spawn and every
+# record into an AssertionError, so a regression fails the test and starts nothing.
+# ---------------------------------------------------------------------------------------------
+
+OFFLOAD_ISOLATED = FAKE_AGENT + r"""
+import dispatcher
+
+results = {}
+for agent in sys.argv[2].split(","):
+    seen.clear()
+    off = dispatcher.offload(agent, "Summarize.", cwd=sys.argv[1], isolate=True, timeout=60)
+    results[agent] = {"seen": list(seen), "relocated": off.get("workspace_relocated"),
+                      "isolated_cwd": off.get("isolated_cwd"), "exit": off.get("exit")}
+print("RESULT " + json.dumps({"process_cwd": os.getcwd(), "results": results}))
+"""
+
+
+def _isolated_env(monkeypatch, tmp_path: Path) -> Path:
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
+    for key in ("ORCH_LOCAL_RUNTIME", "ORCH_MIRROR", "CODEX_SANDBOX"):
+        monkeypatch.delenv(key, raising=False)
+    return home
+
+
+def _forbid_side_effects(monkeypatch) -> None:
+    import exp_abcd
+
+    def forbidden(what):
+        def fail(*_args, **_kwargs):
+            raise AssertionError(f"the guard let this through: it would {what}")
+
+        return fail
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden("start an agent process"))
+    monkeypatch.setattr(subprocess, "run", forbidden("run an agent process"))
+    monkeypatch.setattr(exp_abcd, "_record_execution_start", forbidden("record an execution"))
+    monkeypatch.setattr(exp_abcd.feedback, "record_run", forbidden("write a Brain run row"))
+    monkeypatch.setattr(adapters, "record_ledger", forbidden("write a ledger row"))
+
+
+@pytest.mark.parametrize("agent", ["claude", "codex", "cursor", "gemini", "vibe"])
+def test_every_evaluator_runs_in_a_scratch_workspace_of_its_own(tmp_path, monkeypatch, agent):
+    """exp_abcd.evaluate and ux_review start evaluators with Popen and no cwd, so the command
+    itself must move them: the tick's cwd is `/`, and agy's `--add-dir` used to name this module's
+    directory, which in the mirror is the dispatcher's own code."""
+    import exp_abcd
+
+    _isolated_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("ORCH_MODEL_PROBE", "0")
+    monkeypatch.chdir(tmp_path)
+    command = exp_abcd._eval_command(agent, "prompt.txt")
+    made = list((tmp_path / "state" / "scratch-workspaces").iterdir())
+    assert len(made) == 1, made
+    workspace = str(made[0].resolve())
+    assert f"cd {shlex.quote(workspace)} && (" in command, command[-600:]
+    assert shlex.quote(str(tmp_path / "prompt.txt")) in command, "the prompt path is absolute"
+    if agent == "gemini":
+        added = _flag(shlex.split(command.split(" && ", 1)[1]), "--add-dir")
+        assert added == workspace, (added, workspace)
+        assert added != str(exp_abcd.ORCH.resolve())
+    with pytest.raises(adapters.WorkspaceRefused):
+        exp_abcd._eval_command(agent, "prompt.txt", "/")
+
+
+@pytest.mark.parametrize("agent", ["cursor", "claude", "vibe", "codex", "gemini"])
+def test_an_experiment_arm_never_starts_in_root(tmp_path, monkeypatch, agent):
+    """An arm commits in its worktree, so `/` is refused before anything is recorded."""
+    import exp_abcd
+
+    _isolated_env(monkeypatch, tmp_path)
+    _forbid_side_effects(monkeypatch)
+    log = tmp_path / "logs" / "arm.log"
+    with pytest.raises(adapters.WorkspaceRefused):
+        exp_abcd._spawn(agent, "full", "Implement it.", Path("/"), log)
+    assert not log.parent.exists(), "nothing ran or was written before the refusal"
+
+
+@pytest.mark.parametrize("worktree", ["", "   ", None])
+def test_a_resume_with_no_worktree_is_blocked_not_run_in_the_callers_cwd(monkeypatch, worktree):
+    import exp_abcd
+
+    _forbid_side_effects(monkeypatch)
+    monkeypatch.setattr(exp_abcd, "_spawn", lambda *a, **k: pytest.fail("the resume spawned"))
+    state = {"experiment_id": "e1", "synthesis": {"synth_agent": "cursor", "worktree": worktree}}
+    out = exp_abcd._resume_synthesis_promotion(state)
+    assert out == {"blocked": True, "reason": "resume lacks synthesis agent/worktree"}, out
+
+
+@pytest.mark.parametrize("agent", ["cursor", "claude", "vibe", "aider", "codex", "gemini"])
+def test_adapters_dispatch_refuses_root_for_every_agent(tmp_path, monkeypatch, agent):
+    _isolated_env(monkeypatch, tmp_path)
+    _forbid_side_effects(monkeypatch)
+    with pytest.raises(adapters.WorkspaceRefused):
+        adapters.dispatch(agent, "x", cwd="/")
+
+
+def test_an_isolated_offload_from_root_names_one_workspace(tmp_path):
+    """A relocated run is not copied again: the agent is told and granted the same directory."""
+    out = _run_child(tmp_path, OFFLOAD_ISOLATED, ".", "codex,gemini,cursor")
+    for agent, res in out["results"].items():
+        seen, relocated = res["seen"][0], res["relocated"]
+        assert relocated and relocated["requested"] == "/", (agent, res)
+        workspace = relocated["workspace"]
+        assert seen["cwd"] == workspace == res["isolated_cwd"], (agent, seen["cwd"], res)
+        argv = _agent_argv(seen["wrapped"])
+        granted = {_flag(argv, "--cd"), _flag(argv, "--add-dir")} - {None}
+        assert granted <= {workspace}, (agent, granted, workspace)
+        assert "GEMINI ISOLATED WORKSPACE" not in seen["wrapped"], agent
+
+
+def test_the_identity_check_catches_a_spelling_resolve_cannot_normalise(tmp_path, monkeypatch):
+    """Portable form of the case-variant test, so CI's case-sensitive runner exercises the
+    identity clause too: a spelling the canonicaliser leaves alone, same directory underneath."""
+    home = _isolated_env(monkeypatch, tmp_path)
+    (home / "sub").mkdir()
+    monkeypatch.setattr(adapters, "workspace_path", lambda cwd: Path(cwd))
+    reason = adapters.broad_workspace_reason(home / "sub" / "..")
+    assert reason and "is the user's home" in reason, reason
+
+
+def test_the_data_volume_path_of_home_is_refused(tmp_path, monkeypatch):
+    """macOS firmlinks `/Users/x` to `/System/Volumes/Data/Users/x`: one directory, two paths."""
+    _isolated_env(monkeypatch, tmp_path)
+    data = tmp_path / "Data"
+    data.mkdir()
+    (tmp_path / "work").mkdir()
+    monkeypatch.setattr(adapters, "MACOS_DATA_VOLUME", data)
+    reason = adapters.broad_workspace_reason(data)
+    assert reason and "contains the user's home, by its data path" in reason, reason
+    assert adapters.broad_workspace_reason(tmp_path / "work") is None
+
+
+def test_every_homes_control_plane_is_refused_when_home_is_moved(tmp_path, monkeypatch):
+    import pwd
+
+    home = _isolated_env(monkeypatch, tmp_path)
+    account = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    assert account != home
+    for path, holds in (
+        (account / ".codex" / "orchestrator", "default state dir"),
+        (account / ".codex" / "orchestrator-mirror", "exec mirror"),
+        (home / ".codex" / "orchestrator", "default state dir"),
+    ):
+        reason = adapters.broad_workspace_reason(path)
+        assert reason and holds in reason, (path, reason)
+
+
+def test_a_malformed_override_never_makes_the_predicate_raise(tmp_path, monkeypatch):
+    _isolated_env(monkeypatch, tmp_path)
+    (tmp_path / "work").mkdir()
+    for key in ("ORCH_STATE_DIR", "ORCH_LOCAL_RUNTIME", "ORCH_MIRROR"):
+        monkeypatch.setenv(key, "~nosuchuser-orch-test/x")
+    assert adapters.broad_workspace_reason(tmp_path / "work") is None
+    assert adapters.broad_workspace_reason("/")
+
+
+def test_pruning_removes_only_old_empty_scratch_dirs(tmp_path, monkeypatch):
+    import time
+
+    _isolated_env(monkeypatch, tmp_path)
+    root = adapters.scratch_workspace_root()
+    root.mkdir(parents=True)
+    stale = time.time() - adapters.SCRATCH_PRUNE_AFTER_S - 60
+    old_empty = root / "20200101T000000Z-codex-old"
+    old_written = root / "20200101T000000Z-codex-wrote"
+    foreign = root / "not-a-scratch-dir"
+    fresh = root / "20991231T000000Z-codex-new"
+    for path in (old_empty, old_written, foreign, fresh):
+        path.mkdir()
+    (old_written / "result.txt").write_text("kept for the caller\n")
+    for path in (old_empty, old_written, foreign):
+        os.utime(path, (stale, stale))
+    made = adapters.scratch_workspace("codex")
+    assert not old_empty.exists()
+    assert old_written.is_dir() and foreign.is_dir() and fresh.is_dir() and made.is_dir()
