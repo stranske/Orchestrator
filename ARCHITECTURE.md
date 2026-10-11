@@ -222,7 +222,7 @@ therefore uses the same config; authentication also requires access to that conf
 store. The pin is a path and adds no token to the agent's argv or environment, and every other
 tool keeps the redirect. It works in both directions: gh's own writes (`auth logout`, `auth
 switch`, `config set`) from an unsandboxed agent reach that config and keyring entry too, as they
-would from the dispatcher's shell. No stage, component or surface moved, so the diagram is
+would from the dispatcher's shell, so a guard refuses them inside a dispatched agent (`dispatcher._gh_guard_exports`, owner decision 2026-10-05): `auth logout|login|switch|refresh`, `config set` and `alias set|delete|import` exit 77, every other gh command runs. A wrapper first on PATH is not enough, because a login shell (codex's `zsh -lc`, cursor's shell) re-applies the owner's PATH; the same check is also a `gh` shell function that bash reads from `BASH_ENV` and zsh from a proxy `ZDOTDIR` whose files first run the owner's own dotfiles. It is bypassable on purpose by gh's full path. No stage, component or surface moved, so the diagram is
 unchanged.
 
 **The detached wrappers name the interpreter of their own python steps (2026-10-05).** The dispatch
