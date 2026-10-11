@@ -110,14 +110,17 @@ def _run(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess
 def _scratch_copy() -> tempfile.TemporaryDirectory:
     """A throwaway copy of the tracked tree, so `--fix` can be measured without touching it."""
     tmp = tempfile.TemporaryDirectory(prefix="ci-lint-baseline-")
-    archive = _run(["git", "archive", "HEAD"])
-    if archive.returncode != 0:
-        raise SystemExit(f"git archive HEAD failed: {archive.stderr.strip()}")
-    subprocess.run(
-        ["tar", "-x", "-C", tmp.name],
-        input=archive.stdout.encode("utf-8", "surrogateescape"),
-        check=True,
-    )
+    try:
+        # A tar stream contains binary file contents: text=True can fail to decode it or
+        # silently translate CRLF bytes. Keep the archive binary all the way to extraction.
+        archive = subprocess.run(["git", "archive", "HEAD"], capture_output=True, cwd=REPO)
+        if archive.returncode != 0:
+            detail = archive.stderr.decode("utf-8", errors="replace").strip()
+            raise SystemExit(f"git archive HEAD failed: {detail}")
+        subprocess.run(["tar", "-x", "-C", tmp.name], input=archive.stdout, check=True)
+    except BaseException:
+        tmp.cleanup()
+        raise
     return tmp
 
 
