@@ -13,17 +13,30 @@ supply (a rejected counterfactual, a role disagreement, an exploration-review re
 good the evidence is. Effectiveness has to be measured directly.
 
 THE MEASURE. `influence_edges` carries, per (capability, run): `accepted` (the capability's
-contribution was taken up), `counterfactual` (it was considered and rejected — the natural control
-arm), `outcome_verdict`, and `durability`. So:
+contribution was taken up) and `counterfactual` (it was considered and rejected — the natural control
+arm). What became of the run is read from `outcomes`, its authoritative table, when the report is
+made. So:
 
     durable_rate(accepted)  vs  durable_rate(counterfactual)
 
 is a real within-capability comparison rather than a cross-agent guess.
 
+THE EDGE SAYS WHO, THE OUTCOME SAYS WHAT HAPPENED. An edge also stores `outcome_verdict` and
+`durability`, but only as a copy of the target's `outcomes` row taken when it was last propagated,
+and nothing keeps that copy current. This reader therefore takes the verdict and durability from
+`outcomes`, as `feedback.capability_causal_evidence` already does for the same edges.
+
+AN OUTCOME NO LEARNER MAY SCORE IS NOT EVIDENCE HERE EITHER. A target whose `failure_class` is in
+`feedback.LEARNING_EXCLUDED_FAILURE_CLASSES`, the ONE set every learner excludes (CLAUDE.md §2), says
+nothing about the capability in either arm. It is counted in `excluded`, beside `terminal`, and
+never scored.
+
 REFUSES TO MISLEAD. A rate computed from one or two observations is noise wearing a percentage sign,
 and this subsystem has already produced several confident numbers that were artifacts. So every rate
 carries its denominator, anything under MIN_SAMPLE reports `insufficient_evidence` instead of a
 figure, and a capability with no terminal outcomes is reported as "not yet measurable" — never as 0%.
+One whose only resolved outcomes are learning-excluded is `excluded_only`, a different state: waiting
+will not change it, attribution has to.
 
     python3 capability_effectiveness.py            # human-readable
     python3 capability_effectiveness.py --json
@@ -67,11 +80,29 @@ def _edge_rows(conn=None) -> list[dict]:
         # Filtered in SQL rather than in `_arm_stats` so `attributed` (the numerator's denominator)
         # excludes them too — counting an edge as attributed while refusing it as terminal would
         # report a capability as busier than its measurable evidence supports.
+        #
+        # THE VERDICT AND DURABILITY COME FROM `outcomes`, NOT FROM THE EDGE. The edge's own two
+        # columns are written only from the target's `outcomes` row, and only at two moments:
+        # `_propagate_outcome_lineage_in_conn` when something re-records the target, and
+        # `outcomes.backfill_triage_disagreements`, which grades a counterfactual edge once
+        # (`WHERE outcome_verdict IS NULL`). A change to the outcome made any other way never
+        # reaches the edge, and several writers make it another way: `durability_sweep`'s
+        # truncated-recheck restore, `feedback.mark_transient_infra` (the edge has no class column
+        # at all), and the data migrations. MEASURED 2026-10-11 on a copy of the live Brain: the
+        # three 2026-10-04 relabels moved 53 outcomes into learning-excluded classes and refreshed
+        # none of the 54 accepted capability edges on them. 2 of those still read PASS/durable for
+        # role-triage and 2 for offload, on outcomes that now carry no verdict, and those 2 were
+        # ALL of role-triage's durable subjects. No edge carried a terminal value without an
+        # `outcomes` row, so reading the row loses nothing the edge had. The verdict is the
+        # adjudicated one, else the verifier's: the reading `capability_causal_evidence` makes,
+        # never CI alone.
         rows = c.execute(
-            """SELECT capability_id, accepted, counterfactual, outcome_verdict, durability,
-                      target_run_id, created_ts
-               FROM influence_edges
-               WHERE capability_id IS NOT NULL AND target_event_id IS NOT NULL"""
+            """SELECT ie.capability_id, ie.accepted, ie.counterfactual,
+                      o.adjudicated_verdict, o.verifier_verdict, o.durability, o.failure_class,
+                      ie.target_run_id, ie.created_ts
+               FROM influence_edges ie
+               LEFT JOIN outcomes o ON o.run_id = ie.target_run_id
+               WHERE ie.capability_id IS NOT NULL AND ie.target_event_id IS NOT NULL"""
         ).fetchall()
     finally:
         if close:
@@ -81,10 +112,11 @@ def _edge_rows(conn=None) -> list[dict]:
             "capability_id": r[0],
             "accepted": bool(r[1]),
             "counterfactual": bool(r[2]),
-            "verdict": r[3],
-            "durability": r[4],
-            "run_id": r[5],
-            "ts": r[6],
+            "verdict": str(r[3] or r[4] or "").upper() or None,
+            "durability": str(r[5] or "").lower() or None,
+            "failure_class": r[6],
+            "run_id": r[7],
+            "ts": r[8],
         }
         for r in rows
     ]
@@ -111,10 +143,23 @@ def _arm_stats(edges: list[dict]) -> dict:
     "the fleet kept retrying two blocked issues" — precisely the environment-noise-as-incapability
     error the learning rules forbid. Deduplicating by subject turns that into an honest
     `insufficient_evidence`.
+
+    A LEARNING-EXCLUDED OUTCOME IS COUNTED, NEVER SCORED. Its class says the environment killed the
+    run or the outcome cannot be shown to be the run's own work, so it is neither a durable success
+    nor a failure of the capability. MEASURED 2026-10-11, after #525: all 22 of role-triage's
+    accepted-arm terminal outcomes were in `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES` (14
+    `unattributed_delegation`, 8 `unattributed_closing_pr`), as were 27 of offload's 73 and all 4 in
+    the counterfactual arms. role-triage's durable rate of 0.167 rested on no attributable outcome
+    at all. The set is read here, at call time, and nowhere else, so a class added to it is
+    excluded without touching this module. `excluded` stands beside `terminal`, so the set-aside is
+    a number on the page and not a quietly smaller denominator.
     """
+    excluded_classes = feedback.LEARNING_EXCLUDED_FAILURE_CLASSES
+    excluded = [e for e in edges if e.get("failure_class") in excluded_classes]
+    scored = [e for e in edges if e.get("failure_class") not in excluded_classes]
     terminal = [
         e
-        for e in edges
+        for e in scored
         if e["verdict"] in ("PASS", "FAIL")
         or e["durability"] in ("durable", "abandoned", "reverted", "reopened")
     ]
@@ -122,24 +167,37 @@ def _arm_stats(edges: list[dict]) -> dict:
     # Distinct subjects — a target counts as durable if ANY attempt on it landed durably.
     durable_subjects = {_target_of(e["run_id"]) for e in durable}
     terminal_subjects = {_target_of(e["run_id"]) for e in terminal}
+    excluded_subjects = {_target_of(e["run_id"]) for e in excluded}
     out: dict[str, Any] = {
         "attributed": len(edges),
         "terminal": len(terminal),
+        "excluded": len(excluded),
         "durable": len(durable),
         "terminal_subjects": len(terminal_subjects),
+        "excluded_subjects": len(excluded_subjects),
         "durable_subjects": len(durable_subjects),
         "attempts_per_subject": (
             round(len(terminal) / len(terminal_subjects), 2) if terminal_subjects else None
         ),
     }
-    if not terminal:
+    if not terminal and excluded:
+        # NOT `not_yet_measurable`: outcomes DID resolve, and every one is in a class no learner
+        # may score. Waiting will not change that, so one sentinel for both would hide which.
+        out["durable_rate"] = None
+        out["status"] = (
+            f"excluded_only ({len(excluded)} attempts on {len(excluded_subjects)} subjects, "
+            "every outcome learning-excluded)"
+        )
+    elif not terminal:
         out["durable_rate"] = None
         out["status"] = "not_yet_measurable"  # NOT 0% — nothing has resolved yet
     elif len(terminal_subjects) < MIN_SAMPLE:
         out["durable_rate"] = None
         out["status"] = (
             f"insufficient_evidence ({len(terminal_subjects)}/{MIN_SAMPLE} distinct "
-            f"subjects from {len(terminal)} attempts)"
+            f"subjects from {len(terminal)} attempts"
+            + (f"; {len(excluded)} learning-excluded" if excluded else "")
+            + ")"
         )
     else:
         out["durable_rate"] = round(len(durable_subjects) / len(terminal_subjects), 3)
@@ -195,8 +253,23 @@ def measure(*, path=None, conn=None) -> dict:
             for e in attributed
             if e["accepted"]["status"] == "not_yet_measurable"
         ],
+        # Resolved, but nothing a learner may score: the fix is attribution, not patience.
+        "excluded_only": [
+            e["capability_id"]
+            for e in attributed
+            if e["accepted"]["status"].startswith("excluded_only")
+        ],
         "rows": out,
     }
+
+
+def _arm_cell(arm: dict, *, attempts: bool) -> str:
+    cell = f"{arm['durable_subjects']}/{arm['terminal_subjects']} subj" if arm["terminal"] else "—"
+    if arm["terminal"] and attempts:
+        cell += f" ({arm['terminal']} att)"
+    if arm["excluded"]:
+        cell += f", {arm['excluded']} excl"
+    return cell
 
 
 def format_report(rep: dict) -> str:
@@ -221,23 +294,29 @@ def format_report(rep: dict) -> str:
     for row in rep["rows"]:
         if not row["attributed_edges"]:
             continue
-        a, c = row["accepted"], row["counterfactual"]
-        arm = (
-            (f"{a['durable_subjects']}/{a['terminal_subjects']} subj " f"({a['terminal']} att)")
-            if a["terminal"]
-            else "—"
-        )
-        ctl = (f"{c['durable_subjects']}/{c['terminal_subjects']} subj") if c["terminal"] else "—"
+        arm = _arm_cell(row["accepted"], attempts=True)
+        ctl = _arm_cell(row["counterfactual"], attempts=False)
         lift = "—" if row["lift"] is None else f"{row['lift']:+.3f}"
         lines.append(
             f"| {row['capability_id']} | {row['invocations_per_week']} | "
             f"{row['attributed_edges']} | {arm} | {ctl} | {lift} | {row['verdict']} |"
         )
+    lines += [
+        "",
+        "`excl`: attempts whose outcome is in feedback.LEARNING_EXCLUDED_FAILURE_CLASSES. "
+        "They are set aside in both arms and never scored.",
+    ]
     if rep["awaiting_outcomes"]:
         lines += [
             "",
             "Awaiting outcome resolution (edges exist, nothing terminal yet): "
             + ", ".join(rep["awaiting_outcomes"]),
+        ]
+    if rep["excluded_only"]:
+        lines += [
+            "",
+            "Resolved, but every outcome is learning-excluded, so nothing is scored: "
+            + ", ".join(rep["excluded_only"]),
         ]
     return "\n".join(lines) + "\n"
 
@@ -338,6 +417,37 @@ def _selftest() -> None:
     # capability as busy on evidence it cannot be measured by is the same lie one layer up.
     assert not any("e-orphan" in i for i in _ids), _ids
     assert _arm_stats(_rows)["attributed"] == 1, _arm_stats(_rows)
+
+    # WHAT HAPPENED IS READ FROM `outcomes`, AND AN EXCLUDED OUTCOME IS COUNTED, NEVER SCORED. The
+    # live case: a relabel moved the outcome into `unattributed_delegation` and cleared its verdict,
+    # while the edge kept the PASS/durable it was given before. And the reverse: an outcome that
+    # resolved durable after its edge was last propagated. `e-linked` above has no outcome row, so
+    # the PASS/durable written onto it directly is not an outcome either.
+    for _eid, _cf, _snapshot, _outcome in (
+        ("e-relabelled", 0, ("PASS", "durable"), (None, "abandoned", "unattributed_delegation")),
+        ("e-resolved", 0, ("PASS", "pending"), ("PASS", "durable", None)),
+        ("e-control", 1, ("UNATTRIBUTED", "abandoned"), (None, "abandoned", "transient_infra")),
+    ):
+        _run = f"remote:o/r#{_eid}:codex"
+        _c.execute(
+            "INSERT INTO influence_edges (edge_id,schema_version,influence_type,influence_id,"
+            "source_run_id,target_event_id,target_run_id,capability_id,accepted,counterfactual,"
+            "outcome_verdict,durability,created_ts,metadata_hash) "
+            "VALUES (?,1,'capability','offload','src','ev-1',?,'offload',?,?,?,?,0,'h')",
+            (_eid, _run, 1 - _cf, _cf, *_snapshot),
+        )
+        _c.execute(
+            "INSERT INTO outcomes (run_id,adjudicated_verdict,durability,failure_class) "
+            "VALUES (?,?,?,?)",
+            (_run, *_outcome),
+        )
+    _rows = _edge_rows(_c)
+    _acc = _arm_stats([r for r in _rows if not r["counterfactual"]])
+    assert (_acc["attributed"], _acc["terminal"], _acc["durable"]) == (3, 1, 1), _acc
+    assert (_acc["excluded"], _acc["excluded_subjects"]) == (1, 1), _acc
+    _ctl = _arm_stats([r for r in _rows if r["counterfactual"]])
+    assert (_ctl["terminal"], _ctl["excluded"]) == (0, 1), _ctl
+    assert _ctl["status"].startswith("excluded_only"), "resolved-but-excluded is not 'pending'"
     _c.close()
 
     # CORRELATED ATTEMPTS MUST NOT INFLATE THE SAMPLE. 30 retries of one stuck target is one
@@ -438,8 +548,10 @@ def _selftest() -> None:
                             e["capability_id"],
                             e["accepted"],
                             e["counterfactual"],
-                            e["verdict"],
+                            e["verdict"],  # adjudicated
+                            None,  # verifier
                             e["durability"],
+                            None,  # failure_class
                             e["run_id"],
                             e["ts"],
                         )
@@ -472,7 +584,8 @@ def _selftest() -> None:
 
     print(
         "capability_effectiveness.py selftest: OK (lift on real samples, refuses small samples, "
-        "pending != 0%, no-control-arm is not a verdict)"
+        "pending != 0%, no-control-arm is not a verdict, outcomes read current, "
+        "learning-excluded counted not scored)"
     )
 
 
