@@ -88,15 +88,19 @@ def expected_pins(worktree: str | Path, repo: str | None = None) -> tuple[Path, 
         git_dir = _real(wt / value.strip())
         worktrees = git_dir.parent
         clone = worktrees.parent.parent
-        if worktrees.name != "worktrees" or worktrees.parent.name != ".git" or clone.parent != repos:
+        if worktrees.name != "worktrees" or worktrees.parent.name != ".git":
+            return f"{dotgit} names {git_dir}, which is not a linked-worktree git dir; {_CLEAR}"
+        if repo is not None:
+            # The caller knows the repo: its canonical clone is the only acceptable owner.
+            expected = _real(provision.canonical_path(repo))
+            if clone != expected:
+                return f"{dotgit} names a git dir of {clone}, not of {expected}; {_CLEAR}"
+        elif clone.parent != repos or not wt.name.startswith(clone.name + "__"):
+            # Otherwise the worktree's own name says which canonical clone it belongs to.
             return (
-                f"{dotgit} names {git_dir}, which is not under {repos}/<clone>/.git/worktrees/; "
-                f"{_CLEAR}"
+                f"{dotgit} names {git_dir}, which is not under "
+                f"{repos}/<the clone {wt.name} was named for>/.git/worktrees/; {_CLEAR}"
             )
-        if repo is not None and clone != _real(provision.canonical_path(repo)):
-            return f"{dotgit} names a git dir of {clone.name}, not of {repo}; {_CLEAR}"
-        if not wt.name.startswith(clone.name + "__"):
-            return f"{dotgit} names a git dir of {clone.name}, not of worktree {wt.name}; {_CLEAR}"
         if git_dir.is_symlink() or not git_dir.is_dir():
             return f"{git_dir} (named by {dotgit}) is not a directory; {_CLEAR}"
         common = clone / ".git"
@@ -154,7 +158,9 @@ def run(
         err = reason if text else reason.encode()
         return subprocess.CompletedProcess(argv, REFUSED_RC, stdout=empty, stderr=err)
     argv, env = planned
-    return subprocess.run(argv, env=env, capture_output=True, text=text, timeout=timeout, check=False)
+    return subprocess.run(
+        argv, env=env, capture_output=True, text=text, timeout=timeout, check=False
+    )
 
 
 def _selftest() -> None:
