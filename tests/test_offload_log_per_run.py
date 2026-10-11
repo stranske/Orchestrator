@@ -178,7 +178,10 @@ def test_a_name_another_process_holds_is_never_written(monkeypatch, stores):
     logs = dispatcher.DISPATCH_LOG_DIR
     logs.mkdir(parents=True)
     theirs = logs / f"offload.codex.{FROZEN_NS}.log"
-    theirs.write_text(f"=== other process run_id=offload:codex:{FROZEN_NS} ===\ntheir report\n")
+    theirs.write_text(
+        f"=== 2026-10-05T00:00:00Z offload other process run_id=offload:codex:{FROZEN_NS} ===\n"
+        "their report\n"
+    )
     before = theirs.read_bytes()
     monkeypatch.setattr(
         dispatcher.subprocess,
