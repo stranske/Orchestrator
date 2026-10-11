@@ -1106,6 +1106,21 @@ def load_backlog() -> list[dict]:
         return []
 
 
+def backlog_generated_at() -> int | None:
+    """When `backlog.json` was written, from its own `generated_at` (epoch seconds), or None.
+
+    None means "cannot tell" (file absent, unreadable, a bare-list payload that carries no stamp, a
+    non-numeric or non-positive value) and is never read as a measured age of zero."""
+    try:
+        data = json.loads(BACKLOG_JSON.read_text())
+    except Exception:
+        return None
+    stamp = data.get("generated_at") if isinstance(data, dict) else None
+    if isinstance(stamp, bool) or not isinstance(stamp, (int, float)) or stamp <= 0:
+        return None
+    return int(stamp)
+
+
 # ---------------------------------------------------------------------------
 def _selftest() -> None:
     import tempfile
