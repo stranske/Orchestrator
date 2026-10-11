@@ -197,28 +197,81 @@ def _usage_from_obj(obj: dict[str, Any]) -> tuple[int, int]:
     return int(tokens_in), int(tokens_out)
 
 
-def _log_segment(path: Path, run_id: str) -> list[str]:
+# A run's header, as text: credential_redaction.RUN_HEADER is the one definition of its shape, and
+# it is not anchored to a line start, so a header glued onto the previous run's unterminated last
+# line is still found. Its first 24 characters are always `=== <YYYY-MM-DDTHH:MM:SSZ>`.
+_RUN_HEADER = re.compile(credential_redaction.RUN_HEADER.pattern.decode("ascii"))
+_HEADER_STAMP = slice(4, 24)
+
+
+def _writers_by_log(rows: list[dict[str, Any]]) -> dict[str, set[str]]:
+    """Capacity-ledger rows -> {log file: the run ids recorded as writing it}."""
+    index: dict[str, set[str]] = defaultdict(set)
+    for row in rows:
+        log_file, run_id = row.get("log_file"), row.get("run_id")
+        if isinstance(log_file, str) and log_file.strip() and isinstance(run_id, str) and run_id:
+            index[str(Path(log_file))].add(run_id)
+    return index
+
+
+def _log_writers(index: dict[str, set[str]], log_file: Path | str, run_id: str) -> set[str] | None:
+    """The run ids the capacity ledger records as writing `log_file`, or None when unknown.
+
+    Every run writer records its `start` row, with its log file, before it writes its header, so a
+    run that wrote a header into this file is in the set by then. The set is trusted only when it
+    holds `run_id` itself: a ledger that does not know this run wrote here does not know who else
+    did, and an empty set would turn every later header into this run's output."""
+    writers = index.get(str(Path(log_file)))
+    return writers if writers and run_id in writers else None
+
+
+def _completion_writers(log_file: Path, run_id: str) -> set[str] | None:
+    """`_log_writers` for one run at its completion, from the capacity ledger; None if unreadable."""
+    try:
+        rows, _ = _read_ledger(_ledger_path())
+    except (OSError, UnicodeDecodeError):
+        return None
+    return _log_writers(_writers_by_log(rows), log_file, run_id)
+
+
+def _log_segment(path: Path, run_id: str, writers: set[str] | None = None) -> list[str]:
+    """This run's own lines of `path`: from its header up to where the NEXT RUN's header begins.
+
+    Its header is the FIRST one naming it; a later copy is the run printing its own log. The segment
+    ends at the first later header that names another run, is not stamped before this run's own,
+    and, when `writers` is known (`_log_writers`), names a run the ledger records writing this file.
+    Anything else is this run's OUTPUT and stays in it: pytest's `=====` banners, which ended the
+    segment at the first `===` line until 2026-10-11, and the whole, valid headers an agent prints
+    when it reads a run log, of an older run (stamped earlier) or of another file (not a writer).
+    A header glued onto the end of this run's last line still ends it, mid-line."""
     if not path.exists():
         return []
     try:
-        lines = path.read_text(errors="replace").splitlines()
+        text = path.read_text(errors="replace")
     except OSError:
         return []
-    marker = f"run_id={run_id}"
-    start = None
-    for idx, line in enumerate(lines):
-        if line.startswith("===") and marker in line:
-            start = idx + 1
-    if start is None:
+    headers = list(_RUN_HEADER.finditer(text))
+    own = next((m for m in headers if m.group(1) == run_id), None)
+    if own is None:
         # A dedicated legacy/external log may have no run delimiter at all. It is safe to use the
-        # whole file only when no other run markers exist; mixed logs remain fail-closed.
-        return lines if not any(line.startswith("===") for line in lines) else []
-    end = len(lines)
-    for idx in range(start, len(lines)):
-        if lines[idx].startswith("==="):
-            end = idx
-            break
-    return lines[start:end]
+        # whole file only when it holds no run header; mixed logs remain fail-closed.
+        return text.splitlines() if not headers else []
+    stamp = own.group(0)[_HEADER_STAMP]
+    end = next(
+        (
+            m.start()
+            for m in headers
+            if m.start() > own.start()
+            and m.group(1) != run_id
+            and m.group(0)[_HEADER_STAMP] >= stamp
+            and (writers is None or m.group(1) in writers)
+        ),
+        len(text),
+    )
+    start = own.end()
+    if text[start : start + 1] == "\n":
+        start += 1
+    return text[start:end].splitlines()
 
 
 def _classify_run_log_segment(
@@ -289,12 +342,12 @@ def _classify_run_log_segment(
     return evidence_result
 
 
-def _log_usage(path: Path | None, run_id: str) -> tuple[int, int]:
+def _log_usage(path: Path | None, run_id: str, writers: set[str] | None = None) -> tuple[int, int]:
     if path is None:
         return 0, 0
     tokens_in = 0
     tokens_out = 0
-    for line in _log_segment(path, run_id):
+    for line in _log_segment(path, run_id, writers):
         text = line.strip()
         if not text.startswith("{"):
             continue
@@ -310,7 +363,7 @@ def _log_usage(path: Path | None, run_id: str) -> tuple[int, int]:
     return tokens_in, tokens_out
 
 
-def _log_cost_usd(path: Path | None, run_id: str) -> float:
+def _log_cost_usd(path: Path | None, run_id: str, writers: set[str] | None = None) -> float:
     """item 16(j) (2026-07-08): real dollars from the run's own log. claude -p JSON results carry
     total_cost_usd (native telemetry, no OTel collector needed at solo scale — deliberate decision
     over standing up an OTLP pipeline for one Mac); other agents may emit cost_usd. Max over the
@@ -318,7 +371,7 @@ def _log_cost_usd(path: Path | None, run_id: str) -> float:
     if path is None:
         return 0.0
     best = 0.0
-    for line in _log_segment(path, run_id):
+    for line in _log_segment(path, run_id, writers):
         text = line.strip()
         if not text.startswith("{"):
             continue
@@ -727,7 +780,7 @@ def record_completion(
     if log_file:
         log_path = Path(log_file)
         if log_path.exists():
-            seg = _log_segment(log_path, run_id)
+            seg = _log_segment(log_path, run_id, _completion_writers(log_path, run_id))
             _classify_run_log_segment(
                 seg,
                 agent,
@@ -805,6 +858,7 @@ def reconcile(
 
     known = _known_runs()
     sources = _cost_sources()
+    writers_by_log = _writers_by_log(rows)
     written = 0
     marker_backfills = 0
     profile_unresolved_backfills = 0
@@ -849,10 +903,11 @@ def reconcile(
                 skipped["unknown_run_id"] += 1
                 continue
         log_file = _latest_log_file(run_rows)
+        writers = _log_writers(writers_by_log, log_file, run_id) if log_file else None
         # Before the cost-source skip below, on purpose: whether a run did any work has nothing to
         # do with which cost row it got, and that skip ends the run's whole pass.
         if log_file is not None:
-            refusal = provider_limit_before_work(_log_segment(log_file, run_id))
+            refusal = provider_limit_before_work(_log_segment(log_file, run_id, writers))
             if refusal is not None:
                 provider_limit_deaths["seen"] += 1
                 bucket = _settle_provider_limit_death(run_id, refusal, dry_run=dry_run)
@@ -863,7 +918,7 @@ def reconcile(
             continue
         # 16f/16h harvest from the run's log segment (same segment _log_usage scans).
         if log_file is not None and not dry_run:
-            seg = _log_segment(log_file, run_id)
+            seg = _log_segment(log_file, run_id, writers)
             agent = next((str(r.get("agent")) for r in run_rows if r.get("agent")), "")
             target = next((str(r.get("target")) for r in run_rows if r.get("target")), "")
             completion_exit = next(
@@ -904,9 +959,9 @@ def reconcile(
                         owner_questions_recorded += 1
                 except Exception:
                     pass
-        tokens_in, tokens_out = _log_usage(log_file, run_id)
+        tokens_in, tokens_out = _log_usage(log_file, run_id, writers)
         cost_usd = sum(float(_number(r.get("cost_usd")) or 0.0) for r in run_rows)
-        log_cost = _log_cost_usd(log_file, run_id)
+        log_cost = _log_cost_usd(log_file, run_id, writers)
         if log_cost > cost_usd:  # 16(j): the agent's own reported dollars beat ledger zeros
             cost_usd = log_cost
             log_costs_harvested += 1
@@ -1095,6 +1150,11 @@ def _selftest():
             + json.dumps(
                 {"type": "turn.completed", "usage": {"input_tokens": 100, "output_tokens": 50}}
             )
+            # A pytest banner is the run's own output, not the end of its segment.
+            + "\n"
+            + "=" * 30
+            + " 3 passed in 0.12s "
+            + "=" * 30
             + "\n"
             + json.dumps(
                 {

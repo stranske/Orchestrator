@@ -19,6 +19,8 @@ def incident_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(rate_incidents, "INCIDENT_FILE", tmp_path / "rate-limit-incidents.ndjson")
     monkeypatch.setattr(rate_incidents, "LOCK_FILE", tmp_path / "rate-limit-incidents.ndjson.lock")
     monkeypatch.setattr(rate_incidents, "SHED_DIR", tmp_path / "capacity-shed")
+    # The completion step reads the capacity ledger for a log's writers: never the live one.
+    monkeypatch.setattr(adapters, "LEDGER", tmp_path / "capacity-ledger.ndjson")
     return tmp_path
 
 
@@ -291,9 +293,9 @@ def test_ledger_completion_hook_uses_only_run_segment(incident_paths, monkeypatc
     )
     log = incident_paths / "run.log"
     log.write_text(
-        "=== earlier run_id=other ===\nHTTP 429 Too Many Requests\n"
-        "=== current run_id=run-current ===\nresource_exhausted\n"
-        "=== later run_id=later ===\nauthentication failed\n"
+        "=== 2026-10-05T00:00:00Z earlier run_id=other ===\nHTTP 429 Too Many Requests\n"
+        "=== 2026-10-05T00:01:00Z current run_id=run-current ===\nresource_exhausted\n"
+        "=== 2026-10-05T00:02:00Z later run_id=later ===\nauthentication failed\n"
     )
     ledger_reconcile.record_completion("run-current", "codex", log_file=str(log), exit_code=1)
     rows = [json.loads(line) for line in rate_incidents.INCIDENT_FILE.read_text().splitlines()]
@@ -324,7 +326,7 @@ def test_unmarked_dedicated_log_is_available_but_mixed_log_remains_bounded(incid
         "resource_exhausted",
     ]
     mixed = incident_paths / "mixed.log"
-    mixed.write_text("=== run_id=other ===\nresource_exhausted\n")
+    mixed.write_text("=== 2026-10-05T00:00:00Z dispatch run_id=other ===\nresource_exhausted\n")
     assert ledger_reconcile._log_segment(mixed, "run") == []
 
 
@@ -342,12 +344,12 @@ def test_successful_completion_log_with_bare_429_does_not_shed(incident_paths, m
     )
     log = incident_paths / "successful-run.log"
     log.write_text(
-        "=== current run_id=run-benign ===\n"
+        "=== 2026-10-05T00:01:00Z current run_id=run-benign ===\n"
         "Reading src/capacity.py to understand the 429-shed flag design.\n"
         "HTTP 429 Too Many Requests\n"
         "Modified 429 lines in this refactor.\n"
         "All tests passed. Task complete.\n"
-        "=== later run_id=later ===\n"
+        "=== 2026-10-05T00:02:00Z later run_id=later ===\n"
     )
 
     ledger_reconcile.record_completion("run-benign", "codex", log_file=str(log), exit_code=0)
