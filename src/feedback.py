@@ -2194,6 +2194,17 @@ UNATTRIBUTED_DELEGATION = "unattributed_delegation"
 # carrier is its FAIL; this class is what remains, terminal and scored by no learner.
 UNATTRIBUTED_REPLACEMENT = "unattributed_replacement"
 
+# What outcome ingest writes when a KEEPALIVE run's own PR closed unmerged and a PR linked to its
+# issue carries the closed PR's head commit (`outcomes.judge_keepalive_replacement`): merged after it
+# opened (the opener lane's rehome), merged before it opened (a duplicate of delivered work), or
+# still open. A keepalive run IS its PR, and the carrier is recorded as its own keepalive run, so the
+# work's verdict is that run's: a PASS here would count one delivery twice, and the FAIL written
+# until 2026-10-11 counted it as a failure. Measured that day: 16 of the 99 named-agent keepalive
+# FAILs of the 90 days were such PRs (14 rehomes, 2 duplicates), and every carrier with a Brain row
+# had its own PASS. Terminal, no verdict, scored by no learner. The merge state stays False: the PR
+# itself did not merge.
+CARRIED_BY_OTHER_PR = "carried_by_other_pr"
+
 # What the durability sweep writes for a merged outcome whose merge it cannot identify as THIS run's
 # (`durability_sweep.find_merge`): no merge on the run's own branch, several, one that landed before
 # the run started, or no repository target at all. Whether such a merge HELD can never be judged, so
@@ -2216,7 +2227,8 @@ BROKE_LATER_UNCHECKED = "broke_later_unchecked"
 # the environment killed the run (`transient_infra`, from `mark_transient_infra`), the target
 # closed through a PR the run cannot be shown to have produced, a delegation's PR settled without
 # the delegated agent's work on it, a closed PR's replacement cannot be told apart
-# (`UNATTRIBUTED_REPLACEMENT`), the merge a row recorded cannot be identified as the run's
+# (`UNATTRIBUTED_REPLACEMENT`), a keepalive PR's work is carried by another PR whose own run holds
+# its verdict (`CARRIED_BY_OTHER_PR`), the merge a row recorded cannot be identified as the run's
 # own (`UNJUDGEABLE_MERGE`), or no fix-PR read reached it (`BROKE_LATER_UNCHECKED`). ONE set:
 # relearn's SQL reads it, relearn_quality and
 # exploration_review read it through `_has_outcome_evidence`, and the capability tally reads it
@@ -2230,6 +2242,7 @@ LEARNING_EXCLUDED_FAILURE_CLASSES = frozenset(
         UNATTRIBUTED_CLOSING_PR,
         UNATTRIBUTED_DELEGATION,
         UNATTRIBUTED_REPLACEMENT,
+        CARRIED_BY_OTHER_PR,
         UNJUDGEABLE_MERGE,
         BROKE_LATER_UNCHECKED,
     }
