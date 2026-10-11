@@ -1175,11 +1175,62 @@ def _selftest() -> None:
             finally:
                 feedback.DB_PATH = _old_db
 
+    # ---- a role edge's ARM is the derived capability edge's arm (2026-10-11) ---------------------
+    # Ungated: the role run's version is passed explicitly, so no ledger row is needed. An accepted
+    # role edge derives credit; a rejected one onto a recorded run derives the counterfactual, which
+    # tags no outcome; one onto a run nothing recorded derives nothing and is counted.
+    import tempfile as _tf_arms
+
+    _old_db = feedback.DB_PATH
+    with _tf_arms.TemporaryDirectory(prefix="bridge-arms-") as _td:
+        feedback.DB_PATH = Path(_td) / "brain.db"
+        try:
+            role = "role:triage:selftest"
+            feedback.record_run(
+                role,
+                "snapshot",
+                "role:triage",
+                "gemini",
+                mode="role",
+                role_name="triage",
+                capability_ids=["role-triage"],
+                capability_version_ids=["cv:selftest"],
+            )
+            took, overruled = "remote:o/r#7:gemini", "remote:o/r#8:gemini"
+            for run_id in (took, overruled):
+                feedback.record_run(
+                    run_id, run_id.split(":")[1], "implement", "gemini", mode="remote"
+                )
+            feedback.join_role_to_outcome(role, took, accepted=True)
+            feedback.join_role_to_outcome(role, overruled, accepted=False)
+            feedback.join_role_to_outcome(role, "remote:o/r#9:gemini", accepted=False)
+            for run_id in (took, overruled):
+                feedback.record_outcome(
+                    run_id, adjudicated_verdict="PASS", merged=True, durability="durable"
+                )
+            arms = backfill_role_capability_edges()
+            assert (arms["backfilled"], arms["counterfactual"], arms["skipped"]) == (2, 1, 1), arms
+            with feedback._conn() as c:
+                got = c.execute(
+                    "SELECT target_run_id, accepted, counterfactual, outcome_verdict "
+                    "FROM influence_edges WHERE influence_type='capability' AND source_run_id=? "
+                    "ORDER BY target_run_id",
+                    (role,),
+                ).fetchall()
+                arm_rows = collect(lookback_days=36500, conn=c)
+            assert got == [(took, 1, 0, "PASS"), (overruled, 0, 1, None)], got
+            arm_tags = {r["run_id"]: r["capability_ids"] for r in arm_rows}
+            assert (arm_tags[took], arm_tags[overruled]) == (["role-triage"], []), arm_tags
+            assert backfill_role_capability_edges()["backfilled"] == 0, "not idempotent"
+        finally:
+            feedback.DB_PATH = _old_db
+
     env_prereq.report_gaps("capability_outcome_bridge.py", _gaps)
     print(
         "capability_outcome_bridge.py selftest: OK (explicit attribution, no entrypoint "
         "inference, unknown ids refused, idempotent, dry-run inert, collect supplies "
-        "recorded tags so run_tagged is live, offload backfill keyed on backend_run_id)"
+        "recorded tags so run_tagged is live, offload backfill keyed on backend_run_id, "
+        "a rejected role edge derives the counterfactual arm and never credit)"
         + (f" — {len(set(_gaps))} section(s) skipped, see above" if _gaps else "")
     )
 

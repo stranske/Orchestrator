@@ -6044,6 +6044,92 @@ def _selftest_agent_switches_utc() -> None:
                 conn.close()
 
 
+def _selftest_rejected_role_capability_edges() -> None:
+    """The one-time deletion of the capability edges derived from a role edge that was not accepted:
+    an edge whose pair has an accepted role edge stays, and so do a role run's own edge and an edge
+    whose source is not a role run; an edge derived from a rejected role edge or from no role edge
+    goes; a second open deletes nothing; the restore puts every row back and removes the
+    counterfactual edge the bridge derived in its place."""
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.executescript(SCHEMA)
+
+        def record(run_id: str, role_name: str | None = None) -> None:
+            conn.execute(
+                "INSERT INTO runs (run_id, ts, target, task_type, agent, mode, role_name) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (run_id, 1, "o/r#1", "implement", "gemini", "remote", role_name),
+            )
+            _record_completion_event_in_conn(
+                conn,
+                run_id,
+                event_type="decision",
+                phase="decision",
+                producer="selftest",
+                status="recorded",
+                payload={},
+            )
+
+        def edge(target: str, source: str, *, role=False, accepted=True, cap="offload") -> str:
+            made = _record_influence_edge_in_conn(
+                conn,
+                target_run_id=target,
+                influence_type="role" if role else "capability",
+                influence_id=source if role else "cv:1",
+                source_run_id=source,
+                accepted=accepted,
+                capability_id=None if role else cap,
+                capability_version_id=None if role else "cv:1",
+            )
+            return str(made["edge_id"])
+
+        took, overruled, untied = (
+            "remote:o/r#1:gemini",
+            "remote:o/r#2:gemini",
+            "remote:o/r#3:gemini",
+        )
+        for run_id in (took, overruled, untied):
+            record(run_id)
+        record("role:triage:a", "triage")
+        record("role:triage:b", "triage")
+        own = edge("role:triage:a", "role:triage:a")
+        edge(took, "role:triage:a", role=True)
+        credited = edge(took, "role:triage:a")
+        edge(overruled, "role:triage:b", role=True, accepted=False)
+        derived_from_rejected = edge(overruled, "role:triage:b")
+        derived_from_nothing = edge(untied, "role:triage:b")
+        not_a_role_source = edge(untied, took, cap="role-triage")
+        everything = "SELECT * FROM influence_edges ORDER BY edge_id"
+        before = {row[0]: row for row in conn.execute(everything).fetchall()}
+        _migrate_schema(conn)
+        after = {row[0]: row for row in conn.execute(everything).fetchall()}
+        gone = set(before) - set(after)
+        assert gone == {derived_from_rejected, derived_from_nothing}, gone
+        for kept in (own, credited, not_a_role_source):
+            assert after[kept] == before[kept], kept
+        (raw,) = conn.execute(
+            "SELECT detail FROM data_migrations WHERE name=?",
+            (REJECTED_ROLE_CAPABILITY_EDGES_MIGRATION,),
+        ).fetchone()
+        assert json.loads(raw)["deleted_by_source"] == {
+            "refusal_pair": 0,
+            "rejected_role_edge": 1,
+            "no_role_edge": 1,
+        }, raw
+        _migrate_schema(conn)
+        assert {row[0] for row in conn.execute(everything).fetchall()} == set(after)
+        edge(overruled, "role:triage:b", accepted=False)  # what the bridge now derives there
+        assert restore_rejected_role_capability_edges(conn=conn) == {
+            "restored": 2,
+            "of": 2,
+            "removed_counterfactual": 1,
+        }
+        _migrate_schema(conn)
+        assert {row[0]: row for row in conn.execute(everything).fetchall()} == before
+    finally:
+        conn.close()
+
+
 def _selftest_refusal_role_edges() -> None:
     """The one-time deletion of the tick's refusal edges: an edge written in the tick that recorded
     its run stays, including one from the FIRST recording of a run recorded again later (whose
@@ -6217,6 +6303,7 @@ def _selftest():
             legacy.close()
         _selftest_agent_switches_utc()
         _selftest_refusal_role_edges()
+        _selftest_rejected_role_capability_edges()
 
         priors = {"implement": {"claude": 0.7, "cursor": 0.5}}
         # No data yet -> relearn yields the PRIOR (posterior == prior).
@@ -7360,6 +7447,7 @@ def _selftest():
             "versioned weights, eval matrix, human calibration, evidence-gap growth+prune+approval, "
             "trace retention, test_evaluator_trace_cannot_resolve_worker_model, conservative legacy migration, "
             "one-time agent_switches UTC re-key, one-time refusal role-edge deletion + restore, "
+            "one-time rejected-role capability-edge deletion + restore, "
             "quality-magnitude/outcome learner + effort reward, safe completion lineage + "
             "rejected-edge non-inheritance, named verification gate, json snapshot)"
             + (f" — {len(set(gaps))} section(s) skipped, see above" if gaps else "")
