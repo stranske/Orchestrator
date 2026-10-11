@@ -533,9 +533,11 @@ The three 2026-10-04 relabels moved 53 outcomes into excluded classes and refres
 accepted capability edges on them. So the reader takes the verdict (adjudicated, else the verifier's)
 and the durability from `outcomes` when the report is made, as `capability_causal_evidence` already
 does. A target whose `failure_class` is in `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES` is counted
-in `excluded`, beside `terminal`, in either arm, and is never scored. A capability whose only
-resolved outcomes are excluded reads `excluded_only`, never `not_yet_measurable`: waiting will not
-change it, and attribution has to.
+in `excluded`, beside `terminal`, in either arm, and is never scored. An arm whose
+outcomes are all excluded reads `excluded_only`; an arm with unresolved nonexcluded attempts remains
+`not_yet_measurable` and visible in `awaiting_outcomes`. The report qualifies its summary as
+accepted-arm-only, because the control arm can still have a measured rate. Waiting cannot change
+the excluded subset; those outcomes need attribution.
 
 Measured on a copy of the live Brain after #525:
 

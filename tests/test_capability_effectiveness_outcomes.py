@@ -10,8 +10,8 @@ read PASS/durable on outcomes a relabel had since cleared: role-triage's whole d
 
 THE RULE THIS PINS. Verdict and durability come from `outcomes` when the report is made. A target
 whose class is in the one set is counted in `excluded`, in either arm, and never scored. A
-capability whose only resolved outcomes are excluded is `excluded_only`, never
-`not_yet_measurable`: waiting will not change it.
+arm whose outcomes are all excluded is `excluded_only`; unresolved nonexcluded attempts stay
+visible as `not_yet_measurable`. Waiting will not change the excluded subset.
 
 Rows are written by the production writers on a controlled clock. An accepted edge is written by
 `record_capability_consumption`, as `capability_lifecycle` does, so each run carries exactly one; the
@@ -249,3 +249,42 @@ def test_a_small_sample_names_what_it_set_aside(brain):
     assert status == (
         "insufficient_evidence (1/5 distinct subjects from 1 attempts; 1 learning-excluded)"
     ), status
+
+
+def test_excluded_accepted_arm_does_not_claim_the_measured_control_is_unscored(brain):
+    _consumed(
+        1,
+        adjudicated_verdict="FAIL",
+        merged=0,
+        durability="abandoned",
+        failure_class=feedback.UNATTRIBUTED_CLOSING_PR,
+    )
+    for n in range(2, 7):
+        _overruled(n, adjudicated_verdict="PASS", merged=1, durability="durable")
+        # Role-run associations are separate accepted edges; exclude their inherited outcomes.
+        feedback.record_outcome(
+            f"role:triage:gemini:{n}", failure_class=feedback.UNATTRIBUTED_CLOSING_PR
+        )
+    rep = _report(brain)
+    row = _row(rep, "role-triage")
+    assert row["counterfactual"]["durable_rate"] == 1.0
+    text = effectiveness.format_report(rep)
+    assert "Accepted arms resolved, but every outcome is learning-excluded" in text
+    assert "so that arm is not scored" in text
+
+
+def test_excluded_outcome_does_not_hide_unresolved_accepted_attempts(brain):
+    _consumed(
+        1,
+        adjudicated_verdict="FAIL",
+        merged=0,
+        durability="abandoned",
+        failure_class=feedback.UNATTRIBUTED_CLOSING_PR,
+    )
+    _consumed(2)
+    rep = _report(brain)
+    arm = _row(rep, "role-triage")["accepted"]
+    assert arm["excluded"] == 1
+    assert arm["status"] == "not_yet_measurable"
+    assert "role-triage" in rep["awaiting_outcomes"]
+    assert "role-triage" not in rep["excluded_only"]

@@ -178,7 +178,7 @@ def _arm_stats(edges: list[dict]) -> dict:
             round(len(terminal) / len(terminal_subjects), 2) if terminal_subjects else None
         ),
     }
-    if not terminal and excluded:
+    if not terminal and excluded and not scored:
         # NOT `not_yet_measurable`: outcomes DID resolve, and every one is in a class no learner
         # may score. Waiting will not change that, so one sentinel for both would hide which.
         out["durable_rate"] = None
@@ -251,7 +251,7 @@ def measure(*, path=None, conn=None) -> dict:
             for e in attributed
             if e["accepted"]["status"] == "not_yet_measurable"
         ],
-        # Resolved, but nothing a learner may score: the fix is attribution, not patience.
+        # Accepted arms resolved with no scoreable outcomes; the control arm is independent.
         "excluded_only": [
             e["capability_id"]
             for e in attributed
@@ -313,8 +313,8 @@ def format_report(rep: dict) -> str:
     if rep["excluded_only"]:
         lines += [
             "",
-            "Resolved, but every outcome is learning-excluded, so nothing is scored: "
-            + ", ".join(rep["excluded_only"]),
+            "Accepted arms resolved, but every outcome is learning-excluded, "
+            "so that arm is not scored: " + ", ".join(rep["excluded_only"]),
         ]
     return "\n".join(lines) + "\n"
 
