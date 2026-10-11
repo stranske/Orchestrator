@@ -50,6 +50,9 @@ def test_same_agent_arms_do_not_collide(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(exp_abcd, "EXP_DIR", tmp_path / "experiments")
     monkeypatch.setattr(exp_abcd.provision, "WORKTREES_DIR", tmp_path / "worktrees")
     monkeypatch.setattr(exp_abcd.provision, "ensure_canonical", lambda _repo: canon)
+    # In production ensure_canonical returns canonical_path(repo); collect() checks the arm
+    # worktree against canonical_path (worktree_git), so the fixture keeps the two equal.
+    monkeypatch.setattr(exp_abcd.provision, "canonical_path", lambda _repo: canon)
     monkeypatch.setattr(exp_abcd.provision, "base_branch", lambda _repo: "main")
 
     def fake_run(argv, check=False):
