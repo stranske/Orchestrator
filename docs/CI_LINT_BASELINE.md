@@ -1,5 +1,44 @@
 # Gate python-ci baseline — what is checked, what is deferred, and what would clear it
 
+## Measured pending Maint 52 toolchain — 2026-10-11
+
+<!-- measured-with: ruff=0.16.10 black=26.10.0 mypy=2.4.0 pytest=9.1.1 -->
+
+The proposed toolchain from generated PR #517, exact head
+`c93fe39be4fa497475fdb915ffe10631b4cb186e`, was actually run against source
+`7728066fa679ff8941a696d4b52c5b7e460f4607` using Python 3.12.2. The complete
+strict measurement, commands/output, installed versions, pin-file digest and
+measurement-script digest are retained in
+[`report.json`](evidence/issue-518-toolchain-baseline/report.json).
+The authenticated proposed pin bytes are in the adjacent `proposed-pins.env`.
+No generated branch or shared/repo pin was edited for this measurement.
+
+| Check | Blocking | Drainable | Measured command |
+| --- | ---: | ---: | --- |
+| Ruff | 0 findings | 0 | `ruff check --extend-exclude .workflows-lib --output-format concise .` |
+| Black | 0 files | 0 | `black --check --line-length 100 --exclude '(\.venv|\.workflows-lib|node_modules)' .` |
+| mypy | 0 errors | 0 | `mypy --config-file pyproject.toml --exclude .workflows-lib src` |
+| Coverage startup | 0 errors | 0 | `pytest --cov --cov-config=pyproject.toml --collect-only -q -p no:cacheprovider` |
+
+This execution also exposed and repaired a real counter defect: mypy's
+`annotation-unchecked` informational notes were counted as blocking errors when
+the tool reported success. Only actual error diagnostics now count; a deliberate
+old-counter regression failed and the fixed regression passed. The table's
+coverage row proves startup only, not the combined-coverage or execution-mirror
+verdicts. Those remain separate required delivery checks; the 2,672 collection
+floor and capability/skip guards are unchanged.
+
+The version-coupling regression requires one **complete** recorded toolchain to
+match the installed pin bundle. It supports both the unchanged current pins and
+the measured pending pins, so the preparation can merge before Maint 52 applies
+the new pins. Unknown, incomplete and hybrid bundles still fail. This is not
+permission to invent a marker without running the measured commands.
+
+## Historical baseline — current pre-sync pin bundle
+
+The older numbers and rationale below are retained as dated history, not fresh
+counts for the pending toolchain. Rerun the script before quoting them.
+
 <!-- measured-with: ruff=0.16.4 black=26.5.1 mypy=2.3.1 pytest=9.1.1 -->
 
 **Do not trust the numbers below because they are written down.** Regenerate them:
