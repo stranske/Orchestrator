@@ -84,9 +84,16 @@ def _run(
     )
 
 
+def _wt_git(wt: Path, args: list[str]) -> subprocess.CompletedProcess:
+    """git in an existing dispatch worktree, whose git dir an earlier agent could write (#452)."""
+    import worktree_git  # lazy: worktree_git imports this module
+
+    return worktree_git.run(wt, args)
+
+
 def _existing_worktree_reuse_error(wt: Path) -> str | None:
     """Return a reason an existing worktree is unsafe to reuse for a fresh dispatch."""
-    status = _run(["git", "-C", str(wt), "status", "--porcelain"], check=False)
+    status = _wt_git(wt, ["status", "--porcelain"])
     if status.returncode != 0:
         detail = (status.stderr or status.stdout or "git status failed").strip()
         return f"existing worktree status failed: {detail[:300]}"
@@ -96,16 +103,12 @@ def _existing_worktree_reuse_error(wt: Path) -> str | None:
         suffix = "..." if len(changed) > 5 else ""
         return f"existing worktree has uncommitted changes: {preview}{suffix}"
 
-    upstream = _run(
-        ["git", "-C", str(wt), "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-        check=False,
+    upstream = _wt_git(
+        wt, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]
     ).stdout.strip()
     if not upstream:
         return None
-    counts = _run(
-        ["git", "-C", str(wt), "rev-list", "--left-right", "--count", f"{upstream}...HEAD"],
-        check=False,
-    )
+    counts = _wt_git(wt, ["rev-list", "--left-right", "--count", f"{upstream}...HEAD"])
     if counts.returncode != 0:
         detail = (counts.stderr or counts.stdout or "rev-list failed").strip()
         return f"existing worktree divergence check failed: {detail[:300]}"
