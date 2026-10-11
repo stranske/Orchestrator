@@ -377,6 +377,24 @@ step and input switches held off. Unknown demand never becomes zero. It changes 
 selection, gate, dispatcher or lifecycle decision; the existing weekly artifact carries
 the section rather than a second audit log or inventory.
 
+**Its `outcome` step reads what became of a run from `outcomes`, and scores no outcome a learner
+may not (2026-10-11).** It counted an acted-on edge's own `outcome_verdict` and `durability`, the
+copy that `capability_effectiveness` stopped trusting the same day (see the feedback loop below),
+and never read `failure_class`. `_brain` now replaces the edge's copied columns with its target's
+`outcomes` row, read when the report is made: the adjudicated verdict, else the verifier's. An
+acted-on run whose class is in `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES` is counted in
+`outcome_excluded`, printed beside `outcome` as `(+N excluded)`, and never scored. When every
+acted-on run is excluded, the first break is `outcome_excluded`, not `no_outcome`: waiting will
+not change it, attribution has to. An unread Brain still leaves both counts unmeasured.
+
+Measured on a copy of the live Brain, the same inputs and clock both sides: role-triage's
+`outcome` fell from 2 to 0 (24 excluded), and its first break from `works` to `no_outcome`. Its
+two outcomes were edges still reading PASS/durable on Trend_Model_Project#5913 and #5944, whose
+outcomes the 2026-10-04 relabels had cleared to `unattributed_delegation`, and they had been the
+report's only `works`. offload fell from 48 to 46 on the same two runs (30 excluded), and
+agy-runtime-isolation stayed at 4 (11 excluded). The other 45 rows were identical. No stage,
+component or surface moved, so the loop diagram is unchanged.
+
 `issue_size_quality` extends that weekly caller with a read-only join: every closed issue in
 the 90-day reviewed-fleet population contributes its checkbox-count band, and only PRs merged
 by the issue's close can contribute canonical Brain outcomes. PASS uses the final adjudication;

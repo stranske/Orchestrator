@@ -4,6 +4,11 @@
 This is the data section of switch_review, not a second auditor or event store.
 Collectors return None on absent/incomplete evidence; a measured zero requires a
 complete population. Reads use existing ledger events, Brain rows and fleet issues.
+
+The `outcome` step reads what became of an acted-on run from `outcomes` when the
+report is made, never from the influence edge's cached copy, and counts a run whose
+outcome is in `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES` in `outcome_excluded`,
+never in `outcome` (see `_brain`).
 """
 
 from __future__ import annotations
@@ -22,9 +27,13 @@ from pathlib import Path
 from typing import Any
 
 import capabilities
+import feedback
 
 CAPABILITY_ID = "value-chain-monitor"
 WINDOW_DAYS = 90
+# A graded outcome: a verdict AND a judged durability, read from the target's `outcomes` row.
+GRADED_VERDICTS = frozenset({"PASS", "FAIL", "CONCERNS", "APPROVE", "NEEDS-FIX"})
+GRADED_DURABILITY = frozenset({"durable", "broke_later", "reverted", "reworked", "reopened"})
 # Explicit dependence, not a guess from a capability name or lack of heartbeats.
 INPUT_FLAGS = {
     "role-triage": ("ORCH_DISPATCH_LANE",),
@@ -113,11 +122,53 @@ def first_break(row: Mapping[str, Any]) -> str | None:
         if row[field] == 0:
             if field == "offered" and row.get("invocation_count"):
                 continue
+            # Every acted-on run DID reach an outcome, and each is one no learner may score. Not
+            # `no_outcome`: waiting will not change it, attribution has to.
+            if field == "outcome" and 0 < (row.get("outcome_excluded") or 0) == row["acted_on"]:
+                return "outcome_excluded"
             return broken
     return "works"
 
 
+def outcome_counts(own_edges: list[dict] | None) -> dict[str, int | None]:
+    """The last two value-chain steps over one capability's non-counterfactual edges.
+
+    `outcome` is an acted-on run that reached a graded outcome no learner is barred from scoring;
+    `outcome_excluded` is one whose outcome is in the one set. None when the edges are unread:
+    unmeasured, never zero.
+    """
+    if own_edges is None:
+        return {"acted_on": None, "outcome": None, "outcome_excluded": None}
+    acted = [e for e in own_edges if e.get("accepted") == 1]
+    # Read at call time, never copied: a class added to the one set is excluded here too.
+    excluded_classes = feedback.LEARNING_EXCLUDED_FAILURE_CLASSES
+    return {
+        "acted_on": len(acted),
+        "outcome": sum(
+            e.get("failure_class") not in excluded_classes
+            and str(e.get("outcome_verdict") or "").upper() in GRADED_VERDICTS
+            and e.get("durability") in GRADED_DURABILITY
+            for e in acted
+        ),
+        "outcome_excluded": sum(e.get("failure_class") in excluded_classes for e in acted),
+    }
+
+
 def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
+    """Accepted completion events and influence edges in the window, read-only.
+
+    THE EDGE SAYS WHO, THE OUTCOME SAYS WHAT HAPPENED. An edge's `outcome_verdict`, `merged` and
+    `durability` are a copy of its target's `outcomes` row, written only when propagation
+    re-records the target (accepted edges only) or the triage grader grades a counterfactual
+    edge once. `durability_sweep`'s truncated-recheck restore, `feedback.mark_transient_infra`
+    and the data migrations write `outcomes` without refreshing it. MEASURED 2026-10-11 on a
+    copy of the live Brain: role-triage's two counted outcomes were edges still reading
+    PASS/durable on outcomes the 2026-10-04 relabels had cleared to `unattributed_delegation`,
+    and they were the only `works` in the report. So each edge's copied columns are REPLACED by
+    the outcome's, read now: the verdict adjudicated, else the verifier's (never CI alone), as
+    `capability_effectiveness` and `capability_causal_evidence` read them, plus its
+    `failure_class`. An edge with no `outcomes` row has no outcome.
+    """
     result: dict[str, Any] = {"completion_events": None, "edges": None, "errors": []}
     try:
         with sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True) as con:
@@ -130,13 +181,25 @@ def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
                     (since, now),
                 )
             ]
-            result["edges"] = [
-                dict(r)
-                for r in con.execute(
-                    "SELECT * FROM influence_edges WHERE created_ts BETWEEN ? AND ?",
-                    (since, now),
-                )
-            ]
+            edges = []
+            for r in con.execute(
+                "SELECT ie.*, o.adjudicated_verdict AS outcome_adjudicated, "
+                "o.verifier_verdict AS outcome_verifier, o.durability AS outcome_durability, "
+                "o.merged AS outcome_merged, o.failure_class AS outcome_failure_class "
+                "FROM influence_edges ie "
+                "LEFT JOIN outcomes o ON o.run_id = ie.target_run_id "
+                "WHERE ie.created_ts BETWEEN ? AND ?",
+                (since, now),
+            ):
+                edge = dict(r)
+                adjudicated = edge.pop("outcome_adjudicated")
+                verifier = edge.pop("outcome_verifier")
+                edge["outcome_verdict"] = str(adjudicated or verifier or "").upper() or None
+                edge["durability"] = str(edge.pop("outcome_durability") or "").lower() or None
+                edge["merged"] = edge.pop("outcome_merged")
+                edge["failure_class"] = edge.pop("outcome_failure_class")
+                edges.append(edge)
+            result["edges"] = edges
     except (sqlite3.Error, OSError, ValueError) as exc:
         result["errors"].append(f"Brain evidence unavailable: {exc}")
     return result
@@ -281,21 +344,8 @@ def report(
             "offered": offers,
             "invocation_count": sum(e.get("type") == "invocation" for e in production),
             "usable": sum(e.get("type") == "success" for e in production),
-            "acted_on": (
-                None if own_edges is None else sum(e.get("accepted") == 1 for e in own_edges)
-            ),
-            "outcome": (
-                None
-                if own_edges is None
-                else sum(
-                    e.get("accepted") == 1
-                    and e.get("outcome_verdict")
-                    in {"PASS", "FAIL", "CONCERNS", "approve", "needs-fix"}
-                    and e.get("durability")
-                    in {"durable", "broke_later", "reverted", "reworked", "reopened"}
-                    for e in own_edges
-                )
-            ),
+            # `outcome_excluded` is counted, never scored, and never hidden in a smaller `outcome`.
+            **outcome_counts(own_edges),
         }
         dependencies = set(INPUT_FLAGS.get(cid, ())) | set(cap.get("input_flags", []))
 
@@ -326,7 +376,7 @@ def report(
         "total": len(rows),
         "rows": rows,
         "errors": inputs.get("errors", []),
-        "population": "all live ledger rows; fleet issue creations in 90 days, current open issues, persisted verifier disagreements; independent probes/rail inputs when supplied",
+        "population": "all live ledger rows; fleet issue creations in 90 days, current open issues, persisted verifier disagreements; independent probes/rail inputs when supplied; acted-on edges' outcomes read from `outcomes` at report time",
     }
 
 
@@ -339,10 +389,18 @@ def format_lines(section: dict) -> list[str]:
             else f"demand {row['situation_count']}"
         )
         first = row["first_break"] or "unmeasured"
+        excluded = row.get("outcome_excluded")
         lines.append(
             f"  {row['capability']}: {demand}; invocation {row['invocation_count']}; usable {row['usable']}; "
-            f"acted_on {row['acted_on']}; outcome {row['outcome']}; first_break {first}"
+            f"acted_on {row['acted_on']}; outcome {row['outcome']}"
+            + (f" (+{excluded} excluded)" if excluded else "")
+            + f"; first_break {first}"
             + ("; " + ", ".join(row["input_off"]) if row["input_off"] else "")
+        )
+    if any(row.get("outcome_excluded") for row in section["rows"]):
+        lines.append(
+            "  `excluded`: acted-on runs whose outcome is in "
+            "feedback.LEARNING_EXCLUDED_FAILURE_CLASSES; counted, never scored."
         )
     lines.extend(f"  evidence UNKNOWN: {e}" for e in section.get("errors", []))
     return lines + [""]
@@ -375,6 +433,17 @@ def recurrence_fixture() -> bool:
     row["situation_count"] = 3
     assert first_break(row) == "not_offered"
     row.update(offered=1, invocation_count=1, usable=1, acted_on=1)
+    assert first_break(row) == "no_outcome"
+    # A durable PASS whose class no learner may score is counted beside `outcome`, never in it.
+    edge = {"accepted": 1, "outcome_verdict": "PASS", "durability": "durable"}
+    for failure_class in feedback.LEARNING_EXCLUDED_FAILURE_CLASSES:
+        counts = outcome_counts([{**edge, "failure_class": failure_class}])
+        assert counts == {"acted_on": 1, "outcome": 0, "outcome_excluded": 1}, counts
+        row.update(counts)
+        assert first_break(row) == "outcome_excluded"
+    assert outcome_counts([edge]) == {"acted_on": 1, "outcome": 1, "outcome_excluded": 0}
+    assert outcome_counts(None) == {"acted_on": None, "outcome": None, "outcome_excluded": None}
+    row.update(acted_on=2)  # one acted-on run still has no graded outcome of its own
     assert first_break(row) == "no_outcome"
     return True
 
