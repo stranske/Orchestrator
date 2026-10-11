@@ -1647,9 +1647,10 @@ def seatbelt_write_profile(protect: list[str], allow: list[str]) -> str:
     rules += [f"(allow file-write* (subpath {_seatbelt_quote(a)}))" for a in allow]
     for a in allow:
         # Escape the path for the regex, then the whole regex for the Seatbelt string literal.
-        # Both layers matter: regex escaping alone leaves quotes bare and backslashes consumed.
+        # Pass the escaped pattern as an ordinary SBPL string. The #" reader uses different
+        # escaping; native sandbox-exec rejects the doubly escaped regex-reader form.
         pattern = f"^{re.escape(a)}/(.*/)?\\.git(/|$)"
-        rules.append(f"(deny file-write* (regex #{_seatbelt_quote(pattern)}))")
+        rules.append(f"(deny file-write* (regex {_seatbelt_quote(pattern)}))")
     return "".join(rules)
 
 
