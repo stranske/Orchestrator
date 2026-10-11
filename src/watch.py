@@ -23,6 +23,7 @@ from typing import Any
 
 import redirect_plan
 import redirect_policy
+import worktree_git
 
 DEFAULT_STALE_SECONDS = 600
 LOG_TAIL_BYTES = 800
@@ -143,9 +144,8 @@ def file_age_seconds(path: str | Path | None, now: float | None = None) -> float
 
 
 def _git(worktree: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "-C", str(worktree), *args], capture_output=True, text=True, check=False
-    )
+    # An agent's worktree git dir was writable by it (#452): pin the repository locations.
+    return worktree_git.run(worktree, args)
 
 
 def _is_git_worktree(worktree: str | Path | None) -> bool:

@@ -38,6 +38,9 @@ def subject_harness(tmp_path, monkeypatch):
     monkeypatch.setattr(exp_abcd, "EXP_DIR", tmp_path / "experiments")
     monkeypatch.setattr(exp_abcd.provision, "WORKTREES_DIR", tmp_path / "worktrees")
     monkeypatch.setattr(exp_abcd.provision, "ensure_canonical", lambda repo: canon)
+    # In production ensure_canonical returns canonical_path(repo); collect() checks the arm
+    # worktree against canonical_path (worktree_git), so the fixture keeps the two equal.
+    monkeypatch.setattr(exp_abcd.provision, "canonical_path", lambda _repo: canon)
     monkeypatch.setattr(exp_abcd.provision, "base_branch", lambda repo: "main")
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
