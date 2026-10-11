@@ -174,7 +174,9 @@ def test_associations_do_not_turn_excluded_only_into_unscoreable(brain):
 
 
 def test_a_merge_the_sweep_has_not_judged_waits_and_then_scores(brain):
-    run = _consumed("remote:o/r#7:codex", adjudicated_verdict="PASS", merged=1, durability="pending")
+    run = _consumed(
+        "remote:o/r#7:codex", adjudicated_verdict="PASS", merged=1, durability="pending"
+    )
     # The sweep's own selector picks it up: this is the population that resolves.
     assert run in {r["run_id"] for r in durability_sweep._pending_merged_runs()}
     rep = _report(brain)
@@ -199,9 +201,9 @@ def test_an_unmerged_pending_run_is_unresolvable_never_awaiting(brain):
     rep = _report(brain)
     arm = _row(rep, "deliberate-break-verifier")["accepted"]
     assert (arm["terminal"], arm["awaiting_sweep"], arm["unresolvable"]) == (0, 0, 1), arm
-    assert arm["status"] == (
-        "unscoreable (1 edges, none can be scored: 1 never resolvable)"
-    ), arm["status"]
+    assert arm["status"] == ("unscoreable (1 edges, none can be scored: 1 never resolvable)"), arm[
+        "status"
+    ]
     assert "deliberate-break-verifier" not in rep["awaiting_outcomes"]
     assert "1 unres" in effectiveness.format_report(rep)
 

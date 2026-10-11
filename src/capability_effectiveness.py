@@ -531,9 +531,19 @@ def _selftest() -> None:
     # resolved durable after its edge was last propagated. `e-linked` above has no outcome row, so
     # the PASS/durable written onto it directly is not an outcome either.
     for _eid, _cf, _snapshot, _outcome in (
-        ("e-relabelled", 0, ("PASS", "durable"), (None, "abandoned", "unattributed_delegation", None)),
+        (
+            "e-relabelled",
+            0,
+            ("PASS", "durable"),
+            (None, "abandoned", "unattributed_delegation", None),
+        ),
         ("e-resolved", 0, ("PASS", "pending"), ("PASS", "durable", None, 1)),
-        ("e-control", 1, ("UNATTRIBUTED", "abandoned"), (None, "abandoned", "transient_infra", None)),
+        (
+            "e-control",
+            1,
+            ("UNATTRIBUTED", "abandoned"),
+            (None, "abandoned", "transient_infra", None),
+        ),
     ):
         _run = f"remote:o/r#{_eid}:codex"
         _c.execute(
@@ -562,7 +572,7 @@ def _selftest() -> None:
     # window, and an offload run nothing will ever judge. A verifier NON_PASS under an adjudicated
     # PASS is terminal and is not a durable success (feedback's predicates).
     _c.execute("INSERT INTO runs (run_id, role_name) VALUES ('role:triage:x:1', 'triage')")
-    for _eid, _cap, _run, _outcome in (
+    for _eid, _cap, _run, _fields in (
         ("e-self", "role-triage", "role:triage:x:1", ("PASS", None, "durable", 1)),
         ("e-assoc", "offload", "role:triage:x:1", ("PASS", None, "durable", 1)),
         ("e-sweep", "c9", "remote:o/r#1:codex", ("PASS", None, "pending", 1)),
@@ -579,7 +589,7 @@ def _selftest() -> None:
         _c.execute(
             "INSERT OR REPLACE INTO outcomes "
             "(run_id,adjudicated_verdict,verifier_verdict,durability,merged) VALUES (?,?,?,?,?)",
-            (_run, *_outcome),
+            (_run, *_fields),
         )
     _rows = _edge_rows(_c)
     _self = _arm_stats([r for r in _rows if r["capability_id"] == "role-triage"])
