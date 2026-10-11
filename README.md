@@ -575,6 +575,7 @@ The model role uses the existing read-only offload transport and a private cwd.
   dispatcher's gh reads (`dispatcher.gh_config_dir`), so the prelude is exactly what it was before
   the pin. Inherited explicit config or token authentication remains effective; agents depending
   on the pin return to the empty runtime config and "gh auth login";
+  `ORCH_AGENT_GH_GUARD_DISABLED=1` removes the gh write guard from the prelude (the wrapper, `BASH_ENV` and the proxy `ZDOTDIR`), so a dispatched agent's `gh auth logout` or `gh config set` reaches the owner's real gh login and config again;
   `ORCH_CREDENTIAL_REDACTION_DISABLED=1` stops masking credentials in agent output
   (`credential_redaction`), and every place that would have masked says so where the output lands;
   `ORCH_CREDENTIAL_EXPOSURE_SCAN=0` skips switch review's exposure scan, which then reports
