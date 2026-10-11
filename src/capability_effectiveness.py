@@ -96,14 +96,12 @@ def _edge_rows(conn=None) -> list[dict]:
         # `outcomes` row, so reading the row loses nothing the edge had. The verdict is the
         # adjudicated one, else the verifier's: the reading `capability_causal_evidence` makes,
         # never CI alone.
-        rows = c.execute(
-            """SELECT ie.capability_id, ie.accepted, ie.counterfactual,
+        rows = c.execute("""SELECT ie.capability_id, ie.accepted, ie.counterfactual,
                       o.adjudicated_verdict, o.verifier_verdict, o.durability, o.failure_class,
                       ie.target_run_id, ie.created_ts
                FROM influence_edges ie
                LEFT JOIN outcomes o ON o.run_id = ie.target_run_id
-               WHERE ie.capability_id IS NOT NULL AND ie.target_event_id IS NOT NULL"""
-        ).fetchall()
+               WHERE ie.capability_id IS NOT NULL AND ie.target_event_id IS NOT NULL""").fetchall()
     finally:
         if close:
             c.close()
