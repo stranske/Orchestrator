@@ -1,0 +1,38 @@
+{
+  "repository": "stranske/Orchestrator",
+  "inherited_pr": 524,
+  "head_sha": "2c4509df9b53a32b4eb4143d7ba396808e38b49a",
+  "merge_sha": "2465397667427d2f3e84f422adbbf461e88eb7ea",
+  "retrieval": "GitHub connector job logs; no workflow or real-agent rerun",
+  "jobs": [
+    {
+      "run_id": 38176808788,
+      "job_id": 114580816630,
+      "job_url": "https://github.com/stranske/Orchestrator/actions/runs/38176808788/job/114580816630",
+      "excerpts": [
+        "2026-10-11T21:33:17.1727685Z HEAD is now at ca0b19c Merge 2c4509df9b53a32b4eb4143d7ba396808e38b49a into f6d3f9c3bd2a4c73fac68e680456eafaa15dcb32",
+        "2026-10-11T21:36:24.2086194Z   pytest:     2717 passed, 0 failed, 26/26 max skipped (2743 collected; floor 2743)",
+        "2026-10-11T21:36:24.2086976Z   selftests:  97 of 104 modules ran, 7/7 max skipped",
+        "2026-10-11T21:36:24.2091247Z   gates:      2/2 max skipped",
+        "2026-10-11T21:36:24.2179472Z   VERIFIED — 2717 tests actually executed and passed, 97 selftests spoke, 3 of 5 gates green; 26 test(s), 7 selftest(s) and 2 gate(s) SKIPPED for a named missing prerequisite, listed above"
+      ]
+    },
+    {
+      "run_id": 38176809124,
+      "job_id": 114581351588,
+      "job_url": "https://github.com/stranske/Orchestrator/actions/runs/38176809124/job/114581351588",
+      "excerpts": [
+        "2026-10-11T21:36:26.6003252Z HEAD is now at ca0b19c Merge 2c4509df9b53a32b4eb4143d7ba396808e38b49a into f6d3f9c3bd2a4c73fac68e680456eafaa15dcb32",
+        "2026-10-11T21:38:41.2709176Z =========== 2717 passed, 26 skipped, 4 warnings in 120.50s (0:02:00) ==========="
+      ]
+    }
+  ],
+  "focused_original_transcript": "UNKNOWN: not present in recovered job-log excerpts; artifact ZIP returned a remote file reference that is not locally readable",
+  "post_merge_comparison": {
+    "run_id": 38178578301,
+    "url": "https://github.com/stranske/Orchestrator/pull/524#issuecomment-6114368956",
+    "result": "NON_PASS; CONCERNS/CONCERNS. Applies to inherited PR 524 only."
+  },
+  "candidate_full_verification": "NOT RUN: pytest and Black unavailable",
+  "native_acceptance": "UNKNOWN: Linux runner"
+}
