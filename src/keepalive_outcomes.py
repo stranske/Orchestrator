@@ -356,6 +356,7 @@ class IngestSummary(TypedDict):
     verifier_verdicts_seen: int
     runtime_ac_specs_authored: int
     runtime_ac_shadow_errors: list[str]
+    replacements: dict[str, Any]
 
 
 def _fetch_issue_body(repo: str, number: int) -> str | None:
@@ -1088,6 +1089,38 @@ def _outcome_for_pr(
     return oc
 
 
+def _with_replacement_read(
+    repo: str,
+    pr: dict,
+    oc: dict | None,
+    existing: dict | None,
+    read,
+    now: int,
+    counts: dict,
+) -> dict | None:
+    """A PR closed unmerged is read before its FIRST outcome: does a PR linked to its issue carry its
+    head (`outcomes.attach_keepalive_replacement`)? The answer replaces the FAIL `oc` holds, or, when
+    GitHub did not answer, leaves no outcome, so the run is asked again (here while the PR is in the
+    lookback, and by the remote ingest, which selects every keepalive row without an outcome). A
+    decided row is never re-read here; the re-judge owns those. `read` None (injected PRs) reads
+    nothing and keeps the FAIL, as before the read existed."""
+    if (
+        read is None
+        or oc is None
+        or existing is not None
+        or str(pr.get("state") or "").upper() != "CLOSED"
+        or pr.get("mergedAt")
+        or pr.get("number") is None
+    ):
+        return oc
+    _gh_throttle("graphql")
+    judged = outcomes.attach_keepalive_replacement(
+        dict(pr), repo, int(pr["number"]), now=now, read=read
+    )
+    outcomes.count_keepalive_replacement(counts, judged)
+    return outcomes.state_to_outcome(judged)
+
+
 def _should_record_outcome(existing: dict | None, oc: dict | None) -> bool:
     if oc is None:
         return False
@@ -1123,10 +1156,16 @@ def ingest_keepalive_outcomes(
     _policy_at_dispatch_fn=None,
     _issue_fetch_fn=None,
     _spec_dir=None,
+    _replacement_fn=None,
 ) -> IngestSummary:
     repos = repos or _active_repos()
     pr_fetch_fn = _pr_fetch_fn or _fetch_prs
     closure_context_fn = _closure_context_fn or _fetch_pr_context
+    # Injected PRs mean an offline run, which makes no live read (the verifier's rule below).
+    replacement_fn = _replacement_fn or (
+        outcomes.keepalive_replacement if _pr_fetch_fn is None else None
+    )
+    read_now = int(_now or time.time())
     verifier_fetch_fn = _verifier_fetch_fn or (
         verifier_evidence.fetch_decisions if _pr_fetch_fn is None else lambda _repo, _nums: {}
     )
@@ -1177,6 +1216,9 @@ def ingest_keepalive_outcomes(
         "verifier_verdicts_seen": 0,
         "runtime_ac_specs_authored": 0,
         "runtime_ac_shadow_errors": [],
+        # What the read before each closed PR's first outcome answered; `waiting` is the blocking
+        # number of its one wait, and every one drains on an answer or at the horizon.
+        "replacements": outcomes.keepalive_replacement_counts(),
     }
 
     def observe_shadow(repo, pr, run_id):
@@ -1300,9 +1342,14 @@ def ingest_keepalive_outcomes(
 
                 task_type = _task_type_from_labels(labels)
                 work_type = _work_type(labels, str(pr.get("title") or ""), _author_login(pr))
-                oc = _maybe_mark_process_ignore(repo, pr, work_type, oc, closure_context_fn)
                 run_already_exists = _run_exists(run_id)
                 existing_oc = _existing_outcome(run_id)
+                # The run is recorded below even when the read leaves no outcome: a terminal PR's
+                # row is what the remote ingest retries from once the PR leaves the lookback.
+                oc = _with_replacement_read(
+                    repo, pr, oc, existing_oc, replacement_fn, read_now, summary["replacements"]
+                )
+                oc = _maybe_mark_process_ignore(repo, pr, work_type, oc, closure_context_fn)
 
                 if run_already_exists:
                     summary["skipped_existing"] += 1
@@ -1358,6 +1405,7 @@ def ingest_keepalive_outcomes(
             run_id = _stable_run_id(repo, pr_number, agent)
             run = {"run_id": run_id, "target": target, "mode": "remote", "pr_number": pr_number}
             run_already_exists = _run_exists(run_id)
+            existing_oc = _existing_outcome(run_id)
             oc = _outcome_for_pr(
                 repo,
                 pr,
@@ -1369,8 +1417,10 @@ def ingest_keepalive_outcomes(
                 fix_cache=fix_cache,
                 fix_since=fix_since,
             )
+            oc = _with_replacement_read(
+                repo, pr, oc, existing_oc, replacement_fn, read_now, summary["replacements"]
+            )
             oc = _maybe_mark_process_ignore(repo, pr, work_type, oc, closure_context_fn)
-            existing_oc = _existing_outcome(run_id)
 
             if run_already_exists:
                 summary["skipped_existing"] += 1
@@ -2025,10 +2075,32 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--apply", action="store_true", help="allow --backfill-attribution to write"
     )
+    parser.add_argument(
+        "--undo-replacement-recheck",
+        action="store_true",
+        help="restore every keepalive row the replacement re-judge changed to the state it "
+        "snapshotted first, and run nothing else",
+    )
+    parser.add_argument(
+        "--replacement-recheck",
+        action="store_true",
+        help="run only the keepalive replacement re-judge (with --dry-run, preview it), no ingest",
+    )
     args = parser.parse_args(argv)
 
     if args.selftest:
         _selftest()
+        return 0
+
+    if args.undo_replacement_recheck:
+        print(json.dumps(outcomes.undo_keepalive_replacement_recheck(), indent=2))
+        return 0
+
+    if args.replacement_recheck:
+        recheck = outcomes.recheck_keepalive_replacements(
+            dry_run=args.dry_run, throttle=lambda: _gh_throttle("graphql")
+        )
+        print(json.dumps(recheck, indent=2, sort_keys=True) if args.json else recheck)
         return 0
 
     if args.backfill_attribution:
@@ -2036,11 +2108,18 @@ def main(argv: list[str]) -> int:
         print(json.dumps(result, indent=2, sort_keys=True) if args.json else result)
         return 0
 
-    res = ingest_keepalive_outcomes(
-        args.repos,
-        lookback_days=args.lookback_days,
-        dry_run=args.dry_run,
-        include_non_agent=args.include_non_agent,
+    res: dict[str, Any] = dict(
+        ingest_keepalive_outcomes(
+            args.repos,
+            lookback_days=args.lookback_days,
+            dry_run=args.dry_run,
+            include_non_agent=args.include_non_agent,
+        )
+    )
+    # The rows written before the keepalive read existed are re-judged once each, after the ingest
+    # (`outcomes.recheck_keepalive_replacements`), then it selects nothing.
+    res["replacement_recheck"] = outcomes.recheck_keepalive_replacements(
+        dry_run=args.dry_run, throttle=lambda: _gh_throttle("graphql")
     )
     if args.json:
         print(json.dumps(res, indent=2, sort_keys=True))
