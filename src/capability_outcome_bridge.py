@@ -44,6 +44,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -165,11 +166,15 @@ def collect(
         # capability stayed in `invoked_without_outcomes` no matter how much work it did. Found
         # 2026-08-21 while measuring between phases, after tagging four capabilities and watching
         # the bridge attribute exactly none of them.
+        #
+        # ONLY AN ACCEPTED EDGE TAGS A RUN. A counterfactual capability edge says the run rejected
+        # the capability's contribution, so its outcome is the control arm's, never the
+        # capability's own (`backfill_role_capability_edges`, 2026-10-11).
         tagged: dict[str, list[str]] = {}
         try:
             for run_id, capability_id in c.execute(
                 "SELECT target_run_id, capability_id FROM influence_edges "
-                "WHERE influence_type='capability' AND capability_id IS NOT NULL"
+                "WHERE influence_type='capability' AND capability_id IS NOT NULL AND accepted=1"
             ).fetchall():
                 tagged.setdefault(str(run_id), []).append(str(capability_id))
         except sqlite3.Error:
@@ -281,7 +286,7 @@ def apply_links(links: list[dict], *, path: Path | None = None, dry_run: bool = 
 
 
 def backfill_role_capability_edges(*, dry_run: bool = False, conn=None) -> dict:
-    """Re-attribute a role run's capability onto the run that ACTED on its proposal.
+    """Re-attribute a role run's capability onto the run its role edge points at, in the same arm.
 
     WHY THE EDGES COULD NEVER RESOLVE. `record_role_run` tags the role run itself, but a role run is
     advisory: it proposes and never produces a PR, so no `outcomes` row is ever written for it.
@@ -294,18 +299,38 @@ def backfill_role_capability_edges(*, dry_run: bool = False, conn=None) -> dict:
     does this for new runs; this repairs the history, and stays in the daily bridge so it self-heals
     rather than being a one-off migration.
 
-    Idempotent: skips any target that already carries a capability edge, so re-running is a no-op.
+    THE ARM COMES FROM THE ROLE EDGE (2026-10-11). Until then this joined ANY role edge and wrote an
+    ACCEPTED capability edge for each, so a run that went ahead against its role credited the role's
+    capability with its outcome. On the owner's Brain that was 334 of the 361 edges it derived. 329
+    came from the rejected edges the tick wrote for delegations it REFUSED. No run acted on that
+    advice, and `feedback`'s once-only migration deletes them. They were 104 of role-triage's 128
+    accepted-arm terminal outcomes in `capability_effectiveness`, and 130 of offload's 206. A
+    rejected role edge now derives a COUNTERFACTUAL capability edge (`accepted=0`): the capability's
+    contribution was considered and rejected on that run. That is the control arm
+    `capability_effectiveness` compares the accepted arm against, and until now no capability had
+    one. Nothing back-propagates over it. It carries exactly the grade its rejected role edge was
+    given (`outcomes.backfill_triage_disagreements` grades those from the run's own outcome), so it
+    can never say more than the edge it came from. It is derived only onto a RECORDED run: a
+    disagreement needs a run that acted, and a target with no completion event is counted in
+    `skipped` until one is recorded.
+
+    One capability edge per (run, capability): an existing one, accepted or not, is never doubled,
+    and within one pass an accepted role edge is derived before a rejected one. Idempotent, so
+    re-running is a no-op.
     """
     close = conn is None
     c = conn or feedback._conn()
-    created, resolved, skipped = [], 0, 0
+    created, resolved, skipped, graded = [], 0, 0, 0
+    unlinked = 0
     try:
-        rows = c.execute("""SELECT DISTINCT r.source_run_id, r.target_run_id, ce.capability_id,
-                               ce.capability_version_id
+        rows = c.execute(
+            """SELECT DISTINCT r.source_run_id, r.target_run_id, r.accepted,
+                               ce.capability_id, ce.capability_version_id
                FROM influence_edges r
                JOIN influence_edges ce
                  ON ce.target_run_id = r.source_run_id
                 AND ce.influence_type = 'capability'
+                AND ce.accepted = 1
                 AND ce.capability_id IS NOT NULL
                 AND ce.capability_version_id IS NOT NULL
                WHERE r.influence_type = 'role'
@@ -314,13 +339,26 @@ def backfill_role_capability_edges(*, dry_run: bool = False, conn=None) -> dict:
                        SELECT 1 FROM influence_edges x
                         WHERE x.target_run_id = r.target_run_id
                           AND x.influence_type = 'capability'
-                          AND x.capability_id = ce.capability_id)""").fetchall()
-        unlinked = 0
-        for role_run, work_run, cap_id, cap_version in rows:
+                          AND x.capability_id = ce.capability_id)
+               ORDER BY r.accepted DESC, r.target_run_id, ce.capability_id, r.source_run_id"""
+        ).fetchall()
+        derived: set[tuple[str, str]] = set()
+        for role_run, work_run, role_accepted, cap_id, cap_version in rows:
+            accepted = bool(role_accepted)
+            if (str(work_run), str(cap_id)) in derived:
+                continue
+            if not accepted and not feedback._latest_completion_event_id(c, str(work_run)):
+                skipped += 1
+                continue
+            derived.add((str(work_run), str(cap_id)))
+            link = {
+                "capability_id": cap_id,
+                "target_run_id": work_run,
+                "source_run_id": role_run,
+                "accepted": accepted,
+            }
             if dry_run:
-                created.append(
-                    {"capability_id": cap_id, "target_run_id": work_run, "source_run_id": role_run}
-                )
+                created.append(link)
                 continue
             feedback._record_influence_edge_in_conn(
                 c,
@@ -328,7 +366,7 @@ def backfill_role_capability_edges(*, dry_run: bool = False, conn=None) -> dict:
                 influence_type="capability",
                 influence_id=str(cap_version),
                 source_run_id=str(role_run),
-                accepted=True,
+                accepted=accepted,
                 capability_id=str(cap_id),
                 capability_version_id=str(cap_version),
                 # DECLARED UNLINKED: a backfill re-attributes onto runs that may predate the
@@ -336,16 +374,17 @@ def backfill_role_capability_edges(*, dry_run: bool = False, conn=None) -> dict:
                 # edges are associations, not causal evidence. Measured 2026-08-21: 202 of 296
                 # orphan edges came from exactly this class of backfill, reported as plain successes
                 # -- hence `unlinked_edges` below, so the count is visible where it is CREATED
-                # rather than found by an audit two weeks later.
-                allow_unlinked=True,
+                # rather than found by an audit two weeks later. A counterfactual edge is written
+                # only onto a recorded run, so it never needs this.
+                allow_unlinked=accepted,
             )
-            if not feedback._latest_completion_event_id(c, str(work_run)):
-                unlinked += 1
-            # Resolve immediately from the outcome that already exists for the acting run.
-            resolved += feedback._propagate_outcome_lineage_in_conn(c, str(work_run))
-            created.append(
-                {"capability_id": cap_id, "target_run_id": work_run, "source_run_id": role_run}
-            )
+            if accepted:
+                if not feedback._latest_completion_event_id(c, str(work_run)):
+                    unlinked += 1
+                # Resolve immediately from the outcome that already exists for the acting run.
+                resolved += feedback._propagate_outcome_lineage_in_conn(c, str(work_run))
+            created.append(link)
+        graded = _grade_counterfactual_capability_edges(c, dry_run=dry_run)
         if not dry_run:
             c.commit()
     finally:
@@ -353,12 +392,54 @@ def backfill_role_capability_edges(*, dry_run: bool = False, conn=None) -> dict:
             c.close()
     return {
         "backfilled": len(created),
+        "counterfactual": sum(1 for link in created if not link["accepted"]),
         "edges_resolved": resolved,
+        "counterfactual_graded": graded,
         "skipped": skipped,
         "unlinked_edges": unlinked,
         "dry_run": dry_run,
         "links": created[:20],
     }
+
+
+def _grade_counterfactual_capability_edges(c: sqlite3.Connection, *, dry_run: bool) -> int:
+    """Give each counterfactual capability edge the grade of the rejected role edge it came from.
+
+    The role edge is graded later than the bridge may run (`triage_shadow` grades disagreements
+    after the run settles), so every pass re-reads it. A role edge with no grade yet leaves its
+    capability edges ungraded: attributed, never terminal. Returns the number of edges brought into
+    line; on a dry run, the number that would be."""
+    pending: dict[str, tuple] = {}
+    for edge_id, verdict, merged, durability, cur_verdict, cur_merged, cur_durability in c.execute(
+        """SELECT ce.edge_id, r.outcome_verdict, r.merged, r.durability,
+                  ce.outcome_verdict, ce.merged, ce.durability
+             FROM influence_edges ce
+             JOIN influence_edges r
+               ON r.source_run_id = ce.source_run_id
+              AND r.target_run_id = ce.target_run_id
+              AND r.influence_type = 'role'
+              AND r.accepted = 0
+            WHERE ce.influence_type = 'capability'
+              AND ce.accepted = 0
+              AND r.outcome_verdict IS NOT NULL
+            ORDER BY ce.edge_id, r.created_ts, r.edge_id"""
+    ).fetchall():
+        if edge_id in pending:
+            continue  # two rejected edges between one pair: the earliest one decides, every pass
+        pending[edge_id] = (verdict, merged, durability, cur_verdict, cur_merged, cur_durability)
+    now = int(time.time())
+    changed = 0
+    for edge_id, (verdict, merged, durability, *current) in pending.items():
+        if current == [verdict, merged, durability]:
+            continue
+        changed += 1
+        if not dry_run:
+            c.execute(
+                "UPDATE influence_edges SET outcome_verdict=?,merged=?,durability=?,propagated_ts=? "
+                "WHERE edge_id=? AND accepted=0",
+                (verdict, merged, durability, now, edge_id),
+            )
+    return changed
 
 
 def backfill_offload_capability_edges(*, dry_run: bool = False, conn=None) -> dict:

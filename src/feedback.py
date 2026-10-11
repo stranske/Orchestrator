@@ -829,6 +829,10 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
             REFUSAL_ROLE_EDGES_MIGRATION,
             lambda conn: _delete_refusal_role_edges(conn, tables),
         )
+        # After the refusal migration, whose marker names the pairs this one counts as refusals.
+        _apply_data_migration_once(
+            c, REJECTED_ROLE_CAPABILITY_EDGES_MIGRATION, _delete_rejected_role_capability_edges
+        )
     if "agent_switches" in tables:
         switch_cols = {row[1] for row in c.execute("PRAGMA table_info(agent_switches)").fetchall()}
         if "source" not in switch_cols:
@@ -1130,6 +1134,150 @@ def restore_refusal_role_edges(*, conn: sqlite3.Connection | None = None) -> dic
         )
         c.commit()
         return {"restored": restored, "of": len(detail["rows"])}
+    finally:
+        if close:
+            c.close()
+
+
+REJECTED_ROLE_CAPABILITY_EDGES_MIGRATION = (
+    "influence_edges.rejected-role-capability-edges-2026-10-11"
+)
+
+
+def _delete_rejected_role_capability_edges(c: sqlite3.Connection) -> dict[str, Any]:
+    """Delete, once, the capability edges derived from a role edge that was not accepted.
+
+    Until 2026-10-11 `capability_outcome_bridge.backfill_role_capability_edges` joined ANY role edge
+    and wrote an ACCEPTED capability edge onto its target. On the owner's Brain that left 334 such
+    edges. 329 came from the rejected edges the tick wrote for delegations it REFUSED, whose role
+    edges `REFUSAL_ROLE_EDGES_MIGRATION` deleted: no run acted on that advice, so the capability
+    edge is neither credit nor a control. They were 104 of role-triage's 128 terminal outcomes in
+    `capability_effectiveness`'s accepted arm, and 130 of offload's 206. 5 came from the 3 rejected
+    role edges that remain, where a run went ahead against its role. The bridge now derives those as
+    COUNTERFACTUAL edges, and does so on its next pass once these rows are gone.
+
+    The selection: a capability edge from a recorded role run to another run, with no ACCEPTED role
+    edge between the two. `record_run` writes its own inherited edges in the same call as their
+    accepted role edge, so none of those match. Every deleted row is kept, with every column the
+    table has, in the marker's `detail`, and `restore_rejected_role_capability_edges` puts them
+    back. The marker also counts each row by its source: a pair `REFUSAL_ROLE_EDGES_MIGRATION`
+    deleted, a pair whose rejected role edge remains, or neither."""
+    columns = [row[1] for row in c.execute("PRAGMA table_info(influence_edges)").fetchall()]
+    rows = [
+        dict(zip(columns, row))
+        for row in c.execute(
+            f"SELECT {','.join('e.' + name for name in columns)} FROM influence_edges e "
+            "WHERE e.influence_type='capability' AND e.target_run_id != e.source_run_id "
+            "AND e.source_run_id IN (SELECT run_id FROM runs WHERE role_name IS NOT NULL) "
+            "AND NOT EXISTS (SELECT 1 FROM influence_edges r WHERE r.influence_type='role' "
+            "AND r.accepted=1 AND r.source_run_id=e.source_run_id "
+            "AND r.target_run_id=e.target_run_id) "
+            "ORDER BY e.created_ts, e.edge_id"
+        ).fetchall()
+    ]
+    refusal_pairs: set[tuple[str, str]] = set()
+    found = c.execute(
+        "SELECT detail FROM data_migrations WHERE name=?", (REFUSAL_ROLE_EDGES_MIGRATION,)
+    ).fetchone()
+    if found is not None:
+        refusal = json.loads(found[0])
+        names = refusal.get("columns") or []
+        for values in refusal.get("rows") or []:
+            row = dict(zip(names, values))
+            refusal_pairs.add((str(row["source_run_id"]), str(row["target_run_id"])))
+    rejected_pairs = {
+        (str(source), str(target))
+        for source, target in c.execute(
+            "SELECT source_run_id, target_run_id FROM influence_edges "
+            "WHERE influence_type='role' AND accepted=0 AND source_run_id IS NOT NULL"
+        ).fetchall()
+    }
+    by_source = {"refusal_pair": 0, "rejected_role_edge": 0, "no_role_edge": 0}
+    by_capability: dict[str, int] = {}
+    for row in rows:
+        pair = (str(row["source_run_id"]), str(row["target_run_id"]))
+        kind = (
+            "refusal_pair"
+            if pair in refusal_pairs
+            else "rejected_role_edge" if pair in rejected_pairs else "no_role_edge"
+        )
+        by_source[kind] += 1
+        cap = str(row["capability_id"])
+        by_capability[cap] = by_capability.get(cap, 0) + 1
+        c.execute("DELETE FROM influence_edges WHERE edge_id=?", (row["edge_id"],))
+    return {
+        "selector": {
+            "influence_type": "capability",
+            "source": "a recorded role run (runs.role_name), not the target",
+            "excluded": "an accepted role edge between the same source and target",
+        },
+        "deleted": len(rows),
+        "deleted_by_source": by_source,
+        "deleted_by_capability": dict(sorted(by_capability.items())),
+        "deleted_linked": sum(1 for row in rows if row["target_event_id"] is not None),
+        "deleted_with_verdict": sum(
+            1 for row in rows if row["outcome_verdict"] is not None or row["durability"]
+        ),
+        "columns": columns,
+        "rows": [[row[name] for name in columns] for row in rows],
+    }
+
+
+def restore_rejected_role_capability_edges(
+    *, conn: sqlite3.Connection | None = None
+) -> dict[str, Any]:
+    """Undo `_delete_rejected_role_capability_edges`, back to the Brain as it was before.
+
+    Every row its marker kept goes back unchanged (INSERT OR IGNORE by edge_id). The counterfactual
+    edges the bridge derived since, between the same source, target and capability, are removed,
+    because they replaced those rows; with the accepted rows back, the bridge derives nothing there
+    again. The marker stays and records the restore, so the next open does not delete the rows
+    again. Restoring `REFUSAL_ROLE_EDGES_MIGRATION` alone brings its rejected role edges back, and
+    the bridge would then derive counterfactual edges from those onto the runs that were recorded:
+    restore both to return to the state before either."""
+    c = conn or _conn()
+    close = conn is None
+    try:
+        found = c.execute(
+            "SELECT detail FROM data_migrations WHERE name=?",
+            (REJECTED_ROLE_CAPABILITY_EDGES_MIGRATION,),
+        ).fetchone()
+        if found is None:
+            return {"restored": 0, "reason": "not applied on this Brain"}
+        detail = json.loads(found[0])
+        if detail.get("restored_ts"):
+            return {
+                "restored": 0,
+                "reason": "already restored",
+                "restored_ts": detail["restored_ts"],
+            }
+        columns = detail["columns"]
+        insert = (
+            f"INSERT OR IGNORE INTO influence_edges ({','.join(columns)}) "
+            f"VALUES ({','.join('?' for _ in columns)})"
+        )
+        replaced = 0
+        for values in detail["rows"]:
+            row = dict(zip(columns, values))
+            replaced += c.execute(
+                "DELETE FROM influence_edges WHERE influence_type='capability' AND accepted=0 "
+                "AND source_run_id=? AND target_run_id=? AND capability_id=?",
+                (row["source_run_id"], row["target_run_id"], row["capability_id"]),
+            ).rowcount
+        restored = sum(c.execute(insert, values).rowcount for values in detail["rows"])
+        detail["restored_ts"] = int(time.time())
+        detail["restored"] = restored
+        detail["removed_counterfactual"] = replaced
+        c.execute(
+            "UPDATE data_migrations SET detail=? WHERE name=?",
+            (json.dumps(detail, sort_keys=True), REJECTED_ROLE_CAPABILITY_EDGES_MIGRATION),
+        )
+        c.commit()
+        return {
+            "restored": restored,
+            "of": len(detail["rows"]),
+            "removed_counterfactual": replaced,
+        }
     finally:
         if close:
             c.close()
@@ -3074,13 +3222,15 @@ def _capability_attribution_of(c: sqlite3.Connection, run_id: str) -> list[tuple
     """(capability_id, capability_version_id) pairs already attributed to `run_id`.
 
     Reads the existing edge table rather than re-deriving from prompts or entrypoints, so an
-    inherited attribution can never be stronger than the attribution it came from. Returns [] on
-    any failure: attribution telemetry must never break the run that is recording it.
+    inherited attribution can never be stronger than the attribution it came from. Only an ACCEPTED
+    edge is an attribution: a counterfactual one says the capability's contribution was rejected,
+    and `capability_outcome_bridge.backfill_role_capability_edges` inherits by the same rule.
+    Returns [] on any failure: attribution telemetry must never break the run that is recording it.
     """
     try:
         rows = c.execute(
             "SELECT DISTINCT capability_id, capability_version_id FROM influence_edges "
-            "WHERE target_run_id=? AND influence_type='capability' "
+            "WHERE target_run_id=? AND influence_type='capability' AND accepted=1 "
             "AND capability_id IS NOT NULL AND capability_version_id IS NOT NULL",
             (str(run_id),),
         ).fetchall()
@@ -7230,6 +7380,9 @@ def main(argv):
         return 0
     if argv and argv[0] == "restore-refusal-role-edges":
         print(json.dumps(restore_refusal_role_edges(), indent=2, sort_keys=True))
+        return 0
+    if argv and argv[0] == "restore-rejected-role-capability-edges":
+        print(json.dumps(restore_rejected_role_capability_edges(), indent=2, sort_keys=True))
         return 0
     if argv and argv[0] == "completion-events":
         limit = 1000
