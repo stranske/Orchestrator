@@ -460,6 +460,39 @@ a versioned influence edge only when the run has a completion event. It does not
 from prose or from a capability merely being offered. `capabilities.py usage` reports all-time
 `fleet_edges`, which counts edges rather than independent durable successes.
 
+**A capability inherited from a role takes the role edge's arm (2026-10-11).** A role run's
+capability attribution moves onto the run its role edge points at. `record_run` does this when a
+dispatch carries an accepted role, and `capability_outcome_bridge.backfill_role_capability_edges`
+repairs the history daily. Until 2026-10-11 the bridge joined ANY role edge and wrote an ACCEPTED
+capability edge, so a run that went ahead against its role credited the role's capability with its
+outcome. On the owner's Brain that was 334 of the 361 edges the bridge had derived:
+- 329 came from the rejected edges the tick wrote for refused delegations, which #491's migration
+  deleted. No run acted on that advice.
+- 5 came from the 3 rejected role edges that remain.
+
+The 329 were 104 of role-triage's 128 accepted-arm terminal outcomes in `capability_effectiveness`,
+and 130 of offload's 206.
+
+A rejected role edge onto a RECORDED run now derives a COUNTERFACTUAL capability edge. That is the
+control arm `capability_effectiveness` compares the accepted arm against, and until now no
+capability had one. The edge carries exactly the observational grade its role edge was given
+(`outcomes.backfill_triage_disagreements`), and nothing back-propagates over it. Both inheritance
+sites (`feedback._capability_attribution_of` and the bridge) inherit accepted attribution only, and
+the bridge's outcome heartbeats (`collect`) read accepted edges only.
+
+A once-only migration in `feedback.py` (`influence_edges.rejected-role-capability-edges-2026-10-11`)
+deletes the 334 rows and keeps them in its marker. The bridge's next pass derives the 5 from real
+delegations as counterfactual edges. `feedback.py restore-rejected-role-capability-edges` puts the
+rows back and removes those replacements. `completion_event_health` orphans fall from 220 to 125.
+The rest are the `offload` association edges on advisory role runs kept on 2026-08-21, so
+`dry_seam_audit` still fails on them.
+
+The control arm starts at 2 subjects each for role-triage and offload, short of
+`capability_effectiveness.MIN_SAMPLE` (5). It grows only when a delegation goes ahead against
+triage, and the dispatch lane has been shadow since 2026-09-03. No stage, component or surface
+moved: the counterfactual arm was already a column of the edge table and the comparison
+`capability_effectiveness` makes. The loop diagram is unchanged.
+
 The one place two LLMs touch the same task is an `agent:auto` switch, where the keepalive delegation
 policy replaces a stalled agent. `agent_switches.py` (rail, daily) records each such pair in the Brain
 table `agent_switches` — commits before and after the switch and the terminal outcome — from two
