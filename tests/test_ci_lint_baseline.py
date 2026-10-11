@@ -4,7 +4,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from scripts import ci_lint_baseline as baseline
 
 
