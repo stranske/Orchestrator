@@ -1550,6 +1550,7 @@ def offload(
     profile_id: str | None = None,
     research_round: str | None = None,
     task_type: str | None = None,
+    write_boundary: dict | None = None,
 ) -> dict:
     """SYNCHRONOUS offload for token conservation.
 
@@ -1580,6 +1581,12 @@ def offload(
     agents is comparable evidence, but only if the runs carry the round as their experiment_id:
     without it each agent is an unrelated run against an ephemeral temp path, which is why
     thousands of offload runs across six agents produced nothing the learner could compare.
+
+    `write_boundary` = {"protect": [dirs], "allow": [dirs]} bounds where the agent may write: nowhere
+    under `protect` except the run's own cwd and the `allow` roots (never a `.git` beneath one).
+    codex is held by its own sandbox (`--add-dir` per root); cursor, agy, vibe, aider and claude run
+    under a seatbelt profile (`adapters.apply_write_boundary`). A boundary that cannot be enforced
+    refuses the run (exit 2) rather than running it unbounded. None changes nothing.
 
     `task_type` names what the work IS (review, mechanical, implement, ...) so the run the learner
     reads is ranked under that type. None keeps the historical literal "offload", under which every
@@ -1647,6 +1654,27 @@ def offload(
             "it is only used as Antigravity's launch directory; project/app data is redirected "
             "under the Orchestrator runtime."
         )
+    boundary: tuple[list[str], list[str]] | None = None
+    if write_boundary is not None:
+        try:
+            boundary = adapters.write_boundary_roots(
+                write_boundary.get("protect") or [],
+                write_boundary.get("allow") or [],
+                run_cwd,
+                agent=agent,
+            )
+            unenforceable = adapters.write_boundary_unenforceable(agent)
+            if unenforceable:
+                raise adapters.WorkspaceRefused(unenforceable)
+        except Exception as exc:
+            return {"agent": agent, "exit": 2, "output": "", "error": str(exc), "run_id": None}
+        prompt = (
+            f"{prompt.rstrip()}\n\nWRITE BOUNDARY: you may create or change files only under "
+            + ", ".join(boundary[1])
+            + " and the system temp dir (never a .git inside them). Everything under "
+            + ", ".join(boundary[0])
+            + " is otherwise read-only to you, and a write there fails with 'Operation not permitted'."
+        )
     prepared_prompt = _offload_prompt(prompt, run_cwd, agent)
     if relocated:
         prepared_prompt = f"{prepared_prompt}\n{_relocated_workspace_rule(relocated)}"
@@ -1705,6 +1733,7 @@ def offload(
             profile=profile,
             transport="offload",
             prompt_via_stdin=prompt_via_stdin,
+            write_roots=boundary[1][1:] if boundary and agent == "codex" else None,
         )
         if profile
         else adapters.build_command(
@@ -1721,6 +1750,7 @@ def offload(
                 else None
             ),
             prompt_via_stdin=prompt_via_stdin,
+            write_roots=boundary[1][1:] if boundary and agent == "codex" else None,
         )
     )  # raises ValueError on unknown agent
     if agent == "gemini" and "--add-dir" in argv:
@@ -1745,6 +1775,11 @@ def offload(
         # Two literals would drift, and the symptom of drift here is a model that never resolves.
         agy_log = adapters.agy_log_for(logf)
         argv[argv.index("--log-file") + 1] = str(agy_log)
+    if boundary is not None:
+        try:
+            argv = adapters.apply_write_boundary(agent, argv, *boundary)
+        except Exception as exc:
+            return {"agent": agent, "exit": 2, "output": "", "error": str(exc), "run_id": None}
     auth_prelude = _auth_prelude(agent)
     agent_prelude = _agent_runtime_prelude(agent)
     wrapped = (

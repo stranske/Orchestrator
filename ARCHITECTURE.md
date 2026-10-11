@@ -193,6 +193,19 @@ worktree's git dir, plus the canonical clone's `objects/`, `refs/` and `logs/`
 in place. Offloads, read-only runs and the outer-seat bypass get nothing, and the clone's `config`
 and `hooks/` are never granted. No stage, component or surface moved, so the diagram is unchanged.
 
+**An offload's caller can bound where it writes, whichever agent runs it (2026-10-11).**
+`dispatcher.offload(write_boundary={"protect": [...], "allow": [...]})` lets the run write nowhere
+under `protect` except its own cwd and the `allow` roots, and never in a `.git` beneath them. codex
+is held by its own sandbox, with one `--add-dir` per root. cursor, agy, vibe, aider and claude have
+no sandbox, so they run under a `sandbox-exec` profile (`adapters.seatbelt_write_profile`); cursor
+and agy also get the roots as `--add-dir`, because their file tools keep to a workspace. A boundary
+that cannot hold (an empty `protect`, a broad root, codex's seat bypass, no `sandbox-exec`, or a
+nested seatbelt) refuses the run with exit 2 (`adapters.write_boundary_unenforceable`). Without a
+boundary every argv is unchanged. The research program's driver is its first caller: from
+2026-09-06 to 10-04 its 232 workers (cursor 144, gemini 50, codex 36, vibe 2) all ran with the
+program's own code directory writable. No stage, component or surface moved, so the diagram is
+unchanged.
+
 **No agent run is given a workspace that is or holds `/`, the home dir or the control plane
 (2026-10-05).** A run's workspace is where it may write. codex makes `--cd` a write entry of the
 run's own permission profile, so `writable_roots` cannot narrow it. agy's `--add-dir` is its write
