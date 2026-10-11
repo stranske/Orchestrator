@@ -207,8 +207,19 @@ isolation with a fresh scratch directory under `$ORCH_STATE_DIR/scratch-workspac
 (`adapters.agent_workspace`). The run still starts. The relocation goes to stderr, the dispatch log,
 the agent's prompt, the result's `workspace_relocated` and the ledger's `workspace_relocated_from`.
 `plan_dispatch` skips a refused provisioned worktree like a provision failure, because a committing
-run cannot work in scratch. `build_command` refuses to emit one for a writable codex run or for agy,
-whoever calls it. (No stage, component or surface moved; the diagram is unchanged.)
+run cannot work in scratch. `build_command` refuses to emit one for a writable codex run or for agy.
+That backstop covers only the argv it builds, and two spawners never call it. The A/B evaluators
+(`exp_abcd._eval_command`, shared by `evaluate` and `ux_review`) are started by `Popen` with no cwd,
+so in the tick they ran in `/`; agy's `--add-dir` named the module directory, which in the mirror
+is the dispatcher's own code. Each evaluator now `cd`s into a scratch workspace of its own, and agy
+is granted only that. Experiment arms (`exp_abcd._spawn`) and `adapters.dispatch` refuse a broad
+workspace for every agent, because cursor, claude and vibe have no argv workspace to check, and a
+synthesis resume with a blank worktree is blocked rather than run in the caller's cwd. The
+predicate also names every home's default state dir and mirror (a sandbox may move `$HOME`) and,
+on macOS, each anchor's `/System/Volumes/Data` firmlink path. Empty scratch directories older than
+a day are pruned (`os.rmdir`, so anything an agent wrote is kept). The in-process tests replace
+every spawn and store write with a failure, because a regressed guard reached the real ones once.
+(No stage, component or surface moved; the diagram is unchanged.)
 
 The dispatcher's agent prelude moves `XDG_CONFIG_HOME` into each agent's runtime, and gh honours
 it. Until 2026-10-04 an agent whose dispatcher exported neither `GH_CONFIG_DIR` nor `GH_TOKEN` (a
