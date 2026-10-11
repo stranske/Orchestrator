@@ -636,6 +636,148 @@ def gh_config_dir() -> Path:
     return config.absolute()
 
 
+# THE gh WRITE GUARD (owner decision 2026-10-05). With the pin above, an unsandboxed agent's
+# `gh auth logout` deletes the owner's keychain token and empties the real hosts file, and
+# `gh config set` rewrites the owner's config, for the whole machine. These are refused inside a
+# dispatched agent; every other gh command runs unchanged. A wrapper first on PATH alone is not
+# enough: measured 2026-10-05, a login shell (codex runs every command with `zsh -lc`, cursor's
+# shell re-applies the login PATH) puts /opt/homebrew/bin back in front. So the same check is also
+# a `gh` shell FUNCTION, which outranks PATH: bash reads it from BASH_ENV, zsh from a proxy
+# ZDOTDIR whose files first run the owner's real dotfiles. Bypassable on purpose by gh's full path.
+AGENT_GH_GUARD_DISABLED_ENV = "ORCH_AGENT_GH_GUARD_DISABLED"
+GH_GUARD_REFUSED = (
+    "auth logout",
+    "auth login",
+    "auth switch",
+    "auth refresh",
+    "config set",
+    "alias set",
+    "alias delete",
+    "alias import",
+)
+GH_GUARD_EXIT = 77  # EX_NOPERM
+_ZSH_DOTFILES = (".zshenv", ".zprofile", ".zshrc", ".zlogin")
+
+
+def agent_gh_guard_disabled() -> bool:
+    return os.environ.get(AGENT_GH_GUARD_DISABLED_ENV, "").strip() == "1"
+
+
+def _gh_guard_check(leave: str) -> str:
+    """The refusal, as POSIX shell that sh, bash and zsh all read. `leave` is exit or return.
+
+    It scans EVERY argument rather than `$1 $2`: options may come first (`gh -R o/r auth logout`)
+    or between the group and its subcommand (`gh auth --hostname h logout`). A decided subcommand
+    anywhere after its group refuses; a false refusal is cheap, a missed one is not.
+    """
+    groups = sorted({pair.split()[0] for pair in GH_GUARD_REFUSED})
+    pattern = "|".join(f'"{pair}"' for pair in GH_GUARD_REFUSED)
+    return (
+        "__orch_gh_group=; __orch_gh_hit=\n"
+        'for __orch_gh_arg in "$@"; do\n'
+        f'  case "$__orch_gh_group $__orch_gh_arg" in {pattern}) '
+        '__orch_gh_hit="$__orch_gh_group $__orch_gh_arg"; break ;; esac\n'
+        f'  case "$__orch_gh_arg" in {"|".join(groups)}) '
+        '[ -n "$__orch_gh_group" ] || __orch_gh_group="$__orch_gh_arg" ;; esac\n'
+        "done\n"
+        'if [ -n "$__orch_gh_hit" ]; then\n'
+        "  printf '%s\\n' \"orchestrator gh guard: 'gh $__orch_gh_hit' is refused inside a "
+        "dispatched agent: it would change the owner's gh login or config for the whole machine.\" >&2\n"
+        f"  unset __orch_gh_group __orch_gh_hit __orch_gh_arg; {leave} {GH_GUARD_EXIT}\n"
+        "fi\n"
+        "unset __orch_gh_group __orch_gh_hit __orch_gh_arg\n"
+    )
+
+
+def _gh_guard_function() -> str:
+    return "gh() {\n" + _gh_guard_check("return") + 'command gh "$@"\n}\n'
+
+
+def _gh_guard_files(guard: Path) -> dict[Path, str]:
+    wrapper = (
+        "#!/bin/sh\n# Written by dispatcher.py: the gh write guard. Do not edit.\n"
+        + _gh_guard_check("exit")
+        + "set -f\n"
+        + 'self=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)\n'
+        + "IFS=:\n"
+        + "for d in $PATH; do\n"
+        + '  [ -n "$d" ] || continue\n'
+        + '  r=$(CDPATH= cd -- "$d" 2>/dev/null && pwd -P) || continue\n'
+        + '  [ "$r" = "$self" ] && continue\n'
+        + '  if [ -x "$d/gh" ] && [ ! -d "$d/gh" ]; then exec "$d/gh" "$@"; fi\n'
+        + "done\n"
+        + "echo 'orchestrator gh guard: no gh found on PATH' >&2\n"
+        + "exit 127\n"
+    )
+    bashenv = (
+        "# Written by dispatcher.py: the gh write guard for bash. Do not edit.\n"
+        'if [ -n "${ORCH_GH_GUARD_PREV_BASH_ENV:-}" ] '
+        '&& [ "$ORCH_GH_GUARD_PREV_BASH_ENV" != "$BASH_ENV" ]; then\n'
+        '  . "$ORCH_GH_GUARD_PREV_BASH_ENV"\nfi\n' + _gh_guard_function()
+    )
+    files = {guard / "bin" / "gh": wrapper, guard / "bashenv.sh": bashenv}
+    for name in _ZSH_DOTFILES:
+        # Run the owner's own file first, then (re)define the function so it wins.
+        files[guard / "zdotdir" / name] = (
+            "# Written by dispatcher.py: the gh write guard for zsh. Do not edit.\n"
+            '__orch_gh_real="${ORCH_GH_GUARD_REAL_ZDOTDIR:-$HOME}"\n'
+            f'if [ "$__orch_gh_real" != "$ZDOTDIR" ] && [ -f "$__orch_gh_real/{name}" ]; then\n'
+            f'  source "$__orch_gh_real/{name}"\nfi\n' + _gh_guard_function()
+        )
+    return files
+
+
+def _ensure_gh_guard() -> Path:
+    """Write the guard files under the agent runtime; replace atomically, only when they differ."""
+    guard = AGENT_RUNTIME_DIR / "gh-guard"
+    for path, text in _gh_guard_files(guard).items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if path.read_text() == text:
+                continue
+        except OSError:
+            pass
+        # One temp file per writer: concurrent offloads in one process share a pid.
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as fh:
+                fh.write(text)
+            os.chmod(tmp, 0o755 if path.name == "gh" else 0o644)
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    return guard
+
+
+def _gh_guard_exports() -> list[str]:
+    guard = _ensure_gh_guard()
+    proxy, bashenv = str(guard / "zdotdir"), str(guard / "bashenv.sh")
+    # A dispatcher run INSIDE a guarded agent already sees the proxy and our BASH_ENV; carry the
+    # owner's originals through instead, or the proxy would source itself.
+    zdotdir = os.environ.get("ZDOTDIR")
+    if zdotdir == proxy:
+        zdotdir = os.environ.get("ORCH_GH_GUARD_REAL_ZDOTDIR")
+    prev = os.environ.get("BASH_ENV")
+    if prev == bashenv:
+        prev = os.environ.get("ORCH_GH_GUARD_PREV_BASH_ENV")
+    exports = [
+        f"export ORCH_GH_GUARD_REAL_ZDOTDIR={shlex.quote(zdotdir or str(REAL_HOME))}",
+        f"export ZDOTDIR={shlex.quote(proxy)}",
+        (
+            f"export ORCH_GH_GUARD_PREV_BASH_ENV={shlex.quote(prev)}"
+            if prev
+            else "unset ORCH_GH_GUARD_PREV_BASH_ENV"
+        ),
+        f"export BASH_ENV={shlex.quote(bashenv)}",
+        f'export PATH={shlex.quote(str(guard / "bin"))}:"$PATH"',
+    ]
+    return exports
+
+
 def _agent_runtime_prelude(agent: str) -> str:
     """Shell exports for the child agent only; run this inside a subshell."""
     base = _ensure_agent_runtime(agent)
@@ -660,6 +802,8 @@ def _agent_runtime_prelude(agent: str) -> str:
     # keyring entry too, exactly as they would from the dispatcher's shell.
     if not agent_gh_config_disabled():
         exports.append(f"export GH_CONFIG_DIR={shlex.quote(str(gh_config_dir()))}")
+    if not agent_gh_guard_disabled():
+        exports.extend(_gh_guard_exports())
     if agent == "cursor":
         # Cursor's login-keychain probe fails in restricted Codex subprocesses. Keep HOME real for
         # shell semantics, source CURSOR_API_KEY from the real auth file, and force Cursor to keep
