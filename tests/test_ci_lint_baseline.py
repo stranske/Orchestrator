@@ -65,3 +65,50 @@ def test_scratch_copy_reports_archive_failure_and_cleans_up(tmp_path, monkeypatc
         baseline._scratch_copy()
 
     assert not list(tmp_path.glob("ci-lint-baseline-*"))
+
+
+def test_scratch_copy_preserves_extraction_error_and_cleans_up(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "tracked.txt").write_text("tracked\n")
+    _git(repo, "add", "tracked.txt")
+    _git(repo, "commit", "-qm", "archive succeeds")
+    monkeypatch.setattr(baseline, "REPO", repo)
+    monkeypatch.setattr(baseline.tempfile, "tempdir", str(tmp_path))
+    original_run = subprocess.run
+    failure = subprocess.CalledProcessError(2, ["tar", "-x"])
+    archive_succeeded = False
+
+    def run(command, **kwargs):
+        nonlocal archive_succeeded
+        if command[0] == "tar":
+            assert archive_succeeded
+            assert kwargs["input"]
+            assert kwargs["check"] is True
+            raise failure
+        result = original_run(command, **kwargs)
+        assert command == ["git", "archive", "HEAD"]
+        archive_succeeded = result.returncode == 0
+        return result
+
+    monkeypatch.setattr(baseline.subprocess, "run", run)
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        baseline._scratch_copy()
+    assert caught.value is failure
+    assert archive_succeeded
+    assert not list(tmp_path.glob("ci-lint-baseline-*"))
+
+
+def test_mypy_success_notes_are_not_blocking_findings(monkeypatch):
+    output = (
+        "src/example.py:1: note: Consider checking untyped bodies [annotation-unchecked]\n"
+        "Success: no issues found in 121 source files\n"
+    )
+    monkeypatch.setattr(
+        baseline, "_run", lambda command: subprocess.CompletedProcess(command, 0, output)
+    )
+    monkeypatch.setattr(baseline, "_measure_behind_exempt_list", lambda target: (0, 0))
+    result = baseline.measure_mypy()
+    assert result["blocking"] == 0
+    assert result["by_code"] == {}

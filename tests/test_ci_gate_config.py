@@ -292,25 +292,42 @@ def test_baseline_doc_records_every_disabled_check_with_both_quantities():
         assert field in doc.lower(), f"{BASELINE_DOC.name} never states `{field}`"
 
 
+def _has_measured_baseline(doc, pins):
+    """Match one complete toolchain, never a mixture of measurements."""
+    required = {"ruff", "black", "mypy", "pytest"}
+    for marker in re.findall(r"<!--\s*measured-with:\s*(.*?)\s*-->", doc):
+        measured = dict(pair.split("=", 1) for pair in marker.split())
+        if required <= measured.keys() and all(
+            pins.get(f"{tool.upper().replace('-', '_')}_VERSION") == version
+            for tool, version in measured.items()
+        ):
+            return True
+    return False
+
+
 def test_baseline_was_measured_with_the_pinned_versions():
     """The counts are version-specific, so a pin bump without a re-measure must go red."""
     require_checkout()
     doc = BASELINE_DOC.read_text(encoding="utf-8")
-    match = re.search(r"<!--\s*measured-with:\s*(.*?)\s*-->", doc)
-    assert match, (
-        f"{BASELINE_DOC.name} has no `<!-- measured-with: ... -->` line. Without it there is no way "
-        "to tell whether its numbers describe the toolchain CI actually installs."
-    )
-    measured = dict(pair.split("=", 1) for pair in match.group(1).split())
     pins = read_pins()
-    for tool, version in measured.items():
-        pin_key = f"{tool.upper().replace('-', '_')}_VERSION"
-        assert pin_key in pins, f"{BASELINE_DOC.name} cites {tool}, which {PINS.name} does not pin"
-        assert pins[pin_key] == version, (
-            f"{BASELINE_DOC.name} recorded its counts with {tool} {version}, but {PINS.name} now "
-            f"pins {pins[pin_key]}. Re-run `python3 scripts/ci_lint_baseline.py` and update both, "
-            "or the baseline describes a toolchain nobody runs."
-        )
+    assert _has_measured_baseline(doc, pins), (
+        f"{BASELINE_DOC.name} has no complete measured toolchain matching {PINS.name}: {pins}. "
+        "Re-run scripts/ci_lint_baseline.py with these exact pins and retain its measurements."
+    )
+
+
+@pytest.mark.parametrize("defect", ["unknown-version", "hybrid", "incomplete"])
+def test_baseline_requires_one_complete_matching_toolchain(defect):
+    pins = {f"{tool.upper()}_VERSION": "2.0.0" for tool in ("ruff", "black", "mypy", "pytest")}
+    markers = {
+        "unknown-version": "ruff=1.0.0 black=2.0.0 mypy=2.0.0 pytest=2.0.0",
+        "hybrid": "ruff=1.0.0 black=2.0.0 mypy=2.0.0 pytest=2.0.0 -->\n<!-- measured-with: ruff=2.0.0 black=1.0.0 mypy=2.0.0 pytest=2.0.0",
+        "incomplete": "ruff=2.0.0",
+    }
+    assert not _has_measured_baseline(f"<!-- measured-with: {markers[defect]} -->", pins)
+    assert _has_measured_baseline(
+        "<!-- measured-with: ruff=2.0.0 black=2.0.0 mypy=2.0.0 pytest=2.0.0 -->", pins
+    )
 
 
 def test_mypy_config_silences_nothing_by_error_code():

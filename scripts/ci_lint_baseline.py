@@ -237,10 +237,10 @@ def measure_mypy() -> dict:
     cmd = ["mypy", "--config-file", "pyproject.toml", "--exclude", GATE_EXCLUDE_RUFF, target]
     out = _run(cmd).stdout
     codes: dict[str, int] = {}
-    for match in re.finditer(r"\[([a-z][a-z-]+)\]\s*$", out, re.M):
+    for match in re.finditer(r"^.*?:\s*error:.*\[([a-z][a-z-]+)\]\s*$", out, re.M):
         codes[match.group(1)] = codes.get(match.group(1), 0) + 1
     match = re.search(r"Found (\d+) errors? in (\d+) files?", out)
-    blocking = int(match.group(1)) if match else len(codes)
+    blocking = int(match.group(1)) if match else len(re.findall(r"^.*?:\s*error:", out, re.M))
     # BOTH NUMBERS, or this report stops being able to see its own subject. Once the per-module
     # exempt list landed, the gate-facing count became 0 -- true, and useless for tracking the
     # drain, because the findings behind the list vanished from the only report that counts them.
