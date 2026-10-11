@@ -1,6 +1,6 @@
 # Gate python-ci baseline — what is checked, what is deferred, and what would clear it
 
-<!-- measured-with: ruff=0.16.4 black=26.5.1 mypy=2.3.1 pytest=9.1.1 -->
+<!-- measured-with: ruff=0.16.10 black=26.10.0 mypy=2.4.0 pytest=9.1.1 -->
 
 **Do not trust the numbers below because they are written down.** Regenerate them:
 
@@ -50,7 +50,18 @@ A second blocker was hidden behind the first, and only became visible once the p
 
 ## Current state
 
-Measured 2026-08-23 with the pinned versions, after the drain described below.
+**Re-measured 2026-10-11** at the pins the dev-tool sync wrote that day (ruff 0.16.10, black
+26.10.0, mypy 2.4.0, pytest 9.1.1), with the Gate's commands as `scripts/ci_lint_baseline.py` runs
+them today: `lint-ruff` **0 findings**, `lint-format` **0 files**, `typecheck-mypy` **0 errors**
+(`mypy --config-file pyproject.toml --exclude .workflows-lib src`, 122 files, the per-module exempt
+list empty, so nothing sits behind it), `coverage` **0 startup errors**. The script could not run
+that day until two of its own defects were fixed: it decoded the `git archive` tar stream as UTF-8,
+which raised once the tree tracked gzip evidence (`docs/evidence/`, 2026-10-07), and with no
+`Found N errors` line it counted the distinct codes of every bracketed line, so mypy's clean run read
+`1 errors` from six `annotation-unchecked` notes.
+
+The table below is the 2026-08-23 record, measured with the pins of that day after the drain
+described below; it is history, and the script is the authority.
 
 | check | Gate command | blocking | drainable | state |
 | --- | --- | --- | --- | --- |
@@ -179,10 +190,14 @@ outside the repo that hosted it.
 
 ## The pins and the numbers move together
 
-`.github/workflows/autofix-versions.env` is a local copy of a fleet constant, and **nothing updates
-it automatically**: Renovate's fleet preset excludes dev tools (they are owned by that file), and
-`maint-52-sync-dev-versions.yml` propagates settled pins into a consumer `pyproject.toml`, which this
-repo does not have. Re-copy from `stranske/Workflows` when the fleet bumps.
+`.github/workflows/autofix-versions.env` is a local copy of a fleet constant. Until 2026-10-11
+nothing updated it automatically: Renovate's fleet preset excludes dev tools (they are owned by that
+file), and `maint-52-sync-dev-versions.yml` propagated settled pins only into a consumer
+`pyproject.toml`. That day a sync wrote the pins straight to `main` (`e57bc6b`, github-actions[bot],
+"deps: sync dev tool versions from Workflows"; then `af4b6d6`) with no re-measure, and `main`'s
+`verify.py` went red on the coupling below until this file was re-measured. A pin sync is now
+automatic and the re-measure is not, so every fleet bump reddens `main` until someone runs the
+script and updates the `measured-with` line.
 
 The safeguard is a coupling rather than a reminder: the `measured-with` comment at the top of this
 file must equal the pins, and `test_ci_gate_config.py` fails if they diverge. Bumping a pin without

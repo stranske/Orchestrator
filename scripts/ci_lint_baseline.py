@@ -108,16 +108,19 @@ def _run(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess
 
 
 def _scratch_copy() -> tempfile.TemporaryDirectory:
-    """A throwaway copy of the tracked tree, so `--fix` can be measured without touching it."""
+    """A throwaway copy of the tracked tree, so `--fix` can be measured without touching it.
+
+    The archive travels as BYTES. A tar stream is not text, and once the tree tracked gzip evidence
+    (`docs/evidence/`, 2026-10-07) decoding it as UTF-8 raised before ruff ran, so the re-measure
+    that `test_baseline_was_measured_with_the_pinned_versions` demands after every pin bump could
+    not run at all: the 2026-10-11 dev-tool sync turned main red with no way to clear it."""
     tmp = tempfile.TemporaryDirectory(prefix="ci-lint-baseline-")
-    archive = _run(["git", "archive", "HEAD"])
+    archive = subprocess.run(["git", "archive", "HEAD"], capture_output=True, cwd=REPO)
     if archive.returncode != 0:
-        raise SystemExit(f"git archive HEAD failed: {archive.stderr.strip()}")
-    subprocess.run(
-        ["tar", "-x", "-C", tmp.name],
-        input=archive.stdout.encode("utf-8", "surrogateescape"),
-        check=True,
-    )
+        raise SystemExit(
+            f"git archive HEAD failed: {archive.stderr.decode('utf-8', 'replace').strip()}"
+        )
+    subprocess.run(["tar", "-x", "-C", tmp.name], input=archive.stdout, check=True)
     return tmp
 
 
@@ -220,6 +223,26 @@ def _measure_behind_exempt_list(target: str) -> tuple[int, int]:
     return (int(match.group(1)) if match else 0), exempt
 
 
+# Every mypy line ends with its code in brackets, whatever its severity, and a clean run still prints
+# `note:` lines (`annotation-unchecked`). Only an `error:` line is a finding.
+MYPY_ERROR_LINE = re.compile(r": error: .*\[([a-z][a-z-]+)\]\s*$", re.M)
+
+
+def mypy_counts(out: str) -> tuple[int, dict[str, int], int | None]:
+    """(errors, errors by code, files) from mypy's output. The summary line decides when mypy
+    printed one; a run with none (a clean `Success: no issues found ...`) counts its error lines.
+    Until 2026-10-11 that branch counted the DISTINCT codes of every bracketed line, notes included,
+    so mypy 2.4.0's clean run over `src` read "1 errors <-- DEADLOCK": six `annotation-unchecked`
+    notes, one code."""
+    codes: dict[str, int] = {}
+    for match in MYPY_ERROR_LINE.finditer(out):
+        codes[match.group(1)] = codes.get(match.group(1), 0) + 1
+    found = re.search(r"Found (\d+) errors? in (\d+) files?", out)
+    if found:
+        return int(found.group(1)), codes, int(found.group(2))
+    return sum(codes.values()), codes, None
+
+
 def measure_mypy() -> dict:
     """`mypy --config-file pyproject.toml --exclude .workflows-lib src` -- the Gate's own command.
 
@@ -233,11 +256,7 @@ def measure_mypy() -> dict:
     target = "src" if (REPO / "src").is_dir() else "."
     cmd = ["mypy", "--config-file", "pyproject.toml", "--exclude", GATE_EXCLUDE_RUFF, target]
     out = _run(cmd).stdout
-    codes: dict[str, int] = {}
-    for match in re.finditer(r"\[([a-z][a-z-]+)\]\s*$", out, re.M):
-        codes[match.group(1)] = codes.get(match.group(1), 0) + 1
-    match = re.search(r"Found (\d+) errors? in (\d+) files?", out)
-    blocking = int(match.group(1)) if match else len(codes)
+    blocking, codes, files = mypy_counts(out)
     # BOTH NUMBERS, or this report stops being able to see its own subject. Once the per-module
     # exempt list landed, the gate-facing count became 0 -- true, and useless for tracking the
     # drain, because the findings behind the list vanished from the only report that counts them.
@@ -256,7 +275,7 @@ def measure_mypy() -> dict:
         # how hard the work is.
         "drainable": 0,
         "drain": DRAINS["typecheck-mypy"],
-        "files": int(match.group(2)) if match else None,
+        "files": files,
         "setup_abort": setup_abort,
         "by_code": dict(sorted(codes.items(), key=lambda kv: (-kv[1], kv[0]))),
     }
