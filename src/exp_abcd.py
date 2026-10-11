@@ -52,6 +52,7 @@ import research_usage_guard
 import spec_provenance
 import synthesis_promotion
 import watch
+import worktree_git
 
 ORCH = Path(__file__).resolve().parent
 EXP_DIR = Path(os.environ.get("ORCH_EXP_DIR", ORCH / "experiments"))
@@ -1173,20 +1174,15 @@ def collect(repo: str, exp_id: str) -> dict:
                     "source": "branch",
                 }
                 continue
+        # The arm could write its worktree git dir (#452): pin the repository locations.
         merge_base = (
-            provision._run(
-                ["git", "-C", str(wt), "merge-base", "HEAD", base_ref], check=False
-            ).stdout.strip()
+            worktree_git.run(wt, ["merge-base", "HEAD", base_ref], repo=repo).stdout.strip()
             or base_ref
         )
-        committed = provision._run(
-            ["git", "-C", str(wt), "--no-pager", "diff", merge_base, "HEAD"],
-            check=False,
+        committed = worktree_git.run(
+            wt, ["--no-pager", "diff", merge_base, "HEAD"], repo=repo
         ).stdout
-        uncommitted = provision._run(
-            ["git", "-C", str(wt), "--no-pager", "diff", "HEAD"],
-            check=False,
-        ).stdout
+        uncommitted = worktree_git.run(wt, ["--no-pager", "diff", "HEAD"], repo=repo).stdout
         # Capture the candidate's real delta without letting stale origin/<base>
         # drift expand the patch to the whole repository.
         d = _join_diffs(committed, uncommitted)
@@ -1231,7 +1227,7 @@ def _gemini_scratch_diff(log: Path, base: str) -> str:
         if not (path / ".git").exists():
             continue
         d = provision._run(
-            ["git", "-C", str(path), "--no-pager", "diff", f"origin/{base}", "HEAD"],
+            worktree_git.hardened_argv(path, ["--no-pager", "diff", f"origin/{base}", "HEAD"]),
             check=False,
         ).stdout
         if d.strip():

@@ -193,6 +193,32 @@ worktree's git dir, plus the canonical clone's `objects/`, `refs/` and `logs/`
 in place. Offloads, read-only runs and the outer-seat bypass get nothing, and the clone's `config`
 and `hooks/` are never granted. No stage, component or surface moved, so the diagram is unchanged.
 
+That grant leaves one residue: the private git dir's `commondir` and `gitdir` pointer files are
+writable by the run, and the tool later runs git in that worktree itself, outside any sandbox
+(the push record, the redirect sweep's `watch`, `exp_abcd.collect`, `provision`'s reuse check and
+`dispatch`'s status). Those reads go through `worktree_git.run` (2026-10-11). For a worktree under
+`provision.WORKTREES_DIR` it checks the `.git` file, `gitdir`, `commondir` and the absence of
+`config.worktree` against the clone `provision` derives (`canonical_path(repo)`, or the clone the
+worktree's name belongs to). A mismatch refuses without starting git and names the file and the
+clear path, which is removing the worktree and re-provisioning it. A match runs git with
+`GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE` pinned to those known paths and with
+`core.fsmonitor` and `core.hooksPath` disabled; other paths (offload cwds, `local_verify`) get the
+two `-c` flags only. `ORCH_WORKTREE_GIT_GUARD_DISABLED=1` restores the old commands. It is a rail
+hardening inside existing stages, so the diagram is unchanged.
+
+**An offload's caller can bound where it writes, whichever agent runs it (2026-10-11).**
+`dispatcher.offload(write_boundary={"protect": [...], "allow": [...]})` lets the run write nowhere
+under `protect` except its own cwd and the `allow` roots, and never in a `.git` beneath them. codex
+is held by its own sandbox, with one `--add-dir` per root. cursor, agy, vibe, aider and claude have
+no sandbox, so they run under a `sandbox-exec` profile (`adapters.seatbelt_write_profile`); cursor
+and agy also get the roots as `--add-dir`, because their file tools keep to a workspace. A boundary
+that cannot hold (an empty `protect`, a broad root, codex's seat bypass, no `sandbox-exec`, or a
+nested seatbelt) refuses the run with exit 2 (`adapters.write_boundary_unenforceable`). Without a
+boundary every argv is unchanged. The research program's driver is its first caller: from
+2026-09-06 to 10-04 its 232 workers (cursor 144, gemini 50, codex 36, vibe 2) all ran with the
+program's own code directory writable. No stage, component or surface moved, so the diagram is
+unchanged.
+
 **No agent run is given a workspace that is or holds `/`, the home dir or the control plane
 (2026-10-05).** A run's workspace is where it may write. codex makes `--cd` a write entry of the
 run's own permission profile, so `writable_roots` cannot narrow it. agy's `--add-dir` is its write
@@ -207,8 +233,19 @@ isolation with a fresh scratch directory under `$ORCH_STATE_DIR/scratch-workspac
 (`adapters.agent_workspace`). The run still starts. The relocation goes to stderr, the dispatch log,
 the agent's prompt, the result's `workspace_relocated` and the ledger's `workspace_relocated_from`.
 `plan_dispatch` skips a refused provisioned worktree like a provision failure, because a committing
-run cannot work in scratch. `build_command` refuses to emit one for a writable codex run or for agy,
-whoever calls it. (No stage, component or surface moved; the diagram is unchanged.)
+run cannot work in scratch. `build_command` refuses to emit one for a writable codex run or for agy.
+That backstop covers only the argv it builds, and two spawners never call it. The A/B evaluators
+(`exp_abcd._eval_command`, shared by `evaluate` and `ux_review`) are started by `Popen` with no cwd,
+so in the tick they ran in `/`; agy's `--add-dir` named the module directory, which in the mirror
+is the dispatcher's own code. Each evaluator now `cd`s into a scratch workspace of its own, and agy
+is granted only that. Experiment arms (`exp_abcd._spawn`) and `adapters.dispatch` refuse a broad
+workspace for every agent, because cursor, claude and vibe have no argv workspace to check, and a
+synthesis resume with a blank worktree is blocked rather than run in the caller's cwd. The
+predicate also names every home's default state dir and mirror (a sandbox may move `$HOME`) and,
+on macOS, each anchor's `/System/Volumes/Data` firmlink path. Empty scratch directories older than
+a day are pruned (`os.rmdir`, so anything an agent wrote is kept). The in-process tests replace
+every spawn and store write with a failure, because a regressed guard reached the real ones once.
+(No stage, component or surface moved; the diagram is unchanged.)
 
 The dispatcher's agent prelude moves `XDG_CONFIG_HOME` into each agent's runtime, and gh honours
 it. Until 2026-10-04 an agent whose dispatcher exported neither `GH_CONFIG_DIR` nor `GH_TOKEN` (a
@@ -448,6 +485,39 @@ can record `--deliverable owner/repo#N`; the positive verdict captures the capab
 a versioned influence edge only when the run has a completion event. It does not infer attribution
 from prose or from a capability merely being offered. `capabilities.py usage` reports all-time
 `fleet_edges`, which counts edges rather than independent durable successes.
+
+**A capability inherited from a role takes the role edge's arm (2026-10-11).** A role run's
+capability attribution moves onto the run its role edge points at. `record_run` does this when a
+dispatch carries an accepted role, and `capability_outcome_bridge.backfill_role_capability_edges`
+repairs the history daily. Until 2026-10-11 the bridge joined ANY role edge and wrote an ACCEPTED
+capability edge, so a run that went ahead against its role credited the role's capability with its
+outcome. On the owner's Brain that was 334 of the 361 edges the bridge had derived:
+- 329 came from the rejected edges the tick wrote for refused delegations, which #491's migration
+  deleted. No run acted on that advice.
+- 5 came from the 3 rejected role edges that remain.
+
+The 329 were 104 of role-triage's 128 accepted-arm terminal outcomes in `capability_effectiveness`,
+and 130 of offload's 206.
+
+A rejected role edge onto a RECORDED run now derives a COUNTERFACTUAL capability edge. That is the
+control arm `capability_effectiveness` compares the accepted arm against, and until now no
+capability had one. The edge carries exactly the observational grade its role edge was given
+(`outcomes.backfill_triage_disagreements`), and nothing back-propagates over it. Both inheritance
+sites (`feedback._capability_attribution_of` and the bridge) inherit accepted attribution only, and
+the bridge's outcome heartbeats (`collect`) read accepted edges only.
+
+A once-only migration in `feedback.py` (`influence_edges.rejected-role-capability-edges-2026-10-11`)
+deletes the 334 rows and keeps them in its marker. The bridge's next pass derives the 5 from real
+delegations as counterfactual edges. `feedback.py restore-rejected-role-capability-edges` puts the
+rows back and removes those replacements. `completion_event_health` orphans fall from 220 to 125.
+The rest are the `offload` association edges on advisory role runs kept on 2026-08-21, so
+`dry_seam_audit` still fails on them.
+
+The control arm starts at 2 subjects each for role-triage and offload, short of
+`capability_effectiveness.MIN_SAMPLE` (5). It grows only when a delegation goes ahead against
+triage, and the dispatch lane has been shadow since 2026-09-03. No stage, component or surface
+moved: the counterfactual arm was already a column of the edge table and the comparison
+`capability_effectiveness` makes. The loop diagram is unchanged.
 
 The one place two LLMs touch the same task is an `agent:auto` switch, where the keepalive delegation
 policy replaces a stalled agent. `agent_switches.py` (rail, daily) records each such pair in the Brain

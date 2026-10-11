@@ -51,6 +51,7 @@ import time
 from pathlib import Path
 
 import feedback
+import worktree_git
 
 # Kill switch. Set to 1 and completion records nothing, so ingest resolves every run as before.
 DISABLE_ENV = "ORCH_PUSH_RECORD_DISABLED"
@@ -81,12 +82,8 @@ def created_here(subject: str) -> bool:
 
 
 def _git(workspace: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", "-C", str(workspace), *args],
-        capture_output=True,
-        text=True,
-        timeout=GIT_TIMEOUT_S,
-    )
+    # The run's worktree git dir was writable by the agent (#452): pin the repository locations.
+    return worktree_git.run(workspace, list(args), timeout=GIT_TIMEOUT_S)
 
 
 def _reflog(workspace: Path, ref: str) -> list[tuple[int, str, str]] | None:

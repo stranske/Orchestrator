@@ -52,6 +52,7 @@ from pathlib import Path
 from shutil import copy2, copytree
 
 import feedback
+import worktree_git
 
 TAIL_CHARS = 4000
 
@@ -537,7 +538,9 @@ def break_transcript(result: dict, *, worktree_label: str = "") -> str:
 
 
 def _git(worktree: Path, args: list[str]) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(["git", "-C", str(worktree), *args], capture_output=True, check=False)
+    return subprocess.run(
+        worktree_git.hardened_argv(worktree, args), capture_output=True, check=False
+    )
 
 
 def _changed_paths(worktree: Path, base_ref: str) -> list[str]:
@@ -546,7 +549,7 @@ def _changed_paths(worktree: Path, base_ref: str) -> list[str]:
     if diff.returncode == 0:
         paths.update(p.decode().strip() for p in diff.stdout.splitlines() if p.strip())
     status = subprocess.run(
-        ["git", "-C", str(worktree), "status", "--short", "--untracked-files=all"],
+        worktree_git.hardened_argv(worktree, ["status", "--short", "--untracked-files=all"]),
         capture_output=True,
         text=True,
         check=False,
