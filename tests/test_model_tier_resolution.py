@@ -270,7 +270,7 @@ def test_tiers_are_distinct_and_ordered_cheap_to_full():
         assert len(set(picks)) == 3, (agent, picks)
 
 
-def test_build_command_honours_every_tier(tmp_path):
+def test_build_command_honours_every_tier(tmp_path, monkeypatch):
     """The pin must actually reach argv — a tier map nothing dispatches is dead code.
 
     Expectations are stated post-ceiling, because that is what really dispatches: claude is
@@ -278,10 +278,11 @@ def test_build_command_honours_every_tier(tmp_path):
     The workspace is the test's own directory, not the shared `/tmp`: where the state dir lives
     under `/tmp` (CI's bare exec mirror), `/tmp` holds it and no agent may be granted it.
     """
+    monkeypatch.setenv("ORCH_MODEL_PROBE", "0")  # Literal-pin wiring, not a live rename probe.
     expected = {
         "codex": ("gpt-6-luna", "gpt-5.6-terra", "gpt-6.1-sol"),
         "claude": ("claude-haiku-4-5", "claude-sonnet-5-5", "claude-sonnet-5-5"),
-        "gemini": ("gemini-3.7-flash-low", "gemini-3.7-flash-high", "gemini-3.1-pro-high"),
+        "gemini": ("gemini-3.8-flash-low", "gemini-3.8-flash-high", "gemini-3.1-pro-high"),
     }
     for agent, models in expected.items():
         for tier, model in zip(adapters.MODEL_TIER_NAMES, models):
@@ -1049,3 +1050,21 @@ def test_aider_is_backup_only_and_vibe_is_a_real_lane():
     # table — remove the entries and `--agent aider` silently stops routing.
     explicit = router.select_agent("implement", cap, only={"aider"})
     assert explicit and explicit["agent"] == "aider", explicit
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_gemini_rename_preserves_advertised_effort(monkeypatch, effort):
+    """A renamed low-cost rung must not silently become high-effort work."""
+    monkeypatch.delenv("ORCH_GEMINI_MODEL_CHEAP", raising=False)
+    monkeypatch.setitem(adapters.MODEL_TIERS["gemini"], "cheap", f"gemini-3.7-flash-{effort}")
+    _fake_catalog(
+        monkeypatch,
+        [
+            "gemini-3.8-flash-high",
+            "gemini-3.8-flash-medium",
+            "gemini-3.8-flash-low",
+        ],
+    )
+    health = adapters.model_health("gemini", "cheap")
+    assert health["source"] == "auto_from_catalog"
+    assert health["model"] == f"gemini-3.8-flash-{effort}"

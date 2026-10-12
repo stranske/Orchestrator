@@ -1,0 +1,3 @@
+Command: /opt/anaconda3/bin/python3 -m pytest --collect-only -q -o addopts=
+Full collected-node log SHA256: 30b72ad7c8d37a9a29d1a4d089199f8780b34a87373a75d9138b0a7848a7aebd
+3190 tests collected in 4.82s

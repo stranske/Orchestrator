@@ -58,6 +58,8 @@ AGENT_RUNTIME = Path(os.environ.get("ORCH_AGENT_RUNTIME_DIR", LOCAL_RUNTIME / "a
 #            retirement notice and `agy models` now advertises the full 3.7 rung set
 #            (high/medium/low). Pro STAYS at 3.1 — `3.7 > 3.1` is a newer FLASH, not a better PRO
 #            (see the ladder-trap note in execution_profiles.py).
+#   2026-10-12: the installed catalog renamed Flash to 3.8; cheap/mid and their profiles
+#   move together. Pro3.1 remains the explicit full pin, whose live absence stays a red guard.
 #   vibe   — Mistral merged its coding line into ONE model (mistral-medium-3.5, 256k, replaced
 #            Devstral 2 as the Vibe default). No tiers to pin; the CLI default is correct.
 #   aider  — 'mistral/codestral-latest' is a floating alias that self-upgrades; pinning would be
@@ -75,8 +77,8 @@ MODEL_TIERS: dict[str, dict[str, str]] = {
     "codex": {"cheap": "gpt-6-luna", "mid": "gpt-5.6-terra", "full": "gpt-6.1-sol"},
     "claude": {"cheap": "claude-haiku-4-5", "mid": "claude-sonnet-5-5", "full": "claude-opus-5-5"},
     "gemini": {
-        "cheap": "gemini-3.7-flash-low",
-        "mid": "gemini-3.7-flash-high",
+        "cheap": "gemini-3.8-flash-low",
+        "mid": "gemini-3.8-flash-high",
         "full": "gemini-3.1-pro-high",
     },
     "cursor": {},
@@ -874,7 +876,15 @@ def _auto_resolve(agent: str, tier: str, pinned: str, advertised: list[str]) -> 
     if not candidates:
         return None
     same_family = [m for m in candidates if family and family in m]
-    return sorted(same_family or candidates, key=_rank_gemini_model)[0]
+    # A version rename must preserve the effort rung when the new family offers it.
+    # Ranking every replacement by "high first" silently upgraded cheap/low requests.
+    effort = next((e for e in ("low", "medium", "high") if pinned.endswith("-" + e)), None)
+
+    def replacement_rank(model: str) -> tuple:
+        rank = _rank_gemini_model(model)
+        return (*rank[:3], 0 if effort and model.endswith("-" + effort) else 1, *rank[3:])
+
+    return sorted(same_family or candidates, key=replacement_rank)[0]
 
 
 def resolve_model(agent: str, tier: str = "full") -> str | None:
@@ -2443,8 +2453,8 @@ def _selftest_inner(*, gaps: list[str] | None = None):
         # THE ask: cheap/mid ride Flash, only full pays for Pro. Flash is both newer (3.7 vs 3.1)
         # and far cheaper in compute units on this metered seat.
         for tier, expected in (
-            ("cheap", "gemini-3.7-flash-low"),
-            ("mid", "gemini-3.7-flash-high"),
+            ("cheap", "gemini-3.8-flash-low"),
+            ("mid", "gemini-3.8-flash-high"),
             ("full", "gemini-3.1-pro-high"),
         ):
             gt = build_command("gemini", "x", mode=tier, cwd=gemini_cwd)
@@ -2644,7 +2654,7 @@ def _selftest_inner(*, gaps: list[str] | None = None):
         flash = model_health("gemini", "cheap")
         assert flash["model"] == "gemini-4.0-flash-high", flash
         # A pinned model that IS advertised is used verbatim, with no auto-pick.
-        _ADVERTISED_MEMO["gemini"]["models"] = [DEFAULT_GEMINI_MODEL, "gemini-3.7-flash-low"]
+        _ADVERTISED_MEMO["gemini"]["models"] = [DEFAULT_GEMINI_MODEL, "gemini-3.8-flash-low"]
         assert gemini_model_health()["source"] == "pinned_default", gemini_model_health()
         assert gemini_model() == DEFAULT_GEMINI_MODEL
         # An operator override is honoured verbatim but reported UNRESOLVABLE when agy lacks it,

@@ -3961,9 +3961,9 @@ def _selftest() -> None:
         # fix is choosing per task, not deleting the expensive rung.
         gemini_ids = {p["profile_id"] for p in execution_profiles.profiles_for_agent("gemini")}
         assert "gemini-3.1-pro-high" in gemini_ids, gemini_ids
-        assert "gemini-3.7-flash-high" in gemini_ids, gemini_ids
+        assert "gemini-3.8-flash-high" in gemini_ids, gemini_ids
         # The cheap rung is registered too, so the ladder the router names is fully reachable.
-        assert "gemini-3.7-flash-low" in gemini_ids, gemini_ids
+        assert "gemini-3.8-flash-low" in gemini_ids, gemini_ids
 
         # AGY REPORTS IN ITS LOG, and the log must be PER RUN. agy's structured output carries only
         # conversation_id/cwd/usage; its log carries
@@ -3990,12 +3990,24 @@ def _selftest() -> None:
             )
             return Completed()
 
+        old_advertised_catalog = adapter_module.advertised_catalog
         try:
             adapter_module.build_command = fake_gemini_build_command
+            # This fixture reports a historical model, so its authority must be historical too.
+            # The host's current catalog correctly refuses an old label it no longer advertises.
+            adapter_module.advertised_catalog = lambda agent, **kwargs: (
+                {
+                    "models": ["gemini-3.6-flash-high"],
+                    "pairs": {"gemini 3.6 flash (high)": "gemini-3.6-flash-high"},
+                }
+                if agent == "gemini"
+                else old_advertised_catalog(agent, **kwargs)
+            )
             subprocess_module.run = fake_agy_run
             agy_off = offload("gemini", "Summarize.", cwd=str(nongit), timeout=1)
         finally:
             adapter_module.build_command = old_build_command
+            adapter_module.advertised_catalog = old_advertised_catalog
             subprocess_module.run = old_subprocess_run
         with feedback._conn() as c:
             agy_row = c.execute(

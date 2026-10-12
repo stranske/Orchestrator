@@ -1,0 +1,48 @@
+{
+  "cases": [
+    {
+      "name": "red",
+      "argv": [
+        "/opt/anaconda3/bin/python3",
+        "-m",
+        "pytest",
+        "tests/test_model_tier_resolution.py",
+        "-k",
+        "rename_preserves_advertised_effort",
+        "-q",
+        "-o",
+        "addopts=",
+        "--junitxml=/Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261012T2324Z/effort-proof/red.xml"
+      ],
+      "cwd": "/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch558-catalog-20261012T2324Z",
+      "exit": 1,
+      "production_sha256": "377aa42b5778505794f89aa95b77a2c5416419204ad81f4b53efb94998b5dcfb"
+    },
+    {
+      "name": "restored-green",
+      "argv": [
+        "/opt/anaconda3/bin/python3",
+        "-m",
+        "pytest",
+        "tests/test_model_tier_resolution.py",
+        "-k",
+        "rename_preserves_advertised_effort",
+        "-q",
+        "-o",
+        "addopts=",
+        "--junitxml=/Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261012T2324Z/effort-proof/restored-green.xml"
+      ],
+      "cwd": "/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch558-catalog-20261012T2324Z",
+      "exit": 0,
+      "production_sha256": "784daea3b9b070c0c26111b9d7dc056f8dd9f0e7f462b8e153ab5a97a9f389c0"
+    }
+  ],
+  "restoration_byte_identical": true,
+  "candidate_sha256": "784daea3b9b070c0c26111b9d7dc056f8dd9f0e7f462b8e153ab5a97a9f389c0",
+  "members": {
+    "red.log": "cb605a508267af211f00998b9e11952472daac9255b227329eeee3acb41efc41",
+    "restored-green.log": "8540a1e8d76c62d297c2a7bed8ac28e80f0f68e3ea8c31a48ab9544dee5c0962",
+    "restored-green.xml": "e3883676728e8f3e626d711a6305db51ef6ed473198017d040b96b14cfa7c9b9",
+    "red.xml": "be8fa53a1f9305c575503bfc12fb3600bf2a8aeda3a74af8beb955e9324b4a6e"
+  }
+}

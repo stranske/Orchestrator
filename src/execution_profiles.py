@@ -184,9 +184,11 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
         # cheap rung but profile selection and feedback bucketing could not reach it. That is the
         # SAME defect as the Pro-only regression described above, one rung further down -- a ladder
         # is only a choice if every rung it names is registered.
+        # 2026-10-12: installed Flash3.8 replaces3.7 at the same high/low rungs.
+        # Retain the Pro identity; missing live Pro availability remains observable.
         _profile(
-            "gemini-3.7-flash-high",
-            "gemini-3.7-flash-high",
+            "gemini-3.8-flash-high",
+            "gemini-3.8-flash-high",
             "high",
             agent="gemini",
             provider="google",
@@ -194,8 +196,8 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
             adapter_version="agy-cli-profile-v1",
         ),
         _profile(
-            "gemini-3.7-flash-low",
-            "gemini-3.7-flash-low",
+            "gemini-3.8-flash-low",
+            "gemini-3.8-flash-low",
             "low",
             agent="gemini",
             provider="google",
