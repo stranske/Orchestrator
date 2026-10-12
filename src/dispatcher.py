@@ -1689,6 +1689,36 @@ def _claim_offload_log(agent: str) -> tuple[str, Path]:
     )
 
 
+def _offload_subject(
+    subject_id: str | None, research_round: str | None
+) -> tuple[str | None, str | None]:
+    """(subject, source) for one offload run: its registered research round's subject, else the
+    caller's `subject_id`, else (None, None).
+
+    The round wins because `feedback`'s completion-identity path already keys a round-bound run by
+    its round's subject; a second rule here would let the two disagree about one run. Never read
+    from the prompt or notes: an unnamed run stays unkeyed. The round lookup must not prevent the
+    work, so an unreadable registry reads as no round."""
+    caller = str(subject_id or "").strip() or None
+    if research_round:
+        try:
+            import research_subjects  # local: research_subjects imports feedback
+
+            identity = research_subjects.round_identity(research_round)
+        except Exception:
+            identity = None
+        if identity and identity.get("subject_id"):
+            round_subject = str(identity["subject_id"])
+            if caller and caller != round_subject:
+                print(
+                    f"note: offload subject {caller!r} ignored; research round "
+                    f"{research_round!r} is registered to {round_subject}",
+                    file=sys.stderr,
+                )
+            return round_subject, "research_round"
+    return (caller, "caller") if caller else (None, None)
+
+
 def offload(
     agent: str,
     prompt: str,
@@ -1700,6 +1730,7 @@ def offload(
     research_round: str | None = None,
     task_type: str | None = None,
     write_boundary: dict | None = None,
+    subject_id: str | None = None,
 ) -> dict:
     """SYNCHRONOUS offload for token conservation.
 
@@ -1739,7 +1770,13 @@ def offload(
 
     `task_type` names what the work IS (review, mechanical, implement, ...) so the run the learner
     reads is ranked under that type. None keeps the historical literal "offload", under which every
-    offload run before 2026-09-20 was recorded regardless of the work it did."""
+    offload run before 2026-09-20 was recorded regardless of the work it did.
+
+    `subject_id` names the WORK this run was for (`owner/repo#N` for an issue or PR, the repo for a
+    repo audit), recorded as routing metadata `subject_id` so both capability readers count it as a
+    subject. A registered `research_round` supplies its own subject and wins. With neither, the run
+    stays unkeyed and its subject falls back to `offload:<cwd>`, which pools every run from one
+    directory; that is a statement that nothing named the work, never a guess at it."""
     # KILL SWITCH. Added 2026-08-21 because the admission gate was literally right: nothing could
     # stop the fleet's most-used capability (~196 runs/week) without a code change. That is not
     # theoretical -- on 2026-08-08 the gemini model pin rotted and EVERY offload to that seat exited
@@ -1936,6 +1973,7 @@ def offload(
     )
     stream_prompt = adapters.gemini_stream_prompt(prepared_prompt) if prompt_via_stdin else None
     target = f"offload:{run_cwd}"
+    subject, subject_source = _offload_subject(subject_id, research_round)
     task_type = task_type or "offload"
     model = adapters.model_identity(agent, mode, profile)
     started_ts = int(time.time())
@@ -1986,14 +2024,22 @@ def offload(
             model=model,
             routing_metadata=(
                 {
-                    "selected_profile_id": effective_profile_id,
-                    "requested_model": profile.get("requested_model"),
-                    "transport": "offload",
-                    "profile_policy_version": execution_profiles.PROFILE_POLICY_VERSION,
-                    "profile_assignment_probability": 1.0,
+                    **(
+                        {
+                            "selected_profile_id": effective_profile_id,
+                            "requested_model": profile.get("requested_model"),
+                            "transport": "offload",
+                            "profile_policy_version": execution_profiles.PROFILE_POLICY_VERSION,
+                            "profile_assignment_probability": 1.0,
+                        }
+                        if profile
+                        else {}
+                    ),
+                    **(
+                        {"subject_id": subject, "subject_source": subject_source} if subject else {}
+                    ),
                 }
-                if profile
-                else None
+                or None
             ),
         )
         # A WORKER ATTEMPT IS A PROVENANCE RECORD, so only a seat that can supply provenance may
@@ -4175,6 +4221,11 @@ def main(argv: list[str]) -> int:
             help="what the work is (review, mechanical, implement, ...); default keeps the literal offload",
         )
         p.add_argument(
+            "--subject",
+            help="the work this run is for (owner/repo#N, or the repo for a repo audit); without it "
+            "the run's subject is its cwd, which pools every run from that directory",
+        )
+        p.add_argument(
             "--isolate",
             "--worktree-isolation",
             action="store_true",
@@ -4197,6 +4248,7 @@ def main(argv: list[str]) -> int:
                 profile_id=ns.profile_id,
                 research_round=ns.research_round,
                 task_type=ns.task_type,
+                subject_id=ns.subject,
             )
         except KeyboardInterrupt:
             out = {
