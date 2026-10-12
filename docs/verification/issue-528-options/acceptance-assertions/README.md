@@ -1,5 +1,10 @@
 # Acceptance assertion follow-up for PR #549
 
+**Historical runner record.** The pending checks and uncommitted assertions
+below describe the earlier restricted runner. Current passing production
+validation is in the parent README, proof.json and focused.log; the operand
+assertions are committed in tests/test_mirror_generations.py.
+
 Reviewed both PR commits, `f1bac52` and `a671633`. The seven implementation
 checkboxes are already complete in the PR body. The three acceptance checkboxes
 remain pending; none of the failing runner commands below qualifies as GREEN.
