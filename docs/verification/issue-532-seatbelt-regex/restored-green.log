@@ -1,0 +1,13 @@
+native Seatbelt parser/enforcement acceptance UNKNOWN: requires macOS sandbox-exec
+native Seatbelt parser/enforcement acceptance UNKNOWN: requires macOS sandbox-exec
+native Seatbelt parser/enforcement acceptance UNKNOWN: requires macOS sandbox-exec
+native Seatbelt parser/enforcement acceptance UNKNOWN: requires macOS sandbox-exec
+test_backslash (test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests.test_backslash) ... ok
+test_combined (test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests.test_combined) ... ok
+test_quote (test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests.test_quote) ... ok
+test_regex_metacharacters (test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests.test_regex_metacharacters) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.003s
+
+OK

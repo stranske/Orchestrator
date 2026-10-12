@@ -1,0 +1,163 @@
+{
+  "head_sha": "eaa1d9c85d668e756eb4ae810bcd33e2519e8865",
+  "base_sha": "d4bebaf4f1c0057bdd4035308cd37f8db2d3e1db",
+  "tested_merge_sha": "28a8284c9768a0cb273f63aa0cc5147fd2d667a4",
+  "scope": "Recovered hosted evidence for the pre-keepalive head; does not cover subsequent receipt-checker changes or establish closer acceptance.",
+  "jobs": [
+    {
+      "job_id": 114602083892,
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38183918465/job/114602083892",
+      "name": "verify.py (real pytest counts + selftests + capability gates)",
+      "conclusion": "success",
+      "selected_authentic_lines": [
+        "2026-10-11T23:20:38.6590472Z HEAD is now at 28a8284 Merge eaa1d9c85d668e756eb4ae810bcd33e2519e8865 into d4bebaf4f1c0057bdd4035308cd37f8db2d3e1db",
+        "2026-10-11T23:23:10.6208152Z   pytest:     2752 passed, 0 failed, 26/26 max skipped (2778 collected; floor 2778)",
+        "2026-10-11T23:23:10.6210214Z   selftests:  97 of 104 modules ran, 7/7 max skipped",
+        "2026-10-11T23:23:10.6213545Z   gates:      2/2 max skipped",
+        "2026-10-11T23:23:10.6258174Z   VERIFIED \u2014 2752 tests actually executed and passed, 97 selftests spoke, 3 of 5 gates green; 26 test(s), 7 selftest(s) and 2 gate(s) SKIPPED for a named missing prerequisite, listed above"
+      ]
+    },
+    {
+      "job_id": 114602083907,
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38183918465/job/114602083907",
+      "name": "verify.py in the flat exec-mirror shape (the tree a sync ships)",
+      "conclusion": "success",
+      "selected_authentic_lines": [
+        "2026-10-11T23:20:39.2100404Z HEAD is now at 28a8284 Merge eaa1d9c85d668e756eb4ae810bcd33e2519e8865 into d4bebaf4f1c0057bdd4035308cd37f8db2d3e1db",
+        "2026-10-11T23:23:40.7717698Z   pytest:     2731 passed, 0 failed, 47/47 max [bare_mirror_skipped_max] skipped (2778 collected; floor 2778)",
+        "2026-10-11T23:23:40.7719354Z   selftests:  97 of 104 modules ran, 7/7 max [bare_mirror_selftest_skipped_max] skipped",
+        "2026-10-11T23:23:40.7725830Z   gates:      2/2 max [bare_mirror_gate_skipped_max] skipped",
+        "2026-10-11T23:23:40.7895133Z   VERIFIED \u2014 2731 tests actually executed and passed, 97 selftests spoke, 3 of 5 gates green; 47 test(s), 7 selftest(s) and 2 gate(s) SKIPPED for a named missing prerequisite, listed above"
+      ]
+    },
+    {
+      "job_id": 114602178559,
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38183919039/job/114602178559",
+      "name": "python ci / python 3.12",
+      "conclusion": "success",
+      "selected_authentic_lines": [
+        "2026-10-11T23:21:10.2544354Z HEAD is now at 28a8284 Merge eaa1d9c85d668e756eb4ae810bcd33e2519e8865 into d4bebaf4f1c0057bdd4035308cd37f8db2d3e1db",
+        "2026-10-11T23:21:46.0830453Z 4 workers [2778 items]",
+        "2026-10-11T23:23:27.9462913Z =========== 2752 passed, 26 skipped, 4 warnings in 125.52s (0:02:05) ===========",
+        "2026-10-11T23:23:29.4658548Z Checking pytest: success"
+      ]
+    },
+    {
+      "job_id": 114602178532,
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38183919039/job/114602178532",
+      "name": "python ci / python 3.13",
+      "conclusion": "success",
+      "selected_authentic_lines": [
+        "2026-10-11T23:21:10.9818595Z HEAD is now at 28a8284 Merge eaa1d9c85d668e756eb4ae810bcd33e2519e8865 into d4bebaf4f1c0057bdd4035308cd37f8db2d3e1db",
+        "2026-10-11T23:21:50.1656781Z 4 workers [2778 items]",
+        "2026-10-11T23:23:33.3789261Z ========= 2752 passed, 26 skipped, 5343 warnings in 128.01s (0:02:08) ==========",
+        "2026-10-11T23:23:34.4545256Z Checking pytest: success"
+      ]
+    }
+  ],
+  "check_conclusions": {
+    "success": 31,
+    "skipped": 39,
+    "failure": 1
+  },
+  "product_ci_checks": [
+    {
+      "name": "summary",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38183919039/job/114602705922"
+    },
+    {
+      "name": "python ci / logs summary",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38183919039/job/114602660957"
+    },
+    {
+      "name": "python ci / python 3.12",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38183919039/job/114602178559"
+    },
+    {
+      "name": "python ci / python 3.13",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38183919039/job/114602178532"
+    },
+    {
+      "name": "python ci / select reusable CI scope",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38183919039/job/114602150427"
+    },
+    {
+      "name": "python ci / lint-ruff",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38183919039/job/114602150405"
+    },
+    {
+      "name": "python ci / typecheck-mypy",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38183919039/job/114602150354"
+    },
+    {
+      "name": "python ci / lint-format",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38183919039/job/114602150341"
+    },
+    {
+      "name": "python ci / Validate inputs",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38183919039/job/114602130041"
+    },
+    {
+      "name": "test-quality",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38183919039/job/114602129951"
+    },
+    {
+      "name": "docs guard",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38183919039/job/114602129938"
+    },
+    {
+      "name": "github scripts tests",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38183919039/job/114602129892"
+    },
+    {
+      "name": "ledger validation",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38183919039/job/114602129866"
+    },
+    {
+      "name": "issue consistency",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38183919039/job/114602114285"
+    },
+    {
+      "name": "generated delivery seal",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38183919039/job/114602085656"
+    }
+  ],
+  "failed_checks": [
+    {
+      "name": "Merge automerge-labelled agent PRs",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38183916989/job/114602081655"
+    }
+  ]
+}

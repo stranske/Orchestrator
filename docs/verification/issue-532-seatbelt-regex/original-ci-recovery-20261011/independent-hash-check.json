@@ -1,0 +1,38 @@
+{
+  "checks": {
+    "533-focused.log": true,
+    "533-focused.xml": true,
+    "533-collection.log": true,
+    "533-native-proof.py": true,
+    "533-proof-red.log": true,
+    "533-proof-red.xml": true,
+    "533-proof-green.log": true,
+    "533-proof-green.xml": true,
+    "533-proof-results.json": true,
+    "533-boundary-final.log": true,
+    "533-boundary-final.xml": true,
+    "533-floor-controls.log": true,
+    "533-adapters-selftest.log": true,
+    "533-native-packet.md": true,
+    "proof.tar.gz": true,
+    "src/adapters.py": true,
+    "tests/test_seatbelt_regex_quoting.py": true,
+    ".verify-floor.json": true
+  },
+  "members": [
+    "533-focused.log",
+    "533-focused.xml",
+    "533-collection.log",
+    "533-native-proof.py",
+    "533-proof-red.log",
+    "533-proof-red.xml",
+    "533-proof-green.log",
+    "533-proof-green.xml",
+    "533-proof-results.json",
+    "533-boundary-final.log",
+    "533-boundary-final.xml",
+    "533-floor-controls.log",
+    "533-adapters-selftest.log",
+    "533-native-packet.md"
+  ]
+}

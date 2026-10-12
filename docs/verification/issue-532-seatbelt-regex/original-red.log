@@ -1,0 +1,85 @@
+test_backslash (test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests.test_backslash) ... ERROR
+test_combined (test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests.test_combined) ... FAIL
+test_quote (test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests.test_quote) ... FAIL
+test_regex_metacharacters (test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests.test_regex_metacharacters) ... ERROR
+
+======================================================================
+ERROR: test_backslash (test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests.test_backslash)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_seatbelt_regex_quoting.py", line 30, in test_backslash
+    self.check_root(r"back\slash")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_seatbelt_regex_quoting.py", line 24, in check_root
+    _assert_generated_regex_literal_preserves_the_root_and_git_boundary(Path(directory), name)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_seatbelt_regex_quoting.py", line 50, in _assert_generated_regex_literal_preserves_the_root_and_git_boundary
+    pattern = json.loads(literals[0])
+  File "/opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/json/__init__.py", line 352, in loads
+    return _default_decoder.decode(s)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^
+  File "/opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/json/decoder.py", line 345, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/json/decoder.py", line 361, in raw_decode
+    obj, end = self.scan_once(s, idx)
+               ~~~~~~~~~~~~~~^^^^^^^^
+json.decoder.JSONDecodeError: Invalid \escape: line 1 column 16 (char 15)
+
+======================================================================
+ERROR: test_regex_metacharacters (test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests.test_regex_metacharacters)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_seatbelt_regex_quoting.py", line 33, in test_regex_metacharacters
+    self.check_root("meta.[x]+(a){2}^$|?*")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_seatbelt_regex_quoting.py", line 24, in check_root
+    _assert_generated_regex_literal_preserves_the_root_and_git_boundary(Path(directory), name)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_seatbelt_regex_quoting.py", line 50, in _assert_generated_regex_literal_preserves_the_root_and_git_boundary
+    pattern = json.loads(literals[0])
+  File "/opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/json/__init__.py", line 352, in loads
+    return _default_decoder.decode(s)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^
+  File "/opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/json/decoder.py", line 345, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/json/decoder.py", line 361, in raw_decode
+    obj, end = self.scan_once(s, idx)
+               ~~~~~~~~~~~~~~^^^^^^^^
+json.decoder.JSONDecodeError: Invalid \escape: line 1 column 16 (char 15)
+
+======================================================================
+FAIL: test_combined (test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests.test_combined)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_seatbelt_regex_quoting.py", line 36, in test_combined
+    self.check_root('mixed"back\\slash.[x]+(a){2}^$|?* space')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_seatbelt_regex_quoting.py", line 24, in check_root
+    _assert_generated_regex_literal_preserves_the_root_and_git_boundary(Path(directory), name)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_seatbelt_regex_quoting.py", line 49, in _assert_generated_regex_literal_preserves_the_root_and_git_boundary
+    assert len(literals) == 1, profile
+           ^^^^^^^^^^^^^^^^^^
+AssertionError: (version 1)(allow default)(deny file-write* (subpath "/tmp/seatbelt-regression-y5t7m8ai/protected-tree"))(allow file-write* (subpath "/tmp/seatbelt-regression-y5t7m8ai/protected-tree/mixed\"back\\slash.[x]+(a){2}^$|?* space"))(deny file-write* (regex #"^/tmp/seatbelt\-regression\-y5t7m8ai/protected\-tree/mixed"back\\slash\.\[x\]\+\(a\)\{2\}\^\$\|\?\*\ space/(.*/)?\.git(/|$)"))
+
+======================================================================
+FAIL: test_quote (test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests.test_quote)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_seatbelt_regex_quoting.py", line 27, in test_quote
+    self.check_root('odd"root')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_seatbelt_regex_quoting.py", line 24, in check_root
+    _assert_generated_regex_literal_preserves_the_root_and_git_boundary(Path(directory), name)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_seatbelt_regex_quoting.py", line 49, in _assert_generated_regex_literal_preserves_the_root_and_git_boundary
+    assert len(literals) == 1, profile
+           ^^^^^^^^^^^^^^^^^^
+AssertionError: (version 1)(allow default)(deny file-write* (subpath "/tmp/seatbelt-regression-5ye4eprd/protected-tree"))(allow file-write* (subpath "/tmp/seatbelt-regression-5ye4eprd/protected-tree/odd\"root"))(deny file-write* (regex #"^/tmp/seatbelt\-regression\-5ye4eprd/protected\-tree/odd"root/(.*/)?\.git(/|$)"))
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.096s
+
+FAILED (failures=2, errors=2)
