@@ -88,6 +88,118 @@ def test_another_reviewer_set_is_another_judgment(brain):
     assert adversarial.recorded_verdict(TARGET, "a" * 40, ["codex"])["state"] == "none"
 
 
+@pytest.mark.parametrize("from_env", [False, True])
+@pytest.mark.parametrize("exclude", [{"codex"}, {"codex", "gemini", "vibe"}])
+@pytest.mark.parametrize("blocker", [False, True])
+def test_explicit_author_exclusion_preserves_required_coverage(
+    brain, monkeypatch, from_env, exclude, blocker
+):
+    """Drive the production reviewer/aggregate path; only the provider call is faked."""
+    invoked = []
+    head = "a" * 40
+    requested = ["codex", "gemini", "vibe"]
+
+    def offload(agent, *args, **kwargs):
+        invoked.append(agent)
+        return {"output": json.dumps({"blocker": blocker, "severity": "high"})}
+
+    monkeypatch.setattr(adversarial, "_capability_heartbeat", lambda: None)
+    monkeypatch.setattr(adversarial, "_git_write_boundary", lambda *a: {"protect": [], "allow": []})
+    monkeypatch.setattr(adversarial.dispatcher, "offload", offload)
+    kwargs = (
+        {"env": {"ORCH_ADVERSARIAL_REVIEWERS": ",".join(requested)}}
+        if from_env
+        else {"reviewers": requested}
+    )
+    out = adversarial.review_at_head(
+        TARGET, head, worktree="/private/review", head_fn=lambda _: head, exclude=exclude, **kwargs
+    )
+    assert invoked == [r for r in requested if r not in exclude]
+    assert out["verdict"] == "INCONCLUSIVE" and out["conclusive"] is False
+    result = out["result"]
+    assert result["veto_threshold"] == 2
+    assert result["reviewers_requested"] == len(requested)
+    assert result["n_reviewers"] == len(invoked)
+    assert result["reviewers_missing"] == len(requested) - len(invoked)
+    assert result["n_vetoes"] == (len(invoked) if blocker else 0)
+    assert len(result["blockers"]) == result["n_vetoes"]
+    memo = adversarial.recorded_verdict(TARGET, head, out["reviewers"])
+    assert memo["state"] == "none" and memo["inconclusive_at_head"] == 1
+
+
+def test_explicit_author_exclusion_cannot_reuse_a_smaller_panel_pass(brain):
+    head = "a" * 40
+    requested = ["codex", "gemini", "vibe"]
+    seats = []
+
+    def review(worktree, reviewers, context):
+        seats.append(list(reviewers))
+        return adversarial.aggregate_veto(
+            [{"blocker": False, "severity": "none"} for _ in reviewers],
+            veto_threshold=2,
+            reviewers_requested=len(reviewers),
+        )
+
+    # A valid pass for two reviewers cannot qualify a request for three after author exclusion.
+    first = adversarial.review_at_head(
+        TARGET,
+        head,
+        reviewers=requested[1:],
+        worktree="/private/review",
+        head_fn=lambda _: head,
+        review_fn=review,
+    )
+    assert first["verdict"] == "PASS"
+    for _ in range(2):
+        out = adversarial.review_at_head(
+            TARGET,
+            head,
+            reviewers=requested,
+            exclude={"codex"},
+            worktree="/private/review",
+            head_fn=lambda _: head,
+            review_fn=review,
+        )
+        assert out["status"] == "executed" and out["verdict"] == "INCONCLUSIVE"
+        assert out["result"]["reviewers_requested"] == 3
+        assert out["result"]["n_reviewers"] == 2
+    assert seats == [["gemini", "vibe"]] * 3
+
+
+def test_automatic_selection_never_offers_or_dispatches_the_author(brain, monkeypatch):
+    import router
+
+    head = "a" * 40
+    offered = []
+    invoked = []
+
+    def select(task_type, cap, *, only, learned):
+        offered.append(only)
+        assert "codex" not in only
+        return {"agent": "gemini"}
+
+    def offload(agent, *args, **kwargs):
+        invoked.append(agent)
+        return {"output": '{"blocker": false, "severity": "none"}'}
+
+    monkeypatch.setattr(router, "load_capacity", lambda: {})
+    monkeypatch.setattr(router, "learned_ranks", lambda: {})
+    monkeypatch.setattr(router, "select_agent", select)
+    monkeypatch.setattr(adversarial, "_capability_heartbeat", lambda: None)
+    monkeypatch.setattr(adversarial, "_git_write_boundary", lambda *a: {"protect": [], "allow": []})
+    monkeypatch.setattr(adversarial.dispatcher, "offload", offload)
+    out = adversarial.review_at_head(
+        TARGET,
+        head,
+        reviewers=["auto"],
+        exclude={"codex"},
+        worktree="/private/review",
+        head_fn=lambda _: head,
+    )
+    assert offered and invoked == ["gemini"]
+    assert out["verdict"] == "PASS" and out["result"]["veto_threshold"] == 1
+
+
 def test_an_inconclusive_panel_is_re_run_at_the_same_head(brain):
     """A reviewer shortfall is "NOT a pass; re-run the missing coverage". Reusing it would forbid
     exactly that re-run until an unrelated push, so only PASS and BLOCKED are reused."""

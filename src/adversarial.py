@@ -887,16 +887,29 @@ def panel_worktree(target: str, head: str) -> str:
     return str(wt)
 
 
-def _shortfall(reason: str, attempts: list) -> dict:
+def _shortfall(
+    reason: str,
+    attempts: list,
+    *,
+    reviewers_requested: int = 1,
+    veto_threshold: int = 1,
+    outcome: dict | None = None,
+) -> dict:
+    outcome = outcome or {}
+    returned = int(outcome.get("n_reviewers", 0))
+    vetoes = int(outcome.get("n_vetoes", 0))
     return {
+        **outcome,
         "verdict": INCONCLUSIVE,
-        "n_reviewers": 0,
-        "reviewers_requested": 1,
-        "reviewers_missing": 1,
-        "n_vetoes": 0,
-        "veto_threshold": 1,
-        "summary": f"0 vetoes / threshold 1, reviewers returned 0 of 1 ({reason})",
-        "blockers": [],
+        "n_reviewers": returned,
+        "reviewers_requested": reviewers_requested,
+        "reviewers_missing": reviewers_requested - returned,
+        "n_vetoes": vetoes,
+        "veto_threshold": veto_threshold,
+        "threshold_reachable": _threshold_reachable(returned, veto_threshold),
+        "summary": f"{vetoes} veto{'' if vetoes == 1 else 'es'} / threshold {veto_threshold}, "
+        f"reviewers returned {returned} of {reviewers_requested} ({reason})",
+        "blockers": outcome.get("blockers", []),
         "inconclusive_reason": reason + " — this is NOT a pass; re-run the missing coverage",
         "attempts": attempts,
     }
@@ -1056,7 +1069,11 @@ def review_at_head(
             continue
         if not auto and len(seat) != len(requested_reviewers):
             outcome = _shortfall(
-                "explicit author exclusion leaves incomplete reviewer coverage", attempts
+                "explicit author exclusion leaves incomplete reviewer coverage",
+                attempts,
+                reviewers_requested=len(requested_reviewers),
+                veto_threshold=2,
+                outcome=outcome,
             )
         verdict = str(outcome.get("verdict") or "").upper()
         if auto and verdict not in CONCLUSIVE_VERDICTS:
@@ -1072,6 +1089,8 @@ def review_at_head(
             + "; ".join(f"{a['agent']} {a['outcome']}" for a in attempts)
             + ")",
             attempts,
+            reviewers_requested=1 if auto else len(requested_reviewers),
+            veto_threshold=1 if auto else 2,
         )
         used = sorted(tried) or list(reviewers)
     else:
