@@ -38,6 +38,7 @@ import capabilities
 import capability_effectiveness as effectiveness
 import durability_sweep
 import feedback
+import value_chain_monitor as monitor
 
 T0 = 1_791_756_000  # 2026-10-11T23:20:00Z
 VERSIONS = {
@@ -153,6 +154,53 @@ def test_pending_pr_outcome_keeps_its_delivery_semantics(brain, merged, verdict)
         ), arm
     assert arm["no_merge"] == 0, arm
     assert arm["verdict"]["judged"] == 0, arm
+
+
+@pytest.mark.parametrize("mode", [None, "local", "offload"])
+@pytest.mark.parametrize("merged", [None, False])
+def test_pending_pr_lifecycle_stays_consistent_across_readers(brain, mode, merged):
+    """A recorded PR can deliver even when its mode is unknown or says offload."""
+    for n in range(1, 6):
+        _consumed(f"remote:o/r#{n}:codex", **MERGED_DURABLE)
+    run = "pending-pr-lifecycle"
+    feedback.record_run(run, "o/r#6", "implement", "codex", mode=mode, pr_number=6)
+    _consumed_run(run, verifier_verdict="PASS", merged=merged)
+
+    def assert_stage(expected, terminal, durable, waiting):
+        with feedback._conn() as c:
+            edge = next(e for e in effectiveness._edge_rows(c) if e["run_id"] == run)
+        assert edge["delivery_eligibility"] == "merge_path", edge
+        assert effectiveness._classify(edge) == expected, edge
+        arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+        assert (arm["terminal_subjects"], arm["durable_subjects"]) == (terminal, durable), arm
+        assert arm["durable_rate"] == round(durable / terminal, 3), arm
+        assert (arm["no_merge"], arm["verdict"]["judged"]) == (0, 0), arm
+        assert arm["awaiting_sweep"] == waiting, arm
+
+        inputs = monitor._brain(feedback.DB_PATH, T0 - 1, T0 + 1)
+        assert inputs["errors"] == [], inputs
+        edges = [e for e in inputs["edges"] if e["capability_id"] == "deliberate-break-verifier"]
+        counts = monitor.outcome_counts("deliberate-break-verifier", edges)
+        assert (counts["acted_on"], counts["outcome"], counts["outcome_success"]) == (
+            6,
+            terminal,
+            durable,
+        ), counts
+        assert counts["outcome_no_merge"] == 0, counts
+        assert counts["outcome_awaiting_sweep"] == waiting, counts
+        assert counts["outcome_open"] == (1 if expected == "open" else 0), counts
+        assert (run in {r["run_id"] for r in durability_sweep._pending_merged_runs()}) == bool(
+            waiting
+        )
+
+    assert_stage("open", 5, 5, 0)
+    feedback.record_outcome(run, merged=True)
+    assert_stage("awaiting_sweep", 5, 5, 1)
+    feedback.record_outcome(run, durability="durable")
+    assert_stage("terminal", 6, 6, 0)
+    # A later verifier rejection still vetoes success after the merge has held.
+    feedback.record_outcome(run, verifier_verdict="NON_PASS")
+    assert_stage("terminal", 6, 5, 0)
 
 
 # ---- edges onto role runs ---------------------------------------------------------------------

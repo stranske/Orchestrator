@@ -62,3 +62,33 @@ This workspace mounts `.git` read-only: normal staging/commit failed creating `i
 The source commit is therefore recorded in `/tmp/orchestrator-556-git`, a bare clone using this
 checkout as its work tree. The verified edits remain in this checkout for the automation runner
 to publish. The mounted branch/ref was not changed.
+
+## Follow-up lifecycle verification (2026-10-12)
+
+Six new production-writer cases follow a recorded PR from NULL/False merge state through
+merged/pending and durable, then a later verifier NON_PASS. Both readers preserve the five
+existing durable subjects throughout: the sixth joins the durable population only after the
+sweep's judgment, and NON_PASS reduces its durable rate to 0.833. PR identity takes precedence
+over unknown, local, and offload mode. The sweep selector is checked at every stage.
+
+The same six affected suites now pass **155 tests** with `-m 'not slow'`; both module selftests
+pass. Collection with that marker selects **3,097 tests**, six above the prior hosted collection
+of 3,091. Black **26.10.0** formatted the changed test and the required repository-wide check
+passed with **393 files unchanged**, using its normal formatter serially in the sandbox.
+All local checks use temporary state; no live Brain was mutated.
+
+Hosted CI run [38266959305](https://github.com/stranske/Orchestrator/actions/runs/38266959305)
+passed checkout and flat-mirror verification on prior head
+`f43c260a545b8fd9d42c96b46da300b95e46420b`; its checkout log reports 3,065 pytest passes,
+26 allowed skips, and 97 selftest passes with seven allowed skips. Gate rerun
+[38268012441](https://github.com/stranske/Orchestrator/actions/runs/38268012441) also passed.
+These receipts do not cover the follow-up commit. Fresh exact-head hosted verification,
+controller-owned review/guarded merge, and post-merge actual comparison remain outstanding.
+
+The required active `src/merge_guard.py` invocation with the follow-up commit as
+`--expected-head` blocked at **review-thread GraphQL query failed**; `merge_executed` was false.
+This runner cannot connect to `api.github.com` through `gh`. Connector attempts to add the
+`needs-human` label and post the blocker comment were also rejected: both require approval,
+while this run's approval policy is `never`. Neither mutation occurred. The verified changes
+remain in this checkout and the writable `/tmp` clone for the automation runner to publish;
+the lifecycle checkbox remains unchecked.
