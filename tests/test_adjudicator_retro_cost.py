@@ -61,13 +61,28 @@ def _seed_pool(agent, costs, *, unmeasured=0, source="ccusage"):
 def test_dispatch_records_measured_cost_when_the_adapter_reports_usage(
     private_brain, tmp_path, monkeypatch, tokens_in, tokens_out
 ):
-    result, _ = _dispatch(
+    recorded = []
+    record_role_run = feedback.record_role_run
+
+    def capture_record(**record):
+        recorded.append(record)
+        return record_role_run(**record)
+
+    monkeypatch.setattr(feedback, "record_role_run", capture_record)
+    result, path = _dispatch(
         monkeypatch,
         private_brain,
         tmp_path,
         {"input_tokens": tokens_in, "output_tokens": tokens_out},
     )
     rid = result["rows"][0]["role_run_id"]
+    assert len(recorded) == 1
+    assert recorded[0]["run_id"] == rid
+    assert recorded[0]["backend_run_id"] == "backend-one"
+    assert recorded[0]["cost_tokens_in"] == tokens_in
+    assert recorded[0]["cost_tokens_out"] == tokens_out
+    assert recorded[0]["imputed"] is False
+    assert json.loads(path.read_text())["rows"][0]["role_record"] == recorded[0]
     with sqlite3.connect(private_brain) as conn:
         metadata = json.loads(
             conn.execute("SELECT decomposition FROM runs WHERE run_id=?", (rid,)).fetchone()[0]
@@ -124,6 +139,36 @@ def test_missing_usage_is_imputed_and_flagged_never_null(private_brain, tmp_path
         }
     )
     assert rendered.splitlines().count(line) == 1
+
+    # A later read can lose its eligible pool; stale estimates must not survive
+    # that refresh, and both absent dollar totals still need honest display text.
+    with feedback._conn() as conn:
+        conn.execute("DELETE FROM costs WHERE run_id LIKE 'pool:%'")
+
+    def unexpected_dispatch(*args, **kwargs):
+        pytest.fail("Refreshing cost reporting must not dispatch another backend run")
+
+    result = retro.run(
+        dispatch=False, limit=0, path=path, db=private_brain, runner=unexpected_dispatch
+    )
+    assert result["rows"][0]["role_run_id"] == row["role_run_id"]
+    assert result["rows"][0]["cost_report"] == {
+        "scale": feedback.COST_SCALE,
+        "status": "unmeasured",
+        "cost_usd": None,
+        "imputed": False,
+        "source": "no_eligible_pool",
+    }
+    assert result["summary"]["cost_usd"] is None
+    assert result["summary"]["estimated_cost_usd"] is None
+    assert json.loads(path.read_text())["summary"] == result["summary"]
+    line = retro.weekly_line(path)
+    assert "cost UNKNOWN" in line
+    assert "cost measured 0 of 1, imputed 0, unmeasured 1" in line
+    assert "estimated accounted USD UNMEASURED" in line
+    assert "null" not in line
+    assert "None" not in line
+    assert f"scale {feedback.COST_SCALE}" in line
 
 
 def test_no_eligible_pool_names_unmeasured_without_fabricating_free_cost(
