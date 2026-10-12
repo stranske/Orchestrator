@@ -635,11 +635,25 @@ nothing records which run acted on a redirect proposal (accepted role edges exis
 | role-triage | 24 excluded, `not_yet_measurable` | 12 excluded on 11 subjects, 281 associations, `excluded_only` |
 | role-redirect, -prompt, -decomposer | `not_yet_measurable` | `unscoreable` (762, 8, 4 associations) |
 
-Two differences remain, both measured and not decided here:
-- The lifecycle classes only `advisory_self`. It still counts 15 `offload` edges on role runs among
-  its terminal outcomes, tallied `churn_unattributed`.
-- The two readers take the subject from different places. No stage, component or surface moved, so
-the loop diagram is unchanged.
+The lifecycle classes only `advisory_self`, so it still counts 15 `offload` edges on role runs among
+its terminal outcomes, tallied `churn_unattributed`. That is measured and not decided here.
+
+**Both readers key a subject the same way (2026-10-12).** `feedback.run_subject_id` is the
+lifecycle's rule, extracted unchanged: an explicit `causal_context.subject_id`, else a `subject_id`
+in the routing metadata, else `runs.target`, else the run id. All 3,798 lifecycle rows on a fresh
+Brain copy were byte-identical before and after the extraction.
+
+`capability_effectiveness` used to parse the run id instead. That never handled a local run id
+(`stranske__Deliverable-Render_20-gemini-<ns>`), so each attempt at one issue was its own subject.
+It also keyed an `offload:<agent>:<ns>` run by its agent. On that copy the change moves one row:
+agy-runtime-isolation's stated rate of 0.8 becomes `insufficient_evidence` (4 of 5 subjects). Its
+five subjects had been three issues, one of them attempted twice, plus its pooled offload runs.
+
+Every research-program offload run has the same `runs.target`, the automation's working directory.
+So both readers now pool those runs into one subject. Neither the run id nor `runs.target` names the
+task an offload run did; only its notes do, and notes are prose.
+
+No stage, component or surface moved, so the loop diagram is unchanged.
 
 The one place two LLMs touch the same task is an `agent:auto` switch, where the keepalive delegation
 policy replaces a stalled agent. `agent_switches.py` (rail, daily) records each such pair in the Brain
