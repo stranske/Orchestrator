@@ -35,7 +35,8 @@ WHAT COUNTS AS TERMINAL AND AS A DURABLE SUCCESS IS `feedback`'s, NOT THIS MODUL
 `feedback.outcome_is_terminal` and `feedback.outcome_is_durable_success` are the predicates
 `capability_causal_evidence` tallies the lifecycle from, so the two readers of these edges cannot
 disagree about what an outcome says. A merge the durability sweep has not judged yet is counted in
-`awaiting_sweep`, and an unmerged run whose durability nothing will ever judge in `unresolvable`.
+`awaiting_sweep`. A run that never merges has a verdict and no durability: it is counted in
+`no_merge` and scored by a separate verdict rate (`verdict`), never by the durable rate.
 An edge onto a ROLE run is an association (`feedback.role_target_kind`), counted in
 `associations` and never scored: the outcome a role run holds is a copy of its acting run's, and
 the acting run carries the capability's own edge.
@@ -46,7 +47,8 @@ carries its denominator, anything under MIN_SAMPLE reports `insufficient_evidenc
 figure, and a capability with no terminal outcomes is reported as "not yet measurable" — never as 0%.
 One whose only resolved outcomes are learning-excluded is `excluded_only`, a different state: waiting
 will not change it, attribution has to. One whose edges can none of them ever be scored
-(associations, unresolvable outcomes, excluded ones) is `unscoreable`, and never reads as awaiting.
+(associations, excluded ones) is `unscoreable`, and never reads as awaiting. One whose resolved runs
+all never merge is `no_merge_only`: its verdict rate is the number to read.
 
     python3 capability_effectiveness.py            # human-readable
     python3 capability_effectiveness.py --json
@@ -156,7 +158,7 @@ def _outcome_fields(e: dict) -> dict:
 
 
 def _classify(e: dict) -> str:
-    """Exactly one of: association, excluded, terminal, awaiting_sweep, unresolvable, open.
+    """Exactly one of: association, excluded, no_merge, terminal, awaiting_sweep, open.
 
     THE ORDER IS THE RULE. An association is never evidence whatever its target holds, and an
     excluded class is never scored whatever its verdict, so both come before `terminal`.
@@ -168,19 +170,70 @@ def _classify(e: dict) -> str:
     unmerged one is selected by nothing: on a copy of the live Brain those were 38 PASS outcomes of
     agy-runtime-isolation, all `offload:*` research-program runs that never open a PR. Counted as
     terminal they were 38 non-durable results that could never become anything else; counted as
-    open they would read as awaiting forever. They are `unresolvable`: counted, never scored."""
+    open they would read as awaiting forever.
+
+    A RUN THAT NEVER MERGES HAS A VERDICT, NOT A DURABILITY (owner decision 2026-10-12: "separate
+    verdict rate"). Until then its PASS could never score and its FAIL always did: of
+    agy-runtime-isolation's research-program offloads, 38 PASS were never counted and 8 FAIL were
+    scored as non-durable results. Such a run (not merged, durability unjudged, an outcome present)
+    is `no_merge`, whatever its verdict. It never enters the durable rate, which stays a rate of
+    merges, and `_verdict_stats` scores it by its verdict instead. A run closed unmerged is judged
+    (`abandoned`), so it stays in the durable rate."""
     if e.get("role_kind"):
         return "association"
     if e.get("failure_class") in feedback.LEARNING_EXCLUDED_FAILURE_CLASSES:
         return "excluded"
     outcome = _outcome_fields(e)
+    unjudged = str(outcome["durability"] or "").lower() in ("", "pending")
+    if not outcome["merged"] and unjudged and any(v is not None for v in outcome.values()):
+        return "no_merge"
     if feedback.outcome_is_terminal(**outcome):
         return "terminal"
     if outcome["merged"]:
         return "awaiting_sweep"
-    if any(v is not None for v in outcome.values()):
-        return "unresolvable"
     return "open"
+
+
+def _verdict_stats(rows: list[dict]) -> dict:
+    """The verdict rate of runs that never merge: distinct subjects with a passing verdict over
+    distinct subjects with any verdict, refused under MIN_SAMPLE like the durable rate.
+
+    A PASS is the adjudicated (else the verifier's) PASS with no verifier failure, the same reading
+    `feedback.outcome_is_durable_success` makes of a verdict. A subject passes if ANY attempt on it
+    passed, as a subject is durable if any attempt held."""
+    judged = [
+        e
+        for e in rows
+        if (e.get("adjudicated_verdict") or e.get("verdict")) or e.get("verifier_verdict")
+    ]
+    passed = [
+        e
+        for e in judged
+        if str(_outcome_fields(e)["adjudicated_verdict"] or e.get("verifier_verdict") or "")
+        .upper()
+        .startswith("PASS")
+        and str(e.get("verifier_verdict") or "").upper() not in feedback.VERIFIER_FAILURES
+    ]
+    judged_subjects = {_subject(e) for e in judged}
+    pass_subjects = {_subject(e) for e in passed}
+    out: dict[str, Any] = {
+        "judged": len(judged),
+        "passed": len(passed),
+        "judged_subjects": len(judged_subjects),
+        "pass_subjects": len(pass_subjects),
+    }
+    if not judged:
+        out["rate"], out["status"] = None, "not_applicable"
+    elif len(judged_subjects) < MIN_SAMPLE:
+        out["rate"] = None
+        out["status"] = (
+            f"insufficient_evidence ({len(judged_subjects)}/{MIN_SAMPLE} distinct subjects from "
+            f"{len(judged)} attempts)"
+        )
+    else:
+        out["rate"] = round(len(pass_subjects) / len(judged_subjects), 3)
+        out["status"] = "measured"
+    return out
 
 
 def _target_of(run_id: str) -> str:
@@ -225,14 +278,13 @@ def _arm_stats(edges: list[dict]) -> dict:
     a number on the page and not a quietly smaller denominator.
     """
     groups: dict[str, list[dict]] = {
-        k: []
-        for k in ("association", "excluded", "terminal", "awaiting_sweep", "unresolvable", "open")
+        k: [] for k in ("association", "excluded", "no_merge", "terminal", "awaiting_sweep", "open")
     }
     for e in edges:
         groups[_classify(e)].append(e)
     excluded, terminal = groups["excluded"], groups["terminal"]
     associations = groups["association"]
-    awaiting_sweep, unresolvable = groups["awaiting_sweep"], groups["unresolvable"]
+    awaiting_sweep, no_merge = groups["awaiting_sweep"], groups["no_merge"]
     durable = [e for e in terminal if feedback.outcome_is_durable_success(**_outcome_fields(e))]
     # Distinct subjects — a target counts as durable if ANY attempt on it landed durably.
     durable_subjects = {_subject(e) for e in durable}
@@ -245,7 +297,8 @@ def _arm_stats(edges: list[dict]) -> dict:
         "associations": len(associations),
         "advisory_self": sum(1 for e in associations if e["role_kind"] == "advisory_self"),
         "awaiting_sweep": len(awaiting_sweep),
-        "unresolvable": len(unresolvable),
+        "no_merge": len(no_merge),
+        "verdict": _verdict_stats(no_merge),
         "durable": len(durable),
         "terminal_subjects": len(terminal_subjects),
         "excluded_subjects": len(excluded_subjects),
@@ -257,7 +310,13 @@ def _arm_stats(edges: list[dict]) -> dict:
     evidence = len(edges) - len(associations)
     if not terminal and not groups["open"] and not awaiting_sweep and edges:
         out["durable_rate"] = None
-        if excluded and len(excluded) == evidence:
+        if no_merge:
+            # Not unscoreable: these runs are scored, by their verdict (`verdict`), not here.
+            out["status"] = (
+                f"no_merge_only ({len(no_merge)} attempts on {len({_subject(e) for e in no_merge})}"
+                " subjects never merge: see the verdict rate)"
+            )
+        elif excluded and len(excluded) == evidence:
             # NOT `not_yet_measurable`: outcomes DID resolve, and every one is in a class no
             # learner may score. Waiting will not change that, so one sentinel for both would hide
             # which. Associations are not evidence, so they never turn this into `unscoreable`.
@@ -274,7 +333,6 @@ def _arm_stats(edges: list[dict]) -> dict:
                     f"{n} {label}"
                     for n, label in (
                         (len(associations), "associations onto role runs"),
-                        (len(unresolvable), "never resolvable"),
                         (len(excluded), "learning-excluded"),
                     )
                     if n
@@ -291,7 +349,7 @@ def _arm_stats(edges: list[dict]) -> dict:
             f"subjects from {len(terminal)} attempts"
             + (f"; {len(excluded)} learning-excluded" if excluded else "")
             + (f"; {len(awaiting_sweep)} awaiting the durability sweep" if awaiting_sweep else "")
-            + (f"; {len(unresolvable)} never resolvable" if unresolvable else "")
+            + (f"; {len(no_merge)} never merge, scored by verdict" if no_merge else "")
             + ")"
         )
     else:
@@ -333,6 +391,9 @@ def measure(*, path=None, conn=None) -> dict:
             entry["lift"] = None
             # No control arm is the COMMON case and must not read as a result.
             entry["verdict"] = "no_control_arm" if a["durable_rate"] is not None else a["status"]
+        # The same comparison over runs that never merge, by verdict, never mixed into `lift`.
+        av, cv = a["verdict"]["rate"], c["verdict"]["rate"]
+        entry["verdict_lift"] = round(av - cv, 3) if av is not None and cv is not None else None
         out.append(entry)
 
     attributed = [e for e in out if e["attributed_edges"]]
@@ -354,6 +415,12 @@ def measure(*, path=None, conn=None) -> dict:
             for e in attributed
             if e["accepted"]["status"].startswith("excluded_only")
         ],
+        # Accepted arms whose resolved runs never merge: read their verdict rate instead.
+        "no_merge_only": [
+            e["capability_id"]
+            for e in attributed
+            if e["accepted"]["status"].startswith("no_merge_only")
+        ],
         # Accepted arms none of whose edges can ever be scored. Not awaiting anything.
         "unscoreable": [
             e["capability_id"]
@@ -371,12 +438,19 @@ def _arm_cell(arm: dict, *, attempts: bool) -> str:
     for key, label in (
         ("excluded", "excl"),
         ("awaiting_sweep", "sweep"),
-        ("unresolvable", "unres"),
+        ("no_merge", "nomerge"),
         ("associations", "assoc"),
     ):
         if arm[key]:
             cell += f", {arm[key]} {label}"
     return cell
+
+
+def _verdict_cell(stats: dict) -> str:
+    if not stats["judged"]:
+        return "—"
+    cell = f"{stats['pass_subjects']}/{stats['judged_subjects']} subj ({stats['judged']} att)"
+    return cell + (f", rate {stats['rate']}" if stats["rate"] is not None else "")
 
 
 def format_report(rep: dict) -> str:
@@ -395,8 +469,9 @@ def format_report(rep: dict) -> str:
             "",
         ]
     lines += [
-        "| Capability | Inv/wk | Edges | Accepted (dur/term) | Control | Lift | Verdict |",
-        "|---|---:|---:|---|---|---:|---|",
+        "| Capability | Inv/wk | Edges | Accepted (dur/term) | Control | Lift | Verdict "
+        "| No-merge verdict (pass/judged) |",
+        "|---|---:|---:|---|---|---:|---|---|",
     ]
     for row in rep["rows"]:
         if not row["attributed_edges"]:
@@ -406,14 +481,15 @@ def format_report(rep: dict) -> str:
         lift = "—" if row["lift"] is None else f"{row['lift']:+.3f}"
         lines.append(
             f"| {row['capability_id']} | {row['invocations_per_week']} | "
-            f"{row['attributed_edges']} | {arm} | {ctl} | {lift} | {row['verdict']} |"
+            f"{row['attributed_edges']} | {arm} | {ctl} | {lift} | {row['verdict']} | "
+            f"{_verdict_cell(row['accepted']['verdict'])} |"
         )
     lines += [
         "",
         "`excl`: attempts whose outcome is in feedback.LEARNING_EXCLUDED_FAILURE_CLASSES. "
         "They are set aside in both arms and never scored.",
         "`sweep`: merges the durability sweep has not judged yet; they resolve, so they wait.",
-        "`unres`: unmerged runs whose durability nothing will ever judge; never scored.",
+        "`nomerge`: runs that never merge; scored only in the no-merge verdict column.",
         "`assoc`: edges onto role runs, whose outcome is a copy of the acting run's; never scored.",
     ]
     if rep["awaiting_outcomes"]:
@@ -610,7 +686,9 @@ def _selftest() -> None:
     assert (_off["terminal"], _off["associations"], _off["advisory_self"]) == (0, 2, 1), _off
     _c9 = _arm_stats([r for r in _rows if r["capability_id"] == "c9"])
     assert (_c9["terminal"], _c9["durable"]) == (1, 0), _c9
-    assert (_c9["awaiting_sweep"], _c9["unresolvable"]) == (1, 1), _c9
+    assert (_c9["awaiting_sweep"], _c9["no_merge"]) == (1, 1), _c9
+    # The run that never merges is scored by its verdict, never by the durable rate.
+    assert (_c9["verdict"]["judged"], _c9["verdict"]["passed"]) == (1, 1), _c9
 
     # THE SUBJECT IS THE LIFECYCLE'S (`feedback.run_subject_id`), NOT A PARSE OF THE RUN ID. Two
     # attempts at one issue under local run ids are one subject; parsing the id made them two.
@@ -774,7 +852,7 @@ def _selftest() -> None:
         "capability_effectiveness.py selftest: OK (lift on real samples, refuses small samples, "
         "pending != 0%, no-control-arm is not a verdict, outcomes read current, "
         "learning-excluded counted not scored, role-run edges are associations, "
-        "an unjudged merge waits and an unmerged pending run is unresolvable, "
+        "an unjudged merge waits and a run that never merges is scored by verdict, "
         "subjects are the lifecycle's)"
     )
 

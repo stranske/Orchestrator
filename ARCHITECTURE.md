@@ -676,6 +676,25 @@ Every research-program offload run has the same `runs.target`, the automation's 
 So both readers now pool those runs into one subject. Neither the run id nor `runs.target` names the
 task an offload run did; only its notes do, and notes are prose.
 
+**A run that never merges is scored by its verdict, in a rate of its own (owner decision
+2026-10-12).** An offload run opens no PR, so no sweep ever judges its durability. Until this
+change its FAIL was a terminal non-durable result and its PASS could never score, so for such runs
+only failures counted. On a Brain copy that was agy-runtime-isolation's 8 scored FAILs beside 38
+PASSes that never counted. `capability_effectiveness` now classes a run that is not merged, whose
+durability is unjudged and which has an outcome, as `no_merge`, whatever its verdict. Such a run
+never enters the durable rate, which stays a rate of merges. A separate verdict rate scores it:
+distinct subjects with a passing verdict over distinct subjects with any verdict, under the same
+`MIN_SAMPLE`. A verifier failure under an adjudicated PASS is a failing verdict. The report adds a
+"No-merge verdict" column and a `no_merge_only` list.
+
+On the copy, agy-runtime-isolation's 46 no-merge attempts (38 passing) are all one subject (the
+pooling above), so its verdict rate is refused as `insufficient_evidence (1/5 ...)`. None of 2,112
+offload runs since 2026-09-01 records which task it was for, so the rate yields a figure only once
+the offload writer records a subject.
+
+The lifecycle (`capability_causal_evidence`) still counts a no-merge FAIL as a terminal failure.
+This reader differs from it there, on purpose.
+
 No stage, component or surface moved, so the loop diagram is unchanged.
 
 The one place two LLMs touch the same task is an `agent:auto` switch, where the keepalive delegation
