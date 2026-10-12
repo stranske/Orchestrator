@@ -726,7 +726,7 @@ def _worktree_head(worktree: str) -> str:
 
 
 def _worktree_state(worktree: str) -> dict:
-    """HEAD and the tracked-file changes, the two things a reviewer must leave as it found them."""
+    """HEAD and all tracked/untracked changes a reviewer must leave as it found them."""
     status = _git(worktree, "status", "--porcelain", "--untracked-files=all")
     return {
         "head": _worktree_head(worktree),
@@ -784,7 +784,7 @@ def _git_write_boundary(agent: str, worktree: str) -> dict | None:
 
 
 def _tree_changed(after: dict, head: str) -> bool:
-    """A reviewer left the tree at another commit or with tracked changes: its verdict judged other
+    """A reviewer left the tree at another commit or with tracked/untracked changes: its verdict judged other
     code than the head it would be recorded under."""
     return after.get("head") != head or bool(after.get("dirty"))
 
@@ -865,7 +865,7 @@ def choose_reviewer(
 def panel_worktree(target: str, head: str) -> str:
     """A detached checkout of exactly `head`, private to the panel. The closer's worktree tracks
     the PR branch by name (gone once a merge deletes it) and is the tree agents push from, so a
-    reviewer never runs there; `refs/pull/N/head` outlives the branch."""
+    reviewer never runs there. Fetch the exact evaluated commit, including a squash merge commit."""
     import provision
 
     repo, num = provision.parse_target(target)
@@ -923,7 +923,8 @@ def review_at_head(
 ) -> dict:
     """The panel on `target` at exactly `head`, judged once: a conclusive verdict recorded for this
     (target, head, reviewer mode) is reused (`status: reused`), and otherwise the panel runs on a
-    worktree proven to sit at that head and its verdict is recorded (`status: executed`). A
+    worktree proven to sit at that head and its verdict is recorded (`status: executed`).
+    With checkout_head, that actual merge commit is evaluated while head remains the PR memo key. A
     worktree at any other commit is refused (`head_mismatch`) and nothing is reviewed or recorded,
     so no head is ever credited with a judgment of another. Advisory like `review`: the caller
     adjudicates the blockers against ground truth.

@@ -223,3 +223,24 @@ def test_detached_spawn_binds_actual_merge_and_original_head(brain):
     assert out["status"] == "scheduled_after_merge"
     assert calls[0][calls[0].index("--head") + 1] == HEAD
     assert calls[0][calls[0].index("--checkout-head") + 1] == MERGED
+
+
+def test_boundary_protects_configured_state_and_database(monkeypatch, tmp_path):
+    monkeypatch.setattr(adapters, "write_boundary_unenforceable", lambda _: None)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "external-state"))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "external-brain" / "feedback.db")
+    monkeypatch.setattr(
+        adv, "_git", lambda *a: subprocess.CompletedProcess(a, 0, str(tmp_path / "gitdir"), "")
+    )
+    out = adv._git_write_boundary("vibe", str(tmp_path / "review"))
+    assert str(tmp_path / "external-state") in out["protect"]
+    assert str(tmp_path / "external-brain") in out["protect"]
+
+
+def test_boundary_refuses_a_cwd_that_regrants_live_state(monkeypatch, tmp_path):
+    monkeypatch.setattr(adapters, "write_boundary_unenforceable", lambda _: None)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "review" / "live-state"))
+    monkeypatch.setattr(
+        adv, "_git", lambda *a: subprocess.CompletedProcess(a, 0, str(tmp_path / "gitdir"), "")
+    )
+    assert adv._git_write_boundary("vibe", str(tmp_path / "review")) is None
