@@ -42,3 +42,7 @@ Workspace git metadata is read-only; this round's scoped commit is made in a
 writable temporary checkout. The GitHub connector also refused the required
 `needs-human` label because mutations require approval and this run's approval
 policy is `never`; the protected workflow blocker is recorded here for handoff.
+
+## Hosted native-shell prerequisite recovery
+
+Run38198757026 on7fcb8ec failed the unchanged skip ceilings: checkout40>31 and flat mirror61>52. Its nine new zsh cases skipped because Ubuntu had no zsh. CI now installs zsh in all four repo-specific verification jobs, including main floor reconciliation. No skip ceiling, permission, source behavior or live mirror changes. Native focused45PASS/zeroSKIP and Bash4PASS/zeroSKIP, with raw hashed receipts in ci-zsh-prerequisite.json. Fresh hosted validation remains UNKNOWN until the pushed head runs.
