@@ -1030,7 +1030,8 @@ def review_at_head(
 # value chain broke at "acted on" with 0 of 0 findings acted on. A BLOCKED panel now files ONE
 # follow-up issue in the target repo for the fleet to fix or close, and the PR's source issue is
 # closed at that time rather than left hanging (the owner's condition). Idempotent per panel key:
-# a local record first, then a title search, so a re-run at the same head never files twice.
+# a locked local record first, then a search. A pending create is reconciled, never repeated:
+# GitHub may have accepted the request even when its response was lost or search still lags.
 FOLLOWUP_TITLE = "Adversarial review follow-up: {target} @ {short}"
 FOLLOWUP_PRIORITY = {
     "critical": "priority:high",
@@ -1041,6 +1042,68 @@ FOLLOWUP_PRIORITY = {
 
 def _followup_record_path(key: str) -> Path:
     return _panel_artifact_path(key).with_suffix(".followup.json")
+
+
+def _write_followup_record(path: Path, value: dict) -> None:
+    """Persist before sending a create; failed persistence must prevent that request."""
+    import tempfile
+
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
+def _find_followup(run, repo: str, title: str, key: str) -> int | None:
+    """Only a successful, complete, well-formed search can establish absence."""
+    found = run(
+        [
+            "gh",
+            "issue",
+            "list",
+            "-R",
+            repo,
+            "--state",
+            "all",
+            "--search",
+            f'"{title}" in:title',
+            "--limit",
+            "100",
+            "--json",
+            "number,title,body",
+        ]
+    )
+    if found.returncode != 0:
+        raise RuntimeError("follow-up search failed; no create permitted")
+    rows = json.loads(found.stdout)
+    if not isinstance(rows, list) or any(
+        not isinstance(row, dict)
+        or type(row.get("number")) is not int
+        or row["number"] <= 0
+        or not isinstance(row.get("title"), str)
+        or not isinstance(row.get("body"), str)
+        for row in rows
+    ):
+        raise RuntimeError("malformed follow-up search; no create permitted")
+    marker = f"<!-- adversarial-panel:{key} -->"
+    matches = [row["number"] for row in rows if row["title"] == title and marker in row["body"]]
+    if len(matches) > 1:
+        raise RuntimeError("multiple follow-ups for panel key; no create permitted")
+    if matches:
+        return matches[0]
+    if len(rows) >= 100:
+        raise RuntimeError("incomplete follow-up search; no create permitted")
+    return None
 
 
 def followup_body(target: str, head: str, outcome: dict) -> str:
@@ -1086,32 +1149,51 @@ def file_followup(target: str, head: str, outcome: dict, *, gh=None) -> dict:
     if str(outcome.get("verdict") or "").upper() != "BLOCKED":
         return {"filed": False, "reason": f"verdict {outcome.get('verdict')}, nothing to follow up"}
     key = str(outcome.get("key") or panel_key(target, head, outcome.get("reviewers") or []))
-    record = _followup_record_path(key)
+    try:
+        import fcntl
+
+        record = _followup_record_path(key)
+        record.parent.mkdir(parents=True, exist_ok=True)
+        # Never unlink this inode: another process may already have opened it. A nonblocking
+        # loser reports a retry instead of holding a detached worker behind a stalled gh call.
+        with record.with_suffix(".lock").open("a") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return {"filed": False, "reason": "follow-up locked; retry", "key": key}
+            return _file_followup_locked(target, head, outcome, key, record, run)
+    except Exception as exc:
+        return {"filed": False, "error": str(exc)[:300], "key": key}
+
+
+def _file_followup_locked(
+    target: str, head: str, outcome: dict, key: str, record: Path, run
+) -> dict:
     try:
         prior = json.loads(record.read_text(encoding="utf-8"))
-        if prior.get("issue"):
+        if not isinstance(prior, dict):
+            raise RuntimeError("invalid follow-up record; no create permitted")
+    except FileNotFoundError:
+        prior = None
+    if prior is not None:
+        if prior.get("key") != key:
+            raise RuntimeError("invalid follow-up record; no create permitted")
+        if type(prior.get("issue")) is int and prior["issue"] > 0:
             return {"filed": False, "reason": "already filed", **prior}
-    except (OSError, ValueError):
-        pass
+        if prior.get("state") != "create_pending":
+            raise RuntimeError("invalid follow-up state; no create permitted")
     repo, num = target.split("#")
     title = FOLLOWUP_TITLE.format(target=target, short=head[:7])
-    try:
-        found = run(
-            [
-                "gh",
-                "issue",
-                "list",
-                "-R",
-                repo,
-                "--state",
-                "all",
-                "--search",
-                f'"{title}" in:title',
-                "--json",
-                "number,title",
-            ]
-        )
-        existing = [i for i in json.loads(found.stdout or "[]") if i.get("title") == title]
+    existing = _find_followup(run, repo, title, key)
+    if existing is None and prior is not None:
+        return {
+            "filed": False,
+            "key": key,
+            "state": "create_pending",
+            "reason": "create outcome unresolved; reconcile before retrying",
+        }
+    label = None
+    if existing is None:
         severities = [
             str(b.get("severity", "")).lower()
             for b in (outcome.get("result") or {}).get("blockers") or []
@@ -1124,26 +1206,37 @@ def file_followup(target: str, head: str, outcome: dict, *, gh=None) -> dict:
         )
         have = {row.get("name") for row in json.loads(labels_out.stdout or "[]")}
         label = wanted if wanted in have else None
-        if existing:
-            issue = existing[0]["number"]
-        else:
-            cmd = [
-                "gh",
-                "issue",
-                "create",
-                "-R",
-                repo,
-                "--title",
-                title,
-                "--body",
-                followup_body(target, head, {**outcome, "key": key}),
-            ]
-            if label:
-                cmd += ["--label", label]
-            made = run(cmd)
-            if made.returncode != 0:
-                return {"filed": False, "error": (made.stderr or "")[:300]}
-            issue = int(str(made.stdout).strip().rstrip("/").rsplit("/", 1)[-1])
+        cmd = [
+            "gh",
+            "issue",
+            "create",
+            "-R",
+            repo,
+            "--title",
+            title,
+            "--body",
+            followup_body(target, head, {**outcome, "key": key}),
+        ]
+        if label:
+            cmd += ["--label", label]
+        # A crash, timeout, nonzero exit or malformed success response after this point is
+        # ambiguous. Search may recover the issue, but absence cannot authorize another POST.
+        _write_followup_record(record, {"key": key, "repo": repo, "state": "create_pending"})
+        made = run(cmd)
+        if made.returncode != 0:
+            raise RuntimeError("follow-up create response failed; reconciliation required")
+        match = re.fullmatch(
+            rf"https://github\.com/{re.escape(repo)}/issues/([1-9]\d*)", made.stdout.strip()
+        )
+        if not match:
+            raise RuntimeError("invalid follow-up create response; reconciliation required")
+        issue = int(match[1])
+    else:
+        issue = existing
+    out = {"issue": issue, "repo": repo, "label": label, "closed_source": [], "key": key}
+    # Filing must survive a failed source-issue lookup/close or a crash during disposition.
+    _write_followup_record(record, out)
+    try:
         closed = []
         pr = run(["gh", "pr", "view", num, "-R", repo, "--json", "closingIssuesReferences,state"])
         for ref in json.loads(pr.stdout or "{}").get("closingIssuesReferences") or []:
@@ -1166,14 +1259,10 @@ def file_followup(target: str, head: str, outcome: dict, *, gh=None) -> dict:
                 if done.returncode == 0:
                     closed.append(f"{src}#{ref['number']}")
     except Exception as exc:
-        return {"filed": False, "error": str(exc)[:300]}
-    out = {"issue": issue, "repo": repo, "label": label, "closed_source": closed, "key": key}
-    try:
-        record.parent.mkdir(parents=True, exist_ok=True)
-        record.write_text(json.dumps(out), encoding="utf-8")
-    except OSError:
-        pass
-    return {"filed": not existing, **out}
+        return {"filed": existing is None, **out, "error": str(exc)[:300]}
+    out["closed_source"] = closed
+    _write_followup_record(record, out)
+    return {"filed": existing is None, **out}
 
 
 def spawn_post_merge_panel(
@@ -1498,9 +1587,78 @@ def _selftest_one_reviewer() -> None:
     )
 
 
+def _selftest_followup() -> None:
+    """Offline consumer checks, including a failed-search deliberate break and revert."""
+    import subprocess
+    import tempfile
+
+    target, head = "o/r#7", "a" * 40
+    key = panel_key(target, head, [AUTO_REVIEWER])
+    outcome = {"key": key, "verdict": "BLOCKED", "result": {"blockers": []}}
+    saved_state = os.environ.get("ORCH_STATE_DIR")
+    saved_find = _find_followup
+    with tempfile.TemporaryDirectory(prefix="adversarial-followup-") as tmp:
+        os.environ["ORCH_STATE_DIR"] = tmp
+        calls: list[list[str]] = []
+        visible = False
+
+        def gh(cmd):
+            calls.append(cmd)
+            verb = cmd[1:3]
+            if verb == ["issue", "list"]:
+                rows = (
+                    [
+                        {
+                            "number": 90,
+                            "title": FOLLOWUP_TITLE.format(target=target, short=head[:7]),
+                            "body": followup_body(target, head, outcome),
+                        }
+                    ]
+                    if visible
+                    else []
+                )
+                return subprocess.CompletedProcess(cmd, 0, json.dumps(rows), "")
+            if verb == ["label", "list"]:
+                return subprocess.CompletedProcess(cmd, 0, "[]", "")
+            if verb == ["issue", "create"]:
+                return subprocess.CompletedProcess(cmd, 1, "", "create response lost")
+            assert verb == ["pr", "view"], cmd
+            return subprocess.CompletedProcess(cmd, 0, "{}", "")
+
+        def failed_search(cmd):
+            if cmd[1:3] == ["issue", "list"]:
+                return subprocess.CompletedProcess(cmd, 1, "[]", "search unavailable")
+            return gh(cmd)
+
+        try:
+            assert file_followup(target, head, outcome, gh=failed_search).get("error")
+            assert not calls, calls
+            globals()["_find_followup"] = lambda *args: None
+            file_followup(target, head, outcome, gh=failed_search)
+            assert any(cmd[1:3] == ["issue", "create"] for cmd in calls), "vacuous break"
+            globals()["_find_followup"] = saved_find
+            calls.clear()
+            assert file_followup(target, head, outcome, gh=gh).get("state") == "create_pending"
+            assert not any(cmd[1:3] == ["issue", "create"] for cmd in calls), calls
+            visible = True
+            reconciled = file_followup(target, head, outcome, gh=gh)
+            assert reconciled["issue"] == 90 and not reconciled["filed"], reconciled
+            assert not any(cmd[1:3] == ["issue", "create"] for cmd in calls), calls
+        finally:
+            globals()["_find_followup"] = saved_find
+            if saved_state is None:
+                os.environ.pop("ORCH_STATE_DIR", None)
+            else:
+                os.environ["ORCH_STATE_DIR"] = saved_state
+    print(
+        "adversarial.py followup selftest: OK (failed search break->revert, pending create reconciled)"
+    )
+
+
 def _selftest():
     _selftest_review_at_head()
     _selftest_one_reviewer()
+    _selftest_followup()
     p = refute_prompt("merge a payments change")
     assert "REFUTE" in p and "broken until proven sound" in p.lower() and '"blocker"' in p, p
     # minority-veto: 2 substantiated high vetoes meet threshold 2 -> BLOCKED

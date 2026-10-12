@@ -1,0 +1,64 @@
+{
+  "original_commit": "5247ea1f9e9f72191cbd232325b813219ff12a9a",
+  "candidate_sha256": "87e2264857e148c2ad8a048dc446c8f711d676eda407e4ecdb3ee24bc7270d43",
+  "mutant_sha256": "4e631baf5190d9d36bd437bcac3d6c9e0af5043148dbe063b2b6ac2eb2e33f11",
+  "red_argv": [
+    "/opt/hostedtoolcache/Python/3.14.8/x64/bin/python3",
+    "-m",
+    "pytest",
+    "tests/test_adversarial_review_at_head.py",
+    "tests/test_adversarial_high_stakes_shape.py",
+    "tests/test_merge_guard_panel.py",
+    "-q",
+    "-m",
+    "not slow",
+    "-k",
+    "followup_concurrent_processes or followup_crashed_process or followup_ambiguous_create or followup_reconciles_only_the_same_panel_key or (followup_search_failure_or_malformed_result_never_creates and reply0) or followup_filing_is_recorded_before_source_disposition",
+    "--junitxml=docs/verification/issue-558-followup/original-red.xml"
+  ],
+  "tool_sources": {
+    "black": "psf/black@26.10.0",
+    "pytest": "pytest-dev/pytest@9.1.1"
+  },
+  "red_exit": 1,
+  "restored_sha256": "87e2264857e148c2ad8a048dc446c8f711d676eda407e4ecdb3ee24bc7270d43",
+  "green_argv": [
+    "/opt/hostedtoolcache/Python/3.14.8/x64/bin/python3",
+    "-m",
+    "pytest",
+    "tests/test_adversarial_review_at_head.py",
+    "tests/test_adversarial_high_stakes_shape.py",
+    "tests/test_merge_guard_panel.py",
+    "-q",
+    "-m",
+    "not slow",
+    "--junitxml=docs/verification/issue-558-followup/corrected-green.xml"
+  ],
+  "green_exit": 0,
+  "black_argv": [
+    "black",
+    "--check",
+    "--line-length",
+    "100",
+    "--exclude",
+    "(\\.workflows-lib|node_modules)",
+    "."
+  ],
+  "collection_argv": [
+    "python3",
+    "-m",
+    "pytest",
+    "--collect-only",
+    "-q",
+    "-m",
+    "not slow"
+  ],
+  "collected": 3087,
+  "focused_passed": 64,
+  "new_regressions": 21,
+  "original_assertion_failures": 8,
+  "black_runner_environment": {
+    "BLACK_NUM_WORKERS": "1",
+    "loop": "periodic timer wake, unchanged Black formatter"
+  }
+}
