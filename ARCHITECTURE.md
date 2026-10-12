@@ -676,8 +676,23 @@ nothing records which run acted on a redirect proposal (accepted role edges exis
 | role-triage | 24 excluded, `not_yet_measurable` | 12 excluded on 11 subjects, 281 associations, `excluded_only` |
 | role-redirect, -prompt, -decomposer | `not_yet_measurable` | `unscoreable` (762, 8, 4 associations) |
 
-The lifecycle classes only `advisory_self`, so it still counts 15 `offload` edges on role runs among
-its terminal outcomes, tallied `churn_unattributed`. That is measured and not decided here.
+**The lifecycle's tally scores no excluded outcome and no role run (2026-10-12).**
+`capability_causal_evidence` refused a class in `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES` only on
+its adjudicated-FAIL branch. A verifier FAIL never read the class, so agy-runtime-isolation's 11
+`transient_infra` runs trained its routing prior as failures (β 20, posterior 0.2, where 0.357 was
+due). Such a row now tallies `learning_excluded`, ahead of success and failure, and is counted in
+readiness. An excluded regression no longer sets `rollback_pending`.
+
+The tally also classes `role_association` (any capability on a role run that is not the role's own)
+beside `advisory_self`. Durable subjects are read from the `success` tally rather than the raw flag.
+Readiness reads rework, evidence age and a gate's `min_linked_outcomes` from the SCORED rows only
+(`success` or `failure`, counted in `scored_outcomes`), and only a `failure` regression sets
+`rollback_pending`. On a Brain copy this moved offload's 30 `churn_unattributed` rows to 15
+learning-excluded and 15 role associations, and role-triage's 12 to learning-excluded. One readiness
+criterion changed: role-triage's `evidence_age`, True to False, because all of its terminal rows are
+excluded or role-run copies and it has no scored evidence. Its gate had met `min_linked_outcomes` 5
+with 130 such rows in the live ledger. Neither was ready before or after, since neither has a durable
+subject.
 
 **Both readers key a subject the same way (2026-10-12).** `feedback.run_subject_id` is the
 lifecycle's rule, extracted unchanged: an explicit `causal_context.subject_id`, else a `subject_id`

@@ -2468,9 +2468,12 @@ def capability_causal_evidence(
             # failure(s) over the max of 0" — trained toward zero from non-failures).
             # An edge whose TARGET is the capability's own role run is an advisory trace
             # (§2: evaluator/verifier traces are non-worker) — the role registry's naming
-            # convention role-<name> is asserted by selftest, not assumed.
+            # convention role-<name> is asserted by selftest, not assumed. Any OTHER capability
+            # on a role run (the `offload` that produced the proposal) is a role association:
+            # the outcome a role run holds is a copy of its acting run's, and the acting run
+            # carries that capability's own edge, so tallying it counts one delivery twice.
             target_role = str(row["target_role_name"] or "")
-            advisory_self = role_target_kind(capability_id, target_role) == "advisory_self"
+            role_kind = role_target_kind(capability_id, target_role)
             adjudicated_fail = str(row["adjudicated_verdict"] or "").upper().startswith("FAIL")
             named_class = str(row["failure_class"] or "")
             attributable_failure = bool(
@@ -2494,10 +2497,18 @@ def capability_causal_evidence(
                     or (adjudicated_fail and named_class not in NONATTRIBUTABLE_FAILURE_CLASSES)
                 )
             )
-            if advisory_self:
-                tally_class = "advisory_self"
+            if role_kind:
+                tally_class = role_kind
             elif not (consumed and terminal_outcome):
                 tally_class = ""
+            elif named_class in LEARNING_EXCLUDED_FAILURE_CLASSES:
+                # §2: no learner scores these classes, in either direction. The adjudicated-FAIL
+                # branch below already refused them; a VERIFIER fail or a regression durability
+                # did not, so 11 `transient_infra` runs of agy-runtime-isolation trained its
+                # routing prior as failures (beta 20, posterior 0.2 where 0.357 was due;
+                # measured 2026-10-12). Checked before success too: an excluded class says the
+                # outcome is not the run's own, whatever it was.
+                tally_class = "learning_excluded"
             elif durable_success:
                 tally_class = "success"
             elif attributable_failure:
