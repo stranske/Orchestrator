@@ -1,0 +1,46 @@
+{
+  "pr": 543,
+  "head_sha": "a75cec37a4159a62f00af2e9c65e8d83e8335baa",
+  "run_id": 38197764763,
+  "synthetic_merge_sha": "6c5caa7af54abdfb324d76412d698ec8215ef061",
+  "evidence_kind": "Selected authentic hosted log excerpts; not a complete final-head CI or review-pagination receipt.",
+  "jobs": {
+    "0": {
+      "job_id": 114644176301,
+      "excerpt": [
+        "2026-10-12T02:56:27.9676637Z HEAD is now at 6c5caa7 Merge a75cec37a4159a62f00af2e9c65e8d83e8335baa into 4d4136d83a26f69f1ffc0cffbcf3cd8ae7fa38b1",
+        "2026-10-12T02:59:43.8004110Z   admission          SKIP 10 of 13 admission checks passed, 3 skipped: test_legacy_debt_is_reported_not_forgiven (capability l",
+        "2026-10-12T02:59:43.8011774Z     pytest   SKIPPED [2] tests/test_agent_gh_guard.py:97: zsh is not installed, so its startup files cannot run",
+        "2026-10-12T02:59:43.8013149Z     pytest   SKIPPED [2] tests/test_agent_gh_guard.py:105: zsh is not installed, so its startup files cannot run",
+        "2026-10-12T02:59:43.8014517Z     pytest   SKIPPED [1] tests/test_agent_gh_guard.py:143: zsh is not installed, so its startup files cannot run",
+        "2026-10-12T02:59:43.8015878Z     pytest   SKIPPED [8] tests/test_agent_gh_guard.py:225: zsh is not installed, so its startup files cannot run",
+        "2026-10-12T02:59:43.8017974Z     pytest   SKIPPED [1] tests/test_agent_gh_guard.py:245: zsh is not installed, so its startup files cannot run",
+        "2026-10-12T02:59:43.8183128Z     - CEILING exceeded: 40 skipped test(s) > agreed maximum 31. This is bounded on purpose — either the new one is wrong, or raise `skipped_max` in .verify-floor.json deliberately and say why. 2 of them skipped only for a row this tree declares and the ledger judged lacks (see `declared:`): the deployed code's first writing load registers it, which drains them, so they are never a reason to raise `skipped_max`."
+      ]
+    },
+    "1": {
+      "job_id": 114644176406,
+      "excerpt": [
+        "2026-10-12T02:56:26.6968553Z HEAD is now at 6c5caa7 Merge a75cec37a4159a62f00af2e9c65e8d83e8335baa into 4d4136d83a26f69f1ffc0cffbcf3cd8ae7fa38b1",
+        "2026-10-12T02:58:50.5937273Z   admission          SKIP 10 of 13 admission checks passed, 3 skipped: test_legacy_debt_is_reported_not_forgiven (capability l",
+        "2026-10-12T02:58:50.5942157Z     pytest   SKIPPED [2] tests/test_agent_gh_guard.py:97: zsh is not installed, so its startup files cannot run",
+        "2026-10-12T02:58:50.5942805Z     pytest   SKIPPED [2] tests/test_agent_gh_guard.py:105: zsh is not installed, so its startup files cannot run",
+        "2026-10-12T02:58:50.5943543Z     pytest   SKIPPED [1] tests/test_agent_gh_guard.py:143: zsh is not installed, so its startup files cannot run",
+        "2026-10-12T02:58:50.5944154Z     pytest   SKIPPED [8] tests/test_agent_gh_guard.py:225: zsh is not installed, so its startup files cannot run",
+        "2026-10-12T02:58:50.5944903Z     pytest   SKIPPED [1] tests/test_agent_gh_guard.py:245: zsh is not installed, so its startup files cannot run",
+        "2026-10-12T02:58:50.6041674Z     - CEILING exceeded (bare exec mirror): 61 skipped test(s) > agreed maximum 52. This is bounded on purpose — either the new one is wrong, or raise `bare_mirror_skipped_max` in .verify-floor.json deliberately and say why. 2 of them skipped only for a row this tree declares and the ledger judged lacks (see `declared:`): the deployed code's first writing load registers it, which drains them, so they are never a reason to raise `bare_mirror_skipped_max`."
+      ]
+    }
+  },
+  "blocker": "zsh is absent: all 14 native zsh guard cases skip, including the nine added in this PR. Checkout 40 > 31; bare mirror 61 > 52. Preserve ceilings and install zsh in protected CI workflow jobs.",
+  "local_runner": {
+    "pytest": "not installed",
+    "black": "not installed",
+    "zsh": "not installed",
+    "package_install": "blocked by DNS/network restrictions"
+  },
+  "review_threads_returned": 0,
+  "review_pagination_certified": false,
+  "terminal_merge_executed": false,
+  "verify_compare_executed": false
+}
