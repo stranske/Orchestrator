@@ -9,3 +9,5 @@ Existing main e626002 was integrated; only verification-floor content conflicted
 Final existing-state private-snapshot verification:3000PASS/0FAIL/0SKIP,104of104selftests,5of5gates,122mypy modules checked, no exemptions. Pytest7m17s, selftests27s, gates37s. Full raw summary in full-checkout-verifier.txt.
 
 Follow-on review: effective measured receipt now prefers a valid current measured report and falls back to a retained legacy receipt. Classification and both totals share that amount. Two new regressions failed before the change; 102 focused Python tests and23subtests pass afterward. Final collection3002; prior full3000 run is a baseline proof, not a final-head full-suite claim. Fresh hosted verification remains required.
+
+CLI rendering assertions now expect measured historical zero and partial retained receipts to contribute to the accounted total. Full54 CLI tests PASS; historical zero remains a measured receipt for this summary, while new role-cost admission still requires positive measured cost. No new full-suite claim.

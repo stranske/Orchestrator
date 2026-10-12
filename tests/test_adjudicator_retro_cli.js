@@ -1436,10 +1436,10 @@ print(json.dumps(results))
       + 'estimated accounted USD UNMEASURED; scale list_price_usd)',
     measured_zero: 'adjudicator shadow: cases 1, agree 0, disagree 0, cost 0 '
       + '(graded 0; costs measured 1; cost measured 1 of 1, imputed 0, unmeasured 0; '
-      + 'estimated accounted USD UNMEASURED; scale list_price_usd)',
+      + 'estimated accounted USD 0; scale list_price_usd)',
     partial_cost: 'adjudicator shadow: cases 3, agree 0, disagree 0, cost 1.25 '
       + '(graded 0; costs measured 2; cost measured 2 of 2, imputed 0, unmeasured 0; '
-      + 'estimated accounted USD UNMEASURED; scale list_price_usd)',
+      + 'estimated accounted USD 1.25; scale list_price_usd)',
     unmeasured: 'adjudicator shadow: cases 0, agree 0, disagree 0, cost UNKNOWN '
       + '(graded 0; costs measured 0; cost measured 0 of 0, imputed 0, unmeasured 0; '
       + 'estimated accounted USD UNMEASURED; scale list_price_usd)',
@@ -1667,7 +1667,7 @@ print(json.dumps(True))
         'invalid responses must stay outside both agreement denominators');
     }
     assert.equal(report.summary.cost_unmeasured_cases, expected === null ? 1 : 0);
-    assert.equal(report.summary.estimated_cost_usd, expected > 0 ? expected : null);
+    assert.equal(report.summary.estimated_cost_usd, expected);
     assert.deepEqual([saved.case_id, saved.role_run_id, saved.backend_run_id], identity);
     assert.equal(saved.decision, undefined);
     assert.equal(saved.shadow_verdict, null);
