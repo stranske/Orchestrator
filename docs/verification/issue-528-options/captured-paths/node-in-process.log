@@ -1,0 +1,265 @@
+TAP version 13
+# Subtest: incumbent negative control through absolute-alias
+ok 1 - incumbent negative control through absolute-alias
+  ---
+  duration_ms: 683.438275
+  type: 'test'
+  ...
+# Subtest: incumbent negative control through relative-alias
+ok 2 - incumbent negative control through relative-alias
+  ---
+  duration_ms: 691.502586
+  type: 'test'
+  ...
+# Subtest: incumbent negative control through self-locating-alias
+ok 3 - incumbent negative control through self-locating-alias
+  ---
+  duration_ms: 690.087501
+  type: 'test'
+  ...
+# Subtest: repaired reader with unanchored entry through absolute-alias
+ok 4 - repaired reader with unanchored entry through absolute-alias
+  ---
+  duration_ms: 724.878177
+  type: 'test'
+  ...
+# Subtest: repaired reader with unanchored entry through relative-alias
+ok 5 - repaired reader with unanchored entry through relative-alias
+  ---
+  duration_ms: 717.048539
+  type: 'test'
+  ...
+# Subtest: repaired reader with unanchored entry through self-locating-alias
+ok 6 - repaired reader with unanchored entry through self-locating-alias
+  ---
+  duration_ms: 702.544101
+  type: 'test'
+  ...
+# Subtest: production reentry through absolute-alias
+ok 7 - production reentry through absolute-alias
+  ---
+  duration_ms: 686.20294
+  type: 'test'
+  ...
+# Subtest: production reentry through relative-alias
+ok 8 - production reentry through relative-alias
+  ---
+  duration_ms: 694.925363
+  type: 'test'
+  ...
+# Subtest: production reentry through self-locating-alias
+ok 9 - production reentry through self-locating-alias
+  ---
+  duration_ms: 691.231689
+  type: 'test'
+  ...
+# Subtest: production Node split preload and script stay on the selected generation
+not ok 10 - production Node split preload and script stay on the selected generation
+  ---
+  duration_ms: 441.499893
+  type: 'test'
+  location: '/home/runner/work/Orchestrator/Orchestrator/tests/test_mirror_reader_reentry.js:138:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    node:child_process:981
+        throw err;
+        ^
+    
+    <ref *1> Error: spawnSync /opt/hostedtoolcache/node/24.21.0/x64/bin/node EPERM
+        at Object.spawnSync (node:internal/child_process:1160:20)
+        at spawnSync (node:child_process:928:24)
+        at Object.execFileSync (node:child_process:971:15)
+        at Object.<anonymous> (/tmp/orch-node-options-YEfgch/mirror.generation-7dc3ba9f5a804cf686f00fd207a9a28d/scripts/observer.cjs:2:18)
+        at Module._compile (node:internal/modules/cjs/loader:1929:14)
+        at Object..js (node:internal/modules/cjs/loader:2060:10)
+        at Module.load (node:internal/modules/cjs/loader:1651:32)
+        at Module._load (node:internal/modules/cjs/loader:1443:12)
+        at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+        at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5) {
+      errno: -1,
+      code: 'EPERM',
+      syscall: 'spawnSync /opt/hostedtoolcache/node/24.21.0/x64/bin/node',
+      path: '/opt/hostedtoolcache/node/24.21.0/x64/bin/node',
+      spawnargs: [
+        '-e',
+        'console.log(require(process.argv[1]).value)',
+        '/tmp/orch-node-options-YEfgch/mirror.generation-7dc3ba9f5a804cf686f00fd207a9a28d/scripts/peer.cjs'
+      ],
+      error: [Circular *1],
+      status: 0,
+      signal: null,
+      output: [ null, '', '' ],
+      pid: 144,
+      stdout: '',
+      stderr: ''
+    }
+    
+    Node.js v24.21.0
+    
+    
+    1 !== 0
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 0
+  actual: 1
+  operator: 'strictEqual'
+  stack: |-
+    Object.spawnSync (node:internal/child_process:1160:20)
+    spawnSync (node:child_process:928:24)
+    Object.execFileSync (node:child_process:971:15)
+    Object.<anonymous> (/tmp/orch-node-options-YEfgch/mirror.generation-7dc3ba9f5a804cf686f00fd207a9a28d/scripts/observer.cjs:2:18)
+    Module._compile (node:internal/modules/cjs/loader:1929:14)
+    Object..js (node:internal/modules/cjs/loader:2060:10)
+    Module.load (node:internal/modules/cjs/loader:1651:32)
+    Module._load (node:internal/modules/cjs/loader:1443:12)
+    wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+    Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5) {
+    TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_mirror_reader_reentry.js:226:14)
+    process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: production Node equals preload and script stay on the selected generation
+not ok 11 - production Node equals preload and script stay on the selected generation
+  ---
+  duration_ms: 433.737301
+  type: 'test'
+  location: '/home/runner/work/Orchestrator/Orchestrator/tests/test_mirror_reader_reentry.js:138:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    node:child_process:981
+        throw err;
+        ^
+    
+    <ref *1> Error: spawnSync /opt/hostedtoolcache/node/24.21.0/x64/bin/node EPERM
+        at Object.spawnSync (node:internal/child_process:1160:20)
+        at spawnSync (node:child_process:928:24)
+        at Object.execFileSync (node:child_process:971:15)
+        at Object.<anonymous> (/tmp/orch-node-options-xqkMIZ/mirror.generation-76e0caa5568249f29d5a0c7ed89c2dce/scripts/observer.cjs:2:18)
+        at Module._compile (node:internal/modules/cjs/loader:1929:14)
+        at Object..js (node:internal/modules/cjs/loader:2060:10)
+        at Module.load (node:internal/modules/cjs/loader:1651:32)
+        at Module._load (node:internal/modules/cjs/loader:1443:12)
+        at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+        at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5) {
+      errno: -1,
+      code: 'EPERM',
+      syscall: 'spawnSync /opt/hostedtoolcache/node/24.21.0/x64/bin/node',
+      path: '/opt/hostedtoolcache/node/24.21.0/x64/bin/node',
+      spawnargs: [
+        '-e',
+        'console.log(require(process.argv[1]).value)',
+        '/tmp/orch-node-options-xqkMIZ/mirror.generation-76e0caa5568249f29d5a0c7ed89c2dce/scripts/peer.cjs'
+      ],
+      error: [Circular *1],
+      status: 0,
+      signal: null,
+      output: [ null, '', '' ],
+      pid: 162,
+      stdout: '',
+      stderr: ''
+    }
+    
+    Node.js v24.21.0
+    
+    
+    1 !== 0
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 0
+  actual: 1
+  operator: 'strictEqual'
+  stack: |-
+    Object.spawnSync (node:internal/child_process:1160:20)
+    spawnSync (node:child_process:928:24)
+    Object.execFileSync (node:child_process:971:15)
+    Object.<anonymous> (/tmp/orch-node-options-xqkMIZ/mirror.generation-76e0caa5568249f29d5a0c7ed89c2dce/scripts/observer.cjs:2:18)
+    Module._compile (node:internal/modules/cjs/loader:1929:14)
+    Object..js (node:internal/modules/cjs/loader:2060:10)
+    Module.load (node:internal/modules/cjs/loader:1651:32)
+    Module._load (node:internal/modules/cjs/loader:1443:12)
+    wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+    Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5) {
+    TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_mirror_reader_reentry.js:226:14)
+    process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: production Node short preload and script stay on the selected generation
+not ok 12 - production Node short preload and script stay on the selected generation
+  ---
+  duration_ms: 431.184867
+  type: 'test'
+  location: '/home/runner/work/Orchestrator/Orchestrator/tests/test_mirror_reader_reentry.js:138:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    node:child_process:981
+        throw err;
+        ^
+    
+    <ref *1> Error: spawnSync /opt/hostedtoolcache/node/24.21.0/x64/bin/node EPERM
+        at Object.spawnSync (node:internal/child_process:1160:20)
+        at spawnSync (node:child_process:928:24)
+        at Object.execFileSync (node:child_process:971:15)
+        at Object.<anonymous> (/tmp/orch-node-options-KXbUgS/mirror.generation-b7dc897416cf42b891585eeaac208078/scripts/observer.cjs:2:18)
+        at Module._compile (node:internal/modules/cjs/loader:1929:14)
+        at Object..js (node:internal/modules/cjs/loader:2060:10)
+        at Module.load (node:internal/modules/cjs/loader:1651:32)
+        at Module._load (node:internal/modules/cjs/loader:1443:12)
+        at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+        at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5) {
+      errno: -1,
+      code: 'EPERM',
+      syscall: 'spawnSync /opt/hostedtoolcache/node/24.21.0/x64/bin/node',
+      path: '/opt/hostedtoolcache/node/24.21.0/x64/bin/node',
+      spawnargs: [
+        '-e',
+        'console.log(require(process.argv[1]).value)',
+        '/tmp/orch-node-options-KXbUgS/mirror.generation-b7dc897416cf42b891585eeaac208078/scripts/peer.cjs'
+      ],
+      error: [Circular *1],
+      status: 0,
+      signal: null,
+      output: [ null, '', '' ],
+      pid: 180,
+      stdout: '',
+      stderr: ''
+    }
+    
+    Node.js v24.21.0
+    
+    
+    1 !== 0
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 0
+  actual: 1
+  operator: 'strictEqual'
+  stack: |-
+    Object.spawnSync (node:internal/child_process:1160:20)
+    spawnSync (node:child_process:928:24)
+    Object.execFileSync (node:child_process:971:15)
+    Object.<anonymous> (/tmp/orch-node-options-KXbUgS/mirror.generation-b7dc897416cf42b891585eeaac208078/scripts/observer.cjs:2:18)
+    Module._compile (node:internal/modules/cjs/loader:1929:14)
+    Object..js (node:internal/modules/cjs/loader:2060:10)
+    Module.load (node:internal/modules/cjs/loader:1651:32)
+    Module._load (node:internal/modules/cjs/loader:1443:12)
+    wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+    Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5) {
+    TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_mirror_reader_reentry.js:226:14)
+    process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+1..12
+# tests 12
+# suites 0
+# pass 9
+# fail 3
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 7602.820102

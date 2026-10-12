@@ -1,0 +1,273 @@
+{
+  "base_head": "f1bac523536748b89ab7a7a91b1c93043afd7f01",
+  "phases": [
+    {
+      "phase": "baseline",
+      "failures": 0,
+      "sha256": "3007f0ba4a57e5ff57c2cef9f78a86e905419469989a96806b9316b92b473872",
+      "captures": [
+        {
+          "command": [
+            "node",
+            "--require",
+            "./mirror/scripts/preload.cjs",
+            "./mirror/scripts/main.cjs"
+          ],
+          "captured": [
+            "node",
+            "--require",
+            "/tmp/orch-generations-ppm1r8vd/mirror.generation-94b8741e37364c19b8c50182177e8072/scripts/preload.cjs",
+            "/tmp/orch-generations-ppm1r8vd/mirror.generation-94b8741e37364c19b8c50182177e8072/scripts/main.cjs",
+            "mirror/data.json"
+          ],
+          "generation": "/tmp/orch-generations-ppm1r8vd/mirror.generation-94b8741e37364c19b8c50182177e8072"
+        },
+        {
+          "command": [
+            "node",
+            "--require=./mirror/scripts/preload.cjs",
+            "./mirror/scripts/main.cjs"
+          ],
+          "captured": [
+            "node",
+            "--require=/tmp/orch-generations-2b6f464_/mirror.generation-12987f860d1b4346b0d6800f1770d694/scripts/preload.cjs",
+            "/tmp/orch-generations-2b6f464_/mirror.generation-12987f860d1b4346b0d6800f1770d694/scripts/main.cjs",
+            "mirror/data.json"
+          ],
+          "generation": "/tmp/orch-generations-2b6f464_/mirror.generation-12987f860d1b4346b0d6800f1770d694"
+        },
+        {
+          "command": [
+            "node",
+            "--conditions",
+            "custom",
+            "-r",
+            "./mirror/scripts/preload.cjs",
+            "./mirror/scripts/main.cjs"
+          ],
+          "captured": [
+            "node",
+            "--conditions",
+            "custom",
+            "-r",
+            "/tmp/orch-generations-_0_q2rjm/mirror.generation-920e95f4f77e4a1883a2e24cb58ebbe3/scripts/preload.cjs",
+            "/tmp/orch-generations-_0_q2rjm/mirror.generation-920e95f4f77e4a1883a2e24cb58ebbe3/scripts/main.cjs",
+            "mirror/data.json"
+          ],
+          "generation": "/tmp/orch-generations-_0_q2rjm/mirror.generation-920e95f4f77e4a1883a2e24cb58ebbe3"
+        },
+        {
+          "command": [
+            "/bin/bash",
+            "-o",
+            "pipefail",
+            "./mirror/main.sh"
+          ],
+          "captured": [
+            "/bin/bash",
+            "-o",
+            "pipefail",
+            "/tmp/orch-generations-zcq7532n/mirror.generation-dc10e900c534446f87a631f63bbb4eba/main.sh",
+            "mirror/data.json"
+          ],
+          "generation": "/tmp/orch-generations-zcq7532n/mirror.generation-dc10e900c534446f87a631f63bbb4eba"
+        },
+        {
+          "command": [
+            "/bin/bash",
+            "+o",
+            "pipefail",
+            "./mirror/main.sh"
+          ],
+          "captured": [
+            "/bin/bash",
+            "+o",
+            "pipefail",
+            "/tmp/orch-generations-ipgu7itv/mirror.generation-a6a97bec87a040f9aeee7b4cca4dc378/main.sh",
+            "mirror/data.json"
+          ],
+          "generation": "/tmp/orch-generations-ipgu7itv/mirror.generation-a6a97bec87a040f9aeee7b4cca4dc378"
+        }
+      ]
+    },
+    {
+      "phase": "mutant",
+      "failures": 5,
+      "sha256": "1b6f5068be7c179e5d9980cc42a9899f863bcf8ec253c42b24f0060efe97964a",
+      "captures": [
+        {
+          "command": [
+            "node",
+            "--require",
+            "./mirror/scripts/preload.cjs",
+            "./mirror/scripts/main.cjs"
+          ],
+          "captured": [
+            "node",
+            "--require",
+            "/tmp/orch-generations-7px_ijxd/mirror.generation-9e043f3e47a14647bc94522eaa9eb5fb/scripts/preload.cjs",
+            "./mirror/scripts/main.cjs",
+            "mirror/data.json"
+          ],
+          "generation": "/tmp/orch-generations-7px_ijxd/mirror.generation-9e043f3e47a14647bc94522eaa9eb5fb"
+        },
+        {
+          "command": [
+            "node",
+            "--require=./mirror/scripts/preload.cjs",
+            "./mirror/scripts/main.cjs"
+          ],
+          "captured": [
+            "node",
+            "--require=./mirror/scripts/preload.cjs",
+            "/tmp/orch-generations-bgdjgfok/mirror.generation-679cb12615da44c78dd0f728af69e944/scripts/main.cjs",
+            "mirror/data.json"
+          ],
+          "generation": "/tmp/orch-generations-bgdjgfok/mirror.generation-679cb12615da44c78dd0f728af69e944"
+        },
+        {
+          "command": [
+            "node",
+            "--conditions",
+            "custom",
+            "-r",
+            "./mirror/scripts/preload.cjs",
+            "./mirror/scripts/main.cjs"
+          ],
+          "captured": [
+            "node",
+            "--conditions",
+            "custom",
+            "-r",
+            "./mirror/scripts/preload.cjs",
+            "./mirror/scripts/main.cjs",
+            "mirror/data.json"
+          ],
+          "generation": "/tmp/orch-generations-vkyelne_/mirror.generation-8958c710a77043d398e4f6865f02dea2"
+        },
+        {
+          "command": [
+            "/bin/bash",
+            "-o",
+            "pipefail",
+            "./mirror/main.sh"
+          ],
+          "captured": [
+            "/bin/bash",
+            "-o",
+            "pipefail",
+            "./mirror/main.sh",
+            "mirror/data.json"
+          ],
+          "generation": "/tmp/orch-generations-5pnxrl5e/mirror.generation-25a65f0543b14db789e73d775cab6d72"
+        },
+        {
+          "command": [
+            "/bin/bash",
+            "+o",
+            "pipefail",
+            "./mirror/main.sh"
+          ],
+          "captured": [
+            "/bin/bash",
+            "+o",
+            "pipefail",
+            "./mirror/main.sh",
+            "mirror/data.json"
+          ],
+          "generation": "/tmp/orch-generations-cgckkqbz/mirror.generation-1395d414deea40aab95875bb10317de2"
+        }
+      ]
+    },
+    {
+      "phase": "restored",
+      "failures": 0,
+      "sha256": "3007f0ba4a57e5ff57c2cef9f78a86e905419469989a96806b9316b92b473872",
+      "captures": [
+        {
+          "command": [
+            "node",
+            "--require",
+            "./mirror/scripts/preload.cjs",
+            "./mirror/scripts/main.cjs"
+          ],
+          "captured": [
+            "node",
+            "--require",
+            "/tmp/orch-generations-0p8dyiqo/mirror.generation-f3e43a5b886b4c9e8bf8945f47886baa/scripts/preload.cjs",
+            "/tmp/orch-generations-0p8dyiqo/mirror.generation-f3e43a5b886b4c9e8bf8945f47886baa/scripts/main.cjs",
+            "mirror/data.json"
+          ],
+          "generation": "/tmp/orch-generations-0p8dyiqo/mirror.generation-f3e43a5b886b4c9e8bf8945f47886baa"
+        },
+        {
+          "command": [
+            "node",
+            "--require=./mirror/scripts/preload.cjs",
+            "./mirror/scripts/main.cjs"
+          ],
+          "captured": [
+            "node",
+            "--require=/tmp/orch-generations-bctwgvac/mirror.generation-d1efa29b9bb340868e499c0e5510c555/scripts/preload.cjs",
+            "/tmp/orch-generations-bctwgvac/mirror.generation-d1efa29b9bb340868e499c0e5510c555/scripts/main.cjs",
+            "mirror/data.json"
+          ],
+          "generation": "/tmp/orch-generations-bctwgvac/mirror.generation-d1efa29b9bb340868e499c0e5510c555"
+        },
+        {
+          "command": [
+            "node",
+            "--conditions",
+            "custom",
+            "-r",
+            "./mirror/scripts/preload.cjs",
+            "./mirror/scripts/main.cjs"
+          ],
+          "captured": [
+            "node",
+            "--conditions",
+            "custom",
+            "-r",
+            "/tmp/orch-generations-37hqhkfm/mirror.generation-584079085abd482188ef3617216eec97/scripts/preload.cjs",
+            "/tmp/orch-generations-37hqhkfm/mirror.generation-584079085abd482188ef3617216eec97/scripts/main.cjs",
+            "mirror/data.json"
+          ],
+          "generation": "/tmp/orch-generations-37hqhkfm/mirror.generation-584079085abd482188ef3617216eec97"
+        },
+        {
+          "command": [
+            "/bin/bash",
+            "-o",
+            "pipefail",
+            "./mirror/main.sh"
+          ],
+          "captured": [
+            "/bin/bash",
+            "-o",
+            "pipefail",
+            "/tmp/orch-generations-_wuqmzjs/mirror.generation-5f071ba0f0094510a60e4aa79c94c88f/main.sh",
+            "mirror/data.json"
+          ],
+          "generation": "/tmp/orch-generations-_wuqmzjs/mirror.generation-5f071ba0f0094510a60e4aa79c94c88f"
+        },
+        {
+          "command": [
+            "/bin/bash",
+            "+o",
+            "pipefail",
+            "./mirror/main.sh"
+          ],
+          "captured": [
+            "/bin/bash",
+            "+o",
+            "pipefail",
+            "/tmp/orch-generations-o4w3h9fx/mirror.generation-449904588ad24a3598060f15bc574df8/main.sh",
+            "mirror/data.json"
+          ],
+          "generation": "/tmp/orch-generations-o4w3h9fx/mirror.generation-449904588ad24a3598060f15bc574df8"
+        }
+      ]
+    }
+  ],
+  "byte_identical_restoration": true
+}

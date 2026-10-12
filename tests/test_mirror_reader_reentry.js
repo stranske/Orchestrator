@@ -157,7 +157,8 @@ for (const optionForm of ['split', 'equals', 'short']) {
       const exec = '        os.execvpe(command[0], command, env)';
       assert.ok(helper.includes(exec), 'production exec boundary moved');
       fs.writeFileSync(path.join(snapshot, 'mirror_reader.py'), helper.replace(exec,
-        '        print("SELECTED", flush=True)\n' +
+        '        import json\n' +
+        '        print("SELECTED " + json.dumps(command), flush=True)\n' +
         '        assert sys.stdin.readline() == "resume\\n"\n' + exec));
       function publish(value) {
         fs.writeFileSync(path.join(snapshot, 'scripts/preload.cjs'),
@@ -188,11 +189,15 @@ for (const optionForm of ['split', 'equals', 'short']) {
       reader.stderr.setEncoding('utf8').on('data', (chunk) => { errors += chunk; });
       lines = readline.createInterface({ input: reader.stdout });
       const output = [];
+      let capturedCommand;
       let readyResolve;
       let readyReject;
       const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
       lines.on('line', (line) => {
-        if (line === 'SELECTED') readyResolve();
+        if (line.startsWith('SELECTED ')) {
+          capturedCommand = JSON.parse(line.slice('SELECTED '.length));
+          readyResolve();
+        }
         else output.push(line);
       });
       done = new Promise((resolve, reject) => {
@@ -205,6 +210,18 @@ for (const optionForm of ['split', 'equals', 'short']) {
       await ready;
       publish('new');
       assert.notEqual(fs.realpathSync(mirror), pinned);
+      // Check the operands passed to exec after a real publication. Node's
+      // module loader can canonicalize a live symlink, hiding an unpinned argv.
+      const pinnedPreload = path.join(pinned, 'scripts/preload.cjs');
+      const pinnedOptions = optionForm === 'equals' ? [`--require=${pinnedPreload}`] :
+        optionForm === 'short' ? ['--conditions', 'custom', '-r', pinnedPreload] :
+          ['--require', pinnedPreload];
+      assert.equal(capturedCommand.at(-2), path.join(pinned, 'scripts/observer.cjs'),
+        'script operand was not pinned to the selected generation');
+      assert.deepEqual(capturedCommand,
+        [process.execPath, ...pinnedOptions, path.join(pinned, 'scripts/observer.cjs'),
+          'mirror/data.json'],
+        'preload must stay pinned and relative data must keep its spelling');
       reader.stdin.end('resume\n');
       assert.equal(await done, 0, errors);
       assert.deepEqual(output.map((line) => JSON.parse(line)),

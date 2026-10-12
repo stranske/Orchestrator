@@ -1,0 +1,15 @@
+✖ tests/test_mirror_reader_reentry.js (7530.899184ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7540.896966
+
+✖ failing tests:
+
+test at tests/test_mirror_reader_reentry.js:1:1
+✖ tests/test_mirror_reader_reentry.js (7530.899184ms)
+  'test failed'
