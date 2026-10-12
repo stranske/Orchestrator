@@ -9,3 +9,9 @@ Current review repair scopes shell +o to bash/sh/zsh and +O to bash. Six interpr
 Current focused Python:43 passed plus41 subtests; Node TAP:14 passed/0 skipped. Exact integrated collection:3005 after main545 integration (main3002 plus three executed mirror-option tests). All main skip/mypy ceilings preserved; floor is a measured union, not a new local full-suite verdict. Validation is recorded in focused.log, regression-green.log, and node.log. The named production RED/restored-GREEN proof has been regenerated from the corrected production source and hashes. Full local verify.py is intentionally not claimed: this parser change touches no live ledger or CI-skipped capability; per CLAUDE.md the PR verdict is hosted verify.py in checkout and flat mirror shapes. Skip ceilings are unchanged. Installed mirror publication and provider acceptance are separate.
 
 Reproduce focused witnesses with `PYTHONPATH=src python3 -m pytest -q tests/test_mirror_generations.py` and `node --test tests/test_mirror_reader_reentry.js`. For deliberate break in an isolated checkout, save the candidate source bytes, substitute `git show e626002:src/mirror_reader.py`, run the named test from proof.json expecting five assertion failures, restore the saved bytes exactly, verify SHA256, and rerun expecting zero failures. Never mutate an active installed mirror for this proof.
+
+The named Python acceptance witness now captures argv from production execvpe,
+checks physical script/preload generation paths and unchanged relative data,
+then checks actual old-generation parent/child execution after publication.
+Its regenerated unchanged-base mutation fails five intended operand assertions
+and restored candidate passes; no setup error is counted as the RED proof.

@@ -1,14 +1,15 @@
-<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="5" skipped="0" tests="6" time="1.115" timestamp="2026-10-12T05:28:50.266577-05:00" hostname="server.trs.private"><testcase classname="tests.test_mirror_generations.MirrorGenerationTests" name="test_command_options_preserve_script_pinning" time="1.078"><failure message="AssertionError: Lists differ: ['new', 'old', 'new', 'new', ['mirror/ordinary-data.txt']] != ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]&#10;&#10;First differing element 0:&#10;'new'&#10;'old'&#10;&#10;- ['new', 'old', 'new', 'new', ['mirror/ordinary-data.txt']]&#10;?  -------        ^^^    ^^^&#10;&#10;+ ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]&#10;?          ^^^    ^^^  +++++++">self = &lt;test_mirror_generations.MirrorGenerationTests testMethod=test_command_options_preserve_script_pinning&gt;
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="5" skipped="0" tests="6" time="0.455" timestamp="2026-10-12T05:42:38.896519-05:00" hostname="server.trs.private"><testcase classname="tests.test_mirror_generations.MirrorGenerationTests" name="test_command_options_preserve_script_pinning" time="0.417"><failure message="AssertionError: Lists differ: ['/op[188 chars]s', './mirror/scripts/options.cjs', 'mirror/ordinary-data.txt'] != ['/op[188 chars]s', '/private/var/folders/qm/w0dtc0j132gd6ymf1[137 chars]txt']&#10;&#10;First differing element 3:&#10;'./mirror/scripts/options.cjs'&#10;'/private/var/folders/qm/w0dtc0j132gd6ymf1[108 chars].cjs'&#10;&#10;  ['/opt/homebrew/bin/node',&#10;   '--require',&#10;   '/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/orch-generations-k529ndd3/mirror.generation-013a128ea7d14ed4958e539ea58eaa6b/scripts/preload.cjs',&#10;-  './mirror/scripts/options.cjs',&#10;+  '/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/orch-generations-k529ndd3/mirror.generation-013a128ea7d14ed4958e539ea58eaa6b/scripts/options.cjs',&#10;   'mirror/ordinary-data.txt']">self = &lt;test_mirror_generations.MirrorGenerationTests testMethod=test_command_options_preserve_script_pinning&gt;
 
         def test_command_options_preserve_script_pinning(self):
             """Option values must not hide code operands from the generation pin."""
             harness = """
-    import os, sys
+    import json, os, sys
     from pathlib import Path
     import mirror_reader
     execvpe = os.execvpe
     def paused_exec(executable, command, env):
         print('SELECTED', file=sys.stderr, flush=True)
+        print(json.dumps(command), file=sys.stderr, flush=True)
         assert sys.stdin.readline() == 'resume\\n'
         execvpe(executable, command, env)
     mirror_reader.os.execvpe = paused_exec
@@ -77,35 +78,36 @@
                     try:
                         self.assertTrue(_readable(reader.stderr, 10), "reader did not select")
                         self.assertEqual(reader.stderr.readline().strip(), "SELECTED")
-                        write_code("new")
-                        self.publish_with_deadline()
-                        output, error = reader.communicate("resume\n", timeout=10)
-                        self.assertEqual(reader.returncode, 0, error)
-                        if command[0] == node:
-&gt;                           self.assertEqual(json.loads(output), ["old"] * 4 + [[data]])
-E                           AssertionError: Lists differ: ['new', 'old', 'new', 'new', ['mirror/ordinary-data.txt']] != ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]
-E                           
-E                           First differing element 0:
-E                           'new'
-E                           'old'
-E                           
-E                           - ['new', 'old', 'new', 'new', ['mirror/ordinary-data.txt']]
-E                           ?  -------        ^^^    ^^^
-E                           
-E                           + ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]
-E                           ?          ^^^    ^^^  +++++++
+                        captured = json.loads(reader.stderr.readline())
+                        expected = [
+                            argument.replace("./mirror/", f"{pinned}/") for argument in command
+                        ] + [data]
+&gt;                       self.assertEqual(captured, expected)
+E                       AssertionError: Lists differ: ['/op[188 chars]s', './mirror/scripts/options.cjs', 'mirror/ordinary-data.txt'] != ['/op[188 chars]s', '/private/var/folders/qm/w0dtc0j132gd6ymf1[137 chars]txt']
+E                       
+E                       First differing element 3:
+E                       './mirror/scripts/options.cjs'
+E                       '/private/var/folders/qm/w0dtc0j132gd6ymf1[108 chars].cjs'
+E                       
+E                         ['/opt/homebrew/bin/node',
+E                          '--require',
+E                          '/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/orch-generations-k529ndd3/mirror.generation-013a128ea7d14ed4958e539ea58eaa6b/scripts/preload.cjs',
+E                       -  './mirror/scripts/options.cjs',
+E                       +  '/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/orch-generations-k529ndd3/mirror.generation-013a128ea7d14ed4958e539ea58eaa6b/scripts/options.cjs',
+E                          'mirror/ordinary-data.txt']
 
-tests/test_mirror_generations.py:573: AssertionError</failure><failure message="AssertionError: Lists differ: ['old', 'new', 'old', 'old', ['mirror/ordinary-data.txt']] != ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]&#10;&#10;First differing element 1:&#10;'new'&#10;'old'&#10;&#10;- ['old', 'new', 'old', 'old', ['mirror/ordinary-data.txt']]&#10;?         -------&#10;&#10;+ ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]&#10;?                      +++++++">self = &lt;test_mirror_generations.MirrorGenerationTests testMethod=test_command_options_preserve_script_pinning&gt;
+tests/test_mirror_generations.py:573: AssertionError</failure><failure message="AssertionError: Lists differ: ['/op[28 chars]uire=./mirror/scripts/preload.cjs', '/private/[169 chars]txt'] != ['/op[28 chars]uire=/private/var/folders/qm/w0dtc0j132gd6ymf1[294 chars]txt']&#10;&#10;First differing element 1:&#10;'--require=./mirror/scripts/preload.cjs'&#10;'--require=/private/var/folders/qm/w0dtc0j132gd6ymf1[108 chars].cjs'&#10;&#10;  ['/opt/homebrew/bin/node',&#10;-  '--require=./mirror/scripts/preload.cjs',&#10;+  '--require=/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/orch-generations-k529ndd3/mirror.generation-b13974e5f7154e3b832038457bd1b9bd/scripts/preload.cjs',&#10;   '/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/orch-generations-k529ndd3/mirror.generation-b13974e5f7154e3b832038457bd1b9bd/scripts/options.cjs',&#10;   'mirror/ordinary-data.txt']">self = &lt;test_mirror_generations.MirrorGenerationTests testMethod=test_command_options_preserve_script_pinning&gt;
 
         def test_command_options_preserve_script_pinning(self):
             """Option values must not hide code operands from the generation pin."""
             harness = """
-    import os, sys
+    import json, os, sys
     from pathlib import Path
     import mirror_reader
     execvpe = os.execvpe
     def paused_exec(executable, command, env):
         print('SELECTED', file=sys.stderr, flush=True)
+        print(json.dumps(command), file=sys.stderr, flush=True)
         assert sys.stdin.readline() == 'resume\\n'
         execvpe(executable, command, env)
     mirror_reader.os.execvpe = paused_exec
@@ -174,35 +176,35 @@ tests/test_mirror_generations.py:573: AssertionError</failure><failure message="
                     try:
                         self.assertTrue(_readable(reader.stderr, 10), "reader did not select")
                         self.assertEqual(reader.stderr.readline().strip(), "SELECTED")
-                        write_code("new")
-                        self.publish_with_deadline()
-                        output, error = reader.communicate("resume\n", timeout=10)
-                        self.assertEqual(reader.returncode, 0, error)
-                        if command[0] == node:
-&gt;                           self.assertEqual(json.loads(output), ["old"] * 4 + [[data]])
-E                           AssertionError: Lists differ: ['old', 'new', 'old', 'old', ['mirror/ordinary-data.txt']] != ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]
-E                           
-E                           First differing element 1:
-E                           'new'
-E                           'old'
-E                           
-E                           - ['old', 'new', 'old', 'old', ['mirror/ordinary-data.txt']]
-E                           ?         -------
-E                           
-E                           + ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]
-E                           ?                      +++++++
+                        captured = json.loads(reader.stderr.readline())
+                        expected = [
+                            argument.replace("./mirror/", f"{pinned}/") for argument in command
+                        ] + [data]
+&gt;                       self.assertEqual(captured, expected)
+E                       AssertionError: Lists differ: ['/op[28 chars]uire=./mirror/scripts/preload.cjs', '/private/[169 chars]txt'] != ['/op[28 chars]uire=/private/var/folders/qm/w0dtc0j132gd6ymf1[294 chars]txt']
+E                       
+E                       First differing element 1:
+E                       '--require=./mirror/scripts/preload.cjs'
+E                       '--require=/private/var/folders/qm/w0dtc0j132gd6ymf1[108 chars].cjs'
+E                       
+E                         ['/opt/homebrew/bin/node',
+E                       -  '--require=./mirror/scripts/preload.cjs',
+E                       +  '--require=/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/orch-generations-k529ndd3/mirror.generation-b13974e5f7154e3b832038457bd1b9bd/scripts/preload.cjs',
+E                          '/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/orch-generations-k529ndd3/mirror.generation-b13974e5f7154e3b832038457bd1b9bd/scripts/options.cjs',
+E                          'mirror/ordinary-data.txt']
 
-tests/test_mirror_generations.py:573: AssertionError</failure><failure message="AssertionError: Lists differ: ['new', 'new', 'new', 'new', ['mirror/ordinary-data.txt']] != ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]&#10;&#10;First differing element 0:&#10;'new'&#10;'old'&#10;&#10;- ['new', 'new', 'new', 'new', ['mirror/ordinary-data.txt']]&#10;?   ^^^    ^^^    ^^^    ^^^&#10;&#10;+ ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]&#10;?   ^^^    ^^^    ^^^    ^^^">self = &lt;test_mirror_generations.MirrorGenerationTests testMethod=test_command_options_preserve_script_pinning&gt;
+tests/test_mirror_generations.py:573: AssertionError</failure><failure message="AssertionError: Lists differ: ['/op[50 chars]r', './mirror/scripts/preload.cjs', './mirror/[44 chars]txt'] != ['/op[50 chars]r', '/private/var/folders/qm/w0dtc0j132gd6ymf1[294 chars]txt']&#10;&#10;First differing element 4:&#10;'./mirror/scripts/preload.cjs'&#10;'/private/var/folders/qm/w0dtc0j132gd6ymf1[108 chars].cjs'&#10;&#10;  ['/opt/homebrew/bin/node',&#10;   '--conditions',&#10;   'custom',&#10;   '-r',&#10;-  './mirror/scripts/preload.cjs',&#10;-  './mirror/scripts/options.cjs',&#10;+  '/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/orch-generations-k529ndd3/mirror.generation-9959881e79284330aaf5141ce6b1317f/scripts/preload.cjs',&#10;+  '/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/orch-generations-k529ndd3/mirror.generation-9959881e79284330aaf5141ce6b1317f/scripts/options.cjs',&#10;   'mirror/ordinary-data.txt']">self = &lt;test_mirror_generations.MirrorGenerationTests testMethod=test_command_options_preserve_script_pinning&gt;
 
         def test_command_options_preserve_script_pinning(self):
             """Option values must not hide code operands from the generation pin."""
             harness = """
-    import os, sys
+    import json, os, sys
     from pathlib import Path
     import mirror_reader
     execvpe = os.execvpe
     def paused_exec(executable, command, env):
         print('SELECTED', file=sys.stderr, flush=True)
+        print(json.dumps(command), file=sys.stderr, flush=True)
         assert sys.stdin.readline() == 'resume\\n'
         execvpe(executable, command, env)
     mirror_reader.os.execvpe = paused_exec
@@ -271,35 +273,39 @@ tests/test_mirror_generations.py:573: AssertionError</failure><failure message="
                     try:
                         self.assertTrue(_readable(reader.stderr, 10), "reader did not select")
                         self.assertEqual(reader.stderr.readline().strip(), "SELECTED")
-                        write_code("new")
-                        self.publish_with_deadline()
-                        output, error = reader.communicate("resume\n", timeout=10)
-                        self.assertEqual(reader.returncode, 0, error)
-                        if command[0] == node:
-&gt;                           self.assertEqual(json.loads(output), ["old"] * 4 + [[data]])
-E                           AssertionError: Lists differ: ['new', 'new', 'new', 'new', ['mirror/ordinary-data.txt']] != ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]
-E                           
-E                           First differing element 0:
-E                           'new'
-E                           'old'
-E                           
-E                           - ['new', 'new', 'new', 'new', ['mirror/ordinary-data.txt']]
-E                           ?   ^^^    ^^^    ^^^    ^^^
-E                           
-E                           + ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]
-E                           ?   ^^^    ^^^    ^^^    ^^^
+                        captured = json.loads(reader.stderr.readline())
+                        expected = [
+                            argument.replace("./mirror/", f"{pinned}/") for argument in command
+                        ] + [data]
+&gt;                       self.assertEqual(captured, expected)
+E                       AssertionError: Lists differ: ['/op[50 chars]r', './mirror/scripts/preload.cjs', './mirror/[44 chars]txt'] != ['/op[50 chars]r', '/private/var/folders/qm/w0dtc0j132gd6ymf1[294 chars]txt']
+E                       
+E                       First differing element 4:
+E                       './mirror/scripts/preload.cjs'
+E                       '/private/var/folders/qm/w0dtc0j132gd6ymf1[108 chars].cjs'
+E                       
+E                         ['/opt/homebrew/bin/node',
+E                          '--conditions',
+E                          'custom',
+E                          '-r',
+E                       -  './mirror/scripts/preload.cjs',
+E                       -  './mirror/scripts/options.cjs',
+E                       +  '/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/orch-generations-k529ndd3/mirror.generation-9959881e79284330aaf5141ce6b1317f/scripts/preload.cjs',
+E                       +  '/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/orch-generations-k529ndd3/mirror.generation-9959881e79284330aaf5141ce6b1317f/scripts/options.cjs',
+E                          'mirror/ordinary-data.txt']
 
-tests/test_mirror_generations.py:573: AssertionError</failure><failure message="AssertionError: Lists differ: ['new', 'old', 'old', 'mirror/ordinary-data.txt'] != ['old', 'old', 'old', 'mirror/ordinary-data.txt']&#10;&#10;First differing element 0:&#10;'new'&#10;'old'&#10;&#10;- ['new', 'old', 'old', 'mirror/ordinary-data.txt']&#10;?  -------&#10;&#10;+ ['old', 'old', 'old', 'mirror/ordinary-data.txt']&#10;?               +++++++">self = &lt;test_mirror_generations.MirrorGenerationTests testMethod=test_command_options_preserve_script_pinning&gt;
+tests/test_mirror_generations.py:573: AssertionError</failure><failure message="AssertionError: Lists differ: ['/bi[23 chars]l', './mirror/options.sh', 'mirror/ordinary-data.txt'] != ['/bi[23 chars]l', '/private/var/folders/qm/w0dtc0j132gd6ymf1[128 chars]txt']&#10;&#10;First differing element 3:&#10;'./mirror/options.sh'&#10;'/private/var/folders/qm/w0dtc0j132gd6ymf1[99 chars]s.sh'&#10;&#10;  ['/bin/bash',&#10;   '-o',&#10;   'pipefail',&#10;-  './mirror/options.sh',&#10;+  '/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/orch-generations-k529ndd3/mirror.generation-f8b70071886647dfaaf3e4629594a0e6/options.sh',&#10;   'mirror/ordinary-data.txt']">self = &lt;test_mirror_generations.MirrorGenerationTests testMethod=test_command_options_preserve_script_pinning&gt;
 
         def test_command_options_preserve_script_pinning(self):
             """Option values must not hide code operands from the generation pin."""
             harness = """
-    import os, sys
+    import json, os, sys
     from pathlib import Path
     import mirror_reader
     execvpe = os.execvpe
     def paused_exec(executable, command, env):
         print('SELECTED', file=sys.stderr, flush=True)
+        print(json.dumps(command), file=sys.stderr, flush=True)
         assert sys.stdin.readline() == 'resume\\n'
         execvpe(executable, command, env)
     mirror_reader.os.execvpe = paused_exec
@@ -368,37 +374,36 @@ tests/test_mirror_generations.py:573: AssertionError</failure><failure message="
                     try:
                         self.assertTrue(_readable(reader.stderr, 10), "reader did not select")
                         self.assertEqual(reader.stderr.readline().strip(), "SELECTED")
-                        write_code("new")
-                        self.publish_with_deadline()
-                        output, error = reader.communicate("resume\n", timeout=10)
-                        self.assertEqual(reader.returncode, 0, error)
-                        if command[0] == node:
-                            self.assertEqual(json.loads(output), ["old"] * 4 + [[data]])
-                        else:
-&gt;                           self.assertEqual(output.splitlines(), ["old"] * 3 + [data])
-E                           AssertionError: Lists differ: ['new', 'old', 'old', 'mirror/ordinary-data.txt'] != ['old', 'old', 'old', 'mirror/ordinary-data.txt']
-E                           
-E                           First differing element 0:
-E                           'new'
-E                           'old'
-E                           
-E                           - ['new', 'old', 'old', 'mirror/ordinary-data.txt']
-E                           ?  -------
-E                           
-E                           + ['old', 'old', 'old', 'mirror/ordinary-data.txt']
-E                           ?               +++++++
+                        captured = json.loads(reader.stderr.readline())
+                        expected = [
+                            argument.replace("./mirror/", f"{pinned}/") for argument in command
+                        ] + [data]
+&gt;                       self.assertEqual(captured, expected)
+E                       AssertionError: Lists differ: ['/bi[23 chars]l', './mirror/options.sh', 'mirror/ordinary-data.txt'] != ['/bi[23 chars]l', '/private/var/folders/qm/w0dtc0j132gd6ymf1[128 chars]txt']
+E                       
+E                       First differing element 3:
+E                       './mirror/options.sh'
+E                       '/private/var/folders/qm/w0dtc0j132gd6ymf1[99 chars]s.sh'
+E                       
+E                         ['/bin/bash',
+E                          '-o',
+E                          'pipefail',
+E                       -  './mirror/options.sh',
+E                       +  '/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/orch-generations-k529ndd3/mirror.generation-f8b70071886647dfaaf3e4629594a0e6/options.sh',
+E                          'mirror/ordinary-data.txt']
 
-tests/test_mirror_generations.py:575: AssertionError</failure><failure message="AssertionError: Lists differ: ['new', 'old', 'old', 'mirror/ordinary-data.txt'] != ['old', 'old', 'old', 'mirror/ordinary-data.txt']&#10;&#10;First differing element 0:&#10;'new'&#10;'old'&#10;&#10;- ['new', 'old', 'old', 'mirror/ordinary-data.txt']&#10;?  -------&#10;&#10;+ ['old', 'old', 'old', 'mirror/ordinary-data.txt']&#10;?               +++++++">self = &lt;test_mirror_generations.MirrorGenerationTests testMethod=test_command_options_preserve_script_pinning&gt;
+tests/test_mirror_generations.py:573: AssertionError</failure><failure message="AssertionError: Lists differ: ['/bi[23 chars]l', './mirror/options.sh', 'mirror/ordinary-data.txt'] != ['/bi[23 chars]l', '/private/var/folders/qm/w0dtc0j132gd6ymf1[128 chars]txt']&#10;&#10;First differing element 3:&#10;'./mirror/options.sh'&#10;'/private/var/folders/qm/w0dtc0j132gd6ymf1[99 chars]s.sh'&#10;&#10;  ['/bin/bash',&#10;   '+o',&#10;   'pipefail',&#10;-  './mirror/options.sh',&#10;+  '/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/orch-generations-k529ndd3/mirror.generation-1d23295582034e1abd4d503c29b33f4b/options.sh',&#10;   'mirror/ordinary-data.txt']">self = &lt;test_mirror_generations.MirrorGenerationTests testMethod=test_command_options_preserve_script_pinning&gt;
 
         def test_command_options_preserve_script_pinning(self):
             """Option values must not hide code operands from the generation pin."""
             harness = """
-    import os, sys
+    import json, os, sys
     from pathlib import Path
     import mirror_reader
     execvpe = os.execvpe
     def paused_exec(executable, command, env):
         print('SELECTED', file=sys.stderr, flush=True)
+        print(json.dumps(command), file=sys.stderr, flush=True)
         assert sys.stdin.readline() == 'resume\\n'
         execvpe(executable, command, env)
     mirror_reader.os.execvpe = paused_exec
@@ -467,24 +472,22 @@ tests/test_mirror_generations.py:575: AssertionError</failure><failure message="
                     try:
                         self.assertTrue(_readable(reader.stderr, 10), "reader did not select")
                         self.assertEqual(reader.stderr.readline().strip(), "SELECTED")
-                        write_code("new")
-                        self.publish_with_deadline()
-                        output, error = reader.communicate("resume\n", timeout=10)
-                        self.assertEqual(reader.returncode, 0, error)
-                        if command[0] == node:
-                            self.assertEqual(json.loads(output), ["old"] * 4 + [[data]])
-                        else:
-&gt;                           self.assertEqual(output.splitlines(), ["old"] * 3 + [data])
-E                           AssertionError: Lists differ: ['new', 'old', 'old', 'mirror/ordinary-data.txt'] != ['old', 'old', 'old', 'mirror/ordinary-data.txt']
-E                           
-E                           First differing element 0:
-E                           'new'
-E                           'old'
-E                           
-E                           - ['new', 'old', 'old', 'mirror/ordinary-data.txt']
-E                           ?  -------
-E                           
-E                           + ['old', 'old', 'old', 'mirror/ordinary-data.txt']
-E                           ?               +++++++
+                        captured = json.loads(reader.stderr.readline())
+                        expected = [
+                            argument.replace("./mirror/", f"{pinned}/") for argument in command
+                        ] + [data]
+&gt;                       self.assertEqual(captured, expected)
+E                       AssertionError: Lists differ: ['/bi[23 chars]l', './mirror/options.sh', 'mirror/ordinary-data.txt'] != ['/bi[23 chars]l', '/private/var/folders/qm/w0dtc0j132gd6ymf1[128 chars]txt']
+E                       
+E                       First differing element 3:
+E                       './mirror/options.sh'
+E                       '/private/var/folders/qm/w0dtc0j132gd6ymf1[99 chars]s.sh'
+E                       
+E                         ['/bin/bash',
+E                          '+o',
+E                          'pipefail',
+E                       -  './mirror/options.sh',
+E                       +  '/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/orch-generations-k529ndd3/mirror.generation-1d23295582034e1abd4d503c29b33f4b/options.sh',
+E                          'mirror/ordinary-data.txt']
 
-tests/test_mirror_generations.py:575: AssertionError</failure></testcase></testsuite></testsuites>
+tests/test_mirror_generations.py:573: AssertionError</failure></testcase></testsuite></testsuites>

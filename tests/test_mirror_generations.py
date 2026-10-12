@@ -491,12 +491,13 @@ mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
     def test_command_options_preserve_script_pinning(self):
         """Option values must not hide code operands from the generation pin."""
         harness = """
-import os, sys
+import json, os, sys
 from pathlib import Path
 import mirror_reader
 execvpe = os.execvpe
 def paused_exec(executable, command, env):
     print('SELECTED', file=sys.stderr, flush=True)
+    print(json.dumps(command), file=sys.stderr, flush=True)
     assert sys.stdin.readline() == 'resume\\n'
     execvpe(executable, command, env)
 mirror_reader.os.execvpe = paused_exec
@@ -565,6 +566,11 @@ mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
                 try:
                     self.assertTrue(_readable(reader.stderr, 10), "reader did not select")
                     self.assertEqual(reader.stderr.readline().strip(), "SELECTED")
+                    captured = json.loads(reader.stderr.readline())
+                    expected = [
+                        argument.replace("./mirror/", f"{pinned}/") for argument in command
+                    ] + [data]
+                    self.assertEqual(captured, expected)
                     write_code("new")
                     self.publish_with_deadline()
                     output, error = reader.communicate("resume\n", timeout=10)
