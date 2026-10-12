@@ -243,6 +243,18 @@ def test_delivery_eligibility_requires_recorded_provenance(
     )
     assert effectiveness._classify(edge) == expected, edge
 
+    # The monitor's SQL projection and classifier adapter must preserve the same provenance,
+    # including unknown modes and delivery evidence that overrides an offload's mode.
+    inputs = monitor._brain(feedback.DB_PATH, T0 - 1, T0 + 1)
+    assert inputs["errors"] == [], inputs
+    monitor_edge = inputs["edges"][0]
+    assert (monitor_edge["target_mode"], monitor_edge["target_pr_number"]) == (mode, pr_number)
+    counts = monitor.outcome_counts("deliberate-break-verifier", inputs["edges"])
+    assert counts["acted_on"] == 1, counts
+    for outcome_class, field in monitor.CLASS_FIELDS.items():
+        assert counts[field] == (outcome_class == expected), (expected, counts)
+    assert counts["outcome_success"] == 0, counts
+
 
 @pytest.mark.parametrize("merged", [None, False])
 @pytest.mark.parametrize("verdict", ["PASS", "FAIL_BROKEN", "NON_PASS"])

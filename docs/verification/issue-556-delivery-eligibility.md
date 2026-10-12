@@ -330,3 +330,82 @@ failed`, and `merge_executed=false`. No merge guard was bypassed. The controller
 these checkout changes, reconcile the verified PR checkboxes, and complete hosted verification
 and the review/merge/comparison lifecycle on that published head. Final readiness inspection
 confirmed PR #562 remains open with `isDraft=false` at its prior head `c99a33c`.
+
+## Monitor provenance consistency, keepalive follow-up (2026-10-12)
+
+The production correction is already present. This round extends the existing 14-case
+`test_delivery_eligibility_requires_recorded_provenance` matrix to verify the monitor's SQL
+projection and every outcome counter against the independently expected classification.
+Unknown modes remain unknown; recorded local/remote runs retain delivery eligibility; PR or
+merge evidence overrides offload provenance. No production behavior or collection nodes change.
+
+- [x] Verify monitor consistency across the recorded-provenance matrix.
+- [ ] Publish the follow-up and complete final-head hosted verification, review, guarded merge,
+  and actual comparison. Historical provider **NON_PASS** remains unchanged.
+
+With the monitor's `r.mode AS target_mode` and `r.pr_number AS target_pr_number` projections
+temporarily replaced by NULL, this command returned exit **1**, **12 failed, 2 passed,
+40 deselected**. Byte-identical restoration returned exit **0**, **14 passed, 40 deselected**:
+
+```sh
+python3 -m pytest tests/test_capability_effectiveness_predicates.py \
+  -k delivery_eligibility_requires_recorded_provenance -m "not slow" -q --tb=short
+```
+
+The required historical regression was also rerun using
+`git show 49cdbfee4dba260a5e9149bdd979b7ebca4fd06b:src/capability_effectiveness.py`:
+
+```sh
+python3 -m pytest tests/test_capability_effectiveness_predicates.py \
+  -k pending_pr_outcome -m "not slow" -q --tb=short
+```
+
+RED returned exit **1**, **6 failed, 48 deselected**. Four failing-verdict cases incorrectly
+measured `(5, 5, 1.0)` instead of `(6, 5, 0.833)`; two PASS cases incorrectly became `no_merge`.
+After byte-identical restoration, GREEN returned exit **0**, **6 passed, 48 deselected**.
+Both temporary substitutions restored source bytes in `finally` blocks; test bytes were
+unchanged throughout. All Brain databases were temporary; no live Brain was mutated.
+
+| Binding | Git blob or SHA-256 |
+| --- | --- |
+| RED classifier SHA-256 | `2601f7ff5b71cc3748e344870bd0aaac791cee5f6166eab780a09c9d4e32a5b2` |
+| Restored classifier blob | `770d315257e2402906c4ddbee2bc52047f9dd034` |
+| Restored classifier SHA-256 | `3414f0ecbe839a5074acf248dfa00bd6d674c271c998b73d525d5ca36262d207` |
+| Restored monitor blob | `24ab7856c5e637d122d83221ec5d244f8dbc5ec4` |
+| Restored monitor SHA-256 | `8bec6ec7601ab7617c70ebbb56121df7aed3f206a53596a03ae372341fe4b263` |
+| Test blob, unchanged during both comparisons | `ac43b6eade41644a945f0c946b5ad4c3cb5f53c9` |
+| Test SHA-256 | `c2ffd2b7f78e250497927b3ebfca7e7a5b5d1f47d53f988deb5dec9e41a40d28` |
+
+The six-suite command above passed **162 tests**, both module selftests passed, and
+`python3 -m pytest --collect-only -m "not slow" -q` collected **3104** tests. No floor or
+skip/mypy ceiling changed. Pytest **8.3.5** and Black **26.10.0** were recovered into `/tmp`
+from official GitHub sources. Commands used system Python **3.12** with
+`PYTHONPATH=/tmp/issue-556-tools`; repository dependencies were unchanged.
+
+Hosted [CI run 38300040193](https://github.com/stranske/Orchestrator/actions/runs/38300040193)
+succeeded for prior published head `5f2a71fa0c049bebc30e0b008ae948d0f45a8b09`, synthetic merge
+`47654d04c6e105ea3ba71aed3cae42f16a79cc9f`. Checkout verification reported **3078 passed,
+0 failed, 26 skipped, 3104 collected**, **97 selftests**, and **3 of 5 gates green**;
+flat-mirror verification and combined coverage also succeeded. This receipt does not cover
+this round's changed test bytes or establish provider PASS. PR #562 was observed open and ready.
+
+Black formatted the changed test, and the required command passed:
+
+```sh
+black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+```
+
+Result: **393 files would be left unchanged**. The default asynchronous scheduler stalled;
+the `/tmp` launcher used Black's unchanged `reformat_one` formatter serially, preserving
+discovery, formatting, and check semantics. Normal staging failed with `index.lock: Read-only
+file system`; `/tmp/issue-556-consistency-git` is a writable bare clone using this checkout as
+its work tree. Only the predicate test and this verification document are included in the commit.
+
+Publication failed with `Could not resolve host: github.com`. The required active merge guard
+against PR #562 and the local commit returned `blocked=true`,
+`reason=review-thread GraphQL query failed`, and `merge_executed=false`. No guard was bypassed.
+Attempts to add `needs-human` and post the blocker comment were rejected with
+`MCP tool call requires approval, but approval policy is never`; neither mutation occurred.
+Final readiness inspection found PR #562 open with `isDraft=false` at the prior published head
+`5f2a71fa0c049bebc30e0b008ae948d0f45a8b09`. The controller must publish the checkout changes
+and complete the remaining lifecycle on the final published head.
