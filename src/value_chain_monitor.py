@@ -236,6 +236,9 @@ def outcome_counts(cid: str, own_edges: list[dict] | None) -> dict[str, int | No
                     "experiment_member": feedback.experiment_member_target(
                         e.get("target_routing_metadata")
                     ),
+                    "delivery_eligibility": capability_effectiveness._delivery_eligibility(
+                        e.get("target_mode"), e.get("target_pr_number"), e.get("merged")
+                    ),
                 }
             ),
             e,
@@ -286,7 +289,8 @@ def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
                 "SELECT ie.*, o.adjudicated_verdict AS outcome_adjudicated, "
                 "o.verifier_verdict AS outcome_verifier, o.durability AS outcome_durability, "
                 "o.merged AS outcome_merged, o.failure_class AS outcome_failure_class, "
-                "r.role_name AS target_role_name, "
+                "r.role_name AS target_role_name, r.mode AS target_mode, "
+                "r.pr_number AS target_pr_number, "
                 "r.routing_metadata AS target_routing_metadata FROM influence_edges ie "
                 "LEFT JOIN outcomes o ON o.run_id = ie.target_run_id "
                 "LEFT JOIN runs r ON r.run_id = ie.target_run_id "
