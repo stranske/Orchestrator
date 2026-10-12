@@ -1,5 +1,44 @@
 # Issue 532: Seatbelt regex literal repair
 
+## Bounded current-head measurements and task reconciliation (2026-10-12)
+
+[0f88580-ci-discovery.json](0f88580-ci-discovery.json) recovers existing CI/Gate job metadata
+and authentic selected log lines for pre-change head
+`0f8858061385e52c141c9da5134e0d7bf22478fa`, tested as synthetic merge `2779d0c`.
+Checkout CI measured 2,863 passed / 31 skipped / 2,894 collected; the disposable flat copy
+measured 2,842 passed / 52 skipped / 2,894 collected. Each executed 97 selftests and three
+of five capability gates. Gate's Python CI job was skipped.
+
+The receipt checker's new `verifyDiscoveredCI` path checks production steps, receipt/job
+bindings, checkout heads, measured counts, selftest ceilings and verdict consistency. It
+always reports complete topology and hosted acceptance **UNKNOWN**: the connector lacks
+total counts and per-job attempt/head bindings. Its shared measurement checks also apply
+to complete REST snapshots. It never treats bounded discovery as `retained_hosted_ci`.
+
+```sh
+node tests/test_seatbelt_discovered_ci.js
+node scripts/verify_seatbelt_receipts.js \
+  docs/verification/issue-532-seatbelt-regex/0f88580-ci-discovery.json \
+  0f8858061385e52c141c9da5134e0d7bf22478fa
+```
+
+The first three tasks were reverified from the unchanged production/test bytes, four passing
+local quoting tests and the retained native receipt (four original failures and five GREEN
+macOS probes). [542-task-reconciliation.md](542-task-reconciliation.md) records the proposed
+checkbox update. GitHub rejected the PR-body mutation because approval is required but this
+run's approval policy is `never`; the remote checkboxes are unchanged.
+
+Local validation: all 42 receipt tests pass, including twelve new bounded-discovery tests;
+four quoting tests and adapters/dispatcher selftests pass. Both historical complete REST and
+new bounded snapshots validate in their respective CLI modes; wrong-head CLI input fails.
+No Python files changed. This environment refuses nested Node CLI launches, so CLI modes were
+exercised directly from the terminal rather than through a Node child-process test.
+Original PR/issue discussions were inspected without finding a separate authentic focused-only
+command transcript. That transcript, complete final-head CI, review/floor gates and actual
+post-merge comparison remain pending; task four is incomplete. These measurements do not cover
+the new checker commit. No agents or workflows were rerun, and no merge, mirror installation,
+research deployment or whole native acceptance is claimed.
+
 ## Original artifact validation and pre-change CI discovery (2026-10-12)
 
 `verifyOriginalCI` in `scripts/verify_seatbelt_receipts.js` now reads the retained original

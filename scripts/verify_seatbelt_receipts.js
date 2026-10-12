@@ -212,6 +212,84 @@ print(json.dumps({
     focused_command_transcript: 'UNKNOWN: recovered cases are from the original full run' };
 }
 
+function verifyMeasurement(receipt, expectedHead, name) {
+  const text = receipt.selected_authentic_lines.join('\n');
+  assert.ok(text.includes(`Merge ${expectedHead} into `), 'measurement checkout head mismatch');
+  const count = /pytest:\s+(\d+) passed, 0 failed, (\d+)\/(\d+) max[^\n]*skipped \((\d+) collected; floor (\d+)\)/.exec(text);
+  assert.ok(count, `missing test measurement: ${name}`);
+  const [passed, skipped, skippedMax, collected, floor] = count.slice(1).map(Number);
+  assert.ok(passed > 0 && passed + skipped === collected && collected >= floor
+    && skipped <= skippedMax, `invalid test measurement: ${name}`);
+  const selftests = /selftests:\s+(\d+) of (\d+) modules ran, (\d+)\/(\d+) max[^\n]*skipped/.exec(text);
+  assert.ok(selftests, `missing selftest measurement: ${name}`);
+  const [ran, modules, absent, absentMax] = selftests.slice(1).map(Number);
+  assert.ok(ran > 0 && ran + absent === modules && absent <= absentMax,
+    `invalid selftest measurement: ${name}`);
+  const verdict = /VERIFIED — (\d+) tests actually executed and passed, (\d+) selftests spoke, (\d+) of (\d+) gates green/.exec(text);
+  assert.ok(verdict, `missing verifier verdict measurement: ${name}`);
+  assert.equal(Number(verdict[1]), passed, 'verifier verdict test count mismatch');
+  assert.equal(Number(verdict[2]), ran, 'verifier verdict selftest count mismatch');
+  const [green, gates] = verdict.slice(3).map(Number);
+  assert.ok(green > 0 && green <= gates, `invalid gate measurement: ${name}`);
+  return { job_id: receipt.job_id, passed, skipped, collected, selftests: ran,
+    selftests_skipped: absent, gates_green: green, gates };
+}
+
+// Recover usable measurements from bounded connector discovery without promoting a first page
+// to complete hosted acceptance. Missing attempt/head metadata stays UNKNOWN even if counts pass.
+function verifyDiscoveredCI(evidence, expectedHead) {
+  assert.match(expectedHead, /^[a-f0-9]{40}$/, 'expected head must be an exact SHA');
+  assert.equal(evidence.schema, 'seatbelt-ci-discovery/v1');
+  assert.equal(evidence.repo, 'stranske/Orchestrator');
+  assert.equal(evidence.head_sha, expectedHead, 'discovered evidence covers a different head');
+  assert.ok(typeof evidence.discovery_limit === 'string' && evidence.discovery_limit.trim(),
+    'missing discovery limitation');
+  assert.equal(evidence.runs.length, 2, 'wrong discovered workflow population');
+  const seen = new Set();
+  for (const run of evidence.runs) {
+    assert.ok(Number.isSafeInteger(run.run_id) && run.run_id > 0, 'missing run identity');
+    for (const job of run.jobs) {
+      assert.ok(Number.isSafeInteger(job.id) && job.id > 0, 'missing job identity');
+      assert.ok(!seen.has(job.id), 'duplicate job identity');
+      seen.add(job.id);
+      assert.equal(job.run_id, run.run_id, 'job run mismatch');
+      assert.ok(job.status === 'completed' && ['success', 'skipped'].includes(job.conclusion),
+        `failed or unfinished discovered job: ${job.name}`);
+    }
+  }
+  const workflows = ['CI', 'Gate'].map(name => {
+    const matches = evidence.runs.filter(run => run.name === name);
+    assert.equal(matches.length, 1, `missing or duplicate discovered workflow: ${name}`);
+    return matches[0];
+  });
+  const products = {
+    'verify.py (real pytest counts + selftests + capability gates)': 'Verify',
+    'verify.py in the flat exec-mirror shape (the tree a sync ships)':
+      "Build the flat copy with the sync's copy contract and verify it there",
+    'combined coverage (pytest + selftests, the honest number)': 'Measure combined coverage',
+  };
+  const measurements = [];
+  for (const [name, stepName] of Object.entries(products)) {
+    const jobs = workflows[0].jobs.filter(job => job.name === name);
+    assert.equal(jobs.length, 1, `missing or duplicate discovered product job: ${name}`);
+    const job = jobs[0];
+    assert.equal(job.conclusion, 'success', `discovered product job did not execute: ${name}`);
+    const steps = job.product_steps.filter(step => step.name === stepName);
+    assert.equal(steps.length, 1, `missing discovered product step: ${stepName}`);
+    assert.ok(steps[0].status === 'completed' && steps[0].conclusion === 'success',
+      `discovered product step did not execute: ${stepName}`);
+    if (name.startsWith('verify.py')) {
+      const receipts = evidence.receipts.filter(receipt => receipt.job_id === job.id);
+      assert.equal(receipts.length, 1, `missing or duplicate measurement receipt: ${name}`);
+      measurements.push(verifyMeasurement(receipts[0], expectedHead, name));
+    }
+  }
+  assert.equal(evidence.receipts.length, measurements.length, 'unbound measurement receipt');
+  return { head_sha: expectedHead, measurements,
+    complete_topology: 'UNKNOWN: first-page discovery lacks totals and per-job attempt/head bindings',
+    hosted_acceptance: 'UNKNOWN: requires complete exact-head CI and Gate evidence' };
+}
+
 // Repo-specific completion evidence for issue 532. This checks a retained REST snapshot,
 // not live merge readiness, review threads, or the seven-minute review floor.
 function verifyHostedCI(evidence, expectedHead) {
@@ -281,32 +359,25 @@ function verifyHostedCI(evidence, expectedHead) {
     if (!name.startsWith('verify.py')) continue;
     const receipts = evidence.receipts.filter(receipt => receipt.job_id === jobID);
     assert.equal(receipts.length, 1, `missing or duplicate measurement receipt: ${name}`);
-    const text = receipts[0].selected_authentic_lines.join('\n');
-    assert.ok(text.includes(`Merge ${expectedHead} into `), 'measurement checkout head mismatch');
-    const count = /pytest:\s+(\d+) passed, 0 failed, (\d+)\/(\d+) max[^\n]*skipped \((\d+) collected; floor (\d+)\)/.exec(text);
-    assert.ok(count, `missing test measurement: ${name}`);
-    const [passed, skipped, skippedMax, collected, floor] = count.slice(1).map(Number);
-    assert.ok(passed > 0 && passed + skipped === collected && collected >= floor
-      && skipped <= skippedMax,
-      `invalid test measurement: ${name}`);
-    assert.ok(text.includes(`VERIFIED — ${passed} tests actually executed and passed,`),
-      `missing verifier verdict measurement: ${name}`);
-    measurements.push({ job_id: jobID, passed, skipped, collected });
+    measurements.push(verifyMeasurement(receipts[0], expectedHead, name));
   }
   return { head_sha: expectedHead, product_jobs: executed.size, measurements };
 }
 
-module.exports = { verifyProof, verifyOriginalCI, verifyHostedCI };
+module.exports = { verifyProof, verifyOriginalCI, verifyHostedCI, verifyDiscoveredCI };
 if (require.main === module) {
   Promise.all([verifyProof(), verifyOriginalCI()]).then(([result, original]) => {
     const args = process.argv.slice(2);
     assert.ok(args.length === 0 || args.length === 2,
-      'usage: node scripts/verify_seatbelt_receipts.js [hosted-ci.json expected-head-sha]');
-    const hosted = args.length ? verifyHostedCI(JSON.parse(fs.readFileSync(args[0], 'utf8')),
-      args[1]) : undefined;
+      'usage: node scripts/verify_seatbelt_receipts.js [ci-snapshot.json expected-head-sha]');
+    const snapshot = args.length ? JSON.parse(fs.readFileSync(args[0], 'utf8')) : undefined;
+    const discovered = snapshot?.schema === 'seatbelt-ci-discovery/v1'
+      ? verifyDiscoveredCI(snapshot, args[1]) : undefined;
+    const hosted = snapshot && !discovered ? verifyHostedCI(snapshot, args[1]) : undefined;
     console.log(JSON.stringify({ retained_native_evidence: 'VERIFIED', ...result,
       retained_original_ci: original,
-      ...(hosted ? { retained_hosted_ci: hosted } : {}) }));
+      ...(hosted ? { retained_hosted_ci: hosted } : {}),
+      ...(discovered ? { retained_discovered_ci: discovered } : {}) }));
   }).catch((error) => {
     console.error(`retained evidence: NOT VERIFIED: ${error.message}`);
     process.exitCode = 1;
