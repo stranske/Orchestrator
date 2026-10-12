@@ -1,0 +1,15 @@
+<?xml version='1.0' encoding='utf-8'?>
+<testsuite name="original-offload-boundary-cases-extracted-from-full-ci" tests="12" failures="0" errors="0" skipped="0">
+  <testcase classname="tests.test_offload_write_boundary" name="test_codex_gets_exactly_its_roots_and_no_seatbelt" time="0.284" />
+  <testcase classname="tests.test_offload_write_boundary" name="test_an_agent_without_a_sandbox_runs_under_the_profile[cursor]" time="0.285" />
+  <testcase classname="tests.test_offload_write_boundary" name="test_an_agent_without_a_sandbox_runs_under_the_profile[gemini]" time="0.280" />
+  <testcase classname="tests.test_offload_write_boundary" name="test_an_agent_without_a_sandbox_runs_under_the_profile[vibe]" time="0.292" />
+  <testcase classname="tests.test_offload_write_boundary" name="test_no_boundary_changes_nothing" time="0.396" />
+  <testcase classname="tests.test_offload_write_boundary" name="test_a_boundary_that_cannot_hold_refuses_the_run[home_granted]" time="0.178" />
+  <testcase classname="tests.test_offload_write_boundary" name="test_a_boundary_that_cannot_hold_refuses_the_run[codex_bypassed]" time="0.189" />
+  <testcase classname="tests.test_offload_write_boundary" name="test_a_boundary_that_cannot_hold_refuses_the_run[no_sandbox_exec]" time="0.191" />
+  <testcase classname="tests.test_offload_write_boundary" name="test_a_boundary_that_cannot_hold_refuses_the_run[empty_protect]" time="0.181" />
+  <testcase classname="tests.test_offload_write_boundary" name="test_a_boundary_that_cannot_hold_refuses_the_run[nested_seatbelt]" time="0.197" />
+  <testcase classname="tests.test_offload_write_boundary" name="test_roots_resolve_and_lead_with_the_cwd" time="0.012" />
+  <testcase classname="tests.test_offload_write_boundary" name="test_the_profile_quotes_a_path_it_cannot_otherwise_name" time="0.001" />
+</testsuite>
