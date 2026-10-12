@@ -3419,7 +3419,7 @@ def _selftest() -> None:
 
         old_offload = dispatcher.offload
 
-        def fake_gemini_offload(agent, prompt, cwd=".", mode=None, timeout=600):
+        def fake_gemini_offload(agent, prompt, cwd=".", mode=None, timeout=600, subject_id=None):
             return {
                 "agent": agent,
                 "exit": 70,
