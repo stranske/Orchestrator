@@ -3925,6 +3925,9 @@ def record_role_run(
     batch_id: str | None = None,
     source: str | None = None,
     report_state: str | None = None,
+    cost_tokens_in: int | None = None,
+    cost_tokens_out: int | None = None,
+    imputed: bool | None = None,
 ):
     """Record a role invocation as its own learnable run.
 
@@ -3939,7 +3942,16 @@ def record_role_run(
     learner a per-role `(role:<name>, backend)` surface without contaminating the
     normal task-type weights.
     """
+    for count in (cost_tokens_in, cost_tokens_out):
+        if count is not None and (type(count) is not int or count < 0):
+            raise ValueError("role token usage must be nonnegative integers or None")
     metadata = {
+        "cost_tokens_in": cost_tokens_in,
+        "cost_tokens_out": cost_tokens_out,
+        "imputed": (
+            imputed if imputed is not None else cost_tokens_in is None and cost_tokens_out is None
+        ),
+        "cost_scale": COST_SCALE,
         "role": role_name,
         "backend_run_id": backend_run_id,
         "action": action,
@@ -3983,6 +3995,24 @@ def record_role_run(
         source=source if source == "retrospective" else None,
         capability_ids=capability_ids,
     )
+    if cost_tokens_in is not None or cost_tokens_out is not None:
+        # Token effort is a proxy, never complete-source USD. Record-only retries
+        # must not overwrite a richer session receipt that arrived meanwhile.
+        with _conn() as c:
+            c.execute(
+                "INSERT INTO costs VALUES (?,?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET "
+                "tokens_in=excluded.tokens_in,tokens_out=excluded.tokens_out,pulled_ts=excluded.pulled_ts "
+                "WHERE costs.source='ledger'",
+                (
+                    run_id,
+                    cost_tokens_in or 0,
+                    cost_tokens_out or 0,
+                    0.0,
+                    0.0,
+                    "ledger",
+                    int(time.time()),
+                ),
+            )
     record_completion_event(
         run_id,
         event_type="role",
@@ -4000,6 +4030,74 @@ def record_role_run(
             },
         },
     )
+
+
+def role_cost_report(run_id: str | None, agent: str | None, db: Path | None = None) -> dict:
+    """Read whole-run dollars or an explicitly imputed estimate on the existing scale.
+
+    Estimates never enter costs or masquerade as native usage. No eligible pool
+    means UNMEASURED, rather than an invented zero-dollar observation.
+    """
+    result = {
+        "scale": COST_SCALE,
+        "status": "unmeasured",
+        "cost_usd": None,
+        "imputed": False,
+        "source": "no_eligible_pool",
+    }
+    with sqlite3.connect(f"file:{(db or DB_PATH).resolve()}?mode=ro", uri=True) as c:
+        row = c.execute("SELECT cost_usd,source FROM costs WHERE run_id=?", (run_id,)).fetchone()
+        if (
+            row
+            and row[1] in COMPLETE_COST_SOURCES
+            and isinstance(row[0], (int, float))
+            and math.isfinite(row[0])
+            and row[0] > 0
+        ):
+            return {
+                **result,
+                "status": "measured",
+                "cost_usd": row[0],
+                "imputed": False,
+                "source": row[1],
+            }
+        since = int(time.time()) - RELEARN_WINDOW_DAYS * 86400
+        agents = {
+            r[0]
+            for r in c.execute(
+                "SELECT DISTINCT agent FROM runs WHERE ts>=? AND agent IS NOT NULL", (since,)
+            )
+        }
+        telemetry = _cost_telemetry(c, agents, since)
+        marks = ",".join("?" for _ in COMPLETE_COST_SOURCES)
+        pools = [
+            (a, cost)
+            for a, cost in c.execute(
+                "SELECT r.agent,co.cost_usd FROM runs r JOIN costs co ON r.run_id=co.run_id "
+                f"WHERE r.ts>=? AND r.agent IS NOT NULL AND co.source IN ({marks}) AND co.cost_usd>0",
+                (since, *sorted(COMPLETE_COST_SOURCES)),
+            )
+            if telemetry[a]["valid"] and math.isfinite(cost)
+        ]
+        own = [cost for a, cost in pools if a == agent]
+        if own:
+            return {
+                **result,
+                "status": "imputed",
+                "imputed": True,
+                "cost_usd": sum(own) / len(own),
+                "source": "agent_global",
+            }
+        all_costs = sorted(cost for _a, cost in pools)
+        if all_costs:
+            return {
+                **result,
+                "status": "imputed",
+                "imputed": True,
+                "cost_usd": all_costs[len(all_costs) // 2],
+                "source": "global_median",
+            }
+    return result
 
 
 def record_role_selector_event(
@@ -7276,6 +7374,8 @@ def _selftest():
             action="redirect",
             decision_source="redirect_agent",
             proposal={"action": "redirect"},
+            cost_tokens_in=3000,
+            cost_tokens_out=200,
         )
         record_run("downstream-good", "o/r#role", "implement", "codex")
         record_outcome(
@@ -7308,6 +7408,8 @@ def _selftest():
                 "SELECT durability, notes FROM outcomes WHERE run_id='role-good'"
             ).fetchone()
         assert role_row[0] == "role:redirect" and role_row[1] == "redirect", role_row
+        assert json.loads(role_row[2])["cost_tokens_in"] == 3000
+        assert json.loads(role_row[2])["imputed"] is False
         assert "offload:cursor:1" in (role_row[2] or ""), role_row
         assert influenced == "role-good", influenced
         assert role_outcome[0] == "durable" and "accepted redirect" in role_outcome[1], role_outcome

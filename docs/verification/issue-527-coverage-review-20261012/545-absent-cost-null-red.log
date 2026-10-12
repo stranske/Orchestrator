@@ -1,0 +1,42 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_missing_usage_is_imputed_and_flagged_never_null _____________
+
+private_brain = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1039/test_missing_usage_is_imputed_0/brain.db')
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1039/test_missing_usage_is_imputed_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10da38710>
+
+    def test_missing_usage_is_imputed_and_flagged_never_null(private_brain, tmp_path, monkeypatch):
+        _seed_pool("gemini", [2.0, 4.0])
+        result, path = _dispatch(monkeypatch, private_brain, tmp_path)
+        row = result["rows"][0]
+        with sqlite3.connect(private_brain) as conn:
+            metadata = json.loads(
+                conn.execute(
+                    "SELECT decomposition FROM runs WHERE run_id=?", (row["role_run_id"],)
+                ).fetchone()[0]
+            )
+        assert metadata["imputed"] is True
+        assert row["cost_report"] == {
+            "scale": feedback.COST_SCALE,
+            "status": "imputed",
+            "cost_usd": 3.0,
+            "imputed": True,
+            "source": "agent_global",
+        }
+        assert result["summary"]["cost_usd"] is None
+        assert result["summary"]["estimated_cost_usd"] == 3.0
+        line = retro.weekly_line(path)
+        assert "cost measured 0 of 1, imputed 1, unmeasured 0" in line
+>       assert "null" not in line
+E       AssertionError: assert 'null' not in 'adjudicator...t_price_usd)'
+E         
+E         'null' is contained here:
+E           e 0, cost null (graded 0; costs measured 0; cost measured 0 of 1, imputed 1, unmeasured 0; estimated accounted USD 3.0; scale list_price_usd)
+E         ?           ++++
+
+tests/test_adjudicator_retro_cost.py:127: AssertionError
+tracked test inputs: NOT CHECKED -- /Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261012T0820Z/545-production-copy is not a git checkout. In the exec mirror that loses nothing: its tests/ IS `git archive HEAD tests`, so every file in it was tracked
+=========================== short test summary info ============================
+FAILED tests/test_adjudicator_retro_cost.py::test_missing_usage_is_imputed_and_flagged_never_null
+1 failed in 0.28s

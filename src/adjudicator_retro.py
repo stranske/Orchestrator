@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -326,7 +327,42 @@ def summarize(rows: list[dict]) -> dict:
     graded = [r for r in accepted if r.get("later_truth")]
     agree = sum(r["shadow_verdict"] == r["later_truth"] for r in graded)
     baseline = sum(r["merge_rule_verdict"] == r["later_truth"] for r in graded)
-    measured_costs = [r["cost_usd"] for r in rows if isinstance(r.get("cost_usd"), (int, float))]
+
+    # A legacy dollar receipt proves an attempt even if its backend ID was not
+    # retained. Preparation-only rows do not. Classify each attempt once, so
+    # coverage numerators and denominator describe the same population.
+    def valid_amount(value):
+        return type(value) in (int, float) and math.isfinite(value) and value >= 0
+
+    def measured_amount(row):
+        report = row.get("cost_report") or {}
+        if report.get("status") == "measured" and valid_amount(report.get("cost_usd")):
+            return report["cost_usd"]
+        value = row.get("cost_usd")
+        return value if valid_amount(value) else None
+
+    attempted_rows = [
+        row
+        for row in rows
+        if row.get("backend_run_id")
+        or measured_amount(row) is not None
+        or (row.get("cost_report") or {}).get("status") in {"measured", "imputed"}
+    ]
+    measured_costs = [
+        measured_amount(row) for row in attempted_rows if measured_amount(row) is not None
+    ]
+    imputed_rows = [
+        row
+        for row in attempted_rows
+        if measured_amount(row) is None
+        and valid_amount((row.get("cost_report") or {}).get("cost_usd"))
+        and (row.get("cost_report") or {}).get("status") == "imputed"
+    ]
+    estimated_costs = measured_costs + [
+        row["cost_report"]["cost_usd"]
+        for row in imputed_rows
+        if valid_amount(row["cost_report"].get("cost_usd"))
+    ]
     return {
         "cases": len(rows),
         "adjudicated": len(accepted),
@@ -340,6 +376,11 @@ def summarize(rows: list[dict]) -> dict:
         "agreement_rate": agree / len(graded) if graded else None,
         "merge_rule_agreement_rate": baseline / len(graded) if graded else None,
         "cost_usd": sum(measured_costs) if measured_costs else None,
+        "cost_attempted_cases": len(attempted_rows),
+        "cost_imputed_cases": len(imputed_rows),
+        "cost_unmeasured_cases": len(attempted_rows) - len(measured_costs) - len(imputed_rows),
+        "cost_scale": feedback.COST_SCALE,
+        "estimated_cost_usd": sum(estimated_costs) if estimated_costs else None,
         "cost_measured_cases": len(measured_costs),
         "cost_per_case": sum(measured_costs) / len(measured_costs) if measured_costs else None,
     }
@@ -969,7 +1010,7 @@ def run(
                 entry["role_record_error"] = None
             except Exception as exc:
                 entry["role_record_error"] = str(exc)
-            _persist_report(path, list(saved.values()), len(population))
+            _persist_report(path, list(saved.values()), len(population), db=db)
     for row in population:
         identity = {k: row[k] for k in ("run_id", "verifier_verdict", "adjudicated_verdict")}
         case_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
@@ -1037,16 +1078,21 @@ def run(
             entry["error"] = str(exc)
         saved[case_id] = entry
         # Persist every attempt so an interrupted batch does not repeat successful paid calls.
-        _persist_report(path, list(saved.values()), len(population))
+        _persist_report(path, list(saved.values()), len(population), db=db)
     # Saved cases can gain judged durability or measured cost without a new
     # paid attempt. Publish those refreshes for the weekly file reader too.
-    return _persist_report(path, list(saved.values()), len(population))
+    return _persist_report(path, list(saved.values()), len(population), db=db)
 
 
-def _persist_report(path: Path, rows: list[dict], population: int) -> dict:
+def _persist_report(path: Path, rows: list[dict], population: int, db: Path | None = None) -> dict:
     """Atomically publish the same shadow evidence returned to the caller."""
     for row in rows:
         _apply_evidence_floor(row)
+    for row in rows:
+        if row.get("backend_run_id"):
+            row["cost_report"] = feedback.role_cost_report(
+                row["backend_run_id"], row.get("backend"), db=db
+            )
     comparison = compare_proposals(rows)
     summary = summarize(rows)
     comparison.update(
@@ -1088,7 +1134,12 @@ def weekly_line(path: Path | None = None) -> str:
         return (
             f"adjudicator shadow: cases {summary['cases']}, agree {summary['agree']}, "
             f"disagree {summary['disagree']}, cost {cost if cost is not None else 'UNKNOWN'} "
-            f"(graded {summary['graded']}; costs measured {summary['cost_measured_cases']})"
+            f"(graded {summary['graded']}; costs measured {summary['cost_measured_cases']}; "
+            f"cost measured {summary['cost_measured_cases']} of {summary.get('cost_attempted_cases', summary['cases'])}, "
+            f"imputed {summary.get('cost_imputed_cases', 0)}, "
+            f"unmeasured {summary.get('cost_unmeasured_cases', 0)}; "
+            f"estimated accounted USD {summary.get('estimated_cost_usd') if summary.get('estimated_cost_usd') is not None else 'UNMEASURED'}; "
+            f"scale {feedback.COST_SCALE})"
         )
     except (OSError, ValueError, KeyError, TypeError):
         return "adjudicator shadow: cases UNKNOWN, agree UNKNOWN, disagree UNKNOWN, cost UNKNOWN"
@@ -1102,6 +1153,11 @@ def _selftest() -> None:
     else:
         raise AssertionError("absent evidence was accepted")
     assert summarize([])["agreement_rate"] is None
+    cost = summarize(
+        [{"backend_run_id": "native", "cost_report": {"status": "imputed", "cost_usd": 3}}]
+    )
+    assert cost["cost_imputed_cases"] == 1 and cost["cost_measured_cases"] == 0
+    assert cost["estimated_cost_usd"] == 3 and cost["cost_usd"] is None
     assert later_truth({"durability": "pending"}) is None
     assert not _safe_source_path("bad\0path")
     criterion = {"criterion": "named artifact", "location": "git-path:proof.txt"}
@@ -1121,7 +1177,7 @@ def _selftest() -> None:
         pass
     else:
         raise AssertionError("nonpositive preparation budget was accepted")
-    print("adjudicator_retro selftest: 7 checks passed")
+    print("adjudicator_retro selftest: 9 checks passed")
 
 
 def main() -> int:

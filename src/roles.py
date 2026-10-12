@@ -2812,6 +2812,7 @@ def run_adjudicator_agent(
     backend_run_id: str | None = None
     backend_error_detail: str | None = None
     backend_model: str | None = None
+    backend_usage: dict = {}
 
     if proposal_json is not None:
         proposal = proposal_json
@@ -2836,6 +2837,7 @@ def run_adjudicator_agent(
             )
             backend_run_id = res.get("run_id")
             backend_model = res.get("model")
+            backend_usage = res.get("usage") or {}
             raw_output = res.get("output", "")
             backend_error_detail = _backend_error_detail(res)
             if res.get("exit") not in (0, None):
@@ -2898,6 +2900,11 @@ def run_adjudicator_agent(
             "decision_source": decision_source,
             "proposal": proposal,
             "model": backend_model,
+            "cost_tokens_in": backend_usage.get("input_tokens"),
+            "cost_tokens_out": backend_usage.get("output_tokens"),
+            "imputed": all(
+                backend_usage.get(key) is None for key in ("input_tokens", "output_tokens")
+            ),
             "source": "retrospective" if retrospective_origin else source,
             "ts": int(time.time()),
         }

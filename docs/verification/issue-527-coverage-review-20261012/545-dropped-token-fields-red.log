@@ -1,0 +1,145 @@
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+_ test_dispatch_records_measured_cost_when_the_adapter_reports_usage[4000-200] _
+
+private_brain = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1036/test_dispatch_records_measured0/brain.db')
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1036/test_dispatch_records_measured0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1095159d0>
+tokens_in = 4000, tokens_out = 200
+
+    @pytest.mark.parametrize("tokens_in,tokens_out", [(4000, 200), (0, 0), (4000, 0), (0, 200)])
+    def test_dispatch_records_measured_cost_when_the_adapter_reports_usage(
+        private_brain, tmp_path, monkeypatch, tokens_in, tokens_out
+    ):
+        recorded = []
+        record_role_run = feedback.record_role_run
+    
+        def capture_record(**record):
+            recorded.append(record)
+            return record_role_run(**record)
+    
+        monkeypatch.setattr(feedback, "record_role_run", capture_record)
+        result, path = _dispatch(
+            monkeypatch,
+            private_brain,
+            tmp_path,
+            {"input_tokens": tokens_in, "output_tokens": tokens_out},
+        )
+        rid = result["rows"][0]["role_run_id"]
+        assert len(recorded) == 1
+        assert recorded[0]["run_id"] == rid
+        assert recorded[0]["backend_run_id"] == "backend-one"
+>       assert recorded[0]["cost_tokens_in"] == tokens_in
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'cost_tokens_in'
+
+tests/test_adjudicator_retro_cost.py:82: KeyError
+___ test_dispatch_records_measured_cost_when_the_adapter_reports_usage[0-0] ____
+
+private_brain = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1036/test_dispatch_records_measured1/brain.db')
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1036/test_dispatch_records_measured1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109515d30>
+tokens_in = 0, tokens_out = 0
+
+    @pytest.mark.parametrize("tokens_in,tokens_out", [(4000, 200), (0, 0), (4000, 0), (0, 200)])
+    def test_dispatch_records_measured_cost_when_the_adapter_reports_usage(
+        private_brain, tmp_path, monkeypatch, tokens_in, tokens_out
+    ):
+        recorded = []
+        record_role_run = feedback.record_role_run
+    
+        def capture_record(**record):
+            recorded.append(record)
+            return record_role_run(**record)
+    
+        monkeypatch.setattr(feedback, "record_role_run", capture_record)
+        result, path = _dispatch(
+            monkeypatch,
+            private_brain,
+            tmp_path,
+            {"input_tokens": tokens_in, "output_tokens": tokens_out},
+        )
+        rid = result["rows"][0]["role_run_id"]
+        assert len(recorded) == 1
+        assert recorded[0]["run_id"] == rid
+        assert recorded[0]["backend_run_id"] == "backend-one"
+>       assert recorded[0]["cost_tokens_in"] == tokens_in
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'cost_tokens_in'
+
+tests/test_adjudicator_retro_cost.py:82: KeyError
+__ test_dispatch_records_measured_cost_when_the_adapter_reports_usage[4000-0] __
+
+private_brain = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1036/test_dispatch_records_measured2/brain.db')
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1036/test_dispatch_records_measured2')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b067aa0>
+tokens_in = 4000, tokens_out = 0
+
+    @pytest.mark.parametrize("tokens_in,tokens_out", [(4000, 200), (0, 0), (4000, 0), (0, 200)])
+    def test_dispatch_records_measured_cost_when_the_adapter_reports_usage(
+        private_brain, tmp_path, monkeypatch, tokens_in, tokens_out
+    ):
+        recorded = []
+        record_role_run = feedback.record_role_run
+    
+        def capture_record(**record):
+            recorded.append(record)
+            return record_role_run(**record)
+    
+        monkeypatch.setattr(feedback, "record_role_run", capture_record)
+        result, path = _dispatch(
+            monkeypatch,
+            private_brain,
+            tmp_path,
+            {"input_tokens": tokens_in, "output_tokens": tokens_out},
+        )
+        rid = result["rows"][0]["role_run_id"]
+        assert len(recorded) == 1
+        assert recorded[0]["run_id"] == rid
+        assert recorded[0]["backend_run_id"] == "backend-one"
+>       assert recorded[0]["cost_tokens_in"] == tokens_in
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'cost_tokens_in'
+
+tests/test_adjudicator_retro_cost.py:82: KeyError
+__ test_dispatch_records_measured_cost_when_the_adapter_reports_usage[0-200] ___
+
+private_brain = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1036/test_dispatch_records_measured3/brain.db')
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1036/test_dispatch_records_measured3')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b067590>
+tokens_in = 0, tokens_out = 200
+
+    @pytest.mark.parametrize("tokens_in,tokens_out", [(4000, 200), (0, 0), (4000, 0), (0, 200)])
+    def test_dispatch_records_measured_cost_when_the_adapter_reports_usage(
+        private_brain, tmp_path, monkeypatch, tokens_in, tokens_out
+    ):
+        recorded = []
+        record_role_run = feedback.record_role_run
+    
+        def capture_record(**record):
+            recorded.append(record)
+            return record_role_run(**record)
+    
+        monkeypatch.setattr(feedback, "record_role_run", capture_record)
+        result, path = _dispatch(
+            monkeypatch,
+            private_brain,
+            tmp_path,
+            {"input_tokens": tokens_in, "output_tokens": tokens_out},
+        )
+        rid = result["rows"][0]["role_run_id"]
+        assert len(recorded) == 1
+        assert recorded[0]["run_id"] == rid
+        assert recorded[0]["backend_run_id"] == "backend-one"
+>       assert recorded[0]["cost_tokens_in"] == tokens_in
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'cost_tokens_in'
+
+tests/test_adjudicator_retro_cost.py:82: KeyError
+tracked test inputs: NOT CHECKED -- /Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261012T0820Z/545-production-copy is not a git checkout. In the exec mirror that loses nothing: its tests/ IS `git archive HEAD tests`, so every file in it was tracked
+=========================== short test summary info ============================
+FAILED tests/test_adjudicator_retro_cost.py::test_dispatch_records_measured_cost_when_the_adapter_reports_usage[4000-200]
+FAILED tests/test_adjudicator_retro_cost.py::test_dispatch_records_measured_cost_when_the_adapter_reports_usage[0-0]
+FAILED tests/test_adjudicator_retro_cost.py::test_dispatch_records_measured_cost_when_the_adapter_reports_usage[4000-0]
+FAILED tests/test_adjudicator_retro_cost.py::test_dispatch_records_measured_cost_when_the_adapter_reports_usage[0-200]
+4 failed in 0.51s

@@ -1,0 +1,215 @@
+...............FFFFFFF                                                   [100%]
+=================================== FAILURES ===================================
+_______________ test_zero_dollar_receipt_is_not_measured[False] ________________
+
+private_brain = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1010/test_zero_dollar_receipt_is_no0/brain.db')
+use_pool = False
+
+    @pytest.mark.parametrize("use_pool", [False, True])
+    def test_zero_dollar_receipt_is_not_measured(private_brain, use_pool):
+        if use_pool:
+            _seed_pool("gemini", [3.0])
+        feedback.record_role_run("zero", "adjudicator", "o/r#1", "gemini")
+        with feedback._conn() as conn:
+            conn.execute(
+                "INSERT INTO costs VALUES (?,?,?,?,?,?,?)",
+                ("zero", 10, 2, 0.0, 0.0, "ccusage", int(time.time())),
+            )
+        report = feedback.role_cost_report("zero", "gemini", db=private_brain)
+>       assert report["status"] == ("imputed" if use_pool else "unmeasured")
+E       AssertionError: assert 'measured' == 'unmeasured'
+E
+E         - unmeasured
+E         ? --
+E         + measured
+
+tests/test_adjudicator_retro_cost.py:221: AssertionError
+________________ test_zero_dollar_receipt_is_not_measured[True] ________________
+
+private_brain = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1010/test_zero_dollar_receipt_is_no1/brain.db')
+use_pool = True
+
+    @pytest.mark.parametrize("use_pool", [False, True])
+    def test_zero_dollar_receipt_is_not_measured(private_brain, use_pool):
+        if use_pool:
+            _seed_pool("gemini", [3.0])
+        feedback.record_role_run("zero", "adjudicator", "o/r#1", "gemini")
+        with feedback._conn() as conn:
+            conn.execute(
+                "INSERT INTO costs VALUES (?,?,?,?,?,?,?)",
+                ("zero", 10, 2, 0.0, 0.0, "ccusage", int(time.time())),
+            )
+        report = feedback.role_cost_report("zero", "gemini", db=private_brain)
+>       assert report["status"] == ("imputed" if use_pool else "unmeasured")
+E       AssertionError: assert 'measured' == 'imputed'
+E
+E         - imputed
+E         + measured
+
+tests/test_adjudicator_retro_cost.py:221: AssertionError
+____________ test_plain_deliverable_json_is_not_native_usage[codex] ____________
+
+stores = {'root': PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1010/test_plain_... 'codex', 'count': 0, 'cost_usd': 0.0, 'event': 'complete', ...}], 'brain_runs': ['offload:codex:1788528486818850000']}
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a9a3e90>
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1010/test_plain_deliverable_json_is0')
+agent = 'codex'
+
+    @pytest.mark.parametrize("agent", ["codex", "claude", "cursor", "gemini"])
+    def test_plain_deliverable_json_is_not_native_usage(stores, monkeypatch, tmp_path, agent):
+        text = json.dumps({"type": "result", "usage": {"input_tokens": 4000, "output_tokens": 200}})
+        real_run = subprocess.run
+
+        def fake_run(cmd, *a, **kw):
+            if isinstance(cmd, list) and cmd[:2] == ["bash", "-lc"]:
+                return subprocess.CompletedProcess(cmd, 0, text, "")
+            return real_run(cmd, *a, **kw)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        result = dispatcher.offload(agent, "Review a bounded case", cwd=str(tmp_path))
+>       assert result["usage"] == {}
+E       AssertionError: assert {'input_token..._tokens': 200} == {}
+E
+E         Left contains 2 more items:
+E         {'input_tokens': 4000, 'output_tokens': 200}
+E         Use -v to get more diff
+
+tests/test_adjudicator_retro_cost.py:237: AssertionError
+___________ test_plain_deliverable_json_is_not_native_usage[claude] ____________
+
+stores = {'root': PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1010/test_plain_...claude', 'count': 0, 'cost_usd': 0.0, 'event': 'complete', ...}], 'brain_runs': ['offload:claude:1788528486818850000']}
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10c9b4800>
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1010/test_plain_deliverable_json_is1')
+agent = 'claude'
+
+    @pytest.mark.parametrize("agent", ["codex", "claude", "cursor", "gemini"])
+    def test_plain_deliverable_json_is_not_native_usage(stores, monkeypatch, tmp_path, agent):
+        text = json.dumps({"type": "result", "usage": {"input_tokens": 4000, "output_tokens": 200}})
+        real_run = subprocess.run
+
+        def fake_run(cmd, *a, **kw):
+            if isinstance(cmd, list) and cmd[:2] == ["bash", "-lc"]:
+                return subprocess.CompletedProcess(cmd, 0, text, "")
+            return real_run(cmd, *a, **kw)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        result = dispatcher.offload(agent, "Review a bounded case", cwd=str(tmp_path))
+>       assert result["usage"] == {}
+E       AssertionError: assert {'input_token..._tokens': 200} == {}
+E
+E         Left contains 2 more items:
+E         {'input_tokens': 4000, 'output_tokens': 200}
+E         Use -v to get more diff
+
+tests/test_adjudicator_retro_cost.py:237: AssertionError
+___________ test_plain_deliverable_json_is_not_native_usage[cursor] ____________
+
+stores = {'root': PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1010/test_plain_...cursor', 'count': 0, 'cost_usd': 0.0, 'event': 'complete', ...}], 'brain_runs': ['offload:cursor:1788528486818850000']}
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10c9ce660>
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1010/test_plain_deliverable_json_is2')
+agent = 'cursor'
+
+    @pytest.mark.parametrize("agent", ["codex", "claude", "cursor", "gemini"])
+    def test_plain_deliverable_json_is_not_native_usage(stores, monkeypatch, tmp_path, agent):
+        text = json.dumps({"type": "result", "usage": {"input_tokens": 4000, "output_tokens": 200}})
+        real_run = subprocess.run
+
+        def fake_run(cmd, *a, **kw):
+            if isinstance(cmd, list) and cmd[:2] == ["bash", "-lc"]:
+                return subprocess.CompletedProcess(cmd, 0, text, "")
+            return real_run(cmd, *a, **kw)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        result = dispatcher.offload(agent, "Review a bounded case", cwd=str(tmp_path))
+>       assert result["usage"] == {}
+E       AssertionError: assert {'input_token..._tokens': 200} == {}
+E
+E         Left contains 2 more items:
+E         {'input_tokens': 4000, 'output_tokens': 200}
+E         Use -v to get more diff
+
+tests/test_adjudicator_retro_cost.py:237: AssertionError
+___________ test_plain_deliverable_json_is_not_native_usage[gemini] ____________
+
+stores = {'root': PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1010/test_plain_...gemini', 'count': 0, 'cost_usd': 0.0, 'event': 'complete', ...}], 'brain_runs': ['offload:gemini:1788528486818850000']}
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10c9ccdd0>
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1010/test_plain_deliverable_json_is3')
+agent = 'gemini'
+
+    @pytest.mark.parametrize("agent", ["codex", "claude", "cursor", "gemini"])
+    def test_plain_deliverable_json_is_not_native_usage(stores, monkeypatch, tmp_path, agent):
+        text = json.dumps({"type": "result", "usage": {"input_tokens": 4000, "output_tokens": 200}})
+        real_run = subprocess.run
+
+        def fake_run(cmd, *a, **kw):
+            if isinstance(cmd, list) and cmd[:2] == ["bash", "-lc"]:
+                return subprocess.CompletedProcess(cmd, 0, text, "")
+            return real_run(cmd, *a, **kw)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        result = dispatcher.offload(agent, "Review a bounded case", cwd=str(tmp_path))
+>       assert result["usage"] == {}
+E       AssertionError: assert {'input_token..._tokens': 200} == {}
+E
+E         Left contains 2 more items:
+E         {'input_tokens': 4000, 'output_tokens': 200}
+E         Use -v to get more diff
+
+tests/test_adjudicator_retro_cost.py:237: AssertionError
+_____________ test_native_usage_accumulates_across_executed_retry ______________
+
+stores = {'root': PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1010/test_native... 'codex', 'count': 0, 'cost_usd': 0.0, 'event': 'complete', ...}], 'brain_runs': ['offload:codex:1788528486818850000']}
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10c9536e0>
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1010/test_native_usage_accumulates_0')
+
+    def test_native_usage_accumulates_across_executed_retry(stores, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            dispatcher.adapters, "build_command", lambda *a, **kw: ["codex", "exec", "--json"]
+        )
+        monkeypatch.setenv("ORCH_OFFLOAD_NETWORK_RETRIES", "1")
+        monkeypatch.setenv("ORCH_OFFLOAD_RETRY_BACKOFF_S", "0")
+        real_run = subprocess.run
+        attempts = []
+
+        def fake_run(cmd, *a, **kw):
+            if isinstance(cmd, list) and cmd[:2] == ["bash", "-lc"]:
+                attempts.append(cmd)
+                first = len(attempts) == 1
+                text = json.dumps(
+                    {
+                        "type": "turn.completed",
+                        "usage": {
+                            "input_tokens": 100 if first else 40,
+                            "output_tokens": 10 if first else 4,
+                        },
+                    }
+                )
+                if not first:
+                    text += "\n" + json.dumps(
+                        {"type": "item.completed", "item": {"type": "agent_message", "text": "done"}}
+                    )
+                return subprocess.CompletedProcess(
+                    cmd, 1 if first else 0, text, "connection reset by peer" if first else ""
+                )
+            return real_run(cmd, *a, **kw)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        result = dispatcher.offload("codex", "Review a bounded case", cwd=str(tmp_path))
+        assert len(attempts) == 2
+>       assert result["usage"] == {"input_tokens": 140, "output_tokens": 14}
+E       AssertionError: assert {'input_token...ut_tokens': 4} == {'input_token...t_tokens': 14}
+E
+E         Differing items:
+E         {'output_tokens': 4} != {'output_tokens': 14}
+E         {'input_tokens': 40} != {'input_tokens': 140}
+E         Use -v to get more diff
+
+tests/test_adjudicator_retro_cost.py:274: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_adjudicator_retro_cost.py::test_zero_dollar_receipt_is_not_measured[False]
+FAILED tests/test_adjudicator_retro_cost.py::test_zero_dollar_receipt_is_not_measured[True]
+FAILED tests/test_adjudicator_retro_cost.py::test_plain_deliverable_json_is_not_native_usage[codex]
+FAILED tests/test_adjudicator_retro_cost.py::test_plain_deliverable_json_is_not_native_usage[claude]
+FAILED tests/test_adjudicator_retro_cost.py::test_plain_deliverable_json_is_not_native_usage[cursor]
+FAILED tests/test_adjudicator_retro_cost.py::test_plain_deliverable_json_is_not_native_usage[gemini]
+FAILED tests/test_adjudicator_retro_cost.py::test_native_usage_accumulates_across_executed_retry
+7 failed, 15 passed in 0.88s
