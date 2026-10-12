@@ -5,7 +5,9 @@ A merge is only a provisional success, and a provisional success still SCORES:
 `feedback._is_success('pending', 'PASS')` is True, so every merged row this sweep leaves pending
 counts as a win until it is judged. Days after the merge, the sweep finds THE merge each pending
 row recorded (`find_merge`) and judges whether it held: durable, reverted, reopened, abandoned
-(delivered nothing) or broke_later. broke_later is read from EVERY fix PR merged since the merge,
+(delivered nothing) or broke_later. broke_later needs a later fix PR that STATES it repairs the
+merge (`reference_relation`; a bare `#N` names a sibling as often as a repair, and one that names it
+without saying how closes it unjudgeable). It is read from EVERY fix PR merged since the merge,
 one read per repo (`read_fix_window`); a merge that read did not reach is never durable, it waits
 (`DRAIN_FIX_SEARCH`) and is closed unchecked if no run reaches it in time. A row whose merge cannot
 be identified as the run's own is closed as `unjudgeable` and excluded from learning: never left
@@ -75,6 +77,15 @@ TRUNCATED_FIX_READ_RE = re.compile(re.escape(TRUNCATED_FIX_READ) + r"(?: \d+)?")
 # it. Under $ORCH_STATE_DIR. "0" in the switch stops the selection, which an undo needs to stick.
 TRUNCATED_RECHECK_UNDO = "durability-truncated-recheck-undo.jsonl"
 TRUNCATED_RECHECK_SWITCH = "ORCH_DURABILITY_TRUNCATED_RECHECK"
+# What the fix-PR read wrote until 2026-10-12 for a bare `#N` in a later fix PR, which made the row
+# broke_later. Every such row is judged again under the stated-repair rule, over the window its own
+# verdict covered. ONE pattern: the selection matches it and every re-check writes a note without
+# it, so the population drains to a printed zero.
+BARE_REFERENCE_NOTE = "names this change"
+BARE_REFERENCE_RE = re.compile(r"later fix PR #\d+ " + re.escape(BARE_REFERENCE_NOTE))
+# "0" stops the selection, which `--undo-truncated-recheck` (one undo log for both re-checks) needs
+# to stick.
+STATED_RECHECK_SWITCH = "ORCH_DURABILITY_STATED_RECHECK"
 MAX_BASE_COMMITS = 100
 EXPLICIT_MERGED_PR_RE = re.compile(r"\bPR\s+#(?P<num>\d+)\s+merged\b", re.IGNORECASE)
 # Every field classify_durability reads, so a direct PR target costs ONE `gh pr view`.
@@ -520,6 +531,106 @@ def _contains_ref(text: str, number: int) -> bool:
     return re.search(rf"(?<!\d)#{number}(?!\d)", text or "") is not None
 
 
+# THE STATED-REPAIR RULE (2026-10-12). Until then any fix-titled later PR whose text contained `#N`
+# made N broke_later. Read against the text around each reference, 87 of the 129 (merge, naming PR)
+# pairs behind the 134 live broke_later rows named N as a sibling, a rebase base, a coverage-round
+# target or a "Related Issues/PRs" link, and 14 more said nothing either way; 28 stated a repair.
+# A fix PR's text now counts against N only where a sentence naming N says this PR repairs, follows
+# up, reverts or corrects it. Each mention is read in its own sentence, as one of three relations.
+REF_REPAIR = "repair"  # the sentence says this PR repairs / follows up / reverts N
+REF_NOT_REPAIR = "not_repair"  # the sentence says what N is to this PR, and it is not a repair
+REF_UNSTATED = "unstated"  # N is named and the sentence says neither
+# _fix_followup_status's answer when the read covered the merge, nothing stated a repair, and some
+# fix PR named it without saying how. ITS OWN VALUE, never None: None means "the read did not reach
+# this merge", which a later run can answer. Nothing can answer this one, so the sweep closes it as
+# unjudgeable (BROKE_LATER_UNSTATED). Unknown is never durable.
+UNSTATED_REFERENCE = "unstated_reference"
+# A sentence that says what N is to this PR, and that it is not a repair: built on, rebased onto,
+# independent of, or named as background. Read before the repair vocabulary, so "#3728
+# independently repairs the verifier findings" stays a sibling.
+_NOT_REPAIR_MARKERS = re.compile(
+    r"\brebas(?:e|ed|es|ing)\b|\bstack(?:ed|s)?\s+on\b|\bindependent(?:ly)?\b|\bnot\s+replace\b"
+    r"|\bnot\s+changed\s+here\b|\bpre-?existing\b|\boriginally\s+merged\b",
+    re.IGNORECASE,
+)
+# The repair vocabulary. `{ref}` is the reference itself; each pattern is matched inside ONE sentence
+# that names N, so a word elsewhere in the body never attaches to the reference.
+_REPAIR_PATTERNS = tuple(
+    pattern.replace("{ref}", r"\#N")
+    for pattern in (
+        r"\bfollow[- ]?ups?\b.*{ref}",  # "Bounded follow-up to merged #1549"
+        r"{ref}\W{0,3}follow[- ]?up",  # "(#1540 follow-up)"
+        r"\brevert\w*\b.*{ref}",
+        r"\bregress\w*\b.*{ref}",  # "A regression I introduced in #3251"
+        r"\bintroduced\s+(?:in|by)\s+(?:merged\s+)?(?:PR\s+)?{ref}",
+        r"\b(?:unbreak\w*|broken|broke)\b.*{ref}",  # "unbreak ... after #5912"
+        r"{ref}.*\bbr(?:oke|eaks)\b",
+        r"\brepair\w*\b.*{ref}",  # "This repairs the consumer rollout started by #3379"
+        r"{ref}.*\brepairs?\b",  # "PR #3169 merged ...; this PR repairs ..."
+        r"\bcorrect(?:s|ed|ing|ion)\b.*{ref}",
+        r"{ref}.*\bcorrection\b",
+        r"{ref}\s+(?:leaves|left)\b",  # "Merged PR #3247 leaves two active review findings"
+        r"{ref}.*\btraded\s+away\b",
+        r"\b(?:concerns?|review\s+findings?)\b.*{ref}",  # "concern in merged #544"
+        r"{ref}.*\b(?:concerns?|review\s+findings?)\b",  # "#564 returned CONCERNS"
+        r"\bfix(?:es)?\s+{ref}",  # "Fixes #42"
+        r"\bfix(?:es)?\b.*\b(?:after|from)\s+(?:merged\s+)?(?:PR\s+)?{ref}",
+        r"\bloose\s+ends?\b.*{ref}",  # "Two loose ends from the onboarding (#3158 / #3159)"
+        r"\bfinding\b.*\bdiscovered\s+(?:on|in)\s+{ref}",  # "the live finding discovered on #3169"
+    )
+)
+# Sentence ends, blank lines, and a line break before a list item, heading, quote or table row. A
+# bare line break is a hard wrap INSIDE a sentence, and splitting there cut "... added by #3189
+# counts a run that compared nothing as" from the rest of its sentence.
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?;])\s+|\n\s*\n|\n(?=\s*(?:[-*+>|#]|\d+[.)]))")
+
+
+def _ref_pattern(number: int) -> str:
+    """`#N` as a reference to THIS repository's N: a qualified `other/Repo#N` is someone else's."""
+    return rf"(?:(?P<qual>[\w.-]+(?:/[\w.-]+)?)(?=#))?#{number}(?!\d)"
+
+
+def _mentions(sentence: str, number: int, repo: str | None) -> bool:
+    for match in re.finditer(_ref_pattern(number), sentence):
+        qual = match.group("qual")
+        if not qual or repo is None or qual.split("/")[-1].lower() == repo.split("/")[-1].lower():
+            return True
+    return False
+
+
+def _sentence_relation(sentence: str, number: int) -> str:
+    """How ONE sentence that names N relates this PR to it."""
+    if re.fullmatch(rf"\s*[-*]\s*\[?[\w./-]*#{number}\]?(?:\([^)]*\))?\s*", sentence):
+        return REF_NOT_REPAIR  # a bare "Related Issues/PRs" link line
+    if _NOT_REPAIR_MARKERS.search(sentence):
+        return REF_NOT_REPAIR
+    flat = re.sub(rf"[\w./-]*#{number}(?!\d)", "#N", sentence)
+    if any(re.search(pattern, flat, re.IGNORECASE) for pattern in _REPAIR_PATTERNS):
+        return REF_REPAIR
+    return REF_UNSTATED
+
+
+def reference_relation(text: str, number: int, repo: str | None = None) -> tuple[str | None, str]:
+    """(relation, the deciding sentence) for every mention of N in a fix PR's title and body.
+
+    REF_REPAIR when ANY sentence naming N states a repair; else REF_UNSTATED when any says nothing;
+    else REF_NOT_REPAIR; None when the text does not name N at all.
+    """
+    found: dict[str, str] = {}
+    for sentence in _SENTENCE_SPLIT.split(text or ""):
+        if sentence.strip() and _mentions(sentence, number, repo):
+            found.setdefault(_sentence_relation(sentence, number), sentence.strip())
+    for relation in (REF_REPAIR, REF_UNSTATED, REF_NOT_REPAIR):
+        if relation in found:
+            return relation, found[relation]
+    return None, ""
+
+
+def _excerpt(sentence: str, limit: int = 140) -> str:
+    flat = " ".join(sentence.split()).replace('"', "'")
+    return flat if len(flat) <= limit else flat[: limit - 3] + "..."
+
+
 def _fetch_repo_revert_prs(repo: str) -> tuple[list | None, bool]:
     """Repo-wide 'Revert in:title' SEARCH (rate: REST search = 30/min).
 
@@ -646,15 +757,19 @@ def _fix_followup_status(
     since_ts: int | None = None,
     until_ts: int | None = None,
     now: int | None = None,
-) -> tuple[bool | None, str]:
-    """Did a LATER merged fix PR explicitly NAME this one? That is `broke_later`.
+) -> tuple[bool | str | None, str]:
+    """Did a LATER merged fix PR STATE that it repairs this one? That is `broke_later`.
 
     A HIGH BAR, deliberately, and higher than the one escaped_defect_priority uses. That module
     ranks work on the loose signal — a fix commit touching the same file — which is decent
     evidence for ORDERING and poor evidence for TRAINING, because code is changed for many
     reasons and a fix on the same file may repair something this change never touched. This
-    writes `outcomes.durability`, which the router learns from, so it demands an explicit
-    reference: a fix-titled PR that names this PR number and merged AFTER it.
+    writes `outcomes.durability`, which the router learns from, so it demands a stated repair: a
+    fix-titled PR merged AFTER it, a sentence of which names this PR and says it repairs, follows
+    up, reverts or corrects it (`reference_relation`). A bare `#N` is not enough: until 2026-10-12
+    it was, and 87 of the 129 naming pairs behind the live broke_later rows were siblings, rebase
+    bases, coverage-round targets and "Related Issues/PRs" links. A fix PR that names this one
+    without saying how answers UNSTATED_REFERENCE, which is unknown, so never durable.
 
     READ WHOLE, OR UNKNOWN. False means every fix PR merged after this merge was read and none
     named it. Anything less is None, and None is never durable.
@@ -674,6 +789,7 @@ def _fix_followup_status(
         entry = read_fix_window(repo, start, now=now, _fetch=_fix_fn)
         if fix_cache is not None:
             fix_cache[repo] = entry
+    unstated: str | None = None
     for item in sorted(entry["items"].values(), key=lambda item: str(item.get("mergedAt") or "")):
         number = item.get("number")
         if number == pr_number:
@@ -684,17 +800,29 @@ def _fix_followup_status(
         if until_ts is not None and later > until_ts:
             continue  # landed after the verdict this answer is about
         title = item.get("title") or ""
-        haystack = f"{title}\n{item.get('body') or ''}"
-        if _contains_ref(haystack, pr_number):
-            return True, f"later fix PR #{number} names this change"
+        relation, sentence = reference_relation(
+            f"{title}\n\n{item.get('body') or ''}", pr_number, repo  # the title is a sentence
+        )
+        if relation == REF_REPAIR:
+            return (
+                True,
+                f'later fix PR #{number} states it repairs this change: "{_excerpt(sentence)}"',
+            )
+        if relation == REF_UNSTATED and unstated is None:
+            unstated = (
+                f"later fix PR #{number} mentions this change without stating a repair: "
+                f'"{_excerpt(sentence)}"'
+            )
     if not _fix_covers(entry, merged_ts):
         reached = entry["covered_from"]
         return None, (
             f"fix-PR search did not reach this merge ({entry['error'] or 'window starts later'}; "
             f"read whole back to {_search_ts(reached) if reached is not None else 'nothing'})"
         )
+    if unstated is not None:
+        return UNSTATED_REFERENCE, unstated
     return False, (
-        "no later fix PR names this change "
+        "no later fix PR states it repairs this change "
         f"(read every fix PR merged since {_search_ts(entry['covered_from'])})"
     )
 
@@ -877,6 +1005,7 @@ def classify_durability(
     _fix_fn=None,
     fix_cache: dict | None = None,
     fix_since: dict | None = None,
+    fix_until: int | None = None,
 ) -> dict:
     """Pure-ish classifier. An undecided result (`durability` None) names its `drain`: what will
     decide it later (DRAINS), or None when nothing can, which the sweep closes as unjudgeable.
@@ -948,9 +1077,21 @@ def classify_durability(
         fix_cache=fix_cache,
         _fix_fn=_fix_fn,
         since_ts=(fix_since or {}).get(fix_repo),
+        until_ts=fix_until,
         now=now,
     )
     fix_search = "uncovered" if broke is None else "covered"
+    if broke == UNSTATED_REFERENCE:
+        # Named, never said how. No later read changes what a merged PR's text says, so nothing
+        # will drain it: the sweep closes it as unjudgeable. Never durable, never broke_later.
+        return {
+            "durability": None,
+            "reason": fix_note,
+            "drain": None,
+            "failure_class": feedback.BROKE_LATER_UNSTATED,
+            "fix_search": fix_search,
+            "unstated": True,
+        }
     if broke is True:
         return {
             "durability": "broke_later",
@@ -1042,12 +1183,32 @@ def sweep_durability(
         "retry_closed": 0,
         # Merges the broke-later check was asked about: read whole back to the merge (covered) or
         # not (uncovered, of which `closed` were closed unchecked this run), and what it took.
-        "fix_search": {"covered": 0, "uncovered": 0, "closed": 0, "reads": 0, "repos": {}},
+        # `unstated`: covered merges a fix PR named without stating a repair, closed unjudgeable.
+        "fix_search": {
+            "covered": 0,
+            "uncovered": 0,
+            "closed": 0,
+            "unstated": 0,
+            "reads": 0,
+            "repos": {},
+        },
         # Rows recorded `durable` on a cut-short read (TRUNCATED_FIX_READ), read again this run.
         "truncated": {
             "selected": 0,
             "broke_later": 0,
             "confirmed": 0,
+            "closed": 0,
+            "waiting": 0,
+            "role_runs": 0,
+            "stuck": 0,
+        },
+        # Rows recorded broke_later on a bare reference (BARE_REFERENCE_NOTE), judged again this run:
+        # kept broke_later on a stated repair, or durable, relabelled, closed or waiting.
+        "restated": {
+            "selected": 0,
+            "broke_later": 0,
+            "durable": 0,
+            "relabelled": 0,
             "closed": 0,
             "waiting": 0,
             "role_runs": 0,
@@ -1084,43 +1245,61 @@ def sweep_durability(
     # The owner's decision on rows judged `durable` on a cut-short read (2026-10-04): find each
     # one's merge again and read it over the window its own verdict covered, in the same reads.
     rechecks: list[tuple[dict, dict]] = []
-    truncated = _truncated_durable_runs()
-    if truncated and not dry_run:
-        _snapshot_for_undo(truncated)
-    selected = {run["run_id"] for run in truncated}
-    for run in truncated:
-        summary["truncated"]["selected"] += 1
-        acting = _acting_runs(run["run_id"])
-        if acting:
-            # A role run's note is its acting run's, copied by propagation when that one is read.
-            if any(acting_run in selected for acting_run, _durability in acting):
-                summary["truncated"]["role_runs"] += 1
-            else:
-                summary["truncated"]["stuck"] += 1
-                summary["details"].append(
-                    {
-                        "run_id": run["run_id"],
-                        "target": run["target"],
-                        "action": "recheck-stuck",
-                        "reason": "its acting runs carry no cut-short read; the note never propagated",
-                    }
+    # The owner's decision on rows recorded broke_later on a bare reference (2026-10-12): judge each
+    # again under the stated-repair rule, over the window its own verdict covered, in the same reads.
+    restated: list[tuple[dict, dict]] = []
+    for bucket, rows, found_rows, stuck_reason in (
+        (
+            "truncated",
+            _truncated_durable_runs(),
+            rechecks,
+            "its acting runs carry no cut-short read; the note never propagated",
+        ),
+        (
+            "restated",
+            _bare_reference_runs(),
+            restated,
+            "its acting runs carry no bare-reference verdict; the note never propagated",
+        ),
+    ):
+        if rows and not dry_run:
+            _snapshot_for_undo(rows)
+        selected = {run["run_id"] for run in rows}
+        for run in rows:
+            summary[bucket]["selected"] += 1
+            acting = _acting_runs(run["run_id"])
+            if acting:
+                # A role run's note is its acting run's, copied by propagation when that one is read.
+                if any(acting_run in selected for acting_run, _durability in acting):
+                    summary[bucket]["role_runs"] += 1
+                else:
+                    summary[bucket]["stuck"] += 1
+                    summary["details"].append(
+                        {
+                            "run_id": run["run_id"],
+                            "target": run["target"],
+                            "action": "recheck-stuck",
+                            "reason": stuck_reason,
+                        }
+                    )
+                continue
+            found = _find(run, _state_fn=_state_fn, _gh=_gh, now=now)
+            if found["status"] == "unanswered":
+                _recheck_unread(
+                    summary, run, found["reason"], clocks, now=now, dry_run=dry_run, bucket=bucket
                 )
-            continue
-        found = _find(run, _state_fn=_state_fn, _gh=_gh, now=now)
-        if found["status"] == "unanswered":
-            _recheck_unread(summary, run, found["reason"], clocks, now=now, dry_run=dry_run)
-        elif found["status"] != "found":
-            summary["truncated"]["closed"] += 1
-            _close_unjudgeable(summary, run, found["reason"], dry_run=dry_run)
-        else:
-            rechecks.append((run, found))
+            elif found["status"] != "found":
+                summary[bucket]["closed"] += 1
+                _close_unjudgeable(summary, run, found["reason"], dry_run=dry_run)
+            else:
+                found_rows.append((run, found))
     fix_since = fix_search_plan(
         (
             (
                 found["pr"].get("repo") or provision.parse_target(run["target"])[0],
                 _parse_gh_ts(found["pr"].get("mergedAt")),
             )
-            for run, found in resolved + rechecks
+            for run, found in resolved + rechecks + restated
         ),
         now=now,
         grace_days=grace_days,
@@ -1152,7 +1331,15 @@ def sweep_durability(
                     summary, run, verdict["reason"], verdict["drain"], verdict.get("drains_at")
                 )
             else:
-                _close_unjudgeable(summary, run, verdict["reason"], dry_run=dry_run)
+                if verdict.get("unstated"):
+                    summary["fix_search"]["unstated"] += 1
+                _close_unjudgeable(
+                    summary,
+                    run,
+                    verdict["reason"],
+                    dry_run=dry_run,
+                    failure_class=verdict.get("failure_class") or feedback.UNJUDGEABLE_MERGE,
+                )
             continue
 
         summary[durability] = summary.get(durability, 0) + 1
@@ -1182,6 +1369,21 @@ def sweep_durability(
             fix_since=fix_since,
             clocks=clocks,
             now=now,
+            _fix_fn=_fix_fn,
+            dry_run=dry_run,
+        )
+    for run, found in restated:
+        _recheck_bare_reference(
+            summary,
+            run,
+            found["pr"],
+            grace_days=grace_days,
+            revert_cache=revert_cache,
+            fix_cache=fix_cache,
+            fix_since=fix_since,
+            clocks=clocks,
+            now=now,
+            _revert_fn=_revert_fn,
             _fix_fn=_fix_fn,
             dry_run=dry_run,
         )
@@ -1295,14 +1497,30 @@ def _truncated_durable_runs() -> list[dict]:
     """Merged rows recorded `durable` on a fix-PR read cut short before their merge."""
     if os.environ.get(TRUNCATED_RECHECK_SWITCH, "1") == "0":
         return []
+    return _merged_rows_noting("durable", TRUNCATED_FIX_READ)
+
+
+def _bare_reference_runs() -> list[dict]:
+    """Merged rows recorded `broke_later` because a later fix PR's text contained `#N`."""
+    if os.environ.get(STATED_RECHECK_SWITCH, "1") == "0":
+        return []
+    return [
+        row
+        for row in _merged_rows_noting("broke_later", BARE_REFERENCE_NOTE)
+        if BARE_REFERENCE_RE.search(row["notes"] or "")
+    ]
+
+
+def _merged_rows_noting(durability: str, note: str) -> list[dict]:
+    """Merged rows at `durability` whose notes carry `note`, oldest run first."""
     with feedback._conn() as c:
         rows = c.execute(
             "SELECT r.run_id, r.target, r.mode, r.pr_number, o.notes, r.agent, r.ts, "
             "o.durability_checked_ts, o.durability, o.failure_class "
             "FROM runs r JOIN outcomes o ON r.run_id=o.run_id "
-            "WHERE o.merged=1 AND o.durability='durable' AND instr(COALESCE(o.notes,''), ?) > 0 "
+            "WHERE o.merged=1 AND o.durability=? AND instr(COALESCE(o.notes,''), ?) > 0 "
             "ORDER BY r.ts ASC",
-            (TRUNCATED_FIX_READ,),
+            (durability, note),
         ).fetchall()
     return [
         {
@@ -1385,12 +1603,20 @@ def undo_truncated_recheck() -> dict:
 
 
 def _recheck_unread(
-    summary: dict, run: dict, reason: str, clocks: dict[str, int], *, now: int, dry_run: bool
+    summary: dict,
+    run: dict,
+    reason: str,
+    clocks: dict[str, int],
+    *,
+    now: int,
+    dry_run: bool,
+    bucket: str = "truncated",
+    failure_class: str = feedback.BROKE_LATER_UNCHECKED,
 ) -> None:
     """A re-check that got no answer waits on the same clock as an unread pending merge."""
     unread_since, closes_at = _retry_close_at(clocks, run["run_id"], now)
     if now < closes_at:
-        summary["truncated"]["waiting"] += 1
+        summary[bucket]["waiting"] += 1
         summary["details"].append(
             {
                 "run_id": run["run_id"],
@@ -1400,13 +1626,13 @@ def _recheck_unread(
             }
         )
         return
-    summary["truncated"]["closed"] += 1
+    summary[bucket]["closed"] += 1
     _close_unjudgeable(
         summary,
         run,
         f"{reason}; unread since {_search_ts(unread_since)}",
         dry_run=dry_run,
-        failure_class=feedback.BROKE_LATER_UNCHECKED,
+        failure_class=failure_class,
     )
 
 
@@ -1448,6 +1674,12 @@ def _recheck_truncated(
     if broke is None:
         _recheck_unread(summary, run, fix_note, clocks, now=now, dry_run=dry_run)
         return
+    if broke == UNSTATED_REFERENCE:
+        summary["truncated"]["closed"] += 1
+        _close_unjudgeable(
+            summary, run, fix_note, dry_run=dry_run, failure_class=feedback.BROKE_LATER_UNSTATED
+        )
+        return
     reread = f"re-read {_search_ts(now)[:10]} up to this verdict; the first read was cut short"
     detail: dict[str, Any] = {"run_id": run["run_id"], "target": run["target"], "action": "patch"}
     if broke:
@@ -1465,6 +1697,87 @@ def _recheck_truncated(
             feedback.record_outcome(run["run_id"], notes=notes)  # the verdict stands
     if dry_run:
         detail["dry_run"] = True
+    summary["details"].append(detail)
+
+
+def _recheck_bare_reference(
+    summary: dict,
+    run: dict,
+    pr: dict,
+    *,
+    grace_days: int,
+    revert_cache: dict,
+    fix_cache: dict,
+    fix_since: dict,
+    clocks: dict[str, int],
+    now: int,
+    _revert_fn=None,
+    _fix_fn=None,
+    dry_run: bool,
+) -> None:
+    """Judge a bare-reference broke_later row again, by `classify_durability` itself, counting only
+    the fix PRs merged by the verdict's own moment, and record what it says.
+
+    A stated repair keeps it broke_later with the deciding sentence in the note. No stated repair
+    lets the rest of the judgement speak (durable, or the revert check's answer). A fix PR that
+    named it without saying how closes it unjudgeable (BROKE_LATER_UNSTATED). Unanswered waits on
+    the retry clock. Every outcome writes a note without BARE_REFERENCE_NOTE, which drains the
+    selection.
+    """
+    bucket = summary["restated"]
+    verdict = classify_durability(
+        run,
+        pr,
+        grace_days=grace_days,
+        now=now,
+        _revert_fn=_revert_fn,
+        revert_cache=revert_cache,
+        _fix_fn=_fix_fn,
+        fix_cache=fix_cache,
+        fix_since=fix_since,
+        fix_until=int(run["judged_ts"] or now),
+    )
+    durability = verdict.get("durability")
+    reread = f"re-read {_search_ts(now)[:10]} under the stated-repair rule"
+    if durability is None:
+        drain = verdict.get("drain")
+        if drain in RETRY_HORIZON_CLOSE:
+            _recheck_unread(
+                summary,
+                run,
+                verdict["reason"],
+                clocks,
+                now=now,
+                dry_run=dry_run,
+                bucket="restated",
+                failure_class=RETRY_HORIZON_CLOSE[drain][0],
+            )
+            return
+        bucket["closed"] += 1
+        _close_unjudgeable(
+            summary,
+            run,
+            f"{verdict['reason']}; {reread}",
+            dry_run=dry_run,
+            failure_class=verdict.get("failure_class") or feedback.UNJUDGEABLE_MERGE,
+        )
+        return
+    if durability in ("broke_later", "durable"):
+        bucket[durability] += 1
+    else:
+        bucket["relabelled"] += 1
+    notes = f"{verdict['notes']}; {reread}; was broke_later on a bare reference"
+    detail: dict[str, Any] = {
+        "run_id": run["run_id"],
+        "target": run["target"],
+        "action": "patch",
+        "durability": durability,
+        "notes": notes,
+    }
+    if dry_run:
+        detail["dry_run"] = True
+    else:
+        feedback.record_outcome(run["run_id"], durability=durability, notes=notes)
     summary["details"].append(detail)
 
 
@@ -1584,6 +1897,19 @@ def summary_line(summary: dict) -> str:
             f"; truncated re-read {cut['selected']} (broke_later {cut['broke_later']}, "
             f"confirmed {cut['confirmed']}, closed {cut['closed']}, waiting {cut['waiting']}, "
             f"role runs {cut['role_runs']}" + (f", STUCK {cut['stuck']})" if cut["stuck"] else ")")
+        )
+    if fix["unstated"]:
+        head += f" (named without a stated repair {fix['unstated']}, closed unjudgeable)"
+    fixed = summary["restated"]
+    if fixed["selected"] == 0:
+        head += "; bare-reference 0"
+    else:
+        head += (
+            f"; bare-reference re-judged {fixed['selected']} (broke_later {fixed['broke_later']}, "
+            f"durable {fixed['durable']}, relabelled {fixed['relabelled']}, "
+            f"closed {fixed['closed']}, waiting {fixed['waiting']}, "
+            f"role runs {fixed['role_runs']}"
+            + (f", STUCK {fixed['stuck']})" if fixed["stuck"] else ")")
         )
     pending = summary["skipped"]
     if pending == 0:
@@ -1808,7 +2134,7 @@ def _selftest_revert_search_cached_per_repo(now: int):
 
 
 def _selftest_broke_later(now: int):
-    """A later fix PR that NAMES this change is broke_later; anything weaker is not.
+    """A later fix PR that STATES it repairs this change is broke_later; anything weaker is not.
 
     The bar is explicit reference on purpose. escaped_defect_priority ranks on the loose signal
     (a fix touching the same file), which is fine for ordering work and wrong for training the
@@ -1901,6 +2227,36 @@ def _selftest_broke_later(now: int):
     )
     assert got["durability"] is None and got["drain"] == DRAIN_FIX_SEARCH, got
     assert got["fix_search"] == "uncovered" and "unavailable" in got["reason"], got
+
+    # (f) NAMED IS NOT REPAIRED (2026-10-12). A sibling that says it does not stack on this change
+    # is not a repair of it; one that names it without saying how is unknown, never durable.
+    def _fix_sibling(body):
+        def fetch(_repo, _since, _until=None):
+            return [
+                {"number": 14, "title": "fix: x", "body": body, "mergedAt": _iso_days_ago(now, 5)}
+            ], True
+
+        return fetch
+
+    got = classify_durability(
+        run,
+        pr,
+        now=now,
+        _revert_fn=_no_revert,
+        _fix_fn=_fix_sibling("This branch is based on main and does not stack on #10."),
+        fix_cache={},
+    )
+    assert got["durability"] == "durable", got
+    got = classify_durability(
+        run,
+        pr,
+        now=now,
+        _revert_fn=_no_revert,
+        _fix_fn=_fix_sibling("Preserve #10 when reconciling the branches."),
+        fix_cache={},
+    )
+    assert got["durability"] is None and got["drain"] is None, got
+    assert got["failure_class"] == feedback.BROKE_LATER_UNSTATED, got
 
 
 def _selftest():
@@ -2075,7 +2431,7 @@ def _selftest():
             "durability_sweep.py selftest: OK (old clean->durable, revert->reverted, "
             "open->reopened, young/ambiguous stay pending, ambiguous closes at the retry "
             "horizon, live revert scan covered, searches cached per repo not per PR, and "
-            "broke_later only on an explicit later-fix reference)"
+            "broke_later only on a stated later repair)"
         )
     finally:
         if saved_state_dir is None:
