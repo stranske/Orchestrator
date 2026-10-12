@@ -217,3 +217,40 @@ def test_a_pause_or_writer_added_since_the_feed_stops_the_launch(monkeypatch, la
 
     monkeypatch.setattr(subprocess, "run", run)
     assert (tick._fetch_issue_body("o/a#1") is not None) is launchable
+
+
+@pytest.mark.parametrize(
+    ("payload", "status"),
+    (
+        ("[]", "unreadable"),
+        ('"text"', "unreadable"),
+        ('{"generated_at": "soon", "items": []}', "unreadable"),
+        ('{"items": [{"target": "o/a#1"}]}', "stale"),
+        ('{"generated_at": null, "items": [{"target": "o/a#1"}]}', "stale"),
+    ),
+)
+def test_a_malformed_feed_is_reported_never_crashes_the_tick(tmp_path, payload, status):
+    path = tmp_path / "research-backlog.json"
+    path.write_text(payload)
+    feed = tick.load_research_feed(path, now=10_000_000)
+    assert (feed["status"], feed["items"]) == (status, []), feed
+
+
+def test_a_feed_exactly_at_its_horizon_is_fresh_and_drops_malformed_items(tmp_path):
+    path = tmp_path / "research-backlog.json"
+    items = [{"target": "o/a#1"}, "junk", {"target": ""}, {"task_type": "implement"}]
+    path.write_text(json.dumps({"generated_at": 1000, "items": items}))
+    feed = tick.load_research_feed(path, now=1000 + tick.RESEARCH_FEED_MAX_AGE_S)
+    assert (feed["status"], feed["items"]) == ("fresh", [{"target": "o/a#1"}]), feed
+
+
+def test_a_row_without_a_number_is_counted_not_fatal_and_a_failed_read_says_why():
+    def issues(repo):
+        if repo == "o/b":
+            raise RuntimeError("HTTP 502")
+        return [{"labels": [{"name": "priority:high"}]}, _issue(2, "priority:high")]
+
+    feed = backlog.build_research_items(["o/a", "o/b"], issues, lambda repo: [])
+    assert [i["target"] for i in feed["items"]] == ["o/a#2"], feed["items"]
+    assert feed["counts"]["malformed"] == 1, feed["counts"]
+    assert feed["repo_errors"] == {"o/b": "HTTP 502"}, feed

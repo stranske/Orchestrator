@@ -109,7 +109,13 @@ def load_research_feed(path: Path | None = None, now: float | None = None) -> di
         return {"status": "absent", "items": []}
     except (OSError, ValueError) as exc:
         return {"status": "unreadable", "error": str(exc)[:200], "items": []}
-    age = max(0, int(now - int(data.get("generated_at") or 0)))
+    if not isinstance(data, dict):
+        return {"status": "unreadable", "error": "feed is not an object", "items": []}
+    try:
+        # A missing stamp reads as the epoch, so the feed is stale: never fresh by default.
+        age = max(0, int(now - int(data.get("generated_at") or 0)))
+    except (TypeError, ValueError):
+        return {"status": "unreadable", "error": "generated_at is not a number", "items": []}
     info = {
         "age_seconds": age,
         "counts": data.get("counts"),
@@ -117,7 +123,8 @@ def load_research_feed(path: Path | None = None, now: float | None = None) -> di
     }
     if age > RESEARCH_FEED_MAX_AGE_S:
         return {"status": "stale", **info, "items": []}
-    return {"status": "fresh", **info, "items": list(data.get("items") or [])}
+    items = [i for i in data.get("items") or [] if isinstance(i, dict) and i.get("target")]
+    return {"status": "fresh", **info, "items": items}
 
 
 def _public_research_plan(plan: dict) -> dict:

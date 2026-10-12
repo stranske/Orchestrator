@@ -522,13 +522,14 @@ off).** Its only input was `backlog.json`, written by dispatch discovery, which 
 dispatch lane: the file was last written 2026-09-17 with 0 issues, and every tick printed
 `no_subject`. `backlog.py --research` now writes `research-backlog.json` each tick (orchestrate.sh,
 skipped when gh is deferred): open issues that are prioritised or ready, minus trackers, automated
-and sync issues, paused or in-progress ones, epic/cross-repo/mechanical ones and anything with an
-open PR, with a count per reason; a repo it cannot read is named, never read as empty. The tick
+and sync issues, paused or in-progress ones, epic/cross-repo/mechanical ones, anything with an
+open PR, and anything `dispatcher._remote_skip_reason` refuses (`agents:paused`, any `agent:*`
+writer), with a count per reason; a repo it cannot read is named, never read as empty. The tick
 plans research from it only while it is under two hours old, and the TICK-PLAN line prints the
-research status beside its inputs and skip reasons. At launch an issue that is no longer open is
-refused, and the subject cooldown is per issue whatever arm set is proposed (Workflows#2710 was
-launched 123 times because a new arm mix passed it). First live read: 7 eligible of 70 open issues
-in 16 repos; a shadow tick planned 1. Launching stays off, and it is held by TWO switches, not
+research status beside its inputs and skip reasons. At launch the issue is re-read and refused if it
+is no longer open or has since been paused or given a writer, and the subject cooldown is per issue whatever arm set is proposed (Workflows#2710 was
+launched 123 times because a new arm mix passed it). Live read after review: 7 eligible of 72 open
+issues in 16 repos, 6 of them owned or paused; a shadow tick planned 1. Launching stays off, and it is held by TWO switches, not
 one: `ORCH_RESEARCH_ARM=1`, and a non-dry-run research tick, which `tick.main` grants only when
 the dispatch lane is live. No stage moved, so the loop diagram is unchanged.
 

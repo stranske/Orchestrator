@@ -471,17 +471,23 @@ def build_research_items(repos, fetch_issues, fetch_prs, scoped: set[str] | None
     items: list[dict] = []
     counts: dict[str, int] = {"open_issues": 0}
     failed: list[str] = []
+    errors: dict[str, str] = {}
     for repo in repos:
         try:
             issues = fetch_issues(repo)
             prs = fetch_prs(repo)
-        except Exception:  # noqa: BLE001 — named, never read as an empty repo
+        except Exception as exc:  # noqa: BLE001 — named, never read as an empty repo
             failed.append(repo)
+            errors[repo] = str(exc)[:200]
+            print(f"research feed: {repo} unreadable: {errors[repo]}", file=sys.stderr)
             continue
         referenced: set[str] = set()
         for pr in prs:
             referenced.update(_issue_targets(repo, pr))
         for issue in issues:
+            if issue.get("number") is None:
+                counts["malformed"] = counts.get("malformed", 0) + 1
+                continue
             counts["open_issues"] += 1
             labels = _labels(issue)
             target = f"{repo}#{issue['number']}"
@@ -510,6 +516,7 @@ def build_research_items(repos, fetch_issues, fetch_prs, scoped: set[str] | None
         "counts": counts,
         "repos_read": len(repos) - len(failed),
         "repos_failed": failed,
+        "repo_errors": errors,
         "scope": "orchestrator research lane only; NOT fleet workload.",
     }
 
