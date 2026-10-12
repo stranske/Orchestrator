@@ -32,9 +32,7 @@ PUSH_CLAUSE = "github.event_name == 'push'"
 
 
 def _is_push_only(condition: str) -> bool:
-    """True only for a conjunction that requires a push; `push || pull_request` still runs on PRs."""
-    if "||" in condition:
-        return False
+    """True only when a top-level `&&` clause is exactly the push test; `push || pull_request` is not."""
     clauses = [clause.strip().strip("()").strip() for clause in condition.split("&&")]
     return PUSH_CLAUSE in clauses
 
