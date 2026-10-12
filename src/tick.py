@@ -21,6 +21,7 @@ import os
 import sys
 import tempfile
 import time
+from collections import Counter
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -62,7 +63,7 @@ def _fetch_issue_body(target: str, *, issue_body_fn=None) -> str | None:
 
     try:
         out = subprocess.run(
-            ["gh", "issue", "view", number, "-R", repo, "--json", "title,body"],
+            ["gh", "issue", "view", number, "-R", repo, "--json", "title,body,state,labels"],
             capture_output=True,
             text=True,
             timeout=60,
@@ -72,10 +73,58 @@ def _fetch_issue_body(target: str, *, issue_body_fn=None) -> str | None:
         data = json.loads(out.stdout or "{}")
     except Exception:
         return None
+    # A subject closed since the feed was read is never launched: the research feed can be up to
+    # RESEARCH_FEED_MAX_AGE_S old, and nothing else re-reads the issue before agents start on it.
+    if str(data.get("state") or "").upper() != "OPEN":
+        return None
+    # Ownership is re-read at launch too: the feed is up to two hours old, and a pause or an
+    # `agent:*` writer added since then must stop the launch (dispatcher's rule, not a copy).
+    import dispatcher
+
+    labels = {
+        str(lab.get("name") or "") for lab in data.get("labels") or [] if isinstance(lab, dict)
+    }
+    if dispatcher._remote_skip_reason(labels, "research"):
+        return None
     title = (data.get("title") or "").strip()
     body = (data.get("body") or "").strip()
     text = f"# {title}\n\n{body}".strip()
     return text or None
+
+
+# The research lane's own feed (`backlog.py --research`, run by orchestrate.sh each active tick).
+RESEARCH_FEED_MAX_AGE_S = 2 * 3600
+
+
+def load_research_feed(path: Path | None = None, now: float | None = None) -> dict:
+    """The feed's items and what can be said about it. `status` is fresh, stale, absent or
+    unreadable; only a fresh feed contributes items, and every status is reported."""
+    import backlog
+
+    path = path or backlog.RESEARCH_BACKLOG_JSON
+    now = time.time() if now is None else now
+    try:
+        data = json.loads(path.read_text())
+    except FileNotFoundError:
+        return {"status": "absent", "items": []}
+    except (OSError, ValueError) as exc:
+        return {"status": "unreadable", "error": str(exc)[:200], "items": []}
+    if not isinstance(data, dict):
+        return {"status": "unreadable", "error": "feed is not an object", "items": []}
+    try:
+        # A missing stamp reads as the epoch, so the feed is stale: never fresh by default.
+        age = max(0, int(now - int(data.get("generated_at") or 0)))
+    except (TypeError, ValueError):
+        return {"status": "unreadable", "error": "generated_at is not a number", "items": []}
+    info = {
+        "age_seconds": age,
+        "counts": data.get("counts"),
+        "repos_failed": data.get("repos_failed"),
+    }
+    if age > RESEARCH_FEED_MAX_AGE_S:
+        return {"status": "stale", **info, "items": []}
+    items = [i for i in data.get("items") or [] if isinstance(i, dict) and i.get("target")]
+    return {"status": "fresh", **info, "items": items}
 
 
 def _public_research_plan(plan: dict) -> dict:
@@ -451,6 +500,7 @@ def remote_tick(
     max_delegations: int | None = None,
     env: Mapping[str, str] | None = None,
     research_tick_fn=None,
+    research_feed: dict | None = None,
 ) -> dict:
     """Choose + delegate each item to a keepalive agent (remote), then ingest outcomes. Applies no labels
     when dry_run; do_ingest=False skips the ingest pass (tests).
@@ -615,8 +665,12 @@ def remote_tick(
         and item.get("lane", "opener") == "opener"
         and item.get("task_type") in range_task_types
     )
+    # The research lane plans from its own feed as well as the dispatch backlog's opener items.
+    feed = research_feed or {"status": "not_loaded", "items": []}
+    backlog_targets = {str(item.get("target")) for item in items}
+    feed_items = [i for i in feed.get("items") or [] if str(i.get("target")) not in backlog_targets]
     research = (research_tick_fn or research_tick)(
-        items,
+        items + feed_items,
         cap,
         learned=learned,
         dry_run=dry_run,
@@ -654,7 +708,26 @@ def remote_tick(
         },
         "closer_not_examined": closer_not_examined,
         "role_shadows": role_shadows,
-        "research": research,
+        "research": {
+            **research,
+            # What the lane had to choose from, beside what it chose: `no_subject` alone read the
+            # same for "no input" and "every input filtered" (2026-10-12).
+            "inputs": {
+                "backlog_opener": sum(1 for i in items if i.get("lane", "opener") == "opener"),
+                "feed_status": feed.get("status"),
+                "feed_items": len(feed_items),
+                "feed_age_seconds": feed.get("age_seconds"),
+                "feed_counts": feed.get("counts"),
+                "feed_repos_failed": feed.get("repos_failed"),
+                "skipped": dict(
+                    Counter(
+                        str(row.get("reason"))
+                        for row in research.get("skipped") or []
+                        if row.get("reason")
+                    )
+                ),
+            },
+        },
     }
 
 
@@ -1176,8 +1249,25 @@ def plan_headline(out: Mapping[str, Any], artifact: Any, *, lane_live: bool) -> 
         f"{len(out.get('blocked') or [])} blocked; "
         f"deferred {len(out.get('deferred') or [])} (delegable {n(deferral.get('delegable'))}, "
         f"drainable {n(deferral.get('drainable'))}); "
-        f"{_backlog_age_text(out.get('backlog'))} -> {artifact}"
+        f"{_backlog_age_text(out.get('backlog'))}; {_research_text(out.get('research'))} "
+        f"-> {artifact}"
     )
+
+
+def _research_text(research: Any) -> str:
+    """The research lane's status beside its inputs and the filters that consumed them."""
+    if not isinstance(research, Mapping):
+        return "research ?"
+    inputs = research.get("inputs") or {}
+    skipped = inputs.get("skipped") or {}
+    text = (
+        f"research {research.get('status', '?')} "
+        f"(feed {inputs.get('feed_status', '?')} {inputs.get('feed_items', '?')}, "
+        f"opener {inputs.get('backlog_opener', '?')}"
+    )
+    if skipped:
+        text += "; skipped " + ", ".join(f"{k} {v}" for k, v in sorted(skipped.items()))
+    return text + ")"
 
 
 def main(argv):
@@ -1207,6 +1297,7 @@ def main(argv):
         learned=router.learned_ranks(),
         dry_run=not lane_live,
         ingest_dry_run=not active,
+        research_feed=load_research_feed(),
     )
     out["backlog"] = backlog_age()
     if "--summary" in argv:

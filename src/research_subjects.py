@@ -920,6 +920,27 @@ def assess_candidate(
                     "unevaluated_backlog_total": backlog_total,
                     "unevaluated_cap": max(0, int(unevaluated_cap)),
                 }
+        # THE COOLDOWN IS PER ISSUE, not per arm set (2026-10-12). Keyed on the arm set alone, a
+        # new random arm mix on the same issue passed the cooldown as soon as the previous
+        # experiment was evaluated: Workflows#2710 was launched 123 times. The spec is left out
+        # too, so an edited issue body does not reopen it.
+        family_cooldown = db.execute(
+            "SELECT MAX(x.cooldown_until), x.exp_id FROM research_subject_experiments x "
+            "JOIN research_subjects s ON s.subject_id=x.subject_id "
+            "WHERE s.canonical_target=? AND s.task_type=?",
+            (identity["canonical_target"], identity["task_type"]),
+        ).fetchone()
+        if family_cooldown and int(family_cooldown[0] or 0) > now:
+            return {
+                **identity,
+                "eligible": False,
+                "reason": "subject_cooldown",
+                "cooldown_until": int(family_cooldown[0]),
+                "existing_exp_id": family_cooldown[1],
+                "unevaluated_backlog": backlog_count,
+                "unevaluated_backlog_total": backlog_total,
+                "unevaluated_cap": max(0, int(unevaluated_cap)),
+            }
         family_open = 0
         if identity.get("base_sha") is None:
             family_rows = db.execute(

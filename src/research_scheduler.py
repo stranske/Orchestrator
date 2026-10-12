@@ -604,7 +604,8 @@ def research_job_candidates(
     jobs = []
     seen_subject_families: set[str] = set()
     for item in items:
-        if item.get("lane") and item.get("lane") != "opener":
+        # `research` items come from the research lane's own feed (`backlog.py --research`).
+        if item.get("lane") and item.get("lane") not in ("opener", "research"):
             if skipped is not None:
                 skipped.append(
                     {

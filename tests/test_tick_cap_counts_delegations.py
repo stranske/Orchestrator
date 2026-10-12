@@ -338,7 +338,8 @@ def test_the_headline_prints_each_bound_beside_its_count_and_blocking_beside_dra
         "TICK-PLAN: delegations 0/3 would apply (shadow); 12 refused; examined 12/12; "
         "0 closer set aside; "
         "label reads 12 answered, 0 unanswered (refused); 0 no capacity, 0 blocked; "
-        "deferred 8 (delegable 8, drainable 0); backlog age ? -> PLAN"
+        "deferred 8 (delegable 8, drainable 0); backlog age ?; "
+        "research skipped (feed not_loaded 0, opener 20) -> PLAN"
     )
 
 
@@ -357,7 +358,8 @@ def test_the_fully_drained_line_is_one_an_empty_backlog_produces(gh, sandbox):
         "TICK-PLAN: delegations 0/3 would apply (shadow); 0 refused; examined 0/12; "
         "0 closer set aside; "
         "label reads 0 answered, 0 unanswered (refused); 0 no capacity, 0 blocked; "
-        "deferred 0 (delegable 0, drainable 0); backlog age ? -> PLAN"
+        "deferred 0 (delegable 0, drainable 0); backlog age ?; "
+        "research skipped (feed not_loaded 0, opener 0) -> PLAN"
     )
 
 
@@ -391,13 +393,13 @@ def _headline_with(backlog):
 
 def test_a_fresh_backlog_prints_its_age_unmarked():
     line = _headline_with({"generated_at": 1, "age_seconds": 3600, "stale_after_seconds": 172800})
-    assert "; backlog age 0.0d -> PLAN" in line and "STALE" not in line, line
+    assert "; backlog age 0.0d; research ? -> PLAN" in line and "STALE" not in line, line
 
 
 def test_a_stale_backlog_is_marked_with_its_horizon():
     age = 17 * 86400
     line = _headline_with({"generated_at": 1, "age_seconds": age, "stale_after_seconds": 172800})
-    assert "; backlog age 17.0d STALE (>2d) -> PLAN" in line, line
+    assert "; backlog age 17.0d STALE (>2d); research ? -> PLAN" in line, line
 
 
 def test_the_horizon_itself_is_not_stale_and_one_second_past_is():
@@ -410,7 +412,7 @@ def test_the_horizon_itself_is_not_stale_and_one_second_past_is():
 def test_an_unreadable_age_prints_unknown_never_zero():
     for info in (None, {}, {"age_seconds": None}, {"age_seconds": "x"}):
         line = _headline_with(info)
-        assert "; backlog age ? -> PLAN" in line and "STALE" not in line, (info, line)
+        assert "; backlog age ?; research ? -> PLAN" in line and "STALE" not in line, (info, line)
 
 
 def test_backlog_age_reads_the_files_generated_at(tmp_path, monkeypatch):

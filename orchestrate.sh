@@ -372,6 +372,16 @@ elif [[ "${ORCH_DISPATCH_LANE:-0}" == "1" ]]; then
 else
   echo "  discovery: skipped (dispatch lane shadow; ORCH_DISPATCH_LANE=1 to run backlog discovery)"
 fi
+# THE RESEARCH LANE'S OWN FEED (2026-10-12). Discovery above is retired with the dispatch lane, and it
+# was the research lane's only input: the lane planned from a backlog last written 2026-09-17 with 0
+# issues and printed `no_subject` every tick. This feed is read whatever ORCH_RESEARCH_ARM says, so a
+# shadow tick measures real candidates; launching still needs ORCH_RESEARCH_ARM=1. The tick ignores a
+# feed older than two hours and prints its status on the TICK-PLAN line.
+if _gh_deferred; then
+  echo "  research feed: SKIPPED — gh deferred by the preflight (feed left as it was)"
+else
+  python3 "$ORCH/backlog.py" --research 2>&1 | sed 's/^/  /' || echo "  warn: research feed failed (continuing)"
+fi
 # ORCH-ANCHOR: frontend-verify-doctor -- the ONLY tick caller of the frontend-verifier capability.
 if [[ "${ORCH_FRONTEND_VERIFY_START_BROWSER:-0}" == "1" ]]; then
   if python3 "$ORCH/frontend_verify.py" --doctor --require-browser-endpoint --start-browser >/dev/null 2>&1; then
