@@ -11,3 +11,6 @@ All three affected module selftests pass. Dispatcher now gives its historical 3.
 Exact collection: 3190 = base 3187 + 3 new cases, all existing ceilings preserved. Full hosted verification and fresh exact-head review gates remain required. This is bounded recovery, not complete source558 acceptance, provider PASS or mirror deployment.
 
 Original fixed snapshot acd91af full private verification:3187 PASS,3 live Pro FAIL,0 SKIP,3190 collected,104/104 selftests and all5 gates PASS. Natural exit1 remains explicit. Rebased after concurrent566 merge68c79c9: expected integrated union3211 = current main3208 +3; fresh hosted checkout/flat mirror validates the final head.
+
+## Advisory correction
+Final recovery retains historical immutable Flash3.7 identities and uses the existing retirement map to select3.8 automatically. Two new controls prove old identities remain addressable for explicit retired-profile decisions and automatic routing excludes them. Focused profile suite21PASS/1existing live-Pro availability FAIL; both affected module selftests PASS; collection3213. The live availability guard continues to require every non-retired profile, including Pro. Historical automatic-decision replay across policy retirement is not newly claimed. Source558 remains open; closing keyword removed from the PR body.

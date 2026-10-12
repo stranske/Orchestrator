@@ -745,7 +745,10 @@ def test_gemini_model_is_one_the_seat_advertises():
     advertised = set((json.loads(cache.read_text()) or {}).get("models") or [])
     assert advertised, f"cache present but lists no models: {cache}"
     for profile in execution_profiles.PROFILE_REGISTRY.values():
-        if profile["agent"] == "gemini":
+        if (
+            profile["agent"] == "gemini"
+            and profile["profile_id"] not in execution_profiles.PROFILE_RETIREMENTS
+        ):
             assert profile["requested_model"] in advertised, (
                 profile["requested_model"],
                 sorted(advertised),

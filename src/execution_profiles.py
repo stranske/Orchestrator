@@ -184,8 +184,25 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
         # cheap rung but profile selection and feedback bucketing could not reach it. That is the
         # SAME defect as the Pro-only regression described above, one rung further down -- a ladder
         # is only a choice if every rung it names is registered.
-        # 2026-10-12: installed Flash3.8 replaces3.7 at the same high/low rungs.
-        # Retain the Pro identity; missing live Pro availability remains observable.
+        # Keep historical profile identities addressable; production retirement selects3.8.
+        _profile(
+            "gemini-3.7-flash-high",
+            "gemini-3.7-flash-high",
+            "high",
+            agent="gemini",
+            provider="google",
+            pool="gemini-prepaid",
+            adapter_version="agy-cli-profile-v1",
+        ),
+        _profile(
+            "gemini-3.7-flash-low",
+            "gemini-3.7-flash-low",
+            "low",
+            agent="gemini",
+            provider="google",
+            pool="gemini-prepaid",
+            adapter_version="agy-cli-profile-v1",
+        ),
         _profile(
             "gemini-3.8-flash-high",
             "gemini-3.8-flash-high",
@@ -292,6 +309,8 @@ CREATE TABLE IF NOT EXISTS route_weights_v2 (
 # Historical profile definitions are immutable.  This production-only retirement
 # map keeps explicit trials addressable while preventing automatic selection.
 PROFILE_RETIREMENTS: dict[str, str] = {
+    "gemini-3.7-flash-high": "gemini-3.8-flash-high",
+    "gemini-3.7-flash-low": "gemini-3.8-flash-low",
     "codex-5.6-sol-high": "codex-6.1-sol-high",
     "codex-5.6-sol-medium": "codex-6.1-sol-medium",
     "codex-5.6-luna-high": "codex-6-luna-high",

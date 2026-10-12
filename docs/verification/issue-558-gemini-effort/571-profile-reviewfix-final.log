@@ -1,0 +1,37 @@
+.....................F                                                   [100%]
+=================================== FAILURES ===================================
+_________________ test_gemini_model_is_one_the_seat_advertises _________________
+
+    def test_gemini_model_is_one_the_seat_advertises():
+        """gemini's requested model must appear in agy's OWN advertised-models probe.
+    
+        Skips with the missing file named when the probe cache is absent (a runner). The point is that
+        the id is not guessed: agy publishes what it serves, and drifting off that list would request a
+        model the seat cannot route.
+        """
+        import json
+    
+        import adapters
+        import env_prereq
+        import execution_profiles
+    
+        cache = adapters.GEMINI_MODEL_CACHE
+        env_prereq.require(None if cache.is_file() else f"agy advertised-models cache absent: {cache}")
+        advertised = set((json.loads(cache.read_text()) or {}).get("models") or [])
+        assert advertised, f"cache present but lists no models: {cache}"
+        for profile in execution_profiles.PROFILE_REGISTRY.values():
+            if (
+                profile["agent"] == "gemini"
+                and profile["profile_id"] not in execution_profiles.PROFILE_RETIREMENTS
+            ):
+>               assert profile["requested_model"] in advertised, (
+                    profile["requested_model"],
+                    sorted(advertised),
+                )
+E               AssertionError: ('gemini-3.1-pro-high', ['claude-opus-5-5-high', 'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-sonnet-5-5-high', 'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', ...])
+E               assert 'gemini-3.1-pro-high' in {'claude-opus-5-5-high', 'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-sonnet-5-5-high', 'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', ...}
+
+tests/test_capacity_profiles.py:752: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_capacity_profiles.py::test_gemini_model_is_one_the_seat_advertises
+1 failed, 21 passed in 6.23s
