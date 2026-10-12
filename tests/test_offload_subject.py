@@ -140,7 +140,9 @@ def _open_as_a_brain_from_before_the_migration() -> None:
     """The live Brain has no marker until the first open after the sync: drop the one this test's
     first open wrote, so the next open runs the migration over the rows seeded since."""
     with feedback._conn() as c:
-        c.execute("DELETE FROM data_migrations WHERE name=?", (feedback.OFFLOAD_SUBJECTS_MIGRATION,))
+        c.execute(
+            "DELETE FROM data_migrations WHERE name=?", (feedback.OFFLOAD_SUBJECTS_MIGRATION,)
+        )
         c.commit()
     feedback._conn().close()
 
@@ -167,10 +169,18 @@ def _seed_before_the_writer() -> dict[str, str]:
             experiment_id=round_,
             routing_metadata=metadata,
         )
-    feedback.record_role_run("role:redirect:a", "redirect", "o/r#5", "codex", backend_run_id="offload:codex:2")
-    feedback.record_role_run("role:triage:a", "triage", "triage:9-items", "gemini", backend_run_id="offload:gemini:3")
-    feedback.record_role_run("role:adjudicator:a", "adjudicator", "o/r#6", "gemini", backend_run_id="offload:gemini:4")
-    feedback.record_role_run("role:adjudicator:b", "adjudicator", "o/r#7", "gemini", backend_run_id="offload:gemini:4")
+    feedback.record_role_run(
+        "role:redirect:a", "redirect", "o/r#5", "codex", backend_run_id="offload:codex:2"
+    )
+    feedback.record_role_run(
+        "role:triage:a", "triage", "triage:9-items", "gemini", backend_run_id="offload:gemini:3"
+    )
+    feedback.record_role_run(
+        "role:adjudicator:a", "adjudicator", "o/r#6", "gemini", backend_run_id="offload:gemini:4"
+    )
+    feedback.record_role_run(
+        "role:adjudicator:b", "adjudicator", "o/r#7", "gemini", backend_run_id="offload:gemini:4"
+    )
     return {"round_subject": round_subject, **{k: v[0] for k, v in runs.items()}}
 
 
