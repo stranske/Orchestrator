@@ -2270,6 +2270,46 @@ def offload(
             agy_label = adapters.model_label_from_agy_log(agy_text)
             if agy_label:
                 observed_model = adapters.model_id_for_label(agent, agy_label)
+        # Capture native terminal-event usage BEFORE stream reduction discards it.
+        # Only CLI completion events count; JSON in an assistant deliverable does not.
+        import ledger_reconcile
+
+        reported_in = reported_out = 0
+        has_reported_usage = False
+        # The transport request, never the shape of assistant text, identifies
+        # the CLI event protocol. Plain-text adapters cannot mint receipts.
+        stream_json = any(
+            argv[i : i + 2] == ["--output-format", "stream-json"] for i in range(len(argv) - 1)
+        )
+        terminal_types = (
+            {"turn.completed"}
+            if agent == "codex" and "--json" in argv
+            else {"result"} if agent in {"cursor", "gemini"} and stream_json else set()
+        )
+        for line in (proc.stdout or "").splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if (
+                isinstance(event, dict)
+                and event.get("type") in terminal_types
+                and isinstance(event.get("usage"), dict)
+            ):
+                tin, tout = ledger_reconcile._usage_from_obj(event)
+                reported_in += tin
+                reported_out += tout
+                # An explicit zero count is still a native receipt. Empty or
+                # null usage must retain its missing-telemetry meaning.
+                has_reported_usage |= bool(tin or tout) or any(
+                    type(event["usage"].get(key)) is int and event["usage"][key] == 0
+                    for key in ("input_tokens", "output_tokens")
+                )
+        reported_usage = (
+            {"input_tokens": reported_in, "output_tokens": reported_out}
+            if has_reported_usage
+            else {}
+        )
         # The large-prompt transport uses agy's matching NDJSON output. Preserve the existing
         # offload return contract by handing callers its final text response, as print mode does.
         if prompt_via_stdin:
@@ -2345,6 +2385,7 @@ def offload(
             "exit": exit_code,
             "output": (proc.stdout or "").strip(),
             "model": model,
+            "usage": reported_usage,
             "stderr_tail": (proc.stderr or "")[-800:],
             "cwd": str(run_cwd),
             "process_cwd": str(proc_cwd),
@@ -2362,9 +2403,18 @@ def offload(
 
     out = {}
     attempts = 0
+    total_in = total_out = 0
+    has_reported_usage = False
     for attempt in range(1, max_network_retries + 2):
         attempts = attempt
         out = _run_offload_attempt()
+        usage = out.get("usage") or {}
+        has_reported_usage |= bool(usage)
+        total_in += usage.get("input_tokens", 0)
+        total_out += usage.get("output_tokens", 0)
+        out["usage"] = (
+            {"input_tokens": total_in, "output_tokens": total_out} if has_reported_usage else {}
+        )
         out["attempts"] = attempts
         if out.get("exit") == 0:
             break

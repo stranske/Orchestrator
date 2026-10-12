@@ -1,0 +1,21 @@
+{
+  "production_entry": "src/verify.py::load_floor",
+  "original_sha256": "8b91678987803ca308db9aeb7faa917679c2d673792fd32f008a588ddddfa13b",
+  "candidate_sha256": "5cdc57eb988fd3bf5f33dedb08bf9b450fe563376d556d24fb2b24bb4ea7d83c",
+  "red": {
+    "__unreadable__": true
+  },
+  "green_floor": {
+    "collected": 2709,
+    "passed": 2709,
+    "skipped_max": 26,
+    "mirror_skipped_max": 21,
+    "bare_mirror_skipped_max": 47,
+    "bare_mirror_selftest_skipped_max": 7,
+    "bare_mirror_gate_skipped_max": 2,
+    "selftest_skipped_max": 7,
+    "gate_skipped_max": 2,
+    "mypy_exempt_max": 0
+  },
+  "strict_floor_preserved": true
+}

@@ -1,0 +1,12 @@
+{
+  "docs/verification/issue-528-options/captured-paths/node-in-process.log": {
+    "stored": "docs/verification/issue-528-options/captured-paths/node-in-process.log.gz",
+    "decoded_sha256": "b99bc54620228a4a4ac7223b1083509cc6141c94f043f69ac3b8674e2d1acba0",
+    "stored_sha256": "ffdf30b443e8faabdbd4a9326c0e8964da7aab3006f23e0f2e2f564ef101a79f"
+  },
+  "docs/verification/issue-528-options/plus-options-before-fix.log": {
+    "stored": "docs/verification/issue-528-options/plus-options-before-fix.log.gz",
+    "decoded_sha256": "1f7138f2bbcdb4e6dae1bebad2ab1c9f59660b246626028258d6073613d8198e",
+    "stored_sha256": "c890e3fba1b133002027de5cc5a5f4bb4c89b6fee003eb3bffa9fbd05914e801"
+  }
+}

@@ -373,13 +373,13 @@ def test_non_retrospective_adjudication_retains_existing_contract():
     assert result["decision_source"] == "adjudicator_agent"
 
 
-def test_five_real_metadata_proposals_keep_raw_history_without_grades(tmp_path):
+def test_five_real_metadata_proposals_keep_raw_history_without_grades(tmp_path, private_brain):
     from pathlib import Path
 
     fixture = Path(__file__).parent / "fixtures/adjudicator-retro-metadata-proposals.json"
     rows = json.loads(fixture.read_text())
     raw = json.loads(json.dumps(rows))
-    report = retro._persist_report(tmp_path / "retro.json", rows, 122)
+    report = retro._persist_report(tmp_path / "retro.json", rows, 122, db=private_brain)
     assert len(rows) == 5
     for current, original in zip(report["rows"], raw):
         assert current["proposal"] == original["proposal"]

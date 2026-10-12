@@ -1,0 +1,24 @@
+{
+  "source_head": "cbbdceeb84199d4d60592d6c838b2e296f3f40af",
+  "scope": "Exact production copies, private state and mocked backend; no paid call or live Brain write",
+  "controls": [
+    {
+      "control": "dropped-token-fields",
+      "test": "tests/test_adjudicator_retro_cost.py::test_dispatch_records_measured_cost_when_the_adapter_reports_usage",
+      "baseline": 0,
+      "red": 1,
+      "restored_green": 0,
+      "restored_byte_identical": true,
+      "source_sha256": "c1c3b87a80392976865289195b6ccfe48b677a55d2ee78d564ce71e67d35ea06"
+    },
+    {
+      "control": "absent-cost-null",
+      "test": "tests/test_adjudicator_retro_cost.py::test_missing_usage_is_imputed_and_flagged_never_null",
+      "baseline": 0,
+      "red": 1,
+      "restored_green": 0,
+      "restored_byte_identical": true,
+      "source_sha256": "96083fbbd6bc4cd4d388a16b2cacd16479075d4244d1123b41e30fd1b6a0afd3"
+    }
+  ]
+}

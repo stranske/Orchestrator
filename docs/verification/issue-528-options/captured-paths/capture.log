@@ -1,0 +1,7 @@
+test_option_code_paths_and_plain_values_are_distinct (test_mirror_generations.MirrorGenerationTests.test_option_code_paths_and_plain_values_are_distinct) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.031s
+
+OK
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-ndpkj_t_/mirror

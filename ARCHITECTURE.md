@@ -394,7 +394,8 @@ the third reader that agrees with the lifecycle on what an outcome says, and it 
 its own. Only a terminal outcome, good or bad, is the `outcome` step. Every other class is counted
 in its own field and printed beside it with a legend:
 - `excl`: learning-excluded;
-- `assoc`: an edge onto a role run, whose outcome is a copy of the acting run's;
+- `assoc`: an edge onto a role run, whose outcome is a copy of the acting run's (set aside at
+  `acted_on` since 2026-10-12, below);
 - `sweep`: a merge the durability sweep has not judged;
 - `unres`: an unmerged run nothing will judge;
 - `open`: no outcome yet.
@@ -419,6 +420,28 @@ Measured on a copy of the live Brain, with the same inputs and clock on both sid
 
 The other 37 rows are identical. No first break other than role-triage's changed. No stage,
 component or surface moved, so the loop diagram is unchanged.
+
+**The section reaches a reader, `works` needs a success, and a role run is not acted on
+(2026-10-12, owner decisions).** Three changes followed:
+- **The tick writes the readable report.** The tick ran `switch_review.py --json` alone, so
+  `format_report`, the monitor's declared consumer, never ran in production. The `value_chain` key
+  reached `switch-review.json`, where nothing reads it, and no owner question was ever raised from
+  switch review. The tick now also passes `--text-out`, writing `$ORCH_STATE_DIR/switch-review.md`
+  beside the JSON, in one step that is whole or fails the step loudly. CLAUDE.md §6 and the
+  repo-audit and rail-exercise skills name that file as the measurement a capability verdict cites.
+- **`works` needs a durable success.** A terminal outcome is not yet value. `outcome_success` counts
+  the terminal outcomes that are a durable success (`feedback.outcome_is_durable_success`, the
+  lifecycle's predicate), and the chain breaks at `no_success` when outcomes exist and none
+  succeeded. role-adjudicator, runtime-ac-checks and testgen-lane each held one terminal outcome
+  and no success.
+- **A role run is not acted on.** An edge onto a role run is counted in `acted_on_associations`
+  beside `acted_on`, not in it, because the run that took the role's advice carries the
+  capability's own edge. On the same copy, offload's `acted_on` falls from 1,803 to 61,
+  role-triage's from 293 to 12, role-adjudicator's from 40 to 1, and role-redirect's from 762 to
+  0. That last is the defect #540 named: nothing records which run acted on a redirect proposal.
+
+No first break changes on today's data: every row these touch breaks earlier or has unmeasured
+demand. No stage, component or surface moved, so the loop diagram is unchanged.
 
 `issue_size_quality` extends that weekly caller with a read-only join: every closed issue in
 the 90-day reviewed-fleet population contributes its checkbox-count band, and only PRs merged
@@ -1736,7 +1759,13 @@ against post-detection durability evidence, compares it with the merged-PASS bas
 unmeasured costs. The closer-lane advisor offers this role only when the caller's recorded
 `verifier_verdict` and `merge_disposition` disagree; missing facts withhold the offer. Weekly switch
 review consumes the saved report and prints its case, agreement, disagreement and cost counts.
-This extends the existing role and reporting rails; it does not re-enable tick adjudication.
+This extends the existing role and reporting rails; it does not re-enable tick adjudication. Native CLI terminal token usage is retained
+through the existing role record as ledger effort, never complete-source dollars.
+Shadow reports label measured, imputed and unmeasured attempts separately on
+`feedback.COST_SCALE`. Imputation uses eligible complete-source agent means or
+the global median under the existing coverage/plausibility guards; without a
+pool the report names UNMEASURED. Estimates never become measured Brain costs,
+and late native session receipts replace report estimates without redispatch.
 
 Its separate `--collect-case` rail reads only local evaluated-revision Git blobs. Explicit
 `git-path:` acceptance locations use the same bounded literal-path reader as source files,

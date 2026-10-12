@@ -1,0 +1,46 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+______ test_summary_classifies_and_totals_one_effective_receipt[row0-3.0] ______
+
+row = {'backend_run_id': 'saved-abstention', 'cost_usd': None, 'cost_report': {'status': 'measured', 'cost_usd': 3.0}}
+expected = 3.0
+
+    @pytest.mark.parametrize(
+        "row, expected",
+        [
+            ({"backend_run_id": "saved-abstention", "cost_usd": None,
+              "cost_report": {"status": "measured", "cost_usd": 3.0}}, 3.0),
+            ({"cost_usd": 2.0}, 2.0),
+        ],
+    )
+    def test_summary_classifies_and_totals_one_effective_receipt(row, expected):
+        summary = retro.summarize([row])
+>       assert summary["cost_measured_cases"] == 1
+E       assert 0 == 1
+
+tests/test_adjudicator_retro_cost.py:369: AssertionError
+______ test_summary_classifies_and_totals_one_effective_receipt[row1-2.0] ______
+
+row = {'cost_usd': 2.0}, expected = 2.0
+
+    @pytest.mark.parametrize(
+        "row, expected",
+        [
+            ({"backend_run_id": "saved-abstention", "cost_usd": None,
+              "cost_report": {"status": "measured", "cost_usd": 3.0}}, 3.0),
+            ({"cost_usd": 2.0}, 2.0),
+        ],
+    )
+    def test_summary_classifies_and_totals_one_effective_receipt(row, expected):
+        summary = retro.summarize([row])
+        assert summary["cost_measured_cases"] == 1
+        assert summary["cost_unmeasured_cases"] == 0
+        assert summary["cost_usd"] == expected
+>       assert summary["estimated_cost_usd"] == expected
+E       assert None == 2.0
+
+tests/test_adjudicator_retro_cost.py:372: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_adjudicator_retro_cost.py::test_summary_classifies_and_totals_one_effective_receipt[row0-3.0]
+FAILED tests/test_adjudicator_retro_cost.py::test_summary_classifies_and_totals_one_effective_receipt[row1-2.0]
+2 failed, 39 deselected in 4.96s

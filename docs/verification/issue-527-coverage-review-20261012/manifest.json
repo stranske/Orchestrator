@@ -1,0 +1,25 @@
+{
+  "baseline_head": "36c091020806a0acafee28195413fdfdf57f2d1b",
+  "integrated_main": "e626002302d025e471e9e6b95b5cbf5ff09d7141",
+  "baseline_source_sha256": {
+    "src/adjudicator_retro.py": "47884ee3630b4b5831116f27799da381688c6ecf5b2b2c12dba5305c1a20121b",
+    "src/feedback.py": "497accd81ff15cecd9a3c3024259b89e1a4ff6bc70a2593d1e79cebc843d60c4"
+  },
+  "candidate_source_sha256": {
+    "src/adjudicator_retro.py": "d13db19bf5df1609f9d56aa934e9ba0ba659cfb2e10f1c805722bb80eaacfca3",
+    "src/feedback.py": "015a1724b82746b518e26a49dfd2cbaf78637e483f6f30e66553244b69a9a342"
+  },
+  "evidence_sha256": {
+    "focused-green.txt": "0d8d7b3c65ee2728d1d624689ae6f854bc5549933883edb1ad96e4d4bcd6a76c",
+    "full-checkout-verifier.txt": "563cd991b90a4b142cae8c4028b137fb9612b3ad3a25f46200654399333bd06a",
+    "README.md": "f7aeb33b07ec255cd3fa713275adfce806de59ff654399e4292e0629bb4b4a01",
+    "prior-production-red.txt": "d7719ebb47a86bdc6c13369d61d808ac06d36f3fd11a0af0f8cd4d44eacca96e",
+    "cli-green.txt": "7b0b8f18c91a783c86df7959139624511a808f6ea326b94656fe434286125119",
+    "isolated-checkout-verifier.txt": "34d92fa4e15866f762c71294c69de9991cc6508f0ddf1be7d85f5a9e86bbcbda"
+  },
+  "scope": "Synthetic protocol/SQLite/report controls, no paid redispatch or live Brain writes",
+  "red": "Unchanged production fails 3 intended assertions;36pass; added Gemini cases alreadypass before repair",
+  "green": "95 Python cases;54 CLI cases",
+  "isolated_full": "2992PASS;8 named prerequisites SKIP;100selftests,3gates; separate existing-state snapshot run pending",
+  "full_checkout": "3000PASS/0FAIL/0SKIP;104selftests;5gates;122mypy modules checked; private snapshots of existing ledger/Brain, no live writes"
+}

@@ -1,0 +1,59 @@
+.....F.........................F......F                                  [100%]
+=================================== FAILURES ===================================
+_____ test_no_eligible_pool_names_unmeasured_without_fabricating_free_cost _____
+
+private_brain = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1017/test_no_eligible_pool_names_un0/brain.db')
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1017/test_no_eligible_pool_names_un0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b973dd0>
+
+    def test_no_eligible_pool_names_unmeasured_without_fabricating_free_cost(
+        private_brain, tmp_path, monkeypatch
+    ):
+        result, path = _dispatch(monkeypatch, private_brain, tmp_path)
+        assert result["rows"][0]["cost_report"]["source"] == "no_eligible_pool"
+>       assert result["rows"][0]["cost_report"]["imputed"] is False
+E       assert True is False
+
+tests/test_adjudicator_retro_cost.py:134: AssertionError
+_______________ test_zero_dollar_receipt_is_not_measured[False] ________________
+
+private_brain = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1017/test_zero_dollar_receipt_is_no0/brain.db')
+use_pool = False
+
+    @pytest.mark.parametrize("use_pool", [False, True])
+    def test_zero_dollar_receipt_is_not_measured(private_brain, use_pool):
+        if use_pool:
+            _seed_pool("gemini", [3.0])
+        feedback.record_role_run("zero", "adjudicator", "o/r#1", "gemini")
+        with feedback._conn() as conn:
+            conn.execute(
+                "INSERT INTO costs VALUES (?,?,?,?,?,?,?)",
+                ("zero", 10, 2, 0.0, 0.0, "ccusage", int(time.time())),
+            )
+        report = feedback.role_cost_report("zero", "gemini", db=private_brain)
+        assert report["status"] == ("imputed" if use_pool else "unmeasured")
+        assert report["cost_usd"] == (3.0 if use_pool else None)
+>       assert report["imputed"] is use_pool
+E       assert True is False
+
+tests/test_adjudicator_retro_cost.py:284: AssertionError
+_______ test_cost_coverage_uses_one_population_and_exclusive_categories ________
+
+    def test_cost_coverage_uses_one_population_and_exclusive_categories():
+        rows = [
+            {"backend_run_id": "measured", "cost_usd": 2.0},
+            {"backend_run_id": "imputed", "cost_report": {"status": "imputed", "cost_usd": 3.0}},
+            {"backend_run_id": "missing"},
+            {"cost_usd": 0.0},  # Legacy receipt without retained backend identity.
+            {},  # Preparation only, no evidence of an executed attempt.
+        ]
+        summary = retro.summarize(rows)
+>       assert summary["cost_attempted_cases"] == 4
+E       assert 3 == 4
+
+tests/test_adjudicator_retro_cost.py:348: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_adjudicator_retro_cost.py::test_no_eligible_pool_names_unmeasured_without_fabricating_free_cost
+FAILED tests/test_adjudicator_retro_cost.py::test_zero_dollar_receipt_is_not_measured[False]
+FAILED tests/test_adjudicator_retro_cost.py::test_cost_coverage_uses_one_population_and_exclusive_categories
+3 failed, 36 passed in 4.22s

@@ -74,6 +74,81 @@ with feedback._conn() as conn:
                       for table in ("runs", "outcomes", "costs")}))
 `;
 
+// Exercise the full dispatch -> role -> Brain path with native adapter telemetry.
+// Only the paid backend is stubbed; recording, imputation and rendering stay real.
+const dispatchCost = `
+import json
+import sys
+import time
+from unittest.mock import patch
+import adjudicator_retro as retro
+import feedback
+import roles
+
+usage, seed_pool = json.loads(sys.argv[1])
+now = int(time.time())
+with feedback._conn() as conn:
+    conn.execute("INSERT INTO runs(run_id,ts,target) VALUES ('original',?,'owner/repo#1')", (now,))
+    conn.execute(
+        "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged,"
+        "durability,durability_checked_ts) VALUES ('original','NON_PASS','PASS',1,'broke_later',?)",
+        (now,),
+    )
+    conn.execute("INSERT INTO costs(run_id,cost_usd,source) VALUES ('backend-one',0,'ledger')")
+    if seed_pool:
+        for index, cost in enumerate((2.0, 4.0)):
+            rid = f"pool:{index}"
+            conn.execute("INSERT INTO runs(run_id,ts,agent) VALUES (?,?,'gemini')", (rid, now))
+            conn.execute(
+                "INSERT INTO costs(run_id,cost_usd,source,tokens_in) VALUES (?,?,'ccusage',3000)",
+                (rid, cost),
+            )
+proposal = {
+    "decision": "uphold_blocker", "confidence": "high",
+    "rationale": "The later regression confirms the missing criterion.",
+    "evidence_assessment": [{"claim": "Missing test", "status": "supported",
+        "evidence_ref": "gate-run", "reason": "The regression is reproducible"}],
+    "ground_truth_refs": ["gate-run"], "recommended_next_step": "Inspect the regression",
+    "evidence_gaps": [],
+}
+evidence = {
+    "disputed_finding": {"ref": "verifier-comment", "body": "Missing acceptance test"},
+    "ground_truth_evidence": {"diff_summary": "Added test", "gate_runs": ["gate-run"]},
+}
+with patch.object(roles, "route_role", return_value={"agent": "gemini"}), \\
+     patch.object(roles, "_role_capability_event"), \\
+     patch.object(roles.dispatcher, "offload", return_value={
+         "run_id": "backend-one", "model": "native-model", "usage": usage,
+         "output": json.dumps(proposal), "exit": 0,
+     }) as backend, \\
+     patch.object(feedback, "record_role_run", wraps=feedback.record_role_run) as record:
+    report = retro.run(dispatch=True, evidence_reader=lambda row: evidence)
+    assert backend.call_count == record.call_count == 1
+    kwargs = record.call_args.kwargs
+with feedback._conn() as conn:
+    metadata = json.loads(conn.execute(
+        "SELECT decomposition FROM runs WHERE run_id=?", (kwargs["run_id"],)
+    ).fetchone()[0])
+    receipt = conn.execute(
+        "SELECT tokens_in,tokens_out,source FROM costs WHERE run_id=?", (kwargs["run_id"],)
+    ).fetchone()
+print(json.dumps({"record": kwargs, "metadata": metadata, "receipt": receipt,
+                  "report": report}))
+`;
+
+const renderCost = `
+import json
+import adjudicator_retro as retro
+import switch_review
+line = retro.weekly_line()
+rendered = switch_review.format_report({
+    "review_days": 7, "raise_count": 0,
+    "held_off": [], "on_but_idle": [], "unconditioned": [],
+    "mirror_drift": {"status": "ok"}, "adjudicator_shadow": line,
+})
+print(json.dumps({"line": line, "rendered": rendered}))
+`;
+
 function world(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'adjudicator-retro-cli-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -869,6 +944,8 @@ print(json.dumps({"first": first, "second": second, "resumed": resumed,
     graded: 0, agree: 0, disagree: 0,
     agreement_rate: null, merge_rule_agreement_rate: null,
     cost_usd: 4.75, cost_measured_cases: 4, cost_per_case: 1.1875,
+    cost_attempted_cases: 4, cost_imputed_cases: 0, cost_unmeasured_cases: 0,
+    cost_scale: 'list_price_usd', estimated_cost_usd: 4.75,
   });
   assert.deepEqual(report.proposal_comparison, {
     evidence_basis: 'raw_metadata_proposals', cases: 4, proposed_decisions: 2,
@@ -1297,6 +1374,8 @@ test('retro CLI preserves raw proposals without grading metadata and refreshes m
     graded: 0, agree: 0, disagree: 0,
     agreement_rate: null, merge_rule_agreement_rate: null,
     cost_usd: 4.5, cost_measured_cases: 4, cost_per_case: 1.125,
+    cost_attempted_cases: 5, cost_imputed_cases: 0, cost_unmeasured_cases: 1,
+    cost_scale: 'list_price_usd', estimated_cost_usd: 4.5,
   });
   const report = w.report();
   assert.deepEqual(report.proposal_comparison, {
@@ -1341,8 +1420,74 @@ rendered = switch_review.format_report({
 print(json.dumps({"line": line, "rendered": rendered}))
 `]);
   assert.equal(line, 'adjudicator shadow: cases 6, agree 0, disagree 0, cost 4.5 '
-    + '(graded 0; costs measured 4)');
+    + '(graded 0; costs measured 4; cost measured 4 of 5, imputed 0, unmeasured 1; '
+    + 'estimated accounted USD 4.5; scale list_price_usd)');
   assert.equal(rendered.split('\n').filter((text) => text === line).length, 1);
+});
+
+for (const usage of [
+  { input_tokens: 4000, output_tokens: 200 },
+  { input_tokens: 0, output_tokens: 0 },
+  { input_tokens: 4000, output_tokens: 0 },
+  { input_tokens: 0, output_tokens: 200 },
+  { input_tokens: 0 },
+  { output_tokens: 200 },
+]) {
+  test(`native usage survives dispatch and role recording: ${JSON.stringify(usage)}`, (t) => {
+    const w = world(t);
+    const { record, metadata, receipt, report } = w.run([
+      '-c', dispatchCost, JSON.stringify([usage, false]),
+    ]);
+    const row = report.rows[0];
+    assert.equal(record.run_id, row.role_run_id);
+    assert.equal(record.backend_run_id, 'backend-one');
+    for (const saved of [record, metadata, row.role_record]) {
+      assert.equal(saved.cost_tokens_in ?? null, usage.input_tokens ?? null);
+      assert.equal(saved.cost_tokens_out ?? null, usage.output_tokens ?? null);
+      assert.equal(saved.imputed, false);
+    }
+    // The legacy costs table defaults absent directions to zero; role metadata
+    // above retains the missing direction separately from measured zero usage.
+    assert.deepEqual(receipt, [usage.input_tokens ?? 0, usage.output_tokens ?? 0, 'ledger']);
+    assert.deepEqual(w.report(), report, 'recovery receipt must be persisted intact');
+    assert.equal(report.summary.cost_measured_cases, 0, 'tokens alone do not price dollars');
+  });
+}
+
+test('missing usage displays imputation and pool withdrawal without null or another dispatch', (t) => {
+  const w = world(t);
+  const { record, metadata, report } = w.run(['-c', dispatchCost, JSON.stringify([{}, true])]);
+  assert.equal(record.imputed, true);
+  assert.equal(metadata.imputed, true);
+  assert.equal(report.rows[0].cost_report.status, 'imputed');
+  assert.equal(report.rows[0].cost_report.cost_usd, 3);
+  assert.equal(report.summary.cost_usd, null);
+  assert.equal(report.summary.estimated_cost_usd, 3);
+  for (const [imputed, unmeasured, dollars] of [[1, 0, '3.0'], [0, 1, 'UNMEASURED']]) {
+    const { line, rendered } = w.run(['-c', renderCost]);
+    assert.match(line, new RegExp(`cost measured 0 of 1, imputed ${imputed}, unmeasured ${unmeasured}`));
+    assert.ok(line.includes(`estimated accounted USD ${dollars}; scale list_price_usd`));
+    assert.match(line, /cost UNKNOWN/);
+    assert.doesNotMatch(line, /\b(null|None)\b/);
+    assert.equal(rendered.split('\n').filter((text) => text === line).length, 1);
+    if (imputed) {
+      w.run(['-c', `
+import json
+import feedback
+with feedback._conn() as conn:
+    conn.execute("DELETE FROM costs WHERE run_id LIKE 'pool:%'")
+print(json.dumps(True))
+`]);
+      const before = w.brain();
+      const refreshed = w.refresh();
+      assert.equal(refreshed.estimated_cost_usd, null);
+      assert.equal(w.report().rows[0].role_run_id, record.run_id);
+      assert.equal(w.report().rows[0].cost_report.source, 'no_eligible_pool');
+      assert.equal(w.report().rows[0].cost_report.imputed, false);
+      assert.equal(w.report().rows[0].cost_report.cost_usd, null);
+      assert.deepEqual(w.brain(), before, 'refresh must not create another role run');
+    }
+  }
 });
 
 test('switch review reads and renders saved adjudicator evidence without replay or writes', (t) => {
@@ -1427,18 +1572,23 @@ print(json.dumps(results))
   assert.equal(results.length, 10);
   const knownLines = {
     measured: 'adjudicator shadow: cases 4, agree 2, disagree 1, cost 1.25 '
-      + '(graded 3; costs measured 4)',
+      + '(graded 3; costs measured 4; cost measured 4 of 4, imputed 0, unmeasured 0; '
+      + 'estimated accounted USD UNMEASURED; scale list_price_usd)',
     measured_zero: 'adjudicator shadow: cases 1, agree 0, disagree 0, cost 0 '
-      + '(graded 0; costs measured 1)',
+      + '(graded 0; costs measured 1; cost measured 1 of 1, imputed 0, unmeasured 0; '
+      + 'estimated accounted USD 0; scale list_price_usd)',
     partial_cost: 'adjudicator shadow: cases 3, agree 0, disagree 0, cost 1.25 '
-      + '(graded 0; costs measured 2)',
+      + '(graded 0; costs measured 2; cost measured 2 of 2, imputed 0, unmeasured 0; '
+      + 'estimated accounted USD 1.25; scale list_price_usd)',
     unmeasured: 'adjudicator shadow: cases 0, agree 0, disagree 0, cost UNKNOWN '
-      + '(graded 0; costs measured 0)',
+      + '(graded 0; costs measured 0; cost measured 0 of 0, imputed 0, unmeasured 0; '
+      + 'estimated accounted USD UNMEASURED; scale list_price_usd)',
   };
   for (const result of results) {
     const expected = knownLines[result.fixture]
       ?? 'adjudicator shadow: cases UNKNOWN, agree UNKNOWN, disagree UNKNOWN, cost UNKNOWN';
     assert.equal(result.line, expected, result.fixture);
+    assert.doesNotMatch(result.line, /\b(null|None)\b/, result.fixture);
     assert.equal(result.rendered.split('\n').filter((line) => line === expected).length, 1,
       result.fixture);
     assert.equal(result.raise_count, 0, 'shadow evidence must remain informational');
@@ -1465,6 +1615,8 @@ print(json.dumps(True))
     graded: 0, agree: 0, disagree: 0,
     agreement_rate: null, merge_rule_agreement_rate: null,
     cost_usd: 5.25, cost_measured_cases: 5, cost_per_case: 1.05,
+    cost_attempted_cases: 5, cost_imputed_cases: 0, cost_unmeasured_cases: 0,
+    cost_scale: 'list_price_usd', estimated_cost_usd: 5.25,
   });
   assert.deepEqual(w.report().summary, summary);
   assert.deepEqual(w.report().proposal_comparison, {
@@ -1554,7 +1706,11 @@ print(json.dumps(True))
     const expectedCosts = {
       cost_usd: 4 + cost, cost_measured_cases: 4, cost_per_case: (4 + cost) / 4,
     };
-    assert.deepEqual(report.summary, { ...initial.summary, ...expectedCosts });
+    assert.deepEqual(report.summary, {
+      ...initial.summary, ...expectedCosts,
+      cost_unmeasured_cases: 1,
+      estimated_cost_usd: 4 + cost,
+    });
     assert.deepEqual(report.proposal_comparison,
       { ...initial.proposal_comparison, ...expectedCosts },
       'late abstention telemetry must not enter either binary agreement denominator');
@@ -1605,7 +1761,10 @@ print(json.dumps(result))
   assert.equal(invalid.backend_run_id, 'backend-invalid');
   assert.equal(invalid.cost_usd, null);
   const identity = [invalid.case_id, invalid.role_run_id, invalid.backend_run_id];
-  const withoutCosts = ({ cost_usd, cost_measured_cases, cost_per_case, ...counts }) => counts;
+  const withoutCosts = ({
+    cost_usd, cost_measured_cases, cost_per_case, cost_unmeasured_cases,
+    estimated_cost_usd, ...counts
+  }) => counts;
 
   // No replay population remains. Refresh must still account for paid attempts
   // with no usable decision, even after the original outcome disappears.
@@ -1647,6 +1806,8 @@ print(json.dumps(True))
       assert.deepEqual(withoutCosts(report[section]), withoutCosts(initial[section]),
         'invalid responses must stay outside both agreement denominators');
     }
+    assert.equal(report.summary.cost_unmeasured_cases, expected === null ? 1 : 0);
+    assert.equal(report.summary.estimated_cost_usd, expected);
     assert.deepEqual([saved.case_id, saved.role_run_id, saved.backend_run_id], identity);
     assert.equal(saved.decision, undefined);
     assert.equal(saved.shadow_verdict, null);
@@ -1910,6 +2071,8 @@ test('retro CLI publishes an empty report without inventing agreement or cost', 
     graded: 0, agree: 0, disagree: 0,
     agreement_rate: null, merge_rule_agreement_rate: null,
     cost_usd: null, cost_measured_cases: 0, cost_per_case: null,
+    cost_attempted_cases: 0, cost_imputed_cases: 0, cost_unmeasured_cases: 0,
+    cost_scale: 'list_price_usd', estimated_cost_usd: null,
   });
   assert.deepEqual(w.report().summary, summary);
   assert.deepEqual(w.report().rows, []);

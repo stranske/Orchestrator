@@ -1,0 +1,184 @@
+======================================================================
+FAIL: test_command_options_preserve_script_pinning (test_mirror_generations.MirrorGenerationTests.test_command_options_preserve_script_pinning) (command=['/opt/hostedtoolcache/node/24.21.0/x64/bin/node', '--require', './mirror/scripts/preload.cjs', './mirror/scripts/options.cjs'])
+Option values must not hide code operands from the generation pin.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_mirror_generations.py", line 566, in test_command_options_preserve_script_pinning
+    self.assertEqual(reader.returncode, 0, error)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : node:child_process:981
+    throw err;
+    ^
+
+<ref *1> Error: spawnSync /opt/hostedtoolcache/node/24.21.0/x64/bin/node EPERM
+    at Object.spawnSync (node:internal/child_process:1160:20)
+    at spawnSync (node:child_process:928:24)
+    at Object.execFileSync (node:child_process:971:15)
+    at Object.<anonymous> (/tmp/orch-generations-gxg8q640/mirror.generation-e7698b2f58da4eaea01442cfa390e4c5/scripts/options.cjs:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1929:14)
+    at Object..js (node:internal/modules/cjs/loader:2060:10)
+    at Module.load (node:internal/modules/cjs/loader:1651:32)
+    at Module._load (node:internal/modules/cjs/loader:1443:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5) {
+  errno: -1,
+  code: 'EPERM',
+  syscall: 'spawnSync /opt/hostedtoolcache/node/24.21.0/x64/bin/node',
+  path: '/opt/hostedtoolcache/node/24.21.0/x64/bin/node',
+  spawnargs: [
+    '-e',
+    'console.log(require(process.argv[1]).value)',
+    '/tmp/orch-generations-gxg8q640/mirror.generation-e7698b2f58da4eaea01442cfa390e4c5/scripts/peer.cjs'
+  ],
+  error: [Circular *1],
+  status: 0,
+  signal: null,
+  output: [ null, '', '' ],
+  pid: 27,
+  stdout: '',
+  stderr: ''
+}
+
+Node.js v24.21.0
+
+
+======================================================================
+FAIL: test_command_options_preserve_script_pinning (test_mirror_generations.MirrorGenerationTests.test_command_options_preserve_script_pinning) (command=['/opt/hostedtoolcache/node/24.21.0/x64/bin/node', '--require=./mirror/scripts/preload.cjs', './mirror/scripts/options.cjs'])
+Option values must not hide code operands from the generation pin.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_mirror_generations.py", line 566, in test_command_options_preserve_script_pinning
+    self.assertEqual(reader.returncode, 0, error)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : node:child_process:981
+    throw err;
+    ^
+
+<ref *1> Error: spawnSync /opt/hostedtoolcache/node/24.21.0/x64/bin/node EPERM
+    at Object.spawnSync (node:internal/child_process:1160:20)
+    at spawnSync (node:child_process:928:24)
+    at Object.execFileSync (node:child_process:971:15)
+    at Object.<anonymous> (/tmp/orch-generations-gxg8q640/mirror.generation-098d10581e3045fbb70fcf2b4668836b/scripts/options.cjs:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1929:14)
+    at Object..js (node:internal/modules/cjs/loader:2060:10)
+    at Module.load (node:internal/modules/cjs/loader:1651:32)
+    at Module._load (node:internal/modules/cjs/loader:1443:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5) {
+  errno: -1,
+  code: 'EPERM',
+  syscall: 'spawnSync /opt/hostedtoolcache/node/24.21.0/x64/bin/node',
+  path: '/opt/hostedtoolcache/node/24.21.0/x64/bin/node',
+  spawnargs: [
+    '-e',
+    'console.log(require(process.argv[1]).value)',
+    '/tmp/orch-generations-gxg8q640/mirror.generation-098d10581e3045fbb70fcf2b4668836b/scripts/peer.cjs'
+  ],
+  error: [Circular *1],
+  status: 0,
+  signal: null,
+  output: [ null, '', '' ],
+  pid: 42,
+  stdout: '',
+  stderr: ''
+}
+
+Node.js v24.21.0
+
+
+======================================================================
+FAIL: test_command_options_preserve_script_pinning (test_mirror_generations.MirrorGenerationTests.test_command_options_preserve_script_pinning) (command=['/opt/hostedtoolcache/node/24.21.0/x64/bin/node', '--conditions', 'custom', '-r', './mirror/scripts/preload.cjs', './mirror/scripts/options.cjs'])
+Option values must not hide code operands from the generation pin.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_mirror_generations.py", line 566, in test_command_options_preserve_script_pinning
+    self.assertEqual(reader.returncode, 0, error)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : node:child_process:981
+    throw err;
+    ^
+
+<ref *1> Error: spawnSync /opt/hostedtoolcache/node/24.21.0/x64/bin/node EPERM
+    at Object.spawnSync (node:internal/child_process:1160:20)
+    at spawnSync (node:child_process:928:24)
+    at Object.execFileSync (node:child_process:971:15)
+    at Object.<anonymous> (/tmp/orch-generations-gxg8q640/mirror.generation-49b1cc0eb70a417fb5ad10298affa6f4/scripts/options.cjs:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1929:14)
+    at Object..js (node:internal/modules/cjs/loader:2060:10)
+    at Module.load (node:internal/modules/cjs/loader:1651:32)
+    at Module._load (node:internal/modules/cjs/loader:1443:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5) {
+  errno: -1,
+  code: 'EPERM',
+  syscall: 'spawnSync /opt/hostedtoolcache/node/24.21.0/x64/bin/node',
+  path: '/opt/hostedtoolcache/node/24.21.0/x64/bin/node',
+  spawnargs: [
+    '-e',
+    'console.log(require(process.argv[1]).value)',
+    '/tmp/orch-generations-gxg8q640/mirror.generation-49b1cc0eb70a417fb5ad10298affa6f4/scripts/peer.cjs'
+  ],
+  error: [Circular *1],
+  status: 0,
+  signal: null,
+  output: [ null, '', '' ],
+  pid: 57,
+  stdout: '',
+  stderr: ''
+}
+
+Node.js v24.21.0
+
+
+----------------------------------------------------------------------
+Ran 16 tests in 8.686s
+
+FAILED (failures=3)
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-ph_r6wac/mirror
+installed verified snapshot 3897381a0cb5: 6 modules, 0 test files -> /tmp/orch-generations-ph_r6wac/mirror
+installed verified snapshot 66e67c536f7c: 6 modules, 0 test files -> /tmp/orch-generations-6ftip_e9/mirror
+installed verified snapshot 66e67c536f7c: 6 modules, 0 test files -> /tmp/orch-generations-6ftip_e9/mirror
+installed verified snapshot 66e67c536f7c: 6 modules, 0 test files -> /tmp/orch-generations-6ftip_e9/mirror
+installed verified snapshot 66e67c536f7c: 6 modules, 0 test files -> /tmp/orch-generations-6ftip_e9/mirror
+installed verified snapshot f5d3f35eaf97: 6 modules, 0 test files -> /tmp/orch-generations-gxg8q640/mirror
+installed verified snapshot f5d3f35eaf97: 6 modules, 0 test files -> /tmp/orch-generations-gxg8q640/mirror
+installed verified snapshot f5d3f35eaf97: 6 modules, 0 test files -> /tmp/orch-generations-gxg8q640/mirror
+installed verified snapshot f5d3f35eaf97: 6 modules, 0 test files -> /tmp/orch-generations-gxg8q640/mirror
+installed verified snapshot f5d3f35eaf97: 6 modules, 0 test files -> /tmp/orch-generations-gxg8q640/mirror
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-mgtqossv/mirror
+installed verified snapshot 3897381a0cb5: 6 modules, 0 test files -> /tmp/orch-generations-mgtqossv/mirror
+installed verified snapshot a98957e8eada: 6 modules, 0 test files -> /tmp/orch-generations-mgtqossv/mirror
+installed verified snapshot eaf09a94e47a: 6 modules, 0 test files -> /tmp/orch-generations-v42z5l26/mirror
+installed verified snapshot 4da8f89f2473: 6 modules, 0 test files -> /tmp/orch-generations-v42z5l26/mirror
+installed verified snapshot 628b88b9b713: 6 modules, 0 test files -> /tmp/orch-generations-v42z5l26/mirror
+installed verified snapshot 6eb6e5e55f6d: 6 modules, 0 test files -> /tmp/orch-generations-fv3i2on8/mirror
+installed verified snapshot d1719ee9780f: 6 modules, 0 test files -> /tmp/orch-generations-fv3i2on8/mirror
+installed verified snapshot a51a4dcaea71: 6 modules, 0 test files -> /tmp/orch-generations-fv3i2on8/mirror
+installed verified snapshot 816f6c628aa7: 6 modules, 0 test files -> /tmp/orch-generations-jdchbdvy/mirror
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-tbr6jzzy/mirror
+installed verified snapshot 3897381a0cb5: 6 modules, 0 test files -> /tmp/orch-generations-tbr6jzzy/mirror
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-tbr6jzzy/mirror
+installed verified snapshot 3897381a0cb5: 6 modules, 0 test files -> /tmp/orch-generations-tbr6jzzy/mirror
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-96bb81y8/mirror
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-y01ryf3w/mirror
+installed verified snapshot 681766bc47e5: 9 modules, 0 test files -> /tmp/orch-generations-7hgv5gfz/mirror
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-_q7az_2s/mirror
+installed verified snapshot 3897381a0cb5: 6 modules, 0 test files -> /tmp/orch-generations-_q7az_2s/mirror
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-f3bcnk6v/mirror
+installed verified snapshot 3897381a0cb5: 6 modules, 0 test files -> /tmp/orch-generations-f3bcnk6v/mirror
+installed verified snapshot a98957e8eada: 6 modules, 0 test files -> /tmp/orch-generations-f3bcnk6v/mirror
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-f3bcnk6v/mirror
+installed verified snapshot 3897381a0cb5: 6 modules, 0 test files -> /tmp/orch-generations-f3bcnk6v/mirror
+installed verified snapshot a98957e8eada: 6 modules, 0 test files -> /tmp/orch-generations-f3bcnk6v/mirror
+installed verified snapshot d6011a04f14c: 9 modules, 0 test files -> /tmp/orch-generations-38x6bui7/mirror
+installed verified snapshot 29feb98ebaff: 9 modules, 0 test files -> /tmp/orch-generations-38x6bui7/mirror
+installed verified snapshot 29feb98ebaff: 9 modules, 0 test files -> /tmp/orch-generations-38x6bui7/mirror
+installed verified snapshot d6df1a454de7: 9 modules, 0 test files -> /tmp/orch-generations-38x6bui7/mirror
+installed verified snapshot 20afd0ea475d: 9 modules, 0 test files -> /tmp/orch-generations-38x6bui7/mirror
+installed verified snapshot 20afd0ea475d: 9 modules, 0 test files -> /tmp/orch-generations-38x6bui7/mirror
+installed verified snapshot 03f7210b4b2f: 8 modules, 0 test files -> /tmp/orch-generations-5mdamoov/mirror
+installed verified snapshot c41fd2e8f8af: 8 modules, 0 test files -> /tmp/orch-generations-5mdamoov/mirror
+installed verified snapshot 8c1e3b7a1e57: 8 modules, 0 test files -> /tmp/orch-generations-5mdamoov/mirror
+installed verified snapshot 03f7210b4b2f: 8 modules, 0 test files -> /tmp/orch-generations-5mdamoov/mirror
+installed verified snapshot c41fd2e8f8af: 8 modules, 0 test files -> /tmp/orch-generations-5mdamoov/mirror
+installed verified snapshot 8c1e3b7a1e57: 8 modules, 0 test files -> /tmp/orch-generations-5mdamoov/mirror

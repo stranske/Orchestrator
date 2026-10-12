@@ -6,7 +6,7 @@ import fcntl
 import json
 import os
 import py_compile
-import select
+import selectors
 import shutil
 import signal
 import subprocess
@@ -14,7 +14,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from contextlib import nullcontext, suppress
+from contextlib import chdir, nullcontext, suppress
 from itertools import product
 from pathlib import Path
 from unittest.mock import patch
@@ -22,6 +22,14 @@ from unittest.mock import patch
 from scripts import install_verified_snapshot as installer
 
 import paths
+
+
+def _readable(stream, timeout: float) -> bool:
+    """Wait for pipe readiness without select's platform descriptor ceiling."""
+    with selectors.DefaultSelector() as selector:
+        selector.register(stream, selectors.EVENT_READ)
+        return bool(selector.select(timeout))
+
 
 REPO = Path(__file__).resolve().parents[1]
 # The MODULES, wherever this tree keeps them: src/ in a checkout, the root of the flat exec mirror.
@@ -144,7 +152,7 @@ installer.install(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
             start_new_session=True,
         )
         try:
-            ready, _, _ = select.select([publisher.stderr], [], [], 10)
+            ready = _readable(publisher.stderr, 10)
             self.assertTrue(ready, "publisher did not reach the exclusive lock")
             self.assertEqual(publisher.stderr.readline().strip(), "PUBLICATION-ATTEMPTED")
             _, error = publisher.communicate(timeout=timeout)
@@ -334,7 +342,7 @@ print(json.dumps([
             start_new_session=True,
         )
         try:
-            ready, _, _ = select.select([reader.stdout], [], [], 15)
+            ready = _readable(reader.stdout, 15)
             self.assertTrue(ready, "reader did not report its inherited import paths")
             paths = json.loads(reader.stdout.readline())
             (self.snapshot / "later_only.py").write_text("VALUE = 'new generation only'\n")
@@ -462,7 +470,7 @@ mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
                     start_new_session=True,
                 )
                 try:
-                    ready, _, _ = select.select([reader.stderr], [], [], 10)
+                    ready = _readable(reader.stderr, 10)
                     self.assertTrue(ready, "reader did not select a generation")
                     self.assertEqual(reader.stderr.readline().strip(), "SELECTED")
                     self.set_value("new")
@@ -479,6 +487,222 @@ mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
                     with suppress(ProcessLookupError):
                         os.killpg(reader.pid, signal.SIGKILL)
                     reader.communicate(timeout=10)
+
+    def test_command_options_preserve_script_pinning(self):
+        """Option values must not hide code operands from the generation pin."""
+        harness = """
+import json, os, sys
+from pathlib import Path
+import mirror_reader
+execvpe = os.execvpe
+def paused_exec(executable, command, env):
+    print('SELECTED', file=sys.stderr, flush=True)
+    print(json.dumps(command), file=sys.stderr, flush=True)
+    assert sys.stdin.readline() == 'resume\\n'
+    execvpe(executable, command, env)
+mirror_reader.os.execvpe = paused_exec
+mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
+"""
+        node = shutil.which("node")
+        node_commands = (
+            []
+            if node is None
+            else [
+                [node, "--require", "./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                [node, "--require=./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                [
+                    node,
+                    "--conditions",
+                    "custom",
+                    "-r",
+                    "./mirror/scripts/preload.cjs",
+                    "./mirror/scripts/options.cjs",
+                ],
+            ]
+        )
+        commands = node_commands + [
+            ["/bin/bash", "-o", "pipefail", "./mirror/options.sh"],
+            ["/bin/bash", "+o", "pipefail", "./mirror/options.sh"],
+        ]
+        for command in commands:
+            with self.subTest(command=command):
+
+                def write_code(value):
+                    self.set_value(value)
+                    (self.snapshot / "scripts/preload.cjs").write_text(
+                        f"global.preloadValue = {value!r};\n"
+                    )
+                    (self.snapshot / "scripts/peer.cjs").write_text(f"exports.value = {value!r};\n")
+                    (self.snapshot / "scripts/options.cjs").write_text(
+                        "const cp = require('node:child_process');\n"
+                        "const child = cp.execFileSync(process.execPath, ['-e', "
+                        "'console.log(require(process.argv[1]).value)', "
+                        "require.resolve('./peer.cjs')], {encoding:'utf8'}).trim();\n"
+                        f"console.log(JSON.stringify([{value!r}, global.preloadValue, "
+                        "require('./peer.cjs').value, child, process.argv.slice(2)]));\n"
+                    )
+                    (self.snapshot / "options.sh").write_text(
+                        f"printf '%s\\n' {value}\n"
+                        f"{sys.executable} -c 'import module, subprocess, sys; "
+                        "print(module.VALUE); print(subprocess.check_output([sys.executable, "
+                        '"-c", "import module; print(module.VALUE)"], text=True).strip())' + "'\n"
+                        "printf '%s\\n' \"$1\"\n"
+                    )
+
+                write_code("old")
+                self.publish()
+                pinned = self.mirror.resolve()
+                data = "mirror/ordinary-data.txt"
+                reader = subprocess.Popen(
+                    [sys.executable, "-c", harness, str(self.mirror), *command, data],
+                    cwd=self.root,
+                    env=dict(os.environ, PYTHONPATH=str(MODULES)),
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    start_new_session=True,
+                )
+                try:
+                    self.assertTrue(_readable(reader.stderr, 10), "reader did not select")
+                    self.assertEqual(reader.stderr.readline().strip(), "SELECTED")
+                    captured = json.loads(reader.stderr.readline())
+                    expected = [
+                        argument.replace("./mirror/", f"{pinned}/") for argument in command
+                    ] + [data]
+                    self.assertEqual(captured, expected)
+                    write_code("new")
+                    self.publish_with_deadline()
+                    output, error = reader.communicate("resume\n", timeout=10)
+                    self.assertEqual(reader.returncode, 0, error)
+                    if command[0] == node:
+                        self.assertEqual(json.loads(output), ["old"] * 4 + [[data]])
+                    else:
+                        self.assertEqual(output.splitlines(), ["old"] * 3 + [data])
+                    self.assertNotEqual(self.mirror.resolve(), pinned)
+                finally:
+                    with suppress(ProcessLookupError):
+                        os.killpg(reader.pid, signal.SIGKILL)
+                    reader.communicate(timeout=10)
+
+    def test_command_options_keep_bash_witnesses_without_node(self):
+        with patch.object(shutil, "which", return_value=None):
+            self.test_command_options_preserve_script_pinning()
+
+    def test_option_code_paths_and_plain_values_are_distinct(self):
+        import mirror_reader
+
+        self.publish()
+        pinned = self.mirror.resolve()
+        data = "mirror/data.json"
+        cases = [
+            (
+                [
+                    "node",
+                    "--import=./mirror/scripts/preload.mjs",
+                    "--loader",
+                    "./mirror/scripts/loader.mjs",
+                    "./mirror/scripts/main.mjs",
+                    data,
+                ],
+                [
+                    "node",
+                    f"--import={pinned}/scripts/preload.mjs",
+                    "--loader",
+                    f"{pinned}/scripts/loader.mjs",
+                    f"{pinned}/scripts/main.mjs",
+                    data,
+                ],
+            ),
+            (
+                [
+                    "node",
+                    "--conditions",
+                    data,
+                    "--require",
+                    "some-package",
+                    "./mirror/scripts/main.cjs",
+                    data,
+                ],
+                [
+                    "node",
+                    "--conditions",
+                    data,
+                    "--require",
+                    "some-package",
+                    f"{pinned}/scripts/main.cjs",
+                    data,
+                ],
+            ),
+            (
+                [
+                    "bash",
+                    "--rcfile",
+                    "./mirror/scripts/bashrc",
+                    "-o",
+                    "pipefail",
+                    "./mirror/options.sh",
+                    data,
+                ],
+                [
+                    "bash",
+                    "--rcfile",
+                    f"{pinned}/scripts/bashrc",
+                    "-o",
+                    "pipefail",
+                    f"{pinned}/options.sh",
+                    data,
+                ],
+            ),
+            (
+                ["python3", "-W", "ignore", "-X", "dev", "./mirror/observer.py", data],
+                ["python3", "-W", "ignore", "-X", "dev", f"{pinned}/observer.py", data],
+            ),
+            (
+                ["node", "--", "./mirror/-entry.cjs", data],
+                ["node", "--", f"{pinned}/-entry.cjs", data],
+            ),
+        ]
+        # Plus options are shell-specific; for other interpreters they are
+        # script operands, so subsequent relative data must stay untouched.
+        for interpreter, option in (
+            ("python3", "+o"),
+            ("python3", "+O"),
+            ("node", "+o"),
+            ("node", "+O"),
+            ("sh", "+O"),
+            ("zsh", "+O"),
+        ):
+            command = [interpreter, option, data]
+            cases.append((command, command.copy()))
+        for interpreter, option in (("bash", "+O"), ("bash", "+o"), ("sh", "+o"), ("zsh", "+o")):
+            cases.append(
+                (
+                    [interpreter, option, "option-name", "./mirror/options.sh", data],
+                    [interpreter, option, "option-name", f"{pinned}/options.sh", data],
+                )
+            )
+
+        for inline in (
+            ["node", "-e", "void 0", data],
+            ["node", "--eval=void 0", data],
+            ["node", "-p", "1", data],
+            ["bash", "-lc", "echo ok", data],
+            ["python3", "-m", "module", data],
+        ):
+            cases.append((inline, inline.copy()))
+
+        class CapturedExec(Exception):
+            pass
+
+        for command, expected in cases:
+            with self.subTest(command=command):
+                with patch.object(mirror_reader.os, "execvpe", side_effect=CapturedExec) as execute:
+                    with self.assertRaises(CapturedExec):
+                        # Resolve relative operands from the same launch directory as real readers.
+                        with chdir(self.root):
+                            mirror_reader.run(self.mirror, command.copy())
+                self.assertEqual(execute.call_args.args[1], expected)
 
     def test_tick_and_child_imports_remain_pinned_while_publication_completes(self):
         text = (REPO / "orchestrate.sh").read_text()
@@ -603,7 +827,7 @@ installer.install(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
 """
                 publisher = None
                 try:
-                    ready, _, _ = select.select([reader.stderr], [], [], 15)
+                    ready = _readable(reader.stderr, 15)
                     self.assertTrue(ready, "first startup module did not rendezvous")
                     self.assertEqual(reader.stderr.readline().strip(), "STARTUP-READY")
                     self.set_value("new")
@@ -622,7 +846,7 @@ installer.install(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
                         text=True,
                         start_new_session=True,
                     )
-                    ready, _, _ = select.select([publisher.stderr], [], [], 10)
+                    ready = _readable(publisher.stderr, 10)
                     self.assertTrue(ready, "publisher did not reach the exclusive lock")
                     self.assertEqual(publisher.stderr.readline().strip(), "PUBLICATION-ATTEMPTED")
                     if exit_shell:

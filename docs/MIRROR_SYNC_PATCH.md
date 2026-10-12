@@ -1149,3 +1149,41 @@ lands a second later drops out of its own report. On main `35537f1` a 1.05 s gap
 time (the invocation is recorded, `invocation_count` is 0), and main's version of the test failed the
 same way under load. It can turn any busy pre-sync run red, and a rerun clears it; it is tracked
 separately.
+
+
+### Interpreter options and generation pinning (issue #528)
+
+`mirror_reader.py run MIRROR COMMAND ...` selects one physical generation before
+executing code. Supported value-taking interpreter options no longer hide the
+script operand. Mirror-owned executable and preload paths are rebased to that
+selected generation; ordinary relative data/output arguments keep their spelling.
+The existing absolute-argument mapping is preserved.
+
+- Python: separate `-W VALUE` and `-X VALUE`; `-c`/`-m` stop script selection.
+- Node: separate `-r MODULE`, `--require MODULE`, `--import MODULE`, `--loader MODULE`,
+  and `--experimental-loader MODULE`, including long `--OPTION=MODULE` forms,
+  pin mirror-owned filesystem preload paths. Bare package names remain unchanged.
+  Separate `-C`/`--conditions`, `--input-type`, `--inspect-port`, `--title`,
+  `--icu-data-dir`, `--openssl-config`, and `--unhandled-rejections` consume
+  plain option values before script selection. `-e`/`--eval` and `-p`/`--print`
+  stop script selection, including long equals forms.
+- Shell: `-o VALUE`/`+o VALUE` consume option names. Bash additionally supports
+  `-O VALUE`/`+O VALUE` and pins filesystem `--rcfile FILE`/`--init-file FILE`
+  operands. `-c` (including combined flags such as `-lc`) and `-s` stop script
+  selection. `--` ends options and selects the next script operand.
+
+This is an explicit option contract, not a general interpreter command parser.
+Node attached short preload syntax (`-rFILE`), file-URL preload operands, shell
+startup files selected by environment variables, arbitrary interpreter options,
+wrapper languages, and code embedded in eval strings are outside this contract.
+Use separate supported option/value operands for mirror-owned code.
+
+`tests/test_mirror_generations.py::MirrorGenerationTests::test_command_options_preserve_script_pinning`
+pauses the production helper immediately before exec, publishes a different
+generation with the real installer, then runs Node preload/script/child and bash
+script/Python-child observers. `node --test tests/test_mirror_reader_reentry.js`
+adds three production Node option witnesses while retaining all nine incumbent
+negative/positive reentry controls. Raw baseline, deliberate-break, restored-GREEN,
+JUnit, TAP and source hashes are retained under `docs/verification/issue-528-options/`.
+These are isolated source witnesses; installed mirror publication and provider
+acceptance remain separate delivery steps.
