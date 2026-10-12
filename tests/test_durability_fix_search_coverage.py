@@ -340,16 +340,17 @@ def test_the_drained_line_states_coverage_by_count(brain):
         "covered": 0,
         "uncovered": 0,
         "closed": 0,
+        "unstated": 0,
         "reads": 0,
         "repos": {},
     }
     assert empty["line"].endswith(
-        "fix search covered 0, uncovered 0; truncated 0; pending 0, fully drained"
+        "fix search covered 0, uncovered 0; truncated 0; bare-reference 0; pending 0, fully drained"
     ), empty["line"]
     _merged("judged", "o/r", 101, NOW - 20 * DAY)
     judged = _sweep(PrView({("o/r", 101): _pr(101, NOW - 20 * DAY)}), FixSearch())
     assert judged["line"].endswith(
-        "fix search covered 1, uncovered 0; truncated 0; pending 0, fully drained"
+        "fix search covered 1, uncovered 0; truncated 0; bare-reference 0; pending 0, fully drained"
     ), judged["line"]
     read = judged["fix_search"]["repos"]["o/r"]
     assert (read["since"], read["covered_from"], read["reads"], read["error"]) == (
@@ -461,7 +462,7 @@ def test_a_fix_after_the_verdict_leaves_it_durable_and_the_note_drains(brain):
     res = _sweep(view, FixSearch({"o/r": [later]}))
     durability, _failure_class, notes = _row("cut")
     assert durability == "durable" and durability_sweep.TRUNCATED_FIX_READ not in notes, notes
-    assert "no later fix PR names this change" in notes and "re-read" in notes, notes
+    assert "no later fix PR states it repairs this change" in notes and "re-read" in notes, notes
     assert _checked_ts("cut") == NOW - 32 * DAY  # the verdict stands, so its moment does too
     assert (res["truncated"]["confirmed"], res["truncated"]["broke_later"]) == (1, 0)
     assert _sweep(view, FixSearch({"o/r": [later]}))["truncated"]["selected"] == 0
