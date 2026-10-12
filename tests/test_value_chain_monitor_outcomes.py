@@ -38,6 +38,7 @@ import pytest
 import adversarial
 import capabilities
 import feedback
+import local_verify
 import paths
 import switch_review
 import value_chain_monitor as monitor
@@ -400,7 +401,14 @@ def test_a_proven_no_delivery_run_is_not_the_outcome_step(brain, verdict):
 @pytest.mark.parametrize("merged", [None, False])
 @pytest.mark.parametrize("verdict", ["FAIL_BROKEN", "PASS", "NON_PASS"])
 def test_pending_pr_verdict_is_not_set_aside_as_no_delivery(brain, merged, verdict):
-    _consumed(1, verifier_verdict=verdict, merged=merged)
+    run = _consumed(1)
+    if merged is False:
+        feedback.record_outcome(run, merged=False)
+    local_verify.record_verdict(run, {"verdict": verdict, "reason": "delivery eligibility probe"})
+    with feedback._conn() as c:
+        assert c.execute(
+            "SELECT merged, durability FROM outcomes WHERE run_id=?", (run,)
+        ).fetchone() == (merged, "pending")
     row = _row(brain)
     assert row["outcome_no_merge"] == 0, row
     if verdict == "PASS":

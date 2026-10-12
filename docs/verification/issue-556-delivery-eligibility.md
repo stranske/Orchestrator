@@ -92,3 +92,79 @@ This runner cannot connect to `api.github.com` through `gh`. Connector attempts 
 while this run's approval policy is `never`. Neither mutation occurred. The verified changes
 remain in this checkout and the writable `/tmp` clone for the automation runner to publish;
 the lifecycle checkbox remains unchecked.
+
+## Verifier-writer RED/restored GREEN receipt (2026-10-12)
+
+The six-subject regression and the six monitor regressions now call
+`local_verify.record_verdict` directly. This is the production writer identified in #556:
+it supplies no merge update. For NULL, it inserts the outcome; for False, the test first
+records `merged=False` and verifies that the verifier preserves it. Every case verifies
+`durability=pending` in the stored outcome. The test count is unchanged.
+
+After reviewing commits `f43c260a545b8fd9d42c96b46da300b95e46420b` and
+`b38bd8765a57e3bba0bc88dcc1ccc8f89b07b105`, the first four primary task checkboxes
+are verified complete. Updating the PR body was attempted before proceeding, but the
+connector returned `MCP tool call requires approval, but approval policy is never`.
+The remote checklist was not changed. The combined hosted/review/merge/comparison task
+remains incomplete.
+
+Source bindings for this receipt:
+
+| Binding | Git blob or SHA-256 |
+| --- | --- |
+| RED commit (merged #555) | `49cdbfee4dba260a5e9149bdd979b7ebca4fd06b` |
+| RED `src/capability_effectiveness.py` SHA-256 | `2601f7ff5b71cc3748e344870bd0aaac791cee5f6166eab780a09c9d4e32a5b2` |
+| Restored GREEN source Git blob | `770d315257e2402906c4ddbee2bc52047f9dd034` |
+| GREEN source SHA-256 before and after restoration | `3414f0ecbe839a5074acf248dfa00bd6d674c271c998b73d525d5ca36262d207` |
+| Predicate test Git blob | `cabc2ce5924c63dc6ce6bd28b16ac98d3c179355` |
+| Predicate test SHA-256, identical for RED and GREEN | `4678b082aae266528c7e4beb55cb8054b6a349702d9fb9da0ccfe44b54ee72d9` |
+| Monitor test Git blob | `fbfac45e124c23d8c864adc8067edc673c357cac` |
+
+Only the classifier source was replaced with the bytes returned by:
+
+```sh
+git show 49cdbfee4dba260a5e9149bdd979b7ebca4fd06b:src/capability_effectiveness.py
+```
+
+For each source state, the same command ran with pytest 8.3.5 on Python 3.14.8:
+
+```sh
+python3 -m pytest tests/test_capability_effectiveness_predicates.py \
+  -k pending_pr_outcome -m "not slow" -q --tb=short
+```
+
+RED returned exit 1: **6 failed, 41 deselected**. Four failing-verdict cases reported
+`(5, 5, 1.0)` instead of `(6, 5, 0.833)`; the two PASS cases reported `no_merge`
+instead of `open`. There were no collection errors. A `finally` block restored the
+saved corrected source bytes, and a direct byte comparison returned true before
+GREEN ran. GREEN returned exit 0: **6 passed, 41 deselected**. These commands used
+temporary Brain databases and fixture state; no live Brain was mutated.
+
+- [x] Run the six intended failures on merged #555 and six passes after byte-identical
+  restoration, capturing commands, results, and source bindings without live Brain mutation.
+- [ ] Complete hosted verification of the verifier-writer changes and the normal
+  review/guarded merge/actual-comparison lifecycle.
+
+The six affected suites passed **155 tests** after the writer changes; both module
+selftests passed. Black 26.10.0 left both changed Python files unchanged, and the required
+repository-wide `black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`
+passed with **393 files unchanged**. Tooling was
+recovered into `/tmp` from pinned official sources, with installed pip-vendored dependencies;
+Black schedules its normal formatter serially because this sandbox denies the socket
+required by Python 3.14's process pool. No repository dependencies were changed.
+
+Hosted CI [38269807578](https://github.com/stranske/Orchestrator/actions/runs/38269807578)
+and Gate [38269808924](https://github.com/stranske/Orchestrator/actions/runs/38269808924)
+passed on prior head `b38bd8765a57e3bba0bc88dcc1ccc8f89b07b105`. The checkout verify
+job reported **3,071 passed, 26 allowed skips, 3,097 collected** and **97 of 104
+selftests ran, seven allowed skips**. These receipts cover that prior head only.
+The merge guard's dry-run with that expected head returned `blocked=true`,
+`reason=review-thread GraphQL query failed`, and `merge_executed=false`. No merge
+was attempted outside the guard, and no post-merge actual comparison is attested.
+
+Attempts to add `needs-human` and post the blocker comment were also rejected with
+`MCP tool call requires approval, but approval policy is never`; neither mutation occurred.
+The mounted `.git` is read-only, so this round's test and evidence commit is recorded in
+the writable bare clone `/tmp/orchestrator-556-git`, using this checkout as its work tree.
+The automation runner must publish the checkout changes and reconcile the PR body;
+the remote PR was observed open and ready for review, with no review threads.

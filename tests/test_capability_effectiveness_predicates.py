@@ -38,6 +38,7 @@ import capabilities
 import capability_effectiveness as effectiveness
 import durability_sweep
 import feedback
+import local_verify
 import value_chain_monitor as monitor
 
 T0 = 1_791_756_000  # 2026-10-11T23:20:00Z
@@ -135,7 +136,12 @@ def test_pending_pr_outcome_keeps_its_delivery_semantics(brain, merged, verdict)
         _consumed(f"remote:o/r#{n}:codex", **MERGED_DURABLE)
     run = "ordinary-pr-attempt"
     feedback.record_run(run, "o/r#6", "implement", "codex", mode="local", pr_number=6)
-    _consumed_run(run, verifier_verdict=verdict, merged=merged)
+    _consumed_run(run)
+    if merged is False:
+        feedback.record_outcome(run, merged=False)
+    # Exercise the verifier that originally exposed this bug: it writes a verdict without
+    # supplying a merge update, preserving NULL on insert and False on an existing outcome.
+    local_verify.record_verdict(run, {"verdict": verdict, "reason": "delivery eligibility probe"})
     with feedback._conn() as c:
         assert c.execute(
             "SELECT merged, durability FROM outcomes WHERE run_id=?", (run,)
