@@ -19,3 +19,7 @@ and restored candidate passes; no setup error is counted as the RED proof.
 Raw production RED stdout and JUnit are losslessly gzip-retained as
 production-red.log.gz and production-red.xml.gz to preserve pytest whitespace
 without adding trailing-whitespace source diffs.
+
+Additional raw logs with pytest/Node trailing whitespace are gzip-retained
+losslessly; raw-retention.json maps original paths to compressed paths and
+decoded SHA256. Historical records keep their original invocation/path text.
