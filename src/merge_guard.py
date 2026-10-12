@@ -10,8 +10,12 @@ could change any outcome. The decision a closer PR actually faces is this one, i
 The runtime-AC gate blocks it as before. A high-stakes PR also gets the adversarial panel, judged
 once per exact head (`adversarial.review_at_head`) and ADVISORY, as the owner set it: its verdict
 and blockers are reported beside the merge decision for the merger to verify against ground truth,
-and it never blocks. It runs only when ORCH_RUN_ADVERSARIAL_REVIEW=1, the flag the tick read; with
-the flag off, a verdict already recorded for this head is still reported.
+and it never blocks. Since 2026-10-12 it is ON unless ORCH_RUN_ADVERSARIAL_REVIEW=0, and it runs
+AFTER the merge, detached (`adversarial.spawn_post_merge_panel`): the merged head is the head it
+judges, and a ~13-minute panel inside this call would stall every high-stakes merge. One reviewer
+the router chooses, never the change's author; a BLOCKED verdict files one follow-up issue and
+closes the PR's source issue. With the flag off, a verdict already recorded for this head is still
+reported.
 """
 
 from __future__ import annotations
@@ -188,12 +192,15 @@ def adversarial_review_status(
     head: str | None,
     env: Mapping[str, str] | None = None,
     run_fn=subprocess.run,
+    run_now: bool = False,
     **review_kwargs: Any,
 ) -> dict[str, Any]:
     """The advisory panel at this merge: `routine`, `unknown` (the source-issue labels the rule
     needs did not answer), `no_head`, `required_but_not_run` (flag off and nothing recorded for this
-    head), or a verdict, `reused` for this exact head or `executed` now. Never blocks.
-    `review_kwargs` reach `adversarial.review_at_head` (its worktree and test seams)."""
+    head), `reused` (a conclusive verdict for this exact head), `deferred_to_post_merge` (it will
+    run detached once the merge lands), or `executed` when a caller asks for it now (`run_now`).
+    Never blocks. `review_kwargs` reach `adversarial.review_at_head` (its worktree and test seams).
+    """
     import adversarial
 
     source = source_issue_labels(list(meta.get("closing_issues") or []), run_fn=run_fn)
@@ -224,22 +231,37 @@ def adversarial_review_status(
         }
     env = os.environ if env is None else env
     reviewers = adversarial.reviewers_from_env(env)
+    recorded = adversarial.recorded_verdict(target, head, reviewers)
+    if recorded.get("state") == "found":
+        return {"reason": reason, "status": "reused", **recorded}
     if not adversarial.review_enabled(env):
-        recorded = adversarial.recorded_verdict(target, head, reviewers)
-        if recorded.get("state") == "found":
-            return {"reason": reason, "status": "reused", **recorded}
         return {
             "status": "required_but_not_run",
             "reason": reason,
             "memo": recorded.get("state"),
-            "detail": "high-stakes PR with no panel verdict at this head; set "
-            "ORCH_RUN_ADVERSARIAL_REVIEW=1, or run: python3 src/adversarial.py review "
+            "detail": "high-stakes PR with no panel verdict at this head; the panel is off "
+            "(ORCH_RUN_ADVERSARIAL_REVIEW=0); to run it: python3 src/adversarial.py review "
             f"--target {target} --head {head}",
         }
     labels = ", ".join(pr_labels + source_labels) or "(none)"
     context = f"High-stakes PR {target}: {title}. Reason: {reason}. Labels: {labels}."
+    exclude = adversarial.author_agents(pr_labels)
+    if not run_now:
+        return {
+            "reason": reason,
+            "status": "deferred_to_post_merge",
+            "memo": recorded.get("state"),
+            "context": context,
+            "exclude_agents": sorted(exclude),
+        }
     out = adversarial.review_at_head(
-        target, head, reviewers=reviewers, context=context, env=env, **review_kwargs
+        target,
+        head,
+        reviewers=reviewers,
+        context=context,
+        env=env,
+        exclude=exclude,
+        **review_kwargs,
     )
     return {"reason": reason, **out}
 
@@ -352,6 +374,13 @@ def _preflight_block_reason(preflight: Any) -> str | None:
     return None
 
 
+def _no_spawn(target: str, head: str, context: str, exclude: set) -> dict:
+    return {
+        "status": "not_scheduled",
+        "detail": "merge_fn was injected; no real merge, no real panel",
+    }
+
+
 def guarded_merge(
     target: str,
     *,
@@ -370,6 +399,7 @@ def guarded_merge(
     preflight_fn=exact_head_merge_gate.snapshot,
     panel_fn=None,
     adjudicate_fn=None,
+    spawn_fn=None,
 ) -> dict[str, Any]:
     dry_run = not confirm_merge
     if confirm_merge and not expected_head:
@@ -455,6 +485,26 @@ def guarded_merge(
         remote_runs_fn=remote_runs_fn,
         record_outcome_fn=record_outcome_fn,
     )
+    # A FAKED merge never schedules a real panel: the default spawn needs the real `gh pr merge`,
+    # and an injected merge must inject its spawn too (guard tests must forbid spawns).
+    if spawn_fn is None and merge_fn is not subprocess.run:
+        spawn_fn = _no_spawn
+    if panel.get("status") == "deferred_to_post_merge" or (
+        panel.get("status") == "reused" and str(panel.get("verdict")).upper() == "BLOCKED"
+    ):
+        # After the merge and outside it: the detached job judges the merged head (or reuses the
+        # verdict already recorded for it) and, on BLOCKED, files the follow-up. Never blocks.
+        import adversarial
+
+        try:
+            panel["post_merge"] = (spawn_fn or adversarial.spawn_post_merge_panel)(
+                target,
+                str(expected_head),
+                str(panel.get("context") or f"High-stakes PR {target}."),
+                set(panel.get("exclude_agents") or []),
+            )
+        except Exception as exc:
+            panel["post_merge"] = {"status": "spawn_failed", "error": str(exc)[:300]}
     return result
 
 
@@ -732,19 +782,18 @@ def _selftest_panel() -> None:
         merged.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, stdout="merged", stderr="")
 
-    on = {"ORCH_RUN_ADVERSARIAL_REVIEW": "1", "ORCH_ADVERSARIAL_REVIEWERS": "vibe,gemini"}
+    on: dict[str, str] = {}  # the default since 2026-10-12: on, one router-chosen reviewer
+    off = {"ORCH_RUN_ADVERSARIAL_REVIEW": "0"}
+    spawned: list[tuple] = []
 
-    def merge(verdict="BLOCKED", labels=("risk:major",), env=None, expected=head, **kw):
+    def spawn(target, head, context, exclude):
+        spawned.append((target, head, context, frozenset(exclude)))
+        return {"status": "scheduled_after_merge", "pid": None}
+
+    def merge(labels=("risk:major",), env=None, expected=head, **kw):
         def panel(target, metadata, *, head, env):
             return adversarial_review_status(
-                target,
-                metadata,
-                head=head,
-                env=env,
-                run_fn=issue_labels(*labels),
-                worktree="/wt/at-head",
-                head_fn=lambda wt: head,
-                review_fn=stub_panel(verdict),
+                target, metadata, head=head, env=env, run_fn=issue_labels(*labels)
             )
 
         return guarded_merge(
@@ -758,26 +807,60 @@ def _selftest_panel() -> None:
             merge_fn=fake_merge,
             remote_runs_fn=lambda target, mode=None: [],
             panel_fn=panel,
+            spawn_fn=spawn,
             **kw,
         )
 
-    # Risk lives on the SOURCE issue; the PR carries only its agent label. Advisory: it merges.
+    # Risk lives on the SOURCE issue; the PR carries only its agent label. The panel is deferred
+    # until the merge has landed, then scheduled detached, excluding the PR's author agent.
     first = merge()
     panel = first["adversarial_review"]
-    assert panel["status"] == "executed" and panel["verdict"] == "BLOCKED", first
+    assert panel["status"] == "deferred_to_post_merge", panel
     assert panel["reason"] == "high-stakes label: risk:major", panel
     assert first["merge_executed"] is True and first["blocked"] is False, first
-    assert "fails open" in panel["result"]["blockers"][0]["finding"], panel
-    # The same head is judged once; the verdict and its findings come back from the record.
-    again = merge(verdict="PASS")
+    assert panel["post_merge"]["status"] == "scheduled_after_merge", panel
+    assert spawned and spawned[0][3] == frozenset({"codex"}) and not reviews, spawned
+    # A dry run never runs or schedules anything.
+    dry = guarded_merge(
+        "o/r#41",
+        expected_head=head,
+        env=on,
+        metadata_fn=meta,
+        gate_fn=lambda item, **kwargs: None,
+        preflight_fn=clean,
+        panel_fn=lambda t, m, *, head, env: adversarial_review_status(
+            t, m, head=head, env=env, run_fn=issue_labels("risk:major")
+        ),
+        spawn_fn=spawn,
+    )
+    assert (
+        dry["adversarial_review"]["status"] == "deferred_to_post_merge" and len(spawned) == 1
+    ), dry
+    # The detached job judges the head (as `adversarial.py review` would), and records it.
+    judged = adversarial_review_status(
+        "o/r#41",
+        meta("o/r#41"),
+        head=head,
+        env=on,
+        run_fn=issue_labels("risk:major"),
+        run_now=True,
+        worktree="/wt/at-head",
+        head_fn=lambda wt: head,
+        choose_fn=lambda exclude: {"agent": "cursor", "reason": "stub"},
+        review_fn=stub_panel("BLOCKED"),
+    )
+    assert judged["status"] == "executed" and judged["verdict"] == "BLOCKED", judged
+    assert "fails open" in judged["result"]["blockers"][0]["finding"], judged
+    # A second merge attempt at the same head reports the recorded verdict, never re-judges it.
+    again = merge()
     assert again["adversarial_review"]["status"] == "reused", again
     assert again["adversarial_review"]["verdict"] == "BLOCKED" and len(reviews) == 1, again
     # Flag off: a verdict recorded for this head is still reported, and nothing runs.
-    quiet = merge(env={"ORCH_ADVERSARIAL_REVIEWERS": "vibe,gemini"})
+    quiet = merge(env=off)
     assert quiet["adversarial_review"]["status"] == "reused" and len(reviews) == 1, quiet
     # Flag off at a head with no verdict: required, named, with the one command that judges it.
     other = "b" * 40
-    unjudged = merge(env={"ORCH_ADVERSARIAL_REVIEWERS": "vibe,gemini"}, expected=other)
+    unjudged = merge(env=off, expected=other)
     status = unjudged["adversarial_review"]
     assert status["status"] == "required_but_not_run" and status["memo"] == "none", status
     assert f"--head {other}" in status["detail"] and unjudged["merge_executed"], status

@@ -185,6 +185,25 @@ live in a hash-checked artifact beside it. The closer lane, which merges fleet P
 same entry through the advisor's `HOW_TO_USE` (`adversarial.py review --target … --head …`).
 The panel moved from the Delegate stage to the Monitor + verify gate, so the diagram draws it there.
 
+**The panel is on at every high-stakes merge, after it, with one reviewer and a consumer
+(2026-10-12).** A retrospective concept test replayed the panel on the 33 high-stakes agent PRs merged
+2026-07-07..10-05, each at its final head in a checkout holding only that head's ancestors. Both PRs
+that later broke were BLOCKED with the defect named; BLOCKED PRs were later broken or repaired 6 of 16
+times against 1 of 14 PASS. Three mechanism defects came with it. Vibe vetoed 30 of 33, so the
+two-seat panel was gemini's verdict paid twice. Reviewers ran write-capable in the tree they judged:
+one edited the code the next reviewer vetoed, another left HEAD on an older commit. And nothing read
+a BLOCKED verdict. The owner decided: on by default, advisory, one reviewer, and a consumer. So
+`merge_guard` defers the panel past the merge and starts it detached
+(`adversarial.spawn_post_merge_panel`): the merged head is the head it judges, and a ~13-minute
+panel inside the merge call would stall the lane. The seat goes to ONE reviewer the router chooses on
+the `review` route (`adversarial.choose_reviewer` over `router.select_agent`: ability, then capacity
+and load, with exploration re-testing the others), never the change's author agent, vibe only when
+nothing else is selectable. A reviewer that returns nothing or changes the tree is replaced, up to
+three. The tree is checked after the panel as well as before, and a changed tree is restored with its
+verdict discarded. A BLOCKED verdict files one follow-up issue in the target repo
+(`adversarial.file_followup`), idempotent per panel key, and closes the PR's still-open source issue so
+it is not left hanging. Selection stays a rail; only the reviewer's judgment is a role.
+
 The adapter also decides each codex run's writable boundary. A run whose job is to commit (a
 dispatch from `plan_dispatch`, or an experiment arm) gets `--add-dir` for exactly its linked
 worktree's git dir, plus the canonical clone's `objects/`, `refs/` and `logs/`

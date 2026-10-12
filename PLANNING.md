@@ -264,6 +264,8 @@ running experiments opportunistically (the research scheduler) and refreshing th
       in active ticks when `ORCH_RUN_ADVERSARIAL_REVIEW=1`. *Moved 2026-10-05:* the tick no longer
       examines closer items (none can be delegated); the panel runs at `merge_guard.py`'s terminal
       merge, once per exact head (`adversarial.review_at_head`), still advisory and still behind the flag.
+      *2026-10-12:* on by default after the 33-PR concept test; it runs detached after the merge with one
+      router-chosen reviewer (never the author) and files a follow-up issue on BLOCKED.
 - [x] **Runtime AC checks, first increment.** `runtime_ac.py` emits strict AC-bound spec-authoring prompts,
       validates runtime verification JSON for metadata/context, per-AC evidence requirements,
       frontend/command/deliberate-break/manual checks, non-regression checks, and verdict policies, and

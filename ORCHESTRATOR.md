@@ -473,10 +473,12 @@ cursor-agent live outside the default PATH):
   repo's committed `AGENTS.md`; add `--repo-path <local-repo> --apply` to update only the managed
   Orchestrator section, and `--validate-agents-md <local-repo> --repo owner/repo` to check that the
   committed section still matches the registry and that backticked path references resolve.
-- **Adversarial high-stakes merge review (NEW)** — `tick.py` detects closer PRs with explicit high-risk
-  labels/title metadata and reports a planned advisory refute-mode panel. Active ticks only run it when
-  `ORCH_RUN_ADVERSARIAL_REVIEW=1`; reviewers default to `codex,vibe,gemini` and can be set with
-  `ORCH_ADVERSARIAL_REVIEWERS`. The result is evidence for adjudication, not an automatic block.
+- **Adversarial high-stakes merge review** — `merge_guard.py` detects high-stakes PRs (risk labels on
+  the PR or its source issue, or a high-risk title) and, after the merge lands, starts the advisory
+  refute-mode panel detached (on by default since 2026-10-12; `ORCH_RUN_ADVERSARIAL_REVIEW=0` turns it
+  off). One reviewer, chosen by the router on the `review` route and never the change's author agent
+  (vibe last), judges the merged head once; `ORCH_ADVERSARIAL_REVIEWERS` pins an explicit set. A BLOCKED
+  verdict files one follow-up issue and closes the PR's open source issue. Never an automatic block.
 - **Periodic dataset report (NEW)** — `python3 src/periodic_report.py [--json] [--window-days N]
   [--min-gap-recurrence N] [--snapshot-json data/feedback-snapshot.json]
   [--approve-evidence-type NAME --from-gap GAP [--rationale TEXT] [--apply]]` → read-only review of the
