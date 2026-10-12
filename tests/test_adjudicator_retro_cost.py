@@ -167,14 +167,31 @@ def test_invalid_token_counts_are_rejected_before_recording(private_brain, value
         assert not conn.execute("SELECT 1 FROM runs WHERE run_id='bad'").fetchone()
 
 
+@pytest.mark.parametrize(
+    "agent,event_type,argv",
+    [
+        ("cursor", "result", ["cursor-agent", "--output-format", "stream-json"]),
+        ("codex", "turn.completed", ["codex", "exec", "--json"]),
+    ],
+)
 def test_offload_preserves_native_terminal_usage_before_result_reduction(
-    stores, monkeypatch, tmp_path
+    stores, monkeypatch, tmp_path, agent, event_type, argv
 ):
+    monkeypatch.setattr(dispatcher.adapters, "build_command", lambda *a, **kw: argv)
     events = [
         {"type": "system", "subtype": "init", "model": "native-model"},
         {"type": "assistant", "usage": {"input_tokens": 99999}},
-        {"type": "result", "result": "done", "usage": {"input_tokens": 4000, "output_tokens": 200}},
+        {
+            "type": event_type,
+            "result": "done",
+            "usage": {"input_tokens": 4000, "output_tokens": 200},
+        },
     ]
+    if agent == "codex":
+        events = [
+            {"type": "item.completed", "item": {"type": "agent_message", "text": "done"}},
+            events[-1],
+        ]
     real_run = subprocess.run
 
     def fake_run(cmd, *a, **kw):
@@ -185,6 +202,73 @@ def test_offload_preserves_native_terminal_usage_before_result_reduction(
         return real_run(cmd, *a, **kw)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    result = dispatcher.offload("codex", "Review a bounded case", cwd=str(tmp_path))
+    result = dispatcher.offload(agent, "Review a bounded case", cwd=str(tmp_path))
     assert result["usage"] == {"input_tokens": 4000, "output_tokens": 200}
-    assert result["output"] == "done"
+    assert ("agent_message" in result["output"]) if agent == "codex" else result["output"] == "done"
+
+
+@pytest.mark.parametrize("use_pool", [False, True])
+def test_zero_dollar_receipt_is_not_measured(private_brain, use_pool):
+    if use_pool:
+        _seed_pool("gemini", [3.0])
+    feedback.record_role_run("zero", "adjudicator", "o/r#1", "gemini")
+    with feedback._conn() as conn:
+        conn.execute(
+            "INSERT INTO costs VALUES (?,?,?,?,?,?,?)",
+            ("zero", 10, 2, 0.0, 0.0, "ccusage", int(time.time())),
+        )
+    report = feedback.role_cost_report("zero", "gemini", db=private_brain)
+    assert report["status"] == ("imputed" if use_pool else "unmeasured")
+    assert report["cost_usd"] == (3.0 if use_pool else None)
+
+
+@pytest.mark.parametrize("agent", ["codex", "claude", "cursor", "gemini"])
+def test_plain_deliverable_json_is_not_native_usage(stores, monkeypatch, tmp_path, agent):
+    text = json.dumps({"type": "result", "usage": {"input_tokens": 4000, "output_tokens": 200}})
+    real_run = subprocess.run
+
+    def fake_run(cmd, *a, **kw):
+        if isinstance(cmd, list) and cmd[:2] == ["bash", "-lc"]:
+            return subprocess.CompletedProcess(cmd, 0, text, "")
+        return real_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = dispatcher.offload(agent, "Review a bounded case", cwd=str(tmp_path))
+    assert result["usage"] == {}
+
+
+def test_native_usage_accumulates_across_executed_retry(stores, monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        dispatcher.adapters, "build_command", lambda *a, **kw: ["codex", "exec", "--json"]
+    )
+    monkeypatch.setenv("ORCH_OFFLOAD_NETWORK_RETRIES", "1")
+    monkeypatch.setenv("ORCH_OFFLOAD_RETRY_BACKOFF_S", "0")
+    real_run = subprocess.run
+    attempts = []
+
+    def fake_run(cmd, *a, **kw):
+        if isinstance(cmd, list) and cmd[:2] == ["bash", "-lc"]:
+            attempts.append(cmd)
+            first = len(attempts) == 1
+            text = json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {
+                        "input_tokens": 100 if first else 40,
+                        "output_tokens": 10 if first else 4,
+                    },
+                }
+            )
+            if not first:
+                text += "\n" + json.dumps(
+                    {"type": "item.completed", "item": {"type": "agent_message", "text": "done"}}
+                )
+            return subprocess.CompletedProcess(
+                cmd, 1 if first else 0, text, "connection reset by peer" if first else ""
+            )
+        return real_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = dispatcher.offload("codex", "Review a bounded case", cwd=str(tmp_path))
+    assert len(attempts) == 2
+    assert result["usage"] == {"input_tokens": 140, "output_tokens": 14}

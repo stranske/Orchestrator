@@ -2753,6 +2753,14 @@ def main(argv: list[str]) -> int:
             "because its environment IS the tick's"
         ),
     )
+    ap.add_argument(
+        "--text-out",
+        metavar="PATH",
+        help=(
+            "also write the readable report to PATH. The tick passes this beside --json: the JSON "
+            "feeds the graders, and the text is what a capability verdict cites (CLAUDE.md §6)"
+        ),
+    )
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
     if args.selftest:
@@ -2843,7 +2851,27 @@ def main(argv: list[str]) -> int:
             return 2
         rep["questions"] = raise_questions(rep, dry_run=False)
     print(json.dumps(rep, indent=2) if args.json else format_report(rep), end="")
+    if args.text_out:
+        try:
+            write_text_report(rep, Path(args.text_out))
+        except OSError as exc:
+            print(f"switch_review: could not write {args.text_out}: {exc}", file=sys.stderr)
+            return 1
     return 0
+
+
+def write_text_report(rep: dict, path: Path) -> None:
+    """Write the readable report beside the JSON one, whole or not at all.
+
+    THE CONSUMER THIS EXISTS FOR (2026-10-12). The tick ran this module with `--json` alone, so
+    `format_report` never ran in production: the value-chain section, whose declared consumer it
+    is, reached `switch-review.json` and nothing read it there. The text is what a capability
+    verdict cites (CLAUDE.md §6). Written to a temporary file and moved into place, so a reader
+    never sees half a week's report.
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(format_report(rep), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 if __name__ == "__main__":

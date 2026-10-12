@@ -1,0 +1,11 @@
+{
+  "red_exit": 1,
+  "restored_sha256": {
+    "src/dispatcher.py": "e3b2fa07650c27e622e61805a28531b20df476cc777fe3866c2caa75bfe098b7",
+    "src/feedback.py": "444751b3ab69264aa5400aeb4f27cc2d03cf36080448cbbbd65d141b0cf2a754"
+  },
+  "restored_byte_identical": true,
+  "console_normalization": "Committed RED transcript trims trailing whitespace only; original raw retained in lane round545-production-red.log",
+  "original_red_sha256": "dae8dc2dbde682871e7c54d1978a79de196129ae623053cc27646e63735a2e89",
+  "committed_red_sha256": "46e3dbac62a8a45aa8f7f3eaf34fab1cee6ea6e5590eff40aa4047e062927b62"
+}

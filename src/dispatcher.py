@@ -2275,6 +2275,16 @@ def offload(
         import ledger_reconcile
 
         reported_in = reported_out = 0
+        # The transport request, never the shape of assistant text, identifies
+        # the CLI event protocol. Plain-text adapters cannot mint receipts.
+        stream_json = any(
+            argv[i : i + 2] == ["--output-format", "stream-json"] for i in range(len(argv) - 1)
+        )
+        terminal_types = (
+            {"turn.completed"}
+            if agent == "codex" and "--json" in argv
+            else {"result"} if agent in {"cursor", "gemini"} and stream_json else set()
+        )
         for line in (proc.stdout or "").splitlines():
             try:
                 event = json.loads(line)
@@ -2282,7 +2292,7 @@ def offload(
                 continue
             if (
                 isinstance(event, dict)
-                and event.get("type") in {"turn.completed", "result"}
+                and event.get("type") in terminal_types
                 and isinstance(event.get("usage"), dict)
             ):
                 tin, tout = ledger_reconcile._usage_from_obj(event)
@@ -2386,9 +2396,16 @@ def offload(
 
     out = {}
     attempts = 0
+    total_in = total_out = 0
     for attempt in range(1, max_network_retries + 2):
         attempts = attempt
         out = _run_offload_attempt()
+        usage = out.get("usage") or {}
+        total_in += usage.get("input_tokens", 0)
+        total_out += usage.get("output_tokens", 0)
+        out["usage"] = (
+            {"input_tokens": total_in, "output_tokens": total_out} if total_in or total_out else {}
+        )
         out["attempts"] = attempts
         if out.get("exit") == 0:
             break

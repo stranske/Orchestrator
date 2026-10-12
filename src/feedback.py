@@ -3818,7 +3818,7 @@ def role_cost_report(run_id: str | None, agent: str | None, db: Path | None = No
             and row[1] in COMPLETE_COST_SOURCES
             and isinstance(row[0], (int, float))
             and math.isfinite(row[0])
-            and row[0] >= 0
+            and row[0] > 0
         ):
             return {
                 **result,
