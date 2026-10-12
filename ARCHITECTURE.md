@@ -106,6 +106,21 @@ bounded offload or delegation chooses that exact profile; it does not create a n
 change the feedback loop. Operator `ORCH_CODEX_MODEL_*` pins and `ORCH_CODEX_MAX_TIER` ceilings
 continue through the tier adapter for automatic routes; the explicit profile stays exact.
 
+**An offload run records which work it was for (2026-10-12).** Both capability readers key a run's
+subject by a `subject_id` in its routing metadata, else by `runs.target`, and an offload's target is
+`offload:<cwd>`. No offload run recorded a subject, so all 591 role-backend runs since 2026-09-01 were
+one subject (`offload:/`, the tick's cwd) and each research-program directory another.
+`dispatcher.offload` now records `subject_id` and `subject_source`: a registered research round's
+subject first (the completion-identity path already keys a round-bound run that way), else the
+caller's `subject_id` (`--subject` on the CLI), else nothing. A role passes its own target when it
+names one work item (`feedback.work_item_subject`: `owner/repo#N`); triage ranks a batch and passes
+none, and a lane agent's ad hoc offload stays unkeyed until its caller names the work. Prose never
+supplies a subject. The data migration `runs.offload-subjects-2026-10-12` gives earlier runs the
+same two keys from the same two structured links (the round, and the role run whose
+`backend_run_id` is the offload); `feedback.py restore-offload-subjects` undoes it. On a copy of the
+live Brain it keyed 1,214 of 4,461 offload runs (277 by round, 937 by role target, none ambiguous).
+The loop diagram is unchanged: no stage, component or surface moved.
+
 Complete collected evidence also crosses the existing dispatch transport rail. Gemini
 offloads can carry the full prompt as one native NDJSON user message on stdin, using
 a private temporary file rather than embedding evidence in shell or provider argv.
