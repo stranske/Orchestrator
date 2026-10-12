@@ -1,0 +1,17 @@
+✔ six-instance CLI trial writes the program receipt and remains idempotent on replay (400.857042ms)
+✔ six-instance CLI refuses unverified evidence and accepts a corrected retry (406.20075ms)
+✔ six-instance CLI refuses provider-unavailable evidence and accepts a corrected retry (402.665958ms)
+✔ six-instance CLI refuses artifact-changed evidence and accepts a corrected retry (390.298ms)
+✔ six-instance CLI refuses source-changed evidence and accepts a corrected retry (390.051792ms)
+✔ six-instance CLI refuses missing-instance evidence and accepts a corrected retry (466.401167ms)
+✔ six-instance CLI refuses invalid-quality evidence and accepts a corrected retry (423.852417ms)
+✔ six-instance CLI refuses invalid-usage evidence and accepts a corrected retry (400.107208ms)
+✔ six-instance CLI refuses identity-content-mismatch evidence and accepts a corrected retry (392.516125ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3728.163208

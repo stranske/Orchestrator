@@ -1,0 +1,26 @@
+{
+  "source_head": "6219b46e18c01f7af7f15818fe383116d4bcf13e",
+  "command": "python3 src/verify.py --floor-may-lag",
+  "exit": 0,
+  "actual_passed": 2718,
+  "actual_skipped": 0,
+  "selftests": 103,
+  "gates": 5,
+  "mypy_modules": 121,
+  "prior_floor": 2709,
+  "final_floor": 2718,
+  "ceilings": {
+    "skipped_max": 26,
+    "mirror_skipped_max": 21,
+    "bare_mirror_skipped_max": 47,
+    "bare_mirror_selftest_skipped_max": 7,
+    "bare_mirror_gate_skipped_max": 2,
+    "selftest_skipped_max": 7,
+    "gate_skipped_max": 2,
+    "mypy_exempt_max": 0
+  },
+  "final_production_floor_problems": [],
+  "final_floor_sha256": "cd04f951b5d5379a3bb597334342798a8d4dbfcbe19b7c7f24667f653932b0f9",
+  "limits": "Full run measured unchanged source with repaired2709floor; final edit only raises counts to2718 and records provenance. Final production load_floor/_floor_problems exercised directly. No final full rerun, hosted parity, native trial receipt or provider PASS is inferred.",
+  "timestamp": "2026-10-10T23:32:08.047316+00:00"
+}
