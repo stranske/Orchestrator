@@ -17,7 +17,8 @@ node tests/test_discover_seatbelt_ci.js
 ```
 
 Authenticated connector REST GETs used **two records per page and two complete scans**.
-The new helper replayed the recorded endpoint/response sequence and produced:
+The retained records contain assembled run lists. The new helper replayed those
+stored runs with simulated pagination and reproduced:
 
 - [original-run-discovery-20261012.json](original-run-discovery-20261012.json):
   all 13 original-head runs from 14 GETs. CI `38176808788` and both Gate runs
