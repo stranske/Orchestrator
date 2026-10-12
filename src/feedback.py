@@ -2465,6 +2465,14 @@ def capability_causal_evidence(
                 tally_class = "advisory_self"
             elif not (consumed and terminal_outcome):
                 tally_class = ""
+            elif named_class in LEARNING_EXCLUDED_FAILURE_CLASSES:
+                # §2: no learner scores these classes, in either direction. The adjudicated-FAIL
+                # branch below already refused them; a VERIFIER fail or a regression durability
+                # did not, so 11 `transient_infra` runs of agy-runtime-isolation trained its
+                # routing prior as failures (beta 20, posterior 0.2 where 0.357 was due;
+                # measured 2026-10-12). Checked before success too: an excluded class says the
+                # outcome is not the run's own, whatever it was.
+                tally_class = "learning_excluded"
             elif durable_success:
                 tally_class = "success"
             elif attributable_failure:

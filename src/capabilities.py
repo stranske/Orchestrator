@@ -850,7 +850,12 @@ def register_compiled_version(
 def _causal_readiness(cap: dict[str, Any], rows: list[dict], now: int) -> dict[str, Any]:
     policy = {**DEFAULT_PROMOTION_POLICY, **(cap.get("lifecycle_policy") or {})}
     accepted = [row for row in rows if row["accepted_consumption"]]
-    durable_subjects = sorted({row["subject_id"] for row in accepted if row["durable_success"]})
+    # A durable subject is a `success` tally, the same classification the prior counts. Reading
+    # `durable_success` directly also counted an advisory role run holding a copy of its acting
+    # run's outcome (keyed `triage:N-items`, a subject of its own) and a learning-excluded row.
+    durable_subjects = sorted(
+        {row["subject_id"] for row in accepted if row.get("tally_class") == "success"}
+    )
     terminal = [row for row in accepted if row["terminal_outcome"]]
     # Count from feedback's tally_class — the single classification both this readiness view and
     # reconcile_causal_lifecycle's routing prior consume, so the gate's number and the prior's
@@ -861,6 +866,7 @@ def _causal_readiness(cap: dict[str, Any], rows: list[dict], now: int) -> dict[s
         1 for row in terminal if row.get("tally_class") == "churn_unattributed"
     )
     advisory_self_edges = sum(1 for row in accepted if row.get("tally_class") == "advisory_self")
+    learning_excluded = sum(1 for row in terminal if row.get("tally_class") == "learning_excluded")
     rework = sum(1 for row in terminal if row["rework"])
     latest = max((int(row["observed_ts"] or 0) for row in terminal), default=0)
     max_age = int(policy["max_evidence_age_days"]) * 86400
@@ -882,6 +888,8 @@ def _causal_readiness(cap: dict[str, Any], rows: list[dict], now: int) -> dict[s
         # no-op class again. These two numbers are what the old "failures" over-counted.
         "churn_unattributed": churn_unattributed,
         "advisory_self_edges": advisory_self_edges,
+        # §2's classes, never a success or a failure: counted here so the set-aside is a number.
+        "learning_excluded": learning_excluded,
         "rework": rework,
         "latest_evidence_ts": latest,
     }
@@ -1106,7 +1114,11 @@ def reconcile_causal_lifecycle(
                 "ref": durable[-1]["target_run_id"],
             }
         cap["outcome_links"] = sorted({row["target_run_id"] for row in terminal})
-        regressions = [row for row in terminal if row["regression"]]
+        regressions = [
+            row
+            for row in terminal
+            if row["regression"] and row.get("tally_class") != "learning_excluded"
+        ]
         if regressions:
             cap["rollback_pending"] = {
                 "reason": "joined capability outcome regressed",
@@ -1181,6 +1193,7 @@ def reconcile_causal_lifecycle(
                     # window is legible in the event log rather than silently absorbed.
                     "churn_unattributed": readiness.get("churn_unattributed", 0),
                     "advisory_self_edges": readiness.get("advisory_self_edges", 0),
+                    "learning_excluded": readiness.get("learning_excluded", 0),
                     "status": cap.get("status"),
                 }
             )
