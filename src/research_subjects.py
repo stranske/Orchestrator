@@ -346,23 +346,36 @@ def round_identity(round_id: str, *, conn: sqlite3.Connection | None = None) -> 
     close = conn is None
     try:
         ensure_schema(db)
-        row = db.execute(
-            "SELECT s.subject_id, s.subject_family_id, s.canonical_target, s.task_type "
-            "FROM research_subject_experiments x "
-            "JOIN research_subjects s ON s.subject_id=x.subject_id WHERE x.exp_id=?",
-            (round_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        return {
-            "subject_id": row[0],
-            "subject_family_id": row[1],
-            "canonical_target": row[2],
-            "task_type": row[3],
-        }
+        return read_round_identity(db, round_id)
     finally:
         if close:
             db.close()
+
+
+def read_round_identity(db: sqlite3.Connection, round_id: str) -> dict | None:
+    """`round_identity` without creating the schema, for a caller inside a transaction.
+
+    `ensure_schema` is an `executescript`, which COMMITS whatever transaction is open: the Brain's
+    one-time data migrations run under BEGIN IMMEDIATE with their marker written in the same
+    transaction, and a commit in the middle would split the two. Absent tables mean no round."""
+    if not (
+        _table_exists(db, "research_subject_experiments") and _table_exists(db, "research_subjects")
+    ):
+        return None
+    row = db.execute(
+        "SELECT s.subject_id, s.subject_family_id, s.canonical_target, s.task_type "
+        "FROM research_subject_experiments x "
+        "JOIN research_subjects s ON s.subject_id=x.subject_id WHERE x.exp_id=?",
+        (round_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "subject_id": row[0],
+        "subject_family_id": row[1],
+        "canonical_target": row[2],
+        "task_type": row[3],
+    }
 
 
 def round_arm_evidence(round_id: str, *, conn: sqlite3.Connection | None = None) -> dict:

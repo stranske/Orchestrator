@@ -2031,6 +2031,8 @@ def run_redirect_agent(
                 cwd=str(report.get("worktree") or "."),
                 mode=role.mode,
                 timeout=timeout,
+                # The work is the role run's own target; the backfill keys earlier runs the same way.
+                subject_id=feedback.work_item_subject(report.get("target")),
             )
             backend_run_id = res.get("run_id")
             backend_model = res.get("model")
@@ -2251,7 +2253,14 @@ def run_prompt_agent(
         proposal = proposal_json
     elif dispatch and backend_name is not None:
         _role_capability_event("prompt", "invocation", metadata={"backend": backend_name})
-        res = dispatcher.offload(backend_name, prompt, cwd=cwd, mode=role.mode, timeout=timeout)
+        res = dispatcher.offload(
+            backend_name,
+            prompt,
+            cwd=cwd,
+            mode=role.mode,
+            timeout=timeout,
+            subject_id=feedback.work_item_subject(target),
+        )
         backend_run_id = res.get("run_id")
         backend_model = res.get("model")
         raw_output = res.get("output", "")
@@ -2537,7 +2546,14 @@ def run_decomposer_agent(
             errors.append("no eligible backend has capacity for the decomposer role")
         else:
             _role_capability_event("decomposer", "invocation", metadata={"backend": backend_name})
-            res = dispatcher.offload(backend_name, prompt, cwd=cwd, mode=role.mode, timeout=timeout)
+            res = dispatcher.offload(
+                backend_name,
+                prompt,
+                cwd=cwd,
+                mode=role.mode,
+                timeout=timeout,
+                subject_id=feedback.work_item_subject(target or repo),
+            )
             backend_run_id = res.get("run_id")
             backend_model = res.get("model")
             raw_output = res.get("output", "")
@@ -2671,6 +2687,7 @@ def run_triage_agent(
             errors.append("no eligible backend has capacity for the triage role")
         else:
             _role_capability_event("triage", "invocation", metadata={"backend": backend_name})
+            # NO SUBJECT: triage ranks a batch of items, so no one work item is this run's subject.
             res = dispatcher.offload(backend_name, prompt, cwd=cwd, mode=role.mode, timeout=timeout)
             backend_run_id = res.get("run_id")
             backend_model = res.get("model")
@@ -2834,6 +2851,7 @@ def run_adjudicator_agent(
                 mode=role.mode,
                 timeout=timeout,
                 isolate=retrospective_origin,
+                subject_id=feedback.work_item_subject(compact_case.get("target")),
             )
             backend_run_id = res.get("run_id")
             backend_model = res.get("model")
@@ -3401,7 +3419,7 @@ def _selftest() -> None:
 
         old_offload = dispatcher.offload
 
-        def fake_gemini_offload(agent, prompt, cwd=".", mode=None, timeout=600):
+        def fake_gemini_offload(agent, prompt, cwd=".", mode=None, timeout=600, subject_id=None):
             return {
                 "agent": agent,
                 "exit": 70,
