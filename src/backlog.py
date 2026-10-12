@@ -37,6 +37,10 @@ from typing import Any
 HANDOFF = Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff"))
 SENTINEL = HANDOFF / "lane-handoff.json"
 BACKLOG_JSON = HANDOFF / "backlog.json"
+# The research lane's own feed (2026-10-12). Discovery above feeds only the dispatch lane and runs
+# only when it is live, so with it retired the research lane read a backlog last written on
+# 2026-09-17 holding 0 issues, and printed `no_subject` every tick.
+RESEARCH_BACKLOG_JSON = HANDOFF / "research-backlog.json"
 
 SUPPORTED_REPOS = [
     "stranske/Workflows",
@@ -417,6 +421,134 @@ def build_backlog(repos, fetch_issues, fetch_prs, scoped: set[str] | None = None
     return items
 
 
+# --- research feed ----------------------------------------------------------
+# An issue worth trying several ways: open, prioritised or marked ready, not a tracker, an automated
+# or sync issue, paused or already in progress, not epic/cross-repo/mechanical, and with no open PR.
+# Measured 2026-10-12: of 24 issues open across the fleet from the last 30 days, the
+# `status: ready` filter alone kept 1, and an open PR excluded that one.
+RESEARCH_EXCLUDED_LABELS = {
+    "automation",
+    "automated",
+    "consumer-sync",
+    "sync",
+    "sync-failure",
+    "agents:auto-pilot-pause",
+    "status:in-progress",
+    "status: in-progress",
+}
+RESEARCH_EXCLUDED_PREFIXES = ("tracker:", "campaign:")
+RESEARCH_EXCLUDED_CLASSES = {"epic", "cross_repo", "mechanical"}
+
+
+def research_skip_reason(labels: list[str]) -> str | None:
+    """Why an open issue is not a research subject, or None when it is one."""
+    low = {lab.strip().lower() for lab in labels}
+    if low & RESEARCH_EXCLUDED_LABELS or any(
+        lab.startswith(RESEARCH_EXCLUDED_PREFIXES) for lab in low
+    ):
+        return "excluded_label"
+    if classify(labels) in RESEARCH_EXCLUDED_CLASSES:
+        return "excluded_class"
+    if not (_is_ready(labels) or any(lab.startswith("priority:") for lab in low)):
+        return "not_prioritised"
+    return None
+
+
+def build_research_items(repos, fetch_issues, fetch_prs, scoped: set[str] | None = None) -> dict:
+    """The research feed over injected fetchers. A fetcher RAISES on a failed read: a repo whose
+    issues or PRs could not be read contributes nothing and is named in `repos_failed`, because
+    without its open PRs nothing can say its issues are not already being worked."""
+    scoped = scoped or set()
+    items: list[dict] = []
+    counts: dict[str, int] = {"open_issues": 0}
+    failed: list[str] = []
+    for repo in repos:
+        try:
+            issues = fetch_issues(repo)
+            prs = fetch_prs(repo)
+        except Exception:  # noqa: BLE001 — named, never read as an empty repo
+            failed.append(repo)
+            continue
+        referenced: set[str] = set()
+        for pr in prs:
+            referenced.update(_issue_targets(repo, pr))
+        for issue in issues:
+            counts["open_issues"] += 1
+            labels = _labels(issue)
+            target = f"{repo}#{issue['number']}"
+            reason = research_skip_reason(labels)
+            if reason is None and target in scoped:
+                reason = "scoped_blocker"
+            if reason is None and target in referenced:
+                reason = "open_pr"
+            if reason:
+                counts[reason] = counts.get(reason, 0) + 1
+                continue
+            items.append(
+                {
+                    "target": target,
+                    "task_type": classify(labels),
+                    "lane": "research",
+                    "labels": labels,
+                    "title": issue.get("title", "") or "",
+                    "body": issue.get("body", "") or "",
+                }
+            )
+    counts["eligible"] = len(items)
+    return {
+        "generated_at": int(time.time()),
+        "items": items,
+        "counts": counts,
+        "repos_read": len(repos) - len(failed),
+        "repos_failed": failed,
+        "scope": "orchestrator research lane only; NOT fleet workload.",
+    }
+
+
+def _gh_strict(args: list[str]) -> list:
+    out = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=60)
+    if out.returncode != 0:
+        raise RuntimeError((out.stderr or "gh failed").strip()[:200])
+    value = json.loads(out.stdout or "null")
+    if not isinstance(value, list):
+        raise RuntimeError("gh returned no list")
+    return value
+
+
+def strict_fetch_issues(repo: str) -> list:
+    return _gh_strict(
+        [
+            "issue",
+            "list",
+            "-R",
+            repo,
+            "--state",
+            "open",
+            "-L",
+            "1000",
+            "--json",
+            "number,labels,title,body",
+        ]
+    )
+
+
+def strict_fetch_prs(repo: str) -> list:
+    return _gh_strict(
+        [
+            "pr",
+            "list",
+            "-R",
+            repo,
+            "--state",
+            "open",
+            "-L",
+            "200",
+            "--json",
+            "number,labels,title,body,closingIssuesReferences,headRefName,isDraft",
+        ]
+    )
+
+
 # --- live gh fetchers -------------------------------------------------------
 def _gh_json(args: list[str]) -> list:
     try:
@@ -780,8 +912,22 @@ def main(argv: list[str]) -> int:
     if "--selftest" in argv:
         _selftest()
         return 0
+    if "--research" in argv:
+        feed = build_research_items(
+            SUPPORTED_REPOS, strict_fetch_issues, strict_fetch_prs, scoped=load_scoped_blockers()
+        )
+        HANDOFF.mkdir(parents=True, exist_ok=True)
+        tmp = RESEARCH_BACKLOG_JSON.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(feed, indent=2) + "\n")
+        os.replace(tmp, RESEARCH_BACKLOG_JSON)
+        print(
+            f"research feed: {feed['counts']['eligible']} eligible of "
+            f"{feed['counts']['open_issues']} open issues; {feed['repos_read']} repos read, "
+            f"{len(feed['repos_failed'])} failed"
+        )
+        return 0
     if "--live" not in argv and "--dry-run" not in argv:
-        print("usage: backlog.py --live | --dry-run | --selftest", file=sys.stderr)
+        print("usage: backlog.py --live | --dry-run | --research | --selftest", file=sys.stderr)
         return 2
     live_blockers = load_scoped_blockers()
     expired = expired_scoped_blockers()
