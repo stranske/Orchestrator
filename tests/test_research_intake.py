@@ -176,7 +176,8 @@ def test_the_cooldown_holds_the_issue_whatever_arms_are_proposed():
     edited = research_subjects.assess_candidate(**{**base, "spec": "edited body"}, arms=["vibe"])
     assert edited["reason"] == "subject_cooldown", "an edited body must not reopen the issue"
     later = research_subjects.assess_candidate(
-        **{**base, "now": now + 200 * 3600}, arms=["gemini", "vibe"]
+        **{**base, "now": now + 200 * 3600},
+        arms=["gemini", "vibe"],
     )
     assert later["eligible"], later
     conn.close()

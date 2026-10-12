@@ -930,7 +930,10 @@ def main(argv: list[str]) -> int:
         return 0
     if "--research" in argv:
         feed = build_research_items(
-            SUPPORTED_REPOS, strict_fetch_issues, strict_fetch_prs, scoped=load_scoped_blockers()
+            SUPPORTED_REPOS,
+            strict_fetch_issues,
+            strict_fetch_prs,
+            scoped=load_scoped_blockers(),
         )
         HANDOFF.mkdir(parents=True, exist_ok=True)
         tmp = RESEARCH_BACKLOG_JSON.with_suffix(".json.tmp")

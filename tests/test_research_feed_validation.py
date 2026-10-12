@@ -88,7 +88,9 @@ class ResearchFeedValidationTests(unittest.TestCase):
 
         with patch("subprocess.run", side_effect=read):
             feed = backlog.build_research_items(
-                ["o/truncated", "o/complete"], lambda repo: [issue], backlog.strict_fetch_prs
+                ["o/truncated", "o/complete"],
+                lambda repo: [issue],
+                backlog.strict_fetch_prs,
             )
         self.assertEqual(feed["repos_failed"], ["o/truncated"])
         self.assertEqual(feed["repos_read"], 1)

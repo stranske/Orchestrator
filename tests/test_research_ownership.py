@@ -138,7 +138,12 @@ class ResearchOwnershipTests(unittest.TestCase):
                     patch.object(tick.exp_abcd, "prepare") as prepare,
                 ):
                     result = tick.research_tick(
-                        items, cap, dry_run=dry_run, env=env, conn=self.conn, hyps=[]
+                        items,
+                        cap,
+                        dry_run=dry_run,
+                        env=env,
+                        conn=self.conn,
+                        hyps=[],
                     )
                     self.assertTrue(result["planned"])
                     self.assertFalse(result["active"])
