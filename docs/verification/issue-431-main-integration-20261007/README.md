@@ -1,0 +1,3 @@
+# Current main integration
+
+Existing PR498 at8d9384a conflicted only in .verify-floor.json against main2cf85927. Merge integration preserves both production changes, takes the stricter original skip/exemption ceilings, and raises the count floor to the actual combined2669collected nodes. Affected profile ingest/instances/summary, value-chain and campaign tests:99PASS,30subtestsPASS. No six-attempt provider trial was run; served-model/output/native cost prerequisites and existing incomplete/quarantined state are unchanged. Full hosted verification remains required; this is conflict recovery, not native trial acceptance or source431 completion. Merge commits on this branch must still land only through a final guarded squash.
