@@ -13,6 +13,7 @@ import adjudicator_retro as retro
 import dispatcher
 import feedback
 import roles
+import switch_review
 
 private_brain = retro_tests.private_brain
 stores = offload_tests.stores
@@ -56,11 +57,15 @@ def _seed_pool(agent, costs, *, unmeasured=0, source="ccusage"):
             )
 
 
+@pytest.mark.parametrize("tokens_in,tokens_out", [(4000, 200), (0, 0), (4000, 0), (0, 200)])
 def test_dispatch_records_measured_cost_when_the_adapter_reports_usage(
-    private_brain, tmp_path, monkeypatch
+    private_brain, tmp_path, monkeypatch, tokens_in, tokens_out
 ):
     result, _ = _dispatch(
-        monkeypatch, private_brain, tmp_path, {"input_tokens": 4000, "output_tokens": 200}
+        monkeypatch,
+        private_brain,
+        tmp_path,
+        {"input_tokens": tokens_in, "output_tokens": tokens_out},
     )
     rid = result["rows"][0]["role_run_id"]
     with sqlite3.connect(private_brain) as conn:
@@ -70,10 +75,13 @@ def test_dispatch_records_measured_cost_when_the_adapter_reports_usage(
         tokens = conn.execute(
             "SELECT tokens_in,tokens_out,source FROM costs WHERE run_id=?", (rid,)
         ).fetchone()
-    assert metadata["cost_tokens_in"] == 4000
-    assert metadata["cost_tokens_out"] == 200
+    assert metadata["cost_tokens_in"] == tokens_in
+    assert metadata["cost_tokens_out"] == tokens_out
     assert metadata["imputed"] is False
-    assert tokens == (4000, 200, "ledger")
+    assert tokens == (tokens_in, tokens_out, "ledger")
+    assert result["rows"][0]["role_record"]["cost_tokens_in"] == tokens_in
+    assert result["rows"][0]["role_record"]["cost_tokens_out"] == tokens_out
+    assert result["rows"][0]["role_record"]["imputed"] is False
     # Measured token effort does not invent a dollar price or satisfy complete-source USD.
     assert result["summary"]["cost_measured_cases"] == 0
     assert result["rows"][0]["cost_report"]["status"] == "unmeasured"
@@ -102,6 +110,20 @@ def test_missing_usage_is_imputed_and_flagged_never_null(private_brain, tmp_path
     line = retro.weekly_line(path)
     assert "cost measured 0 of 1, imputed 1, unmeasured 0" in line
     assert "null" not in line
+    assert "None" not in line
+    assert f"scale {feedback.COST_SCALE}" in line
+    rendered = switch_review.format_report(
+        {
+            "review_days": 7,
+            "raise_count": 0,
+            "held_off": [],
+            "on_but_idle": [],
+            "unconditioned": [],
+            "mirror_drift": {"status": "ok"},
+            "adjudicator_shadow": line,
+        }
+    )
+    assert rendered.splitlines().count(line) == 1
 
 
 def test_no_eligible_pool_names_unmeasured_without_fabricating_free_cost(
@@ -112,6 +134,31 @@ def test_no_eligible_pool_names_unmeasured_without_fabricating_free_cost(
     assert result["summary"]["estimated_cost_usd"] is None
     assert "cost UNKNOWN" in retro.weekly_line(path)
     assert "imputed 0, unmeasured 1" in retro.weekly_line(path)
+
+
+@pytest.mark.parametrize(
+    "tokens_in,tokens_out,imputed", [(None, None, True), (0, 0, False), (0, None, False)]
+)
+def test_role_record_distinguishes_zero_usage_from_missing(
+    private_brain, tokens_in, tokens_out, imputed
+):
+    feedback.record_role_run(
+        "role-usage",
+        "adjudicator",
+        "o/r#1",
+        "gemini",
+        cost_tokens_in=tokens_in,
+        cost_tokens_out=tokens_out,
+    )
+    with sqlite3.connect(private_brain) as conn:
+        metadata = json.loads(
+            conn.execute(
+                "SELECT decomposition FROM runs WHERE run_id='role-usage'"
+            ).fetchone()[0]
+        )
+    assert metadata["imputed"] is imputed
+    assert metadata.get("cost_tokens_in") == tokens_in
+    assert metadata.get("cost_tokens_out") == tokens_out
 
 
 @pytest.mark.parametrize("source,unmeasured", [("langsmith", 0), ("ledger", 0), ("ccusage", 10)])
@@ -168,6 +215,18 @@ def test_invalid_token_counts_are_rejected_before_recording(private_brain, value
 
 
 @pytest.mark.parametrize(
+    "usage,expected",
+    [
+        (
+            {"input_tokens": 4000, "output_tokens": 200},
+            {"input_tokens": 4000, "output_tokens": 200},
+        ),
+        ({"input_tokens": 0, "output_tokens": 0}, {"input_tokens": 0, "output_tokens": 0}),
+        ({}, {}),
+        ({"input_tokens": None, "output_tokens": None}, {}),
+    ],
+)
+@pytest.mark.parametrize(
     "agent,event_type,argv",
     [
         ("cursor", "result", ["cursor-agent", "--output-format", "stream-json"]),
@@ -175,7 +234,7 @@ def test_invalid_token_counts_are_rejected_before_recording(private_brain, value
     ],
 )
 def test_offload_preserves_native_terminal_usage_before_result_reduction(
-    stores, monkeypatch, tmp_path, agent, event_type, argv
+    stores, monkeypatch, tmp_path, agent, event_type, argv, usage, expected
 ):
     monkeypatch.setattr(dispatcher.adapters, "build_command", lambda *a, **kw: argv)
     events = [
@@ -184,7 +243,7 @@ def test_offload_preserves_native_terminal_usage_before_result_reduction(
         {
             "type": event_type,
             "result": "done",
-            "usage": {"input_tokens": 4000, "output_tokens": 200},
+            "usage": usage,
         },
     ]
     if agent == "codex":
@@ -203,7 +262,7 @@ def test_offload_preserves_native_terminal_usage_before_result_reduction(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     result = dispatcher.offload(agent, "Review a bounded case", cwd=str(tmp_path))
-    assert result["usage"] == {"input_tokens": 4000, "output_tokens": 200}
+    assert result["usage"] == expected
     assert ("agent_message" in result["output"]) if agent == "codex" else result["output"] == "done"
 
 

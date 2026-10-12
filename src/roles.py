@@ -2902,8 +2902,8 @@ def run_adjudicator_agent(
             "model": backend_model,
             "cost_tokens_in": backend_usage.get("input_tokens"),
             "cost_tokens_out": backend_usage.get("output_tokens"),
-            "imputed": not bool(
-                backend_usage.get("input_tokens") or backend_usage.get("output_tokens")
+            "imputed": all(
+                backend_usage.get(key) is None for key in ("input_tokens", "output_tokens")
             ),
             "source": "retrospective" if retrospective_origin else source,
             "ts": int(time.time()),

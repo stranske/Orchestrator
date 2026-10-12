@@ -3716,7 +3716,11 @@ def record_role_run(
     metadata = {
         "cost_tokens_in": cost_tokens_in,
         "cost_tokens_out": cost_tokens_out,
-        "imputed": imputed if imputed is not None else not bool(cost_tokens_in or cost_tokens_out),
+        "imputed": (
+            imputed
+            if imputed is not None
+            else cost_tokens_in is None and cost_tokens_out is None
+        ),
         "cost_scale": COST_SCALE,
         "role": role_name,
         "backend_run_id": backend_run_id,
