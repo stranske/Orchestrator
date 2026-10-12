@@ -292,3 +292,49 @@ def test_role_target_kind_is_the_lifecycles_advisory_self(brain):
         assert (kind == "advisory_self") == (row["tally_class"] == "advisory_self"), row
     assert feedback.role_target_kind("offload", "triage") == "role_association"
     assert feedback.role_target_kind("offload", None) == ""
+
+
+# ---- the subject ---------------------------------------------------------------------------------
+
+
+def _local_attempt(n: int, issue: int, **outcome) -> str:
+    """A local run: its id is not `<kind>:<target>:<agent>`, so parsing it finds no issue."""
+    run = f"stranske__Repo_{issue}-gemini-{n}"
+    feedback.record_run(run, f"stranske/Repo#{issue}", "implement", "gemini", mode="local")
+    return _consumed_run(run, **outcome)
+
+
+def _consumed_run(run: str, cap_id: str = "deliberate-break-verifier", **outcome) -> str:
+    feedback.record_capability_consumption(
+        capability_id=cap_id,
+        capability_version_id=VERSIONS[cap_id],
+        source_run_id=f"capability-producer:{cap_id}:{run}",
+        target_run_id=run,
+        accepted=True,
+    )
+    if outcome:
+        feedback.record_outcome(run, **outcome)
+    return run
+
+
+def test_two_local_attempts_at_one_issue_are_one_subject(brain):
+    # The live case: agy-runtime-isolation's 0.8 rested on two attempts at Deliverable-Render#20
+    # counting as two of its five subjects.
+    _local_attempt(1, 20, **MERGED_DURABLE)
+    _local_attempt(2, 20, **MERGED_DURABLE)
+    arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+    assert (arm["terminal"], arm["terminal_subjects"], arm["durable_subjects"]) == (2, 1, 1), arm
+    assert arm["attempts_per_subject"] == 2.0, arm
+
+
+def test_this_reader_and_the_lifecycle_count_the_same_subjects(brain):
+    for n, issue in ((1, 20), (2, 20), (3, 21)):
+        _local_attempt(n, issue, **MERGED_DURABLE)
+    _consumed("remote:o/r#7:codex", **MERGED_DURABLE)
+    lifecycle = feedback.capability_causal_evidence(
+        "deliberate-break-verifier", VERSIONS["deliberate-break-verifier"]
+    )
+    durable = {r["subject_id"] for r in lifecycle if r["tally_class"] == "success"}
+    arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+    assert durable == {"stranske/Repo#20", "stranske/Repo#21", "o/r#7"}, durable
+    assert arm["durable_subjects"] == len(durable) == 3, arm

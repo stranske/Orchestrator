@@ -2313,6 +2313,22 @@ def outcome_is_durable_success(
     )
 
 
+def run_subject_id(routing_metadata, target, run_id) -> str:
+    """The work SUBJECT behind a run: what repeats when the same work is attempted again.
+
+    Run ids are per attempt, so counting them makes N retries of one stuck issue N observations.
+    The subject is an explicit `causal_context.subject_id` (top level or under `profile_decision`),
+    else a `subject_id` in the routing metadata, else `runs.target`, else the run id. Both readers
+    of capability edges key subjects with this. Until 2026-10-12 `capability_effectiveness` parsed
+    the run id instead, which never parsed a local run id (`stranske__Repo_20-gemini-<ns>`), so two
+    attempts at one issue counted as two subjects, and keyed `offload:<agent>:<ns>` by the agent."""
+    metadata = _routing_metadata_dict(routing_metadata)
+    causal_context = metadata.get("causal_context") or (
+        (metadata.get("profile_decision") or {}).get("causal_context") or {}
+    )
+    return str(causal_context.get("subject_id") or metadata.get("subject_id") or target or run_id)
+
+
 def role_target_kind(capability_id: str, target_role_name: str | None) -> str:
     """What a capability edge onto a ROLE run is: never evidence about the capability.
 
@@ -2369,15 +2385,8 @@ def capability_causal_evidence(
         ).fetchall()
         evidence: list[dict] = []
         for row in rows:
-            metadata = _routing_metadata_dict(row["routing_metadata"])
-            causal_context = metadata.get("causal_context") or (
-                (metadata.get("profile_decision") or {}).get("causal_context") or {}
-            )
-            subject_id = str(
-                causal_context.get("subject_id")
-                or metadata.get("subject_id")
-                or row["target"]
-                or row["target_run_id"]
+            subject_id = run_subject_id(
+                row["routing_metadata"], row["target"], row["target_run_id"]
             )
             attempts = [
                 item[0]
