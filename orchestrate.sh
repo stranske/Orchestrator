@@ -719,7 +719,9 @@ if _cadence_due switch-review && _attempt_ok switch-review; then
   echo "  [cadence] switch review (weekly; held + on-but-idle switches)"
   # Process mode: this process's environment IS the tick's, exported above. Without it the review
   # resolves each switch as a reader outside the tick must, by executing this prologue again in bash.
-  switch_args=(--json --env process)
+  # Also the readable report, which a capability verdict cites (CLAUDE.md §6). With the JSON alone
+  # format_report never ran here, so the value-chain section reached no reader (2026-10-12).
+  switch_args=(--json --env process --text-out "$STAMP_DIR/switch-review.md")
   [ "${ORCH_SWITCH_REVIEW:-}" = "1" ] && switch_args+=(--raise)
   if python3 "$ORCH/switch_review.py" "${switch_args[@]}" \
        > "$STAMP_DIR/switch-review.json" 2>> "$STAMP_DIR/switch-review.log"; then

@@ -12,7 +12,7 @@ THE RULE THIS PINS. `_brain` replaces the edge's copied columns with the outcome
 report is made, and each acted-on edge is classified by `capability_effectiveness._classify`, the
 one classifier of these edges, from `feedback`'s predicates (#540). Only a terminal outcome is the
 `outcome` step. An acted-on run whose class is in `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES` is
-counted in `outcome_excluded`; an edge onto a role run in `outcome_associations`; a merge the sweep
+counted in `outcome_excluded`; an edge onto a role run in `acted_on_associations`; a merge the sweep
 has not judged, an unmerged run nothing will judge, and a run with no outcome yet each in its own
 field. `no_outcome` only while something can still resolve: when every evidence edge is excluded
 the break is `outcome_excluded`, and when nothing can ever be scored `outcome_unscoreable`. An
@@ -38,6 +38,7 @@ import pytest
 import adversarial
 import capabilities
 import feedback
+import paths
 import switch_review
 import value_chain_monitor as monitor
 
@@ -157,7 +158,8 @@ def test_an_outcome_outside_the_set_is_still_scored(brain, failure_class):
         durability="broke_later",
         failure_class=failure_class,
     )
-    assert _steps(_row(brain)) == (1, 1, 0, "works")
+    # Scored, and a failure: an outcome, never a success.
+    assert _steps(_row(brain)) == (1, 1, 0, "no_success")
 
 
 def test_the_one_set_is_read_when_the_report_is_made(brain, monkeypatch):
@@ -194,7 +196,7 @@ def test_a_relabel_the_edge_never_saw_is_read_from_the_outcome(brain):
 
 def test_mark_transient_infra_is_read_without_refreshing_the_edge(brain):
     run = _consumed(1, adjudicated_verdict="FAIL", merged=0, durability="reopened")
-    assert _steps(_row(brain)) == (1, 1, 0, "works")
+    assert _steps(_row(brain)) == (1, 1, 0, "no_success")
     assert feedback.mark_transient_infra(run, "agent killed by signal")
     assert _edge(run) == ("FAIL", "reopened"), "the writer updates `outcomes` alone"
     assert _steps(_row(brain)) == (1, 0, 1, "outcome_excluded")
@@ -258,7 +260,7 @@ def test_an_unread_outcome_table_is_unmeasured_never_the_edge_copy(brain, tmp_pa
     assert _steps(row) == (None, None, None, None), row
     assert any("Brain evidence unavailable" in e for e in section["errors"])
     text = "\n".join(monitor.format_lines(section))
-    assert "outcome None; first_break unmeasured" in text
+    assert "outcome None; success None; first_break unmeasured" in text
     assert "(+" not in text and "`excl`" not in text
 
 
@@ -277,9 +279,9 @@ def test_the_report_prints_the_excluded_count_and_writes_nothing(brain):
     assert hashlib.sha256(feedback.DB_PATH.read_bytes()).hexdigest() == before
     assert brain.read_bytes() == ledger_before
     triage = next(line for line in lines if line.startswith(f"  {CAP}:"))
-    assert "outcome 0 (+1 excl); first_break outcome_excluded" in triage, triage
+    assert "outcome 0 (+1 excl); success 0; first_break outcome_excluded" in triage, triage
     offload = next(line for line in lines if line.startswith("  offload:"))
-    assert "outcome 1; first_break works" in offload, offload
+    assert "outcome 1; success 1; first_break works" in offload, offload
     assert sum("LEARNING_EXCLUDED_FAILURE_CLASSES" in line for line in lines) == 1
     assert sum(line.startswith("  `") for line in lines) == 1, "one legend line per label shown"
     # Nothing set aside anywhere: no count and no legend.
@@ -327,7 +329,7 @@ def test_the_weekly_consumer_carries_the_count(brain, monkeypatch):
     row = next(r for r in rep["value_chain"]["rows"] if r["capability"] == CAP)
     assert _steps(row) == (1, 0, 1, "outcome_excluded"), row
     text = switch_review.format_report(rep)
-    assert "outcome 0 (+1 excl); first_break outcome_excluded" in text
+    assert "outcome 0 (+1 excl); success 0; first_break outcome_excluded" in text
 
 
 # ---- the one classifier: #540's predicates, never a second copy ------------------------------
@@ -342,19 +344,21 @@ def test_a_role_runs_copied_outcome_is_an_association_never_a_second_outcome(bra
     assert copied == ("durable",)
     for cap_id in (CAP, "offload"):  # advisory_self and role_association
         row = _row(brain, cap_id)
-        assert _steps(row) == (2, 1, 0, "works"), (cap_id, row)
-        assert row["outcome_associations"] == 1, (cap_id, row)
+        # The role run's edge is set aside at `acted_on`: one delivery, acted on once.
+        assert _steps(row) == (1, 1, 0, "works"), (cap_id, row)
+        assert row["acted_on_associations"] == 1, (cap_id, row)
 
 
-def test_a_capability_only_on_role_runs_is_unscoreable_not_awaiting(brain):
-    # role-redirect: its role runs are recorded, and no run is ever joined to their advice.
+def test_a_capability_only_on_role_runs_was_never_acted_on(brain):
+    # role-redirect: its role runs are recorded, and no run is ever joined to their advice. Its
+    # first break is the one #540 named: nothing records which run acted on a redirect proposal.
     for n in range(1, 4):
         feedback.record_role_run(f"role:redirect:cursor:{n}", "redirect", f"o/r#{n}", "cursor")
     row = _row(brain, "role-redirect")
-    assert _steps(row) == (3, 0, 0, "outcome_unscoreable"), row
-    assert row["outcome_associations"] == 3, row
+    assert _steps(row) == (0, 0, 0, "not_acted_on"), row
+    assert row["acted_on_associations"] == 3, row
     line = next(x for x in monitor.format_lines(_section(brain)) if "role-redirect:" in x)
-    assert "outcome 0 (+3 assoc); first_break outcome_unscoreable" in line, line
+    assert "acted_on 0 (+3 assoc); outcome 0; success 0; first_break not_acted_on" in line, line
 
 
 def test_awaiting_the_sweep_waits_and_unresolvable_does_not(brain):
@@ -371,7 +375,7 @@ def test_a_failure_is_terminal_whatever_its_durability(brain):
     # under an adjudicated PASS. The monitor's own sets counted neither until #540's predicates.
     _consumed(1, adjudicated_verdict="FAIL", merged=0, durability="pending")
     _consumed(2, adjudicated_verdict="PASS", verifier_verdict="NON_PASS", merged=1)
-    assert _steps(_row(brain)) == (2, 2, 0, "works")
+    assert _steps(_row(brain)) == (2, 2, 0, "no_success")
 
 
 def test_the_monitor_classifies_with_the_one_classifier(brain, monkeypatch):
@@ -383,3 +387,77 @@ def test_the_monitor_classifies_with_the_one_classifier(brain, monkeypatch):
     monkeypatch.setattr(capability_effectiveness, "_classify", lambda edge: "unresolvable")
     row = _row(brain)
     assert (row["outcome"], row["outcome_unresolvable"]) == (0, 1), row
+
+
+# ---- `works` needs a durable success; the readable report reaches a reader (2026-10-12) ---------
+
+
+def test_works_needs_a_durable_success(brain):
+    # Owner decision 2026-10-12: a terminal outcome is not yet value. The success is the
+    # lifecycle's predicate, so a merge the fleet verifier marked NON_PASS is not one.
+    _consumed(1, adjudicated_verdict="FAIL", merged=0, durability="abandoned")
+    _consumed(
+        2, adjudicated_verdict="PASS", verifier_verdict="NON_PASS", merged=1, durability="durable"
+    )
+    row = _row(brain)
+    assert (_steps(row), row["outcome_success"]) == ((2, 2, 0, "no_success"), 0), row
+    _consumed(3, adjudicated_verdict="PASS", merged=1, durability="durable")
+    row = _row(brain)
+    assert (_steps(row), row["outcome_success"]) == ((3, 3, 0, "works"), 1), row
+
+
+def _weekly_stubs(monkeypatch):
+    monkeypatch.setenv("ORCH_CREDENTIAL_EXPOSURE_SCAN", "0")
+    monkeypatch.setenv(
+        "ORCH_DISABLE_STEPS", os.environ.get("ORCH_DISABLE_STEPS", "") + ",issue-size-quality"
+    )
+    monkeypatch.setattr(adversarial, "record_shape_measurement", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        switch_review,
+        "adversarial_shape_population",
+        lambda **kw: {"status": "unknown", "reason": "unit-test fixture"},
+    )
+    for name, value in (
+        ("switch_states", lambda **kw: {"held_off": [], "on_but_idle": []}),
+        ("stale_runners", lambda: []),
+        ("mirror_drift", lambda: {"status": "ok"}),
+        ("fleet_gates", lambda **kw: {}),
+        ("_exploration_gate", lambda: {}),
+        ("gate_expiry", lambda **kw: {}),
+    ):
+        monkeypatch.setattr(switch_review, name, value)
+
+
+def test_the_tick_writes_the_readable_report_a_verdict_cites(brain, monkeypatch, tmp_path, capsys):
+    """THE DEFECT: the tick ran `switch_review.py --json` alone, so `format_report`, the value-chain
+    section's declared consumer, never ran in production and the section reached no reader."""
+    _consumed(1, adjudicated_verdict="PASS", merged=1, durability="durable")
+    _weekly_stubs(monkeypatch)
+    monkeypatch.setenv("ORCH_VALUE_CHAIN_MONITOR", "1")
+    monkeypatch.setattr(capabilities, "REG", brain)
+    monkeypatch.setattr(
+        monitor,
+        "collect_inputs",
+        lambda **kw: {**monitor._brain(feedback.DB_PATH, 0, NOW), "fleet_issues": [OPEN_ISSUE]},
+    )
+    out = tmp_path / "switch-review.md"
+    argv = ["--json", "--env", "process", "--text-out", str(out)]
+    assert switch_review.main(argv) == 0
+    assert json.loads(capsys.readouterr().out)["value_chain"]["rows"], "the JSON is unchanged"
+    text = out.read_text(encoding="utf-8")
+    assert "## Capability value chain" in text
+    assert f"  {CAP}: demand 1;" in text and "success 1; first_break works" in text, text
+    assert not list(tmp_path.glob("*.tmp")), "the report is moved into place whole"
+    # A report that cannot be written fails the step loudly; the JSON is still printed.
+    assert switch_review.main([*argv[:-1], str(tmp_path / "no-such-dir" / "x.md")]) == 1
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) and "could not write" in captured.err
+
+
+def test_orchestrate_sh_writes_the_readable_switch_review():
+    """The wiring. ONE site, so a second cannot hide its removal."""
+    text = paths.orchestrate_sh().read_text(encoding="utf-8")
+    needle = "--text-" + "out"
+    assert text.count(needle) == 1, (needle, text.count(needle))
+    line = next(ln for ln in text.splitlines() if needle in ln)
+    assert line.strip().startswith("switch_args=(") and "switch-review.md" in line, line
