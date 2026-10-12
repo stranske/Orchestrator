@@ -39,6 +39,8 @@ CANDIDATE_BODY = "synthesis-delivery-candidate.md"
 DEFAULT_TTL_DAYS = 14
 DEFAULT_CANDIDATE_TTL_DAYS = 7
 DEFAULT_MAX_RETRIES = 3
+DELIVERY_SEARCH_PAGE_SIZE = 100
+DELIVERY_SEARCH_MAX_RESULTS = 1000  # GitHub's REST search result ceiling, not a uniqueness limit.
 FOLLOWUP_SHIP_GATE_ENV = "ORCH_FOLLOWUP_SHIP_GATE"
 LIVE_RECONCILE_GATE_REFUSAL = (
     "refusing --live reconcile: ORCH_FOLLOWUP_SHIP_GATE is disabled; "
@@ -909,29 +911,91 @@ def _gh_json(argv: list[str], timeout: int = 60) -> Any:
 
 
 def _prs_naming(repo: str, candidate_id: str, gh_fn: Callable[[list[str]], Any]) -> list[int]:
-    """Every PR in `repo` whose body names `candidate_id`, read over REST.
+    """Return current marker matches only after every search page is accounted for.
 
-    Search is only the index: GitHub ranks by relevance and tokenises the id, so each hit is
-    re-read and kept only when its body carries the exact id."""
-    found = gh_fn(
-        [
-            "gh",
-            "api",
-            "-X",
-            "GET",
-            "search/issues",
-            "-f",
-            f'q=repo:{repo} is:pr "{candidate_id}"',
-            "-f",
-            "per_page=100",
-        ]
-    )
-    numbers = []
-    for item in (found or {}).get("items") or []:
-        number = item.get("number")
-        if isinstance(number, int) and candidate_id in str(item.get("body") or ""):
-            numbers.append(number)
-    return sorted(set(numbers))
+    Search supplies candidates, not authoritative bodies. Require explicit completeness
+    metadata, a stable total within GitHub's 1,000-result ceiling, full pages and distinct PR
+    identities; otherwise the caller reports unavailable and retries on the next followup.
+    GitHub does not supply an atomic snapshot, so detected pagination drift fails closed.
+
+    Marker matching is case-sensitive. Word characters (including Unicode), colon, period,
+    slash, plus and hyphen extend an identifier on either side. Whitespace, backticks,
+    parentheses and commas delimit it; quoting the candidate avoids punctuation ambiguity.
+    """
+    total: int | None = None
+    numbers: set[int] = set()
+    page = 1
+    repo_url = f"https://api.github.com/repos/{repo}".lower()
+    while True:
+        found = gh_fn(
+            [
+                "gh",
+                "api",
+                "-X",
+                "GET",
+                "search/issues",
+                "-f",
+                f'q=repo:{repo} is:pr in:body "{candidate_id}"',
+                "-f",
+                f"per_page={DELIVERY_SEARCH_PAGE_SIZE}",
+                "-f",
+                f"page={page}",
+                "-f",
+                "sort=created",
+                "-f",
+                "order=asc",
+            ]
+        )
+        if not isinstance(found, dict) or found.get("incomplete_results") is not False:
+            raise RuntimeError("delivery search completeness is unavailable")
+        count = found.get("total_count")
+        if type(count) is not int or not 0 <= count <= DELIVERY_SEARCH_MAX_RESULTS:
+            raise RuntimeError(
+                "delivery search total is missing, invalid or exceeds the safe bound"
+            )
+        if total is not None and count != total:
+            raise RuntimeError("delivery search total changed during pagination")
+        total = count
+        items = found.get("items")
+        expected = min(DELIVERY_SEARCH_PAGE_SIZE, total - len(numbers))
+        if not isinstance(items, list) or len(items) != expected:
+            raise RuntimeError("delivery search page is missing or truncated")
+        for item in items:
+            if not isinstance(item, dict):
+                raise RuntimeError("delivery search returned an unreadable candidate")
+            number = item.get("number")
+            identity = item.get("pull_request")
+            if (
+                type(number) is not int
+                or number <= 0
+                or not isinstance(identity, dict)
+                or str(identity.get("url") or "").lower() != f"{repo_url}/pulls/{number}"
+                or number in numbers
+            ):
+                raise RuntimeError("delivery search returned a mismatched or repeated PR identity")
+            numbers.add(number)
+        if len(numbers) == total:
+            break
+        page += 1
+
+    marker = re.compile(r"(?<![\w:./+-])" + re.escape(candidate_id) + r"(?![\w:./+-])")
+    matches = []
+    for number in sorted(numbers):
+        current = gh_fn(["gh", "api", f"repos/{repo}/pulls/{number}"])
+        if (
+            not isinstance(current, dict)
+            or type(current.get("number")) is not int
+            or current["number"] != number
+            or str(current.get("url") or "").lower() != f"{repo_url}/pulls/{number}"
+            or str(((current.get("base") or {}).get("repo") or {}).get("full_name") or "").lower()
+            != repo.lower()
+            or "body" not in current
+            or (current["body"] is not None and not isinstance(current["body"], str))
+        ):
+            raise RuntimeError("delivery current PR identity or body is unavailable")
+        if marker.search(current["body"] or ""):
+            matches.append(number)
+    return matches
 
 
 def default_delivery_discovery(

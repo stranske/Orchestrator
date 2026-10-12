@@ -1,0 +1,31 @@
+{
+  "baseline_commit": "9ade53b2252dd89b14c527db2050030183cdb166",
+  "files": {
+    "src/synthesis_promotion.py": {
+      "original_sha256": "c8a3dd8c338eb2cac8a6c264772cf443323a552d620ed4bbe300bfb28f9d3e06",
+      "corrected_sha256": "513e14a2055619e1fc5c3699cff6b469ceae90e177fbf0986895c5784624c024",
+      "unchanged": false
+    },
+    "tests/test_synthesis_delivery_discovery.py": {
+      "original_sha256": "2212af14244ad6643d66b5c9e10bfba258b173e0b1f15820e0a7f55e51949fb3",
+      "corrected_sha256": "4bcdb17e46def5160bcddc407d75789a4ae7c27dcca6690017df775929fb919d",
+      "unchanged": false
+    },
+    ".verify-floor.json": {
+      "original_sha256": "bb759be415a8c33da3e9bbb2fbc489882007cc9b44efb861610ca06649386b32",
+      "corrected_sha256": "bb759be415a8c33da3e9bbb2fbc489882007cc9b44efb861610ca06649386b32",
+      "unchanged": true
+    },
+    "pyproject.toml": {
+      "original_sha256": "c863c0b169e759f20d763ed13a0a32fa39b6e07a77d0839b42baa06b562e5cb2",
+      "corrected_sha256": "c863c0b169e759f20d763ed13a0a32fa39b6e07a77d0839b42baa06b562e5cb2",
+      "unchanged": true
+    },
+    "ruff.toml": {
+      "original_sha256": "4e5f88fbb7465e9f20aa115acaa7e1c21f0fa03321ee03834d934559db42b451",
+      "corrected_sha256": "4e5f88fbb7465e9f20aa115acaa7e1c21f0fa03321ee03834d934559db42b451",
+      "unchanged": true
+    }
+  },
+  "uncompressed_red_log_sha256": "6c6c761d9abe4889729e2ab3801c3bf34a9b0e1e964329af3a19b1f32c796b1c"
+}
