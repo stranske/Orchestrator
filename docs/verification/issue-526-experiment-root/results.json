@@ -1,0 +1,35 @@
+{
+  "runs": [
+    {
+      "phase": "red",
+      "command": [
+        "python3",
+        "-m",
+        "pytest",
+        "tests/test_strategy_experiment_subject.py",
+        "-k",
+        "test_strategy_experiment_directory_lands_in_followup_exp_dir",
+        "-q",
+        "--junitxml=/Users/teacher/.codex/automations/pd-workloop-resume/evidence/20261012T0403Z/526-proof/red.xml"
+      ],
+      "exit": 1,
+      "source_sha256": "aadffdeaeea61dcbd3e5c1465a3c3ff012b8e1ba74aaf3608b2a559acf88a224"
+    },
+    {
+      "phase": "green",
+      "command": [
+        "python3",
+        "-m",
+        "pytest",
+        "tests/test_strategy_experiment_subject.py",
+        "-q",
+        "--junitxml=/Users/teacher/.codex/automations/pd-workloop-resume/evidence/20261012T0403Z/526-proof/green.xml"
+      ],
+      "exit": 0,
+      "source_sha256": "580f778a9c2790aa2e62f52eb9bbd3c72079fc426f3c1aa3034648788d88ccda"
+    }
+  ],
+  "byte_identical_restoration": true,
+  "production_source_sha256": "580f778a9c2790aa2e62f52eb9bbd3c72079fc426f3c1aa3034648788d88ccda",
+  "mutant_sha256": "aadffdeaeea61dcbd3e5c1465a3c3ff012b8e1ba74aaf3608b2a559acf88a224"
+}

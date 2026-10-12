@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import runpy
 import shlex
 import subprocess
 import time
@@ -70,6 +71,80 @@ def subject_harness(tmp_path, monkeypatch):
 
     monkeypatch.setattr(exp_abcd, "_spawn", spawn)
     return spawned
+
+
+@pytest.mark.parametrize("layout", ["flat", "src"])
+@pytest.mark.parametrize("shared_override", [False, True])
+def test_experiment_directory_resolution_matches_checkout_and_shared_tick_store(
+    tmp_path, monkeypatch, layout, shared_override
+):
+    """Execute the real module initializer in both deployed directory shapes."""
+    checkout = tmp_path / "alternate-checkout"
+    modules = checkout / "src" if layout == "src" else checkout
+    modules.mkdir(parents=True)
+    module = modules / "exp_abcd.py"
+    module.write_bytes(Path(exp_abcd.__file__).read_bytes())
+    caller = tmp_path / "automation-runner"
+    caller.mkdir()
+    monkeypatch.chdir(caller)
+    monkeypatch.delenv("ORCH_EXP_DIR", raising=False)
+    expected = checkout / "experiments"
+    if shared_override:
+        expected = tmp_path / "tick-store" / "experiments"
+        monkeypatch.setenv("ORCH_EXP_DIR", str(expected))
+    loaded = runpy.run_path(str(module))
+    assert loaded["EXP_DIR"] == expected
+    assert loaded["exp_paths"]("subject-location") == expected / "subject-location"
+
+
+def test_strategy_experiment_directory_lands_in_followup_exp_dir(
+    tmp_path, subject_harness, monkeypatch
+):
+    """An automation checkout and a flat tick mirror use the same explicit store."""
+    caller = tmp_path / "disconnected-checkout"
+    caller.mkdir()
+    monkeypatch.chdir(caller)
+    shared_store = tmp_path / "tick-store" / "experiments"
+    monkeypatch.setenv("ORCH_EXP_DIR", str(shared_store))
+    roots = []
+    for modules in (caller / "src", tmp_path / "tick-mirror"):
+        modules.mkdir()
+        module = modules / "exp_abcd.py"
+        module.write_bytes(Path(exp_abcd.__file__).read_bytes())
+        loaded = runpy.run_path(str(module))
+        assert loaded["EXP_DIR"] == shared_store
+        roots.append(loaded["EXP_DIR"])
+    # Use each independently initialized process root at its lifecycle boundary.
+    monkeypatch.setattr(exp_abcd, "EXP_DIR", roots[0])
+    subject = {
+        "target": "o/r#44",
+        "repo": "o/r",
+        "body": "## Acceptance Criteria\nKeep the experiment visible to followup.",
+        "shape": "tests|verify:compare|tests",
+        "broke_later_rate": 0.33,
+    }
+    prepared = strategy_experiment.prepare_subject_experiment(
+        subject,
+        exp_id="subject-location",
+        agent="codex",
+        reviewer="claude",
+        claim_fn=lambda target, agent: True,
+    )
+    edir = shared_store / "subject-location"
+    assert Path(prepared["metadata_written"]) == edir / "strategy.json"
+    assert (edir / "spec.md").read_text() == subject["body"]
+    assert (edir / "meta.json").is_file()
+    assert not (caller / "experiments").exists()
+    assert not (caller / "src" / "experiments").exists()
+    assert not (tmp_path / "tick-mirror" / "experiments").exists()
+    monkeypatch.setattr(exp_abcd, "EXP_DIR", roots[1])
+    monkeypatch.setenv("ORCH_RESEARCH_ARM", "1")
+    monkeypatch.setattr(exp_abcd.capabilities, "production_heartbeat", lambda *a, **kw: None)
+    result = exp_abcd.followup(subject_lifecycle_fn=lambda *a, **kw: None)
+    assert [(row["exp_id"], row["reason"]) for row in result["skipped"]] == [
+        ("subject-location", "pair-review-pending")
+    ]
+    assert len(subject_harness) == 9  # Real followup found and prepared all three reviewers.
 
 
 def test_subject_path_freezes_the_spec_and_prepares_two_strategy_arms_with_three_instances(
