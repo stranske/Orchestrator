@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="1.020" timestamp="2026-10-11T23:13:05.665017-05:00" hostname="server.trs.private"><testcase classname="tests.test_strategy_experiment_subject" name="test_strategy_experiment_directory_lands_in_followup_exp_dir" time="0.883"><failure message="AssertionError: assert PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-906/test_strategy_experiment_direc0/disconnected-checkout/experiments/subject-location/strategy.json') == (PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-906/test_strategy_experiment_direc0/experiments/subject-location') / 'strategy.json')&#10; +  where PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-906/test_strategy_experiment_direc0/disconnected-checkout/experiments/subject-location/strategy.json') = Path('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-906/test_strategy_experiment_direc0/disconnected-checkout/experiments/subject-location/strategy.json')">tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-906/test_strategy_experiment_direc0')
+subject_harness = [{'agent': 'codex', 'worktree': PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/... experiment visible to followup.', 'run_id': 'subject-location:member:arm-06-pair-codex-claude--member-01-codex', ...}]
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x122a03980&gt;
+
+    def test_strategy_experiment_directory_lands_in_followup_exp_dir(
+        tmp_path, subject_harness, monkeypatch
+    ):
+        """Real preparation and followup agree despite an unrelated caller cwd."""
+        caller = tmp_path / "disconnected-checkout"
+        caller.mkdir()
+        monkeypatch.chdir(caller)
+        subject = {
+            "target": "o/r#44",
+            "repo": "o/r",
+            "body": "## Acceptance Criteria\nKeep the experiment visible to followup.",
+            "shape": "tests|verify:compare|tests",
+            "broke_later_rate": 0.33,
+        }
+        prepared = strategy_experiment.prepare_subject_experiment(
+            subject,
+            exp_id="subject-location",
+            agent="codex",
+            reviewer="claude",
+            claim_fn=lambda target, agent: True,
+        )
+        edir = exp_abcd.exp_paths("subject-location")
+&gt;       assert Path(prepared["metadata_written"]) == edir / "strategy.json"
+E       AssertionError: assert PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-906/test_strategy_experiment_direc0/disconnected-checkout/experiments/subject-location/strategy.json') == (PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-906/test_strategy_experiment_direc0/experiments/subject-location') / 'strategy.json')
+E        +  where PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-906/test_strategy_experiment_direc0/disconnected-checkout/experiments/subject-location/strategy.json') = Path('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-906/test_strategy_experiment_direc0/disconnected-checkout/experiments/subject-location/strategy.json')
+
+/Users/teacher/.codex/automations/pd-workloop-resume/worktrees/orch526-shared-experiments-20261012/tests/test_strategy_experiment_subject.py:122: AssertionError</failure></testcase></testsuite></testsuites>

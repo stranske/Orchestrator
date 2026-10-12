@@ -1,0 +1,35 @@
+.F...                                                                    [100%]
+=================================== FAILURES ===================================
+_ test_experiment_directory_resolution_matches_checkout_and_shared_tick_store[False-src] _
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-905/test_experiment_directory_reso1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107aa8860>
+layout = 'src', shared_override = False
+
+    @pytest.mark.parametrize("layout", ["flat", "src"])
+    @pytest.mark.parametrize("shared_override", [False, True])
+    def test_experiment_directory_resolution_matches_checkout_and_shared_tick_store(
+        tmp_path, monkeypatch, layout, shared_override
+    ):
+        """Execute the real module initializer in both deployed directory shapes."""
+        checkout = tmp_path / "alternate-checkout"
+        modules = checkout / "src" if layout == "src" else checkout
+        modules.mkdir(parents=True)
+        module = modules / "exp_abcd.py"
+        module.write_bytes(Path(exp_abcd.__file__).read_bytes())
+        caller = tmp_path / "automation-runner"
+        caller.mkdir()
+        monkeypatch.chdir(caller)
+        monkeypatch.delenv("ORCH_EXP_DIR", raising=False)
+        expected = checkout / "experiments"
+        if shared_override:
+            expected = tmp_path / "tick-store" / "experiments"
+            monkeypatch.setenv("ORCH_EXP_DIR", str(expected))
+        loaded = runpy.run_path(str(module))
+>       assert loaded["EXP_DIR"] == expected
+E       AssertionError: assert PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-905/test_experiment_directory_reso1/alternate-checkout/src/experiments') == PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-905/test_experiment_directory_reso1/alternate-checkout/experiments')
+
+/Users/teacher/.codex/automations/pd-workloop-resume/worktrees/orch526-shared-experiments-20261012/tests/test_strategy_experiment_subject.py:96: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_strategy_experiment_subject.py::test_experiment_directory_resolution_matches_checkout_and_shared_tick_store[False-src]
+1 failed, 4 passed, 4 deselected in 1.83s
