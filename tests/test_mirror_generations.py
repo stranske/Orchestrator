@@ -689,10 +689,13 @@ installer.install(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
         pinned = self.mirror.resolve()
 
         def imported_value(root):
+            # This test is about bytecode caches, so the child must write them whatever the
+            # parent exports (Claude Code shells set PYTHONDONTWRITEBYTECODE=1).
+            env = {k: v for k, v in os.environ.items() if k != "PYTHONDONTWRITEBYTECODE"}
             result = subprocess.run(
                 [sys.executable, "-c", "import module; print(module.VALUE)"],
                 cwd=self.root,
-                env=dict(os.environ, PYTHONPATH=str(root)),
+                env=dict(env, PYTHONPATH=str(root)),
                 capture_output=True,
                 text=True,
                 check=True,

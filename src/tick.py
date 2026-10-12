@@ -1110,6 +1110,34 @@ def _selftest():
         feedback.DB_PATH = old_feedback_db
 
 
+# THE ONE STALENESS HORIZON for the backlog a tick plans from. Discovery (`backlog.py --live`) runs
+# only when ORCH_DISPATCH_LANE=1, so a shadow lane plans from whatever it last wrote: until 2026-10-06
+# that was a 2026-09-18 snapshot, planned from hourly for 17 days with nothing on the line saying so.
+# The line marks the age STALE past this; it gates nothing (a mark, never a block).
+BACKLOG_STALE_AFTER_SECONDS = 2 * 86400
+
+
+def backlog_age(now: float | None = None) -> dict:
+    """The plan's record of the backlog it planned from. `age_seconds` is None when the backlog
+    carries no readable `generated_at`: unknown, never zero."""
+    stamp = router.backlog_generated_at()
+    now = time.time() if now is None else now
+    return {
+        "generated_at": stamp,
+        "age_seconds": None if stamp is None else max(0, int(now - stamp)),
+        "stale_after_seconds": BACKLOG_STALE_AFTER_SECONDS,
+    }
+
+
+def _backlog_age_text(info: Any) -> str:
+    age = info.get("age_seconds") if isinstance(info, Mapping) else None
+    if not isinstance(age, (int, float)) or isinstance(age, bool):
+        return "backlog age ?"
+    text = f"backlog age {age / 86400:.1f}d"
+    limit = info.get("stale_after_seconds", BACKLOG_STALE_AFTER_SECONDS)
+    return text + (f" STALE (>{limit / 86400:g}d)" if age > limit else "")
+
+
 def plan_headline(out: Mapping[str, Any], artifact: Any, *, lane_live: bool) -> str:
     """The one TICK-PLAN line. Each bound prints beside the count it bounds, as the plan carries
     them (`delegations`/`cap`, `examined`/`examine_cap`), and the deferred items print their blocking
@@ -1147,7 +1175,8 @@ def plan_headline(out: Mapping[str, Any], artifact: Any, *, lane_live: bool) -> 
         f"{len(out.get('no_capacity') or [])} no capacity, "
         f"{len(out.get('blocked') or [])} blocked; "
         f"deferred {len(out.get('deferred') or [])} (delegable {n(deferral.get('delegable'))}, "
-        f"drainable {n(deferral.get('drainable'))}) -> {artifact}"
+        f"drainable {n(deferral.get('drainable'))}); "
+        f"{_backlog_age_text(out.get('backlog'))} -> {artifact}"
     )
 
 
@@ -1179,6 +1208,7 @@ def main(argv):
         dry_run=not lane_live,
         ingest_dry_run=not active,
     )
+    out["backlog"] = backlog_age()
     if "--summary" in argv:
         state_dir = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex/orchestrator"))
         artifact = state_dir / "tick-plan.json"

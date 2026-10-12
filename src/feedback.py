@@ -2203,6 +2203,17 @@ UNATTRIBUTED_DELEGATION = "unattributed_delegation"
 # carrier is its FAIL; this class is what remains, terminal and scored by no learner.
 UNATTRIBUTED_REPLACEMENT = "unattributed_replacement"
 
+# What outcome ingest writes when a KEEPALIVE run's own PR closed unmerged and a PR linked to its
+# issue carries the closed PR's head commit (`outcomes.judge_keepalive_replacement`): merged after it
+# opened (the opener lane's rehome), merged before it opened (a duplicate of delivered work), or
+# still open. A keepalive run IS its PR, and the carrier is recorded as its own keepalive run, so the
+# work's verdict is that run's: a PASS here would count one delivery twice, and the FAIL written
+# until 2026-10-11 counted it as a failure. Measured that day: 16 of the 99 named-agent keepalive
+# FAILs of the 90 days were such PRs (14 rehomes, 2 duplicates), and every carrier with a Brain row
+# had its own PASS. Terminal, no verdict, scored by no learner. The merge state stays False: the PR
+# itself did not merge.
+CARRIED_BY_OTHER_PR = "carried_by_other_pr"
+
 # What the durability sweep writes for a merged outcome whose merge it cannot identify as THIS run's
 # (`durability_sweep.find_merge`): no merge on the run's own branch, several, one that landed before
 # the run started, or no repository target at all. Whether such a merge HELD can never be judged, so
@@ -2225,7 +2236,8 @@ BROKE_LATER_UNCHECKED = "broke_later_unchecked"
 # the environment killed the run (`transient_infra`, from `mark_transient_infra`), the target
 # closed through a PR the run cannot be shown to have produced, a delegation's PR settled without
 # the delegated agent's work on it, a closed PR's replacement cannot be told apart
-# (`UNATTRIBUTED_REPLACEMENT`), the merge a row recorded cannot be identified as the run's
+# (`UNATTRIBUTED_REPLACEMENT`), a keepalive PR's work is carried by another PR whose own run holds
+# its verdict (`CARRIED_BY_OTHER_PR`), the merge a row recorded cannot be identified as the run's
 # own (`UNJUDGEABLE_MERGE`), or no fix-PR read reached it (`BROKE_LATER_UNCHECKED`). ONE set:
 # relearn's SQL reads it, relearn_quality and
 # exploration_review read it through `_has_outcome_evidence`, and the capability tally reads it
@@ -2239,6 +2251,7 @@ LEARNING_EXCLUDED_FAILURE_CLASSES = frozenset(
         UNATTRIBUTED_CLOSING_PR,
         UNATTRIBUTED_DELEGATION,
         UNATTRIBUTED_REPLACEMENT,
+        CARRIED_BY_OTHER_PR,
         UNJUDGEABLE_MERGE,
         BROKE_LATER_UNCHECKED,
     }
@@ -2259,6 +2272,69 @@ CAPABILITY_REGRESSION_DURABILITY = {
     "broke_later",
     "abandoned",
 }
+
+
+# WHAT AN OUTCOME ROW SAYS, DEFINED ONCE. `capability_causal_evidence` (the lifecycle's tally) and
+# `capability_effectiveness` (the accepted-vs-counterfactual comparison) read the same edges and the
+# same `outcomes` rows, and until 2026-10-11 each wrote its own predicates. They disagreed on two
+# populations of one Brain: a merge still awaiting the durability sweep (PASS/pending) was terminal
+# and non-durable in the second and not terminal in the first, and a merge the fleet verifier
+# marked NON_PASS was a durable success in the second and a failure in the first. Both take these.
+def _outcome_present(*, verifier_verdict, adjudicated_verdict, merged, durability) -> bool:
+    return any(v is not None for v in (verifier_verdict, adjudicated_verdict, merged, durability))
+
+
+def outcome_is_terminal(*, verifier_verdict, adjudicated_verdict, merged, durability) -> bool:
+    """The outcome will not change: a judged durability, or a failure verdict.
+
+    A merge stays `pending` until `durability_sweep` judges it, so PASS/pending is NOT terminal: read
+    as one, every merge still in the sweep's grace window counts as a non-durable result. A FAIL is
+    final whatever the durability, and so is a verifier failure under an adjudicated PASS."""
+    d = str(durability or "").lower() or None
+    verdict = str(adjudicated_verdict or verifier_verdict or "").upper()
+    return _outcome_present(
+        verifier_verdict=verifier_verdict,
+        adjudicated_verdict=adjudicated_verdict,
+        merged=merged,
+        durability=durability,
+    ) and bool(
+        d not in (None, "pending")
+        or verdict.startswith("FAIL")
+        or str(verifier_verdict or "").upper() in VERIFIER_FAILURES
+    )
+
+
+def outcome_is_durable_success(
+    *, verifier_verdict, adjudicated_verdict, merged, durability
+) -> bool:
+    """A verified success that held: PASS, no verifier failure, merged, judged durable.
+
+    `NON_PASS` is the fleet verifier's verdict on the merged commit (CI failed, or a provider did
+    not pass it), so a merge it marks is not a verified success however the merge was adjudicated.
+    On the owner's Brain (2026-10-11) such merges regressed 6 of 65 times against 2 of 79 for a
+    verifier PASS."""
+    verdict = str(adjudicated_verdict or verifier_verdict or "").upper()
+    return bool(
+        verdict.startswith("PASS")
+        and str(verifier_verdict or "").upper() not in VERIFIER_FAILURES
+        and merged
+        and str(durability or "").lower() == "durable"
+    )
+
+
+def role_target_kind(capability_id: str, target_role_name: str | None) -> str:
+    """What a capability edge onto a ROLE run is: never evidence about the capability.
+
+    A role run is advisory: it proposes and never delivers. Whatever outcome it holds is a copy of
+    the acting run's (`_propagate_outcome_lineage_in_conn`), and the acting run carries the
+    capability's own edge (`record_run`'s inheritance, the bridge's backfill). `advisory_self` is the
+    role's own capability on its run (§2: evaluator traces are non-worker); `role_association` is
+    any other capability on it, which the 2026-08-21 decision keeps as an association (the `offload`
+    that produced the proposal). "" means the target is not a role run."""
+    role = str(target_role_name or "")
+    if not role:
+        return ""
+    return "advisory_self" if capability_id == f"role-{role}" else "role_association"
 
 
 def capability_causal_evidence(
@@ -2327,29 +2403,14 @@ def capability_causal_evidence(
                 and row["target_event_id"]
                 and row["target_validation_status"] == "accepted"
             )
-            outcome_present = bool(
-                row["verifier_verdict"] is not None
-                or row["adjudicated_verdict"] is not None
-                or row["merged"] is not None
-                or row["durability"] is not None
-            )
+            outcome = {
+                key: row[key]
+                for key in ("verifier_verdict", "adjudicated_verdict", "merged", "durability")
+            }
+            outcome_present = _outcome_present(**outcome)
             verifier_fail = str(row["verifier_verdict"] or "").upper() in VERIFIER_FAILURES
-            terminal_outcome = bool(
-                outcome_present
-                and (
-                    durability not in (None, "pending")
-                    or verdict.startswith("FAIL")
-                    or verifier_fail
-                )
-            )
-            durable_success = bool(
-                consumed
-                and outcome_present
-                and verdict.startswith("PASS")
-                and not verifier_fail
-                and row["merged"]
-                and durability == "durable"
-            )
+            terminal_outcome = outcome_is_terminal(**outcome)
+            durable_success = consumed and outcome_is_durable_success(**outcome)
             # THE TALLY CLASS — the one predicate every alpha/beta consumer counts from.
             # A failure must be ATTRIBUTABLE, symmetric with how strong durable_success is:
             # a regression durability, a VERIFIER's FAIL, or an adjudicated FAIL carrying a
@@ -2362,7 +2423,7 @@ def capability_causal_evidence(
             # (§2: evaluator/verifier traces are non-worker) — the role registry's naming
             # convention role-<name> is asserted by selftest, not assumed.
             target_role = str(row["target_role_name"] or "")
-            advisory_self = bool(target_role) and capability_id == f"role-{target_role}"
+            advisory_self = role_target_kind(capability_id, target_role) == "advisory_self"
             adjudicated_fail = str(row["adjudicated_verdict"] or "").upper().startswith("FAIL")
             named_class = str(row["failure_class"] or "")
             attributable_failure = bool(

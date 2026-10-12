@@ -1034,6 +1034,148 @@ def _shed_row(marker: dict, entry: Path, *, now: float) -> dict:
     return row
 
 
+WORKTREE_GIT_LATEST = 3  # how many distinct worktrees the line names
+GC_SKIP_MARK = " lane-worktree-gc skip-git "
+
+
+def _gc_log_path() -> Path:
+    """The lane GC's log, as `~/.codex/bin/lane-worktree-gc.sh` resolves it (LANE_GC_LOG)."""
+    explicit = os.environ.get("LANE_GC_LOG")
+    if explicit:
+        return Path(explicit)
+    handoff = os.environ.get("HANDOFF_DIR") or str(Path.home() / ".codex" / "handoff")
+    return Path(handoff) / "lane-worktree-gc.log"
+
+
+def _latest_distinct(rows: list[tuple[int, str]]) -> list[str]:
+    out: list[str] = []
+    for _ts, name in sorted(rows, reverse=True):
+        if name not in out:
+            out.append(name)
+        if len(out) == WORKTREE_GIT_LATEST:
+            break
+    return out
+
+
+def worktree_git_refusals(
+    *, now: float | None = None, log_path: Path | None = None, gc_log: Path | None = None
+) -> dict:
+    """FYI: how often the tool refused to run git in a worktree whose pointer files disagree.
+
+    Two writers, one count each. `worktree_git.run` appends a JSON row per refusal
+    (`worktree_git.refusal_log_path`); `lane-worktree-gc.sh` writes a `skip-git` line to its log
+    when a removed worktree's `.git` names a canonical outside the known homes. Neither is a gate
+    and nothing here clears anything: a refusal is cleared by re-provisioning that worktree, a GC
+    skip needs nothing (the directory was removed anyway).
+
+    Absent and unreadable are different answers. The refusal log is created by the first refusal,
+    so its absence is a measured zero ("never recorded"); a log that exists but cannot be read is
+    `unknown`. The GC log exists wherever the GC has run, so its absence is `unmeasured`.
+    `now` is the real clock, never the review's: these are real-world times.
+    """
+    import worktree_git
+
+    now = time.time() if now is None else now
+    since = now - REVIEW_DAYS * 86400
+    path = Path(log_path) if log_path is not None else worktree_git.refusal_log_path()
+    refusals: dict = {"path": str(path), "count": 0, "latest": [], "malformed": 0}
+    rows: list[tuple[int, str]] = []
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        refusals["status"] = "ok"
+    except FileNotFoundError:
+        text = ""
+        refusals["status"] = "never_recorded"
+    except OSError as exc:
+        text = ""
+        refusals["status"] = "unknown"
+        refusals["reason"] = f"{type(exc).__name__}: {exc}"
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+            ts, worktree = row["ts"], str(row["worktree"])
+            if type(ts) is not int:
+                raise TypeError("ts")
+        except (ValueError, KeyError, TypeError):
+            refusals["malformed"] += 1
+            continue
+        if since <= ts <= now + 300:
+            rows.append((ts, worktree))
+    refusals["count"] = len(rows)
+    refusals["latest"] = _latest_distinct(rows)
+
+    gpath = Path(gc_log) if gc_log is not None else _gc_log_path()
+    skips: dict = {"path": str(gpath), "count": 0, "latest": []}
+    srows: list[tuple[int, str]] = []
+    try:
+        gtext = gpath.read_text(encoding="utf-8", errors="replace")
+        skips["status"] = "ok"
+    except FileNotFoundError:
+        gtext = ""
+        skips["status"] = "unmeasured"
+        skips["reason"] = "no GC log at this path"
+    except OSError as exc:
+        gtext = ""
+        skips["status"] = "unmeasured"
+        skips["reason"] = f"{type(exc).__name__}: {exc}"
+    for line in gtext.splitlines():
+        if GC_SKIP_MARK not in line:
+            continue
+        stamp, _, rest = line.partition(GC_SKIP_MARK)
+        try:
+            ts = int(
+                datetime.strptime(stamp.strip(), "%Y-%m-%dT%H:%M:%SZ")
+                .replace(tzinfo=timezone.utc)
+                .timestamp()
+            )
+        except ValueError:
+            continue
+        worktree = rest.partition(" reason=")[0].removeprefix("worktree=")
+        if since <= ts <= now + 300:
+            srows.append((ts, worktree))
+    skips["count"] = len(srows)
+    skips["latest"] = _latest_distinct(srows)
+    return {"window_days": REVIEW_DAYS, "refusals": refusals, "gc_skips": skips}
+
+
+def format_worktree_git_refusals(section: dict) -> list[str]:
+    """Always prints both numbers, so a zero is a statement rather than a missing line."""
+    days = section.get("window_days", REVIEW_DAYS)
+    lines = ["## Worktree git guard (FYI only; nothing here clears a refusal)", ""]
+    ref = section.get("refusals", {})
+    if ref.get("status") == "unknown":
+        lines.append(
+            f"  worktree-git refusals: NOT MEASURED — {ref['path']} unreadable ({ref.get('reason')})"
+        )
+    else:
+        line = f"  worktree-git refusals: {ref.get('count', 0)} in {days}d"
+        if ref.get("latest"):
+            line += f" (latest: {', '.join(ref['latest'])})"
+        elif ref.get("status") == "never_recorded":
+            line += f" (no refusal ever recorded at {ref['path']})"
+        if ref.get("malformed"):
+            line += f"; {ref['malformed']} malformed row(s) not counted"
+        lines.append(line)
+        if ref.get("count"):
+            lines.append(
+                "    clear: remove each named worktree and re-provision it; nothing else does"
+            )
+    gc = section.get("gc_skips", {})
+    if gc.get("status") != "ok":
+        lines.append(
+            f"  lane-worktree-gc pointer skips: NOT MEASURED — {gc.get('path')} "
+            f"({gc.get('reason', 'unreadable')})"
+        )
+    else:
+        line = f"  lane-worktree-gc pointer skips: {gc.get('count', 0)} in {days}d"
+        if gc.get("latest"):
+            line += f" (latest: {', '.join(gc['latest'])})"
+        lines.append(line)
+    return lines + [""]
+
+
 def credential_exposure(*, now: float | None = None) -> dict:
     """FYI: the files under the dispatch-log and agent-runtime directories that hold a credential.
 
@@ -1566,6 +1708,9 @@ def review(
         "gate_expiry": gate_expiry(now=now, path=path),
         # And a seat stood down by hand is a switch held off. FYI only, on the real clock.
         "capacity_shed": capacity_shed(),
+        # And a guard refusal is evidence that an agent's worktree disagreed with where the tool
+        # put it. FYI only, real clock, never counted in `raise_count`.
+        "worktree_git_refusals": worktree_git_refusals(),
         "raise_count": len(due) + len(quiet),
     }
     # FYI only, never counted in `raise_count`, and outside the graded projection
@@ -1952,6 +2097,9 @@ def format_report(rep: dict) -> str:
     shed = rep.get("capacity_shed")
     if shed is not None:
         lines += format_capacity_shed(shed)
+    refusals = rep.get("worktree_git_refusals")
+    if refusals is not None:
+        lines += format_worktree_git_refusals(refusals)
     exposure = rep.get("credential_exposure")
     if exposure is not None:
         import credential_redaction
@@ -2305,6 +2453,7 @@ def _selftest() -> None:
         _GH_CALL_RUNNER = saved_runner
     _selftest_gate_expiry()
     _selftest_capacity_shed()
+    _selftest_worktree_git_refusals()
     proof: dict = {
         "status": "ok",
         "generated_at": 1_800_000_000,
@@ -2350,7 +2499,7 @@ def _selftest() -> None:
         "switch_states is the review's rows without the sweep, review writes no ledger, an idle "
         "bootstrap row carries its drain read from a sandbox, the expiry notice names soon/lapsed "
         "rows and states its drained and unmeasured states, the shed sweep names each marker's "
-        "drain and removes none)"
+        "drain and removes none, the worktree-git section prints its zero and counts both writers)"
     )
 
 
@@ -2391,6 +2540,33 @@ def _selftest_capacity_shed() -> None:
         assert rows["claude_code"]["suspect"] is None and rep["suspect"] == 2, rep
         text = "\n".join(format_capacity_shed(rep))
         assert "2 SUSPECT" in text and "claude_code  inert" in text, text
+
+
+def _selftest_worktree_git_refusals() -> None:
+    import tempfile
+
+    now = 1_800_000_000
+    with tempfile.TemporaryDirectory() as td:
+        log, gc = Path(td) / "refusals.jsonl", Path(td) / "gc.log"
+        zero = worktree_git_refusals(now=now, log_path=log, gc_log=gc)
+        text = "\n".join(format_worktree_git_refusals(zero))
+        assert "worktree-git refusals: 0 in 7d (no refusal ever recorded" in text, text
+        assert "pointer skips: NOT MEASURED" in text, text
+        log.write_text(
+            json.dumps({"ts": now - 60, "worktree": "/w/a"})
+            + "\n"
+            + json.dumps({"ts": now - 8 * 86400, "worktree": "/w/old"})
+            + "\nnot json\n"
+        )
+        gc.write_text(
+            "fatal: noise\n2027-01-15T07:00:00Z lane-worktree-gc skip-git worktree=/w/g reason=x\n"
+        )
+        rep = worktree_git_refusals(now=now, log_path=log, gc_log=gc)
+        assert rep["refusals"]["count"] == 1 and rep["refusals"]["latest"] == ["/w/a"], rep
+        assert rep["refusals"]["malformed"] == 1, rep
+        assert rep["gc_skips"]["count"] == 1 and rep["gc_skips"]["latest"] == ["/w/g"], rep
+        text = "\n".join(format_worktree_git_refusals(rep))
+        assert "refusals: 1 in 7d (latest: /w/a)" in text and "re-provision" in text, text
 
 
 def _selftest_gate_expiry() -> None:

@@ -204,7 +204,12 @@ clear path, which is removing the worktree and re-provisioning it. A match runs 
 `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE` pinned to those known paths and with
 `core.fsmonitor` and `core.hooksPath` disabled; other paths (offload cwds, `local_verify`) get the
 two `-c` flags only. `ORCH_WORKTREE_GIT_GUARD_DISABLED=1` restores the old commands. It is a rail
-hardening inside existing stages, so the diagram is unchanged.
+hardening inside existing stages, so the diagram is unchanged. Each refusal is also appended, best-effort and
+without changing it, to `$ORCH_STATE_DIR/worktree-git-refusals.jsonl` (time, worktree, pointer file,
+reason, caller), and the weekly `switch_review` prints the window's count and latest worktrees as an
+FYI line, zero included, beside the `skip-git` lines the out-of-repo `lane-worktree-gc.sh` now writes
+when a removed worktree's `.git` names a canonical outside the known homes (2026-10-11); that is a
+feedback surface on an existing sweep, so the diagram is still unchanged.
 
 **An offload's caller can bound where it writes, whichever agent runs it (2026-10-11).**
 `dispatcher.offload(write_boundary={"protect": [...], "allow": [...]})` lets the run write nowhere
@@ -259,7 +264,7 @@ therefore uses the same config; authentication also requires access to that conf
 store. The pin is a path and adds no token to the agent's argv or environment, and every other
 tool keeps the redirect. It works in both directions: gh's own writes (`auth logout`, `auth
 switch`, `config set`) from an unsandboxed agent reach that config and keyring entry too, as they
-would from the dispatcher's shell. No stage, component or surface moved, so the diagram is
+would from the dispatcher's shell, so a guard refuses them inside a dispatched agent (`dispatcher._gh_guard_exports`, owner decision 2026-10-05): `auth logout|login|switch|refresh`, `config set` and `alias set|delete|import` exit 77, every other gh command runs. A wrapper first on PATH is not enough, because a login shell (codex's `zsh -lc`, cursor's shell) re-applies the owner's PATH; the same check is also a `gh` shell function that bash reads from `BASH_ENV` and zsh from a proxy `ZDOTDIR` whose files first run the owner's own dotfiles. It is bypassable on purpose by gh's full path. No stage, component or surface moved, so the diagram is
 unchanged.
 
 **The detached wrappers name the interpreter of their own python steps (2026-10-05).** The dispatch
@@ -377,6 +382,44 @@ step and input switches held off. Unknown demand never becomes zero. It changes 
 selection, gate, dispatcher or lifecycle decision; the existing weekly artifact carries
 the section rather than a second audit log or inventory.
 
+**Its `outcome` step reads what became of a run from `outcomes`, and counts it with the one
+classifier of these edges (2026-10-11).** It counted an acted-on edge's own `outcome_verdict` and
+`durability`, the copy that `capability_effectiveness` stopped trusting the same day (see the
+feedback loop below), against a private verdict-and-durability set, and never read `failure_class`.
+`_brain` now replaces the edge's copied columns with its target's `outcomes` row, read when the
+report is made, and adds the target's `runs.role_name`. Each acted-on edge is then classified by
+`capability_effectiveness._classify`, which applies `feedback`'s predicates
+(`LEARNING_EXCLUDED_FAILURE_CLASSES`, `role_target_kind`, `outcome_is_terminal`). So the monitor is
+the third reader that agrees with the lifecycle on what an outcome says, and it has no predicate of
+its own. Only a terminal outcome, good or bad, is the `outcome` step. Every other class is counted
+in its own field and printed beside it with a legend:
+- `excl`: learning-excluded;
+- `assoc`: an edge onto a role run, whose outcome is a copy of the acting run's;
+- `sweep`: a merge the durability sweep has not judged;
+- `unres`: an unmerged run nothing will judge;
+- `open`: no outcome yet.
+
+`no_outcome` now means something can still resolve, which is only `open` or `sweep`. When every
+evidence edge is excluded, the first break is `outcome_excluded`. When nothing can ever be scored,
+it is `outcome_unscoreable`. This is the split `capability_effectiveness` reports as
+`excluded_only` and `unscoreable`. An unread Brain still leaves every count unmeasured.
+
+Measured on a copy of the live Brain, with the same inputs and clock on both sides:
+- role-triage's `outcome` fell from 2 to 0 (12 excluded, 281 associations), and its first break
+  from `works` to `outcome_excluded`. Its two outcomes were edges still reading PASS/durable on
+  Trend_Model_Project#5913 and #5944, whose outcomes the 2026-10-04 relabels had cleared to
+  `unattributed_delegation`. They had been the report's only `works`.
+- offload moved from 48 to 46 (15 excluded, 1,742 associations).
+- deliberate-break-verifier moved from 64 to 106 (5 awaiting the sweep). The 42 new ones are merges
+  the fleet verifier marked `NON_PASS` while their durability is pending, which
+  `outcome_is_terminal` treats as final.
+- agy-runtime-isolation moved from 4 to 12: 8 FAILs, plus 11 excluded and 38 unresolvable set aside.
+- role-adjudicator, runtime-ac-checks and testgen-lane each moved from 0 to 1, a `NON_PASS` merge.
+- role-redirect's 762, role-prompt's 8 and role-decomposer's 4 acted-on edges are all associations.
+
+The other 37 rows are identical. No first break other than role-triage's changed. No stage,
+component or surface moved, so the loop diagram is unchanged.
+
 `issue_size_quality` extends that weekly caller with a read-only join: every closed issue in
 the 90-day reviewed-fleet population contributes its checkbox-count band, and only PRs merged
 by the issue's close can contribute canonical Brain outcomes. PASS uses the final adjudication;
@@ -439,7 +482,7 @@ credits the latest remote run on the merged PR only if that run is not a delegat
 its PR), and leaves a delegation with no outcome for ingest to decide, through the one predicate both read
 (`outcomes.needs_delegation_guard`). Until 2026-10-04 it credited whichever remote run was latest, and
 ingest never re-decides a row already merged and pending durability, so a delegation's merge PASS would
-have skipped the guard for good (latent: its 2 rows were keepalive runs; again no stage moved). A local run's candidates start with the branches it pushed from its own worktree, which its completion step reads from git's reflogs (`pushed_branches.py`, the Brain table `run_pushes`): a PR there is credited only if the run opened it (head == branch, created at or after the run started), and a run with no usable record resolves exactly as before (again no stage, component or surface moved). Since 2026-10-05 a local run's own PR closed unmerged is not yet its FAIL: the opener lane rehomes a PR keepalive cannot drive into a replacement at the SAME head commit on a registry branch and closes the old one, so ingest first reads which PRs linked to the run's issue carry the closed PR's head (`outcomes.judge_replacement`, one GraphQL read). Exactly one, merged after the run started, for a PR the run opened (created at or after its start), is the run's merge, pending durability and named `replacement PR #M merged` for the sweep, and the PR's own keepalive run keeps its verifier evidence (`durability_sweep._verifier_claims`); a replacement with different commits is different work and the FAIL stands, and so does an issue GitHub says does not exist; an open carrier waits as the run's own open PR would; an answer that cannot single one out (several carriers, a list cut at the read's limit, a run or closed PR that cannot be placed in time, a PR older than the run) is `unattributed_replacement`, in the excluded set; an unanswered read is retried. Until then 5 of the 9 local closed-unmerged FAILs of the 90 days, all codex, were runs whose head had merged that day in such a replacement. The rows written before are re-judged once each by `outcomes.recheck_replacements` after the local ingest, only for the PR each FAIL was written about, behind a snapshot of the whole outcome row and its `record_outcome` completion events (`outcomes.py --undo-replacement-recheck` restores both), `ORCH_REPLACEMENT_RECHECK=0`, and an owner question whose newest answer stops it when it says "decline"; a row it cannot decide within 7 days keeps its FAIL with the reason. Remote and keepalive rows are unchanged: a keepalive run IS its PR, and its replacement is recorded as its own run (again no stage, component or surface moved; the diagram is unchanged). Also since
+have skipped the guard for good (latent: its 2 rows were keepalive runs; again no stage moved). A local run's candidates start with the branches it pushed from its own worktree, which its completion step reads from git's reflogs (`pushed_branches.py`, the Brain table `run_pushes`): a PR there is credited only if the run opened it (head == branch, created at or after the run started), and a run with no usable record resolves exactly as before (again no stage, component or surface moved). Since 2026-10-05 a local run's own PR closed unmerged is not yet its FAIL: the opener lane rehomes a PR keepalive cannot drive into a replacement at the SAME head commit on a registry branch and closes the old one, so ingest first reads which PRs linked to the run's issue carry the closed PR's head (`outcomes.judge_replacement`, one GraphQL read). Exactly one, merged after the run started, for a PR the run opened (created at or after its start), is the run's merge, pending durability and named `replacement PR #M merged` for the sweep, and the PR's own keepalive run keeps its verifier evidence (`durability_sweep._verifier_claims`); a replacement with different commits is different work and the FAIL stands, and so does an issue GitHub says does not exist; an open carrier waits as the run's own open PR would; an answer that cannot single one out (several carriers, a list cut at the read's limit, a run or closed PR that cannot be placed in time, a PR older than the run) is `unattributed_replacement`, in the excluded set; an unanswered read is retried. Until then 5 of the 9 local closed-unmerged FAILs of the 90 days, all codex, were runs whose head had merged that day in such a replacement. The rows written before are re-judged once each by `outcomes.recheck_replacements` after the local ingest, only for the PR each FAIL was written about, behind a snapshot of the whole outcome row and its `record_outcome` completion events (`outcomes.py --undo-replacement-recheck` restores both), `ORCH_REPLACEMENT_RECHECK=0`, and an owner question whose newest answer stops it when it says "decline"; a row it cannot decide within 7 days keeps its FAIL with the reason. A remote delegation's row is unchanged. Since 2026-10-11 a KEEPALIVE run's own PR closed unmerged gets the same read before its FAIL (`outcomes.keepalive_replacement`): the closed PR's view, then the same query once per issue it links in its repository, judged by the same judge with the run's start at the PR's creation, since a keepalive run IS its PR. But the carrier is recorded as its own keepalive run with its own verdict, so a PR carrying the closed head (merged after it opened, merged before it opened, or still open) ends the run with NO verdict, `carried_by_other_pr`, in the excluded set: a PASS would count one delivery twice. A replacement with different commits, or a PR that links no issue, keeps the FAIL, marked. Both writers read: `keepalive_outcomes` before a row's first outcome, and remote ingest for a keepalive row recorded while its PR was open. A read GitHub did not answer writes nothing until `REPLACEMENT_RECHECK_HORIZON_DAYS` after the PR closed, then keeps the FAIL with the reason; each summary prints `keepalive_replacements` with `waiting` beside `drains_by`. Until then 16 of the 99 named-agent keepalive FAILs of the 90 days were such PRs (14 rehomes: codex 10, claude 3, cursor 1; 2 opened on work that had already merged), and every carrier with a Brain row had its own PASS. The rows written before are re-judged once each by `outcomes.recheck_keepalive_replacements` after the daily keepalive ingest, named-agent rows only, behind its own snapshot (`keepalive_outcomes.py --undo-replacement-recheck`), `ORCH_KEEPALIVE_REPLACEMENT_RECHECK=0`, and its own owner question (again no stage, component or surface moved; the diagram is unchanged). Also since
 2026-10-04 the set holds `unjudgeable_merge`: the durability sweep (`durability_sweep.find_merge`) judges only
 THE merge a row recorded, a direct PR target or the one merge on the run's own branch, and closes a row with
 no such merge as durability `unjudgeable`. Until then such rows were re-skipped on every run while their
@@ -514,10 +557,89 @@ The rest are the `offload` association edges on advisory role runs kept on 2026-
 `dry_seam_audit` still fails on them.
 
 The control arm starts at 2 subjects each for role-triage and offload, short of
-`capability_effectiveness.MIN_SAMPLE` (5). It grows only when a delegation goes ahead against
-triage, and the dispatch lane has been shadow since 2026-09-03. No stage, component or surface
-moved: the counterfactual arm was already a column of the edge table and the comparison
-`capability_effectiveness` makes. The loop diagram is unchanged.
+`capability_effectiveness.MIN_SAMPLE` (5), and every one of them is learning-excluded, so none is
+scored (next paragraph). It grows only when a delegation goes ahead against triage, and the dispatch
+lane has been shadow since 2026-09-03. No stage, component or surface moved: the counterfactual arm
+was already a column of the edge table and the comparison `capability_effectiveness` makes. The
+loop diagram is unchanged.
+
+**`capability_effectiveness` reads what became of a run from `outcomes`, and scores no outcome a
+learner may not (2026-10-11).** An influence edge says which capability touched which run, and in
+which arm. Its `outcome_verdict` and `durability` columns are only a copy of the target's `outcomes`
+row, taken when the edge was last propagated, and nothing keeps that copy current:
+- propagation runs only when a writer re-records the target, and only over accepted edges;
+- the triage grader writes a counterfactual edge's grade once;
+- `durability_sweep`'s truncated-recheck restore, `feedback.mark_transient_infra` and the data
+  migrations write `outcomes` directly.
+
+The three 2026-10-04 relabels moved 53 outcomes into excluded classes and refreshed none of the 54
+accepted capability edges on them. So the reader takes the verdict (adjudicated, else the verifier's)
+and the durability from `outcomes` when the report is made, as `capability_causal_evidence` already
+does. A target whose `failure_class` is in `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES` is counted
+in `excluded`, beside `terminal`, in either arm, and is never scored. An arm whose
+outcomes are all excluded reads `excluded_only`; an arm with unresolved nonexcluded attempts remains
+`not_yet_measurable` and visible in `awaiting_outcomes`. The report qualifies its summary as
+accepted-arm-only, because the control arm can still have a measured rate. Waiting cannot change
+the excluded subset; those outcomes need attribution.
+
+Measured on a copy of the live Brain after #525:
+
+| Arm | Before | After |
+|---|---|---|
+| role-triage, accepted | 22 terminal on 12 subjects, durable rate 0.167 | none scored; 24 excluded on 12 subjects |
+| offload, accepted | 73 terminal on 60 subjects, 0.633 | 46 on 46 subjects, 0.783; 30 excluded on 14 |
+| both control arms | 2 terminal each | none scored; 2 and 3 excluded |
+
+Both durable subjects behind role-triage's 0.167 were edges still reading PASS/durable on outcomes
+since relabelled `unattributed_delegation`. No stage, component or surface moved, so the loop
+diagram is unchanged.
+
+**What an outcome says is defined once, in `feedback`, for both readers of these edges
+(2026-10-11).** `capability_causal_evidence` (the lifecycle's tally) and `capability_effectiveness`
+read the same edges and the same `outcomes` rows. Until this change each wrote its own predicates,
+and they disagreed. Both now call `feedback.outcome_is_terminal` and
+`feedback.outcome_is_durable_success`, and the lifecycle's `advisory_self` class comes from
+`feedback.role_target_kind`. Re-dumping all 3,778 lifecycle rows on a Brain copy gave byte-identical
+output before and after the extraction. Measured on that copy, the disagreements were:
+- **An edge onto a role run.** The outcome a role run holds is a copy of its acting run's
+  (`_propagate_outcome_lineage_in_conn`), and the acting run carries the same capability's edge. So
+  this reader counted one delivery twice, and `_target_of` pooled every `role:<name>:*` run into one
+  subject. 2,711 of its 3,653 edges target role runs. Every one of the 27 that held an outcome was
+  such a copy, and each had a same-capability edge on its acting run.
+
+  Such an edge is now an ASSOCIATION, in both arms. `advisory_self` is the role's own capability.
+  `role_association` is any other capability, such as the `offload` that produced the proposal (the
+  2026-08-21 decision). Associations are counted in `associations` and never scored.
+- **PASS with `pending` durability.** This reader counted it as terminal and non-durable; the
+  lifecycle does not count it as terminal. The rows fall into two populations:
+  - 55 merges are selected by `durability_sweep._pending_merged_runs` and sit in its grace window.
+    The sweep's 2026-10-11 run printed `undrainable 0`. They are `awaiting_sweep` and resolve on
+    their own.
+  - 38 agy-runtime-isolation `offload:*` runs never open a PR, and nothing selects them. They are
+    `unresolvable`: counted, never scored, never awaiting.
+- **A verifier `NON_PASS` under an adjudicated PASS.** `NON_PASS` is the fleet verifier's verdict on
+  the merged commit. The lifecycle counted it as a failure; this reader counted it as a durable
+  success. Among judged merges, `NON_PASS` regressed 6 of 65 times, against 2 of 79 for a verifier
+  PASS and 130 of 4,535 with no verifier verdict.
+
+An accepted arm whose edges can never be scored reads `unscoreable (...)`, never
+`not_yet_measurable`. role-redirect is one: all 762 of its edges are on its own role runs, and
+nothing records which run acted on a redirect proposal (accepted role edges exist only for triage,
+15 of them).
+
+| Accepted arm | #529 | Now |
+|---|---|---|
+| deliberate-break-verifier | 60/111 subjects, 0.541 | 55/106, 0.519; 5 awaiting the sweep (42 of the 47 pending merges carry `NON_PASS`) |
+| offload | 36/46, 0.783; 30 excluded | 31/46, 0.674; 15 excluded, 1,617 associations |
+| agy-runtime-isolation | 4/5 on 50 attempts, 0.8 | 4/5 on 12 attempts, 0.8; 38 unresolvable |
+| role-triage | 24 excluded, `not_yet_measurable` | 12 excluded on 11 subjects, 281 associations, `excluded_only` |
+| role-redirect, -prompt, -decomposer | `not_yet_measurable` | `unscoreable` (762, 8, 4 associations) |
+
+Two differences remain, both measured and not decided here:
+- The lifecycle classes only `advisory_self`. It still counts 15 `offload` edges on role runs among
+  its terminal outcomes, tallied `churn_unattributed`.
+- The two readers take the subject from different places. No stage, component or surface moved, so
+the loop diagram is unchanged.
 
 The one place two LLMs touch the same task is an `agent:auto` switch, where the keepalive delegation
 policy replaces a stalled agent. `agent_switches.py` (rail, daily) records each such pair in the Brain

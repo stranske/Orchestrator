@@ -326,3 +326,19 @@ def pytest_terminal_summary(terminalreporter) -> None:
 def tracked_inputs_guard() -> Guard | None:
     """The guard this session armed, for the test that asserts it armed where it should."""
     return _GUARD
+
+
+@pytest.fixture(scope="session")
+def _worktree_git_refusal_log(tmp_path_factory) -> Path:
+    return tmp_path_factory.mktemp("worktree-git") / "worktree-git-refusals.jsonl"
+
+
+@pytest.fixture(autouse=True)
+def _worktree_git_refusals_stay_in_the_test(_worktree_git_refusal_log, monkeypatch):
+    """A refusal a test provokes is recorded in a scratch file, never in the live state dir.
+
+    `worktree_git.run` appends every refusal to `$ORCH_STATE_DIR/worktree-git-refusals.jsonl`, and
+    `verify.py` gives its children private copies of the ledger and the Brain only. Without this,
+    each suite run would add rows to the log the weekly `switch_review` counts.
+    """
+    monkeypatch.setenv("ORCH_WORKTREE_GIT_REFUSAL_LOG", str(_worktree_git_refusal_log))
