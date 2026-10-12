@@ -14,6 +14,10 @@ worktree and its head are stubbed.
 from __future__ import annotations
 
 import json
+import multiprocessing
+import os
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -84,6 +88,118 @@ def test_another_reviewer_set_is_another_judgment(brain):
     assert adversarial.recorded_verdict(TARGET, "a" * 40, ["codex"])["state"] == "none"
 
 
+@pytest.mark.parametrize("from_env", [False, True])
+@pytest.mark.parametrize("exclude", [{"codex"}, {"codex", "gemini", "vibe"}])
+@pytest.mark.parametrize("blocker", [False, True])
+def test_explicit_author_exclusion_preserves_required_coverage(
+    brain, monkeypatch, from_env, exclude, blocker
+):
+    """Drive the production reviewer/aggregate path; only the provider call is faked."""
+    invoked = []
+    head = "a" * 40
+    requested = ["codex", "gemini", "vibe"]
+
+    def offload(agent, *args, **kwargs):
+        invoked.append(agent)
+        return {"output": json.dumps({"blocker": blocker, "severity": "high"})}
+
+    monkeypatch.setattr(adversarial, "_capability_heartbeat", lambda: None)
+    monkeypatch.setattr(adversarial, "_git_write_boundary", lambda *a: {"protect": [], "allow": []})
+    monkeypatch.setattr(adversarial.dispatcher, "offload", offload)
+    kwargs = (
+        {"env": {"ORCH_ADVERSARIAL_REVIEWERS": ",".join(requested)}}
+        if from_env
+        else {"reviewers": requested}
+    )
+    out = adversarial.review_at_head(
+        TARGET, head, worktree="/private/review", head_fn=lambda _: head, exclude=exclude, **kwargs
+    )
+    assert invoked == [r for r in requested if r not in exclude]
+    assert out["verdict"] == "INCONCLUSIVE" and out["conclusive"] is False
+    result = out["result"]
+    assert result["veto_threshold"] == 2
+    assert result["reviewers_requested"] == len(requested)
+    assert result["n_reviewers"] == len(invoked)
+    assert result["reviewers_missing"] == len(requested) - len(invoked)
+    assert result["n_vetoes"] == (len(invoked) if blocker else 0)
+    assert len(result["blockers"]) == result["n_vetoes"]
+    memo = adversarial.recorded_verdict(TARGET, head, out["reviewers"])
+    assert memo["state"] == "none" and memo["inconclusive_at_head"] == 1
+
+
+def test_explicit_author_exclusion_cannot_reuse_a_smaller_panel_pass(brain):
+    head = "a" * 40
+    requested = ["codex", "gemini", "vibe"]
+    seats = []
+
+    def review(worktree, reviewers, context):
+        seats.append(list(reviewers))
+        return adversarial.aggregate_veto(
+            [{"blocker": False, "severity": "none"} for _ in reviewers],
+            veto_threshold=2,
+            reviewers_requested=len(reviewers),
+        )
+
+    # A valid pass for two reviewers cannot qualify a request for three after author exclusion.
+    first = adversarial.review_at_head(
+        TARGET,
+        head,
+        reviewers=requested[1:],
+        worktree="/private/review",
+        head_fn=lambda _: head,
+        review_fn=review,
+    )
+    assert first["verdict"] == "PASS"
+    for _ in range(2):
+        out = adversarial.review_at_head(
+            TARGET,
+            head,
+            reviewers=requested,
+            exclude={"codex"},
+            worktree="/private/review",
+            head_fn=lambda _: head,
+            review_fn=review,
+        )
+        assert out["status"] == "executed" and out["verdict"] == "INCONCLUSIVE"
+        assert out["result"]["reviewers_requested"] == 3
+        assert out["result"]["n_reviewers"] == 2
+    assert seats == [["gemini", "vibe"]] * 3
+
+
+def test_automatic_selection_never_offers_or_dispatches_the_author(brain, monkeypatch):
+    import router
+
+    head = "a" * 40
+    offered = []
+    invoked = []
+
+    def select(task_type, cap, *, only, learned):
+        offered.append(only)
+        assert "codex" not in only
+        return {"agent": "gemini"}
+
+    def offload(agent, *args, **kwargs):
+        invoked.append(agent)
+        return {"output": '{"blocker": false, "severity": "none"}'}
+
+    monkeypatch.setattr(router, "load_capacity", lambda: {})
+    monkeypatch.setattr(router, "learned_ranks", lambda: {})
+    monkeypatch.setattr(router, "select_agent", select)
+    monkeypatch.setattr(adversarial, "_capability_heartbeat", lambda: None)
+    monkeypatch.setattr(adversarial, "_git_write_boundary", lambda *a: {"protect": [], "allow": []})
+    monkeypatch.setattr(adversarial.dispatcher, "offload", offload)
+    out = adversarial.review_at_head(
+        TARGET,
+        head,
+        reviewers=["auto"],
+        exclude={"codex"},
+        worktree="/private/review",
+        head_fn=lambda _: head,
+    )
+    assert offered and invoked == ["gemini"]
+    assert out["verdict"] == "PASS" and out["result"]["veto_threshold"] == 1
+
+
 def test_an_inconclusive_panel_is_re_run_at_the_same_head(brain):
     """A reviewer shortfall is "NOT a pass; re-run the missing coverage". Reusing it would forbid
     exactly that re-run until an unrelated push, so only PASS and BLOCKED are reused."""
@@ -142,3 +258,285 @@ def test_the_cli_reports_a_recorded_verdict_without_running_the_panel(brain, cap
     out = json.loads(capsys.readouterr().out)
     assert (out["state"], out["verdict"]) == ("found", "BLOCKED"), out
     assert adversarial.main(["review", "--target", TARGET, "--head", "zz", "--lookup-only"]) == 2
+
+
+def _blocked_followup():
+    return {
+        "key": adversarial.panel_key(TARGET, "a" * 40, REVIEWERS),
+        "verdict": "BLOCKED",
+        "reviewers": REVIEWERS,
+        "result": {"blockers": [{"severity": "critical", "finding": "policy fails open"}]},
+    }
+
+
+class FollowupGitHub:
+    """A disposable remote store; a create may commit without delivering its response."""
+
+    def __init__(self):
+        self.calls = []
+        self.issues = []
+        self.search_reply = None
+        self.create_response = "ok"
+        self.visible = True
+        self.fail_source_lookup = False
+
+    def __call__(self, cmd):
+        self.calls.append(cmd)
+        verb = cmd[1:3]
+        if verb == ["issue", "list"]:
+            if self.search_reply is not None:
+                code, body = self.search_reply
+                return subprocess.CompletedProcess(cmd, code, body, "search unavailable")
+            reply = json.dumps(self.issues if self.visible else [])
+        elif verb == ["label", "list"]:
+            reply = json.dumps([{"name": "priority:high"}])
+        elif verb == ["issue", "create"]:
+            self.issues.append(
+                {
+                    "number": 90,
+                    "title": cmd[cmd.index("--title") + 1],
+                    "body": cmd[cmd.index("--body") + 1],
+                }
+            )
+            if self.create_response == "timeout":
+                raise subprocess.TimeoutExpired(cmd, 30)
+            if self.create_response == "failed":
+                return subprocess.CompletedProcess(cmd, 1, "", "response lost")
+            reply = (
+                "invalid response"
+                if self.create_response == "malformed"
+                else "https://github.com/o/r/issues/90\n"
+            )
+        elif verb == ["pr", "view"]:
+            if self.fail_source_lookup:
+                raise OSError("source lookup failed")
+            reply = json.dumps({"closingIssuesReferences": []})
+        else:
+            raise AssertionError(f"unexpected mutation: {cmd}")
+        return subprocess.CompletedProcess(cmd, 0, reply, "")
+
+    @property
+    def creates(self):
+        return sum(cmd[1:3] == ["issue", "create"] for cmd in self.calls)
+
+
+def _file_blocked(gh):
+    return adversarial.file_followup(TARGET, "a" * 40, _blocked_followup(), gh=gh)
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [(1, "[]"), (0, ""), (0, "bad JSON"), (0, "{}"), (0, "[{}]")],
+)
+def test_followup_search_failure_or_malformed_result_never_creates(brain, reply):
+    gh = FollowupGitHub()
+    gh.search_reply = reply
+    out = _file_blocked(gh)
+    assert out["filed"] is False and "error" in out, out
+    assert gh.creates == 0, gh.calls
+    gh.search_reply = None
+    assert _file_blocked(gh)["issue"] == 90  # a read failure does not latch a create attempt
+    assert gh.creates == 1
+
+
+@pytest.mark.parametrize("response", ["failed", "timeout", "malformed"])
+def test_followup_ambiguous_create_reconciles_before_any_retry(brain, response):
+    gh = FollowupGitHub()
+    gh.create_response = response
+    first = _file_blocked(gh)
+    assert first["filed"] is False and "error" in first, first
+    record = adversarial._followup_record_path(_blocked_followup()["key"])
+    assert record.exists(), "an ambiguous create must leave a durable pending receipt"
+    assert json.loads(record.read_text())["state"] == "create_pending"
+    # GitHub search can lag. Even several successful empty searches cannot justify another POST.
+    gh.visible = False
+    for _ in range(3):
+        retry = _file_blocked(gh)
+        assert retry["filed"] is False and retry.get("state") == "create_pending", retry
+    gh.visible = True
+    reconciled = _file_blocked(gh)
+    assert reconciled["filed"] is False and reconciled["issue"] == 90, reconciled
+    assert _file_blocked(gh)["issue"] == 90
+    assert gh.creates == 1, gh.calls
+
+
+def test_followup_reconciles_only_the_same_panel_key(brain):
+    gh = FollowupGitHub()
+    gh.create_response = "failed"
+    _file_blocked(gh)
+    body = gh.issues[0]["body"]
+    gh.issues[0]["body"] = body.replace(_blocked_followup()["key"], "another-panel")
+    out = _file_blocked(gh)
+    assert out.get("state") == "create_pending" and "issue" not in out, out
+    assert gh.creates == 1
+    gh.issues[0]["body"] = body
+    assert _file_blocked(gh)["issue"] == 90
+
+
+def test_followup_remote_record_is_reused_without_a_local_receipt(brain):
+    gh = FollowupGitHub()
+    gh.issues = [
+        {
+            "number": 90,
+            "title": adversarial.FOLLOWUP_TITLE.format(target=TARGET, short="a" * 7),
+            "body": adversarial.followup_body(TARGET, "a" * 40, _blocked_followup()),
+        }
+    ]
+    out = _file_blocked(gh)
+    assert out["filed"] is False and out["issue"] == 90, out
+    assert gh.creates == 0
+    gh.visible = False
+    assert _file_blocked(gh)["issue"] == 90
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_followup_incomplete_or_duplicate_search_refuses_create(brain, duplicate):
+    gh = FollowupGitHub()
+    if duplicate:
+        gh.issues = [
+            {
+                "number": n,
+                "title": adversarial.FOLLOWUP_TITLE.format(target=TARGET, short="a" * 7),
+                "body": adversarial.followup_body(TARGET, "a" * 40, _blocked_followup()),
+            }
+            for n in (90, 91)
+        ]
+    else:
+        gh.issues = [{"number": n, "title": "other title", "body": ""} for n in range(1, 101)]
+    out = _file_blocked(gh)
+    assert out["filed"] is False and "error" in out, out
+    assert gh.creates == 0
+
+
+@pytest.mark.parametrize("contents", ["broken JSON", "null", "[]", '{"key":"another-panel"}'])
+def test_followup_corrupt_record_never_authorizes_another_create(brain, contents):
+    gh = FollowupGitHub()
+    path = adversarial._followup_record_path(_blocked_followup()["key"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(contents)
+    out = _file_blocked(gh)
+    assert out["filed"] is False and "error" in out, out
+    assert gh.creates == 0, gh.calls
+
+
+def test_followup_persistence_failure_prevents_create(brain, monkeypatch):
+    gh = FollowupGitHub()
+
+    def fail(path, value):
+        raise OSError("state storage unavailable")
+
+    monkeypatch.setattr(adversarial, "_write_followup_record", fail)
+    out = _file_blocked(gh)
+    assert out["filed"] is False and "error" in out, out
+    assert gh.creates == 0
+
+
+def test_followup_success_survives_failed_receipt_write(brain, monkeypatch):
+    gh = FollowupGitHub()
+    write = adversarial._write_followup_record
+
+    def fail_receipt(path, value):
+        if value.get("issue"):
+            raise OSError("receipt write failed")
+        write(path, value)
+
+    monkeypatch.setattr(adversarial, "_write_followup_record", fail_receipt)
+    assert "error" in _file_blocked(gh)
+    monkeypatch.setattr(adversarial, "_write_followup_record", write)
+    assert _file_blocked(gh)["issue"] == 90
+    assert gh.creates == 1
+
+
+def test_followup_filing_is_recorded_before_source_disposition(brain):
+    gh = FollowupGitHub()
+    gh.fail_source_lookup = True
+    out = _file_blocked(gh)
+    assert out["filed"] is True and out["issue"] == 90 and "error" in out, out
+    gh.visible = False
+    again = _file_blocked(gh)
+    assert again["filed"] is False and again["issue"] == 90, again
+    assert gh.creates == 1
+
+
+def _followup_process(state, started, release, results, *, crash=False):
+    """Fresh process, real lock and persistence, fake GitHub mutation recorded outside its memory."""
+    os.environ["ORCH_STATE_DIR"] = state
+    gh = FollowupGitHub()
+
+    def run(cmd):
+        if cmd[1:3] == ["issue", "create"]:
+            with (Path(state) / "creates.log").open("a") as stream:
+                stream.write("create\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            if crash:
+                os._exit(27)
+            if not started.is_set():
+                started.set()
+                assert release.wait(10), "worker not released"
+        return gh(cmd)
+
+    results.put(_file_blocked(run))
+
+
+def test_followup_concurrent_processes_create_at_most_once(brain):
+    ctx = multiprocessing.get_context("spawn")
+    started, release, results = ctx.Event(), ctx.Event(), ctx.Queue()
+    owner = ctx.Process(target=_followup_process, args=(str(brain), started, release, results))
+    contender = ctx.Process(target=_followup_process, args=(str(brain), started, release, results))
+    try:
+        owner.start()
+        assert started.wait(10), "owner did not reach create"
+        contender.start()
+        contender.join(10)
+        assert contender.exitcode == 0, "contender failed or waited behind the lock"
+        release.set()
+        owner.join(10)
+        assert owner.exitcode == 0
+        outputs = [results.get(timeout=5), results.get(timeout=5)]
+        assert sum(out["filed"] for out in outputs) == 1, outputs
+        assert (brain / "creates.log").read_text().splitlines() == ["create"]
+        gh = FollowupGitHub()
+        assert _file_blocked(gh)["issue"] == 90 and gh.creates == 0
+    finally:
+        release.set()
+        for proc in (owner, contender):
+            if proc.pid is not None:
+                if proc.is_alive():
+                    proc.terminate()
+                proc.join(5)
+        results.close()
+
+
+def test_followup_crashed_process_keeps_pending_create_and_releases_lock(brain):
+    ctx = multiprocessing.get_context("spawn")
+    started, release, results = ctx.Event(), ctx.Event(), ctx.Queue()
+    proc = ctx.Process(
+        target=_followup_process,
+        args=(str(brain), started, release, results),
+        kwargs={"crash": True},
+    )
+    try:
+        proc.start()
+        proc.join(10)
+        assert proc.exitcode == 27, "create crash did not occur"
+        gh = FollowupGitHub()
+        out = _file_blocked(gh)
+        assert out.get("state") == "create_pending", out
+        assert gh.creates == 0
+        outcome = _blocked_followup()
+        gh.issues = [
+            {
+                "number": 90,
+                "title": adversarial.FOLLOWUP_TITLE.format(target=TARGET, short="a" * 7),
+                "body": adversarial.followup_body(TARGET, "a" * 40, outcome),
+            }
+        ]
+        assert _file_blocked(gh)["issue"] == 90
+        assert gh.creates == 0
+        assert (brain / "creates.log").read_text().splitlines() == ["create"]
+    finally:
+        if proc.is_alive():
+            proc.terminate()
+        proc.join(5)
+        results.close()

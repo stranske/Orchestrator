@@ -1,0 +1,4 @@
+adversarial.py review_at_head selftest: OK (one judgment per head, a moved head judged afresh, inconclusive re-run, head mismatch refused, unknown memo still runs, artifact hash checked, head-blind key break->revert)
+adversarial.py one-reviewer selftest: OK (author excluded, vibe last resort, failed and tree-changing reviewers replaced, shortfall re-run, auto-mode memo, follow-up filed once with the source issue closed, detached job argv; after-check break->revert)
+adversarial.py followup selftest: OK (failed search break->revert, pending create reconciled)
+adversarial.py selftest: OK (refute prompt, minority-veto aggregation, reviewer-shortfall and finding-coverage guards each w/ break->revert, json extract, high-stakes detection, env helpers)

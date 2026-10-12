@@ -1,0 +1,187 @@
+FFFFFFFF                                                                 [100%]
+=================================== FAILURES ===================================
+____ test_followup_search_failure_or_malformed_result_never_creates[reply0] ____
+
+brain = PosixPath('/tmp/pytest-of-runner/pytest-3/test_followup_search_failure_o0')
+reply = (1, '[]')
+
+    @pytest.mark.parametrize(
+        "reply",
+        [(1, "[]"), (0, ""), (0, "bad JSON"), (0, "{}"), (0, "[{}]")],
+    )
+    def test_followup_search_failure_or_malformed_result_never_creates(brain, reply):
+        gh = FollowupGitHub()
+        gh.search_reply = reply
+        out = _file_blocked(gh)
+>       assert out["filed"] is False and "error" in out, out
+E       AssertionError: {'filed': True, 'issue': 90, 'repo': 'o/r', 'label': 'priority:high', ...}
+E       assert (True is False)
+
+tests/test_adversarial_review_at_head.py:223: AssertionError
+______ test_followup_ambiguous_create_reconciles_before_any_retry[failed] ______
+
+brain = PosixPath('/tmp/pytest-of-runner/pytest-3/test_followup_ambiguous_create0')
+response = 'failed'
+
+    @pytest.mark.parametrize("response", ["failed", "timeout", "malformed"])
+    def test_followup_ambiguous_create_reconciles_before_any_retry(brain, response):
+        gh = FollowupGitHub()
+        gh.create_response = response
+        first = _file_blocked(gh)
+        assert first["filed"] is False and "error" in first, first
+        record = adversarial._followup_record_path(_blocked_followup()["key"])
+>       assert record.exists(), "an ambiguous create must leave a durable pending receipt"
+E       AssertionError: an ambiguous create must leave a durable pending receipt
+E       assert False
+E        +  where False = exists()
+E        +    where exists = PosixPath('/tmp/pytest-of-runner/pytest-3/test_followup_ambiguous_create0/adversarial-panels/8c157e6933745422ecc501666eb472290373ea7b00220ca526302ae8e81235bb.followup.json').exists
+
+tests/test_adversarial_review_at_head.py:237: AssertionError
+_____ test_followup_ambiguous_create_reconciles_before_any_retry[timeout] ______
+
+brain = PosixPath('/tmp/pytest-of-runner/pytest-3/test_followup_ambiguous_create1')
+response = 'timeout'
+
+    @pytest.mark.parametrize("response", ["failed", "timeout", "malformed"])
+    def test_followup_ambiguous_create_reconciles_before_any_retry(brain, response):
+        gh = FollowupGitHub()
+        gh.create_response = response
+        first = _file_blocked(gh)
+        assert first["filed"] is False and "error" in first, first
+        record = adversarial._followup_record_path(_blocked_followup()["key"])
+>       assert record.exists(), "an ambiguous create must leave a durable pending receipt"
+E       AssertionError: an ambiguous create must leave a durable pending receipt
+E       assert False
+E        +  where False = exists()
+E        +    where exists = PosixPath('/tmp/pytest-of-runner/pytest-3/test_followup_ambiguous_create1/adversarial-panels/8c157e6933745422ecc501666eb472290373ea7b00220ca526302ae8e81235bb.followup.json').exists
+
+tests/test_adversarial_review_at_head.py:237: AssertionError
+____ test_followup_ambiguous_create_reconciles_before_any_retry[malformed] _____
+
+brain = PosixPath('/tmp/pytest-of-runner/pytest-3/test_followup_ambiguous_create2')
+response = 'malformed'
+
+    @pytest.mark.parametrize("response", ["failed", "timeout", "malformed"])
+    def test_followup_ambiguous_create_reconciles_before_any_retry(brain, response):
+        gh = FollowupGitHub()
+        gh.create_response = response
+        first = _file_blocked(gh)
+        assert first["filed"] is False and "error" in first, first
+        record = adversarial._followup_record_path(_blocked_followup()["key"])
+>       assert record.exists(), "an ambiguous create must leave a durable pending receipt"
+E       AssertionError: an ambiguous create must leave a durable pending receipt
+E       assert False
+E        +  where False = exists()
+E        +    where exists = PosixPath('/tmp/pytest-of-runner/pytest-3/test_followup_ambiguous_create2/adversarial-panels/8c157e6933745422ecc501666eb472290373ea7b00220ca526302ae8e81235bb.followup.json').exists
+
+tests/test_adversarial_review_at_head.py:237: AssertionError
+_______________ test_followup_reconciles_only_the_same_panel_key _______________
+
+brain = PosixPath('/tmp/pytest-of-runner/pytest-3/test_followup_reconciles_only_0')
+
+    def test_followup_reconciles_only_the_same_panel_key(brain):
+        gh = FollowupGitHub()
+        gh.create_response = "failed"
+        _file_blocked(gh)
+        body = gh.issues[0]["body"]
+        gh.issues[0]["body"] = body.replace(_blocked_followup()["key"], "another-panel")
+        out = _file_blocked(gh)
+>       assert out.get("state") == "create_pending" and "issue" not in out, out
+E       AssertionError: {'filed': False, 'issue': 90, 'repo': 'o/r', 'label': 'priority:high', ...}
+E       assert (None == 'create_pending')
+E        +  where None = <built-in method get of dict object at 0x7f6088971f80>('state')
+E        +    where <built-in method get of dict object at 0x7f6088971f80> = {'filed': False, 'issue': 90, 'repo': 'o/r', 'label': 'priority:high', ...}.get
+
+tests/test_adversarial_review_at_head.py:258: AssertionError
+__________ test_followup_filing_is_recorded_before_source_disposition __________
+
+brain = PosixPath('/tmp/pytest-of-runner/pytest-3/test_followup_filing_is_record0')
+
+    def test_followup_filing_is_recorded_before_source_disposition(brain):
+        gh = FollowupGitHub()
+        gh.fail_source_lookup = True
+        out = _file_blocked(gh)
+>       assert out["filed"] is True and out["issue"] == 90 and "error" in out, out
+E       AssertionError: {'filed': False, 'error': 'source lookup failed'}
+E       assert (False is True)
+
+tests/test_adversarial_review_at_head.py:342: AssertionError
+____________ test_followup_concurrent_processes_create_at_most_once ____________
+
+brain = PosixPath('/tmp/pytest-of-runner/pytest-3/test_followup_concurrent_proce0')
+
+    def test_followup_concurrent_processes_create_at_most_once(brain):
+        ctx = multiprocessing.get_context("spawn")
+        started, release, results = ctx.Event(), ctx.Event(), ctx.Queue()
+        owner = ctx.Process(target=_followup_process, args=(str(brain), started, release, results))
+        contender = ctx.Process(target=_followup_process, args=(str(brain), started, release, results))
+        try:
+            owner.start()
+            assert started.wait(10), "owner did not reach create"
+            contender.start()
+            contender.join(10)
+            assert contender.exitcode == 0, "contender failed or waited behind the lock"
+            release.set()
+            owner.join(10)
+            assert owner.exitcode == 0
+            outputs = [results.get(timeout=5), results.get(timeout=5)]
+>           assert sum(out["filed"] for out in outputs) == 1, outputs
+E           AssertionError: [{'filed': True, 'issue': 90, 'repo': 'o/r', 'label': 'priority:high', ...}, {'filed': True, 'issue': 90, 'repo': 'o/r', 'label': 'priority:high', ...}]
+E           assert 2 == 1
+E            +  where 2 = sum(<generator object test_followup_concurrent_processes_create_at_most_once.<locals>.<genexpr> at 0x7f608842c380>)
+
+tests/test_adversarial_review_at_head.py:385: AssertionError
+_____ test_followup_crashed_process_keeps_pending_create_and_releases_lock _____
+
+brain = PosixPath('/tmp/pytest-of-runner/pytest-3/test_followup_crashed_process_0')
+
+    def test_followup_crashed_process_keeps_pending_create_and_releases_lock(brain):
+        ctx = multiprocessing.get_context("spawn")
+        started, release, results = ctx.Event(), ctx.Event(), ctx.Queue()
+        proc = ctx.Process(
+            target=_followup_process,
+            args=(str(brain), started, release, results),
+            kwargs={"crash": True},
+        )
+        try:
+            proc.start()
+            proc.join(10)
+            assert proc.exitcode == 27, "create crash did not occur"
+            gh = FollowupGitHub()
+            out = _file_blocked(gh)
+>           assert out.get("state") == "create_pending", out
+E           AssertionError: {'filed': True, 'issue': 90, 'repo': 'o/r', 'label': 'priority:high', ...}
+E           assert None == 'create_pending'
+E            +  where None = <built-in method get of dict object at 0x7f6088a0c580>('state')
+E            +    where <built-in method get of dict object at 0x7f6088a0c580> = {'filed': True, 'issue': 90, 'repo': 'o/r', 'label': 'priority:high', ...}.get
+
+tests/test_adversarial_review_at_head.py:413: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_adversarial_review_at_head.py::test_followup_search_failure_or_malformed_result_never_creates[reply0] - AssertionError: {'filed': True, 'issue': 90, 'repo': 'o/r', 'label': 'priority:high', ...}
+assert (True is False)
+FAILED tests/test_adversarial_review_at_head.py::test_followup_ambiguous_create_reconciles_before_any_retry[failed] - AssertionError: an ambiguous create must leave a durable pending receipt
+assert False
+ +  where False = exists()
+ +    where exists = PosixPath('/tmp/pytest-of-runner/pytest-3/test_followup_ambiguous_create0/adversarial-panels/8c157e6933745422ecc501666eb472290373ea7b00220ca526302ae8e81235bb.followup.json').exists
+FAILED tests/test_adversarial_review_at_head.py::test_followup_ambiguous_create_reconciles_before_any_retry[timeout] - AssertionError: an ambiguous create must leave a durable pending receipt
+assert False
+ +  where False = exists()
+ +    where exists = PosixPath('/tmp/pytest-of-runner/pytest-3/test_followup_ambiguous_create1/adversarial-panels/8c157e6933745422ecc501666eb472290373ea7b00220ca526302ae8e81235bb.followup.json').exists
+FAILED tests/test_adversarial_review_at_head.py::test_followup_ambiguous_create_reconciles_before_any_retry[malformed] - AssertionError: an ambiguous create must leave a durable pending receipt
+assert False
+ +  where False = exists()
+ +    where exists = PosixPath('/tmp/pytest-of-runner/pytest-3/test_followup_ambiguous_create2/adversarial-panels/8c157e6933745422ecc501666eb472290373ea7b00220ca526302ae8e81235bb.followup.json').exists
+FAILED tests/test_adversarial_review_at_head.py::test_followup_reconciles_only_the_same_panel_key - AssertionError: {'filed': False, 'issue': 90, 'repo': 'o/r', 'label': 'priority:high', ...}
+assert (None == 'create_pending')
+ +  where None = <built-in method get of dict object at 0x7f6088971f80>('state')
+ +    where <built-in method get of dict object at 0x7f6088971f80> = {'filed': False, 'issue': 90, 'repo': 'o/r', 'label': 'priority:high', ...}.get
+FAILED tests/test_adversarial_review_at_head.py::test_followup_filing_is_recorded_before_source_disposition - AssertionError: {'filed': False, 'error': 'source lookup failed'}
+assert (False is True)
+FAILED tests/test_adversarial_review_at_head.py::test_followup_concurrent_processes_create_at_most_once - AssertionError: [{'filed': True, 'issue': 90, 'repo': 'o/r', 'label': 'priority:high', ...}, {'filed': True, 'issue': 90, 'repo': 'o/r', 'label': 'priority:high', ...}]
+assert 2 == 1
+ +  where 2 = sum(<generator object test_followup_concurrent_processes_create_at_most_once.<locals>.<genexpr> at 0x7f608842c380>)
+FAILED tests/test_adversarial_review_at_head.py::test_followup_crashed_process_keeps_pending_create_and_releases_lock - AssertionError: {'filed': True, 'issue': 90, 'repo': 'o/r', 'label': 'priority:high', ...}
+assert None == 'create_pending'
+ +  where None = <built-in method get of dict object at 0x7f6088a0c580>('state')
+ +    where <built-in method get of dict object at 0x7f6088a0c580> = {'filed': True, 'issue': 90, 'repo': 'o/r', 'label': 'priority:high', ...}.get
+8 failed, 56 deselected in 1.69s
