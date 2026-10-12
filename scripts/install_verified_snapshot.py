@@ -42,6 +42,7 @@ OWNED_FILES = (
     "AGENTS.md",
     "ORCHESTRATOR.md",
     "IMPROVEMENT_BACKLOG.md",
+    "orchestrator-loop.svg",  # read by tests/test_orchestrator_loop_svg.js
     "repo_review_registry.json",
     "experiments/hypotheses.json",
     "experiments/features.json",
