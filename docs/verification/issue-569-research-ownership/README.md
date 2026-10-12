@@ -1,5 +1,48 @@
 # Issue #569: research ownership recovery
 
+## Current keepalive validation
+
+The working-tree change strengthens the existing auto-pilot pause regression with a single
+production feed containing both reproduced ownership failures, the existing pause control,
+and an eligible unowned prioritized issue. Only the unowned issue reaches scheduler intake.
+Scheduler rejection now checks normalized case and whitespace for every tested ownership family.
+These extend existing test methods; no collection floor, ceiling, exemption or workflow changed.
+
+Verified task results:
+
+- [x] `priority:high` + `agents:paused` contributes zero eligible subjects.
+- [x] `priority:high` + `agent:codex` contributes zero eligible subjects.
+- [x] `priority:high` + `agents:auto-pilot-pause` remains excluded.
+
+Fresh original-source RED uses `backlog.py` from
+`4a3dcf25addce6399d3267df42fb3b7063150651`, with SHA-256
+`6ce66422bafff61e015cbfc644443be662cda63eb1ce9f27dcded9ab7b1250f8`.
+Both reproduced assertions fail with `eligible=1`; the original auto-pilot pause control stays
+`eligible=0`. Current production passes all 23 ownership/feed-validation/wiring unittest cases.
+Raw logs are `keepalive-original-red.log` and `keepalive-current-green.log`.
+
+This change is **uncommitted**: Black and pytest are absent, PyPI DNS resolution fails, and both
+mandated Black commands fail with `command not found`. The original intake/control/followup
+pytest command cannot run here. The Python pre-commit gate prohibits committing or pushing.
+`git diff --check` passes; this does not replace Black or pytest.
+
+Remote evidence applies only to existing head
+`d5ea3d14577c7faffed2f31c9b02f8e3ba01c993`, not these working-tree changes. PR570 is open and
+ready, with no review threads returned. Readback returns 82 check runs and all 20 suites,
+including seven queued suites. The hosted verifier log reports 3205 passed, 26 skipped,
+97 selftests and 3 of 5 gates passing. The prior maintained expected-check report still names
+`auto-pilot`, `format-pause-wakeup` and `gate` as unreported. Complete expected topology has not
+been cleared; no actual `verify:compare` verdict was found in checks, statuses or comments.
+`merge_guard` dry-run fails closed with `review-thread GraphQL query failed`; no merge occurred.
+
+Automatic approval review rejected updating PR task checkboxes, adding `needs-human`, and
+posting the blocker comment because each mutation requires approval while this run's policy
+is `never`. Those remote mutations did not occur. Run Black and the relevant pytest suites
+in a capable environment before committing; then resolve the existing expected-check blocker,
+read every suite at the resulting head, satisfy the seven-minute floor and thread clearance,
+use the required active merge guard, and consume actual `verify:compare` evidence.
+Launching remains off; no live Brain, installed mirror, dispatch or deployment was activated.
+
 ## Current recovery, 2026-10-12
 
 The existing PR is rebased onto merged source PR566, main

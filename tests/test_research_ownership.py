@@ -67,6 +67,31 @@ class ResearchOwnershipTests(unittest.TestCase):
         self.assertEqual(feed["counts"]["eligible"], 0)
         self.assertEqual(self.candidates(feed["items"]), [])
 
+        # Keep the existing pause control beside both reproduced failures and an eligible
+        # subject: rejecting ownership must not discard the rest of a repository's feed.
+        issues = [
+            {
+                "number": number,
+                "labels": ["priority:high", *labels],
+                "title": "Research subject",
+                "body": "Implement the parser",
+            }
+            for number, labels in enumerate(
+                (
+                    ["agents:auto-pilot-pause"],
+                    ["agents:paused"],
+                    ["agent:codex"],
+                    [],
+                ),
+                start=1,
+            )
+        ]
+        feed = backlog.build_research_items(["o/r"], lambda repo: issues, lambda repo: [])
+        self.assertEqual(feed["counts"]["open_issues"], 4)
+        self.assertEqual(feed["counts"]["eligible"], 1)
+        self.assertEqual([item["target"] for item in feed["items"]], ["o/r#4"])
+        self.assertEqual([job["target"] for job in self.candidates(feed["items"])], ["o/r#4"])
+
     def test_every_pause_and_agent_family_is_excluded(self):
         for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS):
             for spelling in (label, f"  {label.upper()}  "):
@@ -82,17 +107,18 @@ class ResearchOwnershipTests(unittest.TestCase):
 
     def test_scheduler_rechecks_injected_research_ownership(self):
         for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS):
-            with self.subTest(label=label):
-                item = {
-                    "target": "o/r#1",
-                    "task_type": "implement",
-                    "lane": "research",
-                    "labels": ["priority:high", label],
-                    "body": "Implement the parser",
-                }
-                with patch.object(research_scheduler, "should_test") as select:
-                    self.assertEqual(self.candidates([item]), [])
-                    select.assert_not_called()
+            for spelling in (label, f"  {label.upper()}  "):
+                with self.subTest(label=spelling):
+                    item = {
+                        "target": "o/r#1",
+                        "task_type": "implement",
+                        "lane": "research",
+                        "labels": ["priority:high", spelling],
+                        "body": "Implement the parser",
+                    }
+                    with patch.object(research_scheduler, "should_test") as select:
+                        self.assertEqual(self.candidates([item]), [])
+                        select.assert_not_called()
 
     def test_unowned_prioritised_issue_reaches_scheduler(self):
         for label in (None, "agent-ready", "agents:keepalive"):
