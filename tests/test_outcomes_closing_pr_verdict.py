@@ -237,7 +237,8 @@ def test_no_route_learner_scores_an_unattributed_row(brain, learner):
 def test_the_capability_tally_never_counts_an_unattributed_fail(brain, monkeypatch):
     """A legacy row relabelled by class alone keeps its FAIL; the tally must still not count it.
     Since 2026-10-12 every class in the excluded set tallies `learning_excluded`, whichever branch
-    made the row a failure (it was `churn_unattributed` here, and a verifier FAIL was not refused)."""
+    made the row a failure (it was `churn_unattributed` here, and a verifier FAIL was not refused).
+    """
     ledger = brain / "capabilities.json"
     now = int(time.time())
     cap = capabilities.register_compiled_version(
