@@ -1,5 +1,40 @@
 # Issue 532: Seatbelt regex literal repair
 
+## Complete pre-change-head job recovery (2026-10-12)
+
+[c49b250-hosted-ci.json](c49b250-hosted-ci.json) retains authenticated REST metadata for
+head `c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f`, tested as synthetic merge `cc91b16`.
+Existing CI run `38201036896` and Gate run `38201037364` both completed successfully.
+Attempt-specific REST job lists returned all **4 CI jobs and 11 Gate jobs**, with declared
+totals and per-job head/attempt bindings; both run identities were reread after recovery.
+Checkout measured **2,877 passed / 26 skipped / 2,903 collected**; the disposable flat copy
+measured **2,856 passed / 47 skipped / 2,903 collected**. Each ran 97 selftests and three
+of five capability gates. Gate's Python job was skipped. The strict hosted checker rejects
+this snapshot for its missing executed Python matrix, as expected; complete metadata does
+not establish full hosted acceptance.
+
+The repo-specific `scripts/recover_seatbelt_ci.js` reads existing run metadata, follows all
+attempt-specific job pages, requires stable totals and unique job identities, checks every
+head/attempt binding, and rereads each run to reject a concurrent rerun. It retains selected
+measurement lines and validates the measured CI products, preserving skipped Gate jobs.
+Its authenticated-runner CLI performs GET requests only:
+
+```sh
+node scripts/recover_seatbelt_ci.js c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f 38201036896 38201037364
+node tests/test_recover_seatbelt_ci.js
+```
+
+All **55 Node receipt/recovery tests** and four local quoting tests pass. Thirteen new
+recovery tests exercise complete authentic REST replay, pagination omissions/overlaps,
+changed attempts/totals, wrong heads, late failed jobs and skipped Gate preservation.
+The native and original archive checkers still validate four production RED failures,
+byte-identical restoration GREEN, five native probes and twelve original boundary passes.
+No Python files changed. These receipts cover the pre-change head, not the new recovery
+helper commit. Original focused-only command evidence, final-head acceptance, review/floor
+gates and actual post-merge comparison remain pending; neither remaining checkbox is marked
+complete. No real agents or workflows were rerun, and no merge, installation or deployment
+was performed.
+
 ## Bounded current-head measurements and task reconciliation (2026-10-12)
 
 [0f88580-ci-discovery.json](0f88580-ci-discovery.json) recovers existing CI/Gate job metadata
