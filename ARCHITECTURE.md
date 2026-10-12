@@ -504,6 +504,19 @@ abcd-experiment moves from `not_yet_measurable` to `unscoreable`, and its `acted
 Every other row is identical. No stage, component or surface moved, so the loop diagram is
 unchanged.
 
+**A verified winner can now be delivered and scored (2026-10-12, owner decisions).** Two of the
+three breaks above are closed. `exp_abcd.followup` passes `default_delivery_discovery` to every
+reconcile, so a `candidate_ready` promotion links itself when exactly one PR in its repo names the
+candidate id in its body and the keepalive ingester has recorded exactly one run for that PR, the
+row `default_outcome_lookup` reads. No PR, two PRs, an unrecorded PR or an unreadable GitHub link
+nothing and are reported as `delivery_discovery:<status>`. The candidate body now tells its
+deliverer to name the id. The root synthesis run, where `default_mirror_outcome` lands the
+delivery, carries the `abcd-experiment` edge; a resume run does not, because it is not the outcome
+anchor and an edge there would wait forever. Nothing here opens a PR: publication stays with the
+repository's issue/PR workflow. The first real trial is strategy434, delivered to PAEM#2336. The
+remaining break, intake, is unchanged. No stage, component or surface moved, so the loop diagram
+is unchanged.
+
 **The research lane has its own input (2026-10-12, owner decision: build intake, keep launching
 off).** Its only input was `backlog.json`, written by dispatch discovery, which retired with the
 dispatch lane: the file was last written 2026-09-17 with 0 issues, and every tick printed

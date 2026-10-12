@@ -737,6 +737,15 @@ def _break_caveat(local_gate: dict) -> str:
     return ""
 
 
+def _candidate_id(state: dict) -> str:
+    return (
+        "synth-candidate:"
+        + hashlib.sha256(
+            f"{state['experiment_id']}|{(state.get('synthesis') or {}).get('commit')}|{state['verification'].get('evidence_hash')}".encode()
+        ).hexdigest()[:24]
+    )
+
+
 def _candidate_body(state: dict, exp_dir: Path) -> str:
     lineage = state["lineage"]
     verification = state["verification"]
@@ -777,6 +786,8 @@ Experiment `{lineage.get('experiment_id')}` produced a locally committed synthes
 - Deliver only commit `{(state.get('synthesis') or {}).get('commit')}` and the paths listed below.
 - Preserve experiment, arm, member, evaluator, synthesis, profile, and shared-capacity lineage.
 - Route the work through the repository's existing issue/PR and Workflows Keepalive ownership.
+- Name `{_candidate_id(state)}` in the delivering PR's body: `exp_abcd.py followup` links the
+  delivery by that id, and an unnamed PR is never credited to this experiment.
 
 ## Non-Goals
 
@@ -811,12 +822,7 @@ def compile_candidate(
         raise ValueError("candidate compilation requires synth_verified")
     root = Path(exp_dir)
     body = _candidate_body(state, root)
-    candidate_id = (
-        "synth-candidate:"
-        + hashlib.sha256(
-            f"{state['experiment_id']}|{(state.get('synthesis') or {}).get('commit')}|{state['verification'].get('evidence_hash')}".encode()
-        ).hexdigest()[:24]
-    )
+    candidate_id = _candidate_id(state)
     body_hash = _hash(body)
     candidate = {
         "schema_version": SCHEMA_VERSION,
@@ -862,6 +868,131 @@ def compile_candidate(
     return state, candidate
 
 
+def _apply_delivery_link(
+    state: dict,
+    *,
+    delivery_run_id: str,
+    delivery_ref: str,
+    pr_number: int | None,
+    now: int | None,
+    reason: str = "external_delivery_link_recorded",
+) -> dict:
+    """Record the delivery on an in-memory state and cross `candidate_ready`. No lock, no write:
+    the caller holds the experiment lock and persists the state."""
+    if not delivery_run_id or not delivery_ref:
+        raise ValueError("delivery link requires run id and issue/PR reference")
+    if state.get("delivery_phase") not in {"candidate_ready", "delegated_or_pr", "merged"}:
+        raise ValueError("delivery link requires a candidate_ready promotion")
+    existing = state.get("delivery") or {}
+    if existing and (
+        existing.get("run_id") != delivery_run_id or existing.get("ref") != delivery_ref
+    ):
+        raise ValueError("conflicting delivery link")
+    state["delivery"] = {
+        "run_id": delivery_run_id,
+        "ref": delivery_ref,
+        "pr_number": pr_number,
+        "linked_ts": int(now or time.time()),
+    }
+    if state["delivery_phase"] == "candidate_ready":
+        state, _ = transition(
+            state, "delegated_or_pr", reason=reason, evidence=state["delivery"], now=now
+        )
+    return state
+
+
+def _gh_json(argv: list[str], timeout: int = 60) -> Any:
+    proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout or "gh failed").strip()[:200])
+    return json.loads(proc.stdout or "null")
+
+
+def _prs_naming(repo: str, candidate_id: str, gh_fn: Callable[[list[str]], Any]) -> list[int]:
+    """Every PR in `repo` whose body names `candidate_id`, read over REST.
+
+    Search is only the index: GitHub ranks by relevance and tokenises the id, so each hit is
+    re-read and kept only when its body carries the exact id."""
+    found = gh_fn(
+        [
+            "gh",
+            "api",
+            "-X",
+            "GET",
+            "search/issues",
+            "-f",
+            f'q=repo:{repo} is:pr "{candidate_id}"',
+            "-f",
+            "per_page=100",
+        ]
+    )
+    numbers = []
+    for item in (found or {}).get("items") or []:
+        number = item.get("number")
+        if isinstance(number, int) and candidate_id in str(item.get("body") or ""):
+            numbers.append(number)
+    return sorted(set(numbers))
+
+
+def default_delivery_discovery(
+    state: dict,
+    *,
+    gh_fn: Callable[[list[str]], Any] | None = None,
+    db_path: str | Path | None = None,
+) -> dict:
+    """Find the delivery of a `candidate_ready` promotion; never create one.
+
+    The candidate tells its deliverer to name its id in the PR body. The delivery RECORD is the
+    run the keepalive ingester writes for that PR (`keepalive:<repo>#<N>:<agent>`), the row
+    `default_outcome_lookup` reads and the durability sweep judges. So a link needs exactly one PR
+    naming the id AND exactly one ingested run for it. Anything else is reported by its status and
+    links nothing: no PR yet, two PRs (which one delivered is not this reader's guess), a PR the
+    ingester has not recorded yet (it will, so the next followup retries), or GitHub unreadable.
+    Added 2026-10-12: until then nothing called `link_delivery`, and 0 of 257 promotions crossed
+    `candidate_ready`."""
+    candidate_id = str((state.get("candidate") or {}).get("candidate_id") or "")
+    repo = str(state.get("repo") or "")
+    if not candidate_id or not repo:
+        return {"status": "no_candidate"}
+    try:
+        prs = _prs_naming(repo, candidate_id, gh_fn or _gh_json)
+    except Exception as exc:  # noqa: BLE001 — a failed read is reported, never read as "no PR"
+        return {"status": "unavailable", "error": str(exc)[:200]}
+    if not prs:
+        return {"status": "no_pr"}
+    if len(prs) > 1:
+        return {"status": "ambiguous_pr", "prs": prs}
+    pr_number = prs[0]
+    path = Path(db_path or feedback.DB_PATH)
+    if not path.exists():
+        return {"status": "record_pending", "pr_number": pr_number}
+    conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+    try:
+        runs = [
+            row[0]
+            for row in conn.execute(
+                "SELECT run_id FROM runs WHERE run_id LIKE ? ESCAPE '\\' ORDER BY run_id",
+                (
+                    "keepalive:"
+                    + repo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                    + f"#{pr_number}:%",
+                ),
+            )
+        ]
+    finally:
+        conn.close()
+    if not runs:
+        return {"status": "record_pending", "pr_number": pr_number}
+    if len(runs) > 1:
+        return {"status": "ambiguous_record", "pr_number": pr_number, "runs": runs}
+    return {
+        "status": "linked",
+        "run_id": runs[0],
+        "ref": f"{repo}#{pr_number}",
+        "pr_number": pr_number,
+    }
+
+
 def link_delivery(
     exp_dir: str | Path,
     *,
@@ -875,31 +1006,15 @@ def link_delivery(
     root = Path(exp_dir)
     with _locked(root):
         state = load_state(root)
-        if state is None or state.get("delivery_phase") not in {
-            "candidate_ready",
-            "delegated_or_pr",
-            "merged",
-        }:
+        if state is None:
             raise ValueError("delivery link requires a candidate_ready promotion")
-        existing = state.get("delivery") or {}
-        if existing and (
-            existing.get("run_id") != delivery_run_id or existing.get("ref") != delivery_ref
-        ):
-            raise ValueError("conflicting delivery link")
-        state["delivery"] = {
-            "run_id": delivery_run_id,
-            "ref": delivery_ref,
-            "pr_number": pr_number,
-            "linked_ts": int(now or time.time()),
-        }
-        if state["delivery_phase"] == "candidate_ready":
-            state, _ = transition(
-                state,
-                "delegated_or_pr",
-                reason="external_delivery_link_recorded",
-                evidence=state["delivery"],
-                now=now,
-            )
+        state = _apply_delivery_link(
+            state,
+            delivery_run_id=delivery_run_id,
+            delivery_ref=delivery_ref,
+            pr_number=pr_number,
+            now=now,
+        )
         _atomic_json(state_path(root), state)
         return state
 
@@ -1114,6 +1229,7 @@ def reconcile(
     now: int | None = None,
     max_steps: int = 6,
     dry_run: bool = False,
+    delivery_fn: Callable[[dict], dict] | None = None,
 ) -> dict:
     root = Path(exp_dir)
     ts = int(now or time.time())
@@ -1355,8 +1471,24 @@ def reconcile(
                 continue
 
             if phase == "candidate_ready":
-                # Only an explicit external delivery link may cross this boundary.
+                # Only an external delivery may cross this boundary: a PR naming the candidate
+                # with its ingested run (`delivery_fn`), or the `link-delivery` CLI.
+                found: dict[str, Any] = (
+                    delivery_fn(state) if delivery_fn else {"status": "not_consulted"}
+                )
+                if found.get("status") == "linked":
+                    state = _apply_delivery_link(
+                        state,
+                        delivery_run_id=found["run_id"],
+                        delivery_ref=found["ref"],
+                        pr_number=int(found["pr_number"]),
+                        now=ts,
+                        reason="delivery_discovered",
+                    )
+                    actions.append(f"delivery_linked:{found['ref']}")
+                    continue
                 actions.append("awaiting_external_delivery_link")
+                actions.append(f"delivery_discovery:{found.get('status')}")
                 break
 
             if phase in {"delegated_or_pr", "merged"}:

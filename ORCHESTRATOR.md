@@ -518,6 +518,10 @@ cursor-agent live outside the default PATH):
   evaluator, synthesis, profile, shared-capacity, and accepted influence lineage. It is candidate-only:
   use `python3 src/synthesis_promotion.py link-delivery <experiment-dir> --run-id RUN --ref owner/repo#N`
   only after the existing Workflows auto-pilot/Keepalive workflow has created the delivery record.
+  Since 2026-10-12 `followup` finds the delivery itself (`default_delivery_discovery`): exactly one
+  PR in the repo whose body names the candidate id, and exactly one keepalive-ingested run for it.
+  Anything else links nothing and is reported as `delivery_discovery:<status>`. The root synthesis
+  run carries the `abcd-experiment` edge, so a delivered winner's merge and durability score it.
   Repeated followup is idempotent; merge/durability outcomes mirror to the synthesis/source evidence,
   while failed verification, expiry, or reversion retires the candidate without remote mutation.
 - **Check human calibration readiness (NEW)** — `python3 src/human_calibration.py [--json]` parses structured
