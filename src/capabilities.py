@@ -867,6 +867,9 @@ def _causal_readiness(cap: dict[str, Any], rows: list[dict], now: int) -> dict[s
     )
     advisory_self_edges = sum(1 for row in accepted if row.get("tally_class") == "advisory_self")
     learning_excluded = sum(1 for row in terminal if row.get("tally_class") == "learning_excluded")
+    role_association_edges = sum(
+        1 for row in accepted if row.get("tally_class") == "role_association"
+    )
     rework = sum(1 for row in terminal if row["rework"])
     latest = max((int(row["observed_ts"] or 0) for row in terminal), default=0)
     max_age = int(policy["max_evidence_age_days"]) * 86400
@@ -890,6 +893,7 @@ def _causal_readiness(cap: dict[str, Any], rows: list[dict], now: int) -> dict[s
         "advisory_self_edges": advisory_self_edges,
         # §2's classes, never a success or a failure: counted here so the set-aside is a number.
         "learning_excluded": learning_excluded,
+        "role_association_edges": role_association_edges,
         "rework": rework,
         "latest_evidence_ts": latest,
     }
@@ -1194,6 +1198,7 @@ def reconcile_causal_lifecycle(
                     "churn_unattributed": readiness.get("churn_unattributed", 0),
                     "advisory_self_edges": readiness.get("advisory_self_edges", 0),
                     "learning_excluded": readiness.get("learning_excluded", 0),
+                    "role_association_edges": readiness.get("role_association_edges", 0),
                     "status": cap.get("status"),
                 }
             )

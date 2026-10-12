@@ -185,3 +185,28 @@ def test_a_durable_subject_is_a_success_tally(ledger):
     ]
     ready = capabilities._causal_readiness(cap, rows, NOW + 30)
     assert ready["durable_subjects"] == ["owner/repo#1"], ready
+
+
+def test_a_capability_on_a_role_run_is_an_association_not_a_second_delivery(ledger):
+    """Any capability other than the role's own, on a role run, is `role_association` (the
+    2026-08-21 decision for `offload`). The role run's outcome is a copy of its acting run's, and
+    the acting run carries the capability's own edge: tallied, one delivery counts twice."""
+    cap = _register(ledger)
+    role_run = "role:triage:gemini:1"
+    feedback.record_run(role_run, "triage:1-items", "role:triage", "gemini", role_name="triage")
+    feedback.record_capability_consumption(
+        capability_id=cap["capability_id"],
+        capability_version_id=cap["capability_version_id"],
+        source_run_id="capability-output:role",
+        target_run_id=role_run,
+        accepted=True,
+        producer="selftest",
+    )
+    # What propagation writes onto a role run when its acting run merges durably.
+    feedback.record_outcome(role_run, adjudicated_verdict="PASS", merged=True, durability="durable")
+    _consumed(cap, 2, adjudicated_verdict="PASS", merged=True, durability="durable")
+    assert sorted(_tally(cap)) == ["role_association", "success"]
+    result = _reconcile(cap, ledger)
+    assert result["routing_prior"]["alpha"] == 2.0, result["routing_prior"]
+    assert result["readiness"]["durable_subjects"] == ["owner/repo#2"], result["readiness"]
+    assert result["readiness"]["role_association_edges"] == 1, result["readiness"]
