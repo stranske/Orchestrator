@@ -46,6 +46,7 @@ import execution_profiles
 import feedback
 import fleet_shapes
 import judge_reliability
+import paths
 import provision
 import research_subjects
 import research_usage_guard
@@ -55,7 +56,9 @@ import watch
 import worktree_git
 
 ORCH = Path(__file__).resolve().parent
-EXP_DIR = Path(os.environ.get("ORCH_EXP_DIR", ORCH / "experiments"))
+# The tick and preparation share one store, independent of flat versus src/ layout.
+# Callers using different checkouts share the tick's absolute ORCH_EXP_DIR override.
+EXP_DIR = Path(os.environ.get("ORCH_EXP_DIR", paths.checkout_root(ORCH) / "experiments"))
 DISPATCH_LOG_DIR = (
     Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff")) / "dispatch-logs"
 )

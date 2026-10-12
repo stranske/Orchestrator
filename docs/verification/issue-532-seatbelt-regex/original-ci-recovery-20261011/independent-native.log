@@ -1,0 +1,7 @@
+native Seatbelt probe: OK
+.native Seatbelt probe: OK
+native Seatbelt probe: OK
+.native Seatbelt probe: OK
+.native Seatbelt probe: OK
+.
+4 passed in 0.45s

@@ -1,0 +1,29 @@
+{
+  "schema": "original-ci-recovery/v1",
+  "repo": "stranske/Orchestrator",
+  "source_pr": 524,
+  "original_head": "2c4509df9b53a32b4eb4143d7ba396808e38b49a",
+  "original_merge": "2465397667427d2f3e84f422adbbf461e88eb7ea",
+  "run_id": 38176809124,
+  "artifact_id": 11716675610,
+  "artifact_name": "gate-coverage-3.12-1",
+  "artifact_created_at": "2026-10-11T21:38:43Z",
+  "artifact_digest": "c64668c7ad38cac9cf207f7538b21f58cef204da1dca936af31123f53e9a7bbb",
+  "archive_crc_valid": true,
+  "original_junit_sha256": "51840e65bfe2413e7c0aae783cdcb5ca92641cbd6e149e5dfc1d090cf4e660fc",
+  "focused_cases": 12,
+  "case_extraction": "Original case records selected from authentic full-suite JUnit; not a historical focused-only command transcript",
+  "candidate_source_head": "eaa1d9c85d668e756eb4ae810bcd33e2519e8865",
+  "current_native_junit_sha256": "045436a79f817b4f25fa90b5c5620a1f70433a28f41d010ff58926240da78105",
+  "current_native_tests": 4,
+  "current_native_profiles": 5,
+  "provider_verdict": "Original524 CONCERNS/CONCERNS NON_PASS retained; no new provider result",
+  "files": {
+    "independent-hash-check.json": "102546123d47587d823692e9054a9d49a4939b856222853a77702d3fcc755f97",
+    "independent-native.log": "9bd77afdc3f23e9af69fae78d0673c9afd27679a95f99a121e83b1e6afcba8de",
+    "README.md": "b944ed8a0a7c48898d409e03aea88f48d7d3f2c1e69323b818673f5b2f688f7e",
+    "independent-native.xml": "045436a79f817b4f25fa90b5c5620a1f70433a28f41d010ff58926240da78105",
+    "gate-coverage-3.12-1.zip": "c64668c7ad38cac9cf207f7538b21f58cef204da1dca936af31123f53e9a7bbb",
+    "original-boundary-cases.xml": "6447894fd044e0677e4c4ce9eccc84091768fd0fc948e04994a20f3d683d70ed"
+  }
+}

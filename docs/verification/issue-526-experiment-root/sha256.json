@@ -1,0 +1,15 @@
+{
+  "docs/verification/issue-526-experiment-root/526-baseline-red.log": "e20e8333077b2e8458c8d12a122a3d046f2ce5bae544acb8d2eae49850e6e667",
+  "docs/verification/issue-526-experiment-root/526-baseline-red.xml": "3901451ffae0099c4776161bca6db08b3d328f73874ba96fb760de168b652bca",
+  "docs/verification/issue-526-experiment-root/README.md": "991cfaea39991aa0bf18915338612adb18e38d9d5ba55fe1a40f9bf1b064326e",
+  "docs/verification/issue-526-experiment-root/full-verify.log": "8b7f9516eedd70e42400378d6dd0f8adb6bda9ff2bbc9593a855631234e50047",
+  "docs/verification/issue-526-experiment-root/green.log": "2a0800dfb559d58cdc5cabc789755b39a25cb82f22b8afa87b1223d2ee82a1fc",
+  "docs/verification/issue-526-experiment-root/green.xml": "2ec63ad98a45ac846518da2cad8406e202059e127aa1d6512d5b62b2cc7f3153",
+  "docs/verification/issue-526-experiment-root/red.log": "993dfb24bdc2ac046bc4ff6f31bfa3b84ee17f8b0d4c8d1f52812fcb4a9635da",
+  "docs/verification/issue-526-experiment-root/red.xml": "17007fff3e9161df95d8b052e7b66ab489d202900ba01c8ae90039d8f0294e4f",
+  "docs/verification/issue-526-experiment-root/results.json": "cc53f175312f1cfc1a183657c98f0d2186857ce7cef87d98766a69f0ca881b70",
+  "src/exp_abcd.py": "ee0c90d4fdca12e657ae20e5c29fabe4895b1521423858bde6171c2824a36f2c",
+  "src/strategy_experiment.py": "580f778a9c2790aa2e62f52eb9bbd3c72079fc426f3c1aa3034648788d88ccda",
+  "tests/test_strategy_experiment_subject.py": "ec8b5b35105aaf2c9e5d363a16876fe245f342304b4788aa30be620e5e11a782",
+  ".verify-floor.json": "e02c636626785d1967e62b2d717d82ba355589509e412422305fb37e2b522e17"
+}

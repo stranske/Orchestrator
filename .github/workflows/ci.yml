@@ -88,6 +88,13 @@ jobs:
         with:
           python-version: '3.14'
 
+      # Run native shell guard regressions instead of spending the skip budget.
+      - name: Install native shell test prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends zsh
+          command -v zsh
+
       - name: Install dependencies
         run: python -m pip install --quiet pytest pyyaml coverage
 
@@ -194,6 +201,13 @@ jobs:
         with:
           python-version: '3.14'
 
+      # Run native shell guard regressions instead of spending the skip budget.
+      - name: Install native shell test prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends zsh
+          command -v zsh
+
       - name: Install dependencies
         run: python -m pip install --quiet pytest pyyaml coverage
 
@@ -280,6 +294,13 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
+
+      # Run native shell guard regressions instead of spending the skip budget.
+      - name: Install native shell test prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends zsh
+          command -v zsh
 
       - name: Install dependencies
         run: python -m pip install --quiet pytest pyyaml coverage
@@ -368,6 +389,13 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
+
+      # Run native shell guard regressions instead of spending the skip budget.
+      - name: Install native shell test prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends zsh
+          command -v zsh
 
       - name: Install dependencies
         run: python -m pip install --quiet pytest pyyaml coverage

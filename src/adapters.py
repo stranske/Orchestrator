@@ -1645,7 +1645,12 @@ def seatbelt_write_profile(protect: list[str], allow: list[str]) -> str:
     rules = ["(version 1)", "(allow default)"]
     rules += [f"(deny file-write* (subpath {_seatbelt_quote(p)}))" for p in protect]
     rules += [f"(allow file-write* (subpath {_seatbelt_quote(a)}))" for a in allow]
-    rules += [f'(deny file-write* (regex #"^{re.escape(a)}/(.*/)?\\.git(/|$)"))' for a in allow]
+    for a in allow:
+        # Escape the path for the regex, then the whole regex for the Seatbelt string literal.
+        # Pass the escaped pattern as an ordinary SBPL string. The #" reader uses different
+        # escaping; native sandbox-exec rejects the doubly escaped regex-reader form.
+        pattern = f"^{re.escape(a)}/(.*/)?\\.git(/|$)"
+        rules.append(f"(deny file-write* (regex {_seatbelt_quote(pattern)}))")
     return "".join(rules)
 
 
