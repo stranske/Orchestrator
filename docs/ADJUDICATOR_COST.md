@@ -28,3 +28,19 @@ Terminal usage is accepted only when the requested adapter transport is a CLI ev
 The metadata-only persistence regression uses a private Brain database explicitly, so an unavailable machine-local database cannot break a checkout test. Integrated collection is 2,937 nodes; all previous skip ceilings are preserved. The eight new review regression nodes exercise transport provenance, retry accumulation, zero-dollar handling, and Codex completion usage.
 
 Current bounded proof is in `docs/verification/issue-527-review-recovery/`: prior production fails seven assertions; byte-identical candidate restoration passes all 84 focused tests. The native event streams here are synthetic subprocess fixtures, not newly purchased agent calls or recovered historical cost. Full local checkout verification independently executed 2,937 tests with zero failures/skips, all 104 module selftests and all five gates. The raw summary is retained in full-checkout-verifier.txt. Hosted checks and actual post-merge comparison remain required.
+
+## PR545 cost-coverage reconciliation
+
+The coverage population contains executed backend attempts and legacy measured dollar
+receipts whose backend identity was not retained; preparation-only rows are excluded.
+Each row is counted once as measured, imputed, or unmeasured, so the three counts sum
+to the attempted denominator. Legacy measured aggregates, including retained zero
+receipts, keep their historical read-only meaning; new role-cost admission still
+requires positive complete-source dollars or an eligible estimate. A missing estimate
+is explicitly `imputed=false`; the flag becomes true only for an actual own-agent or
+global estimate. Gemini terminal usage has the same stream-json fixture coverage as
+Cursor, alongside Codex completion events.
+
+Current recovery evidence is retained in
+`docs/verification/issue-527-coverage-review-20261012/`. These are synthetic regression
+controls and checkout validation, with no paid redispatch or live Brain writes.
