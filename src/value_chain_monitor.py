@@ -9,8 +9,9 @@ The `outcome` step reads what became of an acted-on run from `outcomes` when the
 report is made, never from the influence edge's cached copy (see `_brain`), and
 classifies it as `capability_effectiveness` does, with `feedback`'s predicates. An
 edge onto a role run is not acted on; it is counted beside `acted_on`. Only a terminal
-outcome is the `outcome` step, and a learning-excluded one, one awaiting the sweep, an
-unresolvable one and an open one are counted beside it. `works` needs a durable
+outcome is the `outcome` step, and a learning-excluded one, one awaiting the sweep, one that never
+merges and an open one are counted beside it. A run that never merges is scored by verdict in
+`capability_effectiveness` (owner decision 2026-10-12), never at this merges-only step. `works` needs a durable
 success (`outcome_success`). The tick writes the readable section to
 `switch-review.md`, the file a capability verdict cites (CLAUDE.md §6).
 """
@@ -49,7 +50,7 @@ CLASS_FIELDS = {
     "terminal": "outcome",
     "excluded": "outcome_excluded",
     "awaiting_sweep": "outcome_awaiting_sweep",
-    "unresolvable": "outcome_unresolvable",
+    "no_merge": "outcome_no_merge",
     "open": "outcome_open",
 }
 # The acted-on runs, partitioned by what became of them.
@@ -86,9 +87,10 @@ SET_ASIDE = (
     ),
     (
         "outcome",
-        "outcome_unresolvable",
-        "unres",
-        "unmerged runs whose durability nothing will ever judge; never scored.",
+        "outcome_no_merge",
+        "nomerge",
+        "runs that never merge; scored by capability_effectiveness's no-merge verdict rate, "
+        "never at this step.",
     ),
     ("outcome", "outcome_open", "open", "acted-on runs with no outcome recorded yet."),
 )
@@ -196,7 +198,7 @@ def _no_outcome_break(row: Mapping[str, Any]) -> str:
     merge the durability sweep has not judged. Otherwise nothing here can ever be scored, and one
     sentinel for both would read a dead end as patience. `outcome_excluded`: every acted-on run
     that is evidence resolved into a class no learner may score; attribution, not time, would
-    change it. `outcome_unscoreable`: the rest (unmerged runs nothing will judge, a mix with
+    change it. `outcome_unscoreable`: the rest (runs that never merge, a mix with
     excluded ones). The same split `capability_effectiveness` reports as
     `excluded_only` and `unscoreable`. A row that does not carry the split stays `no_outcome`.
     """

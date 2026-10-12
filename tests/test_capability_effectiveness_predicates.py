@@ -20,8 +20,9 @@ wrote their own predicates and disagreed:
 THE RULE THIS PINS. Terminal and durable success are `feedback.outcome_is_terminal` and
 `feedback.outcome_is_durable_success`, which `capability_causal_evidence` also calls. An edge onto a
 role run is an association (`feedback.role_target_kind`), counted and never scored. A merge the
-sweep has not judged is `awaiting_sweep`; a pending run no sweep selects is `unresolvable`. An arm
-none of whose edges can ever be scored reads `unscoreable`, never `not_yet_measurable`.
+sweep has not judged is `awaiting_sweep`; a run that never merges is `no_merge`, scored by its
+verdict. An arm none of whose edges can ever be scored reads `unscoreable`, never
+`not_yet_measurable`.
 
 Every row is written by the production writers: `record_role_run` and `record_run`'s role
 inheritance for role advice, `record_capability_consumption` for a consumed capability (as
@@ -181,7 +182,7 @@ def test_a_merge_the_sweep_has_not_judged_waits_and_then_scores(brain):
     assert run in {r["run_id"] for r in durability_sweep._pending_merged_runs()}
     rep = _report(brain)
     arm = _row(rep, "deliberate-break-verifier")["accepted"]
-    assert (arm["terminal"], arm["awaiting_sweep"], arm["unresolvable"]) == (0, 1, 0), arm
+    assert (arm["terminal"], arm["awaiting_sweep"], arm["no_merge"]) == (0, 1, 0), arm
     assert arm["status"] == "not_yet_measurable", arm
     assert "deliberate-break-verifier" in rep["awaiting_outcomes"]
     feedback.record_outcome(run, durability="durable")  # the sweep's verdict
@@ -189,8 +190,9 @@ def test_a_merge_the_sweep_has_not_judged_waits_and_then_scores(brain):
     assert (arm["terminal"], arm["durable"], arm["awaiting_sweep"]) == (1, 1, 0), arm
 
 
-def test_an_unmerged_pending_run_is_unresolvable_never_awaiting(brain):
-    # An offload run: a verdict, no PR, durability left at its default. No sweep selects it.
+def test_a_run_that_never_merges_is_scored_by_verdict_never_awaiting(brain):
+    # An offload run: a verdict, no PR, durability left at its default. No sweep selects it, so it
+    # has no durability to wait for; its verdict is what it has (owner decision 2026-10-12).
     run = _consumed(
         "offload:gemini:9",
         verifier_verdict="PASS",
@@ -200,12 +202,16 @@ def test_an_unmerged_pending_run_is_unresolvable_never_awaiting(brain):
     assert run not in {r["run_id"] for r in durability_sweep._pending_merged_runs()}
     rep = _report(brain)
     arm = _row(rep, "deliberate-break-verifier")["accepted"]
-    assert (arm["terminal"], arm["awaiting_sweep"], arm["unresolvable"]) == (0, 0, 1), arm
-    assert arm["status"] == ("unscoreable (1 edges, none can be scored: 1 never resolvable)"), arm[
-        "status"
-    ]
+    assert (arm["terminal"], arm["awaiting_sweep"], arm["no_merge"]) == (0, 0, 1), arm
+    assert arm["status"] == (
+        "no_merge_only (1 attempts on 1 subjects never merge: see the verdict rate)"
+    ), arm["status"]
+    assert (arm["verdict"]["judged"], arm["verdict"]["passed"]) == (1, 1), arm["verdict"]
     assert "deliberate-break-verifier" not in rep["awaiting_outcomes"]
-    assert "1 unres" in effectiveness.format_report(rep)
+    assert "deliberate-break-verifier" in rep["no_merge_only"]
+    assert "deliberate-break-verifier" not in rep["unscoreable"]
+    text = effectiveness.format_report(rep)
+    assert "1 nomerge" in text and "1/1 subj (1 att)" in text, text
 
 
 def test_pending_merges_no_longer_lower_the_rate(brain):
@@ -224,14 +230,50 @@ def test_a_small_sample_names_what_is_still_waiting_and_what_never_will(brain):
     status = _row(_report(brain), "deliberate-break-verifier")["accepted"]["status"]
     assert status == (
         "insufficient_evidence (1/5 distinct subjects from 1 attempts; "
-        "1 awaiting the durability sweep; 1 never resolvable)"
+        "1 awaiting the durability sweep; 1 never merge, scored by verdict)"
     ), status
 
 
-def test_a_failure_verdict_is_final_whatever_the_durability(brain):
+def test_a_failure_that_never_merges_scores_by_verdict_not_durability(brain):
+    # Before 2026-10-12 this FAIL was a non-durable terminal result while a PASS in the same
+    # position never scored: only failures could count for a run that never merges.
     _consumed("offload:gemini:4", verifier_verdict="FAIL", adjudicated_verdict="FAIL")
     arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
-    assert (arm["terminal"], arm["durable"], arm["unresolvable"]) == (1, 0, 0), arm
+    assert (arm["terminal"], arm["durable"], arm["no_merge"]) == (0, 0, 1), arm
+    assert (arm["verdict"]["judged"], arm["verdict"]["passed"]) == (1, 0), arm["verdict"]
+
+
+def test_a_failure_closed_unmerged_stays_in_the_durable_rate(brain):
+    # Judged: the PR was closed, so its durability is `abandoned`, not unjudged.
+    _consumed("remote:o/r#4:codex", adjudicated_verdict="FAIL", merged=0, durability="abandoned")
+    arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+    assert (arm["terminal"], arm["no_merge"]) == (1, 0), arm
+
+
+def test_the_verdict_rate_counts_subjects_and_refuses_small_samples(brain):
+    # Five distinct no-merge subjects (offload runs keyed by their own targets), one failing twice.
+    for n in range(1, 6):
+        run = f"offload:gemini:{n}"
+        feedback.record_run(run, f"offload:task-{n}", "review", "gemini", mode="offload")
+        verdict = "FAIL" if n == 5 else "PASS"
+        _consumed_run(run, verifier_verdict=verdict, adjudicated_verdict=verdict)
+    feedback.record_run("offload:gemini:6", "offload:task-5", "review", "gemini", mode="offload")
+    _consumed_run("offload:gemini:6", verifier_verdict="FAIL", adjudicated_verdict="FAIL")
+    rep = _report(brain)
+    stats = _row(rep, "deliberate-break-verifier")["accepted"]["verdict"]
+    assert (stats["judged"], stats["judged_subjects"], stats["pass_subjects"]) == (6, 5, 4), stats
+    assert (stats["rate"], stats["status"]) == (0.8, "measured"), stats
+    # Four subjects is a refusal, never a figure.
+    four = effectiveness._verdict_stats(
+        [{"run_id": f"r{i}", "subject": f"s{i}", "verdict": "PASS"} for i in range(4)]
+    )
+    assert four["rate"] is None and four["status"].startswith("insufficient_evidence"), four
+
+
+def test_a_verifier_failure_under_an_adjudicated_pass_is_a_failing_verdict(brain):
+    _consumed("offload:gemini:7", verifier_verdict="NON_PASS", adjudicated_verdict="PASS")
+    stats = _row(_report(brain), "deliberate-break-verifier")["accepted"]["verdict"]
+    assert (stats["judged"], stats["passed"]) == (1, 0), stats
 
 
 # ---- the verifier's NON_PASS --------------------------------------------------------------------
@@ -280,9 +322,16 @@ def test_this_reader_and_capability_causal_evidence_agree(brain):
     )
     assert len(lifecycle) == len(shapes) + 1
     arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
-    assert arm["terminal"] == sum(r["terminal_outcome"] for r in lifecycle) == 6, arm
+    # On runs with a merge path the two readers agree exactly. A run that never merges is the one
+    # deliberate difference (owner decision 2026-10-12): the lifecycle still tallies its FAIL as a
+    # terminal failure; this reader scores it by verdict, outside the durable rate.
+    no_merge = [r for r in lifecycle if not r["merged"] and r["durability"] in (None, "pending")]
+    no_merge = [r for r in no_merge if r["outcome_present"]]
+    merge_path = [r for r in lifecycle if r not in no_merge]
+    assert arm["terminal"] == sum(r["terminal_outcome"] for r in merge_path) == 5, arm
     assert arm["durable"] == sum(r["tally_class"] == "success" for r in lifecycle) == 1, arm
-    assert (arm["awaiting_sweep"], arm["unresolvable"]) == (2, 1), arm
+    assert (arm["awaiting_sweep"], arm["no_merge"]) == (2, len(no_merge)) == (2, 2), arm
+    assert sum(r["terminal_outcome"] for r in no_merge) == 1, "the lifecycle's FAIL"
 
 
 def test_role_target_kind_is_the_lifecycles_advisory_self(brain):
