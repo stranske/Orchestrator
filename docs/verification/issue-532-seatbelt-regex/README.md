@@ -1,5 +1,40 @@
 # Issue 532: Seatbelt regex literal repair
 
+## Current-head CI recovery (2026-10-12)
+
+[380c160-hosted-ci.json](380c160-hosted-ci.json) retains authentic GitHub REST workflow/job
+metadata and selected checkout/measurement log lines for head
+`380c16044a15ba9a0438f845eadc4a57bb8e8266`, tested as synthetic merge `3bbe083`.
+Both CI and Gate executed product checks: checkout verifier 2,863 passed / 31 prerequisite
+skips / 2,894 collected, 97 selftests run; flat-mirror verifier 2,842 passed / 52 prerequisite
+skips / 2,894 collected; Python 3.12 and 3.13 each 2,863 passed / 31 skipped.
+Combined measurement, Black, Ruff and mypy steps also succeeded. The complete job population
+includes the expected main-only reconcile and Docker skips; it is not an all-skipped rollup.
+
+The repo-specific receipt checker now rejects wrong heads/attempts, incomplete discovery,
+missing matrix members, skipped product steps, failed jobs and absent/invalid measured counts:
+
+```sh
+node tests/test_seatbelt_hosted_ci.js
+node tests/test_seatbelt_receipts.js
+node scripts/verify_seatbelt_receipts.js \
+  docs/verification/issue-532-seatbelt-regex/380c160-hosted-ci.json \
+  380c16044a15ba9a0438f845eadc4a57bb8e8266
+```
+
+Local validation: 13 hosted-receipt and seven native-receipt checks pass, as do the four
+quoting regressions and adapters/dispatcher selftests. The native checker still binds four
+production RED failures and byte-identical restoration GREEN (five real macOS probes) to
+the unchanged production/test bytes. This Linux run reports new native acceptance UNKNOWN.
+Local pytest is absent; its measured runner reports zero collected and exit 1. Installing
+pytest/Black into `/tmp` failed, and the full local verifier attempt was interrupted without
+a verdict. No Python files changed in this round.
+
+This snapshot accepts only the recorded head. The receipt-checker commit requires its own
+hosted CI. Review/floor guards and actual post-merge comparison remain pending; neither
+remaining task checkbox is completed. No agents, merge, mirror installation or deployment
+were performed. The older notes below remain historical evidence.
+
 The candidate first regex-escapes an allowed root, then quotes the entire pattern with
 _seatbelt_quote. The rule sequence remains protected denies, allowed subpaths, then .git
 denies. The admission and argv code, and the inherited offload tests, are unchanged.

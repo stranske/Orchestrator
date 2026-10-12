@@ -113,12 +113,102 @@ async function verifyProof(root = path.resolve(__dirname, '..')) {
   return { source_sha256: results.green.sha256, red_failures: 4, green_passes: 4, native_probes: 5 };
 }
 
-module.exports = { verifyProof };
+// Repo-specific completion evidence for issue 532. This checks a retained REST snapshot,
+// not live merge readiness, review threads, or the seven-minute review floor.
+function verifyHostedCI(evidence, expectedHead) {
+  assert.match(expectedHead, /^[a-f0-9]{40}$/, 'expected head must be an exact SHA');
+  assert.equal(evidence.schema, 'seatbelt-hosted-ci/v1');
+  assert.equal(evidence.head_sha, expectedHead, 'hosted evidence covers a different head');
+  const required = {
+    CI: {
+      path: '.github/workflows/ci.yml',
+      jobs: {
+        'verify.py (real pytest counts + selftests + capability gates)': 'Verify',
+        'combined coverage (pytest + selftests, the honest number)': 'Measure combined coverage',
+        'verify.py in the flat exec-mirror shape (the tree a sync ships)':
+          "Build the flat copy with the sync's copy contract and verify it there",
+      },
+    },
+    Gate: {
+      path: '.github/workflows/pr-00-gate.yml',
+      jobs: {
+        'python ci / python 3.12': 'Pytest (unit tests with coverage)',
+        'python ci / python 3.13': 'Pytest (unit tests with coverage)',
+        'python ci / lint-format': 'Black (format check)',
+        'python ci / lint-ruff': 'Ruff (lint)',
+        'python ci / typecheck-mypy': 'Mypy (type check)',
+        summary: 'Summarize results',
+      },
+    },
+  };
+  const executed = new Map();
+  assert.equal(evidence.runs.length, Object.keys(required).length, 'wrong workflow population');
+  for (const [name, requirement] of Object.entries(required)) {
+    const matches = evidence.runs.filter(item => item.run.name === name);
+    assert.equal(matches.length, 1, `missing or duplicate workflow: ${name}`);
+    const { run: workflow, jobs: population } = matches[0];
+    assert.equal(workflow.path, requirement.path, 'wrong workflow source');
+    assert.equal(workflow.event, 'pull_request', 'wrong workflow event');
+    assert.equal(workflow.head_sha, expectedHead, 'workflow head mismatch');
+    assert.equal(workflow.status, 'completed', 'workflow unfinished');
+    assert.equal(workflow.conclusion, 'success', 'workflow failed');
+    assert.ok(Number.isSafeInteger(workflow.id) && workflow.id > 0, 'missing run identity');
+    assert.ok(Number.isSafeInteger(workflow.run_attempt) && workflow.run_attempt > 0,
+      'missing run attempt');
+    assert.equal(population.total_count, population.jobs.length, 'incomplete job discovery');
+    assert.equal(new Set(population.jobs.map(job => job.id)).size, population.jobs.length,
+      'duplicate job identity');
+    for (const job of population.jobs) {
+      assert.equal(job.run_id, workflow.id, 'job run mismatch');
+      assert.equal(job.run_attempt, workflow.run_attempt, 'job attempt mismatch');
+      assert.equal(job.head_sha, expectedHead, 'job head mismatch');
+      assert.ok(job.status === 'completed' && ['success', 'skipped'].includes(job.conclusion),
+        `failed or unfinished job: ${job.name}`);
+    }
+    for (const [jobName, stepName] of Object.entries(requirement.jobs)) {
+      const jobs = population.jobs.filter(job => job.name === jobName);
+      assert.equal(jobs.length, 1, `missing or duplicate product job: ${jobName}`);
+      const job = jobs[0];
+      assert.equal(job.conclusion, 'success', `product job did not execute: ${jobName}`);
+      const steps = (job.steps || []).filter(step => step.name === stepName);
+      assert.equal(steps.length, 1, `missing product step: ${stepName}`);
+      assert.ok(steps[0].status === 'completed' && steps[0].conclusion === 'success',
+        `product step did not execute: ${stepName}`);
+      executed.set(jobName, job.id);
+    }
+  }
+  const measurements = [];
+  for (const [name, jobID] of executed) {
+    if (!name.startsWith('verify.py')) continue;
+    const receipts = evidence.receipts.filter(receipt => receipt.job_id === jobID);
+    assert.equal(receipts.length, 1, `missing or duplicate measurement receipt: ${name}`);
+    const text = receipts[0].selected_authentic_lines.join('\n');
+    assert.ok(text.includes(`Merge ${expectedHead} into `), 'measurement checkout head mismatch');
+    const count = /pytest:\s+(\d+) passed, 0 failed, (\d+)\/(\d+) max[^\n]*skipped \((\d+) collected; floor (\d+)\)/.exec(text);
+    assert.ok(count, `missing test measurement: ${name}`);
+    const [passed, skipped, skippedMax, collected, floor] = count.slice(1).map(Number);
+    assert.ok(passed > 0 && passed + skipped === collected && collected >= floor
+      && skipped <= skippedMax,
+      `invalid test measurement: ${name}`);
+    assert.ok(text.includes(`VERIFIED — ${passed} tests actually executed and passed,`),
+      `missing verifier verdict measurement: ${name}`);
+    measurements.push({ job_id: jobID, passed, skipped, collected });
+  }
+  return { head_sha: expectedHead, product_jobs: executed.size, measurements };
+}
+
+module.exports = { verifyProof, verifyHostedCI };
 if (require.main === module) {
   verifyProof().then((result) => {
-    console.log(JSON.stringify({ retained_native_evidence: 'VERIFIED', ...result }));
+    const args = process.argv.slice(2);
+    assert.ok(args.length === 0 || args.length === 2,
+      'usage: node scripts/verify_seatbelt_receipts.js [hosted-ci.json expected-head-sha]');
+    const hosted = args.length ? verifyHostedCI(JSON.parse(fs.readFileSync(args[0], 'utf8')),
+      args[1]) : undefined;
+    console.log(JSON.stringify({ retained_native_evidence: 'VERIFIED', ...result,
+      ...(hosted ? { retained_hosted_ci: hosted } : {}) }));
   }).catch((error) => {
-    console.error(`retained native evidence: NOT VERIFIED: ${error.message}`);
+    console.error(`retained evidence: NOT VERIFIED: ${error.message}`);
     process.exitCode = 1;
   });
 }

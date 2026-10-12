@@ -1,0 +1,411 @@
+{
+  "schema": "seatbelt-hosted-ci/v1",
+  "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+  "note": "Authentic GitHub REST reads; this is evidence for the recorded head, not subsequent commits or post-merge acceptance. The job population is complete; step lists retain only the product execution steps checked by verifyHostedCI. Logs retain only checkout and measurement lines.",
+  "runs": [
+    {
+      "run": {
+        "id": 38191743199,
+        "name": "CI",
+        "path": ".github/workflows/ci.yml",
+        "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+        "event": "pull_request",
+        "run_attempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743199"
+      },
+      "jobs": {
+        "total_count": 4,
+        "jobs": [
+          {
+            "id": 114625757435,
+            "name": "combined coverage (pytest + selftests, the honest number)",
+            "run_id": 38191743199,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743199/job/114625757435",
+            "steps": [
+              {
+                "name": "Measure combined coverage",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 5,
+                "started_at": "2026-10-12T01:24:21Z",
+                "completed_at": "2026-10-12T01:27:45Z"
+              }
+            ]
+          },
+          {
+            "id": 114625757554,
+            "name": "verify.py (real pytest counts + selftests + capability gates)",
+            "run_id": 38191743199,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743199/job/114625757554",
+            "steps": [
+              {
+                "name": "Verify",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 5,
+                "started_at": "2026-10-12T01:24:21Z",
+                "completed_at": "2026-10-12T01:27:28Z"
+              }
+            ]
+          },
+          {
+            "id": 114625757641,
+            "name": "verify.py in the flat exec-mirror shape (the tree a sync ships)",
+            "run_id": 38191743199,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743199/job/114625757641",
+            "steps": [
+              {
+                "name": "Build the flat copy with the sync's copy contract and verify it there",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 5,
+                "started_at": "2026-10-12T01:24:21Z",
+                "completed_at": "2026-10-12T01:27:40Z"
+              }
+            ]
+          },
+          {
+            "id": 114625758694,
+            "name": "reconcile the collection floor (main only)",
+            "run_id": 38191743199,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "skipped",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743199/job/114625758694",
+            "steps": []
+          }
+        ]
+      }
+    },
+    {
+      "run": {
+        "id": 38191743569,
+        "name": "Gate",
+        "path": ".github/workflows/pr-00-gate.yml",
+        "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+        "event": "pull_request",
+        "run_attempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743569"
+      },
+      "jobs": {
+        "total_count": 18,
+        "jobs": [
+          {
+            "id": 114625759186,
+            "name": "generated delivery seal",
+            "run_id": 38191743569,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743569/job/114625759186",
+            "steps": []
+          },
+          {
+            "id": 114625759298,
+            "name": "detect changed files",
+            "run_id": 38191743569,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743569/job/114625759298",
+            "steps": []
+          },
+          {
+            "id": 114625796780,
+            "name": "issue consistency",
+            "run_id": 38191743569,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743569/job/114625796780",
+            "steps": []
+          },
+          {
+            "id": 114625796829,
+            "name": "privilege environment gate",
+            "run_id": 38191743569,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743569/job/114625796829",
+            "steps": []
+          },
+          {
+            "id": 114625812692,
+            "name": "github scripts tests",
+            "run_id": 38191743569,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743569/job/114625812692",
+            "steps": []
+          },
+          {
+            "id": 114625812762,
+            "name": "test-quality",
+            "run_id": 38191743569,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743569/job/114625812762",
+            "steps": []
+          },
+          {
+            "id": 114625812766,
+            "name": "docs guard",
+            "run_id": 38191743569,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743569/job/114625812766",
+            "steps": []
+          },
+          {
+            "id": 114625812776,
+            "name": "python ci / Validate inputs",
+            "run_id": 38191743569,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743569/job/114625812776",
+            "steps": []
+          },
+          {
+            "id": 114625812809,
+            "name": "ledger validation",
+            "run_id": 38191743569,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743569/job/114625812809",
+            "steps": []
+          },
+          {
+            "id": 114625813454,
+            "name": "docker smoke",
+            "run_id": 38191743569,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "skipped",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743569/job/114625813454",
+            "steps": []
+          },
+          {
+            "id": 114625828193,
+            "name": "python ci / select reusable CI scope",
+            "run_id": 38191743569,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743569/job/114625828193",
+            "steps": []
+          },
+          {
+            "id": 114625828229,
+            "name": "python ci / typecheck-mypy",
+            "run_id": 38191743569,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743569/job/114625828229",
+            "steps": [
+              {
+                "name": "Mypy (type check)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 11,
+                "started_at": "2026-10-12T01:24:42Z",
+                "completed_at": "2026-10-12T01:24:50Z"
+              }
+            ]
+          },
+          {
+            "id": 114625828269,
+            "name": "python ci / lint-ruff",
+            "run_id": 38191743569,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743569/job/114625828269",
+            "steps": [
+              {
+                "name": "Ruff (lint)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 9,
+                "started_at": "2026-10-12T01:24:42Z",
+                "completed_at": "2026-10-12T01:24:42Z"
+              }
+            ]
+          },
+          {
+            "id": 114625828279,
+            "name": "python ci / lint-format",
+            "run_id": 38191743569,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743569/job/114625828279",
+            "steps": [
+              {
+                "name": "Black (format check)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 11,
+                "started_at": "2026-10-12T01:24:48Z",
+                "completed_at": "2026-10-12T01:25:06Z"
+              }
+            ]
+          },
+          {
+            "id": 114625849928,
+            "name": "python ci / python 3.12",
+            "run_id": 38191743569,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743569/job/114625849928",
+            "steps": [
+              {
+                "name": "Pytest (unit tests with coverage)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 18,
+                "started_at": "2026-10-12T01:25:01Z",
+                "completed_at": "2026-10-12T01:27:04Z"
+              }
+            ]
+          },
+          {
+            "id": 114625849947,
+            "name": "python ci / python 3.13",
+            "run_id": 38191743569,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743569/job/114625849947",
+            "steps": [
+              {
+                "name": "Pytest (unit tests with coverage)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 18,
+                "started_at": "2026-10-12T01:25:02Z",
+                "completed_at": "2026-10-12T01:27:14Z"
+              }
+            ]
+          },
+          {
+            "id": 114626400377,
+            "name": "python ci / logs summary",
+            "run_id": 38191743569,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743569/job/114626400377",
+            "steps": []
+          },
+          {
+            "id": 114626462601,
+            "name": "summary",
+            "run_id": 38191743569,
+            "run_attempt": 1,
+            "head_sha": "380c16044a15ba9a0438f845eadc4a57bb8e8266",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38191743569/job/114626462601",
+            "steps": [
+              {
+                "name": "Summarize results",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 14,
+                "started_at": "2026-10-12T01:27:58Z",
+                "completed_at": "2026-10-12T01:27:58Z"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "receipts": [
+    {
+      "job_id": 114625757554,
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38191743199/job/114625757554",
+      "selected_authentic_lines": [
+        "2026-10-12T01:24:15.5394777Z HEAD is now at 3bbe083 Merge 380c16044a15ba9a0438f845eadc4a57bb8e8266 into 55da58dc4dedd690a741fdf11480eb44662d36cd",
+        "2026-10-12T01:27:28.9029262Z   pytest:     2863 passed, 0 failed, 31/31 max skipped (2894 collected; floor 2894)",
+        "2026-10-12T01:27:28.9030031Z   selftests:  97 of 104 modules ran, 7/7 max skipped",
+        "2026-10-12T01:27:28.9034048Z   admission          SKIP 10 of 13 admission checks passed, 3 skipped: test_legacy_debt_is_reported_not_forgiven (capability l",
+        "2026-10-12T01:27:28.9035879Z   gates:      2/2 max skipped",
+        "2026-10-12T01:27:28.9126111Z   VERIFIED — 2863 tests actually executed and passed, 97 selftests spoke, 3 of 5 gates green; 31 test(s), 7 selftest(s) and 2 gate(s) SKIPPED for a named missing prerequisite, listed above"
+      ]
+    },
+    {
+      "job_id": 114625849928,
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38191743569/job/114625849928",
+      "selected_authentic_lines": [
+        "2026-10-12T01:24:47.8390909Z HEAD is now at 3bbe083 Merge 380c16044a15ba9a0438f845eadc4a57bb8e8266 into 55da58dc4dedd690a741fdf11480eb44662d36cd",
+        "2026-10-12T01:25:26.4703755Z 4 workers [2894 items]",
+        "2026-10-12T01:27:04.1443749Z =========== 2863 passed, 31 skipped, 4 warnings in 121.18s (0:02:01) ==========="
+      ]
+    },
+    {
+      "job_id": 114625849947,
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38191743569/job/114625849947",
+      "selected_authentic_lines": [
+        "2026-10-12T01:24:49.5373285Z HEAD is now at 3bbe083 Merge 380c16044a15ba9a0438f845eadc4a57bb8e8266 into 55da58dc4dedd690a741fdf11480eb44662d36cd",
+        "2026-10-12T01:25:30.3936024Z 4 workers [2894 items]",
+        "2026-10-12T01:27:14.1027624Z ========= 2863 passed, 31 skipped, 5766 warnings in 129.29s (0:02:09) =========="
+      ]
+    },
+    {
+      "job_id": 114625757641,
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38191743199/job/114625757641",
+      "selected_authentic_lines": [
+        "2026-10-12T01:24:17.0261225Z HEAD is now at 3bbe083 Merge 380c16044a15ba9a0438f845eadc4a57bb8e8266 into 55da58dc4dedd690a741fdf11480eb44662d36cd",
+        "2026-10-12T01:27:39.3855830Z   pytest:     2842 passed, 0 failed, 52/52 max [bare_mirror_skipped_max] skipped (2894 collected; floor 2894)",
+        "2026-10-12T01:27:39.3857138Z   selftests:  97 of 104 modules ran, 7/7 max [bare_mirror_selftest_skipped_max] skipped",
+        "2026-10-12T01:27:39.3863861Z   admission          SKIP 10 of 13 admission checks passed, 3 skipped: test_legacy_debt_is_reported_not_forgiven (capability l",
+        "2026-10-12T01:27:39.3865520Z   gates:      2/2 max [bare_mirror_gate_skipped_max] skipped",
+        "2026-10-12T01:27:39.4034185Z   VERIFIED — 2842 tests actually executed and passed, 97 selftests spoke, 3 of 5 gates green; 52 test(s), 7 selftest(s) and 2 gate(s) SKIPPED for a named missing prerequisite, listed above",
+        "2026-10-12T01:27:40.0038385Z == verify-before-sync: VERIFIED for /home/runner/work/Orchestrator/Orchestrator @ 3bbe083 (0 uncommitted)"
+      ]
+    }
+  ]
+}
