@@ -17,6 +17,7 @@ really applies labels + ingests + writes the heartbeat (legacy lanes yield). orc
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import tempfile
@@ -71,6 +72,14 @@ def _fetch_issue_body(target: str, *, issue_body_fn=None) -> str | None:
         if out.returncode != 0:
             return None
         data = json.loads(out.stdout or "{}")
+        if not isinstance(data, dict) or not isinstance(data.get("labels"), list):
+            return None
+        labels = []
+        for entry in data["labels"]:
+            label = entry.get("name") if isinstance(entry, dict) else entry
+            if not isinstance(label, str):
+                return None
+            labels.append(label)
     except Exception:
         return None
     # A subject closed since the feed was read is never launched: the research feed can be up to
@@ -79,12 +88,9 @@ def _fetch_issue_body(target: str, *, issue_body_fn=None) -> str | None:
         return None
     # Ownership is re-read at launch too: the feed is up to two hours old, and a pause or an
     # `agent:*` writer added since then must stop the launch (dispatcher's rule, not a copy).
-    import dispatcher
+    import backlog
 
-    labels = {
-        str(lab.get("name") or "") for lab in data.get("labels") or [] if isinstance(lab, dict)
-    }
-    if dispatcher._remote_skip_reason(labels, "research"):
+    if backlog.research_ownership_skip_reason(labels):
         return None
     title = (data.get("title") or "").strip()
     body = (data.get("body") or "").strip()
@@ -112,10 +118,27 @@ def load_research_feed(path: Path | None = None, now: float | None = None) -> di
     if not isinstance(data, dict):
         return {"status": "unreadable", "error": "feed is not an object", "items": []}
     try:
-        # A missing stamp reads as the epoch, so the feed is stale: never fresh by default.
-        age = max(0, int(now - int(data.get("generated_at") or 0)))
+        generated_at = data.get("generated_at")
+        if generated_at is None:
+            return {"status": "stale", "age_seconds": int(now), "items": []}
+        if (
+            isinstance(generated_at, bool)
+            or not isinstance(generated_at, (int, float))
+            or generated_at < 0
+            or generated_at > now
+            or not math.isfinite(generated_at)
+        ):
+            raise ValueError("research feed timestamp must be finite and not in the future")
+        items = data.get("items")
+        if not isinstance(items, list):
+            raise ValueError("research feed items must be a list")
+        if any(not isinstance(item, dict) for item in items) and not any(
+            isinstance(item, dict) and item.get("target") for item in items
+        ):
+            raise ValueError("research feed has no usable item objects")
+        age = int(now - generated_at)
     except (TypeError, ValueError):
-        return {"status": "unreadable", "error": "generated_at is not a number", "items": []}
+        return {"status": "unreadable", "error": "invalid feed timestamp or items", "items": []}
     info = {
         "age_seconds": age,
         "counts": data.get("counts"),

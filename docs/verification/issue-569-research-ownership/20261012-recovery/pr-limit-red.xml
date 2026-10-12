@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="3" time="0.151" timestamp="2026-10-12T18:44:08.629121-05:00" hostname="server.trs.private"><testcase classname="tests.test_research_feed_validation.ResearchFeedValidationTests" name="test_pr_discovery_refuses_a_full_page" time="0.089"><failure message="AssertionError: RuntimeError not raised">self = &lt;test_research_feed_validation.ResearchFeedValidationTests testMethod=test_pr_discovery_refuses_a_full_page&gt;
+
+    def test_pr_discovery_refuses_a_full_page(self):
+        for count in (200, 201):
+            with self.subTest(count=count):
+                response = subprocess.CompletedProcess([], 0, json.dumps([{}] * count), "")
+                with patch("subprocess.run", return_value=response):
+&gt;                   with self.assertRaisesRegex(RuntimeError, "ownership is incomplete"):
+E                   AssertionError: RuntimeError not raised
+
+tests/test_research_feed_validation.py:67: AssertionError</failure><failure message="AssertionError: RuntimeError not raised">self = &lt;test_research_feed_validation.ResearchFeedValidationTests testMethod=test_pr_discovery_refuses_a_full_page&gt;
+
+    def test_pr_discovery_refuses_a_full_page(self):
+        for count in (200, 201):
+            with self.subTest(count=count):
+                response = subprocess.CompletedProcess([], 0, json.dumps([{}] * count), "")
+                with patch("subprocess.run", return_value=response):
+&gt;                   with self.assertRaisesRegex(RuntimeError, "ownership is incomplete"):
+E                   AssertionError: RuntimeError not raised
+
+tests/test_research_feed_validation.py:67: AssertionError</failure></testcase></testsuite></testsuites>

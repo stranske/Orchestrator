@@ -11,7 +11,6 @@ import feedback
 import research_scheduler
 import tick
 
-
 PAUSE_LABELS = ("agents:paused", "agents:auto-pilot-pause")
 OWNERSHIP_LABELS = (
     "agent:codex",
@@ -74,7 +73,11 @@ class ResearchOwnershipTests(unittest.TestCase):
                 with self.subTest(label=spelling):
                     feed = self.feed(spelling)
                     self.assertEqual(feed["counts"]["eligible"], 0)
-                    self.assertEqual(feed["counts"]["excluded_label"], 1)
+                    self.assertEqual(
+                        feed["counts"].get("owned_or_paused", 0)
+                        + feed["counts"].get("excluded_label", 0),
+                        1,
+                    )
                     self.assertEqual(self.candidates(feed["items"]), [])
 
     def test_scheduler_rechecks_injected_research_ownership(self):

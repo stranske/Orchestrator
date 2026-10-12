@@ -440,6 +440,20 @@ RESEARCH_EXCLUDED_PREFIXES = ("tracker:", "campaign:")
 RESEARCH_EXCLUDED_CLASSES = {"epic", "cross_repo", "mechanical"}
 
 
+def research_ownership_skip_reason(labels: list[str]) -> str | None:
+    """Use the incumbent dispatch ownership rule at discovery, intake and launch."""
+    import dispatcher
+
+    low = {lab.strip().lower() for lab in labels}
+    if dispatcher._remote_skip_reason(low, "research") or low & {
+        "agents:auto-pilot-pause",
+        "status:in-progress",
+        "status: in-progress",
+    }:
+        return "owned_or_paused"
+    return None
+
+
 def research_skip_reason(labels: list[str]) -> str | None:
     """Why an open issue is not a research subject, or None when it is one.
 
@@ -447,11 +461,9 @@ def research_skip_reason(labels: list[str]) -> str | None:
     `agents:paused` and any `agent:*` label mean the issue is paused or already has a writer. A
     research subject has no dispatch reservation, so without this the feed admitted both (review of
     #566, 2026-10-12)."""
-    import dispatcher
-
-    if dispatcher._remote_skip_reason({lab.strip() for lab in labels}, "research"):
-        return "owned_or_paused"
     low = {lab.strip().lower() for lab in labels}
+    if research_ownership_skip_reason(labels) and not low & RESEARCH_EXCLUDED_LABELS:
+        return "owned_or_paused"
     if low & RESEARCH_EXCLUDED_LABELS or any(
         lab.startswith(RESEARCH_EXCLUDED_PREFIXES) for lab in low
     ):
@@ -532,7 +544,7 @@ def _gh_strict(args: list[str]) -> list:
 
 
 def strict_fetch_issues(repo: str) -> list:
-    return _gh_strict(
+    rows = _gh_strict(
         [
             "issue",
             "list",
@@ -546,10 +558,13 @@ def strict_fetch_issues(repo: str) -> list:
             "number,labels,title,body",
         ]
     )
+    if len(rows) >= 1000:
+        raise RuntimeError("open issue discovery reached its limit; ownership is incomplete")
+    return rows
 
 
 def strict_fetch_prs(repo: str) -> list:
-    return _gh_strict(
+    rows = _gh_strict(
         [
             "pr",
             "list",
@@ -563,6 +578,9 @@ def strict_fetch_prs(repo: str) -> list:
             "number,labels,title,body,closingIssuesReferences,headRefName,isDraft",
         ]
     )
+    if len(rows) >= 200:
+        raise RuntimeError("open PR discovery reached its limit; ownership is incomplete")
+    return rows
 
 
 # --- live gh fetchers -------------------------------------------------------

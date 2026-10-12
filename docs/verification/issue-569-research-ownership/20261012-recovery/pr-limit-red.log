@@ -1,0 +1,32 @@
+.                                                                      [100%]
+=================================== FAILURES ===================================
+_ ResearchFeedValidationTests.test_pr_discovery_refuses_a_full_page (count=200) _
+
+self = <test_research_feed_validation.ResearchFeedValidationTests testMethod=test_pr_discovery_refuses_a_full_page>
+
+    def test_pr_discovery_refuses_a_full_page(self):
+        for count in (200, 201):
+            with self.subTest(count=count):
+                response = subprocess.CompletedProcess([], 0, json.dumps([{}] * count), "")
+                with patch("subprocess.run", return_value=response):
+>                   with self.assertRaisesRegex(RuntimeError, "ownership is incomplete"):
+E                   AssertionError: RuntimeError not raised
+
+tests/test_research_feed_validation.py:67: AssertionError
+_ ResearchFeedValidationTests.test_pr_discovery_refuses_a_full_page (count=201) _
+
+self = <test_research_feed_validation.ResearchFeedValidationTests testMethod=test_pr_discovery_refuses_a_full_page>
+
+    def test_pr_discovery_refuses_a_full_page(self):
+        for count in (200, 201):
+            with self.subTest(count=count):
+                response = subprocess.CompletedProcess([], 0, json.dumps([{}] * count), "")
+                with patch("subprocess.run", return_value=response):
+>                   with self.assertRaisesRegex(RuntimeError, "ownership is incomplete"):
+E                   AssertionError: RuntimeError not raised
+
+tests/test_research_feed_validation.py:67: AssertionError
+=========================== short test summary info ============================
+SUBFAILED(count=200) tests/test_research_feed_validation.py::ResearchFeedValidationTests::test_pr_discovery_refuses_a_full_page
+SUBFAILED(count=201) tests/test_research_feed_validation.py::ResearchFeedValidationTests::test_pr_discovery_refuses_a_full_page
+2 failed, 1 passed in 0.23s

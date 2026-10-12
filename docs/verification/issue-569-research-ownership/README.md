@@ -1,3 +1,29 @@
+# Issue #569: research ownership recovery
+
+## Current recovery, 2026-10-12
+
+The existing PR is rebased onto merged source PR566, main
+`68c79c90008264a3b648f2b8d533c0e8d3995510`. Current main improvements and
+all original intake assertions are retained. Discovery and scheduler/launch revalidation
+share the incumbent dispatcher ownership policy. Full issue/PR result pages fail closed
+as incomplete; malformed and future feed timestamps are rejected. Missing timestamps
+retain the existing stale classification and mixed valid/malformed rows retain valid entries.
+Launching remains off.
+
+Measured collection is3231, main3208 plus23 independently executed nodes. The affected
+suites pass44 tests and93 subtests; all four affected module selftests pass. Repository-wide
+Black and Ruff pass. Four deliberate production breaks (issue limit, PR limit, scheduler
+ownership and future timestamp) each produce an assertion failure, then pass after
+byte-identical restoration. Raw logs, JUnit and hashes are in `20261012-recovery/`.
+These are bounded proofs; fresh full hosted verification, complete expected check topology,
+exact-head review clearance and the seven-minute push floor remain delivery requirements.
+No installed mirror, Brain, live dispatch or deployment was changed.
+
+## Historical evidence, retained verbatim
+
+The following describes earlier attempts and their then-current environment. Its read-only
+checkout, missing packages and unmerged source statements are historical, not current.
+
 # Issue #569: local research ownership correction
 
 The ownership correction is present in this branch. The feed-wiring restoration described below

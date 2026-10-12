@@ -1,0 +1,15 @@
+{
+  "base": "68c79c90008264a3b648f2b8d533c0e8d3995510",
+  "collected": 3231,
+  "focused_passed": 44,
+  "subtests_passed": 93,
+  "sha256": {
+    "src/backlog.py": "73d229e259104b9896d5f11a3a9c444df3ca6c291b76b4a6b4e6621379026223",
+    "src/research_scheduler.py": "3bc1ae8cdc23e9cc16347acdc58da5751c4a49dbf4b9721795c9fd3ff1558712",
+    "src/tick.py": "ac26a0f84cdfbb9c4638ad1039d32f28787304fba943fe759bf8cf4935558a3f",
+    "tests/test_research_feed_validation.py": "88681f1e588f45c4391660d80fedc053f98be1692e51b2be9b7a7a9a2052b9d4",
+    "tests/test_research_feed_wiring.py": "e59d083f22792d596273ed17d312df6c639be14d89b4f2f911f811e2a67bb658",
+    "tests/test_research_intake.py": "5c155c8155883dafede346abd238e884bbb73ccc33a3c5f9212275837422b639",
+    "tests/test_research_ownership.py": "4f4bb598aa9dfb02d69667b0c2c2ae0e61cb249694a2d6aae0c30b19c3b1bc76"
+  }
+}

@@ -1,0 +1,182 @@
+{
+  "results": [
+    {
+      "name": "issue-limit",
+      "path": "src/backlog.py",
+      "named_node": "tests/test_research_feed_validation.py::ResearchFeedValidationTests::test_issue_discovery_refuses_a_full_page",
+      "restoration_byte_identical": true,
+      "runs": [
+        {
+          "phase": "red",
+          "exit": 1,
+          "argv": [
+            "/opt/anaconda3/bin/python3",
+            "-m",
+            "pytest",
+            "tests/test_research_feed_validation.py::ResearchFeedValidationTests::test_issue_discovery_refuses_a_full_page",
+            "-q",
+            "-o",
+            "addopts=",
+            "--junitxml=/Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261012T2324Z/570-proof/issue-limit-red.xml"
+          ],
+          "cwd": "/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch570-recovery-20261012T2324Z",
+          "production_sha256": "d8ecd1382291dfa158163c2e1c89572dd3c4cd4e47d7eb70591467ba8ef7b222"
+        },
+        {
+          "phase": "restored-green",
+          "exit": 0,
+          "argv": [
+            "/opt/anaconda3/bin/python3",
+            "-m",
+            "pytest",
+            "tests/test_research_feed_validation.py::ResearchFeedValidationTests::test_issue_discovery_refuses_a_full_page",
+            "-q",
+            "-o",
+            "addopts=",
+            "--junitxml=/Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261012T2324Z/570-proof/issue-limit-restored-green.xml"
+          ],
+          "cwd": "/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch570-recovery-20261012T2324Z",
+          "production_sha256": "73d229e259104b9896d5f11a3a9c444df3ca6c291b76b4a6b4e6621379026223"
+        }
+      ]
+    },
+    {
+      "name": "pr-limit",
+      "path": "src/backlog.py",
+      "named_node": "tests/test_research_feed_validation.py::ResearchFeedValidationTests::test_pr_discovery_refuses_a_full_page",
+      "restoration_byte_identical": true,
+      "runs": [
+        {
+          "phase": "red",
+          "exit": 1,
+          "argv": [
+            "/opt/anaconda3/bin/python3",
+            "-m",
+            "pytest",
+            "tests/test_research_feed_validation.py::ResearchFeedValidationTests::test_pr_discovery_refuses_a_full_page",
+            "-q",
+            "-o",
+            "addopts=",
+            "--junitxml=/Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261012T2324Z/570-proof/pr-limit-red.xml"
+          ],
+          "cwd": "/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch570-recovery-20261012T2324Z",
+          "production_sha256": "639756c886cc380dbcdb37897908216f537e4c5c23ba8b4b436959822c4b1761"
+        },
+        {
+          "phase": "restored-green",
+          "exit": 0,
+          "argv": [
+            "/opt/anaconda3/bin/python3",
+            "-m",
+            "pytest",
+            "tests/test_research_feed_validation.py::ResearchFeedValidationTests::test_pr_discovery_refuses_a_full_page",
+            "-q",
+            "-o",
+            "addopts=",
+            "--junitxml=/Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261012T2324Z/570-proof/pr-limit-restored-green.xml"
+          ],
+          "cwd": "/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch570-recovery-20261012T2324Z",
+          "production_sha256": "73d229e259104b9896d5f11a3a9c444df3ca6c291b76b4a6b4e6621379026223"
+        }
+      ]
+    },
+    {
+      "name": "scheduler-owned",
+      "path": "src/research_scheduler.py",
+      "named_node": "tests/test_research_ownership.py::ResearchOwnershipTests::test_scheduler_rechecks_injected_research_ownership",
+      "restoration_byte_identical": true,
+      "runs": [
+        {
+          "phase": "red",
+          "exit": 1,
+          "argv": [
+            "/opt/anaconda3/bin/python3",
+            "-m",
+            "pytest",
+            "tests/test_research_ownership.py::ResearchOwnershipTests::test_scheduler_rechecks_injected_research_ownership",
+            "-q",
+            "-o",
+            "addopts=",
+            "--junitxml=/Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261012T2324Z/570-proof/scheduler-owned-red.xml"
+          ],
+          "cwd": "/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch570-recovery-20261012T2324Z",
+          "production_sha256": "05ed79a71b8d935809a80c0d848695ced9474b3ce04582b734bd33a9bc4cbe7a"
+        },
+        {
+          "phase": "restored-green",
+          "exit": 0,
+          "argv": [
+            "/opt/anaconda3/bin/python3",
+            "-m",
+            "pytest",
+            "tests/test_research_ownership.py::ResearchOwnershipTests::test_scheduler_rechecks_injected_research_ownership",
+            "-q",
+            "-o",
+            "addopts=",
+            "--junitxml=/Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261012T2324Z/570-proof/scheduler-owned-restored-green.xml"
+          ],
+          "cwd": "/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch570-recovery-20261012T2324Z",
+          "production_sha256": "3bc1ae8cdc23e9cc16347acdc58da5751c4a49dbf4b9721795c9fd3ff1558712"
+        }
+      ]
+    },
+    {
+      "name": "future-feed",
+      "path": "src/tick.py",
+      "named_node": "tests/test_research_feed_validation.py::ResearchFeedValidationTests::test_future_timestamps_contribute_no_items",
+      "restoration_byte_identical": true,
+      "runs": [
+        {
+          "phase": "red",
+          "exit": 1,
+          "argv": [
+            "/opt/anaconda3/bin/python3",
+            "-m",
+            "pytest",
+            "tests/test_research_feed_validation.py::ResearchFeedValidationTests::test_future_timestamps_contribute_no_items",
+            "-q",
+            "-o",
+            "addopts=",
+            "--junitxml=/Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261012T2324Z/570-proof/future-feed-red.xml"
+          ],
+          "cwd": "/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch570-recovery-20261012T2324Z",
+          "production_sha256": "82bc999df1e5aba56b735d5932d8ca5cc9ccf54300df886b8f9aabe490be1dc5"
+        },
+        {
+          "phase": "restored-green",
+          "exit": 0,
+          "argv": [
+            "/opt/anaconda3/bin/python3",
+            "-m",
+            "pytest",
+            "tests/test_research_feed_validation.py::ResearchFeedValidationTests::test_future_timestamps_contribute_no_items",
+            "-q",
+            "-o",
+            "addopts=",
+            "--junitxml=/Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261012T2324Z/570-proof/future-feed-restored-green.xml"
+          ],
+          "cwd": "/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch570-recovery-20261012T2324Z",
+          "production_sha256": "ac26a0f84cdfbb9c4638ad1039d32f28787304fba943fe759bf8cf4935558a3f"
+        }
+      ]
+    }
+  ],
+  "members": {
+    "issue-limit-red.xml": "066facc03a00bf6b748001b4f9d6bc048fabde5a4e1cf7a0ebed82e609a48c0c",
+    "scheduler-owned-restored-green.log": "65600d39ea3c49893e568fe6507d0b0594c62b39cf1518bce2225dc750bc6d0d",
+    "future-feed-red.log": "70ee14f4be0578b4e250b231d6c309d1abde986a3627407936763efc57223d66",
+    "issue-limit-restored-green.log": "3ad31a78e37327bc4118760145aa52d799126d09c0a35f6d16d76a6f2edceb7d",
+    "pr-limit-red.log": "d7f010acbe249f9af2fa4aa568a5dcce6caf632f5034b1cdc1367389580977d9",
+    "pr-limit-restored-green.log": "3ad31a78e37327bc4118760145aa52d799126d09c0a35f6d16d76a6f2edceb7d",
+    "future-feed-restored-green.log": "93c97c10af4fc8b54296201243c032c5e8295479ca6b4adc06019033d6f9e282",
+    "scheduler-owned-red.xml": "6e70c3387733bce83867bd04ac4d2ca389290814ae0ba98c4ecf0d613597f216",
+    "issue-limit-restored-green.xml": "cc8b1f7302e8e1b9c5022c90c5d04d3f7bd7aa01aa48f6233bd1b5f25c49aaef",
+    "pr-limit-red.xml": "2a63e6b4884e5ca772f14b7602f8ab0f17005ec5362c34d5570321c7c0e02ff2",
+    "pr-limit-restored-green.xml": "3e00b7c4338efbbce9b82d7788f9a6b6b5901574dcd766bcb4bb926b8e4bbac0",
+    "future-feed-restored-green.xml": "12f6f64a5e54f58e4b08b50b115fa876a507e4a33eb47b0f750e0d6b90bef3ce",
+    "scheduler-owned-red.log": "8abe7c183483541ce2955987808ea00d8b46e91bb477912bb4c57a417ddfd0de",
+    "issue-limit-red.log": "daef76ad8c6e5aa2d5aad866201967658611149b4dc6b2d90a36b1ef978349c3",
+    "scheduler-owned-restored-green.xml": "4ac9573a7b9e76fc3c75d3ba2fe35012e6236f746136a128247f4f147040533e",
+    "future-feed-red.xml": "db265544d9e478f262e2551ba1743709491df1e0fb73613e683c64687c7bd325"
+  }
+}

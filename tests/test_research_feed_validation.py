@@ -28,7 +28,7 @@ class ResearchFeedValidationTests(unittest.TestCase):
                 self.assertEqual((result["status"], result["items"]), ("unreadable", []))
 
     def test_invalid_timestamps_are_unreadable(self):
-        for timestamp in (None, "today", "1000", True, [], {}, -1, 10**1000):
+        for timestamp in ("today", "1000", True, [], {}, -1, 10**1000):
             with self.subTest(timestamp=timestamp):
                 result = self.load({"generated_at": timestamp, "items": []})
                 self.assertEqual((result["status"], result["items"]), ("unreadable", []))
@@ -66,6 +66,14 @@ class ResearchFeedValidationTests(unittest.TestCase):
                 with patch("subprocess.run", return_value=response):
                     with self.assertRaisesRegex(RuntimeError, "ownership is incomplete"):
                         backlog.strict_fetch_prs("o/r")
+
+    def test_issue_discovery_refuses_a_full_page(self):
+        for count in (1000, 1001):
+            with self.subTest(count=count):
+                response = subprocess.CompletedProcess([], 0, json.dumps([{}] * count), "")
+                with patch("subprocess.run", return_value=response):
+                    with self.assertRaisesRegex(RuntimeError, "ownership is incomplete"):
+                        backlog.strict_fetch_issues("o/r")
 
     def test_complete_pr_discovery_keeps_open_pr_exclusion(self):
         prs = [{"number": 2, "body": "Closes #1"}, *([{}] * 198)]

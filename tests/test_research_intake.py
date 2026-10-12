@@ -145,7 +145,7 @@ def test_the_tick_plans_research_from_the_feed_and_reports_its_inputs():
 def test_a_closed_issue_is_never_launched(monkeypatch, state, launchable):
     def run(argv, **kwargs):
         assert "state" in argv[-1], argv
-        payload = {"title": "T", "body": "B", "state": state}
+        payload = {"title": "T", "body": "B", "state": state, "labels": []}
         return subprocess.CompletedProcess(argv, 0, json.dumps(payload), "")
 
     monkeypatch.setattr(subprocess, "run", run)

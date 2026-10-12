@@ -20,7 +20,7 @@ class ResearchFeedWiringTests(unittest.TestCase):
             calls = root / "calls"
             fake_python = root / "python3"
             fake_python.write_text(
-                '#!/usr/bin/env bash\n'
+                "#!/usr/bin/env bash\n"
                 'printf "%s\\n" "$*" >> "$RESEARCH_TEST_CALLS"\n'
                 'exit "$RESEARCH_TEST_EXIT"\n'
             )
