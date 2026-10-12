@@ -2232,13 +2232,21 @@ UNJUDGEABLE_MERGE = "unjudgeable_merge"
 # 2026-10-04 such a merge was recorded `durable`: 436 rows whose read was cut at 200 best matches.
 BROKE_LATER_UNCHECKED = "broke_later_unchecked"
 
+# What the durability sweep writes for a merge a later fix PR NAMES without stating that it repairs
+# it (`durability_sweep.reference_relation`): a sibling, a rebase base, a link in a list, said in a
+# way the rule cannot read. Whether the merge held is unknown, so it closes as
+# DURABILITY_UNJUDGEABLE and trains nothing. Until 2026-10-12 any such mention was `broke_later`:
+# 87 of 129 naming pairs behind the 134 live rows were not repairs.
+BROKE_LATER_UNSTATED = "broke_later_unstated"
+
 # Failure classes whose outcome says nothing about the agent that ran, so NO learner may score them:
 # the environment killed the run (`transient_infra`, from `mark_transient_infra`), the target
 # closed through a PR the run cannot be shown to have produced, a delegation's PR settled without
 # the delegated agent's work on it, a closed PR's replacement cannot be told apart
 # (`UNATTRIBUTED_REPLACEMENT`), a keepalive PR's work is carried by another PR whose own run holds
 # its verdict (`CARRIED_BY_OTHER_PR`), the merge a row recorded cannot be identified as the run's
-# own (`UNJUDGEABLE_MERGE`), or no fix-PR read reached it (`BROKE_LATER_UNCHECKED`). ONE set:
+# own (`UNJUDGEABLE_MERGE`), no fix-PR read reached it (`BROKE_LATER_UNCHECKED`), or a fix PR
+# named it without stating a repair (`BROKE_LATER_UNSTATED`). ONE set:
 # relearn's SQL reads it, relearn_quality and
 # exploration_review read it through `_has_outcome_evidence`, and the capability tally reads it
 # inside NONATTRIBUTABLE_FAILURE_CLASSES. The route learners named `transient_infra`
@@ -2254,6 +2262,7 @@ LEARNING_EXCLUDED_FAILURE_CLASSES = frozenset(
         CARRIED_BY_OTHER_PR,
         UNJUDGEABLE_MERGE,
         BROKE_LATER_UNCHECKED,
+        BROKE_LATER_UNSTATED,
     }
 )
 
