@@ -338,3 +338,26 @@ def test_this_reader_and_the_lifecycle_count_the_same_subjects(brain):
     arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
     assert durable == {"stranske/Repo#20", "stranske/Repo#21", "o/r#7"}, durable
     assert arm["durable_subjects"] == len(durable) == 3, arm
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"causal_context": "not-a-dict"},
+        {"profile_decision": "not-a-dict"},
+        {"profile_decision": {"causal_context": ["not", "a", "dict"]}},
+    ],
+)
+def test_malformed_nested_metadata_is_absent_never_a_crash(brain, metadata):
+    run = "remote:o/r#8:codex"
+    feedback.record_run(
+        run, "o/r#8", "implement", "codex", mode="remote", routing_metadata=metadata
+    )
+    _consumed_run(run, **MERGED_DURABLE)
+    assert feedback.run_subject_id(metadata, "o/r#8", run) == "o/r#8"
+    arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+    assert (arm["terminal_subjects"], arm["durable_subjects"]) == (1, 1), arm
+    rows = feedback.capability_causal_evidence(
+        "deliberate-break-verifier", VERSIONS["deliberate-break-verifier"]
+    )
+    assert [r["subject_id"] for r in rows] == ["o/r#8"], rows

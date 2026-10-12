@@ -2332,9 +2332,14 @@ def run_subject_id(routing_metadata, target, run_id) -> str:
     the run id instead, which never parsed a local run id (`stranske__Repo_20-gemini-<ns>`), so two
     attempts at one issue counted as two subjects, and keyed `offload:<agent>:<ns>` by the agent."""
     metadata = _routing_metadata_dict(routing_metadata)
+    # Only the top level is guaranteed a dict; a nested value of another type is absent, never a
+    # crash that takes down every report reading these edges.
+    decision = metadata.get("profile_decision")
     causal_context = metadata.get("causal_context") or (
-        (metadata.get("profile_decision") or {}).get("causal_context") or {}
+        decision.get("causal_context") if isinstance(decision, dict) else None
     )
+    if not isinstance(causal_context, dict):
+        causal_context = {}
     return str(causal_context.get("subject_id") or metadata.get("subject_id") or target or run_id)
 
 
