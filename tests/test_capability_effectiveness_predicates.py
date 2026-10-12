@@ -436,29 +436,60 @@ def test_a_failure_closed_unmerged_stays_in_the_durable_rate(brain):
 
 
 def test_the_verdict_rate_counts_subjects_and_refuses_small_samples(brain):
-    # Five distinct no-merge subjects (offload runs keyed by their own targets), one failing twice.
+    # Delivery failures remain in the durable population even beside proven offloads.
     for n in range(1, 6):
+        _consumed(f"remote:o/r#{n}:codex", **MERGED_DURABLE)
+    run = "ordinary-failing-pr"
+    feedback.record_run(run, "o/r#6", "implement", "codex", mode="local", pr_number=6)
+    _consumed_run(run)
+    local_verify.record_verdict(run, {"verdict": "FAIL_BROKEN", "reason": "delivery failed"})
+
+    # Seven attempts on four offload subjects still cannot satisfy the five-subject minimum.
+    for n in range(1, 8):
         run = f"offload:gemini:{n}"
-        feedback.record_run(run, f"offload:task-{n}", "review", "gemini", mode="offload")
-        verdict = "FAIL" if n == 5 else "PASS"
-        _consumed_run(run, verifier_verdict=verdict, adjudicated_verdict=verdict)
-    feedback.record_run("offload:gemini:6", "offload:task-5", "review", "gemini", mode="offload")
-    _consumed_run("offload:gemini:6", verifier_verdict="FAIL", adjudicated_verdict="FAIL")
-    rep = _report(brain)
-    stats = _row(rep, "deliberate-break-verifier")["accepted"]["verdict"]
-    assert (stats["judged"], stats["judged_subjects"], stats["pass_subjects"]) == (6, 5, 4), stats
-    assert (stats["rate"], stats["status"]) == (0.8, "measured"), stats
-    # Four subjects is a refusal, never a figure.
-    four = effectiveness._verdict_stats(
-        [{"run_id": f"r{i}", "subject": f"s{i}", "verdict": "PASS"} for i in range(4)]
-    )
-    assert four["rate"] is None and four["status"].startswith("insufficient_evidence"), four
+        feedback.record_run(run, f"offload:task-{min(n, 4)}", "review", "gemini", mode="offload")
+        _consumed_run(run, verifier_verdict="PASS", adjudicated_verdict="PASS")
+
+    def assert_populations(judged, subjects, rate, status):
+        arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+        assert (arm["terminal_subjects"], arm["durable_subjects"], arm["durable_rate"]) == (
+            6,
+            5,
+            0.833,
+        ), arm
+        assert arm["no_merge"] == judged, arm
+        stats = arm["verdict"]
+        assert (stats["judged"], stats["judged_subjects"], stats["pass_subjects"]) == (
+            judged,
+            subjects,
+            4,
+        ), stats
+        assert (stats["rate"], stats["status"]) == (rate, status), stats
+        inputs = monitor._brain(feedback.DB_PATH, T0 - 1, T0 + 1)
+        assert inputs["errors"] == [], inputs
+        counts = monitor.outcome_counts("deliberate-break-verifier", inputs["edges"])
+        assert (counts["outcome"], counts["outcome_no_merge"]) == (6, judged), counts
+
+    assert_populations(7, 4, None, "insufficient_evidence (4/5 distinct subjects from 7 attempts)")
+    # A fifth subject enables measurement; its failed retry must not inflate the denominator.
+    for n in (8, 9):
+        run = f"offload:gemini:{n}"
+        feedback.record_run(run, "offload:task-5", "review", "gemini", mode="offload")
+        _consumed_run(run, verifier_verdict="FAIL", adjudicated_verdict="FAIL")
+    assert_populations(9, 5, 0.8, "measured")
 
 
 def test_a_verifier_failure_under_an_adjudicated_pass_is_a_failing_verdict(brain):
-    _consumed("offload:gemini:7", verifier_verdict="NON_PASS", adjudicated_verdict="PASS")
-    stats = _row(_report(brain), "deliberate-break-verifier")["accepted"]["verdict"]
-    assert (stats["judged"], stats["passed"]) == (1, 0), stats
+    # Each authoritative failure code vetoes the adjudicated PASS, including lowercase storage.
+    for n, failure in enumerate(sorted(feedback.VERIFIER_FAILURES)):
+        run = f"offload:verifier-veto:{n}"
+        feedback.record_run(run, f"research:task-{n}", "review", "gemini", mode="offload")
+        _consumed_run(run, verifier_verdict=failure.lower(), adjudicated_verdict="PASS")
+        arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+        stats = arm["verdict"]
+        assert (arm["terminal"], arm["no_merge"], arm["durable_rate"]) == (0, n + 1, None)
+        assert (stats["judged"], stats["judged_subjects"], stats["passed"]) == (n + 1, n + 1, 0)
+        assert stats["rate"] == (0.0 if n + 1 >= effectiveness.MIN_SAMPLE else None), failure
 
 
 # ---- the verifier's NON_PASS --------------------------------------------------------------------

@@ -253,3 +253,80 @@ on the published head; the local checks above cannot substitute for that hosted 
 ## Closer integration, 2026-10-12
 
 This optional follow-up preserves seven unique late-evidence regression nodes after source #556 was independently closed. It introduces no new production behavior and does not reopen the original source. Rebased onto main 00d9f964a4f4d55955c329e4d4293b741b8c5035. Six affected suites pass 162 tests, both module selftests pass, and exact integrated collection is 3104. Current main's skip/mypy ceilings are preserved. Fresh hosted complete verification, full topology, review and post-push floor remain required. Historical provider NON_PASS stays unchanged.
+
+## Verdict population preservation, keepalive follow-up (2026-10-12)
+
+The positive delivery check is already implemented by merged #557. This round strengthens two
+existing production-writer tests, without changing production behavior or adding collection nodes:
+
+- [x] Preserve the separate verdict population for proven no-delivery runs. Five durable PR
+  subjects and one ordinary verifier FAIL_BROKEN retain their durable rate of **0.833** beside
+  the offloads. Both effectiveness and value-chain readers retain these delivery counts.
+- [x] Enforce the distinct-subject minimum through the production writers. Seven passing
+  offload attempts across four subjects refuse a verdict rate. A fifth subject with two failed
+  attempts enables a verdict rate of **0.8**, with nine attempts and five subjects; the delivery
+  rate remains **0.833**.
+- [x] Preserve the verifier veto. Every member of `feedback.VERIFIER_FAILURES`, written in
+  lowercase under an adjudicated PASS, remains a failed verdict. The verdict rate is withheld
+  below five distinct subjects and measures **0.0** thereafter.
+- [ ] Publish this round's commit and obtain final-head hosted complete verification, review,
+  guarded merge, and actual postmerge comparison. The original provider NON_PASS is unchanged.
+
+The six-suite command in this document ran with `-m "not slow"`: **162 passed**. Both module
+selftests passed, and `python3 -m pytest --collect-only -m "not slow" -q` collected **3104** tests.
+The floor and all skip/mypy ceilings remain unchanged. Black **26.10.0** formatted the changed
+test and passed the required check:
+
+```sh
+black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+```
+
+Result: **393 files would be left unchanged**. Pytest **8.3.5**, Black, and their missing
+dependencies were recovered from pinned official GitHub sources into `/tmp`, with no repository
+dependency changes. Commands used system Python **3.12** (`PATH=/usr/bin:/bin`) and
+`PYTHONPATH=/tmp/issue-556-tools`. The Black launcher scheduled its unchanged `reformat_one`
+formatter serially; neither discovery nor formatting/checking semantics were narrowed.
+
+The exact RED/restored GREEN command was rerun:
+
+```sh
+python3 -m pytest tests/test_capability_effectiveness_predicates.py \
+  -k pending_pr_outcome -m "not slow" -q --tb=short
+```
+
+RED used `git show 49cdbfee4dba260a5e9149bdd979b7ebca4fd06b:src/capability_effectiveness.py`:
+exit **1**, **6 failed, 48 deselected**. Four FAIL_BROKEN/NON_PASS cases read `(5, 5, 1.0)`
+instead of `(6, 5, 0.833)`; two PASS cases read `no_merge` instead of `open`.
+The `finally` block restored byte-identical source and confirmed unchanged test bytes.
+GREEN: exit **0**, **6 passed, 48 deselected**. All databases were temporary; no live Brain
+was mutated.
+
+| Binding | Git blob or SHA-256 |
+| --- | --- |
+| RED source SHA-256 | `2601f7ff5b71cc3748e344870bd0aaac791cee5f6166eab780a09c9d4e32a5b2` |
+| Restored GREEN source blob | `770d315257e2402906c4ddbee2bc52047f9dd034` |
+| GREEN source SHA-256, before and after | `3414f0ecbe839a5074acf248dfa00bd6d674c271c998b73d525d5ca36262d207` |
+| Test blob, identical during RED and GREEN | `98ffdb7dc5c3772a3d8e4cf6196e6af8bb70332c` |
+| Test SHA-256 | `31f585bef7347eaa421cc8b41150174c0429887d5b734a260d8b7930b6841fa4` |
+
+Hosted [CI run 38298528111](https://github.com/stranske/Orchestrator/actions/runs/38298528111)
+is successful for published head `c99a33c324a2c6ebee574baf1d98dad0bf43b59e` and synthetic merge
+`06502ec96dc279b0cd7682db8cb83e28cdee311c`. Its checkout
+[verification job 114975447020](https://github.com/stranske/Orchestrator/actions/runs/38298528111/job/114975447020)
+reports **3078 passed, 0 failed, 26 allowed skips, 3104 collected**, **97/104 selftests run**,
+**3/5 gates green**, and **122 mypy modules checked with zero exemptions**. Flat-mirror and
+combined-coverage jobs also concluded success. These receipts cover the prior published bytes
+only; they do not establish final-head verification for this round or provider PASS.
+
+Normal staging failed with `index.lock: Read-only file system`. The writable bare clone
+`/tmp/issue-556-verdict-git` uses this checkout as its work tree to record the focused test and
+evidence commit. PR #562 was observed **open, ready for review**. Attempts to add `needs-human`
+and post a blocker comment were rejected with `MCP tool call requires approval, but approval
+policy is never`; neither mutation occurred. The remote lifecycle remains unchecked.
+
+Publication from the writable clone failed with `Could not resolve host: github.com`. The
+repository merge guard's dry-run returned `blocked=true`, `reason=review-thread GraphQL query
+failed`, and `merge_executed=false`. No merge guard was bypassed. The controller must publish
+these checkout changes, reconcile the verified PR checkboxes, and complete hosted verification
+and the review/merge/comparison lifecycle on that published head. Final readiness inspection
+confirmed PR #562 remains open with `isDraft=false` at its prior head `c99a33c`.
