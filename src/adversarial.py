@@ -586,7 +586,7 @@ def recorded_verdict(target: str, head: str, reviewers: list[str]) -> dict:
             rows = c.execute(
                 "SELECT event_id, payload_json, updated_ts FROM completion_events "
                 "WHERE producer='adversarial' AND event_type='panel' "
-                "ORDER BY updated_ts DESC, event_id DESC"
+                "ORDER BY updated_ts DESC, rowid DESC"
             ).fetchall()
     except Exception as exc:
         return {"state": "unknown", "key": key, "error": str(exc)[:300]}
@@ -622,6 +622,19 @@ def recorded_verdict(target: str, head: str, reviewers: list[str]) -> dict:
         found["result"] = _read_panel_artifact(key, expected)
         return found
     return {"state": "none", "key": key, "inconclusive_at_head": inconclusive}
+
+
+def reuse_respects_exclusion(result: dict | None, exclude: set[str] | frozenset[str]) -> bool:
+    """Unknown cached reviewer identity cannot establish author exclusion."""
+    if not exclude:
+        return True
+    judged = result.get("reviewed_by") if isinstance(result, dict) else None
+    return (
+        isinstance(judged, list)
+        and bool(judged)
+        and all(isinstance(agent, str) and bool(agent) for agent in judged)
+        and not (set(judged) & exclude)
+    )
 
 
 def _read_panel_artifact(key: str, expected_hash: str | None) -> dict | None:
@@ -714,7 +727,7 @@ def _git(worktree: str, *args: str):
     import subprocess
 
     return subprocess.run(
-        ["git", "-C", worktree, *args], capture_output=True, text=True, check=False
+        ["git", "-C", worktree, *args], capture_output=True, text=True, check=False, timeout=60
     )
 
 
@@ -973,6 +986,7 @@ def review_at_head(
     if (
         lookup.get("state") == "found"
         and (auto or len(reviewers) == len(requested_reviewers))
+        and reuse_respects_exclusion(lookup.get("result"), exclude)
         and (
             not checkout_head or (lookup.get("result") or {}).get("evaluated_head") == checkout_head
         )
@@ -1096,6 +1110,7 @@ def review_at_head(
     else:
         result = {**result, "attempts": attempts}
     result["evaluated_head"] = evaluated_head
+    result["reviewed_by"] = used
     key = base.get("key") or panel_key(target, head, reviewers)
     verdict = str(result.get("verdict") or "").upper()
     return {
@@ -1229,7 +1244,9 @@ def file_followup(target: str, head: str, outcome: dict, *, gh=None) -> dict:
     Never raises: the merge it follows has already happened."""
     import subprocess
 
-    run = gh or (lambda cmd: subprocess.run(cmd, capture_output=True, text=True, check=False))
+    run = gh or (
+        lambda cmd: subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=60)
+    )
     if str(outcome.get("verdict") or "").upper() != "BLOCKED":
         return {"filed": False, "reason": f"verdict {outcome.get('verdict')}, nothing to follow up"}
     key = str(outcome.get("key") or panel_key(target, head, outcome.get("reviewers") or []))
@@ -1392,6 +1409,7 @@ def spawn_post_merge_panel(
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=60,
             )
             if merged.returncode != 0:
                 raise RuntimeError("merged commit lookup failed")

@@ -231,8 +231,11 @@ def adversarial_review_status(
         }
     env = os.environ if env is None else env
     reviewers = adversarial.reviewers_from_env(env)
+    exclude = adversarial.author_agents(pr_labels)
     recorded = adversarial.recorded_verdict(target, head, reviewers)
-    if recorded.get("state") == "found":
+    if recorded.get("state") == "found" and adversarial.reuse_respects_exclusion(
+        recorded.get("result"), exclude
+    ):
         return {"reason": reason, "status": "reused", **recorded}
     if not adversarial.review_enabled(env):
         return {
@@ -241,11 +244,10 @@ def adversarial_review_status(
             "memo": recorded.get("state"),
             "detail": "high-stakes PR with no panel verdict at this head; the panel is off "
             "(ORCH_RUN_ADVERSARIAL_REVIEW=0); to run it: python3 src/adversarial.py review "
-            f"--target {target} --head {head}",
+            f"--target {target} --head {head} --exclude-agents {','.join(sorted(exclude))}",
         }
     labels = ", ".join(pr_labels + source_labels) or "(none)"
     context = f"High-stakes PR {target}: {title}. Reason: {reason}. Labels: {labels}."
-    exclude = adversarial.author_agents(pr_labels)
     if not run_now:
         return {
             "reason": reason,

@@ -185,8 +185,10 @@ live in a hash-checked artifact beside it. The closer lane, which merges fleet P
 same entry through the advisor's `HOW_TO_USE` (`adversarial.py review --target … --head …`).
 The panel moved from the Delegate stage to the Monitor + verify gate, so the diagram draws it there.
 
-**The panel is on at every high-stakes merge, after it, with one reviewer and a consumer
-(2026-10-12).** A retrospective concept test replayed the panel on the 33 high-stakes agent PRs merged
+**The panel is on by default for eligible high-stakes merges, after the merge, with one reviewer
+and a consumer (2026-10-12).** `ORCH_RUN_ADVERSARIAL_REVIEW=0` prevents new panel runs.
+Scheduling requires determinable high-stakes status, an exact head, passing merge gates, and a
+successful merge. A retrospective concept test replayed the panel on the 33 high-stakes agent PRs merged
 2026-07-07..10-05, each at its final head in a checkout holding only that head's ancestors. Both PRs
 that later broke were BLOCKED with the defect named; BLOCKED PRs were later broken or repaired 6 of 16
 times against 1 of 14 PASS. Three mechanism defects came with it. Vibe vetoed 30 of 33, so the
