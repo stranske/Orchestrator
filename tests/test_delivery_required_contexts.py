@@ -28,6 +28,15 @@ CI = ROOT / ".github" / "workflows" / "ci.yml"
 
 JOB_HEADER = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
 JOB_FIELD = re.compile(r"^    (name|if):\s*(.+?)\s*$")
+PUSH_CLAUSE = "github.event_name == 'push'"
+
+
+def _is_push_only(condition: str) -> bool:
+    """True only for a conjunction that requires a push; `push || pull_request` still runs on PRs."""
+    if "||" in condition:
+        return False
+    clauses = [clause.strip().strip("()").strip() for clause in condition.split("&&")]
+    return PUSH_CLAUSE in clauses
 
 
 def _ci_jobs() -> dict[str, dict[str, str]]:
@@ -61,7 +70,7 @@ def _pull_request_check_names() -> set[str]:
     """
     names = set()
     for job_id, fields in _ci_jobs().items():
-        if "github.event_name == 'push'" in fields.get("if", ""):
+        if _is_push_only(fields.get("if", "")):
             continue
         names.add(fields.get("name", job_id))
     return names
@@ -88,10 +97,14 @@ def test_the_job_reader_sees_every_job():
     jobs = _ci_jobs()
     executors = re.findall(r"(?m)^    (?:runs-on|uses):", CI.read_text(encoding="utf-8"))
     assert len(jobs) == len(executors), sorted(jobs)
-    push_only = {
-        job_id for job_id, f in jobs.items() if "github.event_name == 'push'" in f.get("if", "")
-    }
+    push_only = {job_id for job_id, f in jobs.items() if _is_push_only(f.get("if", ""))}
     assert len(_pull_request_check_names()) == len(jobs) - len(push_only)
+
+
+def test_only_a_push_only_condition_removes_a_job():
+    assert _is_push_only("github.event_name == 'push' && github.ref == 'refs/heads/main'")
+    assert not _is_push_only("github.event_name == 'push' || github.event_name == 'pull_request'")
+    assert not _is_push_only("")
 
 
 def test_declaration_equals_the_pull_request_ci_jobs():
