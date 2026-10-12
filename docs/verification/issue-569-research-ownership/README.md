@@ -1,8 +1,51 @@
 # Issue #569: local research ownership correction
 
-The correction is prepared and locally tested. It is **not committed, pushed, merged, or deployed**.
-The source PR #566 remains at `4a3dcf25addce6399d3267df42fb3b7063150651` with an active,
-non-outdated unresolved P1 thread. Its original writer must be reconciled before branch adoption.
+The ownership correction is present in this branch. The feed-wiring restoration described below
+is locally tested but **not committed, pushed, merged, or deployed**. The original evidence recorded
+source PR #566 at `4a3dcf25addce6399d3267df42fb3b7063150651` with an active,
+non-outdated unresolved P1 thread. Its current review state still requires a fresh read.
+
+## Current restoration round
+
+Verified task progress:
+
+- [x] `priority:high` + `agents:paused` contributes zero eligible subjects.
+- [x] `priority:high` + `agent:codex` contributes zero eligible subjects.
+- [x] `priority:high` + `agents:auto-pilot-pause` remains excluded.
+- [ ] Complete original integration and reconcile the actual collection floor.
+- [ ] Run original intake/control/followup suites and full delivery verification together.
+
+`orchestrate.sh` and `ARCHITECTURE.md` are restored byte-for-byte from original #566 commit
+`4a3dcf25addce6399d3267df42fb3b7063150651`. This restores feed generation while dispatch is
+shadowed, respects deferred GitHub reads, and preserves both owner launch gates. The existing
+corrected ownership/freshness/PR completeness code remains in place.
+
+Four new standard-library tests execute only the discovery shell fragment with a fake Python
+command. They check shadow intake with the arm flag absent/off/on, deferred reads, failure
+handling under pipefail, and coexistence with dispatch discovery. They execute no live tick.
+`restoration-wiring-red.log` records all four tests failing before restoration (seven failing
+assertions/subtests); `restoration-green.log` records all 22 ownership/feed/wiring tests passing.
+`restoration-original-red.log` freshly reproduces the two ownership failures on the exact
+original production module, while the auto-pilot pause control passes. All four affected module
+selftests pass again; their `restoration-*-selftest.log` files retain the results. Shell syntax,
+`git diff --check`, and exact original shell/architecture comparisons pass.
+
+The seven original intake assertions remain intact, but pytest is missing, so their pytest run
+and the combined control/followup run could not execute. Black is also missing; both required
+commands fail, and package installation cannot find a distribution in this environment. No
+Python commit is allowed until the formatting gate passes. Git staging itself fails with
+`index.lock: Read-only file system`. `.verify-floor.json` is unchanged: actual pytest collection
+could not be measured, and no collection estimate replaces that measurement. All ceilings and
+exemptions remain unchanged.
+
+GitHub readback fails with `error connecting to api.github.com`, so current PR readiness,
+expected checks, suites, threads, and the actual `verify:compare` verdict remain unverified.
+There is no new pushed head or seven-minute anchor. No merge was attempted, and no Brain,
+installed mirror, dispatch, deployment, or launch activation occurred. Review `restoration.patch`
+for the source/test changes, then complete formatting, measured collection, full verification,
+commit/push, ready-PR readback, and the guarded delivery sequence in a capable environment.
+
+## Prior round evidence
 
 `source-correction.patch` applies to that exact source head. It changes discovery, scheduler
 intake, launch revalidation, feed validation, and PR discovery completeness; adds 18 regression

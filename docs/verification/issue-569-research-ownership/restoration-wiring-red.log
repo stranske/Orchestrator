@@ -1,0 +1,77 @@
+test_deferred_github_skips_both_discovery_reads (test_research_feed_wiring.ResearchFeedWiringTests.test_deferred_github_skips_both_discovery_reads) ... 
+  test_deferred_github_skips_both_discovery_reads (test_research_feed_wiring.ResearchFeedWiringTests.test_deferred_github_skips_both_discovery_reads) (dispatch=False) ... FAIL
+  test_deferred_github_skips_both_discovery_reads (test_research_feed_wiring.ResearchFeedWiringTests.test_deferred_github_skips_both_discovery_reads) (dispatch=True) ... FAIL
+test_live_dispatch_keeps_its_feed_and_builds_research_feed (test_research_feed_wiring.ResearchFeedWiringTests.test_live_dispatch_keeps_its_feed_and_builds_research_feed) ... FAIL
+test_research_read_failure_warns_and_continues (test_research_feed_wiring.ResearchFeedWiringTests.test_research_read_failure_warns_and_continues) ... FAIL
+test_shadow_dispatch_builds_research_feed_with_launching_off (test_research_feed_wiring.ResearchFeedWiringTests.test_shadow_dispatch_builds_research_feed_with_launching_off) ... 
+  test_shadow_dispatch_builds_research_feed_with_launching_off (test_research_feed_wiring.ResearchFeedWiringTests.test_shadow_dispatch_builds_research_feed_with_launching_off) (arm=None) ... FAIL
+  test_shadow_dispatch_builds_research_feed_with_launching_off (test_research_feed_wiring.ResearchFeedWiringTests.test_shadow_dispatch_builds_research_feed_with_launching_off) (arm='0') ... FAIL
+  test_shadow_dispatch_builds_research_feed_with_launching_off (test_research_feed_wiring.ResearchFeedWiringTests.test_shadow_dispatch_builds_research_feed_with_launching_off) (arm='1') ... FAIL
+
+======================================================================
+FAIL: test_deferred_github_skips_both_discovery_reads (test_research_feed_wiring.ResearchFeedWiringTests.test_deferred_github_skips_both_discovery_reads) (dispatch=False)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_research_feed_wiring.py", line 67, in test_deferred_github_skips_both_discovery_reads
+    self.assertIn("research feed: SKIPPED", output)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'research feed: SKIPPED' not found in '  discovery: skipped (dispatch lane shadow; ORCH_DISPATCH_LANE=1 to run backlog discovery)\ndiscovery completed\n'
+
+======================================================================
+FAIL: test_deferred_github_skips_both_discovery_reads (test_research_feed_wiring.ResearchFeedWiringTests.test_deferred_github_skips_both_discovery_reads) (dispatch=True)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_research_feed_wiring.py", line 67, in test_deferred_github_skips_both_discovery_reads
+    self.assertIn("research feed: SKIPPED", output)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'research feed: SKIPPED' not found in '  discovery: SKIPPED — gh deferred by the preflight (backlog.json left as it was)\ndiscovery completed\n'
+
+======================================================================
+FAIL: test_live_dispatch_keeps_its_feed_and_builds_research_feed (test_research_feed_wiring.ResearchFeedWiringTests.test_live_dispatch_keeps_its_feed_and_builds_research_feed)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_research_feed_wiring.py", line 76, in test_live_dispatch_keeps_its_feed_and_builds_research_feed
+    self.assertEqual(len(calls), 2, calls)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 2 : ['/tmp/tmph992x5pv/backlog.py --live']
+
+======================================================================
+FAIL: test_research_read_failure_warns_and_continues (test_research_feed_wiring.ResearchFeedWiringTests.test_research_read_failure_warns_and_continues)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_research_feed_wiring.py", line 71, in test_research_read_failure_warns_and_continues
+    self.assertEqual(len(calls), 1, calls)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1 : []
+
+======================================================================
+FAIL: test_shadow_dispatch_builds_research_feed_with_launching_off (test_research_feed_wiring.ResearchFeedWiringTests.test_shadow_dispatch_builds_research_feed_with_launching_off) (arm=None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_research_feed_wiring.py", line 59, in test_shadow_dispatch_builds_research_feed_with_launching_off
+    self.assertEqual(len(calls), 1, calls)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1 : []
+
+======================================================================
+FAIL: test_shadow_dispatch_builds_research_feed_with_launching_off (test_research_feed_wiring.ResearchFeedWiringTests.test_shadow_dispatch_builds_research_feed_with_launching_off) (arm='0')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_research_feed_wiring.py", line 59, in test_shadow_dispatch_builds_research_feed_with_launching_off
+    self.assertEqual(len(calls), 1, calls)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1 : []
+
+======================================================================
+FAIL: test_shadow_dispatch_builds_research_feed_with_launching_off (test_research_feed_wiring.ResearchFeedWiringTests.test_shadow_dispatch_builds_research_feed_with_launching_off) (arm='1')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_research_feed_wiring.py", line 59, in test_shadow_dispatch_builds_research_feed_with_launching_off
+    self.assertEqual(len(calls), 1, calls)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1 : []
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.021s
+
+FAILED (failures=7)

@@ -1,0 +1,31 @@
+[tick] mode=active dispatch_lane=shadow (ORCH_DISPATCH_LANE=0) ingest=live
+[tick] mode=shadow dispatch_lane=shadow (ORCH_DISPATCH_LANE=0) ingest=dry
+[tick] mode=active dispatch_lane=LIVE ingest=live
+{
+  "chosen": [],
+  "deferred": [],
+  "backlog": {
+    "generated_at": null,
+    "age_seconds": null,
+    "stale_after_seconds": 172800
+  }
+}
+{
+  "chosen": [],
+  "deferred": [],
+  "backlog": {
+    "generated_at": null,
+    "age_seconds": null,
+    "stale_after_seconds": 172800
+  }
+}
+{
+  "chosen": [],
+  "deferred": [],
+  "backlog": {
+    "generated_at": null,
+    "age_seconds": null,
+    "stale_after_seconds": 172800
+  }
+}
+tick.py selftest: OK (remote choose->delegate per item, reserve-aware, learned weights, no-capacity skip, per-tick cap counts delegations not refusals, examination bound, refused-on-discovery-labels examined last, refusals reserve no research capacity, unread labels and unknown claim holders refuse, closer items set aside unexamined and kept out of research, production-before-research arbitration, true research task_type, shadow/opt-in research hook)
