@@ -2367,6 +2367,30 @@ def role_target_kind(capability_id: str, target_role_name: str | None) -> str:
     return "advisory_self" if capability_id == f"role-{role}" else "role_association"
 
 
+def experiment_member_target(routing_metadata: str | dict | None) -> bool:
+    """Whether a run is an abcd experiment MEMBER run, which has no outcome path by design.
+
+    `exp_abcd` tells every member to commit on an isolated branch and never push or open a PR, and
+    judges it in `evaluations_v2`, never in `outcomes`. Delivery credit, when a winner delivers,
+    belongs to the SYNTHESIS run (`synthesis_promotion.default_mirror_outcome`), so an edge onto a
+    member run can never resolve. MEASURED 2026-10-12 on a copy of the live Brain and the live
+    mirror's experiments: 15 member runs, 0 outcomes; of 257 promotions none reached
+    `delegated_or_pr`; no `exp/*` branch ever became a PR in the seven repos experiments ran on.
+    A synthesis run carries the base member's identity too, marked by `synthesis_base_member_id`,
+    and is not a member run."""
+    meta = (
+        routing_metadata
+        if isinstance(routing_metadata, dict)
+        else _routing_metadata_dict(routing_metadata)
+    )
+    return bool(
+        meta.get("experiment_identity_version") == 2
+        and meta.get("experiment_member_id")
+        and "synthesis_base_member_id" not in meta
+        and not meta.get("promotion_resume")
+    )
+
+
 def capability_causal_evidence(
     capability_id: str,
     capability_version_id: str,

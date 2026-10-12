@@ -40,9 +40,12 @@ WINDOW_DAYS = 90
 # row field each class is counted in. An association is set aside at the `acted_on` step (2026-10-12,
 # owner decision): an edge onto a role run is not a run acting on the capability's output, because
 # the run that took the role's advice carries the capability's own edge. Every other class is an
-# acted-on run, and `terminal` is the `outcome` step itself.
+# acted-on run, and `terminal` is the `outcome` step itself. An edge onto an abcd experiment MEMBER
+# run is set aside at the same step (2026-10-12): the member is the experiment's own arm, not a run
+# acting on its result. A winner is acted on through its synthesis run, and no experiment's has been.
 CLASS_FIELDS = {
     "association": "acted_on_associations",
+    "no_outcome_path": "acted_on_member_runs",
     "terminal": "outcome",
     "excluded": "outcome_excluded",
     "awaiting_sweep": "outcome_awaiting_sweep",
@@ -50,7 +53,8 @@ CLASS_FIELDS = {
     "open": "outcome_open",
 }
 # The acted-on runs, partitioned by what became of them.
-OUTCOME_SPLIT = tuple(f for c, f in CLASS_FIELDS.items() if c != "association")
+ACTED_ON_SET_ASIDE = ("association", "no_outcome_path")
+OUTCOME_SPLIT = tuple(f for c, f in CLASS_FIELDS.items() if c not in ACTED_ON_SET_ASIDE)
 # Printed beside a step: (step, row field, label, legend). Labels as `capability_effectiveness` prints.
 SET_ASIDE = (
     (
@@ -59,6 +63,13 @@ SET_ASIDE = (
         "assoc",
         "edges onto role runs, whose outcome is a copy of the acting run's; never counted as "
         "acted on.",
+    ),
+    (
+        "acted_on",
+        "acted_on_member_runs",
+        "member",
+        "edges onto experiment member runs, which never push; a winner is acted on through its "
+        "synthesis run. Never counted as acted on.",
     ),
     (
         "outcome",
@@ -217,7 +228,13 @@ def outcome_counts(cid: str, own_edges: list[dict] | None) -> dict[str, int | No
     classified = [
         (
             capability_effectiveness._classify(
-                {**e, "role_kind": feedback.role_target_kind(cid, e.get("target_role_name"))}
+                {
+                    **e,
+                    "role_kind": feedback.role_target_kind(cid, e.get("target_role_name")),
+                    "experiment_member": feedback.experiment_member_target(
+                        e.get("target_routing_metadata")
+                    ),
+                }
             ),
             e,
         )
@@ -225,7 +242,7 @@ def outcome_counts(cid: str, own_edges: list[dict] | None) -> dict[str, int | No
     ]
     classes = Counter(c for c, _ in classified)
     return {
-        "acted_on": len(accepted) - classes["association"],
+        "acted_on": len(accepted) - sum(classes[c] for c in ACTED_ON_SET_ASIDE),
         **{field: classes[c] for c, field in CLASS_FIELDS.items()},
         "outcome_success": sum(
             c == "terminal"
@@ -267,7 +284,8 @@ def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
                 "SELECT ie.*, o.adjudicated_verdict AS outcome_adjudicated, "
                 "o.verifier_verdict AS outcome_verifier, o.durability AS outcome_durability, "
                 "o.merged AS outcome_merged, o.failure_class AS outcome_failure_class, "
-                "r.role_name AS target_role_name FROM influence_edges ie "
+                "r.role_name AS target_role_name, "
+                "r.routing_metadata AS target_routing_metadata FROM influence_edges ie "
                 "LEFT JOIN outcomes o ON o.run_id = ie.target_run_id "
                 "LEFT JOIN runs r ON r.run_id = ie.target_run_id "
                 "WHERE ie.created_ts BETWEEN ? AND ?",
@@ -538,6 +556,12 @@ def recurrence_fixture() -> bool:
     # An edge onto a role run is an association, whatever its target holds: never acted on.
     counts = outcome_counts("cap", [{**done, "target_role_name": "triage"}])
     assert (counts["acted_on"], counts["acted_on_associations"], counts["outcome"]) == (0, 1, 0)
+    row.update(counts)
+    assert first_break(row) == "not_acted_on"
+    # An edge onto an experiment member run has no outcome path: never acted on, whatever it holds.
+    _member = '{"experiment_identity_version": 2, "experiment_member_id": "a--m"}'
+    counts = outcome_counts("cap", [{**done, "target_routing_metadata": _member}])
+    assert (counts["acted_on"], counts["acted_on_member_runs"], counts["outcome"]) == (0, 1, 0)
     row.update(counts)
     assert first_break(row) == "not_acted_on"
     row.update(outcome_counts("cap", [{"accepted": 1}]))  # acted on, nothing recorded yet

@@ -443,6 +443,24 @@ component or surface moved, so the loop diagram is unchanged.
 No first break changes on today's data: every row these touch breaks earlier or has unmeasured
 demand. No stage, component or surface moved, so the loop diagram is unchanged.
 
+**An experiment member run has no outcome path (2026-10-12, owner decision "trace and wire
+winner").** `exp_abcd` records each member run with the `abcd-experiment` capability and never
+writes its `outcomes` row, by design: a member commits on an isolated branch, never pushes, and is
+judged in `evaluations_v2`. A winner reaches delivery only through `synthesis_promotion`, whose
+outcome lands on the SYNTHESIS run. The trace, on a copy of the live Brain and the live mirror's
+`experiments/`: 257 promotions; 254 expired in `evaluated` before any synthesis (about 24
+experiments a day against a ship gate that launches one a day); 2 synthesized no commit; 1
+(strategy434) reached `candidate_ready`; 0 were linked to a delivery, because `link-delivery` is a
+CLI with no production caller. Over REST, no `exp/*` branch was ever a PR in the seven repos the
+experiments ran on. So abcd-experiment's 12 edges read as "awaiting outcomes" for a wait nothing
+could end. `feedback.experiment_member_target` names a member run (identity v2 with a member id,
+and not a synthesis run). `capability_effectiveness` counts such an edge as `no_outcome_path`,
+never scored, even when another writer put an outcome on it: that is not the arm's delivery. The
+value-chain monitor sets it aside at `acted_on`, as it does an association. On the same copy,
+abcd-experiment moves from `not_yet_measurable` to `unscoreable`, and its `acted_on` from 12 to 0.
+Every other row is identical. No stage, component or surface moved, so the loop diagram is
+unchanged.
+
 `issue_size_quality` extends that weekly caller with a read-only join: every closed issue in
 the 90-day reviewed-fleet population contributes its checkbox-count band, and only PRs merged
 by the issue's close can contribute canonical Brain outcomes. PASS uses the final adjudication;
