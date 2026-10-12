@@ -2270,6 +2270,29 @@ def offload(
             agy_label = adapters.model_label_from_agy_log(agy_text)
             if agy_label:
                 observed_model = adapters.model_id_for_label(agent, agy_label)
+        # Capture native terminal-event usage BEFORE stream reduction discards it.
+        # Only CLI completion events count; JSON in an assistant deliverable does not.
+        import ledger_reconcile
+
+        reported_in = reported_out = 0
+        for line in (proc.stdout or "").splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if (
+                isinstance(event, dict)
+                and event.get("type") in {"turn.completed", "result"}
+                and isinstance(event.get("usage"), dict)
+            ):
+                tin, tout = ledger_reconcile._usage_from_obj(event)
+                reported_in += tin
+                reported_out += tout
+        reported_usage = (
+            {"input_tokens": reported_in, "output_tokens": reported_out}
+            if reported_in or reported_out
+            else {}
+        )
         # The large-prompt transport uses agy's matching NDJSON output. Preserve the existing
         # offload return contract by handing callers its final text response, as print mode does.
         if prompt_via_stdin:
@@ -2345,6 +2368,7 @@ def offload(
             "exit": exit_code,
             "output": (proc.stdout or "").strip(),
             "model": model,
+            "usage": reported_usage,
             "stderr_tail": (proc.stderr or "")[-800:],
             "cwd": str(run_cwd),
             "process_cwd": str(proc_cwd),

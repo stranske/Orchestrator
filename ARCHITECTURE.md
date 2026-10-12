@@ -1722,7 +1722,13 @@ against post-detection durability evidence, compares it with the merged-PASS bas
 unmeasured costs. The closer-lane advisor offers this role only when the caller's recorded
 `verifier_verdict` and `merge_disposition` disagree; missing facts withhold the offer. Weekly switch
 review consumes the saved report and prints its case, agreement, disagreement and cost counts.
-This extends the existing role and reporting rails; it does not re-enable tick adjudication.
+This extends the existing role and reporting rails; it does not re-enable tick adjudication. Native CLI terminal token usage is retained
+through the existing role record as ledger effort, never complete-source dollars.
+Shadow reports label measured, imputed and unmeasured attempts separately on
+`feedback.COST_SCALE`. Imputation uses eligible complete-source agent means or
+the global median under the existing coverage/plausibility guards; without a
+pool the report names UNMEASURED. Estimates never become measured Brain costs,
+and late native session receipts replace report estimates without redispatch.
 
 Its separate `--collect-case` rail reads only local evaluated-revision Git blobs. Explicit
 `git-path:` acceptance locations use the same bounded literal-path reader as source files,
