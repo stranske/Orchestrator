@@ -556,6 +556,53 @@ Both durable subjects behind role-triage's 0.167 were edges still reading PASS/d
 since relabelled `unattributed_delegation`. No stage, component or surface moved, so the loop
 diagram is unchanged.
 
+**What an outcome says is defined once, in `feedback`, for both readers of these edges
+(2026-10-11).** `capability_causal_evidence` (the lifecycle's tally) and `capability_effectiveness`
+read the same edges and the same `outcomes` rows. Until this change each wrote its own predicates,
+and they disagreed. Both now call `feedback.outcome_is_terminal` and
+`feedback.outcome_is_durable_success`, and the lifecycle's `advisory_self` class comes from
+`feedback.role_target_kind`. Re-dumping all 3,778 lifecycle rows on a Brain copy gave byte-identical
+output before and after the extraction. Measured on that copy, the disagreements were:
+- **An edge onto a role run.** The outcome a role run holds is a copy of its acting run's
+  (`_propagate_outcome_lineage_in_conn`), and the acting run carries the same capability's edge. So
+  this reader counted one delivery twice, and `_target_of` pooled every `role:<name>:*` run into one
+  subject. 2,711 of its 3,653 edges target role runs. Every one of the 27 that held an outcome was
+  such a copy, and each had a same-capability edge on its acting run.
+
+  Such an edge is now an ASSOCIATION, in both arms. `advisory_self` is the role's own capability.
+  `role_association` is any other capability, such as the `offload` that produced the proposal (the
+  2026-08-21 decision). Associations are counted in `associations` and never scored.
+- **PASS with `pending` durability.** This reader counted it as terminal and non-durable; the
+  lifecycle does not count it as terminal. The rows fall into two populations:
+  - 55 merges are selected by `durability_sweep._pending_merged_runs` and sit in its grace window.
+    The sweep's 2026-10-11 run printed `undrainable 0`. They are `awaiting_sweep` and resolve on
+    their own.
+  - 38 agy-runtime-isolation `offload:*` runs never open a PR, and nothing selects them. They are
+    `unresolvable`: counted, never scored, never awaiting.
+- **A verifier `NON_PASS` under an adjudicated PASS.** `NON_PASS` is the fleet verifier's verdict on
+  the merged commit. The lifecycle counted it as a failure; this reader counted it as a durable
+  success. Among judged merges, `NON_PASS` regressed 6 of 65 times, against 2 of 79 for a verifier
+  PASS and 130 of 4,535 with no verifier verdict.
+
+An accepted arm whose edges can never be scored reads `unscoreable (...)`, never
+`not_yet_measurable`. role-redirect is one: all 762 of its edges are on its own role runs, and
+nothing records which run acted on a redirect proposal (accepted role edges exist only for triage,
+15 of them).
+
+| Accepted arm | #529 | Now |
+|---|---|---|
+| deliberate-break-verifier | 60/111 subjects, 0.541 | 55/106, 0.519; 5 awaiting the sweep (42 of the 47 pending merges carry `NON_PASS`) |
+| offload | 36/46, 0.783; 30 excluded | 31/46, 0.674; 15 excluded, 1,617 associations |
+| agy-runtime-isolation | 4/5 on 50 attempts, 0.8 | 4/5 on 12 attempts, 0.8; 38 unresolvable |
+| role-triage | 24 excluded, `not_yet_measurable` | 12 excluded on 11 subjects, 281 associations, `excluded_only` |
+| role-redirect, -prompt, -decomposer | `not_yet_measurable` | `unscoreable` (762, 8, 4 associations) |
+
+Two differences remain, both measured and not decided here:
+- The lifecycle classes only `advisory_self`. It still counts 15 `offload` edges on role runs among
+  its terminal outcomes, tallied `churn_unattributed`.
+- The two readers take the subject from different places. No stage, component or surface moved, so
+the loop diagram is unchanged.
+
 The one place two LLMs touch the same task is an `agent:auto` switch, where the keepalive delegation
 policy replaces a stalled agent. `agent_switches.py` (rail, daily) records each such pair in the Brain
 table `agent_switches` — commits before and after the switch and the terminal outcome — from two
