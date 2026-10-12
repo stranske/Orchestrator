@@ -38,6 +38,7 @@ import pytest
 import adversarial
 import capabilities
 import feedback
+import local_verify
 import paths
 import switch_review
 import value_chain_monitor as monitor
@@ -361,13 +362,14 @@ def test_a_capability_only_on_role_runs_was_never_acted_on(brain):
     assert "acted_on 0 (+3 assoc); outcome 0; success 0; first_break not_acted_on" in line, line
 
 
-def test_awaiting_the_sweep_waits_and_a_run_that_never_merges_does_not(brain):
+def test_awaiting_the_sweep_and_pending_pr_wait(brain):
     _consumed(1, adjudicated_verdict="PASS", merged=1, durability="pending")
     row = _row(brain)
     assert _steps(row) == (1, 0, 0, "no_outcome") and row["outcome_awaiting_sweep"] == 1, row
-    _relabel("remote:o/r#1:gemini", merged=0)  # an unmerged run: nothing will ever judge it
+    _relabel("remote:o/r#1:gemini", merged=0)  # the PR may still deliver
     row = _row(brain)
-    assert _steps(row) == (1, 0, 0, "outcome_unscoreable") and row["outcome_no_merge"] == 1, row
+    assert _steps(row) == (1, 0, 0, "no_outcome") and row["outcome_open"] == 1, row
+    assert row["outcome_no_merge"] == 0, row
 
 
 def test_a_verifier_failure_under_a_pass_is_terminal(brain):
@@ -377,13 +379,43 @@ def test_a_verifier_failure_under_a_pass_is_terminal(brain):
     assert _steps(_row(brain)) == (1, 1, 0, "no_success")
 
 
-def test_a_failure_that_never_merges_is_not_the_outcome_step(brain):
+@pytest.mark.parametrize("verdict", ["PASS", "FAIL"])
+def test_a_proven_no_delivery_run_is_not_the_outcome_step(brain, verdict):
     # Owner decision 2026-10-12 ("separate verdict rate"): a run that never merges is scored by
     # its verdict in capability_effectiveness. Before it, this FAIL was a terminal outcome while a
     # PASS in the same place could never be one.
-    _consumed(1, adjudicated_verdict="FAIL", merged=0, durability="pending")
+    run = "offload:gemini:1"
+    feedback.record_run(run, "research:subject-1", "review", "gemini", mode="offload")
+    feedback.record_capability_consumption(
+        capability_id=CAP,
+        capability_version_id=VERSIONS[CAP],
+        source_run_id="capability-producer:research",
+        target_run_id=run,
+        accepted=True,
+    )
+    feedback.record_outcome(run, adjudicated_verdict=verdict, merged=0, durability="pending")
     row = _row(brain)
     assert (row["outcome"], row["outcome_no_merge"]) == (0, 1), row
+
+
+@pytest.mark.parametrize("merged", [None, False])
+@pytest.mark.parametrize("verdict", ["FAIL_BROKEN", "PASS", "NON_PASS"])
+def test_pending_pr_verdict_is_not_set_aside_as_no_delivery(brain, merged, verdict):
+    run = _consumed(1)
+    if merged is False:
+        feedback.record_outcome(run, merged=False)
+    local_verify.record_verdict(run, {"verdict": verdict, "reason": "delivery eligibility probe"})
+    with feedback._conn() as c:
+        assert c.execute(
+            "SELECT merged, durability FROM outcomes WHERE run_id=?", (run,)
+        ).fetchone() == (merged, "pending")
+    row = _row(brain)
+    assert row["outcome_no_merge"] == 0, row
+    if verdict == "PASS":
+        assert _steps(row) == (1, 0, 0, "no_outcome"), row
+        assert row["outcome_open"] == 1, row
+    else:
+        assert _steps(row) == (1, 1, 0, "no_success"), row
 
 
 def test_the_monitor_classifies_with_the_one_classifier(brain, monkeypatch):

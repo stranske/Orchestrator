@@ -120,7 +120,7 @@ def _edge_rows(conn=None) -> list[dict]:
         rows = c.execute("""SELECT ie.capability_id, ie.accepted, ie.counterfactual,
                       o.adjudicated_verdict, o.verifier_verdict, o.durability, o.failure_class,
                       ie.target_run_id, ie.created_ts, o.merged, r.role_name,
-                      r.target, r.routing_metadata
+                      r.target, r.routing_metadata, r.mode, r.pr_number
                FROM influence_edges ie
                LEFT JOIN outcomes o ON o.run_id = ie.target_run_id
                LEFT JOIN runs r ON r.run_id = ie.target_run_id
@@ -144,9 +144,28 @@ def _edge_rows(conn=None) -> list[dict]:
             "role_kind": feedback.role_target_kind(str(r[0]), r[10]),
             "subject": feedback.run_subject_id(r[12], r[11], r[7]),
             "experiment_member": feedback.experiment_member_target(r[12]),
+            "delivery_eligibility": _delivery_eligibility(r[13], r[14], r[9]),
         }
         for r in rows
     ]
+
+
+def _delivery_eligibility(
+    mode: str | None, pr_number: int | None, merged: bool | int | None
+) -> str:
+    """Positive delivery evidence wins over run type; missing evidence stays unknown.
+
+    `dispatcher.offload` records mode=offload and returns work to its caller without a claim or
+    PR. This includes research offloads. A run id prefix, missing PR, or NULL/False merge state
+    alone proves nothing. A recorded PR or merge overrides offload provenance.
+    """
+    if pr_number or merged:
+        return "merge_path"
+    if mode == "offload":
+        return "no_delivery"
+    if mode in ("local", "remote"):
+        return "merge_path"
+    return "unknown"
 
 
 def _outcome_fields(e: dict) -> dict:
@@ -179,8 +198,10 @@ def _classify(e: dict) -> str:
     A RUN THAT NEVER MERGES HAS A VERDICT, NOT A DURABILITY (owner decision 2026-10-12: "separate
     verdict rate"). Until then its PASS could never score and its FAIL always did: of
     agy-runtime-isolation's research-program offloads, 38 PASS were never counted and 8 FAIL were
-    scored as non-durable results. Such a run (not merged, durability unjudged, an outcome present)
-    is `no_merge`, whatever its verdict. It never enters the durable rate, which stays a rate of
+    scored as non-durable results. Such a run must have positive no-delivery provenance, in
+    addition to being unmerged with unjudged durability and an outcome present. NULL/False merge
+    state alone does not establish eligibility: a PR-bearing FAIL remains terminal and its PASS
+    remains open. A proven no-delivery run never enters the durable rate, which stays a rate of
     merges, and `_verdict_stats` scores it by its verdict instead. A run closed unmerged is judged
     (`abandoned`), so it stays in the durable rate.
 
@@ -196,7 +217,12 @@ def _classify(e: dict) -> str:
         return "excluded"
     outcome = _outcome_fields(e)
     unjudged = str(outcome["durability"] or "").lower() in ("", "pending")
-    if not outcome["merged"] and unjudged and any(v is not None for v in outcome.values()):
+    if (
+        e.get("delivery_eligibility") == "no_delivery"
+        and not outcome["merged"]
+        and unjudged
+        and any(v is not None for v in outcome.values())
+    ):
         return "no_merge"
     if feedback.outcome_is_terminal(**outcome):
         return "terminal"
@@ -684,6 +710,7 @@ def _selftest() -> None:
     # window, and an offload run nothing will ever judge. A verifier NON_PASS under an adjudicated
     # PASS is terminal and is not a durable success (feedback's predicates).
     _c.execute("INSERT INTO runs (run_id, role_name) VALUES ('role:triage:x:1', 'triage')")
+    _c.execute("INSERT INTO runs (run_id, mode) VALUES ('offload:gemini:2', 'offload')")
     for _eid, _cap, _run, _fields in (
         ("e-self", "role-triage", "role:triage:x:1", ("PASS", None, "durable", 1)),
         ("e-assoc", "offload", "role:triage:x:1", ("PASS", None, "durable", 1)),
@@ -871,6 +898,8 @@ def _selftest() -> None:
                             None,  # runs.role_name: a work run
                             None,  # runs.target
                             None,  # runs.routing_metadata: not an experiment member
+                            None,  # runs.mode: unknown delivery eligibility
+                            None,  # runs.pr_number
                         )
                         for e in edges
                         if e["accepted"]
