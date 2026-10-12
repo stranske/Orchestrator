@@ -244,6 +244,68 @@ def test_delivery_eligibility_requires_recorded_provenance(
     assert effectiveness._classify(edge) == expected, edge
 
 
+@pytest.mark.parametrize("merged", [None, False])
+@pytest.mark.parametrize("verdict", ["PASS", "FAIL_BROKEN", "NON_PASS"])
+def test_delivery_evidence_is_reread_after_run_update(brain, merged, verdict):
+    # Provenance may arrive after the verifier. Neither reader may cache its earlier inference
+    # or require the outcome/consumption edge to be rewritten when a PR becomes known.
+    run = "offload:late-delivery-evidence"
+    feedback.record_run(run, "o/r#6", "implement", "codex")
+    _consumed_run(run)
+    if merged is False:
+        feedback.record_outcome(run, merged=False)
+    local_verify.record_verdict(run, {"verdict": verdict, "reason": "late delivery evidence"})
+    with feedback._conn() as c:
+        original_outcome = c.execute("SELECT * FROM outcomes WHERE run_id=?", (run,)).fetchone()
+
+    def assert_stage(eligibility, expected):
+        with feedback._conn() as c:
+            edge = effectiveness._edge_rows(c)[0]
+            assert (
+                c.execute("SELECT * FROM outcomes WHERE run_id=?", (run,)).fetchone()
+                == original_outcome
+            )
+        assert edge["delivery_eligibility"] == eligibility, edge
+        assert effectiveness._classify(edge) == expected, edge
+        arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+        assert arm["no_merge"] == (expected == "no_merge"), arm
+        assert arm["terminal"] == (expected == "terminal"), arm
+        assert arm["verdict"]["judged"] == (expected == "no_merge"), arm
+        assert arm["verdict"]["passed"] == (expected == "no_merge" and verdict == "PASS"), arm
+
+        inputs = monitor._brain(feedback.DB_PATH, T0 - 1, T0 + 1)
+        assert inputs["errors"] == [], inputs
+        counts = monitor.outcome_counts("deliberate-break-verifier", inputs["edges"])
+        assert counts["acted_on"] == 1, counts
+        assert counts["outcome"] == (expected == "terminal"), counts
+        assert counts["outcome_open"] == (expected == "open"), counts
+        assert counts["outcome_no_merge"] == (expected == "no_merge"), counts
+
+    delivery_class = "open" if verdict == "PASS" else "terminal"
+    assert_stage("unknown", delivery_class)
+    feedback.record_run(run, "o/r#6", "implement", "codex", mode="offload")
+    assert_stage("no_delivery", "no_merge")
+    feedback.record_run(run, "o/r#6", "implement", "codex", mode="offload", pr_number=6)
+    assert_stage("merge_path", delivery_class)
+
+
+def test_proven_offload_without_an_outcome_remains_open(brain):
+    run = "offload:not-yet-verified"
+    feedback.record_run(run, "research:pending-subject", "review", "gemini", mode="offload")
+    _consumed_run(run)
+    with feedback._conn() as c:
+        edge = effectiveness._edge_rows(c)[0]
+        assert c.execute("SELECT * FROM outcomes WHERE run_id=?", (run,)).fetchone() is None
+    assert edge["delivery_eligibility"] == "no_delivery", edge
+    assert effectiveness._classify(edge) == "open", edge
+    arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+    assert (arm["terminal"], arm["no_merge"], arm["verdict"]["judged"]) == (0, 0, 0), arm
+    inputs = monitor._brain(feedback.DB_PATH, T0 - 1, T0 + 1)
+    assert inputs["errors"] == [], inputs
+    counts = monitor.outcome_counts("deliberate-break-verifier", inputs["edges"])
+    assert (counts["outcome"], counts["outcome_no_merge"], counts["outcome_open"]) == (0, 0, 1)
+
+
 def test_a_role_runs_copied_outcome_is_an_association_not_a_second_delivery(brain):
     role_run, run = _advised(1)
     feedback.record_outcome(run, **MERGED_DURABLE)

@@ -168,3 +168,84 @@ The mounted `.git` is read-only, so this round's test and evidence commit is rec
 the writable bare clone `/tmp/orchestrator-556-git`, using this checkout as its work tree.
 The automation runner must publish the checkout changes and reconcile the PR body;
 the remote PR was observed open and ready for review, with no review threads.
+
+## Late delivery evidence and comparison disposition (PR #562, 2026-10-12)
+
+The correction is already in merged PR #557 (`a533419adc65873d209e31120211e9612b10eae4`).
+This round adds seven production-writer regressions rather than changing that classifier again.
+Six follow an unchanged verifier outcome through recorded run provenance changing from unknown,
+to offload without delivery, to offload with a recorded PR. PASS, FAIL_BROKEN and NON_PASS each
+cover NULL/False merge state. Both readers must re-read the run evidence on each report: only
+the proven offload stage enters the verdict population. The seventh checks that offload mode
+without any outcome is still open, with no scored verdict.
+
+The six affected suites ran with the command above and `-m "not slow"`: **162 passed**
+(the original 155 plus these seven). Both module selftests passed. Collection with
+`python3 -m pytest --collect-only -m "not slow" -q` reported **3,104 tests collected**.
+`.verify-floor.json` now records that measured collection, with all skip/mypy ceilings preserved;
+the `passed` field is the repository's collection expectation, not an assertion that all 3,104
+tests were executed locally. Full hosted execution is still required for this follow-up.
+
+The required RED/restored GREEN command was rerun against identical test bytes:
+
+```sh
+python3 -m pytest tests/test_capability_effectiveness_predicates.py \
+  -k pending_pr_outcome -m "not slow" -q --tb=short
+```
+
+RED used `git show 49cdbfee4dba260a5e9149bdd979b7ebca4fd06b:src/capability_effectiveness.py`
+and returned exit 1: **6 failed, 48 deselected**. The four FAIL_BROKEN/NON_PASS cases again
+reported `(5, 5, 1.0)` instead of `(6, 5, 0.833)`; the two PASS cases again reported `no_merge`
+instead of `open`. A `finally` block restored the saved source bytes and a direct byte
+comparison returned true. GREEN returned exit 0: **6 passed, 48 deselected**.
+
+| Binding | Git blob or SHA-256 |
+| --- | --- |
+| RED source SHA-256 | `2601f7ff5b71cc3748e344870bd0aaac791cee5f6166eab780a09c9d4e32a5b2` |
+| GREEN source blob (unchanged from #557) | `770d315257e2402906c4ddbee2bc52047f9dd034` |
+| GREEN source SHA-256, before and after restoration | `3414f0ecbe839a5074acf248dfa00bd6d674c271c998b73d525d5ca36262d207` |
+| Predicate test blob, identical during RED and GREEN | `fa49b65fe5f3d45bfd509708f2641611e8c38a70` |
+| Predicate test SHA-256 | `889349f4b89d4c6f8f640c4eb97bdc1383b29eda0e9d2b2ca4971abae055208c` |
+
+Tests used temporary Brain databases, and both selftests used their offline fixtures.
+No live Brain was mutated. Pytest 8.3.5 and Black 26.10.0 were recovered into `/tmp` from
+pinned official sources; repository dependencies were not changed.
+
+Black formatted the changed test and the required
+`black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`
+passed: **393 files would be left unchanged**. Its default asynchronous scheduling stalled
+in this sandbox and was interrupted; a `/tmp` launcher then scheduled Black's unchanged
+`reformat_one` formatter serially. Formatting and checking semantics were preserved.
+
+The actual [provider comparison report for #557](https://github.com/stranske/Orchestrator/pull/557#issuecomment-6130287116)
+evaluated merge `a533419adc65873d209e31120211e9612b10eae4` and returned **NON_PASS**:
+OpenAI PASS, Anthropic CONCERNS. It must not be described as a provider PASS merely because
+the comparison workflow completed. Its CI concern can now be attributed precisely:
+[CI run 38291043273](https://github.com/stranske/Orchestrator/actions/runs/38291043273),
+checkout [job 114950936404](https://github.com/stranske/Orchestrator/actions/runs/38291043273/job/114950936404),
+reported **3,071 passed, 0 failed, 26 skipped, 3,097 collected**, but failed because the recorded
+collection floor was **3,064**, 33 behind. The flat-mirror and coverage jobs succeeded, and the
+main-only floor-reconciliation job succeeded. Main's subsequently published floor is 3,097.
+This follow-up's measured floor of 3,104 incorporates the seven new tests.
+
+The report's evidence concerns are addressed locally by the fresh RED/GREEN receipt above,
+its unchanged classifier binding, and this explicit comparison disposition. Its concern about
+unrecognized modes is intentional: without positive provenance, an unknown legacy run cannot
+be claimed to have no delivery path. `dispatcher.offload` records `mode="offload"` for its runs.
+These findings do not change the published NON_PASS or attest to fresh hosted checks on this
+follow-up. The combined hosted verification/review/guarded merge/actual comparison task remains
+unchecked until the controller completes those steps on the final published head.
+
+Publication was attempted from `/tmp/orchestrator-556-round-git`, a writable bare clone
+using this checkout as its work tree because the mounted `.git` is read-only. The commit
+contains only the predicate tests, measured collection floor, and this evidence document.
+Push to `codex/issue-556` failed with `Could not resolve host: github.com`. The required
+merge guard was run in dry-run mode against PR #562 with the source commit as its expected
+head; it returned `blocked=true`, `reason=review-thread GraphQL query failed`, and
+`merge_executed=false`. No guard was bypassed.
+
+Attempts to reconcile the verified PR checkboxes, add `needs-human`, and post the blocker
+comment were rejected with `MCP tool call requires approval, but approval policy is never`.
+None of those remote mutations occurred. PR #562 was observed open and ready for review.
+The automation runner must publish the checkout changes and complete the remaining lifecycle
+on the published head; the local checks above cannot substitute for that hosted receipt.
