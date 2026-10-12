@@ -5,14 +5,20 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { test } = require('node:test');
 const { verifyHostedCI } = require('../scripts/verify_seatbelt_receipts');
+const { withStepLogs } = require('./seatbelt_ci_fixture');
 
-const snapshot = JSON.parse(fs.readFileSync(path.join(__dirname,
+const retained = JSON.parse(fs.readFileSync(path.join(__dirname,
   '../docs/verification/issue-532-seatbelt-regex/380c160-hosted-ci.json'), 'utf8'));
+const snapshot = withStepLogs(retained);
 const head = snapshot.head_sha;
 const copy = () => structuredClone(snapshot);
 
-test('retained hosted CI has executed product checks on the recorded exact head', () => {
+test('synthetic step-bound hosted CI has executed product checks on the recorded exact head', () => {
   assert.equal(verifyHostedCI(snapshot, head).head_sha, head);
+});
+
+test('historical whole-job excerpts lack authenticated producer bindings', () => {
+  assert.throws(() => verifyHostedCI(retained, head), /producer binding/);
 });
 
 test('hosted success for an older head cannot accept a new candidate', () => {
