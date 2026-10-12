@@ -667,9 +667,14 @@ readiness. An excluded regression no longer sets `rollback_pending`.
 
 The tally also classes `role_association` (any capability on a role run that is not the role's own)
 beside `advisory_self`. Durable subjects are read from the `success` tally rather than the raw flag.
-On a Brain copy this moved offload's 30 `churn_unattributed` rows to 15 learning-excluded and 15
-role associations, and role-triage's 12 to learning-excluded. No readiness criterion and no other
-prior changed.
+Readiness reads rework, evidence age and a gate's `min_linked_outcomes` from the SCORED rows only
+(`success` or `failure`, counted in `scored_outcomes`), and only a `failure` regression sets
+`rollback_pending`. On a Brain copy this moved offload's 30 `churn_unattributed` rows to 15
+learning-excluded and 15 role associations, and role-triage's 12 to learning-excluded. One readiness
+criterion changed: role-triage's `evidence_age`, True to False, because all of its terminal rows are
+excluded or role-run copies and it has no scored evidence. Its gate had met `min_linked_outcomes` 5
+with 130 such rows in the live ledger. Neither was ready before or after, since neither has a durable
+subject.
 
 **Both readers key a subject the same way (2026-10-12).** `feedback.run_subject_id` is the
 lifecycle's rule, extracted unchanged: an explicit `causal_context.subject_id`, else a `subject_id`

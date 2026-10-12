@@ -210,3 +210,64 @@ def test_a_capability_on_a_role_run_is_an_association_not_a_second_delivery(ledg
     assert result["routing_prior"]["alpha"] == 2.0, result["routing_prior"]
     assert result["readiness"]["durable_subjects"] == ["owner/repo#2"], result["readiness"]
     assert result["readiness"]["role_association_edges"] == 1, result["readiness"]
+
+
+def _row(tally: str, *, rework: bool = False, ts: int = NOW, subject: str = "owner/repo#1") -> dict:
+    return {
+        "accepted_consumption": True,
+        "terminal_outcome": True,
+        "durable_success": tally == "success",
+        "tally_class": tally,
+        "subject_id": subject,
+        "rework": rework,
+        "observed_ts": ts,
+    }
+
+
+@pytest.mark.parametrize("tally", ["learning_excluded", "advisory_self", "role_association"])
+def test_an_unscored_reworked_row_never_blocks_promotion(ledger, tally):
+    cap = _register(ledger)
+    ready = capabilities._causal_readiness(cap, [_row(tally, rework=True)], NOW + 30)
+    assert (ready["rework"], ready["criteria"]["rework"]) == (0, True), ready
+
+
+@pytest.mark.parametrize("tally", ["learning_excluded", "advisory_self", "role_association"])
+def test_an_unscored_recent_row_never_refreshes_stale_evidence(ledger, tally):
+    cap = _register(ledger)
+    stale = NOW - 90 * 86400
+    rows = [_row("success", ts=stale), _row(tally, ts=NOW, subject="owner/repo#2")]
+    ready = capabilities._causal_readiness(cap, rows, NOW + 30)
+    assert ready["latest_evidence_ts"] == stale, ready
+    assert ready["criteria"]["evidence_age"] is False, ready
+    assert (ready["terminal_outcomes"], ready["scored_outcomes"]) == (2, 1), ready
+
+
+def test_a_role_run_regression_holds_nothing_back(ledger):
+    cap = _register(ledger)
+    role_run = "role:triage:gemini:1"
+    feedback.record_run(role_run, "triage:1-items", "role:triage", "gemini", role_name="triage")
+    feedback.record_capability_consumption(
+        capability_id=cap["capability_id"],
+        capability_version_id=cap["capability_version_id"],
+        source_run_id="capability-output:role",
+        target_run_id=role_run,
+        accepted=True,
+        producer="selftest",
+    )
+    # A copy of an acting run's merged-then-reverted outcome.
+    feedback.record_outcome(
+        role_run, adjudicated_verdict="PASS", merged=True, durability="reverted"
+    )
+    assert _tally(cap) == ["role_association"]
+    result = _reconcile(cap, ledger)
+    assert result["rollback_pending"] is None, result["rollback_pending"]
+
+
+def test_a_gate_counts_only_scored_outcomes_as_linked(ledger):
+    cap = _register(ledger)
+    cap["gate_reason"] = "fixture gate"
+    cap["gate_criteria"] = {"min_linked_outcomes": 2}
+    rows = [_row("success")] + [_row("learning_excluded", subject=f"o/r#{n}") for n in range(5)]
+    cap["causal_evidence"] = {"readiness": capabilities._causal_readiness(cap, rows, NOW + 30)}
+    gate = capabilities.gate_readiness(cap, now=NOW + 30)
+    assert gate["criteria"]["linked_outcomes"] is False, gate

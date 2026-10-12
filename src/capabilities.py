@@ -870,8 +870,11 @@ def _causal_readiness(cap: dict[str, Any], rows: list[dict], now: int) -> dict[s
     role_association_edges = sum(
         1 for row in accepted if row.get("tally_class") == "role_association"
     )
-    rework = sum(1 for row in terminal if row["rework"])
-    latest = max((int(row["observed_ts"] or 0) for row in terminal), default=0)
+    # Rework and evidence age read the SCORED rows only, the ones the prior counts: an excluded or
+    # role-run row must neither block promotion with its rework nor refresh stale evidence.
+    scored = [row for row in terminal if row.get("tally_class") in ("success", "failure")]
+    rework = sum(1 for row in scored if row["rework"])
+    latest = max((int(row["observed_ts"] or 0) for row in scored), default=0)
     max_age = int(policy["max_evidence_age_days"]) * 86400
     criteria = {
         "independent_durable_reuse": len(durable_subjects)
@@ -886,6 +889,9 @@ def _causal_readiness(cap: dict[str, Any], rows: list[dict], now: int) -> dict[s
         "durable_subjects": durable_subjects,
         "accepted_consumptions": len(accepted),
         "terminal_outcomes": len(terminal),
+        # The terminal rows the prior counts (`success` or `failure`); a gate's
+        # `min_linked_outcomes` reads this, never the raw terminal count.
+        "scored_outcomes": len(scored),
         "failures": failures,
         # Excluded-but-VISIBLE: a gate that cannot say what it declined to count is the silent
         # no-op class again. These two numbers are what the old "failures" over-counted.
@@ -1118,10 +1124,10 @@ def reconcile_causal_lifecycle(
                 "ref": durable[-1]["target_run_id"],
             }
         cap["outcome_links"] = sorted({row["target_run_id"] for row in terminal})
+        # Only an attributable failure holds a capability back: never a learning-excluded row,
+        # and never a role run holding a copy of its acting run's outcome.
         regressions = [
-            row
-            for row in terminal
-            if row["regression"] and row.get("tally_class") != "learning_excluded"
+            row for row in terminal if row["regression"] and row.get("tally_class") == "failure"
         ]
         if regressions:
             cap["rollback_pending"] = {
@@ -2954,7 +2960,10 @@ def gate_readiness(cap: dict[str, Any], *, now: int | None = None) -> dict[str, 
         unevaluated.append("no causal evidence recorded yet")
 
     durable = len(readiness.get("durable_subjects") or [])
-    linked = int(readiness.get("terminal_outcomes") or 0)
+    # Scored outcomes only: role-triage's gate met `min_linked_outcomes` 5 with 130 "linked" rows,
+    # nearly all churn, learning-excluded or its own role runs (live ledger, 2026-10-12). A row not
+    # reconciled since that field existed falls back to the old count until its next reconcile.
+    linked = int(readiness.get("scored_outcomes", readiness.get("terminal_outcomes")) or 0)
     failures = int(readiness.get("failures") or 0)
     rework = int(readiness.get("rework") or 0)
     latest = int(readiness.get("latest_evidence_ts") or 0)
