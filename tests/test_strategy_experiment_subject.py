@@ -100,10 +100,22 @@ def test_experiment_directory_resolution_matches_checkout_and_shared_tick_store(
 def test_strategy_experiment_directory_lands_in_followup_exp_dir(
     tmp_path, subject_harness, monkeypatch
 ):
-    """Real preparation and followup agree despite an unrelated caller cwd."""
+    """An automation checkout and a flat tick mirror use the same explicit store."""
     caller = tmp_path / "disconnected-checkout"
     caller.mkdir()
     monkeypatch.chdir(caller)
+    shared_store = tmp_path / "tick-store" / "experiments"
+    monkeypatch.setenv("ORCH_EXP_DIR", str(shared_store))
+    roots = []
+    for modules in (caller / "src", tmp_path / "tick-mirror"):
+        modules.mkdir()
+        module = modules / "exp_abcd.py"
+        module.write_bytes(Path(exp_abcd.__file__).read_bytes())
+        loaded = runpy.run_path(str(module))
+        assert loaded["EXP_DIR"] == shared_store
+        roots.append(loaded["EXP_DIR"])
+    # Use each independently initialized process root at its lifecycle boundary.
+    monkeypatch.setattr(exp_abcd, "EXP_DIR", roots[0])
     subject = {
         "target": "o/r#44",
         "repo": "o/r",
@@ -118,11 +130,14 @@ def test_strategy_experiment_directory_lands_in_followup_exp_dir(
         reviewer="claude",
         claim_fn=lambda target, agent: True,
     )
-    edir = exp_abcd.exp_paths("subject-location")
+    edir = shared_store / "subject-location"
     assert Path(prepared["metadata_written"]) == edir / "strategy.json"
     assert (edir / "spec.md").read_text() == subject["body"]
     assert (edir / "meta.json").is_file()
     assert not (caller / "experiments").exists()
+    assert not (caller / "src" / "experiments").exists()
+    assert not (tmp_path / "tick-mirror" / "experiments").exists()
+    monkeypatch.setattr(exp_abcd, "EXP_DIR", roots[1])
     monkeypatch.setenv("ORCH_RESEARCH_ARM", "1")
     monkeypatch.setattr(exp_abcd.capabilities, "production_heartbeat", lambda *a, **kw: None)
     result = exp_abcd.followup(subject_lifecycle_fn=lambda *a, **kw: None)
