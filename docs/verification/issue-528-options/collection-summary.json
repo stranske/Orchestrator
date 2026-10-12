@@ -7,8 +7,8 @@
     "-q"
   ],
   "exit": 0,
-  "collected": 2964,
-  "raw_sha256": "3ca464436170e080f0f2e5a783023242524204c7eac4e9ae2ee1546eb91672a5",
+  "collected": 3005,
+  "raw_sha256": "c945f13697d53038726f496fff248db929de1c6a377f58cea787c63f817be2fd",
   "raw_location": "collection.log",
-  "summary": "2964 tests collected in 4.88s"
+  "summary": "3005 tests collected in 1.11s"
 }

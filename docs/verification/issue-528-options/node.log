@@ -1,17 +1,17 @@
-✔ incumbent negative control through absolute-alias (471.644792ms)
-✔ incumbent negative control through relative-alias (467.445791ms)
-✔ incumbent negative control through self-locating-alias (467.197292ms)
-✔ repaired reader with unanchored entry through absolute-alias (476.074125ms)
-✔ repaired reader with unanchored entry through relative-alias (476.138666ms)
-✔ repaired reader with unanchored entry through self-locating-alias (474.8655ms)
-✔ production reentry through absolute-alias (477.679917ms)
-✔ production reentry through relative-alias (475.991167ms)
-✔ production reentry through self-locating-alias (478.446959ms)
-✔ production Node split preload and script stay on the selected generation (317.463916ms)
-✔ production Node equals preload and script stay on the selected generation (319.127958ms)
-✔ production Node short preload and script stay on the selected generation (316.960125ms)
-✔ production Bash -o script stay on the selected generation (308.527041ms)
-✔ production Bash +o script stay on the selected generation (316.080416ms)
+✔ incumbent negative control through absolute-alias (475.901583ms)
+✔ incumbent negative control through relative-alias (468.288708ms)
+✔ incumbent negative control through self-locating-alias (473.888875ms)
+✔ repaired reader with unanchored entry through absolute-alias (466.734333ms)
+✔ repaired reader with unanchored entry through relative-alias (472.08075ms)
+✔ repaired reader with unanchored entry through self-locating-alias (470.489916ms)
+✔ production reentry through absolute-alias (477.243958ms)
+✔ production reentry through relative-alias (478.479292ms)
+✔ production reentry through self-locating-alias (484.513542ms)
+✔ production Node split preload and script stay on the selected generation (316.9665ms)
+✔ production Node equals preload and script stay on the selected generation (318.978125ms)
+✔ production Node short preload and script stay on the selected generation (319.786542ms)
+✔ production Bash -o script stay on the selected generation (314.358334ms)
+✔ production Bash +o script stay on the selected generation (313.20375ms)
 ℹ tests 14
 ℹ suites 0
 ℹ pass 14
@@ -19,4 +19,4 @@
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 5890.215166
+ℹ duration_ms 5896.005209
