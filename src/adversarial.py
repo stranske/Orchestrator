@@ -504,7 +504,8 @@ def review(
     # in main(), so the panel could run without the capability ever being credited. (2026-08-20)
     _capability_heartbeat()
     prompt = refute_prompt(context)
-    verdicts, raw = [], {}
+    verdicts: list[dict] = []
+    raw: dict[str, dict | None] = {}
     for r in reviewers:
         boundary = _git_write_boundary(r, worktree)
         if boundary is None:
@@ -753,10 +754,26 @@ def _git_write_boundary(agent: str, worktree: str) -> dict | None:
     boundary is refused by review(), never replaced with an unconfined dispatch.
     """
     import adapters
+    import feedback
 
     if adapters.write_boundary_unenforceable(agent):
         return None
-    dirs = [str(Path.home()), str(Path(worktree).resolve().parent)]
+    review_root = Path(worktree).resolve()
+    state_root = (
+        Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
+        .expanduser()
+        .resolve()
+    )
+    database = Path(feedback.DB_PATH).expanduser().resolve()
+    if database.is_relative_to(review_root) or state_root.is_relative_to(review_root):
+        return None  # the dispatcher's cwd grant would re-grant live state
+    dirs = [
+        str(Path.home()),
+        str(review_root.parent),
+        str(feedback.LOCAL_RUNTIME),
+        str(state_root),
+        str(database.parent),
+    ]
     for flag in ("--absolute-git-dir", "--git-common-dir"):
         out = _git(worktree, "rev-parse", flag)
         if out.returncode != 0 or not out.stdout.strip():

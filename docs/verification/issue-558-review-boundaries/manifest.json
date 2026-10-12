@@ -1,0 +1,62 @@
+{
+  "560-replay.py": {
+    "sha256": "0a9b46c42736e37b4519664a683aa14329fd00eef768489dcae17003435ed68a",
+    "bytes": 1469
+  },
+  "560-production-mutation.json": {
+    "sha256": "60c2300529b510019f7c2e56769ba9998c358d9e4d86096ab9d5a3646c373f04",
+    "bytes": 755
+  },
+  "560-original-red.log": {
+    "sha256": "ea3edb91dcc265660e4a655e899c5b2827f8cde0a2b0a479c086d63df7665206",
+    "bytes": 14599
+  },
+  "560-original-red.xml": {
+    "sha256": "505a6041212f2806b2264493e1dfb0d6544d86e199d0e91190b472046f8b836e",
+    "bytes": 16730
+  },
+  "560-restored-green.log": {
+    "sha256": "e7d4356a9576005bf58c4fa2d8fc48f9f24301568a3bb65d223829e74b522bb7",
+    "bytes": 113
+  },
+  "560-restored-green.xml": {
+    "sha256": "cf7df7965a3ee9e4ac6dd37271cfba5821670b42922ff51a53160496f4890bba",
+    "bytes": 1588
+  },
+  "560-local-verify.json": {
+    "sha256": "c71ae7c2c0044e5a276e1b23a8eaa097f7f5178b6b6270bb542658e5f27b5818",
+    "bytes": 12783
+  },
+  "560-native-boundary.json": {
+    "sha256": "a93c82b18f99ab5b02d229b50121c831c472a0cd31fc768e8fbc35a2dce86075",
+    "bytes": 1557
+  },
+  "560-integrated.log": {
+    "sha256": "9b8043f85543bc890d3f9850ec7d4b0605ed73cbc98430f3478a6d6ea42c243b",
+    "bytes": 180
+  },
+  "560-integrated.xml": {
+    "sha256": "f19abc0c06b5dfc85a5c69a5740d7127c6f271d0e659accbcadd776a2bbc86c1",
+    "bytes": 11229
+  },
+  "560-selftest.log": {
+    "sha256": "1e657f1eb01a2f957cb6b12799bbbe4bedf9afe814a393d1bb4b9d76047fccb7",
+    "bytes": 755
+  },
+  "560-merge-selftest.log": {
+    "sha256": "eab9aec501826590f4765a01ad84a22f0ee013f00654e02bddd9d24f96840db0",
+    "bytes": 215
+  },
+  "560-mypy.log": {
+    "sha256": "5d4b6d285b77932e3d08212c3b4974d0a803f98ec60408ac6ccf6a063fa6c19e",
+    "bytes": 42
+  },
+  "560-integrated-collection.log": {
+    "sha256": "00d4bb4025be2aa02bea837fd910a78ea3697e52e08aa6d45b1ecf4073adfa6e",
+    "bytes": 321164
+  },
+  "archive": {
+    "sha256": "841c9cbf4db734c9a6a06f5a7b9ce0b9dff2cb2f992ef1af26d014806a034bf8",
+    "bytes": 66595
+  }
+}

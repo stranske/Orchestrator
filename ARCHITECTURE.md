@@ -202,7 +202,12 @@ nothing else is selectable. A reviewer that returns nothing or changes the tree 
 three. The tree is checked after the panel as well as before, and a changed tree is restored with its
 verdict discarded. A BLOCKED verdict files one follow-up issue in the target repo
 (`adversarial.file_followup`), idempotent per panel key, and closes the PR's still-open source issue so
-it is not left hanging. Selection stays a rail; only the reviewer's judgment is a role.
+it is not left hanging. The checkout is the actual squash merge commit; the original PR head remains
+its memo and follow-up key. Explicit reviewer sets also exclude authors and retain INCONCLUSIVE
+when coverage is lost. Unavailable confinement dispatches no reviewer; the existing write boundary
+protects sibling checkouts, live home state and Git metadata. Dirty or untracked review trees are
+refused, restoration is verified before retry, and failed source closure is retried independently
+of the already-filed follow-up. Selection stays a rail; only the reviewer's judgment is a role.
 
 The adapter also decides each codex run's writable boundary. A run whose job is to commit (a
 dispatch from `plan_dispatch`, or an experiment arm) gets `--add-dir` for exactly its linked

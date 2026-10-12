@@ -74,7 +74,7 @@
      detached after the merge with one router-chosen reviewer and files a follow-up on BLOCKED. -->
 <g>
 <title>adversarial panel</title>
-<desc>The adversarial review panel belongs to the terminal merge gate (merge_guard): on by default since 2026-10-12, it runs detached right after a high-stakes merge, judged once per exact PR head by one router-chosen reviewer that did not write the change. It is advisory and never blocks; a BLOCKED verdict files one follow-up issue and closes the source issue. The tick no longer examines closer PRs, which it could never delegate.</desc>
+<desc>The adversarial review panel belongs to the terminal merge gate (merge_guard): on by default since 2026-10-12, it runs detached right after a high-stakes merge, judged once per exact PR head by one router-chosen reviewer that did not write the change. It is advisory and never blocks; a BLOCKED verdict files one follow-up issue and retries failed source closure independently. The actual squash commit is reviewed while the original PR head remains the memo key; author exclusion, enforced live-state confinement and verified clean restoration precede accepted verdicts. The tick no longer examines closer PRs, which it could never delegate.</desc>
 <rect class="role" x="190" y="342" width="54" height="24" rx="4"/><text class="ct" x="217" y="358" text-anchor="middle">panel</text>
 </g>
 

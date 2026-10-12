@@ -5,8 +5,9 @@ import subprocess
 from pathlib import Path
 
 import pytest
-import adversarial as adv
+
 import adapters
+import adversarial as adv
 import feedback
 
 HEAD = "a" * 40
