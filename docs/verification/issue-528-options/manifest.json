@@ -1,0 +1,16 @@
+{
+  "README.md": "04ac120f257fdb5359060e147b8fb689eb4bd3f69ecbd4dce22a5f7d9e17f42c",
+  "baseline-green.log": "b6414de0bb4b7bcf5e69235c471aacca2798693513740a0905ecac0b7adf72dc",
+  "baseline-green.xml": "bc5d8af060340834ef066fb4b1f50148409e0cdae6819c5198b56f06cd3713d7",
+  "collection-summary.json": "ebe800a27a3d7cbdd280e4a8886a379bf9d106d80548409b295686413a3afb46",
+  "focused.log": "288b9517cfcf7d9e73385b3f1607335b798ffbbc1f2ca95225039c342040eeb8",
+  "focused.xml": "a6ad1ae8168e61e1a00f647a623bd40eac80b4ae94c806b6f36955de6e2dbe77",
+  "node.log": "848e7a46c0ba6e0453d451e0b9b50bf1c33db6e785796d4b168f23538f56011d",
+  "production-mutant.py.txt": "1b6f5068be7c179e5d9980cc42a9899f863bcf8ec253c42b24f0060efe97964a",
+  "production-red.log": "f0f99f61db8fc7bd9dd781a670ac8d17db8c665587e18750257633c385f66a26",
+  "production-red.xml": "6fcbff738b533aeb019d64383dbfdada6dbb85cb4c788d4da013fda9b88af9a1",
+  "production-restored.py.txt": "3007f0ba4a57e5ff57c2cef9f78a86e905419469989a96806b9316b92b473872",
+  "proof.json": "051a35ba2261c211d7222ff47ecbff11ef9b5f4c0b37b8e7a2c2142f1f02dd89",
+  "restored-green.log": "17db1171a58516d88ae4ebaa7125c4c3b7fba73138a76d3e21182ec9fefd50d9",
+  "restored-green.xml": "874f16d4c6b082a11e6ed5692b9c5bb744bc3bd5efdb32c5ea5f77ede2007ad3"
+}

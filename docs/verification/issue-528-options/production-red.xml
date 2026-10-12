@@ -1,0 +1,465 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="5" skipped="0" tests="6" time="1.157" timestamp="2026-10-12T04:11:00.252915-05:00" hostname="server.trs.private"><testcase classname="tests.test_mirror_generations.MirrorGenerationTests" name="test_command_options_preserve_script_pinning" time="1.118"><failure message="AssertionError: Lists differ: ['new', 'old', 'new', 'new', ['mirror/ordinary-data.txt']] != ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]&#10;&#10;First differing element 0:&#10;'new'&#10;'old'&#10;&#10;- ['new', 'old', 'new', 'new', ['mirror/ordinary-data.txt']]&#10;?  -------        ^^^    ^^^&#10;&#10;+ ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]&#10;?          ^^^    ^^^  +++++++">self = &lt;test_mirror_generations.MirrorGenerationTests testMethod=test_command_options_preserve_script_pinning&gt;
+
+        def test_command_options_preserve_script_pinning(self):
+            """Option values must not hide code operands from the generation pin."""
+            harness = """
+    import os, sys
+    from pathlib import Path
+    import mirror_reader
+    execvpe = os.execvpe
+    def paused_exec(executable, command, env):
+        print('SELECTED', file=sys.stderr, flush=True)
+        assert sys.stdin.readline() == 'resume\\n'
+        execvpe(executable, command, env)
+    mirror_reader.os.execvpe = paused_exec
+    mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
+    """
+            node = shutil.which("node")
+            self.assertIsNotNone(node, "Node is required for the executable option witness")
+            commands = [
+                [node, "--require", "./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                [node, "--require=./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                [
+                    node,
+                    "--conditions",
+                    "custom",
+                    "-r",
+                    "./mirror/scripts/preload.cjs",
+                    "./mirror/scripts/options.cjs",
+                ],
+                ["/bin/bash", "-o", "pipefail", "./mirror/options.sh"],
+                ["/bin/bash", "+o", "pipefail", "./mirror/options.sh"],
+            ]
+            for command in commands:
+                with self.subTest(command=command):
+    
+                    def write_code(value):
+                        self.set_value(value)
+                        (self.snapshot / "scripts/preload.cjs").write_text(
+                            f"global.preloadValue = {value!r};\n"
+                        )
+                        (self.snapshot / "scripts/peer.cjs").write_text(f"exports.value = {value!r};\n")
+                        (self.snapshot / "scripts/options.cjs").write_text(
+                            "const cp = require('node:child_process');\n"
+                            "const child = cp.execFileSync(process.execPath, ['-e', "
+                            "'console.log(require(process.argv[1]).value)', "
+                            "require.resolve('./peer.cjs')], {encoding:'utf8'}).trim();\n"
+                            f"console.log(JSON.stringify([{value!r}, global.preloadValue, "
+                            "require('./peer.cjs').value, child, process.argv.slice(2)]));\n"
+                        )
+                        (self.snapshot / "options.sh").write_text(
+                            f"printf '%s\\n' {value}\n"
+                            f"{sys.executable} -c 'import module, subprocess, sys; "
+                            "print(module.VALUE); print(subprocess.check_output([sys.executable, "
+                            '"-c", "import module; print(module.VALUE)"], text=True).strip())' + "'\n"
+                            "printf '%s\\n' \"$1\"\n"
+                        )
+    
+                    write_code("old")
+                    self.publish()
+                    pinned = self.mirror.resolve()
+                    data = "mirror/ordinary-data.txt"
+                    reader = subprocess.Popen(
+                        [sys.executable, "-c", harness, str(self.mirror), *command, data],
+                        cwd=self.root,
+                        env=dict(os.environ, PYTHONPATH=str(MODULES)),
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        start_new_session=True,
+                    )
+                    try:
+                        self.assertTrue(_readable(reader.stderr, 10), "reader did not select")
+                        self.assertEqual(reader.stderr.readline().strip(), "SELECTED")
+                        write_code("new")
+                        self.publish_with_deadline()
+                        output, error = reader.communicate("resume\n", timeout=10)
+                        self.assertEqual(reader.returncode, 0, error)
+                        if command[0] == node:
+&gt;                           self.assertEqual(json.loads(output), ["old"] * 4 + [[data]])
+E                           AssertionError: Lists differ: ['new', 'old', 'new', 'new', ['mirror/ordinary-data.txt']] != ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]
+E                           
+E                           First differing element 0:
+E                           'new'
+E                           'old'
+E                           
+E                           - ['new', 'old', 'new', 'new', ['mirror/ordinary-data.txt']]
+E                           ?  -------        ^^^    ^^^
+E                           
+E                           + ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]
+E                           ?          ^^^    ^^^  +++++++
+
+tests/test_mirror_generations.py:568: AssertionError</failure><failure message="AssertionError: Lists differ: ['old', 'new', 'old', 'old', ['mirror/ordinary-data.txt']] != ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]&#10;&#10;First differing element 1:&#10;'new'&#10;'old'&#10;&#10;- ['old', 'new', 'old', 'old', ['mirror/ordinary-data.txt']]&#10;?         -------&#10;&#10;+ ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]&#10;?                      +++++++">self = &lt;test_mirror_generations.MirrorGenerationTests testMethod=test_command_options_preserve_script_pinning&gt;
+
+        def test_command_options_preserve_script_pinning(self):
+            """Option values must not hide code operands from the generation pin."""
+            harness = """
+    import os, sys
+    from pathlib import Path
+    import mirror_reader
+    execvpe = os.execvpe
+    def paused_exec(executable, command, env):
+        print('SELECTED', file=sys.stderr, flush=True)
+        assert sys.stdin.readline() == 'resume\\n'
+        execvpe(executable, command, env)
+    mirror_reader.os.execvpe = paused_exec
+    mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
+    """
+            node = shutil.which("node")
+            self.assertIsNotNone(node, "Node is required for the executable option witness")
+            commands = [
+                [node, "--require", "./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                [node, "--require=./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                [
+                    node,
+                    "--conditions",
+                    "custom",
+                    "-r",
+                    "./mirror/scripts/preload.cjs",
+                    "./mirror/scripts/options.cjs",
+                ],
+                ["/bin/bash", "-o", "pipefail", "./mirror/options.sh"],
+                ["/bin/bash", "+o", "pipefail", "./mirror/options.sh"],
+            ]
+            for command in commands:
+                with self.subTest(command=command):
+    
+                    def write_code(value):
+                        self.set_value(value)
+                        (self.snapshot / "scripts/preload.cjs").write_text(
+                            f"global.preloadValue = {value!r};\n"
+                        )
+                        (self.snapshot / "scripts/peer.cjs").write_text(f"exports.value = {value!r};\n")
+                        (self.snapshot / "scripts/options.cjs").write_text(
+                            "const cp = require('node:child_process');\n"
+                            "const child = cp.execFileSync(process.execPath, ['-e', "
+                            "'console.log(require(process.argv[1]).value)', "
+                            "require.resolve('./peer.cjs')], {encoding:'utf8'}).trim();\n"
+                            f"console.log(JSON.stringify([{value!r}, global.preloadValue, "
+                            "require('./peer.cjs').value, child, process.argv.slice(2)]));\n"
+                        )
+                        (self.snapshot / "options.sh").write_text(
+                            f"printf '%s\\n' {value}\n"
+                            f"{sys.executable} -c 'import module, subprocess, sys; "
+                            "print(module.VALUE); print(subprocess.check_output([sys.executable, "
+                            '"-c", "import module; print(module.VALUE)"], text=True).strip())' + "'\n"
+                            "printf '%s\\n' \"$1\"\n"
+                        )
+    
+                    write_code("old")
+                    self.publish()
+                    pinned = self.mirror.resolve()
+                    data = "mirror/ordinary-data.txt"
+                    reader = subprocess.Popen(
+                        [sys.executable, "-c", harness, str(self.mirror), *command, data],
+                        cwd=self.root,
+                        env=dict(os.environ, PYTHONPATH=str(MODULES)),
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        start_new_session=True,
+                    )
+                    try:
+                        self.assertTrue(_readable(reader.stderr, 10), "reader did not select")
+                        self.assertEqual(reader.stderr.readline().strip(), "SELECTED")
+                        write_code("new")
+                        self.publish_with_deadline()
+                        output, error = reader.communicate("resume\n", timeout=10)
+                        self.assertEqual(reader.returncode, 0, error)
+                        if command[0] == node:
+&gt;                           self.assertEqual(json.loads(output), ["old"] * 4 + [[data]])
+E                           AssertionError: Lists differ: ['old', 'new', 'old', 'old', ['mirror/ordinary-data.txt']] != ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]
+E                           
+E                           First differing element 1:
+E                           'new'
+E                           'old'
+E                           
+E                           - ['old', 'new', 'old', 'old', ['mirror/ordinary-data.txt']]
+E                           ?         -------
+E                           
+E                           + ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]
+E                           ?                      +++++++
+
+tests/test_mirror_generations.py:568: AssertionError</failure><failure message="AssertionError: Lists differ: ['new', 'new', 'new', 'new', ['mirror/ordinary-data.txt']] != ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]&#10;&#10;First differing element 0:&#10;'new'&#10;'old'&#10;&#10;- ['new', 'new', 'new', 'new', ['mirror/ordinary-data.txt']]&#10;?   ^^^    ^^^    ^^^    ^^^&#10;&#10;+ ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]&#10;?   ^^^    ^^^    ^^^    ^^^">self = &lt;test_mirror_generations.MirrorGenerationTests testMethod=test_command_options_preserve_script_pinning&gt;
+
+        def test_command_options_preserve_script_pinning(self):
+            """Option values must not hide code operands from the generation pin."""
+            harness = """
+    import os, sys
+    from pathlib import Path
+    import mirror_reader
+    execvpe = os.execvpe
+    def paused_exec(executable, command, env):
+        print('SELECTED', file=sys.stderr, flush=True)
+        assert sys.stdin.readline() == 'resume\\n'
+        execvpe(executable, command, env)
+    mirror_reader.os.execvpe = paused_exec
+    mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
+    """
+            node = shutil.which("node")
+            self.assertIsNotNone(node, "Node is required for the executable option witness")
+            commands = [
+                [node, "--require", "./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                [node, "--require=./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                [
+                    node,
+                    "--conditions",
+                    "custom",
+                    "-r",
+                    "./mirror/scripts/preload.cjs",
+                    "./mirror/scripts/options.cjs",
+                ],
+                ["/bin/bash", "-o", "pipefail", "./mirror/options.sh"],
+                ["/bin/bash", "+o", "pipefail", "./mirror/options.sh"],
+            ]
+            for command in commands:
+                with self.subTest(command=command):
+    
+                    def write_code(value):
+                        self.set_value(value)
+                        (self.snapshot / "scripts/preload.cjs").write_text(
+                            f"global.preloadValue = {value!r};\n"
+                        )
+                        (self.snapshot / "scripts/peer.cjs").write_text(f"exports.value = {value!r};\n")
+                        (self.snapshot / "scripts/options.cjs").write_text(
+                            "const cp = require('node:child_process');\n"
+                            "const child = cp.execFileSync(process.execPath, ['-e', "
+                            "'console.log(require(process.argv[1]).value)', "
+                            "require.resolve('./peer.cjs')], {encoding:'utf8'}).trim();\n"
+                            f"console.log(JSON.stringify([{value!r}, global.preloadValue, "
+                            "require('./peer.cjs').value, child, process.argv.slice(2)]));\n"
+                        )
+                        (self.snapshot / "options.sh").write_text(
+                            f"printf '%s\\n' {value}\n"
+                            f"{sys.executable} -c 'import module, subprocess, sys; "
+                            "print(module.VALUE); print(subprocess.check_output([sys.executable, "
+                            '"-c", "import module; print(module.VALUE)"], text=True).strip())' + "'\n"
+                            "printf '%s\\n' \"$1\"\n"
+                        )
+    
+                    write_code("old")
+                    self.publish()
+                    pinned = self.mirror.resolve()
+                    data = "mirror/ordinary-data.txt"
+                    reader = subprocess.Popen(
+                        [sys.executable, "-c", harness, str(self.mirror), *command, data],
+                        cwd=self.root,
+                        env=dict(os.environ, PYTHONPATH=str(MODULES)),
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        start_new_session=True,
+                    )
+                    try:
+                        self.assertTrue(_readable(reader.stderr, 10), "reader did not select")
+                        self.assertEqual(reader.stderr.readline().strip(), "SELECTED")
+                        write_code("new")
+                        self.publish_with_deadline()
+                        output, error = reader.communicate("resume\n", timeout=10)
+                        self.assertEqual(reader.returncode, 0, error)
+                        if command[0] == node:
+&gt;                           self.assertEqual(json.loads(output), ["old"] * 4 + [[data]])
+E                           AssertionError: Lists differ: ['new', 'new', 'new', 'new', ['mirror/ordinary-data.txt']] != ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]
+E                           
+E                           First differing element 0:
+E                           'new'
+E                           'old'
+E                           
+E                           - ['new', 'new', 'new', 'new', ['mirror/ordinary-data.txt']]
+E                           ?   ^^^    ^^^    ^^^    ^^^
+E                           
+E                           + ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]
+E                           ?   ^^^    ^^^    ^^^    ^^^
+
+tests/test_mirror_generations.py:568: AssertionError</failure><failure message="AssertionError: Lists differ: ['new', 'old', 'old', 'mirror/ordinary-data.txt'] != ['old', 'old', 'old', 'mirror/ordinary-data.txt']&#10;&#10;First differing element 0:&#10;'new'&#10;'old'&#10;&#10;- ['new', 'old', 'old', 'mirror/ordinary-data.txt']&#10;?  -------&#10;&#10;+ ['old', 'old', 'old', 'mirror/ordinary-data.txt']&#10;?               +++++++">self = &lt;test_mirror_generations.MirrorGenerationTests testMethod=test_command_options_preserve_script_pinning&gt;
+
+        def test_command_options_preserve_script_pinning(self):
+            """Option values must not hide code operands from the generation pin."""
+            harness = """
+    import os, sys
+    from pathlib import Path
+    import mirror_reader
+    execvpe = os.execvpe
+    def paused_exec(executable, command, env):
+        print('SELECTED', file=sys.stderr, flush=True)
+        assert sys.stdin.readline() == 'resume\\n'
+        execvpe(executable, command, env)
+    mirror_reader.os.execvpe = paused_exec
+    mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
+    """
+            node = shutil.which("node")
+            self.assertIsNotNone(node, "Node is required for the executable option witness")
+            commands = [
+                [node, "--require", "./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                [node, "--require=./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                [
+                    node,
+                    "--conditions",
+                    "custom",
+                    "-r",
+                    "./mirror/scripts/preload.cjs",
+                    "./mirror/scripts/options.cjs",
+                ],
+                ["/bin/bash", "-o", "pipefail", "./mirror/options.sh"],
+                ["/bin/bash", "+o", "pipefail", "./mirror/options.sh"],
+            ]
+            for command in commands:
+                with self.subTest(command=command):
+    
+                    def write_code(value):
+                        self.set_value(value)
+                        (self.snapshot / "scripts/preload.cjs").write_text(
+                            f"global.preloadValue = {value!r};\n"
+                        )
+                        (self.snapshot / "scripts/peer.cjs").write_text(f"exports.value = {value!r};\n")
+                        (self.snapshot / "scripts/options.cjs").write_text(
+                            "const cp = require('node:child_process');\n"
+                            "const child = cp.execFileSync(process.execPath, ['-e', "
+                            "'console.log(require(process.argv[1]).value)', "
+                            "require.resolve('./peer.cjs')], {encoding:'utf8'}).trim();\n"
+                            f"console.log(JSON.stringify([{value!r}, global.preloadValue, "
+                            "require('./peer.cjs').value, child, process.argv.slice(2)]));\n"
+                        )
+                        (self.snapshot / "options.sh").write_text(
+                            f"printf '%s\\n' {value}\n"
+                            f"{sys.executable} -c 'import module, subprocess, sys; "
+                            "print(module.VALUE); print(subprocess.check_output([sys.executable, "
+                            '"-c", "import module; print(module.VALUE)"], text=True).strip())' + "'\n"
+                            "printf '%s\\n' \"$1\"\n"
+                        )
+    
+                    write_code("old")
+                    self.publish()
+                    pinned = self.mirror.resolve()
+                    data = "mirror/ordinary-data.txt"
+                    reader = subprocess.Popen(
+                        [sys.executable, "-c", harness, str(self.mirror), *command, data],
+                        cwd=self.root,
+                        env=dict(os.environ, PYTHONPATH=str(MODULES)),
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        start_new_session=True,
+                    )
+                    try:
+                        self.assertTrue(_readable(reader.stderr, 10), "reader did not select")
+                        self.assertEqual(reader.stderr.readline().strip(), "SELECTED")
+                        write_code("new")
+                        self.publish_with_deadline()
+                        output, error = reader.communicate("resume\n", timeout=10)
+                        self.assertEqual(reader.returncode, 0, error)
+                        if command[0] == node:
+                            self.assertEqual(json.loads(output), ["old"] * 4 + [[data]])
+                        else:
+&gt;                           self.assertEqual(output.splitlines(), ["old"] * 3 + [data])
+E                           AssertionError: Lists differ: ['new', 'old', 'old', 'mirror/ordinary-data.txt'] != ['old', 'old', 'old', 'mirror/ordinary-data.txt']
+E                           
+E                           First differing element 0:
+E                           'new'
+E                           'old'
+E                           
+E                           - ['new', 'old', 'old', 'mirror/ordinary-data.txt']
+E                           ?  -------
+E                           
+E                           + ['old', 'old', 'old', 'mirror/ordinary-data.txt']
+E                           ?               +++++++
+
+tests/test_mirror_generations.py:570: AssertionError</failure><failure message="AssertionError: Lists differ: ['new', 'old', 'old', 'mirror/ordinary-data.txt'] != ['old', 'old', 'old', 'mirror/ordinary-data.txt']&#10;&#10;First differing element 0:&#10;'new'&#10;'old'&#10;&#10;- ['new', 'old', 'old', 'mirror/ordinary-data.txt']&#10;?  -------&#10;&#10;+ ['old', 'old', 'old', 'mirror/ordinary-data.txt']&#10;?               +++++++">self = &lt;test_mirror_generations.MirrorGenerationTests testMethod=test_command_options_preserve_script_pinning&gt;
+
+        def test_command_options_preserve_script_pinning(self):
+            """Option values must not hide code operands from the generation pin."""
+            harness = """
+    import os, sys
+    from pathlib import Path
+    import mirror_reader
+    execvpe = os.execvpe
+    def paused_exec(executable, command, env):
+        print('SELECTED', file=sys.stderr, flush=True)
+        assert sys.stdin.readline() == 'resume\\n'
+        execvpe(executable, command, env)
+    mirror_reader.os.execvpe = paused_exec
+    mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
+    """
+            node = shutil.which("node")
+            self.assertIsNotNone(node, "Node is required for the executable option witness")
+            commands = [
+                [node, "--require", "./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                [node, "--require=./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                [
+                    node,
+                    "--conditions",
+                    "custom",
+                    "-r",
+                    "./mirror/scripts/preload.cjs",
+                    "./mirror/scripts/options.cjs",
+                ],
+                ["/bin/bash", "-o", "pipefail", "./mirror/options.sh"],
+                ["/bin/bash", "+o", "pipefail", "./mirror/options.sh"],
+            ]
+            for command in commands:
+                with self.subTest(command=command):
+    
+                    def write_code(value):
+                        self.set_value(value)
+                        (self.snapshot / "scripts/preload.cjs").write_text(
+                            f"global.preloadValue = {value!r};\n"
+                        )
+                        (self.snapshot / "scripts/peer.cjs").write_text(f"exports.value = {value!r};\n")
+                        (self.snapshot / "scripts/options.cjs").write_text(
+                            "const cp = require('node:child_process');\n"
+                            "const child = cp.execFileSync(process.execPath, ['-e', "
+                            "'console.log(require(process.argv[1]).value)', "
+                            "require.resolve('./peer.cjs')], {encoding:'utf8'}).trim();\n"
+                            f"console.log(JSON.stringify([{value!r}, global.preloadValue, "
+                            "require('./peer.cjs').value, child, process.argv.slice(2)]));\n"
+                        )
+                        (self.snapshot / "options.sh").write_text(
+                            f"printf '%s\\n' {value}\n"
+                            f"{sys.executable} -c 'import module, subprocess, sys; "
+                            "print(module.VALUE); print(subprocess.check_output([sys.executable, "
+                            '"-c", "import module; print(module.VALUE)"], text=True).strip())' + "'\n"
+                            "printf '%s\\n' \"$1\"\n"
+                        )
+    
+                    write_code("old")
+                    self.publish()
+                    pinned = self.mirror.resolve()
+                    data = "mirror/ordinary-data.txt"
+                    reader = subprocess.Popen(
+                        [sys.executable, "-c", harness, str(self.mirror), *command, data],
+                        cwd=self.root,
+                        env=dict(os.environ, PYTHONPATH=str(MODULES)),
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        start_new_session=True,
+                    )
+                    try:
+                        self.assertTrue(_readable(reader.stderr, 10), "reader did not select")
+                        self.assertEqual(reader.stderr.readline().strip(), "SELECTED")
+                        write_code("new")
+                        self.publish_with_deadline()
+                        output, error = reader.communicate("resume\n", timeout=10)
+                        self.assertEqual(reader.returncode, 0, error)
+                        if command[0] == node:
+                            self.assertEqual(json.loads(output), ["old"] * 4 + [[data]])
+                        else:
+&gt;                           self.assertEqual(output.splitlines(), ["old"] * 3 + [data])
+E                           AssertionError: Lists differ: ['new', 'old', 'old', 'mirror/ordinary-data.txt'] != ['old', 'old', 'old', 'mirror/ordinary-data.txt']
+E                           
+E                           First differing element 0:
+E                           'new'
+E                           'old'
+E                           
+E                           - ['new', 'old', 'old', 'mirror/ordinary-data.txt']
+E                           ?  -------
+E                           
+E                           + ['old', 'old', 'old', 'mirror/ordinary-data.txt']
+E                           ?               +++++++
+
+tests/test_mirror_generations.py:570: AssertionError</failure></testcase></testsuite></testsuites>

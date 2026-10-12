@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "python3",
+    "-m",
+    "pytest",
+    "--collect-only",
+    "-q"
+  ],
+  "exit": 0,
+  "collected": 2963,
+  "raw_sha256": "ac998717493861285f305d5413315f16823d6860f023e79db657ea182e0e43a5",
+  "raw_location": "/Users/teacher/.codex/automations/pd-workloop-resume/run-20261012T0900Z/collection.log",
+  "summary": "2963 tests collected in 5.00s"
+}

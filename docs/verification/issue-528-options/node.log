@@ -1,0 +1,20 @@
+✔ incumbent negative control through absolute-alias (505.435791ms)
+✔ incumbent negative control through relative-alias (497.459541ms)
+✔ incumbent negative control through self-locating-alias (483.698084ms)
+✔ repaired reader with unanchored entry through absolute-alias (477.948833ms)
+✔ repaired reader with unanchored entry through relative-alias (476.386458ms)
+✔ repaired reader with unanchored entry through self-locating-alias (482.313708ms)
+✔ production reentry through absolute-alias (493.570625ms)
+✔ production reentry through relative-alias (497.487375ms)
+✔ production reentry through self-locating-alias (495.615875ms)
+✔ production Node split preload and script stay on the selected generation (321.832458ms)
+✔ production Node equals preload and script stay on the selected generation (323.988375ms)
+✔ production Node short preload and script stay on the selected generation (317.462417ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5421.078375

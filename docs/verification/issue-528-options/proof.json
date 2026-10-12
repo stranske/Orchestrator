@@ -1,0 +1,61 @@
+{
+  "base_commit": "e626002302d025e471e9e6b95b5cbf5ff09d7141",
+  "started_at": "2026-10-12T09:10:56.982810+00:00",
+  "candidate_sha256": "3007f0ba4a57e5ff57c2cef9f78a86e905419469989a96806b9316b92b473872",
+  "mutant_sha256": "1b6f5068be7c179e5d9980cc42a9899f863bcf8ec253c42b24f0060efe97964a",
+  "phases": [
+    {
+      "phase": "baseline-green",
+      "argv": [
+        "python3",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_mirror_generations.py::MirrorGenerationTests::test_command_options_preserve_script_pinning",
+        "--junitxml=docs/verification/issue-528-options/baseline-green.xml"
+      ],
+      "cwd": "/Users/teacher/.codex/automations/pd-workloop-resume/worktrees/orch528-options-20261012",
+      "exit": 0,
+      "failures": 0,
+      "errors": 0,
+      "testcases": 1,
+      "source_sha256": "3007f0ba4a57e5ff57c2cef9f78a86e905419469989a96806b9316b92b473872"
+    },
+    {
+      "phase": "production-red",
+      "argv": [
+        "python3",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_mirror_generations.py::MirrorGenerationTests::test_command_options_preserve_script_pinning",
+        "--junitxml=docs/verification/issue-528-options/production-red.xml"
+      ],
+      "cwd": "/Users/teacher/.codex/automations/pd-workloop-resume/worktrees/orch528-options-20261012",
+      "exit": 1,
+      "failures": 5,
+      "errors": 0,
+      "testcases": 1,
+      "source_sha256": "1b6f5068be7c179e5d9980cc42a9899f863bcf8ec253c42b24f0060efe97964a"
+    },
+    {
+      "phase": "restored-green",
+      "argv": [
+        "python3",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_mirror_generations.py::MirrorGenerationTests::test_command_options_preserve_script_pinning",
+        "--junitxml=docs/verification/issue-528-options/restored-green.xml"
+      ],
+      "cwd": "/Users/teacher/.codex/automations/pd-workloop-resume/worktrees/orch528-options-20261012",
+      "exit": 0,
+      "failures": 0,
+      "errors": 0,
+      "testcases": 1,
+      "source_sha256": "3007f0ba4a57e5ff57c2cef9f78a86e905419469989a96806b9316b92b473872"
+    }
+  ],
+  "restored_sha256": "3007f0ba4a57e5ff57c2cef9f78a86e905419469989a96806b9316b92b473872",
+  "byte_identical_restoration": true
+}
