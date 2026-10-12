@@ -1,5 +1,45 @@
 # Issue 532: Seatbelt regex literal repair
 
+## Original artifact validation and pre-change CI discovery (2026-10-12)
+
+`verifyOriginalCI` in `scripts/verify_seatbelt_receipts.js` now reads the retained original
+ZIP with the standard-library ZIP/XML parsers, verifies CRCs and recorded hashes, checks
+original run/head bindings, and compares every extracted boundary case with its original
+full-run record. It requires the complete twelve-case roster, including no-boundary and
+fail-closed regressions. Ten new tests reject corrupted, incomplete, relabeled or altered
+receipts, including altered extractions with recomputed hashes.
+
+Verified original measurements: **2,717 passed, 26 skipped, 2,743 actual case records**.
+The authentic JUnit summary reports 2,849 tests; the checker exposes that discrepancy and
+uses case records corroborated by the retained job log. All twelve boundary cases passed.
+A separate original focused-only command transcript remains **UNKNOWN**.
+
+```sh
+node tests/test_seatbelt_original_ci.js
+node tests/test_seatbelt_hosted_ci.js
+node tests/test_seatbelt_receipts.js
+node scripts/verify_seatbelt_receipts.js
+```
+
+All 30 receipt tests pass. The four existing production quoting regressions pass via
+stdlib unittest; adapters and dispatcher selftests pass. The existing native receipt
+still verifies four production RED failures, byte-identical restoration and five macOS
+GREEN probes against unchanged source/test bytes. This Linux execution establishes no
+new native acceptance. Pytest and Black are unavailable locally; no Python files changed.
+
+[3793ac8-ci-discovery.json](3793ac8-ci-discovery.json) retains existing connector metadata
+and selected authentic job-log lines for pre-change head
+`3793ac82ebd7feea3500f11bb30d34869007a297`. Checkout CI measured 2,863 passes and 31 skips;
+the disposable flat-copy CI measured 2,842 passes and 52 skips, both from 2,894 collected
+cases with 97 selftests. Gate's Python job was skipped. The connector exposes first-page
+job discovery without total-count/attempt fields, so this snapshot does not establish
+complete exact-head topology. PR #542 was confirmed open with `draft=false`.
+
+The fourth task remains incomplete: the new checker commit needs its own CI evidence.
+Exact-head review/floor gates and actual post-merge comparison remain pending. No workflow
+or real agent was rerun, and no merge, manual mirror installation, research deployment or
+whole-system acceptance is claimed. The sections below preserve historical observations.
+
 ## Current-head CI recovery (2026-10-12)
 
 [380c160-hosted-ci.json](380c160-hosted-ci.json) retains authentic GitHub REST workflow/job

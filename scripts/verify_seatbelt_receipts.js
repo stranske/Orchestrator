@@ -113,6 +113,105 @@ async function verifyProof(root = path.resolve(__dirname, '..')) {
   return { source_sha256: results.green.sha256, red_failures: 4, green_passes: 4, native_probes: 5 };
 }
 
+// Verify the original focused cases directly against the recovered full-run artifact.
+// This establishes retained results, not a separate historical focused command or live CI.
+async function verifyOriginalCI(root = path.resolve(__dirname, '..')) {
+  const dir = path.join(root,
+    'docs/verification/issue-532-seatbelt-regex/original-ci-recovery-20261011');
+  const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
+  const inherited = JSON.parse(fs.readFileSync(path.join(dir, '../inherited-ci.json'), 'utf8'));
+  assert.equal(manifest.schema, 'original-ci-recovery/v1');
+  assert.equal(manifest.repo, 'stranske/Orchestrator');
+  assert.equal(manifest.repo, inherited.repository, 'original repository mismatch');
+  assert.equal(manifest.source_pr, inherited.inherited_pr, 'original PR mismatch');
+  assert.equal(manifest.original_head, inherited.head_sha, 'original head mismatch');
+  assert.equal(manifest.original_merge, inherited.merge_sha, 'original merge mismatch');
+  const archiveName = 'gate-coverage-3.12-1.zip';
+  const extractionName = 'original-boundary-cases.xml';
+  assert.equal(manifest.artifact_name, 'gate-coverage-3.12-1');
+  assert.equal(manifest.artifact_id, 11716675610, 'wrong original artifact');
+  assert.equal(manifest.run_id, 38176809124, 'wrong original run');
+  const job = inherited.jobs.find(item => item.run_id === manifest.run_id);
+  assert.ok(job, 'missing original job binding');
+  const log = job.excerpts.join('\n');
+  assert.ok(log.includes(`Merge ${manifest.original_head} into `), 'original checkout mismatch');
+  const measured = /\b(\d+) passed, (\d+) skipped\b/.exec(log);
+  assert.ok(measured, 'missing original measured counts');
+  const expectedFiles = [archiveName, extractionName, 'README.md',
+    'independent-hash-check.json', 'independent-native.log', 'independent-native.xml'];
+  assert.deepEqual(Object.keys(manifest.files).sort(), expectedFiles.sort(),
+    'incomplete original receipt manifest');
+  for (const file of expectedFiles) {
+    assert.equal(digest(fs.readFileSync(path.join(dir, file))), manifest.files[file],
+      `original receipt digest mismatch: ${file}`);
+  }
+  assert.equal(manifest.artifact_digest, manifest.files[archiveName], 'artifact digest mismatch');
+  // Standard-library ZIP and XML parsers; do not extract files or execute artifact content.
+  const output = await run(process.env.PYTHON || 'python3', ['-I', '-c', `
+import hashlib, json, sys, zipfile, xml.etree.ElementTree as ET
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    names = archive.namelist()
+    assert len(names) == len(set(names)), "duplicate archive member"
+    assert set(names) == {"index.ndjson", "runtimes/3.12/coverage.json",
+        "runtimes/3.12/coverage.xml", "runtimes/3.12/pytest-junit.xml",
+        "runtimes/3.12/summary.json"}, "unexpected original artifact members"
+    assert archive.testzip() is None, "invalid archive CRC"
+    junit = archive.read("runtimes/3.12/pytest-junit.xml")
+    summary = json.loads(archive.read("runtimes/3.12/summary.json"))
+root = ET.fromstring(junit)
+records = list(root.iter("testcase"))
+def record(element):
+    return {"tag": element.tag, "attributes": element.attrib,
+        "text": (element.text or "").strip(), "children": [record(c) for c in element]}
+focused = [c for c in records if c.get("classname") == "tests.test_offload_write_boundary"]
+extracted = ET.parse(sys.argv[2]).getroot()
+print(json.dumps({
+    "junit_sha256": hashlib.sha256(junit).hexdigest(),
+    "summary": summary,
+    "tests": len(records),
+    "unique_tests": len({(c.get("classname"), c.get("name")) for c in records}),
+    "failed": sum(c.find("failure") is not None for c in records),
+    "errors": sum(c.find("error") is not None for c in records),
+    "skipped": sum(c.find("skipped") is not None for c in records),
+    "reported_tests": [int(s.get("tests")) for s in root.iter("testsuite")],
+    "focused": [record(c) for c in focused],
+    "extracted": [record(c) for c in extracted.iter("testcase")]
+}))
+`, path.join(dir, archiveName), path.join(dir, extractionName)]);
+  const result = JSON.parse(output.toString('utf8'));
+  assert.equal(result.junit_sha256, manifest.original_junit_sha256, 'original JUnit digest mismatch');
+  assert.equal(result.summary.python_version, '3.12');
+  assert.equal(result.summary.checks.tests.outcome, 'success', 'original product tests failed');
+  assert.equal(result.failed, 0, 'original failed cases');
+  assert.equal(result.errors, 0, 'original error cases');
+  assert.equal(result.tests, result.unique_tests, 'duplicate original cases');
+  assert.equal(result.skipped, Number(measured[2]), 'original skip count mismatch');
+  assert.equal(result.tests - result.skipped, Number(measured[1]), 'original pass count mismatch');
+  const expectedNames = [
+    'test_codex_gets_exactly_its_roots_and_no_seatbelt',
+    ...['cursor', 'gemini', 'vibe'].map(agent =>
+      `test_an_agent_without_a_sandbox_runs_under_the_profile[${agent}]`),
+    'test_no_boundary_changes_nothing',
+    ...['empty_protect', 'home_granted', 'codex_bypassed', 'no_sandbox_exec',
+      'nested_seatbelt'].map(c => `test_a_boundary_that_cannot_hold_refuses_the_run[${c}]`),
+    'test_roots_resolve_and_lead_with_the_cwd',
+    'test_the_profile_quotes_a_path_it_cannot_otherwise_name',
+  ];
+  assert.equal(manifest.focused_cases, expectedNames.length);
+  assert.deepEqual(result.focused.map(c => c.attributes.name).sort(), expectedNames.sort(),
+    'missing or duplicate original boundary cases');
+  for (const c of result.focused) {
+    assert.deepEqual(c.children, [], `original focused case did not pass: ${c.attributes.name}`);
+  }
+  assert.deepEqual(result.extracted, result.focused, 'extracted cases differ from original JUnit');
+  return { original_head: manifest.original_head, run_id: manifest.run_id,
+    artifact_id: manifest.artifact_id, focused_passes: result.focused.length,
+    passed: result.tests - result.skipped, skipped: result.skipped, collected: result.tests,
+    // Retain the authentic summary discrepancy rather than treating it as a measured count.
+    junit_reported_tests: result.reported_tests,
+    focused_command_transcript: 'UNKNOWN: recovered cases are from the original full run' };
+}
+
 // Repo-specific completion evidence for issue 532. This checks a retained REST snapshot,
 // not live merge readiness, review threads, or the seven-minute review floor.
 function verifyHostedCI(evidence, expectedHead) {
@@ -197,15 +296,16 @@ function verifyHostedCI(evidence, expectedHead) {
   return { head_sha: expectedHead, product_jobs: executed.size, measurements };
 }
 
-module.exports = { verifyProof, verifyHostedCI };
+module.exports = { verifyProof, verifyOriginalCI, verifyHostedCI };
 if (require.main === module) {
-  verifyProof().then((result) => {
+  Promise.all([verifyProof(), verifyOriginalCI()]).then(([result, original]) => {
     const args = process.argv.slice(2);
     assert.ok(args.length === 0 || args.length === 2,
       'usage: node scripts/verify_seatbelt_receipts.js [hosted-ci.json expected-head-sha]');
     const hosted = args.length ? verifyHostedCI(JSON.parse(fs.readFileSync(args[0], 'utf8')),
       args[1]) : undefined;
     console.log(JSON.stringify({ retained_native_evidence: 'VERIFIED', ...result,
+      retained_original_ci: original,
       ...(hosted ? { retained_hosted_ci: hosted } : {}) }));
   }).catch((error) => {
     console.error(`retained evidence: NOT VERIFIED: ${error.message}`);
