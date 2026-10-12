@@ -105,15 +105,71 @@ def run(root: Path, command: list[str], lock_timeout: float = 30.0) -> int:
         code_indices = {0}
         interpreter = Path(command[0]).name
         if interpreter.startswith("python") or interpreter in {"bash", "sh", "zsh", "node"}:
+            # Only declared interpreter options consume the following value.
+            # Preloads are code too; flags such as bash -o consume plain text.
+            value_options = {"-W", "-X"} if interpreter.startswith("python") else set()
+            preload_options: set[str] = set()
+            inline_options = {"-c", "-m"} if interpreter.startswith("python") else {"-c"}
+            if interpreter == "node":
+                preload_options = {
+                    "-r",
+                    "--require",
+                    "--import",
+                    "--loader",
+                    "--experimental-loader",
+                }
+                value_options = preload_options | {
+                    "-C",
+                    "--conditions",
+                    "--input-type",
+                    "--inspect-port",
+                    "--title",
+                    "--icu-data-dir",
+                    "--openssl-config",
+                    "--unhandled-rejections",
+                }
+                inline_options = {"-e", "--eval", "-p", "--print"}
+            elif interpreter in {"bash", "sh", "zsh"}:
+                value_options = {"-o", "+o"}
+                if interpreter == "bash":
+                    preload_options = {"--rcfile", "--init-file"}
+                    value_options |= {"-O", "+O"} | preload_options
+                inline_options = {"-c", "-s"}
             index = 1
-            while index < len(command) and command[index].startswith("-"):
+            while index < len(command):
                 option = command[index]
-                if option in {"-c", "-m", "-e", "--eval", "--print"}:
+                if option == "--":
+                    if index + 1 < len(command):
+                        code_indices.add(index + 1)
                     break
-                index += 2 if option in {"-W", "-X"} else 1
-            else:
-                if index < len(command):
+                if not option.startswith("-") and not (
+                    (option == "+o" and interpreter in {"bash", "sh", "zsh"})
+                    or (option == "+O" and interpreter == "bash")
+                ):
                     code_indices.add(index)
+                    break
+                name, separator, value = option.partition("=")
+                if (
+                    name in inline_options
+                    or (
+                        interpreter == "node"
+                        and option.startswith(("-e", "-p"))
+                        and not option.startswith("--")
+                    )
+                    or (
+                        interpreter in {"bash", "sh", "zsh"}
+                        and not option.startswith("--")
+                        and "c" in option[1:]
+                    )
+                ):
+                    break
+                if separator and name in preload_options:
+                    command[index] = name + "=" + pin_argument(value)
+                elif option in value_options:
+                    if option in preload_options and index + 1 < len(command):
+                        code_indices.add(index + 1)
+                    index += 1
+                index += 1
         command = [
             (
                 pin_argument(argument)

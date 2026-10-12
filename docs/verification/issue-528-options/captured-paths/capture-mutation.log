@@ -1,0 +1,31 @@
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-ppm1r8vd/mirror
+baseline PASS ['node', '--require', './mirror/scripts/preload.cjs', './mirror/scripts/main.cjs']
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-2b6f464_/mirror
+baseline PASS ['node', '--require=./mirror/scripts/preload.cjs', './mirror/scripts/main.cjs']
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-_0_q2rjm/mirror
+baseline PASS ['node', '--conditions', 'custom', '-r', './mirror/scripts/preload.cjs', './mirror/scripts/main.cjs']
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-zcq7532n/mirror
+baseline PASS ['/bin/bash', '-o', 'pipefail', './mirror/main.sh']
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-ipgu7itv/mirror
+baseline PASS ['/bin/bash', '+o', 'pipefail', './mirror/main.sh']
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-7px_ijxd/mirror
+mutant FAIL ['node', '--require', './mirror/scripts/preload.cjs', './mirror/scripts/main.cjs'] script operand was not pinned to the selected generation
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-bgdjgfok/mirror
+mutant FAIL ['node', '--require=./mirror/scripts/preload.cjs', './mirror/scripts/main.cjs'] preload operand was not pinned
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-vkyelne_/mirror
+mutant FAIL ['node', '--conditions', 'custom', '-r', './mirror/scripts/preload.cjs', './mirror/scripts/main.cjs'] script operand was not pinned to the selected generation
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-5pnxrl5e/mirror
+mutant FAIL ['/bin/bash', '-o', 'pipefail', './mirror/main.sh'] script operand was not pinned to the selected generation
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-cgckkqbz/mirror
+mutant FAIL ['/bin/bash', '+o', 'pipefail', './mirror/main.sh'] script operand was not pinned to the selected generation
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-0p8dyiqo/mirror
+restored PASS ['node', '--require', './mirror/scripts/preload.cjs', './mirror/scripts/main.cjs']
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-bctwgvac/mirror
+restored PASS ['node', '--require=./mirror/scripts/preload.cjs', './mirror/scripts/main.cjs']
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-37hqhkfm/mirror
+restored PASS ['node', '--conditions', 'custom', '-r', './mirror/scripts/preload.cjs', './mirror/scripts/main.cjs']
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-_wuqmzjs/mirror
+restored PASS ['/bin/bash', '-o', 'pipefail', './mirror/main.sh']
+installed verified snapshot 8ab6c2c8cf29: 6 modules, 0 test files -> /tmp/orch-generations-o4w3h9fx/mirror
+restored PASS ['/bin/bash', '+o', 'pipefail', './mirror/main.sh']
+Byte-identical restored source: 3007f0ba4a57e5ff57c2cef9f78a86e905419469989a96806b9316b92b473872

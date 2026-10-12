@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "python3",
+    "-m",
+    "pytest",
+    "--collect-only",
+    "-q"
+  ],
+  "exit": 0,
+  "collected": 3005,
+  "raw_sha256": "c945f13697d53038726f496fff248db929de1c6a377f58cea787c63f817be2fd",
+  "raw_location": "collection.log",
+  "summary": "3005 tests collected in 1.11s"
+}

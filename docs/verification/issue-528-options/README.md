@@ -1,0 +1,25 @@
+# Issue 528 option pinning evidence
+
+Base: e626002302d025e471e9e6b95b5cbf5ff09d7141. `proof.json` records exact argv, cwd, statuses and source hashes. The only production difference from the mutant is interpreter option handling in `src/mirror_reader.py`.
+
+The named real-publication test passes, fails five assertions after replacing production with unchanged base source (Node split/equals/short preload plus bash -o/+o), then passes after byte-identical restoration. All five failures are old-versus-new code observations, not import or setup errors. The child import checks and ordinary relative data spelling remain explicit. `production-mutant.py.txt` and `production-restored.py.txt` retain both source versions.
+
+Current review repair scopes shell +o to bash/sh/zsh and +O to bash. Six interpreter-specific regression cases fail before the correction, then pass. The executable witness also runs both Bash cases with Node unavailable. Historical captured-paths runner restrictions are explicitly marked as superseded evidence.
+
+Current focused Python:43 passed plus41 subtests; Node TAP:14 passed/0 skipped. Exact integrated collection:3005 after main545 integration (main3002 plus three executed mirror-option tests). All main skip/mypy ceilings preserved; floor is a measured union, not a new local full-suite verdict. Validation is recorded in focused.log, regression-green.log, and node.log. The named production RED/restored-GREEN proof has been regenerated from the corrected production source and hashes. Full local verify.py is intentionally not claimed: this parser change touches no live ledger or CI-skipped capability; per CLAUDE.md the PR verdict is hosted verify.py in checkout and flat mirror shapes. Skip ceilings are unchanged. Installed mirror publication and provider acceptance are separate.
+
+Reproduce focused witnesses with `PYTHONPATH=src python3 -m pytest -q tests/test_mirror_generations.py` and `node --test tests/test_mirror_reader_reentry.js`. For deliberate break in an isolated checkout, save the candidate source bytes, substitute `git show e626002:src/mirror_reader.py`, run the named test from proof.json expecting five assertion failures, restore the saved bytes exactly, verify SHA256, and rerun expecting zero failures. Never mutate an active installed mirror for this proof.
+
+The named Python acceptance witness now captures argv from production execvpe,
+checks physical script/preload generation paths and unchanged relative data,
+then checks actual old-generation parent/child execution after publication.
+Its regenerated unchanged-base mutation fails five intended operand assertions
+and restored candidate passes; no setup error is counted as the RED proof.
+
+Raw production RED stdout and JUnit are losslessly gzip-retained as
+production-red.log.gz and production-red.xml.gz to preserve pytest whitespace
+without adding trailing-whitespace source diffs.
+
+Additional raw logs with pytest/Node trailing whitespace are gzip-retained
+losslessly; raw-retention.json maps original paths to compressed paths and
+decoded SHA256. Historical records keep their original invocation/path text.

@@ -1,0 +1,173 @@
+{
+  "base_head": "a671633f9874c6b4cd77c0c64b5ada7fa546d7b6",
+  "runs": [
+    {
+      "label": "required-pytest",
+      "argv": [
+        "/opt/hostedtoolcache/Python/3.14.8/x64/bin/python3",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_mirror_generations.py",
+        "-m",
+        "not slow"
+      ],
+      "cwd": "/home/runner/work/Orchestrator/Orchestrator",
+      "exit": 1
+    },
+    {
+      "label": "black-format",
+      "argv": [
+        "bash",
+        "-c",
+        "black --line-length 100 tests/test_mirror_generations.py"
+      ],
+      "cwd": "/home/runner/work/Orchestrator/Orchestrator",
+      "exit": 127
+    },
+    {
+      "label": "black-check",
+      "argv": [
+        "bash",
+        "-c",
+        "black --check --line-length 100 --exclude '(\\.workflows-lib|node_modules)' ."
+      ],
+      "cwd": "/home/runner/work/Orchestrator/Orchestrator",
+      "exit": 127
+    },
+    {
+      "label": "required-node",
+      "argv": [
+        "node",
+        "--test",
+        "tests/test_mirror_reader_reentry.js"
+      ],
+      "cwd": "/home/runner/work/Orchestrator/Orchestrator",
+      "exit": 1
+    },
+    {
+      "label": "diagnostic-node",
+      "argv": [
+        "node",
+        "--test",
+        "--test-isolation=none",
+        "--test-reporter=tap",
+        "tests/test_mirror_reader_reentry.js"
+      ],
+      "cwd": "/home/runner/work/Orchestrator/Orchestrator",
+      "exit": 1
+    },
+    {
+      "label": "bash-options-green",
+      "argv": [
+        "node",
+        "--test",
+        "--test-isolation=none",
+        "--test-reporter=tap",
+        "--test-name-pattern=production Bash",
+        "tests/test_mirror_reader_reentry.js"
+      ],
+      "cwd": "/home/runner/work/Orchestrator/Orchestrator",
+      "exit": 0
+    },
+    {
+      "label": "python-unittest",
+      "argv": [
+        "/opt/hostedtoolcache/Python/3.14.8/x64/bin/python3",
+        "-m",
+        "unittest",
+        "tests.test_mirror_generations",
+        "-v"
+      ],
+      "cwd": "/home/runner/work/Orchestrator/Orchestrator",
+      "exit": 1
+    },
+    {
+      "label": "named-baseline",
+      "argv": [
+        "/opt/hostedtoolcache/Python/3.14.8/x64/bin/python3",
+        "-m",
+        "unittest",
+        "tests.test_mirror_generations.MirrorGenerationTests.test_command_options_preserve_script_pinning",
+        "-v"
+      ],
+      "cwd": "/tmp/issue528-mutation-0rhuq6v8",
+      "exit": 1
+    },
+    {
+      "label": "named-option-revert-red",
+      "argv": [
+        "/opt/hostedtoolcache/Python/3.14.8/x64/bin/python3",
+        "-m",
+        "unittest",
+        "tests.test_mirror_generations.MirrorGenerationTests.test_command_options_preserve_script_pinning",
+        "-v"
+      ],
+      "cwd": "/tmp/issue528-mutation-0rhuq6v8",
+      "exit": 1
+    },
+    {
+      "label": "named-restored",
+      "argv": [
+        "/opt/hostedtoolcache/Python/3.14.8/x64/bin/python3",
+        "-m",
+        "unittest",
+        "tests.test_mirror_generations.MirrorGenerationTests.test_command_options_preserve_script_pinning",
+        "-v"
+      ],
+      "cwd": "/tmp/issue528-mutation-0rhuq6v8",
+      "exit": 1
+    }
+  ],
+  "mutation": {
+    "candidate_sha256": "3007f0ba4a57e5ff57c2cef9f78a86e905419469989a96806b9316b92b473872",
+    "mutant_sha256": "1b6f5068be7c179e5d9980cc42a9899f863bcf8ec253c42b24f0060efe97964a",
+    "restored_sha256": "3007f0ba4a57e5ff57c2cef9f78a86e905419469989a96806b9316b92b473872",
+    "byte_identical_restoration": true,
+    "intended_script_operand_failures": 4,
+    "intended_preload_operand_failures": 1,
+    "runner": "unittest; pytest unavailable",
+    "production_checkout_mutated": false
+  },
+  "source_sha256": {
+    "src/mirror_reader.py": "3007f0ba4a57e5ff57c2cef9f78a86e905419469989a96806b9316b92b473872",
+    "tests/test_mirror_generations.py": "2b066f66e66a79df9207febe977e8100103e90bc1f5018a1828f48c084ddb617",
+    "tests/test_mirror_reader_reentry.js": "17fe9211adf69813e3e6b8e5f927880304dc19b268b3e1cbf041f7e7ade22102"
+  },
+  "pending_python_patch": "/tmp/issue528-python-capture-pending.patch",
+  "pending_python_patch_sha256": "07ee3fd7bb43f54d55a67ccecba3a853aad24911c19f5df8d3207dabafe27c98",
+  "pending_python_changes_committed": false,
+  "python_logs_use_pending_patch": true,
+  "raw_logs": {
+    "bash-options-green.log.gz": {
+      "decompressed_sha256": "dc38269b31d0ed43fad7b8b8359383d564f194137788dbd7be8708569d8ed33a"
+    },
+    "named-restored.log.gz": {
+      "decompressed_sha256": "8e78355bfb1ff064a8f72c45e9dad7126ef352e4dc0ed28000adabae07483732"
+    },
+    "named-baseline.log.gz": {
+      "decompressed_sha256": "212c5474d54e547370122107b09f7e40d3253ccb441e74d968c2ece444312343"
+    },
+    "diagnostic-node.log.gz": {
+      "decompressed_sha256": "7605996235be1a618a160b50df4bd9152baa9b8fd920b26e10d2aa17198d9fd0"
+    },
+    "black-check.log.gz": {
+      "decompressed_sha256": "4f43f8602237fa5b35e289328621f8ffe0fe77fefe0ad02a03d9365806b532fe"
+    },
+    "black-format.log.gz": {
+      "decompressed_sha256": "4f43f8602237fa5b35e289328621f8ffe0fe77fefe0ad02a03d9365806b532fe"
+    },
+    "named-option-revert-red.log.gz": {
+      "decompressed_sha256": "a20936f17681c0ab4b9a613f608ad792c5fe23f2fee81e5083917c3bddb13aa4"
+    },
+    "required-pytest.log.gz": {
+      "decompressed_sha256": "b42f39dcd355244f95f7aaa5b5f8a170efaf813490d508234969b85e25a275d7"
+    },
+    "required-node.log.gz": {
+      "decompressed_sha256": "5797b0835eae0dfa344f5f4dbe0f560255e639bfe5ae04fda0e8e6061241f88a"
+    },
+    "python-unittest.log.gz": {
+      "decompressed_sha256": "4137d8223f412557c06e83bb8bd3d8d5af92999d24a284e2718d076bac0fa043"
+    }
+  }
+}

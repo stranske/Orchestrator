@@ -133,3 +133,112 @@ for (const { unanchored, incumbent, entry } of scenarios) {
     assert.deepEqual(JSON.parse(output[1]), ['old', 'old', pinned]);
   });
 }
+
+for (const optionForm of ['split', 'equals', 'short', '-o', '+o']) {
+  const shell = optionForm === '-o' || optionForm === '+o';
+  const description = shell ? `Bash ${optionForm} script` : `Node ${optionForm} preload and script`;
+  test(`production ${description} stay on the selected generation`,
+    { timeout: 15000 }, async (t) => {
+      const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'orch-node-options-')));
+      const snapshot = path.join(root, 'snapshot');
+      const mirror = path.join(root, 'mirror');
+      let reader;
+      let done;
+      let lines;
+      t.after(async () => {
+        if (reader && reader.exitCode === null && reader.signalCode === null) reader.kill('SIGKILL');
+        if (done) await done;
+        if (lines) lines.close();
+        fs.rmSync(root, { recursive: true, force: true });
+      });
+      fs.mkdirSync(path.join(snapshot, 'scripts'), { recursive: true });
+      fs.copyFileSync(installer, path.join(snapshot, 'scripts', path.basename(installer)));
+      fs.copyFileSync(path.join(modules, 'paths.py'), path.join(snapshot, 'paths.py'));
+      fs.writeFileSync(path.join(snapshot, 'orchestrate.sh'), '#!/bin/sh\n');
+      const helper = fs.readFileSync(path.join(modules, 'mirror_reader.py'), 'utf8');
+      const exec = '        os.execvpe(command[0], command, env)';
+      assert.ok(helper.includes(exec), 'production exec boundary moved');
+      fs.writeFileSync(path.join(snapshot, 'mirror_reader.py'), helper.replace(exec,
+        '        import json\n' +
+        '        print("SELECTED " + json.dumps(command), flush=True)\n' +
+        '        assert sys.stdin.readline() == "resume\\n"\n' + exec));
+      function publish(value) {
+        fs.writeFileSync(path.join(snapshot, 'module.py'), `VALUE = '${value}'\n`);
+        fs.writeFileSync(path.join(snapshot, 'scripts/observer.sh'),
+          `printf '%s\\n' '${value}'\n` +
+          'python3 -c \'import module, subprocess, sys; print(module.VALUE); ' +
+          'print(subprocess.check_output([sys.executable, "-c", ' +
+          '"import module; print(module.VALUE)"], text=True).strip())\'\n' +
+          'printf \'%s\\n\' "$1"\n');
+        fs.writeFileSync(path.join(snapshot, 'scripts/preload.cjs'),
+          `global.preloadValue = '${value}';\n`);
+        fs.writeFileSync(path.join(snapshot, 'scripts/peer.cjs'), `exports.value = '${value}';\n`);
+        fs.writeFileSync(path.join(snapshot, 'scripts/observer.cjs'),
+          "const cp = require('node:child_process');\n" +
+          "const child = cp.execFileSync(process.execPath, ['-e', " +
+          "'console.log(require(process.argv[1]).value)', require.resolve('./peer.cjs')], " +
+          "{encoding:'utf8'}).trim();\n" +
+          `console.log(JSON.stringify(['${value}', global.preloadValue, ` +
+          "require('./peer.cjs').value, child, __dirname, process.argv.slice(2)]));\n");
+        const digest = checkedPython([installer, snapshot, '--digest']);
+        checkedPython([installer, snapshot, mirror, '--expected-digest', digest]);
+      }
+      publish('old');
+      const pinned = fs.realpathSync(mirror);
+      const preload = './mirror/scripts/preload.cjs';
+      const executable = shell ? '/bin/bash' : process.execPath;
+      const script = shell ? 'scripts/observer.sh' : 'scripts/observer.cjs';
+      const options = shell ? [optionForm, 'pipefail'] :
+        optionForm === 'equals' ? [`--require=${preload}`] :
+        optionForm === 'short' ? ['--conditions', 'custom', '-r', preload] : ['--require', preload];
+      const env = { ...process.env, HOME: root };
+      for (const name of ['ORCH_PUBLICATION_READER_FD', 'ORCH_PUBLICATION_ROOT',
+        'ORCH_PUBLICATION_GENERATION', 'ORCH_DIR']) delete env[name];
+      reader = spawn(python, [path.join(pinned, 'mirror_reader.py'), 'run', mirror,
+        executable, ...options, `./mirror/${script}`, 'mirror/data.json'],
+      { cwd: root, env, stdio: ['pipe', 'pipe', 'pipe'] });
+      let errors = '';
+      reader.stderr.setEncoding('utf8').on('data', (chunk) => { errors += chunk; });
+      lines = readline.createInterface({ input: reader.stdout });
+      const output = [];
+      let capturedCommand;
+      let readyResolve;
+      let readyReject;
+      const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
+      lines.on('line', (line) => {
+        if (line.startsWith('SELECTED ')) {
+          capturedCommand = JSON.parse(line.slice('SELECTED '.length));
+          readyResolve();
+        }
+        else output.push(line);
+      });
+      done = new Promise((resolve, reject) => {
+        reader.on('error', (error) => { readyReject(error); reject(error); });
+        reader.on('close', (code) => {
+          readyReject(new Error(`reader exited before selection: ${errors}`));
+          resolve(code);
+        });
+      });
+      await ready;
+      publish('new');
+      assert.notEqual(fs.realpathSync(mirror), pinned);
+      // Check the operands passed to exec after a real publication. Node's
+      // module loader can canonicalize a live symlink, hiding an unpinned argv.
+      const pinnedPreload = path.join(pinned, 'scripts/preload.cjs');
+      const pinnedOptions = shell ? [optionForm, 'pipefail'] :
+        optionForm === 'equals' ? [`--require=${pinnedPreload}`] :
+        optionForm === 'short' ? ['--conditions', 'custom', '-r', pinnedPreload] :
+          ['--require', pinnedPreload];
+      assert.equal(capturedCommand.at(-2), path.join(pinned, script),
+        'script operand was not pinned to the selected generation');
+      assert.deepEqual(capturedCommand,
+        [executable, ...pinnedOptions, path.join(pinned, script),
+          'mirror/data.json'],
+        'preload must stay pinned and relative data must keep its spelling');
+      reader.stdin.end('resume\n');
+      assert.equal(await done, 0, errors);
+      if (shell) assert.deepEqual(output, ['old', 'old', 'old', 'mirror/data.json']);
+      else assert.deepEqual(output.map((line) => JSON.parse(line)),
+        [['old', 'old', 'old', 'old', path.join(pinned, 'scripts'), ['mirror/data.json']]]);
+    });
+}
