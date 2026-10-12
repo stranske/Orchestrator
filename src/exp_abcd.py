@@ -1763,6 +1763,7 @@ def followup(
     promotion_verify_fn=None,
     promotion_outcome_lookup_fn=None,
     promotion_mirror_fn=None,
+    promotion_delivery_fn=None,
 ) -> dict:
     """Drive the UNFINISHED half of the experiment lifecycle (2026-07-08). The tick LAUNCHES
     A/B/C experiments, but nothing ever ran collect/evaluate on them — ZERO tick-* evaluation
@@ -1803,6 +1804,8 @@ def followup(
         reverse=True,
     )
     promotion_reconcile = promotion_reconcile_fn or synthesis_promotion.reconcile
+    # A verified candidate is delivered by a PR naming its id; this finds it (2026-10-12).
+    delivery_fn = promotion_delivery_fn or synthesis_promotion.default_delivery_discovery
     gate_stamp = ship_gate_stamp()
     stamp_age_s = (now - gate_stamp.stat().st_mtime) if gate_stamp.exists() else None
     stamp_fresh = stamp_age_s is not None and stamp_age_s < SHIP_GATE_HOLD_S
@@ -1920,6 +1923,7 @@ def followup(
                 verify_fn=promotion_verify_fn,
                 outcome_lookup_fn=promotion_outcome_lookup_fn,
                 mirror_fn=promotion_mirror_fn,
+                delivery_fn=delivery_fn,
             )
             state = promotion["state"]
             checkpoint_error = persist_terminal_checkpoint(edir, state, phase_before=phase_before)
@@ -2262,6 +2266,7 @@ def followup(
                             verify_fn=promotion_verify_fn,
                             outcome_lookup_fn=promotion_outcome_lookup_fn,
                             mirror_fn=promotion_mirror_fn,
+                            delivery_fn=delivery_fn,
                         )
                         promotion_state = promotion["state"]
                         persist_terminal_checkpoint(edir, promotion_state, phase_before="evaluated")
@@ -2464,6 +2469,8 @@ def _resume_synthesis_promotion(state: dict) -> dict:
         experiment_id=state["experiment_id"],
         model=adapters.model_identity(agent, mode),
         rationale="resume interrupted verified-synthesis attempt in the same isolated worktree",
+        # No capability edge: the ROOT synthesis run is the outcome anchor
+        # (`default_mirror_outcome`), so an edge here would read as awaiting forever.
         routing_metadata={
             "promotion_resume": True,
             "root_synthesis_run_id": synthesis.get("root_run_id"),
@@ -2606,6 +2613,11 @@ def synthesize(
         experiment_id=exp_id,
         model=adapters.model_identity(synth_agent, mode),
         rationale=f"harvest panel-named strengths into base ({base}); not wasted capacity",
+        # The synthesis run is where a winner's delivery outcome lands
+        # (`synthesis_promotion.default_mirror_outcome`), so it carries the capability's edge;
+        # member runs never deliver (`feedback.experiment_member_target`).
+        capability_ids=["abcd-experiment"],
+        influenced_by_workflow_ids=["exp_abcd"],
         routing_metadata=(
             None
             if base_member["legacy"]
@@ -2984,11 +2996,17 @@ def _selftest_checks():
                 "evidence_hash": feedback._completion_hash(evidence),
             }
 
+        def offline_delivery(state):
+            # A selftest never reads GitHub: delivery discovery is exercised in
+            # tests/test_synthesis_delivery_discovery.py with a fake search.
+            return {"status": "selftest_offline"}
+
         def fake_subject_lifecycle(exp_id, lifecycle, reason=None):
             calls["subject_lifecycle"].append((exp_id, lifecycle, reason))
             return True
 
         fu = followup(
+            promotion_delivery_fn=offline_delivery,
             max_experiments=1,
             collect_fn=fake_collect,
             evaluate_fn=fake_evaluate,
@@ -3010,6 +3028,7 @@ def _selftest_checks():
         # other idle zero-diff experiment is terminally skipped.
         promotion_mode["status"] = "interrupted"
         fu2 = followup(
+            promotion_delivery_fn=offline_delivery,
             max_experiments=2,
             collect_fn=fake_collect,
             evaluate_fn=fake_evaluate,
@@ -3037,6 +3056,7 @@ def _selftest_checks():
         )
         promotion_mode["status"] = "complete"
         fu3 = followup(
+            promotion_delivery_fn=offline_delivery,
             max_experiments=2,
             collect_fn=fake_collect,
             evaluate_fn=fake_evaluate,
@@ -3064,6 +3084,7 @@ def _selftest_checks():
         # Repeated followup creates no duplicate candidate or phase transition.
         candidate_id = promoted["candidate"]["candidate_id"]
         fu4 = followup(
+            promotion_delivery_fn=offline_delivery,
             max_experiments=2,
             collect_fn=fake_collect,
             evaluate_fn=fake_evaluate,
@@ -3090,7 +3111,7 @@ def _selftest_checks():
             return atomic_json(path, payload)
 
         with patch.object(synthesis_promotion, "_atomic_json", fail_legacy_checkpoint):
-            repaired = followup(max_experiments=0)
+            repaired = followup(max_experiments=0, promotion_delivery_fn=offline_delivery)
         assert repaired["ship_gate"]["finished"] == 0, repaired
         assert repaired["ship_gate"]["inflight"] is False, repaired
         assert (ftmp / ".last-ship-gate").stat().st_mtime == stamp_before
