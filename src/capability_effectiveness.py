@@ -31,12 +31,22 @@ AN OUTCOME NO LEARNER MAY SCORE IS NOT EVIDENCE HERE EITHER. A target whose `fai
 nothing about the capability in either arm. It is counted in `excluded`, beside `terminal`, and
 never scored.
 
+WHAT COUNTS AS TERMINAL AND AS A DURABLE SUCCESS IS `feedback`'s, NOT THIS MODULE'S.
+`feedback.outcome_is_terminal` and `feedback.outcome_is_durable_success` are the predicates
+`capability_causal_evidence` tallies the lifecycle from, so the two readers of these edges cannot
+disagree about what an outcome says. A merge the durability sweep has not judged yet is counted in
+`awaiting_sweep`, and an unmerged run whose durability nothing will ever judge in `unresolvable`.
+An edge onto a ROLE run is an association (`feedback.role_target_kind`), counted in
+`associations` and never scored: the outcome a role run holds is a copy of its acting run's, and
+the acting run carries the capability's own edge.
+
 REFUSES TO MISLEAD. A rate computed from one or two observations is noise wearing a percentage sign,
 and this subsystem has already produced several confident numbers that were artifacts. So every rate
 carries its denominator, anything under MIN_SAMPLE reports `insufficient_evidence` instead of a
 figure, and a capability with no terminal outcomes is reported as "not yet measurable" — never as 0%.
 One whose only resolved outcomes are learning-excluded is `excluded_only`, a different state: waiting
-will not change it, attribution has to.
+will not change it, attribution has to. One whose edges can none of them ever be scored
+(associations, unresolvable outcomes, excluded ones) is `unscoreable`, and never reads as awaiting.
 
     python3 capability_effectiveness.py            # human-readable
     python3 capability_effectiveness.py --json
@@ -96,11 +106,19 @@ def _edge_rows(conn=None) -> list[dict]:
         # `outcomes` row, so reading the row loses nothing the edge had. The verdict is the
         # adjudicated one, else the verifier's: the reading `capability_causal_evidence` makes,
         # never CI alone.
+        #
+        # `runs.role_name` says whether the target is a ROLE run, the join
+        # `capability_causal_evidence` makes for its `advisory_self` class. MEASURED 2026-10-11 on a
+        # copy of the live Brain: 2,711 of the 3,653 edges read here target role runs. 27 of them had
+        # an outcome, every one a propagated copy ("automatically influenced <run>") of an acting
+        # run that carries the same capability's edge, so each delivery counted twice, and
+        # `_target_of` pooled every `role:triage:*` run into one subject `triage`.
         rows = c.execute("""SELECT ie.capability_id, ie.accepted, ie.counterfactual,
                       o.adjudicated_verdict, o.verifier_verdict, o.durability, o.failure_class,
-                      ie.target_run_id, ie.created_ts
+                      ie.target_run_id, ie.created_ts, o.merged, r.role_name
                FROM influence_edges ie
                LEFT JOIN outcomes o ON o.run_id = ie.target_run_id
+               LEFT JOIN runs r ON r.run_id = ie.target_run_id
                WHERE ie.capability_id IS NOT NULL AND ie.target_event_id IS NOT NULL""").fetchall()
     finally:
         if close:
@@ -111,13 +129,56 @@ def _edge_rows(conn=None) -> list[dict]:
             "accepted": bool(r[1]),
             "counterfactual": bool(r[2]),
             "verdict": str(r[3] or r[4] or "").upper() or None,
+            "adjudicated_verdict": r[3],
+            "verifier_verdict": r[4],
             "durability": str(r[5] or "").lower() or None,
             "failure_class": r[6],
             "run_id": r[7],
             "ts": r[8],
+            "merged": r[9],
+            "role_kind": feedback.role_target_kind(str(r[0]), r[10]),
         }
         for r in rows
     ]
+
+
+def _outcome_fields(e: dict) -> dict:
+    """The four `outcomes` fields `feedback`'s predicates read. A hand-built row may carry only the
+    combined `verdict`; that is the adjudicated one."""
+    return {
+        "verifier_verdict": e.get("verifier_verdict"),
+        "adjudicated_verdict": e.get("adjudicated_verdict", e.get("verdict")),
+        "merged": e.get("merged"),
+        "durability": e.get("durability"),
+    }
+
+
+def _classify(e: dict) -> str:
+    """Exactly one of: association, excluded, terminal, awaiting_sweep, unresolvable, open.
+
+    THE ORDER IS THE RULE. An association is never evidence whatever its target holds, and an
+    excluded class is never scored whatever its verdict, so both come before `terminal`.
+
+    AWAITING THE SWEEP vs UNRESOLVABLE (2026-10-11). Both are a durability still `pending` with no
+    failure verdict, and they are opposites. `durability_sweep._pending_merged_runs` selects exactly
+    `merged=1 AND durability pending`, judges each within its grace window, and printed
+    `undrainable 0` on its 2026-10-11 run, so a merged one is `awaiting_sweep` and will resolve. An
+    unmerged one is selected by nothing: on a copy of the live Brain those were 38 PASS outcomes of
+    agy-runtime-isolation, all `offload:*` research-program runs that never open a PR. Counted as
+    terminal they were 38 non-durable results that could never become anything else; counted as
+    open they would read as awaiting forever. They are `unresolvable`: counted, never scored."""
+    if e.get("role_kind"):
+        return "association"
+    if e.get("failure_class") in feedback.LEARNING_EXCLUDED_FAILURE_CLASSES:
+        return "excluded"
+    outcome = _outcome_fields(e)
+    if feedback.outcome_is_terminal(**outcome):
+        return "terminal"
+    if outcome["merged"]:
+        return "awaiting_sweep"
+    if any(v is not None for v in outcome.values()):
+        return "unresolvable"
+    return "open"
 
 
 def _target_of(run_id: str) -> str:
@@ -152,16 +213,16 @@ def _arm_stats(edges: list[dict]) -> dict:
     excluded without touching this module. `excluded` stands beside `terminal`, so the set-aside is
     a number on the page and not a quietly smaller denominator.
     """
-    excluded_classes = feedback.LEARNING_EXCLUDED_FAILURE_CLASSES
-    excluded = [e for e in edges if e.get("failure_class") in excluded_classes]
-    scored = [e for e in edges if e.get("failure_class") not in excluded_classes]
-    terminal = [
-        e
-        for e in scored
-        if e["verdict"] in ("PASS", "FAIL")
-        or e["durability"] in ("durable", "abandoned", "reverted", "reopened")
-    ]
-    durable = [e for e in terminal if e["durability"] == "durable"]
+    groups: dict[str, list[dict]] = {
+        k: []
+        for k in ("association", "excluded", "terminal", "awaiting_sweep", "unresolvable", "open")
+    }
+    for e in edges:
+        groups[_classify(e)].append(e)
+    excluded, terminal = groups["excluded"], groups["terminal"]
+    associations = groups["association"]
+    awaiting_sweep, unresolvable = groups["awaiting_sweep"], groups["unresolvable"]
+    durable = [e for e in terminal if feedback.outcome_is_durable_success(**_outcome_fields(e))]
     # Distinct subjects — a target counts as durable if ANY attempt on it landed durably.
     durable_subjects = {_target_of(e["run_id"]) for e in durable}
     terminal_subjects = {_target_of(e["run_id"]) for e in terminal}
@@ -170,6 +231,10 @@ def _arm_stats(edges: list[dict]) -> dict:
         "attributed": len(edges),
         "terminal": len(terminal),
         "excluded": len(excluded),
+        "associations": len(associations),
+        "advisory_self": sum(1 for e in associations if e["role_kind"] == "advisory_self"),
+        "awaiting_sweep": len(awaiting_sweep),
+        "unresolvable": len(unresolvable),
         "durable": len(durable),
         "terminal_subjects": len(terminal_subjects),
         "excluded_subjects": len(excluded_subjects),
@@ -178,14 +243,33 @@ def _arm_stats(edges: list[dict]) -> dict:
             round(len(terminal) / len(terminal_subjects), 2) if terminal_subjects else None
         ),
     }
-    if not terminal and excluded and not scored:
-        # NOT `not_yet_measurable`: outcomes DID resolve, and every one is in a class no learner
-        # may score. Waiting will not change that, so one sentinel for both would hide which.
+    evidence = len(edges) - len(associations)
+    if not terminal and not groups["open"] and not awaiting_sweep and edges:
         out["durable_rate"] = None
-        out["status"] = (
-            f"excluded_only ({len(excluded)} attempts on {len(excluded_subjects)} subjects, "
-            "every outcome learning-excluded)"
-        )
+        if excluded and len(excluded) == evidence:
+            # NOT `not_yet_measurable`: outcomes DID resolve, and every one is in a class no
+            # learner may score. Waiting will not change that, so one sentinel for both would hide
+            # which. Associations are not evidence, so they never turn this into `unscoreable`.
+            out["status"] = (
+                f"excluded_only ({len(excluded)} attempts on {len(excluded_subjects)} subjects, "
+                "every outcome learning-excluded)"
+            )
+        else:
+            # NOT `not_yet_measurable` either: nothing here can ever be scored, so waiting is not
+            # the remedy. role-redirect's 762 edges are all on its own role runs.
+            out["status"] = (
+                f"unscoreable ({len(edges)} edges, none can be scored: "
+                + ", ".join(
+                    f"{n} {label}"
+                    for n, label in (
+                        (len(associations), "associations onto role runs"),
+                        (len(unresolvable), "never resolvable"),
+                        (len(excluded), "learning-excluded"),
+                    )
+                    if n
+                )
+                + ")"
+            )
     elif not terminal:
         out["durable_rate"] = None
         out["status"] = "not_yet_measurable"  # NOT 0% — nothing has resolved yet
@@ -195,6 +279,8 @@ def _arm_stats(edges: list[dict]) -> dict:
             f"insufficient_evidence ({len(terminal_subjects)}/{MIN_SAMPLE} distinct "
             f"subjects from {len(terminal)} attempts"
             + (f"; {len(excluded)} learning-excluded" if excluded else "")
+            + (f"; {len(awaiting_sweep)} awaiting the durability sweep" if awaiting_sweep else "")
+            + (f"; {len(unresolvable)} never resolvable" if unresolvable else "")
             + ")"
         )
     else:
@@ -257,6 +343,12 @@ def measure(*, path=None, conn=None) -> dict:
             for e in attributed
             if e["accepted"]["status"].startswith("excluded_only")
         ],
+        # Accepted arms none of whose edges can ever be scored. Not awaiting anything.
+        "unscoreable": [
+            e["capability_id"]
+            for e in attributed
+            if e["accepted"]["status"].startswith("unscoreable")
+        ],
         "rows": out,
     }
 
@@ -265,8 +357,14 @@ def _arm_cell(arm: dict, *, attempts: bool) -> str:
     cell = f"{arm['durable_subjects']}/{arm['terminal_subjects']} subj" if arm["terminal"] else "—"
     if arm["terminal"] and attempts:
         cell += f" ({arm['terminal']} att)"
-    if arm["excluded"]:
-        cell += f", {arm['excluded']} excl"
+    for key, label in (
+        ("excluded", "excl"),
+        ("awaiting_sweep", "sweep"),
+        ("unresolvable", "unres"),
+        ("associations", "assoc"),
+    ):
+        if arm[key]:
+            cell += f", {arm[key]} {label}"
     return cell
 
 
@@ -303,6 +401,9 @@ def format_report(rep: dict) -> str:
         "",
         "`excl`: attempts whose outcome is in feedback.LEARNING_EXCLUDED_FAILURE_CLASSES. "
         "They are set aside in both arms and never scored.",
+        "`sweep`: merges the durability sweep has not judged yet; they resolve, so they wait.",
+        "`unres`: unmerged runs whose durability nothing will ever judge; never scored.",
+        "`assoc`: edges onto role runs, whose outcome is a copy of the acting run's; never scored.",
     ]
     if rep["awaiting_outcomes"]:
         lines += [
@@ -315,6 +416,12 @@ def format_report(rep: dict) -> str:
             "",
             "Accepted arms resolved, but every outcome is learning-excluded, "
             "so that arm is not scored: " + ", ".join(rep["excluded_only"]),
+        ]
+    if rep["unscoreable"]:
+        lines += [
+            "",
+            "Accepted arms none of whose edges can ever be scored (not awaiting anything): "
+            + ", ".join(rep["unscoreable"]),
         ]
     return "\n".join(lines) + "\n"
 
@@ -329,6 +436,7 @@ def _selftest() -> None:
                 "counterfactual": False,
                 "verdict": "PASS",
                 "durability": "durable",
+                "merged": 1,
                 "run_id": f"a{i}",
                 "ts": 0,
             }
@@ -352,6 +460,7 @@ def _selftest() -> None:
                 "counterfactual": True,
                 "verdict": "PASS",
                 "durability": "durable",
+                "merged": 1,
                 "run_id": f"b{i}",
                 "ts": 0,
             }
@@ -422,9 +531,19 @@ def _selftest() -> None:
     # resolved durable after its edge was last propagated. `e-linked` above has no outcome row, so
     # the PASS/durable written onto it directly is not an outcome either.
     for _eid, _cf, _snapshot, _outcome in (
-        ("e-relabelled", 0, ("PASS", "durable"), (None, "abandoned", "unattributed_delegation")),
-        ("e-resolved", 0, ("PASS", "pending"), ("PASS", "durable", None)),
-        ("e-control", 1, ("UNATTRIBUTED", "abandoned"), (None, "abandoned", "transient_infra")),
+        (
+            "e-relabelled",
+            0,
+            ("PASS", "durable"),
+            (None, "abandoned", "unattributed_delegation", None),
+        ),
+        ("e-resolved", 0, ("PASS", "pending"), ("PASS", "durable", None, 1)),
+        (
+            "e-control",
+            1,
+            ("UNATTRIBUTED", "abandoned"),
+            (None, "abandoned", "transient_infra", None),
+        ),
     ):
         _run = f"remote:o/r#{_eid}:codex"
         _c.execute(
@@ -435,8 +554,8 @@ def _selftest() -> None:
             (_eid, _run, 1 - _cf, _cf, *_snapshot),
         )
         _c.execute(
-            "INSERT INTO outcomes (run_id,adjudicated_verdict,durability,failure_class) "
-            "VALUES (?,?,?,?)",
+            "INSERT INTO outcomes (run_id,adjudicated_verdict,durability,failure_class,merged) "
+            "VALUES (?,?,?,?,?)",
             (_run, *_outcome),
         )
     _rows = _edge_rows(_c)
@@ -446,6 +565,41 @@ def _selftest() -> None:
     _ctl = _arm_stats([r for r in _rows if r["counterfactual"]])
     assert (_ctl["terminal"], _ctl["excluded"]) == (0, 1), _ctl
     assert _ctl["status"].startswith("excluded_only"), "resolved-but-excluded is not 'pending'"
+
+    # A ROLE RUN'S OUTCOME IS AN ASSOCIATION, A MERGE THE SWEEP HAS NOT JUDGED WAITS, AND AN
+    # UNMERGED PENDING RUN IS UNRESOLVABLE. Each was a terminal non-durable result before
+    # 2026-10-11: the role run's copy of its acting run's outcome, a merge in the sweep's grace
+    # window, and an offload run nothing will ever judge. A verifier NON_PASS under an adjudicated
+    # PASS is terminal and is not a durable success (feedback's predicates).
+    _c.execute("INSERT INTO runs (run_id, role_name) VALUES ('role:triage:x:1', 'triage')")
+    for _eid, _cap, _run, _fields in (
+        ("e-self", "role-triage", "role:triage:x:1", ("PASS", None, "durable", 1)),
+        ("e-assoc", "offload", "role:triage:x:1", ("PASS", None, "durable", 1)),
+        ("e-sweep", "c9", "remote:o/r#1:codex", ("PASS", None, "pending", 1)),
+        ("e-unres", "c9", "offload:gemini:2", ("PASS", "PASS", "pending", None)),
+        ("e-nonpass", "c9", "remote:o/r#3:codex", ("PASS", "NON_PASS", "durable", 1)),
+    ):
+        _c.execute(
+            "INSERT INTO influence_edges (edge_id,schema_version,influence_type,influence_id,"
+            "source_run_id,target_event_id,target_run_id,capability_id,accepted,counterfactual,"
+            "created_ts,metadata_hash) "
+            "VALUES (?,1,'capability',?,'src','ev-1',?,?,1,0,0,'h')",
+            (_eid, _cap, _run, _cap),
+        )
+        _c.execute(
+            "INSERT OR REPLACE INTO outcomes "
+            "(run_id,adjudicated_verdict,verifier_verdict,durability,merged) VALUES (?,?,?,?,?)",
+            (_run, *_fields),
+        )
+    _rows = _edge_rows(_c)
+    _self = _arm_stats([r for r in _rows if r["capability_id"] == "role-triage"])
+    assert (_self["terminal"], _self["associations"], _self["advisory_self"]) == (0, 1, 1), _self
+    assert _self["status"].startswith("unscoreable (1 edges"), _self["status"]
+    _off = _arm_stats([r for r in _rows if r["run_id"] == "role:triage:x:1"])
+    assert (_off["terminal"], _off["associations"], _off["advisory_self"]) == (0, 2, 1), _off
+    _c9 = _arm_stats([r for r in _rows if r["capability_id"] == "c9"])
+    assert (_c9["terminal"], _c9["durable"]) == (1, 0), _c9
+    assert (_c9["awaiting_sweep"], _c9["unresolvable"]) == (1, 1), _c9
     _c.close()
 
     # CORRELATED ATTEMPTS MUST NOT INFLATE THE SAMPLE. 30 retries of one stuck target is one
@@ -491,6 +645,7 @@ def _selftest() -> None:
             "counterfactual": False,
             "verdict": "PASS",
             "durability": "durable",
+            "merged": 1,
             "run_id": "remote:o/r#900:codex:2",
             "ts": 0,
         }
@@ -552,6 +707,8 @@ def _selftest() -> None:
                             None,  # failure_class
                             e["run_id"],
                             e["ts"],
+                            e.get("merged"),
+                            None,  # runs.role_name: a work run
                         )
                         for e in edges
                         if e["accepted"]
@@ -583,7 +740,8 @@ def _selftest() -> None:
     print(
         "capability_effectiveness.py selftest: OK (lift on real samples, refuses small samples, "
         "pending != 0%, no-control-arm is not a verdict, outcomes read current, "
-        "learning-excluded counted not scored)"
+        "learning-excluded counted not scored, role-run edges are associations, "
+        "an unjudged merge waits and an unmerged pending run is unresolvable)"
     )
 
 
