@@ -118,7 +118,7 @@ def _edge_rows(conn=None) -> list[dict]:
         rows = c.execute("""SELECT ie.capability_id, ie.accepted, ie.counterfactual,
                       o.adjudicated_verdict, o.verifier_verdict, o.durability, o.failure_class,
                       ie.target_run_id, ie.created_ts, o.merged, r.role_name,
-                      r.routing_metadata
+                      r.target, r.routing_metadata
                FROM influence_edges ie
                LEFT JOIN outcomes o ON o.run_id = ie.target_run_id
                LEFT JOIN runs r ON r.run_id = ie.target_run_id
@@ -140,7 +140,8 @@ def _edge_rows(conn=None) -> list[dict]:
             "ts": r[8],
             "merged": r[9],
             "role_kind": feedback.role_target_kind(str(r[0]), r[10]),
-            "experiment_member": feedback.experiment_member_target(r[11]),
+            "subject": feedback.run_subject_id(r[12], r[11], r[7]),
+            "experiment_member": feedback.experiment_member_target(r[12]),
         }
         for r in rows
     ]
@@ -194,13 +195,22 @@ def _classify(e: dict) -> str:
 
 
 def _target_of(run_id: str) -> str:
-    """The work SUBJECT behind a run id, e.g. `remote:stranske/Workflows#2819:cursor` -> the issue.
+    """A subject parsed from a run id, e.g. `remote:stranske/Workflows#2819:cursor` -> the issue.
 
-    Run ids are per-attempt; the subject is what repeats. Used to stop N retries of one stuck issue
-    counting as N independent observations.
+    Only for a hand-built row with no `subject`. Every row `_edge_rows` returns carries the
+    lifecycle's subject (`feedback.run_subject_id`): parsing the id never handled a local run id
+    (`stranske__Repo_20-gemini-<ns>`), so each attempt at one issue was its own subject. MEASURED
+    2026-10-12 on a copy of the live Brain: that held up agy-runtime-isolation's 0.8, whose four
+    durable subjects were three issues, one attempted twice.
     """
     parts = str(run_id or "").split(":")
     return parts[1] if len(parts) > 2 else str(run_id or "")
+
+
+def _subject(e: dict) -> str:
+    """Run ids are per attempt; the subject is what repeats, so N retries of one stuck issue
+    count once."""
+    return e.get("subject") or _target_of(e["run_id"])
 
 
 def _arm_stats(edges: list[dict]) -> dict:
@@ -244,9 +254,9 @@ def _arm_stats(edges: list[dict]) -> dict:
     awaiting_sweep, unresolvable = groups["awaiting_sweep"], groups["unresolvable"]
     durable = [e for e in terminal if feedback.outcome_is_durable_success(**_outcome_fields(e))]
     # Distinct subjects — a target counts as durable if ANY attempt on it landed durably.
-    durable_subjects = {_target_of(e["run_id"]) for e in durable}
-    terminal_subjects = {_target_of(e["run_id"]) for e in terminal}
-    excluded_subjects = {_target_of(e["run_id"]) for e in excluded}
+    durable_subjects = {_subject(e) for e in durable}
+    terminal_subjects = {_subject(e) for e in terminal}
+    excluded_subjects = {_subject(e) for e in excluded}
     out: dict[str, Any] = {
         "attributed": len(edges),
         "terminal": len(terminal),
@@ -651,6 +661,26 @@ def _selftest() -> None:
     assert _ab["status"].startswith("unscoreable (2 edges"), _ab["status"]
     _synth_meta = _c.execute("SELECT routing_metadata FROM runs WHERE run_id='x:synth:a'")
     assert not feedback.experiment_member_target(_synth_meta.fetchone()[0]), "synthesis run"
+
+    # THE SUBJECT IS THE LIFECYCLE'S (`feedback.run_subject_id`), NOT A PARSE OF THE RUN ID. Two
+    # attempts at one issue under local run ids are one subject; parsing the id made them two.
+    for _n in (1, 2):
+        _run = f"stranske__Repo_20-gemini-{_n}"
+        _c.execute("INSERT INTO runs (run_id, target) VALUES (?, 'stranske/Repo#20')", (_run,))
+        _c.execute(
+            "INSERT INTO influence_edges (edge_id,schema_version,influence_type,influence_id,"
+            "source_run_id,target_event_id,target_run_id,capability_id,accepted,counterfactual,"
+            "created_ts,metadata_hash) "
+            "VALUES (?,1,'capability','c8','src','ev-1',?,'c8',1,0,0,'h')",
+            (f"e-local-{_n}", _run),
+        )
+        _c.execute(
+            "INSERT INTO outcomes (run_id,adjudicated_verdict,durability,merged) "
+            "VALUES (?,'PASS','durable',1)",
+            (_run,),
+        )
+    _c8 = _arm_stats([r for r in _edge_rows(_c) if r["capability_id"] == "c8"])
+    assert (_c8["terminal"], _c8["terminal_subjects"], _c8["durable_subjects"]) == (2, 1, 1), _c8
     _c.close()
 
     # CORRELATED ATTEMPTS MUST NOT INFLATE THE SAMPLE. 30 retries of one stuck target is one
@@ -760,6 +790,7 @@ def _selftest() -> None:
                             e["ts"],
                             e.get("merged"),
                             None,  # runs.role_name: a work run
+                            None,  # runs.target
                             None,  # runs.routing_metadata: not an experiment member
                         )
                         for e in edges
@@ -793,7 +824,8 @@ def _selftest() -> None:
         "capability_effectiveness.py selftest: OK (lift on real samples, refuses small samples, "
         "pending != 0%, no-control-arm is not a verdict, outcomes read current, "
         "learning-excluded counted not scored, role-run edges are associations, "
-        "an unjudged merge waits and an unmerged pending run is unresolvable, an experiment member run has no outcome path)"
+        "an unjudged merge waits and an unmerged pending run is unresolvable, "
+        "subjects are the lifecycle's, an experiment member run has no outcome path)"
     )
 
 
