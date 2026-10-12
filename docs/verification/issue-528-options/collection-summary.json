@@ -7,8 +7,8 @@
     "-q"
   ],
   "exit": 0,
-  "collected": 2963,
-  "raw_sha256": "ac998717493861285f305d5413315f16823d6860f023e79db657ea182e0e43a5",
-  "raw_location": "/Users/teacher/.codex/automations/pd-workloop-resume/run-20261012T0900Z/collection.log",
-  "summary": "2963 tests collected in 5.00s"
+  "collected": 2964,
+  "raw_sha256": "3ca464436170e080f0f2e5a783023242524204c7eac4e9ae2ee1546eb91672a5",
+  "raw_location": "collection.log",
+  "summary": "2964 tests collected in 4.88s"
 }

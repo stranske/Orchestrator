@@ -1,61 +1,58 @@
 {
   "base_commit": "e626002302d025e471e9e6b95b5cbf5ff09d7141",
-  "started_at": "2026-10-12T09:10:56.982810+00:00",
-  "candidate_sha256": "3007f0ba4a57e5ff57c2cef9f78a86e905419469989a96806b9316b92b473872",
+  "started_at": "2026-10-12T10:28:53.662166+00:00",
+  "candidate_sha256": "786b2ff2d7c810bbf1d493744fde158f2f2ef71254de4bffc2e1e89493403210",
   "mutant_sha256": "1b6f5068be7c179e5d9980cc42a9899f863bcf8ec253c42b24f0060efe97964a",
   "phases": [
     {
       "phase": "baseline-green",
       "argv": [
-        "python3",
+        "/opt/anaconda3/bin/python3",
         "-m",
         "pytest",
         "-q",
         "tests/test_mirror_generations.py::MirrorGenerationTests::test_command_options_preserve_script_pinning",
-        "--junitxml=docs/verification/issue-528-options/baseline-green.xml"
+        "--junitxml=/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch549-review-20261012T1024/docs/verification/issue-528-options/baseline-green.xml"
       ],
-      "cwd": "/Users/teacher/.codex/automations/pd-workloop-resume/worktrees/orch528-options-20261012",
+      "cwd": "/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch549-review-20261012T1024",
       "exit": 0,
       "failures": 0,
       "errors": 0,
-      "testcases": 1,
-      "source_sha256": "3007f0ba4a57e5ff57c2cef9f78a86e905419469989a96806b9316b92b473872"
+      "source_sha256": "786b2ff2d7c810bbf1d493744fde158f2f2ef71254de4bffc2e1e89493403210"
     },
     {
       "phase": "production-red",
       "argv": [
-        "python3",
+        "/opt/anaconda3/bin/python3",
         "-m",
         "pytest",
         "-q",
         "tests/test_mirror_generations.py::MirrorGenerationTests::test_command_options_preserve_script_pinning",
-        "--junitxml=docs/verification/issue-528-options/production-red.xml"
+        "--junitxml=/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch549-review-20261012T1024/docs/verification/issue-528-options/production-red.xml"
       ],
-      "cwd": "/Users/teacher/.codex/automations/pd-workloop-resume/worktrees/orch528-options-20261012",
+      "cwd": "/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch549-review-20261012T1024",
       "exit": 1,
       "failures": 5,
       "errors": 0,
-      "testcases": 1,
       "source_sha256": "1b6f5068be7c179e5d9980cc42a9899f863bcf8ec253c42b24f0060efe97964a"
     },
     {
       "phase": "restored-green",
       "argv": [
-        "python3",
+        "/opt/anaconda3/bin/python3",
         "-m",
         "pytest",
         "-q",
         "tests/test_mirror_generations.py::MirrorGenerationTests::test_command_options_preserve_script_pinning",
-        "--junitxml=docs/verification/issue-528-options/restored-green.xml"
+        "--junitxml=/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch549-review-20261012T1024/docs/verification/issue-528-options/restored-green.xml"
       ],
-      "cwd": "/Users/teacher/.codex/automations/pd-workloop-resume/worktrees/orch528-options-20261012",
+      "cwd": "/Users/teacher/.codex/automations/imi-merge-verify-closer/worktrees/orch549-review-20261012T1024",
       "exit": 0,
       "failures": 0,
       "errors": 0,
-      "testcases": 1,
-      "source_sha256": "3007f0ba4a57e5ff57c2cef9f78a86e905419469989a96806b9316b92b473872"
+      "source_sha256": "786b2ff2d7c810bbf1d493744fde158f2f2ef71254de4bffc2e1e89493403210"
     }
   ],
-  "restored_sha256": "3007f0ba4a57e5ff57c2cef9f78a86e905419469989a96806b9316b92b473872",
+  "restored_sha256": "786b2ff2d7c810bbf1d493744fde158f2f2ef71254de4bffc2e1e89493403210",
   "byte_identical_restoration": true
 }

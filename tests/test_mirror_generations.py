@@ -503,18 +503,23 @@ mirror_reader.os.execvpe = paused_exec
 mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
 """
         node = shutil.which("node")
-        self.assertIsNotNone(node, "Node is required for the executable option witness")
-        commands = [
-            [node, "--require", "./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
-            [node, "--require=./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
-            [
-                node,
-                "--conditions",
-                "custom",
-                "-r",
-                "./mirror/scripts/preload.cjs",
-                "./mirror/scripts/options.cjs",
-            ],
+        node_commands = (
+            []
+            if node is None
+            else [
+                [node, "--require", "./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                [node, "--require=./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                [
+                    node,
+                    "--conditions",
+                    "custom",
+                    "-r",
+                    "./mirror/scripts/preload.cjs",
+                    "./mirror/scripts/options.cjs",
+                ],
+            ]
+        )
+        commands = node_commands + [
             ["/bin/bash", "-o", "pipefail", "./mirror/options.sh"],
             ["/bin/bash", "+o", "pipefail", "./mirror/options.sh"],
         ]
@@ -573,6 +578,10 @@ mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
                     with suppress(ProcessLookupError):
                         os.killpg(reader.pid, signal.SIGKILL)
                     reader.communicate(timeout=10)
+
+    def test_command_options_keep_bash_witnesses_without_node(self):
+        with patch.object(shutil, "which", return_value=None):
+            self.test_command_options_preserve_script_pinning()
 
     def test_option_code_paths_and_plain_values_are_distinct(self):
         import mirror_reader
@@ -648,6 +657,26 @@ mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
                 ["node", "--", f"{pinned}/-entry.cjs", data],
             ),
         ]
+        # Plus options are shell-specific; for other interpreters they are
+        # script operands, so subsequent relative data must stay untouched.
+        for interpreter, option in (
+            ("python3", "+o"),
+            ("python3", "+O"),
+            ("node", "+o"),
+            ("node", "+O"),
+            ("sh", "+O"),
+            ("zsh", "+O"),
+        ):
+            command = [interpreter, option, data]
+            cases.append((command, command.copy()))
+        for interpreter, option in (("bash", "+O"), ("bash", "+o"), ("sh", "+o"), ("zsh", "+o")):
+            cases.append(
+                (
+                    [interpreter, option, "option-name", "./mirror/options.sh", data],
+                    [interpreter, option, "option-name", f"{pinned}/options.sh", data],
+                )
+            )
+
         for inline in (
             ["node", "-e", "void 0", data],
             ["node", "--eval=void 0", data],

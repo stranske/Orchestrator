@@ -19,18 +19,23 @@ self = <test_mirror_generations.MirrorGenerationTests testMethod=test_command_op
     mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
     """
             node = shutil.which("node")
-            self.assertIsNotNone(node, "Node is required for the executable option witness")
-            commands = [
-                [node, "--require", "./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
-                [node, "--require=./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
-                [
-                    node,
-                    "--conditions",
-                    "custom",
-                    "-r",
-                    "./mirror/scripts/preload.cjs",
-                    "./mirror/scripts/options.cjs",
-                ],
+            node_commands = (
+                []
+                if node is None
+                else [
+                    [node, "--require", "./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                    [node, "--require=./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                    [
+                        node,
+                        "--conditions",
+                        "custom",
+                        "-r",
+                        "./mirror/scripts/preload.cjs",
+                        "./mirror/scripts/options.cjs",
+                    ],
+                ]
+            )
+            commands = node_commands + [
                 ["/bin/bash", "-o", "pipefail", "./mirror/options.sh"],
                 ["/bin/bash", "+o", "pipefail", "./mirror/options.sh"],
             ]
@@ -94,7 +99,7 @@ E
 E                           + ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]
 E                           ?          ^^^    ^^^  +++++++
 
-tests/test_mirror_generations.py:568: AssertionError
+tests/test_mirror_generations.py:573: AssertionError
 _ MirrorGenerationTests.test_command_options_preserve_script_pinning (command=['/opt/homebrew/bin/node', '--require=./mirror/scripts/preload.cjs', './mirror/scripts/options.cjs']) _
 
 self = <test_mirror_generations.MirrorGenerationTests testMethod=test_command_options_preserve_script_pinning>
@@ -114,18 +119,23 @@ self = <test_mirror_generations.MirrorGenerationTests testMethod=test_command_op
     mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
     """
             node = shutil.which("node")
-            self.assertIsNotNone(node, "Node is required for the executable option witness")
-            commands = [
-                [node, "--require", "./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
-                [node, "--require=./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
-                [
-                    node,
-                    "--conditions",
-                    "custom",
-                    "-r",
-                    "./mirror/scripts/preload.cjs",
-                    "./mirror/scripts/options.cjs",
-                ],
+            node_commands = (
+                []
+                if node is None
+                else [
+                    [node, "--require", "./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                    [node, "--require=./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                    [
+                        node,
+                        "--conditions",
+                        "custom",
+                        "-r",
+                        "./mirror/scripts/preload.cjs",
+                        "./mirror/scripts/options.cjs",
+                    ],
+                ]
+            )
+            commands = node_commands + [
                 ["/bin/bash", "-o", "pipefail", "./mirror/options.sh"],
                 ["/bin/bash", "+o", "pipefail", "./mirror/options.sh"],
             ]
@@ -189,7 +199,7 @@ E
 E                           + ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]
 E                           ?                      +++++++
 
-tests/test_mirror_generations.py:568: AssertionError
+tests/test_mirror_generations.py:573: AssertionError
 _ MirrorGenerationTests.test_command_options_preserve_script_pinning (command=['/opt/homebrew/bin/node', '--conditions', 'custom', '-r', './mirror/scripts/preload.cjs', './mirror/scripts/options.cjs']) _
 
 self = <test_mirror_generations.MirrorGenerationTests testMethod=test_command_options_preserve_script_pinning>
@@ -209,18 +219,23 @@ self = <test_mirror_generations.MirrorGenerationTests testMethod=test_command_op
     mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
     """
             node = shutil.which("node")
-            self.assertIsNotNone(node, "Node is required for the executable option witness")
-            commands = [
-                [node, "--require", "./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
-                [node, "--require=./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
-                [
-                    node,
-                    "--conditions",
-                    "custom",
-                    "-r",
-                    "./mirror/scripts/preload.cjs",
-                    "./mirror/scripts/options.cjs",
-                ],
+            node_commands = (
+                []
+                if node is None
+                else [
+                    [node, "--require", "./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                    [node, "--require=./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                    [
+                        node,
+                        "--conditions",
+                        "custom",
+                        "-r",
+                        "./mirror/scripts/preload.cjs",
+                        "./mirror/scripts/options.cjs",
+                    ],
+                ]
+            )
+            commands = node_commands + [
                 ["/bin/bash", "-o", "pipefail", "./mirror/options.sh"],
                 ["/bin/bash", "+o", "pipefail", "./mirror/options.sh"],
             ]
@@ -284,7 +299,7 @@ E
 E                           + ['old', 'old', 'old', 'old', ['mirror/ordinary-data.txt']]
 E                           ?   ^^^    ^^^    ^^^    ^^^
 
-tests/test_mirror_generations.py:568: AssertionError
+tests/test_mirror_generations.py:573: AssertionError
 _ MirrorGenerationTests.test_command_options_preserve_script_pinning (command=['/bin/bash', '-o', 'pipefail', './mirror/options.sh']) _
 
 self = <test_mirror_generations.MirrorGenerationTests testMethod=test_command_options_preserve_script_pinning>
@@ -304,18 +319,23 @@ self = <test_mirror_generations.MirrorGenerationTests testMethod=test_command_op
     mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
     """
             node = shutil.which("node")
-            self.assertIsNotNone(node, "Node is required for the executable option witness")
-            commands = [
-                [node, "--require", "./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
-                [node, "--require=./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
-                [
-                    node,
-                    "--conditions",
-                    "custom",
-                    "-r",
-                    "./mirror/scripts/preload.cjs",
-                    "./mirror/scripts/options.cjs",
-                ],
+            node_commands = (
+                []
+                if node is None
+                else [
+                    [node, "--require", "./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                    [node, "--require=./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                    [
+                        node,
+                        "--conditions",
+                        "custom",
+                        "-r",
+                        "./mirror/scripts/preload.cjs",
+                        "./mirror/scripts/options.cjs",
+                    ],
+                ]
+            )
+            commands = node_commands + [
                 ["/bin/bash", "-o", "pipefail", "./mirror/options.sh"],
                 ["/bin/bash", "+o", "pipefail", "./mirror/options.sh"],
             ]
@@ -381,7 +401,7 @@ E
 E                           + ['old', 'old', 'old', 'mirror/ordinary-data.txt']
 E                           ?               +++++++
 
-tests/test_mirror_generations.py:570: AssertionError
+tests/test_mirror_generations.py:575: AssertionError
 _ MirrorGenerationTests.test_command_options_preserve_script_pinning (command=['/bin/bash', '+o', 'pipefail', './mirror/options.sh']) _
 
 self = <test_mirror_generations.MirrorGenerationTests testMethod=test_command_options_preserve_script_pinning>
@@ -401,18 +421,23 @@ self = <test_mirror_generations.MirrorGenerationTests testMethod=test_command_op
     mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
     """
             node = shutil.which("node")
-            self.assertIsNotNone(node, "Node is required for the executable option witness")
-            commands = [
-                [node, "--require", "./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
-                [node, "--require=./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
-                [
-                    node,
-                    "--conditions",
-                    "custom",
-                    "-r",
-                    "./mirror/scripts/preload.cjs",
-                    "./mirror/scripts/options.cjs",
-                ],
+            node_commands = (
+                []
+                if node is None
+                else [
+                    [node, "--require", "./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                    [node, "--require=./mirror/scripts/preload.cjs", "./mirror/scripts/options.cjs"],
+                    [
+                        node,
+                        "--conditions",
+                        "custom",
+                        "-r",
+                        "./mirror/scripts/preload.cjs",
+                        "./mirror/scripts/options.cjs",
+                    ],
+                ]
+            )
+            commands = node_commands + [
                 ["/bin/bash", "-o", "pipefail", "./mirror/options.sh"],
                 ["/bin/bash", "+o", "pipefail", "./mirror/options.sh"],
             ]
@@ -478,11 +503,11 @@ E
 E                           + ['old', 'old', 'old', 'mirror/ordinary-data.txt']
 E                           ?               +++++++
 
-tests/test_mirror_generations.py:570: AssertionError
+tests/test_mirror_generations.py:575: AssertionError
 =========================== short test summary info ============================
 SUBFAILED(command=['/opt/homebrew/bin/node', '--require', './mirror/scripts/preload.cjs', './mirror/scripts/options.cjs']) tests/test_mirror_generations.py::MirrorGenerationTests::test_command_options_preserve_script_pinning
 SUBFAILED(command=['/opt/homebrew/bin/node', '--require=./mirror/scripts/preload.cjs', './mirror/scripts/options.cjs']) tests/test_mirror_generations.py::MirrorGenerationTests::test_command_options_preserve_script_pinning
 SUBFAILED(command=['/opt/homebrew/bin/node', '--conditions', 'custom', '-r', './mirror/scripts/preload.cjs', './mirror/scripts/options.cjs']) tests/test_mirror_generations.py::MirrorGenerationTests::test_command_options_preserve_script_pinning
 SUBFAILED(command=['/bin/bash', '-o', 'pipefail', './mirror/options.sh']) tests/test_mirror_generations.py::MirrorGenerationTests::test_command_options_preserve_script_pinning
 SUBFAILED(command=['/bin/bash', '+o', 'pipefail', './mirror/options.sh']) tests/test_mirror_generations.py::MirrorGenerationTests::test_command_options_preserve_script_pinning
-5 failed, 1 passed in 1.26s
+5 failed, 1 passed in 1.22s

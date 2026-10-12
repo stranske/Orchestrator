@@ -1,5 +1,11 @@
 # Captured operand assertions (PR #549)
 
+**Historical runner evidence, superseded for current validation.** The restrictions
+and unexecuted commands below describe the earlier captured-paths runner only.
+The parent README and proof.json record the subsequent successful production
+pytest and Node executions; this historical record is retained without claiming
+these earlier restricted results are the current verdict.
+
 Source base: `f1bac523536748b89ab7a7a91b1c93043afd7f01`.
 
 The three production Node option witnesses now capture the actual argv at the

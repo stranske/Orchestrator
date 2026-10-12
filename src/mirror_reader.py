@@ -142,7 +142,10 @@ def run(root: Path, command: list[str], lock_timeout: float = 30.0) -> int:
                     if index + 1 < len(command):
                         code_indices.add(index + 1)
                     break
-                if not option.startswith("-") and option not in {"+o", "+O"}:
+                if not option.startswith("-") and not (
+                    (option == "+o" and interpreter in {"bash", "sh", "zsh"})
+                    or (option == "+O" and interpreter == "bash")
+                ):
                     code_indices.add(index)
                     break
                 name, separator, value = option.partition("=")
