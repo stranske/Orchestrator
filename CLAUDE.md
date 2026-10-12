@@ -424,7 +424,11 @@ Do not create a second event log, model registry, or capability inventory.
   delegation whose issue closed with no PR of its own and no closing PR: the labelled agent never
   had a PR to run on (owner decision 2026-10-04; a LOCAL run keeps that case's FAIL). A merge the
   durability sweep cannot judge closes as `unjudgeable`: `unjudgeable_merge` when it is not the
-  run's own, `broke_later_unchecked` when no fix-PR read reached it. A row GitHub does not answer
+  run's own, `broke_later_unchecked` when no fix-PR read reached it, `broke_later_unstated` when a
+  later fix PR names it without stating that it repairs it. `broke_later` needs a STATED repair (a
+  sentence naming the merge that says this PR repairs, follows up, reverts or corrects it;
+  `durability_sweep.reference_relation`), never a bare `#N`: 87 of 129 naming pairs behind the 134
+  bare-reference rows on 2026-10-12 were siblings, rebase bases or link lists. A row GitHub does not answer
   about waits at most `durability_sweep.RETRY_HORIZON_DAYS` from its first unanswered run, on one
   clock: then an unanswered lookup or revert check closes as `unjudgeable_merge`, an unread fix
   window as `broke_later_unchecked`. An unread window is never `durable`, because a durable label

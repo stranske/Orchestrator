@@ -2385,13 +2385,21 @@ UNJUDGEABLE_MERGE = "unjudgeable_merge"
 # 2026-10-04 such a merge was recorded `durable`: 436 rows whose read was cut at 200 best matches.
 BROKE_LATER_UNCHECKED = "broke_later_unchecked"
 
+# What the durability sweep writes for a merge a later fix PR NAMES without stating that it repairs
+# it (`durability_sweep.reference_relation`): a sibling, a rebase base, a link in a list, said in a
+# way the rule cannot read. Whether the merge held is unknown, so it closes as
+# DURABILITY_UNJUDGEABLE and trains nothing. Until 2026-10-12 any such mention was `broke_later`:
+# 87 of 129 naming pairs behind the 134 live rows were not repairs.
+BROKE_LATER_UNSTATED = "broke_later_unstated"
+
 # Failure classes whose outcome says nothing about the agent that ran, so NO learner may score them:
 # the environment killed the run (`transient_infra`, from `mark_transient_infra`), the target
 # closed through a PR the run cannot be shown to have produced, a delegation's PR settled without
 # the delegated agent's work on it, a closed PR's replacement cannot be told apart
 # (`UNATTRIBUTED_REPLACEMENT`), a keepalive PR's work is carried by another PR whose own run holds
 # its verdict (`CARRIED_BY_OTHER_PR`), the merge a row recorded cannot be identified as the run's
-# own (`UNJUDGEABLE_MERGE`), or no fix-PR read reached it (`BROKE_LATER_UNCHECKED`). ONE set:
+# own (`UNJUDGEABLE_MERGE`), no fix-PR read reached it (`BROKE_LATER_UNCHECKED`), or a fix PR
+# named it without stating a repair (`BROKE_LATER_UNSTATED`). ONE set:
 # relearn's SQL reads it, relearn_quality and
 # exploration_review read it through `_has_outcome_evidence`, and the capability tally reads it
 # inside NONATTRIBUTABLE_FAILURE_CLASSES. The route learners named `transient_infra`
@@ -2407,6 +2415,7 @@ LEARNING_EXCLUDED_FAILURE_CLASSES = frozenset(
         CARRIED_BY_OTHER_PR,
         UNJUDGEABLE_MERGE,
         BROKE_LATER_UNCHECKED,
+        BROKE_LATER_UNSTATED,
     }
 )
 
@@ -2475,6 +2484,27 @@ def outcome_is_durable_success(
     )
 
 
+def run_subject_id(routing_metadata, target, run_id) -> str:
+    """The work SUBJECT behind a run: what repeats when the same work is attempted again.
+
+    Run ids are per attempt, so counting them makes N retries of one stuck issue N observations.
+    The subject is an explicit `causal_context.subject_id` (top level or under `profile_decision`),
+    else a `subject_id` in the routing metadata, else `runs.target`, else the run id. Both readers
+    of capability edges key subjects with this. Until 2026-10-12 `capability_effectiveness` parsed
+    the run id instead, which never parsed a local run id (`stranske__Repo_20-gemini-<ns>`), so two
+    attempts at one issue counted as two subjects, and keyed `offload:<agent>:<ns>` by the agent."""
+    metadata = _routing_metadata_dict(routing_metadata)
+    # Only the top level is guaranteed a dict; a nested value of another type is absent, never a
+    # crash that takes down every report reading these edges.
+    decision = metadata.get("profile_decision")
+    causal_context = metadata.get("causal_context") or (
+        decision.get("causal_context") if isinstance(decision, dict) else None
+    )
+    if not isinstance(causal_context, dict):
+        causal_context = {}
+    return str(causal_context.get("subject_id") or metadata.get("subject_id") or target or run_id)
+
+
 def role_target_kind(capability_id: str, target_role_name: str | None) -> str:
     """What a capability edge onto a ROLE run is: never evidence about the capability.
 
@@ -2488,6 +2518,30 @@ def role_target_kind(capability_id: str, target_role_name: str | None) -> str:
     if not role:
         return ""
     return "advisory_self" if capability_id == f"role-{role}" else "role_association"
+
+
+def experiment_member_target(routing_metadata: str | dict | None) -> bool:
+    """Whether a run is an abcd experiment MEMBER run, which has no outcome path by design.
+
+    `exp_abcd` tells every member to commit on an isolated branch and never push or open a PR, and
+    judges it in `evaluations_v2`, never in `outcomes`. Delivery credit, when a winner delivers,
+    belongs to the SYNTHESIS run (`synthesis_promotion.default_mirror_outcome`), so an edge onto a
+    member run can never resolve. MEASURED 2026-10-12 on a copy of the live Brain and the live
+    mirror's experiments: 15 member runs, 0 outcomes; of 257 promotions none reached
+    `delegated_or_pr`; no `exp/*` branch ever became a PR in the seven repos experiments ran on.
+    A synthesis run carries the base member's identity too, marked by `synthesis_base_member_id`,
+    and is not a member run."""
+    meta = (
+        routing_metadata
+        if isinstance(routing_metadata, dict)
+        else _routing_metadata_dict(routing_metadata)
+    )
+    return bool(
+        meta.get("experiment_identity_version") == 2
+        and meta.get("experiment_member_id")
+        and "synthesis_base_member_id" not in meta
+        and not meta.get("promotion_resume")
+    )
 
 
 def capability_causal_evidence(
@@ -2531,15 +2585,8 @@ def capability_causal_evidence(
         ).fetchall()
         evidence: list[dict] = []
         for row in rows:
-            metadata = _routing_metadata_dict(row["routing_metadata"])
-            causal_context = metadata.get("causal_context") or (
-                (metadata.get("profile_decision") or {}).get("causal_context") or {}
-            )
-            subject_id = str(
-                causal_context.get("subject_id")
-                or metadata.get("subject_id")
-                or row["target"]
-                or row["target_run_id"]
+            subject_id = run_subject_id(
+                row["routing_metadata"], row["target"], row["target_run_id"]
             )
             attempts = [
                 item[0]
@@ -2574,9 +2621,12 @@ def capability_causal_evidence(
             # failure(s) over the max of 0" — trained toward zero from non-failures).
             # An edge whose TARGET is the capability's own role run is an advisory trace
             # (§2: evaluator/verifier traces are non-worker) — the role registry's naming
-            # convention role-<name> is asserted by selftest, not assumed.
+            # convention role-<name> is asserted by selftest, not assumed. Any OTHER capability
+            # on a role run (the `offload` that produced the proposal) is a role association:
+            # the outcome a role run holds is a copy of its acting run's, and the acting run
+            # carries that capability's own edge, so tallying it counts one delivery twice.
             target_role = str(row["target_role_name"] or "")
-            advisory_self = role_target_kind(capability_id, target_role) == "advisory_self"
+            role_kind = role_target_kind(capability_id, target_role)
             adjudicated_fail = str(row["adjudicated_verdict"] or "").upper().startswith("FAIL")
             named_class = str(row["failure_class"] or "")
             attributable_failure = bool(
@@ -2600,10 +2650,18 @@ def capability_causal_evidence(
                     or (adjudicated_fail and named_class not in NONATTRIBUTABLE_FAILURE_CLASSES)
                 )
             )
-            if advisory_self:
-                tally_class = "advisory_self"
+            if role_kind:
+                tally_class = role_kind
             elif not (consumed and terminal_outcome):
                 tally_class = ""
+            elif named_class in LEARNING_EXCLUDED_FAILURE_CLASSES:
+                # §2: no learner scores these classes, in either direction. The adjudicated-FAIL
+                # branch below already refused them; a VERIFIER fail or a regression durability
+                # did not, so 11 `transient_infra` runs of agy-runtime-isolation trained its
+                # routing prior as failures (beta 20, posterior 0.2 where 0.357 was due;
+                # measured 2026-10-12). Checked before success too: an excluded class says the
+                # outcome is not the run's own, whatever it was.
+                tally_class = "learning_excluded"
             elif durable_success:
                 tally_class = "success"
             elif attributable_failure:

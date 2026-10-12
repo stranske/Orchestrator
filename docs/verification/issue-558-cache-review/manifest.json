@@ -1,0 +1,23 @@
+{
+  "base_head": "424c643285cc7b6745d0fcce4f82f757c5fe20ae",
+  "proof_files": {
+    "560-red.log": "96f0568aefdc3b765320889953f473e5729d88fbe4fe58b4eab189409fc97990",
+    "560-red.xml": "cc75ef413d8781d31b05de236f2cfec7eb1b738dc187daedc74b633ce5ef475b",
+    "560-final-green.log": "540f2d5443b29cb890a93cf31234bf3b3bcae78426d9ce62956c4901dd4187bb",
+    "560-final-green.xml": "4a73228fb9d5b171a81b8cba2e20b36835996165f3b299a3e05794dce41e5ffa",
+    "560-focused.log": "4b33fa8aaf367de692c69641fd8a789a410819db36651557fa497f228cf642e7",
+    "560-focused.xml": "d87be7ea2acca62d8e17bb4b7e6fe8af197f7b7eecf7ef9ce42cb5b879376387",
+    "560-local-verify.json": "d9f3d3a13283a83582ad3ee189b59970a491a1574e5f7ca6db415be7dc39063e",
+    "560-local-verify-final.json": "ebd0061e80234729e53bc9c600f8fa6a08771a852c21b53f5409ed89f6deb6f4",
+    "560-selftest.log": "1e657f1eb01a2f957cb6b12799bbbe4bedf9afe814a393d1bb4b9d76047fccb7",
+    "560-merge-selftest.log": "eab9aec501826590f4765a01ad84a22f0ee013f00654e02bddd9d24f96840db0",
+    "560-collection.log": "4b2eba2723f5c22d1e81020101e417157f2dbfa29d84a66d04876bda3f5ba766",
+    "560-mypy.log": "2706f576ee6fdc863a550f84664c1a2a8559e529d588653e11583e36fd46ba5a"
+  },
+  "final_sources": {
+    "src/adversarial.py": "6f2c506aa437bea34017178f2dd9e2ecb132a81ff6004e22ae21bb4768fe9dac",
+    "src/merge_guard.py": "cb7a2f832637010d86a2cb6873cb39d79c1f999dbef87a05c2e536ca75d56713",
+    "tests/test_adversarial_cached_author.py": "6babbf978759ae6933fc2b6eae9f2044d92a41afe728053170da97d11b9100b1"
+  },
+  "archive_sha256": "87dc07ad64846543298c43a6bf4d67c277d29714dd519ba2acc2c6c87ea192b1"
+}

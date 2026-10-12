@@ -1,0 +1,154 @@
+{
+  "base_commit": "c115e72a251227b86e3db0f6d30d6cb227c88055",
+  "original_commit": "5247ea1f9e9f72191cbd232325b813219ff12a9a",
+  "temporarily_restored_functions": [
+    "_shortfall",
+    "review_at_head"
+  ],
+  "test_sha256": "4d508abfbbebbf8575f87bb14b41fcb7ab5f366fc6eb1a148a503880be4fbe72",
+  "corrected_source_sha256": "50ec986c2c483a2927a6a598e2de8d436ea57eddd225da08dd70ac9cc915629c",
+  "prior_red": {
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.14.8/x64/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_adversarial_review_at_head.py",
+      "-q",
+      "-m",
+      "not slow",
+      "-k",
+      "explicit_author_exclusion",
+      "--junitxml=docs/verification/issue-558-author-exclusion/prior-red.xml"
+    ],
+    "exit_code": 1,
+    "cases": 9,
+    "assertion_failures": 9,
+    "errors": 0,
+    "executed_source_sha256": "47159538fc58cf91b3b5362a49fcb463e11131e41e143477e96e37db5fa18878"
+  },
+  "original_red": {
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.14.8/x64/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_adversarial_review_at_head.py",
+      "-q",
+      "-m",
+      "not slow",
+      "-k",
+      "explicit_author_exclusion",
+      "--junitxml=docs/verification/issue-558-author-exclusion/original-red.xml"
+    ],
+    "exit_code": 1,
+    "cases": 9,
+    "assertion_failures": 9,
+    "errors": 0,
+    "executed_source_sha256": "e946c0deeef5137f5bb8768db4fc19dbdb520aeb487a08ed496941938e10737b"
+  },
+  "restored_green": {
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.14.8/x64/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_adversarial_review_at_head.py",
+      "-q",
+      "-m",
+      "not slow",
+      "-k",
+      "explicit_author_exclusion",
+      "--junitxml=docs/verification/issue-558-author-exclusion/restored-green.xml"
+    ],
+    "exit_code": 0,
+    "cases": 9,
+    "assertion_failures": 0,
+    "errors": 0,
+    "executed_source_sha256": "50ec986c2c483a2927a6a598e2de8d436ea57eddd225da08dd70ac9cc915629c"
+  },
+  "byte_identical_restore": true,
+  "focused": {
+    "argv": [
+      "python3",
+      "-m",
+      "pytest",
+      "tests/test_adversarial_review_at_head.py",
+      "tests/test_adversarial_high_stakes_shape.py",
+      "tests/test_merge_guard_panel.py",
+      "tests/test_issue558_review_boundaries.py",
+      "-q",
+      "-m",
+      "not slow",
+      "--junitxml=docs/verification/issue-558-author-exclusion/focused.xml"
+    ],
+    "passed": 88,
+    "exit_code": 0
+  },
+  "collection": {
+    "argv": [
+      "python3",
+      "-m",
+      "pytest",
+      "--collect-only",
+      "-q",
+      "-m",
+      "not slow"
+    ],
+    "collected": 3144,
+    "exit_code": 0
+  },
+  "formatting": {
+    "argv": [
+      "black",
+      "--check",
+      "--line-length",
+      "100",
+      "--exclude",
+      "(\\.workflows-lib|node_modules)",
+      "."
+    ],
+    "files_unchanged": 394,
+    "exit_code": 0
+  },
+  "environment": {
+    "PYTHONPATH": "/tmp/issue558-tools:src",
+    "pytest": "9.0.2",
+    "black": "26.3.1",
+    "formatting_runtime": "BLACK_NUM_WORKERS=1; periodic event-loop timer wakes dropped sandbox thread notifications; formatter source unchanged",
+    "reviewers": "fake provider responses only; no paid calls",
+    "state": "pytest temporary state and Brain fixtures"
+  },
+  "artifacts": {
+    "acceptance-suite.log": "07cd7afa537084897e6244e44aea95f6974964996e1d0e434808fb8b7926a233",
+    "acceptance-suite.xml": "67896423b836f8464e810dc20765b16364f1c82314ccdd6ba9397c7d2fbfa203",
+    "adversarial-selftest.log": "1e657f1eb01a2f957cb6b12799bbbe4bedf9afe814a393d1bb4b9d76047fccb7",
+    "black-check.log": "8c1a372523d2053e829e96933f79c83845fe2d42bc0fd65c5d47294e3b0a16e1",
+    "collection.log.gz": "a6193c4d635ee956dc3c9798c197af395a92916c43f90b915d13d5a67059f572",
+    "corrected-green.log": "46e6735375cf3970a97340ad7ab25301eed864ea37f2665e07ccac542e7936ec",
+    "corrected-green.xml": "4c31845c04bdc6455b554bd67576554d1b93157ede91e8d5a08cd348916d0082",
+    "focused.log": "1b0e4f76bbb04e1328be33b101f63ee0f5c0a4b04feeef9da1ee548973e80066",
+    "focused.xml": "dff4a5e9cbadb36ae54b84ef16078c815cc82b3d3e968915f67622c19dc5abcb",
+    "merge-guard-selftest.log": "eab9aec501826590f4765a01ad84a22f0ee013f00654e02bddd9d24f96840db0",
+    "original-red.log": "0f9f355c8000ff5fb1a1cb109df423492ab02e73ba7fa2311356a92b6d9f45eb",
+    "original-red.xml": "7a59b0c937ae6788d67f8735058ee441824793f7c760128149a2bbe39f11999e",
+    "prior-red.log": "c06285d2a9d146f03b53934eca5170b4fec173a2d09844d61f49419fa5b99d74",
+    "prior-red.xml": "312609ac547e52769bb8f6a392d9990bd4fdc22d3c6d6cceec4f4e7e5e46ccdd",
+    "restored-green.log": "0f740dee925e3605adca087dc7ccd7341cd7403ad3ca7af4eab862723cbd1515",
+    "restored-green.xml": "9bf732cfa200dfaf107f617f1574cebc60f9f16e31b9e457ce9de7dccfaa8971"
+  },
+  "acceptance_suite": {
+    "argv": [
+      "python3",
+      "-m",
+      "pytest",
+      "tests/test_adversarial_review_at_head.py",
+      "tests/test_adversarial_high_stakes_shape.py",
+      "tests/test_merge_guard_panel.py",
+      "-q",
+      "-m",
+      "not slow",
+      "--junitxml=docs/verification/issue-558-author-exclusion/acceptance-suite.xml"
+    ],
+    "passed": 74,
+    "exit_code": 0
+  },
+  "archive_sha256": "c6cd0d3f476a6ed2fce2ed266b71e348a22a58d0d199d65ab1ec1466ca0d40d8"
+}

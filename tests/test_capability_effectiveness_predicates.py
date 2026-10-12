@@ -20,8 +20,9 @@ wrote their own predicates and disagreed:
 THE RULE THIS PINS. Terminal and durable success are `feedback.outcome_is_terminal` and
 `feedback.outcome_is_durable_success`, which `capability_causal_evidence` also calls. An edge onto a
 role run is an association (`feedback.role_target_kind`), counted and never scored. A merge the
-sweep has not judged is `awaiting_sweep`; a pending run no sweep selects is `unresolvable`. An arm
-none of whose edges can ever be scored reads `unscoreable`, never `not_yet_measurable`.
+sweep has not judged is `awaiting_sweep`; a run that never merges is `no_merge`, scored by its
+verdict. An arm none of whose edges can ever be scored reads `unscoreable`, never
+`not_yet_measurable`.
 
 Every row is written by the production writers: `record_role_run` and `record_run`'s role
 inheritance for role advice, `record_capability_consumption` for a consumed capability (as
@@ -37,6 +38,8 @@ import capabilities
 import capability_effectiveness as effectiveness
 import durability_sweep
 import feedback
+import local_verify
+import value_chain_monitor as monitor
 
 T0 = 1_791_756_000  # 2026-10-11T23:20:00Z
 VERSIONS = {
@@ -86,7 +89,14 @@ def _advised(n: int, role: str = "triage") -> tuple[str, str]:
 def _consumed(run: str, cap_id: str = "deliberate-break-verifier", **outcome) -> str:
     """What `capability_lifecycle` records when a capability's output is accepted into a run."""
     n = run.split("#")[-1].split(":")[0] if "#" in run else run
-    feedback.record_run(run, f"o/r#{n}", "implement", "codex", mode="remote")
+    feedback.record_run(
+        run,
+        f"o/r#{n}",
+        "implement",
+        "codex",
+        mode="offload" if run.startswith("offload:") else "remote",
+        pr_number=None if run.startswith("offload:") else int(n),
+    )
     feedback.record_capability_consumption(
         capability_id=cap_id,
         capability_version_id=VERSIONS[cap_id],
@@ -117,7 +127,195 @@ def _outcome_of(run: str) -> tuple | None:
 MERGED_DURABLE = {"adjudicated_verdict": "PASS", "merged": 1, "durability": "durable"}
 
 
+@pytest.mark.parametrize("merged", [None, False])
+@pytest.mark.parametrize("verdict", ["FAIL_BROKEN", "PASS", "NON_PASS"])
+def test_pending_pr_outcome_keeps_its_delivery_semantics(brain, merged, verdict):
+    # The six-subject production-writer reproduction from #556. A local verifier writes no
+    # merge update, so NULL/pending is normal even when the run already has a PR.
+    for n in range(1, 6):
+        _consumed(f"remote:o/r#{n}:codex", **MERGED_DURABLE)
+    run = "ordinary-pr-attempt"
+    feedback.record_run(run, "o/r#6", "implement", "codex", mode="local", pr_number=6)
+    _consumed_run(run)
+    if merged is False:
+        feedback.record_outcome(run, merged=False)
+    # Exercise the verifier that originally exposed this bug: it writes a verdict without
+    # supplying a merge update, preserving NULL on insert and False on an existing outcome.
+    local_verify.record_verdict(run, {"verdict": verdict, "reason": "delivery eligibility probe"})
+    with feedback._conn() as c:
+        assert c.execute(
+            "SELECT merged, durability FROM outcomes WHERE run_id=?", (run,)
+        ).fetchone() == (merged, "pending")
+    arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+    if verdict == "PASS":
+        assert (arm["terminal"], arm["durable_rate"]) == (5, 1.0), arm
+        with feedback._conn() as c:
+            edge = next(e for e in effectiveness._edge_rows(c) if e["run_id"] == run)
+        assert effectiveness._classify(edge) == "open", edge
+    else:
+        assert (arm["terminal_subjects"], arm["durable_subjects"], arm["durable_rate"]) == (
+            6,
+            5,
+            0.833,
+        ), arm
+    assert arm["no_merge"] == 0, arm
+    assert arm["verdict"]["judged"] == 0, arm
+
+
+@pytest.mark.parametrize("mode", [None, "local", "offload"])
+@pytest.mark.parametrize("merged", [None, False])
+def test_pending_pr_lifecycle_stays_consistent_across_readers(brain, mode, merged):
+    """A recorded PR can deliver even when its mode is unknown or says offload."""
+    for n in range(1, 6):
+        _consumed(f"remote:o/r#{n}:codex", **MERGED_DURABLE)
+    run = "pending-pr-lifecycle"
+    feedback.record_run(run, "o/r#6", "implement", "codex", mode=mode, pr_number=6)
+    _consumed_run(run, verifier_verdict="PASS", merged=merged)
+
+    def assert_stage(expected, terminal, durable, waiting):
+        with feedback._conn() as c:
+            edge = next(e for e in effectiveness._edge_rows(c) if e["run_id"] == run)
+        assert edge["delivery_eligibility"] == "merge_path", edge
+        assert effectiveness._classify(edge) == expected, edge
+        arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+        assert (arm["terminal_subjects"], arm["durable_subjects"]) == (terminal, durable), arm
+        assert arm["durable_rate"] == round(durable / terminal, 3), arm
+        assert (arm["no_merge"], arm["verdict"]["judged"]) == (0, 0), arm
+        assert arm["awaiting_sweep"] == waiting, arm
+
+        inputs = monitor._brain(feedback.DB_PATH, T0 - 1, T0 + 1)
+        assert inputs["errors"] == [], inputs
+        edges = [e for e in inputs["edges"] if e["capability_id"] == "deliberate-break-verifier"]
+        counts = monitor.outcome_counts("deliberate-break-verifier", edges)
+        assert (counts["acted_on"], counts["outcome"], counts["outcome_success"]) == (
+            6,
+            terminal,
+            durable,
+        ), counts
+        assert counts["outcome_no_merge"] == 0, counts
+        assert counts["outcome_awaiting_sweep"] == waiting, counts
+        assert counts["outcome_open"] == (1 if expected == "open" else 0), counts
+        assert (run in {r["run_id"] for r in durability_sweep._pending_merged_runs()}) == bool(
+            waiting
+        )
+
+    assert_stage("open", 5, 5, 0)
+    feedback.record_outcome(run, merged=True)
+    assert_stage("awaiting_sweep", 5, 5, 1)
+    feedback.record_outcome(run, durability="durable")
+    assert_stage("terminal", 6, 6, 0)
+    # A later verifier rejection still vetoes success after the merge has held.
+    feedback.record_outcome(run, verifier_verdict="NON_PASS")
+    assert_stage("terminal", 6, 5, 0)
+
+
 # ---- edges onto role runs ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "mode,pr_number,merged,eligibility",
+    [
+        (None, None, None, "unknown"),
+        ("research", None, False, "unknown"),
+        ("local", None, None, "merge_path"),
+        ("remote", None, False, "merge_path"),
+        ("offload", None, None, "no_delivery"),
+        ("offload", 9, None, "merge_path"),
+        ("offload", None, True, "merge_path"),
+    ],
+)
+@pytest.mark.parametrize("verdict", ["PASS", "FAIL_BROKEN"])
+def test_delivery_eligibility_requires_recorded_provenance(
+    brain, mode, pr_number, merged, eligibility, verdict
+):
+    # Even an offload-shaped id proves nothing without its recorded mode. A PR/merge takes
+    # precedence over no-delivery provenance, including conflicting historical rows.
+    run = "offload:looks-like-research"
+    feedback.record_run(run, "research:subject", "review", "gemini", mode=mode, pr_number=pr_number)
+    _consumed_run(run, verifier_verdict=verdict, merged=merged)
+    with feedback._conn() as c:
+        edge = effectiveness._edge_rows(c)[0]
+    assert edge["delivery_eligibility"] == eligibility
+    expected = (
+        "no_merge"
+        if eligibility == "no_delivery"
+        else "terminal" if verdict.startswith("FAIL") else "awaiting_sweep" if merged else "open"
+    )
+    assert effectiveness._classify(edge) == expected, edge
+
+    # The monitor's SQL projection and classifier adapter must preserve the same provenance,
+    # including unknown modes and delivery evidence that overrides an offload's mode.
+    inputs = monitor._brain(feedback.DB_PATH, T0 - 1, T0 + 1)
+    assert inputs["errors"] == [], inputs
+    monitor_edge = inputs["edges"][0]
+    assert (monitor_edge["target_mode"], monitor_edge["target_pr_number"]) == (mode, pr_number)
+    counts = monitor.outcome_counts("deliberate-break-verifier", inputs["edges"])
+    assert counts["acted_on"] == 1, counts
+    for outcome_class, field in monitor.CLASS_FIELDS.items():
+        assert counts[field] == (outcome_class == expected), (expected, counts)
+    assert counts["outcome_success"] == 0, counts
+
+
+@pytest.mark.parametrize("merged", [None, False])
+@pytest.mark.parametrize("verdict", ["PASS", "FAIL_BROKEN", "NON_PASS"])
+def test_delivery_evidence_is_reread_after_run_update(brain, merged, verdict):
+    # Provenance may arrive after the verifier. Neither reader may cache its earlier inference
+    # or require the outcome/consumption edge to be rewritten when a PR becomes known.
+    run = "offload:late-delivery-evidence"
+    feedback.record_run(run, "o/r#6", "implement", "codex")
+    _consumed_run(run)
+    if merged is False:
+        feedback.record_outcome(run, merged=False)
+    local_verify.record_verdict(run, {"verdict": verdict, "reason": "late delivery evidence"})
+    with feedback._conn() as c:
+        original_outcome = c.execute("SELECT * FROM outcomes WHERE run_id=?", (run,)).fetchone()
+
+    def assert_stage(eligibility, expected):
+        with feedback._conn() as c:
+            edge = effectiveness._edge_rows(c)[0]
+            assert (
+                c.execute("SELECT * FROM outcomes WHERE run_id=?", (run,)).fetchone()
+                == original_outcome
+            )
+        assert edge["delivery_eligibility"] == eligibility, edge
+        assert effectiveness._classify(edge) == expected, edge
+        arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+        assert arm["no_merge"] == (expected == "no_merge"), arm
+        assert arm["terminal"] == (expected == "terminal"), arm
+        assert arm["verdict"]["judged"] == (expected == "no_merge"), arm
+        assert arm["verdict"]["passed"] == (expected == "no_merge" and verdict == "PASS"), arm
+
+        inputs = monitor._brain(feedback.DB_PATH, T0 - 1, T0 + 1)
+        assert inputs["errors"] == [], inputs
+        counts = monitor.outcome_counts("deliberate-break-verifier", inputs["edges"])
+        assert counts["acted_on"] == 1, counts
+        assert counts["outcome"] == (expected == "terminal"), counts
+        assert counts["outcome_open"] == (expected == "open"), counts
+        assert counts["outcome_no_merge"] == (expected == "no_merge"), counts
+
+    delivery_class = "open" if verdict == "PASS" else "terminal"
+    assert_stage("unknown", delivery_class)
+    feedback.record_run(run, "o/r#6", "implement", "codex", mode="offload")
+    assert_stage("no_delivery", "no_merge")
+    feedback.record_run(run, "o/r#6", "implement", "codex", mode="offload", pr_number=6)
+    assert_stage("merge_path", delivery_class)
+
+
+def test_proven_offload_without_an_outcome_remains_open(brain):
+    run = "offload:not-yet-verified"
+    feedback.record_run(run, "research:pending-subject", "review", "gemini", mode="offload")
+    _consumed_run(run)
+    with feedback._conn() as c:
+        edge = effectiveness._edge_rows(c)[0]
+        assert c.execute("SELECT * FROM outcomes WHERE run_id=?", (run,)).fetchone() is None
+    assert edge["delivery_eligibility"] == "no_delivery", edge
+    assert effectiveness._classify(edge) == "open", edge
+    arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+    assert (arm["terminal"], arm["no_merge"], arm["verdict"]["judged"]) == (0, 0, 0), arm
+    inputs = monitor._brain(feedback.DB_PATH, T0 - 1, T0 + 1)
+    assert inputs["errors"] == [], inputs
+    counts = monitor.outcome_counts("deliberate-break-verifier", inputs["edges"])
+    assert (counts["outcome"], counts["outcome_no_merge"], counts["outcome_open"]) == (0, 0, 1)
 
 
 def test_a_role_runs_copied_outcome_is_an_association_not_a_second_delivery(brain):
@@ -181,7 +379,7 @@ def test_a_merge_the_sweep_has_not_judged_waits_and_then_scores(brain):
     assert run in {r["run_id"] for r in durability_sweep._pending_merged_runs()}
     rep = _report(brain)
     arm = _row(rep, "deliberate-break-verifier")["accepted"]
-    assert (arm["terminal"], arm["awaiting_sweep"], arm["unresolvable"]) == (0, 1, 0), arm
+    assert (arm["terminal"], arm["awaiting_sweep"], arm["no_merge"]) == (0, 1, 0), arm
     assert arm["status"] == "not_yet_measurable", arm
     assert "deliberate-break-verifier" in rep["awaiting_outcomes"]
     feedback.record_outcome(run, durability="durable")  # the sweep's verdict
@@ -189,8 +387,9 @@ def test_a_merge_the_sweep_has_not_judged_waits_and_then_scores(brain):
     assert (arm["terminal"], arm["durable"], arm["awaiting_sweep"]) == (1, 1, 0), arm
 
 
-def test_an_unmerged_pending_run_is_unresolvable_never_awaiting(brain):
-    # An offload run: a verdict, no PR, durability left at its default. No sweep selects it.
+def test_a_run_that_never_merges_is_scored_by_verdict_never_awaiting(brain):
+    # An offload run: a verdict, no PR, durability left at its default. No sweep selects it, so it
+    # has no durability to wait for; its verdict is what it has (owner decision 2026-10-12).
     run = _consumed(
         "offload:gemini:9",
         verifier_verdict="PASS",
@@ -200,12 +399,16 @@ def test_an_unmerged_pending_run_is_unresolvable_never_awaiting(brain):
     assert run not in {r["run_id"] for r in durability_sweep._pending_merged_runs()}
     rep = _report(brain)
     arm = _row(rep, "deliberate-break-verifier")["accepted"]
-    assert (arm["terminal"], arm["awaiting_sweep"], arm["unresolvable"]) == (0, 0, 1), arm
-    assert arm["status"] == ("unscoreable (1 edges, none can be scored: 1 never resolvable)"), arm[
-        "status"
-    ]
+    assert (arm["terminal"], arm["awaiting_sweep"], arm["no_merge"]) == (0, 0, 1), arm
+    assert arm["status"] == (
+        "no_merge_only (1 attempts on 1 subjects never merge: see the verdict rate)"
+    ), arm["status"]
+    assert (arm["verdict"]["judged"], arm["verdict"]["passed"]) == (1, 1), arm["verdict"]
     assert "deliberate-break-verifier" not in rep["awaiting_outcomes"]
-    assert "1 unres" in effectiveness.format_report(rep)
+    assert "deliberate-break-verifier" in rep["no_merge_only"]
+    assert "deliberate-break-verifier" not in rep["unscoreable"]
+    text = effectiveness.format_report(rep)
+    assert "1 nomerge" in text and "1/1 subj (1 att)" in text, text
 
 
 def test_pending_merges_no_longer_lower_the_rate(brain):
@@ -224,14 +427,81 @@ def test_a_small_sample_names_what_is_still_waiting_and_what_never_will(brain):
     status = _row(_report(brain), "deliberate-break-verifier")["accepted"]["status"]
     assert status == (
         "insufficient_evidence (1/5 distinct subjects from 1 attempts; "
-        "1 awaiting the durability sweep; 1 never resolvable)"
+        "1 awaiting the durability sweep; 1 never merge, scored by verdict)"
     ), status
 
 
-def test_a_failure_verdict_is_final_whatever_the_durability(brain):
+def test_a_failure_that_never_merges_scores_by_verdict_not_durability(brain):
+    # Before 2026-10-12 this FAIL was a non-durable terminal result while a PASS in the same
+    # position never scored: only failures could count for a run that never merges.
     _consumed("offload:gemini:4", verifier_verdict="FAIL", adjudicated_verdict="FAIL")
     arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
-    assert (arm["terminal"], arm["durable"], arm["unresolvable"]) == (1, 0, 0), arm
+    assert (arm["terminal"], arm["durable"], arm["no_merge"]) == (0, 0, 1), arm
+    assert (arm["verdict"]["judged"], arm["verdict"]["passed"]) == (1, 0), arm["verdict"]
+
+
+def test_a_failure_closed_unmerged_stays_in_the_durable_rate(brain):
+    # Judged: the PR was closed, so its durability is `abandoned`, not unjudged.
+    _consumed("remote:o/r#4:codex", adjudicated_verdict="FAIL", merged=0, durability="abandoned")
+    arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+    assert (arm["terminal"], arm["no_merge"]) == (1, 0), arm
+
+
+def test_the_verdict_rate_counts_subjects_and_refuses_small_samples(brain):
+    # Delivery failures remain in the durable population even beside proven offloads.
+    for n in range(1, 6):
+        _consumed(f"remote:o/r#{n}:codex", **MERGED_DURABLE)
+    run = "ordinary-failing-pr"
+    feedback.record_run(run, "o/r#6", "implement", "codex", mode="local", pr_number=6)
+    _consumed_run(run)
+    local_verify.record_verdict(run, {"verdict": "FAIL_BROKEN", "reason": "delivery failed"})
+
+    # Seven attempts on four offload subjects still cannot satisfy the five-subject minimum.
+    for n in range(1, 8):
+        run = f"offload:gemini:{n}"
+        feedback.record_run(run, f"offload:task-{min(n, 4)}", "review", "gemini", mode="offload")
+        _consumed_run(run, verifier_verdict="PASS", adjudicated_verdict="PASS")
+
+    def assert_populations(judged, subjects, rate, status):
+        arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+        assert (arm["terminal_subjects"], arm["durable_subjects"], arm["durable_rate"]) == (
+            6,
+            5,
+            0.833,
+        ), arm
+        assert arm["no_merge"] == judged, arm
+        stats = arm["verdict"]
+        assert (stats["judged"], stats["judged_subjects"], stats["pass_subjects"]) == (
+            judged,
+            subjects,
+            4,
+        ), stats
+        assert (stats["rate"], stats["status"]) == (rate, status), stats
+        inputs = monitor._brain(feedback.DB_PATH, T0 - 1, T0 + 1)
+        assert inputs["errors"] == [], inputs
+        counts = monitor.outcome_counts("deliberate-break-verifier", inputs["edges"])
+        assert (counts["outcome"], counts["outcome_no_merge"]) == (6, judged), counts
+
+    assert_populations(7, 4, None, "insufficient_evidence (4/5 distinct subjects from 7 attempts)")
+    # A fifth subject enables measurement; its failed retry must not inflate the denominator.
+    for n in (8, 9):
+        run = f"offload:gemini:{n}"
+        feedback.record_run(run, "offload:task-5", "review", "gemini", mode="offload")
+        _consumed_run(run, verifier_verdict="FAIL", adjudicated_verdict="FAIL")
+    assert_populations(9, 5, 0.8, "measured")
+
+
+def test_a_verifier_failure_under_an_adjudicated_pass_is_a_failing_verdict(brain):
+    # Each authoritative failure code vetoes the adjudicated PASS, including lowercase storage.
+    for n, failure in enumerate(sorted(feedback.VERIFIER_FAILURES)):
+        run = f"offload:verifier-veto:{n}"
+        feedback.record_run(run, f"research:task-{n}", "review", "gemini", mode="offload")
+        _consumed_run(run, verifier_verdict=failure.lower(), adjudicated_verdict="PASS")
+        arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+        stats = arm["verdict"]
+        assert (arm["terminal"], arm["no_merge"], arm["durable_rate"]) == (0, n + 1, None)
+        assert (stats["judged"], stats["judged_subjects"], stats["passed"]) == (n + 1, n + 1, 0)
+        assert stats["rate"] == (0.0 if n + 1 >= effectiveness.MIN_SAMPLE else None), failure
 
 
 # ---- the verifier's NON_PASS --------------------------------------------------------------------
@@ -280,9 +550,13 @@ def test_this_reader_and_capability_causal_evidence_agree(brain):
     )
     assert len(lifecycle) == len(shapes) + 1
     arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+    # These are ordinary delivery runs, including NULL/pending verifier outcomes. The readers
+    # agree: only positively identified offloads belong in the separate no-delivery population.
     assert arm["terminal"] == sum(r["terminal_outcome"] for r in lifecycle) == 6, arm
     assert arm["durable"] == sum(r["tally_class"] == "success" for r in lifecycle) == 1, arm
-    assert (arm["awaiting_sweep"], arm["unresolvable"]) == (2, 1), arm
+    assert (arm["awaiting_sweep"], arm["no_merge"]) == (2, 0), arm
+    with feedback._conn() as c:
+        assert sum(effectiveness._classify(e) == "open" for e in effectiveness._edge_rows(c)) == 2
 
 
 def test_role_target_kind_is_the_lifecycles_advisory_self(brain):
@@ -292,3 +566,72 @@ def test_role_target_kind_is_the_lifecycles_advisory_self(brain):
         assert (kind == "advisory_self") == (row["tally_class"] == "advisory_self"), row
     assert feedback.role_target_kind("offload", "triage") == "role_association"
     assert feedback.role_target_kind("offload", None) == ""
+
+
+# ---- the subject ---------------------------------------------------------------------------------
+
+
+def _local_attempt(n: int, issue: int, **outcome) -> str:
+    """A local run: its id is not `<kind>:<target>:<agent>`, so parsing it finds no issue."""
+    run = f"stranske__Repo_{issue}-gemini-{n}"
+    feedback.record_run(run, f"stranske/Repo#{issue}", "implement", "gemini", mode="local")
+    return _consumed_run(run, **outcome)
+
+
+def _consumed_run(run: str, cap_id: str = "deliberate-break-verifier", **outcome) -> str:
+    feedback.record_capability_consumption(
+        capability_id=cap_id,
+        capability_version_id=VERSIONS[cap_id],
+        source_run_id=f"capability-producer:{cap_id}:{run}",
+        target_run_id=run,
+        accepted=True,
+    )
+    if outcome:
+        feedback.record_outcome(run, **outcome)
+    return run
+
+
+def test_two_local_attempts_at_one_issue_are_one_subject(brain):
+    # The live case: agy-runtime-isolation's 0.8 rested on two attempts at Deliverable-Render#20
+    # counting as two of its five subjects.
+    _local_attempt(1, 20, **MERGED_DURABLE)
+    _local_attempt(2, 20, **MERGED_DURABLE)
+    arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+    assert (arm["terminal"], arm["terminal_subjects"], arm["durable_subjects"]) == (2, 1, 1), arm
+    assert arm["attempts_per_subject"] == 2.0, arm
+
+
+def test_this_reader_and_the_lifecycle_count_the_same_subjects(brain):
+    for n, issue in ((1, 20), (2, 20), (3, 21)):
+        _local_attempt(n, issue, **MERGED_DURABLE)
+    _consumed("remote:o/r#7:codex", **MERGED_DURABLE)
+    lifecycle = feedback.capability_causal_evidence(
+        "deliberate-break-verifier", VERSIONS["deliberate-break-verifier"]
+    )
+    durable = {r["subject_id"] for r in lifecycle if r["tally_class"] == "success"}
+    arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+    assert durable == {"stranske/Repo#20", "stranske/Repo#21", "o/r#7"}, durable
+    assert arm["durable_subjects"] == len(durable) == 3, arm
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"causal_context": "not-a-dict"},
+        {"profile_decision": "not-a-dict"},
+        {"profile_decision": {"causal_context": ["not", "a", "dict"]}},
+    ],
+)
+def test_malformed_nested_metadata_is_absent_never_a_crash(brain, metadata):
+    run = "remote:o/r#8:codex"
+    feedback.record_run(
+        run, "o/r#8", "implement", "codex", mode="remote", routing_metadata=metadata
+    )
+    _consumed_run(run, **MERGED_DURABLE)
+    assert feedback.run_subject_id(metadata, "o/r#8", run) == "o/r#8"
+    arm = _row(_report(brain), "deliberate-break-verifier")["accepted"]
+    assert (arm["terminal_subjects"], arm["durable_subjects"]) == (1, 1), arm
+    rows = feedback.capability_causal_evidence(
+        "deliberate-break-verifier", VERSIONS["deliberate-break-verifier"]
+    )
+    assert [r["subject_id"] for r in rows] == ["o/r#8"], rows

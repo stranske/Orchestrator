@@ -200,6 +200,32 @@ live in a hash-checked artifact beside it. The closer lane, which merges fleet P
 same entry through the advisor's `HOW_TO_USE` (`adversarial.py review --target … --head …`).
 The panel moved from the Delegate stage to the Monitor + verify gate, so the diagram draws it there.
 
+**The panel is on by default for eligible high-stakes merges, after the merge, with one reviewer
+and a consumer (2026-10-12).** `ORCH_RUN_ADVERSARIAL_REVIEW=0` prevents new panel runs.
+Scheduling requires determinable high-stakes status, an exact head, passing merge gates, and a
+successful merge. A retrospective concept test replayed the panel on the 33 high-stakes agent PRs merged
+2026-07-07..10-05, each at its final head in a checkout holding only that head's ancestors. Both PRs
+that later broke were BLOCKED with the defect named; BLOCKED PRs were later broken or repaired 6 of 16
+times against 1 of 14 PASS. Three mechanism defects came with it. Vibe vetoed 30 of 33, so the
+two-seat panel was gemini's verdict paid twice. Reviewers ran write-capable in the tree they judged:
+one edited the code the next reviewer vetoed, another left HEAD on an older commit. And nothing read
+a BLOCKED verdict. The owner decided: on by default, advisory, one reviewer, and a consumer. So
+`merge_guard` defers the panel past the merge and starts it detached
+(`adversarial.spawn_post_merge_panel`): the merged head is the head it judges, and a ~13-minute
+panel inside the merge call would stall the lane. The seat goes to ONE reviewer the router chooses on
+the `review` route (`adversarial.choose_reviewer` over `router.select_agent`: ability, then capacity
+and load, with exploration re-testing the others), never the change's author agent, vibe only when
+nothing else is selectable. A reviewer that returns nothing or changes the tree is replaced, up to
+three. The tree is checked after the panel as well as before, and a changed tree is restored with its
+verdict discarded. A BLOCKED verdict files one follow-up issue in the target repo
+(`adversarial.file_followup`), idempotent per panel key, and closes the PR's still-open source issue so
+it is not left hanging. The checkout is the actual squash merge commit; the original PR head remains
+its memo and follow-up key. Explicit reviewer sets also exclude authors and retain INCONCLUSIVE
+when coverage is lost. Unavailable confinement dispatches no reviewer; the existing write boundary
+protects sibling checkouts, live home state and Git metadata. Dirty or untracked review trees are
+refused, restoration is verified before retry, and failed source closure is retried independently
+of the already-filed follow-up. Selection stays a rail; only the reviewer's judgment is a role.
+
 The adapter also decides each codex run's writable boundary. A run whose job is to commit (a
 dispatch from `plan_dispatch`, or an experiment arm) gets `--add-dir` for exactly its linked
 worktree's git dir, plus the canonical clone's `objects/`, `refs/` and `logs/`
@@ -412,7 +438,9 @@ in its own field and printed beside it with a legend:
 - `assoc`: an edge onto a role run, whose outcome is a copy of the acting run's (set aside at
   `acted_on` since 2026-10-12, below);
 - `sweep`: a merge the durability sweep has not judged;
-- `unres`: an unmerged run nothing will judge;
+- `nomerge` (`unres` until 2026-10-12): a run that never merges. Since the owner's decision that
+  day, it is set aside here and scored by verdict in `capability_effectiveness`, so the FAIL
+  among them no longer counts at this step (agy-runtime-isolation's 8);
 - `open`: no outcome yet.
 
 `no_outcome` now means something can still resolve, which is only `open` or `sweep`. When every
@@ -457,6 +485,24 @@ component or surface moved, so the loop diagram is unchanged.
 
 No first break changes on today's data: every row these touch breaks earlier or has unmeasured
 demand. No stage, component or surface moved, so the loop diagram is unchanged.
+
+**An experiment member run has no outcome path (2026-10-12, owner decision "trace and wire
+winner").** `exp_abcd` records each member run with the `abcd-experiment` capability and never
+writes its `outcomes` row, by design: a member commits on an isolated branch, never pushes, and is
+judged in `evaluations_v2`. A winner reaches delivery only through `synthesis_promotion`, whose
+outcome lands on the SYNTHESIS run. The trace, on a copy of the live Brain and the live mirror's
+`experiments/`: 257 promotions; 254 expired in `evaluated` before any synthesis (about 24
+experiments a day against a ship gate that launches one a day); 2 synthesized no commit; 1
+(strategy434) reached `candidate_ready`; 0 were linked to a delivery, because `link-delivery` is a
+CLI with no production caller. Over REST, no `exp/*` branch was ever a PR in the seven repos the
+experiments ran on. So abcd-experiment's 12 edges read as "awaiting outcomes" for a wait nothing
+could end. `feedback.experiment_member_target` names a member run (identity v2 with a member id,
+and not a synthesis run). `capability_effectiveness` counts such an edge as `no_outcome_path`,
+never scored, even when another writer put an outcome on it: that is not the arm's delivery. The
+value-chain monitor sets it aside at `acted_on`, as it does an association. On the same copy,
+abcd-experiment moves from `not_yet_measurable` to `unscoreable`, and its `acted_on` from 12 to 0.
+Every other row is identical. No stage, component or surface moved, so the loop diagram is
+unchanged.
 
 `issue_size_quality` extends that weekly caller with a read-only join: every closed issue in
 the 90-day reviewed-fleet population contributes its checkbox-count band, and only PRs merged
@@ -533,7 +579,7 @@ a merge that read did not reach is never `durable`: it waits under the `fix_sear
 `unjudgeable` with that class seven days after the first run that missed it. Until then the read was the 200
 best matches of a repo's whole history, so in the two repos with more fix PRs than that a merge's own weeks were
 read by chance, and 436 rows were judged durable on an unread window; each run now prints how many merges the
-read covered and how many it did not (again no stage moved; the diagram is unchanged). The rows already recorded `durable` on the cut-short read are read again by the same sweep, by the owner's decision: each one up to its own verdict's moment, so a fix named by then makes it `broke_later` and otherwise only the note changes. Each run prints `truncated N` until none remain; `durability_sweep.py --undo-truncated-recheck` restores the snapshot it took first, and `ORCH_DURABILITY_TRUNCATED_RECHECK=0` stops it. Since 2026-10-05 the `retry` drain has the same bound on the same per-row clock: a merge lookup or a revert check GitHub never answers (a renamed or deleted repository, lost access) is asked again by every run for `durability_sweep.RETRY_HORIZON_DAYS` from the first run that went unanswered, then closes as `unjudgeable` with `unjudgeable_merge`, the class an answered revert check that cannot decide already gets. Until then such a row stayed pending forever, scoring as a provisional PASS and counted drainable (latent: no row was in it). A clock lives only while its row stays unanswered, and each run prints the next retry close beside drainable (again no stage moved; the diagram is unchanged). This keeps role learning separate from normal
+read covered and how many it did not (again no stage moved; the diagram is unchanged). The rows already recorded `durable` on the cut-short read are read again by the same sweep, by the owner's decision: each one up to its own verdict's moment, so a fix named by then makes it `broke_later` and otherwise only the note changes. Each run prints `truncated N` until none remain; `durability_sweep.py --undo-truncated-recheck` restores the snapshot it took first, and `ORCH_DURABILITY_TRUNCATED_RECHECK=0` stops it. Since 2026-10-05 the `retry` drain has the same bound on the same per-row clock: a merge lookup or a revert check GitHub never answers (a renamed or deleted repository, lost access) is asked again by every run for `durability_sweep.RETRY_HORIZON_DAYS` from the first run that went unanswered, then closes as `unjudgeable` with `unjudgeable_merge`, the class an answered revert check that cannot decide already gets. Until then such a row stayed pending forever, scoring as a provisional PASS and counted drainable (latent: no row was in it). A clock lives only while its row stays unanswered, and each run prints the next retry close beside drainable (again no stage moved; the diagram is unchanged). Since 2026-10-12 a later fix PR makes a merge `broke_later` only where a sentence naming it STATES a repair (repairs, follows up, reverts, corrects; `durability_sweep.reference_relation`); one that names it without saying how closes it as `unjudgeable` / `broke_later_unstated`, never durable. Until then any `#N` in a fix-titled PR counted, and 87 of the 129 naming pairs behind the 134 live `broke_later` rows were siblings, rebase bases, coverage-round targets or "Related Issues/PRs" links. Those rows are judged again by the same sweep over their own verdict's window, print `bare-reference N` until none remain, share the truncated re-check's undo log, and stop on `ORCH_DURABILITY_STATED_RECHECK=0` (no stage moved; the diagram is unchanged). This keeps role learning separate from normal
 implement/review weights while still using the same `relearn_quality()` machinery. Since 2026-09-21
 that machinery reads the fleet's keepalive outcomes (`assignment` `assigned`/`none`) as well as the
 tool's own `experimental` rows, under the 2026-08-29 broke-later detection floor the receiver rail
@@ -673,11 +719,59 @@ nothing records which run acted on a redirect proposal (accepted role edges exis
 | role-triage | 24 excluded, `not_yet_measurable` | 12 excluded on 11 subjects, 281 associations, `excluded_only` |
 | role-redirect, -prompt, -decomposer | `not_yet_measurable` | `unscoreable` (762, 8, 4 associations) |
 
-Two differences remain, both measured and not decided here:
-- The lifecycle classes only `advisory_self`. It still counts 15 `offload` edges on role runs among
-  its terminal outcomes, tallied `churn_unattributed`.
-- The two readers take the subject from different places. No stage, component or surface moved, so
-the loop diagram is unchanged.
+**The lifecycle's tally scores no excluded outcome and no role run (2026-10-12).**
+`capability_causal_evidence` refused a class in `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES` only on
+its adjudicated-FAIL branch. A verifier FAIL never read the class, so agy-runtime-isolation's 11
+`transient_infra` runs trained its routing prior as failures (β 20, posterior 0.2, where 0.357 was
+due). Such a row now tallies `learning_excluded`, ahead of success and failure, and is counted in
+readiness. An excluded regression no longer sets `rollback_pending`.
+
+The tally also classes `role_association` (any capability on a role run that is not the role's own)
+beside `advisory_self`. Durable subjects are read from the `success` tally rather than the raw flag.
+Readiness reads rework, evidence age and a gate's `min_linked_outcomes` from the SCORED rows only
+(`success` or `failure`, counted in `scored_outcomes`), and only a `failure` regression sets
+`rollback_pending`. On a Brain copy this moved offload's 30 `churn_unattributed` rows to 15
+learning-excluded and 15 role associations, and role-triage's 12 to learning-excluded. One readiness
+criterion changed: role-triage's `evidence_age`, True to False, because all of its terminal rows are
+excluded or role-run copies and it has no scored evidence. Its gate had met `min_linked_outcomes` 5
+with 130 such rows in the live ledger. Neither was ready before or after, since neither has a durable
+subject.
+
+**Both readers key a subject the same way (2026-10-12).** `feedback.run_subject_id` is the
+lifecycle's rule, extracted unchanged: an explicit `causal_context.subject_id`, else a `subject_id`
+in the routing metadata, else `runs.target`, else the run id. All 3,798 lifecycle rows on a fresh
+Brain copy were byte-identical before and after the extraction.
+
+`capability_effectiveness` used to parse the run id instead. That never handled a local run id
+(`stranske__Deliverable-Render_20-gemini-<ns>`), so each attempt at one issue was its own subject.
+It also keyed an `offload:<agent>:<ns>` run by its agent. On that copy the change moves one row:
+agy-runtime-isolation's stated rate of 0.8 becomes `insufficient_evidence` (4 of 5 subjects). Its
+five subjects had been three issues, one of them attempted twice, plus its pooled offload runs.
+
+Every research-program offload run has the same `runs.target`, the automation's working directory.
+So both readers now pool those runs into one subject. Neither the run id nor `runs.target` names the
+task an offload run did; only its notes do, and notes are prose.
+
+**A run that never merges is scored by its verdict, in a rate of its own (owner decision
+2026-10-12).** An offload run opens no PR, so no sweep ever judges its durability. Until this
+change its FAIL was a terminal non-durable result and its PASS could never score, so for such runs
+only failures counted. On a Brain copy that was agy-runtime-isolation's 8 scored FAILs beside 38
+PASSes that never counted. `capability_effectiveness` now classes a run that is not merged, whose
+durability is unjudged and which has an outcome, as `no_merge`, whatever its verdict. Such a run
+never enters the durable rate, which stays a rate of merges. A separate verdict rate scores it:
+distinct subjects with a passing verdict over distinct subjects with any verdict, under the same
+`MIN_SAMPLE`. A verifier failure under an adjudicated PASS is a failing verdict. The report adds a
+"No-merge verdict" column and a `no_merge_only` list.
+
+On the copy, agy-runtime-isolation's 46 no-merge attempts (38 passing) are all one subject (the
+pooling above), so its verdict rate is refused as `insufficient_evidence (1/5 ...)`. None of 2,112
+offload runs since 2026-09-01 records which task it was for, so the rate yields a figure only once
+the offload writer records a subject.
+
+The lifecycle (`capability_causal_evidence`) still counts a no-merge FAIL as a terminal failure.
+This reader differs from it there, on purpose.
+
+No stage, component or surface moved, so the loop diagram is unchanged.
 
 The one place two LLMs touch the same task is an `agent:auto` switch, where the keepalive delegation
 policy replaces a stalled agent. `agent_switches.py` (rail, daily) records each such pair in the Brain

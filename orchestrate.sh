@@ -90,13 +90,14 @@ export ORCH_GH_THROTTLE="${ORCH_GH_THROTTLE:-1}"
 # panel on HIGH-STAKES closer items would run. Since 2026-10-05 the tick does not examine closer items
 # at all (none can be delegated: discovery lists only PRs already carrying agent:*), so nothing the
 # tick runs reads this export. The panel runs at merge_guard.py's terminal merge, once per exact head
-# (adversarial.review_at_head), and merge_guard reads the flag from the MERGING session's environment,
-# where it is unset unless that session sets it. Whether it should run by default at every
-# high-stakes merge is held until its retrospective test reports (improvement log item 0, 10-05).
-# Kept so the owner's setting stays recorded where capability_recurrence_check reads it. Advisory:
-# adjudicate-don't-obey — vetoes are flags to verify, never an automatic block.
+# (adversarial.review_at_head), and merge_guard reads the flag from the MERGING session's environment.
+# Since 2026-10-12 (owner decision after the 33-PR concept test, improvement log item 0) an unset flag
+# there means ON as well; 0 is the kill switch. Kept so the owner's setting stays recorded where capability_recurrence_check reads it.
+# Advisory: adjudicate-don't-obey — vetoes are flags to verify, never an automatic block.
 export ORCH_RUN_ADVERSARIAL_REVIEW="${ORCH_RUN_ADVERSARIAL_REVIEW:-1}"
-export ORCH_ADVERSARIAL_REVIEWERS="${ORCH_ADVERSARIAL_REVIEWERS:-vibe,gemini}"
+# No reviewer default: unset means one router-chosen reviewer (adversarial.choose_reviewer). The old
+# vibe,gemini default paid two seats for gemini's verdict (vibe vetoed 30 of 33 in the test).
+export ORCH_ADVERSARIAL_REVIEWERS="${ORCH_ADVERSARIAL_REVIEWERS:-}"
 # Frontend/runtime-AC checks run from sandboxed automation where direct Chromium launch may be blocked.
 # Expect an authorized Chrome/Chromium process to be kept alive on this local CDP endpoint; operators can
 # override the port/profile by exporting ORCH_FRONTEND_VERIFY_BROWSER_ENDPOINT before invoking the tick.

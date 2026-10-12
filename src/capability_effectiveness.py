@@ -35,10 +35,13 @@ WHAT COUNTS AS TERMINAL AND AS A DURABLE SUCCESS IS `feedback`'s, NOT THIS MODUL
 `feedback.outcome_is_terminal` and `feedback.outcome_is_durable_success` are the predicates
 `capability_causal_evidence` tallies the lifecycle from, so the two readers of these edges cannot
 disagree about what an outcome says. A merge the durability sweep has not judged yet is counted in
-`awaiting_sweep`, and an unmerged run whose durability nothing will ever judge in `unresolvable`.
+`awaiting_sweep`. A run that never merges has a verdict and no durability: it is counted in
+`no_merge` and scored by a separate verdict rate (`verdict`), never by the durable rate.
 An edge onto a ROLE run is an association (`feedback.role_target_kind`), counted in
 `associations` and never scored: the outcome a role run holds is a copy of its acting run's, and
-the acting run carries the capability's own edge.
+the acting run carries the capability's own edge. An edge onto an abcd experiment MEMBER run
+(`feedback.experiment_member_target`) is `no_outcome_path`, counted and never scored: members never
+push, are judged in `evaluations_v2`, and a winner's delivery is credited to the synthesis run.
 
 REFUSES TO MISLEAD. A rate computed from one or two observations is noise wearing a percentage sign,
 and this subsystem has already produced several confident numbers that were artifacts. So every rate
@@ -46,7 +49,8 @@ carries its denominator, anything under MIN_SAMPLE reports `insufficient_evidenc
 figure, and a capability with no terminal outcomes is reported as "not yet measurable" — never as 0%.
 One whose only resolved outcomes are learning-excluded is `excluded_only`, a different state: waiting
 will not change it, attribution has to. One whose edges can none of them ever be scored
-(associations, unresolvable outcomes, excluded ones) is `unscoreable`, and never reads as awaiting.
+(associations, member runs, excluded ones) is `unscoreable`, and never reads as awaiting. One
+whose resolved runs all never merge is `no_merge_only`: its verdict rate is the number to read.
 
     python3 capability_effectiveness.py            # human-readable
     python3 capability_effectiveness.py --json
@@ -115,7 +119,8 @@ def _edge_rows(conn=None) -> list[dict]:
         # `_target_of` pooled every `role:triage:*` run into one subject `triage`.
         rows = c.execute("""SELECT ie.capability_id, ie.accepted, ie.counterfactual,
                       o.adjudicated_verdict, o.verifier_verdict, o.durability, o.failure_class,
-                      ie.target_run_id, ie.created_ts, o.merged, r.role_name
+                      ie.target_run_id, ie.created_ts, o.merged, r.role_name,
+                      r.target, r.routing_metadata, r.mode, r.pr_number
                FROM influence_edges ie
                LEFT JOIN outcomes o ON o.run_id = ie.target_run_id
                LEFT JOIN runs r ON r.run_id = ie.target_run_id
@@ -137,9 +142,30 @@ def _edge_rows(conn=None) -> list[dict]:
             "ts": r[8],
             "merged": r[9],
             "role_kind": feedback.role_target_kind(str(r[0]), r[10]),
+            "subject": feedback.run_subject_id(r[12], r[11], r[7]),
+            "experiment_member": feedback.experiment_member_target(r[12]),
+            "delivery_eligibility": _delivery_eligibility(r[13], r[14], r[9]),
         }
         for r in rows
     ]
+
+
+def _delivery_eligibility(
+    mode: str | None, pr_number: int | None, merged: bool | int | None
+) -> str:
+    """Positive delivery evidence wins over run type; missing evidence stays unknown.
+
+    `dispatcher.offload` records mode=offload and returns work to its caller without a claim or
+    PR. This includes research offloads. A run id prefix, missing PR, or NULL/False merge state
+    alone proves nothing. A recorded PR or merge overrides offload provenance.
+    """
+    if pr_number or merged:
+        return "merge_path"
+    if mode == "offload":
+        return "no_delivery"
+    if mode in ("local", "remote"):
+        return "merge_path"
+    return "unknown"
 
 
 def _outcome_fields(e: dict) -> dict:
@@ -154,7 +180,8 @@ def _outcome_fields(e: dict) -> dict:
 
 
 def _classify(e: dict) -> str:
-    """Exactly one of: association, excluded, terminal, awaiting_sweep, unresolvable, open.
+    """Exactly one of: association, no_outcome_path, excluded, no_merge, terminal, awaiting_sweep,
+    open.
 
     THE ORDER IS THE RULE. An association is never evidence whatever its target holds, and an
     excluded class is never scored whatever its verdict, so both come before `terminal`.
@@ -166,29 +193,103 @@ def _classify(e: dict) -> str:
     unmerged one is selected by nothing: on a copy of the live Brain those were 38 PASS outcomes of
     agy-runtime-isolation, all `offload:*` research-program runs that never open a PR. Counted as
     terminal they were 38 non-durable results that could never become anything else; counted as
-    open they would read as awaiting forever. They are `unresolvable`: counted, never scored."""
+    open they would read as awaiting forever.
+
+    A RUN THAT NEVER MERGES HAS A VERDICT, NOT A DURABILITY (owner decision 2026-10-12: "separate
+    verdict rate"). Until then its PASS could never score and its FAIL always did: of
+    agy-runtime-isolation's research-program offloads, 38 PASS were never counted and 8 FAIL were
+    scored as non-durable results. Such a run must have positive no-delivery provenance, in
+    addition to being unmerged with unjudged durability and an outcome present. NULL/False merge
+    state alone does not establish eligibility: a PR-bearing FAIL remains terminal and its PASS
+    remains open. A proven no-delivery run never enters the durable rate, which stays a rate of
+    merges, and `_verdict_stats` scores it by its verdict instead. A run closed unmerged is judged
+    (`abandoned`), so it stays in the durable rate.
+
+    NO OUTCOME PATH (2026-10-12). An abcd experiment member run never pushes, so nothing writes its
+    `outcomes` row and it can only ever read as awaiting: abcd-experiment's 12 edges did, for six
+    weeks. It comes before `terminal` for the reason an association does: a row another writer put
+    on a member run is not the member's delivery, and crediting a non-winning arm is the error."""
     if e.get("role_kind"):
         return "association"
+    if e.get("experiment_member"):
+        return "no_outcome_path"
     if e.get("failure_class") in feedback.LEARNING_EXCLUDED_FAILURE_CLASSES:
         return "excluded"
     outcome = _outcome_fields(e)
+    unjudged = str(outcome["durability"] or "").lower() in ("", "pending")
+    if (
+        e.get("delivery_eligibility") == "no_delivery"
+        and not outcome["merged"]
+        and unjudged
+        and any(v is not None for v in outcome.values())
+    ):
+        return "no_merge"
     if feedback.outcome_is_terminal(**outcome):
         return "terminal"
     if outcome["merged"]:
         return "awaiting_sweep"
-    if any(v is not None for v in outcome.values()):
-        return "unresolvable"
     return "open"
 
 
-def _target_of(run_id: str) -> str:
-    """The work SUBJECT behind a run id, e.g. `remote:stranske/Workflows#2819:cursor` -> the issue.
+def _verdict_stats(rows: list[dict]) -> dict:
+    """The verdict rate of runs that never merge: distinct subjects with a passing verdict over
+    distinct subjects with any verdict, refused under MIN_SAMPLE like the durable rate.
 
-    Run ids are per-attempt; the subject is what repeats. Used to stop N retries of one stuck issue
-    counting as N independent observations.
+    A PASS is the adjudicated (else the verifier's) PASS with no verifier failure, the same reading
+    `feedback.outcome_is_durable_success` makes of a verdict. A subject passes if ANY attempt on it
+    passed, as a subject is durable if any attempt held."""
+    judged = [
+        e
+        for e in rows
+        if (e.get("adjudicated_verdict") or e.get("verdict")) or e.get("verifier_verdict")
+    ]
+    passed = [
+        e
+        for e in judged
+        if str(_outcome_fields(e)["adjudicated_verdict"] or e.get("verifier_verdict") or "")
+        .upper()
+        .startswith("PASS")
+        and str(e.get("verifier_verdict") or "").upper() not in feedback.VERIFIER_FAILURES
+    ]
+    judged_subjects = {_subject(e) for e in judged}
+    pass_subjects = {_subject(e) for e in passed}
+    out: dict[str, Any] = {
+        "judged": len(judged),
+        "passed": len(passed),
+        "judged_subjects": len(judged_subjects),
+        "pass_subjects": len(pass_subjects),
+    }
+    if not judged:
+        out["rate"], out["status"] = None, "not_applicable"
+    elif len(judged_subjects) < MIN_SAMPLE:
+        out["rate"] = None
+        out["status"] = (
+            f"insufficient_evidence ({len(judged_subjects)}/{MIN_SAMPLE} distinct subjects from "
+            f"{len(judged)} attempts)"
+        )
+    else:
+        out["rate"] = round(len(pass_subjects) / len(judged_subjects), 3)
+        out["status"] = "measured"
+    return out
+
+
+def _target_of(run_id: str) -> str:
+    """A subject parsed from a run id, e.g. `remote:stranske/Workflows#2819:cursor` -> the issue.
+
+    Only for a hand-built row with no `subject`. Every row `_edge_rows` returns carries the
+    lifecycle's subject (`feedback.run_subject_id`): parsing the id never handled a local run id
+    (`stranske__Repo_20-gemini-<ns>`), so each attempt at one issue was its own subject. MEASURED
+    2026-10-12 on a copy of the live Brain: that held up agy-runtime-isolation's 0.8, whose four
+    durable subjects were three issues, one attempted twice.
     """
     parts = str(run_id or "").split(":")
     return parts[1] if len(parts) > 2 else str(run_id or "")
+
+
+def _subject(e: dict) -> str:
+    """Run ids are per attempt; the subject is what repeats, so N retries of one stuck issue
+    count once."""
+    return e.get("subject") or _target_of(e["run_id"])
 
 
 def _arm_stats(edges: list[dict]) -> dict:
@@ -215,26 +316,36 @@ def _arm_stats(edges: list[dict]) -> dict:
     """
     groups: dict[str, list[dict]] = {
         k: []
-        for k in ("association", "excluded", "terminal", "awaiting_sweep", "unresolvable", "open")
+        for k in (
+            "association",
+            "no_outcome_path",
+            "excluded",
+            "no_merge",
+            "terminal",
+            "awaiting_sweep",
+            "open",
+        )
     }
     for e in edges:
         groups[_classify(e)].append(e)
     excluded, terminal = groups["excluded"], groups["terminal"]
-    associations = groups["association"]
-    awaiting_sweep, unresolvable = groups["awaiting_sweep"], groups["unresolvable"]
+    associations, no_outcome_path = groups["association"], groups["no_outcome_path"]
+    awaiting_sweep, no_merge = groups["awaiting_sweep"], groups["no_merge"]
     durable = [e for e in terminal if feedback.outcome_is_durable_success(**_outcome_fields(e))]
     # Distinct subjects — a target counts as durable if ANY attempt on it landed durably.
-    durable_subjects = {_target_of(e["run_id"]) for e in durable}
-    terminal_subjects = {_target_of(e["run_id"]) for e in terminal}
-    excluded_subjects = {_target_of(e["run_id"]) for e in excluded}
+    durable_subjects = {_subject(e) for e in durable}
+    terminal_subjects = {_subject(e) for e in terminal}
+    excluded_subjects = {_subject(e) for e in excluded}
     out: dict[str, Any] = {
         "attributed": len(edges),
         "terminal": len(terminal),
         "excluded": len(excluded),
         "associations": len(associations),
         "advisory_self": sum(1 for e in associations if e["role_kind"] == "advisory_self"),
+        "no_outcome_path": len(no_outcome_path),
         "awaiting_sweep": len(awaiting_sweep),
-        "unresolvable": len(unresolvable),
+        "no_merge": len(no_merge),
+        "verdict": _verdict_stats(no_merge),
         "durable": len(durable),
         "terminal_subjects": len(terminal_subjects),
         "excluded_subjects": len(excluded_subjects),
@@ -243,10 +354,16 @@ def _arm_stats(edges: list[dict]) -> dict:
             round(len(terminal) / len(terminal_subjects), 2) if terminal_subjects else None
         ),
     }
-    evidence = len(edges) - len(associations)
+    evidence = len(edges) - len(associations) - len(no_outcome_path)
     if not terminal and not groups["open"] and not awaiting_sweep and edges:
         out["durable_rate"] = None
-        if excluded and len(excluded) == evidence:
+        if no_merge:
+            # Not unscoreable: these runs are scored, by their verdict (`verdict`), not here.
+            out["status"] = (
+                f"no_merge_only ({len(no_merge)} attempts on {len({_subject(e) for e in no_merge})}"
+                " subjects never merge: see the verdict rate)"
+            )
+        elif excluded and len(excluded) == evidence:
             # NOT `not_yet_measurable`: outcomes DID resolve, and every one is in a class no
             # learner may score. Waiting will not change that, so one sentinel for both would hide
             # which. Associations are not evidence, so they never turn this into `unscoreable`.
@@ -263,7 +380,7 @@ def _arm_stats(edges: list[dict]) -> dict:
                     f"{n} {label}"
                     for n, label in (
                         (len(associations), "associations onto role runs"),
-                        (len(unresolvable), "never resolvable"),
+                        (len(no_outcome_path), "onto experiment member runs, no outcome path"),
                         (len(excluded), "learning-excluded"),
                     )
                     if n
@@ -280,7 +397,7 @@ def _arm_stats(edges: list[dict]) -> dict:
             f"subjects from {len(terminal)} attempts"
             + (f"; {len(excluded)} learning-excluded" if excluded else "")
             + (f"; {len(awaiting_sweep)} awaiting the durability sweep" if awaiting_sweep else "")
-            + (f"; {len(unresolvable)} never resolvable" if unresolvable else "")
+            + (f"; {len(no_merge)} never merge, scored by verdict" if no_merge else "")
             + ")"
         )
     else:
@@ -322,6 +439,9 @@ def measure(*, path=None, conn=None) -> dict:
             entry["lift"] = None
             # No control arm is the COMMON case and must not read as a result.
             entry["verdict"] = "no_control_arm" if a["durable_rate"] is not None else a["status"]
+        # The same comparison over runs that never merge, by verdict, never mixed into `lift`.
+        av, cv = a["verdict"]["rate"], c["verdict"]["rate"]
+        entry["verdict_lift"] = round(av - cv, 3) if av is not None and cv is not None else None
         out.append(entry)
 
     attributed = [e for e in out if e["attributed_edges"]]
@@ -343,6 +463,12 @@ def measure(*, path=None, conn=None) -> dict:
             for e in attributed
             if e["accepted"]["status"].startswith("excluded_only")
         ],
+        # Accepted arms whose resolved runs never merge: read their verdict rate instead.
+        "no_merge_only": [
+            e["capability_id"]
+            for e in attributed
+            if e["accepted"]["status"].startswith("no_merge_only")
+        ],
         # Accepted arms none of whose edges can ever be scored. Not awaiting anything.
         "unscoreable": [
             e["capability_id"]
@@ -360,12 +486,20 @@ def _arm_cell(arm: dict, *, attempts: bool) -> str:
     for key, label in (
         ("excluded", "excl"),
         ("awaiting_sweep", "sweep"),
-        ("unresolvable", "unres"),
+        ("no_merge", "nomerge"),
         ("associations", "assoc"),
+        ("no_outcome_path", "no-path"),
     ):
         if arm[key]:
             cell += f", {arm[key]} {label}"
     return cell
+
+
+def _verdict_cell(stats: dict) -> str:
+    if not stats["judged"]:
+        return "—"
+    cell = f"{stats['pass_subjects']}/{stats['judged_subjects']} subj ({stats['judged']} att)"
+    return cell + (f", rate {stats['rate']}" if stats["rate"] is not None else "")
 
 
 def format_report(rep: dict) -> str:
@@ -384,8 +518,9 @@ def format_report(rep: dict) -> str:
             "",
         ]
     lines += [
-        "| Capability | Inv/wk | Edges | Accepted (dur/term) | Control | Lift | Verdict |",
-        "|---|---:|---:|---|---|---:|---|",
+        "| Capability | Inv/wk | Edges | Accepted (dur/term) | Control | Lift | Verdict "
+        "| No-merge verdict (pass/judged) |",
+        "|---|---:|---:|---|---|---:|---|---|",
     ]
     for row in rep["rows"]:
         if not row["attributed_edges"]:
@@ -395,15 +530,18 @@ def format_report(rep: dict) -> str:
         lift = "—" if row["lift"] is None else f"{row['lift']:+.3f}"
         lines.append(
             f"| {row['capability_id']} | {row['invocations_per_week']} | "
-            f"{row['attributed_edges']} | {arm} | {ctl} | {lift} | {row['verdict']} |"
+            f"{row['attributed_edges']} | {arm} | {ctl} | {lift} | {row['verdict']} | "
+            f"{_verdict_cell(row['accepted']['verdict'])} |"
         )
     lines += [
         "",
         "`excl`: attempts whose outcome is in feedback.LEARNING_EXCLUDED_FAILURE_CLASSES. "
         "They are set aside in both arms and never scored.",
         "`sweep`: merges the durability sweep has not judged yet; they resolve, so they wait.",
-        "`unres`: unmerged runs whose durability nothing will ever judge; never scored.",
+        "`nomerge`: runs that never merge; scored only in the no-merge verdict column.",
         "`assoc`: edges onto role runs, whose outcome is a copy of the acting run's; never scored.",
+        "`no-path`: edges onto experiment member runs, which never push; a winner's delivery is "
+        "credited to its synthesis run. Never scored.",
     ]
     if rep["awaiting_outcomes"]:
         lines += [
@@ -572,6 +710,7 @@ def _selftest() -> None:
     # window, and an offload run nothing will ever judge. A verifier NON_PASS under an adjudicated
     # PASS is terminal and is not a durable success (feedback's predicates).
     _c.execute("INSERT INTO runs (run_id, role_name) VALUES ('role:triage:x:1', 'triage')")
+    _c.execute("INSERT INTO runs (run_id, mode) VALUES ('offload:gemini:2', 'offload')")
     for _eid, _cap, _run, _fields in (
         ("e-self", "role-triage", "role:triage:x:1", ("PASS", None, "durable", 1)),
         ("e-assoc", "offload", "role:triage:x:1", ("PASS", None, "durable", 1)),
@@ -599,7 +738,55 @@ def _selftest() -> None:
     assert (_off["terminal"], _off["associations"], _off["advisory_self"]) == (0, 2, 1), _off
     _c9 = _arm_stats([r for r in _rows if r["capability_id"] == "c9"])
     assert (_c9["terminal"], _c9["durable"]) == (1, 0), _c9
-    assert (_c9["awaiting_sweep"], _c9["unresolvable"]) == (1, 1), _c9
+    assert (_c9["awaiting_sweep"], _c9["no_merge"]) == (1, 1), _c9
+    # The run that never merges is scored by its verdict, never by the durable rate.
+    assert (_c9["verdict"]["judged"], _c9["verdict"]["passed"]) == (1, 1), _c9
+    # AN EXPERIMENT MEMBER RUN HAS NO OUTCOME PATH. It never pushes, so it read as awaiting
+    # forever (abcd-experiment's 12 edges, to 2026-10-12); an outcome another writer put on it is
+    # not the member's delivery. Its synthesis run carries the member identity and is not one.
+    _member_meta = '{"experiment_identity_version": 2, "experiment_arm_id": "a", "experiment_member_id": "a--m"}'
+    _c.execute(
+        "INSERT INTO runs (run_id, routing_metadata) VALUES ('x:member:a--m', ?), ('x:synth:a', ?)",
+        (_member_meta, _member_meta[:-1] + ', "synthesis_base_member_id": "a--m"}'),
+    )
+    for _eid, _run in (("e-mem", "x:member:a--m"), ("e-mem2", "x:member:a--m")):
+        _c.execute(
+            "INSERT INTO influence_edges (edge_id,schema_version,influence_type,influence_id,"
+            "source_run_id,target_event_id,target_run_id,capability_id,accepted,counterfactual,"
+            "created_ts,metadata_hash) "
+            "VALUES (?,1,'capability','abcd-experiment','src','ev-1',?,'abcd-experiment',1,0,0,'h')",
+            (_eid, _run),
+        )
+    _c.execute(
+        "INSERT OR REPLACE INTO outcomes (run_id,adjudicated_verdict,durability,merged) "
+        "VALUES ('x:member:a--m','PASS','durable',1)"
+    )
+    _rows = _edge_rows(_c)
+    _ab = _arm_stats([r for r in _rows if r["capability_id"] == "abcd-experiment"])
+    assert (_ab["no_outcome_path"], _ab["terminal"], _ab["durable"]) == (2, 0, 0), _ab
+    assert _ab["status"].startswith("unscoreable (2 edges"), _ab["status"]
+    _synth_meta = _c.execute("SELECT routing_metadata FROM runs WHERE run_id='x:synth:a'")
+    assert not feedback.experiment_member_target(_synth_meta.fetchone()[0]), "synthesis run"
+
+    # THE SUBJECT IS THE LIFECYCLE'S (`feedback.run_subject_id`), NOT A PARSE OF THE RUN ID. Two
+    # attempts at one issue under local run ids are one subject; parsing the id made them two.
+    for _n in (1, 2):
+        _run = f"stranske__Repo_20-gemini-{_n}"
+        _c.execute("INSERT INTO runs (run_id, target) VALUES (?, 'stranske/Repo#20')", (_run,))
+        _c.execute(
+            "INSERT INTO influence_edges (edge_id,schema_version,influence_type,influence_id,"
+            "source_run_id,target_event_id,target_run_id,capability_id,accepted,counterfactual,"
+            "created_ts,metadata_hash) "
+            "VALUES (?,1,'capability','c8','src','ev-1',?,'c8',1,0,0,'h')",
+            (f"e-local-{_n}", _run),
+        )
+        _c.execute(
+            "INSERT INTO outcomes (run_id,adjudicated_verdict,durability,merged) "
+            "VALUES (?,'PASS','durable',1)",
+            (_run,),
+        )
+    _c8 = _arm_stats([r for r in _edge_rows(_c) if r["capability_id"] == "c8"])
+    assert (_c8["terminal"], _c8["terminal_subjects"], _c8["durable_subjects"]) == (2, 1, 1), _c8
     _c.close()
 
     # CORRELATED ATTEMPTS MUST NOT INFLATE THE SAMPLE. 30 retries of one stuck target is one
@@ -709,6 +896,10 @@ def _selftest() -> None:
                             e["ts"],
                             e.get("merged"),
                             None,  # runs.role_name: a work run
+                            None,  # runs.target
+                            None,  # runs.routing_metadata: not an experiment member
+                            None,  # runs.mode: unknown delivery eligibility
+                            None,  # runs.pr_number
                         )
                         for e in edges
                         if e["accepted"]
@@ -741,7 +932,8 @@ def _selftest() -> None:
         "capability_effectiveness.py selftest: OK (lift on real samples, refuses small samples, "
         "pending != 0%, no-control-arm is not a verdict, outcomes read current, "
         "learning-excluded counted not scored, role-run edges are associations, "
-        "an unjudged merge waits and an unmerged pending run is unresolvable)"
+        "an unjudged merge waits and a run that never merges is scored by verdict, "
+        "subjects are the lifecycle's, an experiment member run has no outcome path)"
     )
 
 

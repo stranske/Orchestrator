@@ -15,7 +15,10 @@ test('loop SVG contains no unresolved conflict markers', () => {
 });
 
 test('loop SVG retains one batch and value-chain description', () => {
-  const descriptions = [...source.matchAll(/<desc>([\s\S]*?)<\/desc>/g)];
+  // Only the diagram's own description counts here: per-element <desc> inside <g> groups
+  // (the adversarial panel's, say) carry accessibility text for that element and stay.
+  const topLevel = source.replace(/<g\b[^>]*>[\s\S]*?<\/g>/g, '');
+  const descriptions = [...topLevel.matchAll(/<desc>([\s\S]*?)<\/desc>/g)];
   assert.equal(descriptions.length, 1);
   const description = descriptions[0][1];
   assert.equal(description.split('RedirectAgent, PromptAgent').length - 1, 1,

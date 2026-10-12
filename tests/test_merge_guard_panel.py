@@ -24,8 +24,8 @@ import feedback
 import merge_guard
 
 HEAD = "a" * 40
-ON = {"ORCH_RUN_ADVERSARIAL_REVIEW": "1", "ORCH_ADVERSARIAL_REVIEWERS": "vibe,gemini"}
-OFF = {"ORCH_ADVERSARIAL_REVIEWERS": "vibe,gemini"}
+ON: dict[str, str] = {}  # on by default since 2026-10-12: one router-chosen reviewer
+OFF = {"ORCH_RUN_ADVERSARIAL_REVIEW": "0"}
 
 
 @pytest.fixture
@@ -65,8 +65,9 @@ class Panel:
         return {"verdict": self.verdict, "blockers": [{"severity": "high", "finding": "x"}]}
 
 
-def _merge(panel, *, labels=("risk:major",), env=ON, head=HEAD, merges=None):
+def _merge(panel=None, *, labels=("risk:major",), env=ON, head=HEAD, merges=None, spawned=None):
     merges = [] if merges is None else merges
+    spawned = [] if spawned is None else spawned
 
     def fake_merge(cmd, capture_output=True, text=True):
         merges.append(cmd)
@@ -74,15 +75,12 @@ def _merge(panel, *, labels=("risk:major",), env=ON, head=HEAD, merges=None):
 
     def panel_fn(target, metadata, *, head, env):
         return merge_guard.adversarial_review_status(
-            target,
-            metadata,
-            head=head,
-            env=env,
-            run_fn=_issue_labels(*labels),
-            worktree="/wt/at-head",
-            head_fn=lambda worktree: head,
-            review_fn=panel,
+            target, metadata, head=head, env=env, run_fn=_issue_labels(*labels)
         )
+
+    def spawn(target, head, context, exclude):
+        spawned.append({"target": target, "head": head, "context": context, "exclude": exclude})
+        return {"status": "scheduled_after_merge", "pid": None}
 
     return merge_guard.guarded_merge(
         "o/r#41",
@@ -95,36 +93,97 @@ def _merge(panel, *, labels=("risk:major",), env=ON, head=HEAD, merges=None):
         merge_fn=fake_merge,
         remote_runs_fn=lambda target, mode=None: [],
         panel_fn=panel_fn,
+        spawn_fn=spawn,
+    )
+
+
+def _judge(panel, *, head=HEAD, labels=("risk:major",)):
+    """What the detached post-merge job does: judge the merged head now and record it."""
+    return merge_guard.adversarial_review_status(
+        "o/r#41",
+        _meta("o/r#41"),
+        head=head,
+        env=ON,
+        run_fn=_issue_labels(*labels),
+        run_now=True,
+        worktree="/wt/at-head",
+        head_fn=lambda worktree: head,
+        choose_fn=lambda exclude: {"agent": "cursor", "reason": "stub"},
+        review_fn=panel,
     )
 
 
 def test_a_source_issue_risk_label_makes_the_merge_high_stakes_and_the_panel_advisory(brain):
-    """The risk label lives on the issue (no fleet PR carries `risk:*`). BLOCKED is reported beside
-    the merge for the merger to verify, and the merge still runs: the owner set the panel advisory.
-    """
-    panel, merges = Panel("BLOCKED"), []
-    out = _merge(panel, merges=merges)
+    """The risk label lives on the issue (no fleet PR carries `risk:*`). The merge is never held:
+    the panel is scheduled AFTER it lands, detached, with the PR's author agent excluded, and its
+    verdict, judged on that head, is BLOCKED for the follow-up to act on (owner, 2026-10-12)."""
+    panel, merges, spawned = Panel("BLOCKED"), [], []
+    out = _merge(merges=merges, spawned=spawned)
     review = out["adversarial_review"]
-    assert (review["status"], review.get("verdict")) == ("executed", "BLOCKED"), review
+    assert review["status"] == "deferred_to_post_merge", review
     assert review["reason"] == "high-stakes label: risk:major", review
     assert out["blocked"] is False and out["merge_executed"] is True and merges, out
-    assert "risk:major" in panel.contexts[0], panel.contexts
+    assert review["post_merge"]["status"] == "scheduled_after_merge", review
+    assert spawned[0]["exclude"] == {"codex"} and "risk:major" in spawned[0]["context"], spawned
+    judged = _judge(panel)
+    assert (judged["status"], judged["verdict"]) == ("executed", "BLOCKED"), judged
+    assert judged["reviewed_by"] == ["cursor"] and "risk:major" in panel.contexts[0], judged
+
+
+def test_a_dry_run_schedules_nothing(brain):
+    spawned: list = []
+    out = merge_guard.guarded_merge(
+        "o/r#41",
+        expected_head=HEAD,
+        env=ON,
+        metadata_fn=_meta,
+        gate_fn=lambda item, **kwargs: None,
+        preflight_fn=_clean,
+        panel_fn=lambda t, m, *, head, env: merge_guard.adversarial_review_status(
+            t, m, head=head, env=env, run_fn=_issue_labels("risk:major")
+        ),
+        spawn_fn=lambda *a: spawned.append(a),
+    )
+    assert out["adversarial_review"]["status"] == "deferred_to_post_merge" and spawned == [], out
+
+
+def test_an_injected_merge_never_spawns_a_real_panel(brain, monkeypatch):
+    import adversarial
+
+    monkeypatch.setattr(
+        adversarial, "spawn_post_merge_panel", lambda *a, **k: pytest.fail("spawned a real panel")
+    )
+    out = merge_guard.guarded_merge(
+        "o/r#41",
+        expected_head=HEAD,
+        confirm_merge=True,
+        env=ON,
+        metadata_fn=_meta,
+        gate_fn=lambda item, **kwargs: None,
+        preflight_fn=_clean,
+        merge_fn=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "merged", ""),
+        remote_runs_fn=lambda target, mode=None: [],
+        panel_fn=lambda t, m, *, head, env: merge_guard.adversarial_review_status(
+            t, m, head=head, env=env, run_fn=_issue_labels("risk:major")
+        ),
+    )
+    assert out["adversarial_review"]["post_merge"]["status"] == "not_scheduled", out
 
 
 def test_a_second_merge_attempt_at_the_same_head_reuses_the_verdict(brain):
     panel = Panel("BLOCKED")
-    _merge(panel)
-    again = _merge(panel)
+    _judge(panel)
+    again = _merge()
     assert again["adversarial_review"]["status"] == "reused", again
     assert len(panel.contexts) == 1, panel.contexts
 
 
 def test_with_the_flag_off_a_recorded_verdict_is_still_reported_and_nothing_runs(brain):
     panel = Panel("PASS")
-    _merge(panel)
-    quiet = _merge(panel, env=OFF)
+    _judge(panel)
+    quiet = _merge(env=OFF)
     assert quiet["adversarial_review"]["status"] == "reused", quiet
-    unjudged = _merge(panel, env=OFF, head="b" * 40)["adversarial_review"]
+    unjudged = _merge(env=OFF, head="b" * 40)["adversarial_review"]
     assert (unjudged["status"], unjudged["memo"]) == ("required_but_not_run", "none"), unjudged
     assert "adversarial.py review --target o/r#41 --head " + "b" * 40 in unjudged["detail"]
     assert len(panel.contexts) == 1, panel.contexts
@@ -242,3 +301,21 @@ def test_the_selftest_writes_nothing_to_the_brain_it_is_pointed_at(tmp_path, mon
         ).fetchone()[0]
     assert rows == 1, f"merge_guard's selftest wrote {rows - 1} rows into the Brain it was given"
     assert feedback.DB_PATH == live
+
+
+def test_cached_premerge_pass_still_schedules_merge_commit_review(brain):
+    _judge(Panel("PASS"))
+    spawned = []
+    out = _merge(spawned=spawned)
+    assert out["merge_executed"] is True
+    assert out["adversarial_review"]["post_merge"]["status"] == "scheduled_after_merge"
+    assert len(spawned) == 1 and spawned[0]["exclude"] == {"codex"}
+
+
+def test_disabled_panel_never_schedules_cached_blocker(brain):
+    _judge(Panel("BLOCKED"))
+    spawned = []
+    out = _merge(env=OFF, spawned=spawned)
+    assert out["merge_executed"] is True
+    assert spawned == []
+    assert "post_merge" not in out["adversarial_review"]
