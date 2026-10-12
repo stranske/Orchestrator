@@ -63,7 +63,7 @@ def _fetch_issue_body(target: str, *, issue_body_fn=None) -> str | None:
 
     try:
         out = subprocess.run(
-            ["gh", "issue", "view", number, "-R", repo, "--json", "title,body,state"],
+            ["gh", "issue", "view", number, "-R", repo, "--json", "title,body,state,labels"],
             capture_output=True,
             text=True,
             timeout=60,
@@ -76,6 +76,15 @@ def _fetch_issue_body(target: str, *, issue_body_fn=None) -> str | None:
     # A subject closed since the feed was read is never launched: the research feed can be up to
     # RESEARCH_FEED_MAX_AGE_S old, and nothing else re-reads the issue before agents start on it.
     if str(data.get("state") or "").upper() != "OPEN":
+        return None
+    # Ownership is re-read at launch too: the feed is up to two hours old, and a pause or an
+    # `agent:*` writer added since then must stop the launch (dispatcher's rule, not a copy).
+    import dispatcher
+
+    labels = {
+        str(lab.get("name") or "") for lab in data.get("labels") or [] if isinstance(lab, dict)
+    }
+    if dispatcher._remote_skip_reason(labels, "research"):
         return None
     title = (data.get("title") or "").strip()
     body = (data.get("body") or "").strip()

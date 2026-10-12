@@ -441,7 +441,16 @@ RESEARCH_EXCLUDED_CLASSES = {"epic", "cross_repo", "mechanical"}
 
 
 def research_skip_reason(labels: list[str]) -> str | None:
-    """Why an open issue is not a research subject, or None when it is one."""
+    """Why an open issue is not a research subject, or None when it is one.
+
+    Ownership is the dispatcher's rule, called rather than copied (`dispatcher._remote_skip_reason`):
+    `agents:paused` and any `agent:*` label mean the issue is paused or already has a writer. A
+    research subject has no dispatch reservation, so without this the feed admitted both (review of
+    #566, 2026-10-12)."""
+    import dispatcher
+
+    if dispatcher._remote_skip_reason({lab.strip() for lab in labels}, "research"):
+        return "owned_or_paused"
     low = {lab.strip().lower() for lab in labels}
     if low & RESEARCH_EXCLUDED_LABELS or any(
         lab.startswith(RESEARCH_EXCLUDED_PREFIXES) for lab in low

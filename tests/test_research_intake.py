@@ -180,3 +180,40 @@ def test_the_cooldown_holds_the_issue_whatever_arms_are_proposed():
     )
     assert later["eligible"], later
     conn.close()
+
+
+@pytest.mark.parametrize(
+    ("labels", "eligible"),
+    (
+        (["priority:high"], True),
+        (["priority:high", "agents:paused"], False),
+        (["priority:high", "agent:codex"], False),
+        (["status: ready", "agent:claude"], False),
+    ),
+)
+def test_a_paused_or_owned_issue_is_never_a_research_subject(labels, eligible):
+    """Review of #566: the feed admitted `agents:paused` and `agent:*` issues. The dispatcher's
+    ownership rule now decides, and these are its own refusal cases plus a positive control."""
+    feed = backlog.build_research_items(["o/a"], lambda repo: [_issue(1, *labels)], lambda repo: [])
+    assert (feed["counts"]["eligible"] == 1) is eligible, feed["counts"]
+    if not eligible:
+        assert feed["counts"]["owned_or_paused"] == 1, feed["counts"]
+
+
+@pytest.mark.parametrize(
+    ("labels", "launchable"),
+    ((["priority:high"], True), (["agents:paused"], False), (["agent:codex"], False)),
+)
+def test_a_pause_or_writer_added_since_the_feed_stops_the_launch(monkeypatch, labels, launchable):
+    def run(argv, **kwargs):
+        assert "labels" in argv[-1], argv
+        payload = {
+            "title": "T",
+            "body": "B",
+            "state": "OPEN",
+            "labels": [{"name": lab} for lab in labels],
+        }
+        return subprocess.CompletedProcess(argv, 0, json.dumps(payload), "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    assert (tick._fetch_issue_body("o/a#1") is not None) is launchable
