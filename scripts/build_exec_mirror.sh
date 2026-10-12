@@ -170,8 +170,9 @@ if [[ -f "$SRC/pyproject.toml" ]]; then
   extra=$((extra + 1))
 fi
 # Root documents that tests read from beside the modules: test_improvement_log.py reads CLAUDE.md and
-# IMPROVEMENT_BACKLOG.md, and the terminal merge-contract test reads AGENTS.md and ORCHESTRATOR.md.
-for root_doc in CLAUDE.md AGENTS.md ORCHESTRATOR.md IMPROVEMENT_BACKLOG.md; do
+# IMPROVEMENT_BACKLOG.md, the terminal merge-contract test reads AGENTS.md and ORCHESTRATOR.md, and
+# test_orchestrator_loop_svg.js reads orchestrator-loop.svg.
+for root_doc in CLAUDE.md AGENTS.md ORCHESTRATOR.md IMPROVEMENT_BACKLOG.md orchestrator-loop.svg; do
   if [[ -f "$SRC/$root_doc" ]]; then
     cp "$SRC/$root_doc" "$MIRROR/$root_doc"
     extra=$((extra + 1))

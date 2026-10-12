@@ -169,6 +169,7 @@ for label, path in (
     ("mirror/AGENTS.md", src / "AGENTS.md"),
     ("mirror/ORCHESTRATOR.md", src / "ORCHESTRATOR.md"),
     ("mirror/IMPROVEMENT_BACKLOG.md", src / "IMPROVEMENT_BACKLOG.md"),
+    ("mirror/orchestrator-loop.svg", src / "orchestrator-loop.svg"),
 ):
     add(label, path.read_bytes() if path.is_file() else b"<absent>")
 config = src / "pyproject.toml"
