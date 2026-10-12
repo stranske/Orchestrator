@@ -131,6 +131,7 @@ def test_no_eligible_pool_names_unmeasured_without_fabricating_free_cost(
 ):
     result, path = _dispatch(monkeypatch, private_brain, tmp_path)
     assert result["rows"][0]["cost_report"]["source"] == "no_eligible_pool"
+    assert result["rows"][0]["cost_report"]["imputed"] is False
     assert result["summary"]["estimated_cost_usd"] is None
     assert "cost UNKNOWN" in retro.weekly_line(path)
     assert "imputed 0, unmeasured 1" in retro.weekly_line(path)
@@ -152,9 +153,7 @@ def test_role_record_distinguishes_zero_usage_from_missing(
     )
     with sqlite3.connect(private_brain) as conn:
         metadata = json.loads(
-            conn.execute(
-                "SELECT decomposition FROM runs WHERE run_id='role-usage'"
-            ).fetchone()[0]
+            conn.execute("SELECT decomposition FROM runs WHERE run_id='role-usage'").fetchone()[0]
         )
     assert metadata["imputed"] is imputed
     assert metadata.get("cost_tokens_in") == tokens_in
@@ -230,6 +229,7 @@ def test_invalid_token_counts_are_rejected_before_recording(private_brain, value
     "agent,event_type,argv",
     [
         ("cursor", "result", ["cursor-agent", "--output-format", "stream-json"]),
+        ("gemini", "result", ["gemini", "--output-format", "stream-json"]),
         ("codex", "turn.completed", ["codex", "exec", "--json"]),
     ],
 )
@@ -279,6 +279,7 @@ def test_zero_dollar_receipt_is_not_measured(private_brain, use_pool):
     report = feedback.role_cost_report("zero", "gemini", db=private_brain)
     assert report["status"] == ("imputed" if use_pool else "unmeasured")
     assert report["cost_usd"] == (3.0 if use_pool else None)
+    assert report["imputed"] is use_pool
 
 
 @pytest.mark.parametrize("agent", ["codex", "claude", "cursor", "gemini"])
@@ -331,3 +332,25 @@ def test_native_usage_accumulates_across_executed_retry(stores, monkeypatch, tmp
     result = dispatcher.offload("codex", "Review a bounded case", cwd=str(tmp_path))
     assert len(attempts) == 2
     assert result["usage"] == {"input_tokens": 140, "output_tokens": 14}
+
+
+def test_cost_coverage_uses_one_population_and_exclusive_categories():
+    rows = [
+        {"backend_run_id": "measured", "cost_usd": 2.0},
+        {"backend_run_id": "imputed", "cost_report": {"status": "imputed", "cost_usd": 3.0}},
+        {"backend_run_id": "missing"},
+        {"cost_usd": 0.0},  # Legacy receipt without retained backend identity.
+        {},  # Preparation only, no evidence of an executed attempt.
+    ]
+    summary = retro.summarize(rows)
+    assert summary["cost_attempted_cases"] == 4
+    assert summary["cost_measured_cases"] == 2
+    assert summary["cost_imputed_cases"] == 1
+    assert summary["cost_unmeasured_cases"] == 1
+    assert (
+        sum(
+            summary[key]
+            for key in ("cost_measured_cases", "cost_imputed_cases", "cost_unmeasured_cases")
+        )
+        == summary["cost_attempted_cases"]
+    )

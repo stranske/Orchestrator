@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -326,7 +327,28 @@ def summarize(rows: list[dict]) -> dict:
     graded = [r for r in accepted if r.get("later_truth")]
     agree = sum(r["shadow_verdict"] == r["later_truth"] for r in graded)
     baseline = sum(r["merge_rule_verdict"] == r["later_truth"] for r in graded)
-    measured_costs = [r["cost_usd"] for r in rows if isinstance(r.get("cost_usd"), (int, float))]
+
+    # A legacy dollar receipt proves an attempt even if its backend ID was not
+    # retained. Preparation-only rows do not. Classify each attempt once, so
+    # coverage numerators and denominator describe the same population.
+    def measured(row):
+        value = row.get("cost_usd")
+        return type(value) in (int, float) and math.isfinite(value) and value >= 0
+
+    attempted_rows = [
+        row
+        for row in rows
+        if row.get("backend_run_id")
+        or measured(row)
+        or (row.get("cost_report") or {}).get("status") in {"measured", "imputed"}
+    ]
+    measured_rows = [row for row in attempted_rows if measured(row)]
+    imputed_rows = [
+        row
+        for row in attempted_rows
+        if not measured(row) and (row.get("cost_report") or {}).get("status") == "imputed"
+    ]
+    measured_costs = [row["cost_usd"] for row in measured_rows]
     return {
         "cases": len(rows),
         "adjudicated": len(accepted),
@@ -340,15 +362,9 @@ def summarize(rows: list[dict]) -> dict:
         "agreement_rate": agree / len(graded) if graded else None,
         "merge_rule_agreement_rate": baseline / len(graded) if graded else None,
         "cost_usd": sum(measured_costs) if measured_costs else None,
-        "cost_attempted_cases": sum(bool(r.get("backend_run_id")) for r in rows),
-        "cost_imputed_cases": sum(
-            (r.get("cost_report") or {}).get("status") == "imputed" for r in rows
-        ),
-        "cost_unmeasured_cases": sum(
-            bool(r.get("backend_run_id"))
-            and (r.get("cost_report") or {}).get("status", "unmeasured") == "unmeasured"
-            for r in rows
-        ),
+        "cost_attempted_cases": len(attempted_rows),
+        "cost_imputed_cases": len(imputed_rows),
+        "cost_unmeasured_cases": len(attempted_rows) - len(measured_rows) - len(imputed_rows),
         "cost_scale": feedback.COST_SCALE,
         "estimated_cost_usd": (
             sum((r.get("cost_report") or {}).get("cost_usd") or 0 for r in rows)

@@ -3717,9 +3717,7 @@ def record_role_run(
         "cost_tokens_in": cost_tokens_in,
         "cost_tokens_out": cost_tokens_out,
         "imputed": (
-            imputed
-            if imputed is not None
-            else cost_tokens_in is None and cost_tokens_out is None
+            imputed if imputed is not None else cost_tokens_in is None and cost_tokens_out is None
         ),
         "cost_scale": COST_SCALE,
         "role": role_name,
@@ -3812,7 +3810,7 @@ def role_cost_report(run_id: str | None, agent: str | None, db: Path | None = No
         "scale": COST_SCALE,
         "status": "unmeasured",
         "cost_usd": None,
-        "imputed": True,
+        "imputed": False,
         "source": "no_eligible_pool",
     }
     with sqlite3.connect(f"file:{(db or DB_PATH).resolve()}?mode=ro", uri=True) as c:
@@ -3854,6 +3852,7 @@ def role_cost_report(run_id: str | None, agent: str | None, db: Path | None = No
             return {
                 **result,
                 "status": "imputed",
+                "imputed": True,
                 "cost_usd": sum(own) / len(own),
                 "source": "agent_global",
             }
@@ -3862,6 +3861,7 @@ def role_cost_report(run_id: str | None, agent: str | None, db: Path | None = No
             return {
                 **result,
                 "status": "imputed",
+                "imputed": True,
                 "cost_usd": all_costs[len(all_costs) // 2],
                 "source": "global_median",
             }

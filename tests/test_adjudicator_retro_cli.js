@@ -869,7 +869,7 @@ print(json.dumps({"first": first, "second": second, "resumed": resumed,
     graded: 0, agree: 0, disagree: 0,
     agreement_rate: null, merge_rule_agreement_rate: null,
     cost_usd: 4.75, cost_measured_cases: 4, cost_per_case: 1.1875,
-    cost_attempted_cases: 4, cost_imputed_cases: 0, cost_unmeasured_cases: 1,
+    cost_attempted_cases: 4, cost_imputed_cases: 0, cost_unmeasured_cases: 0,
     cost_scale: 'list_price_usd', estimated_cost_usd: 4.75,
   });
   assert.deepEqual(report.proposal_comparison, {
@@ -1299,7 +1299,7 @@ test('retro CLI preserves raw proposals without grading metadata and refreshes m
     graded: 0, agree: 0, disagree: 0,
     agreement_rate: null, merge_rule_agreement_rate: null,
     cost_usd: 4.5, cost_measured_cases: 4, cost_per_case: 1.125,
-    cost_attempted_cases: 5, cost_imputed_cases: 0, cost_unmeasured_cases: 2,
+    cost_attempted_cases: 5, cost_imputed_cases: 0, cost_unmeasured_cases: 1,
     cost_scale: 'list_price_usd', estimated_cost_usd: 4.5,
   });
   const report = w.report();
@@ -1345,7 +1345,7 @@ rendered = switch_review.format_report({
 print(json.dumps({"line": line, "rendered": rendered}))
 `]);
   assert.equal(line, 'adjudicator shadow: cases 6, agree 0, disagree 0, cost 4.5 '
-    + '(graded 0; costs measured 4; cost measured 4 of 5, imputed 0, unmeasured 2; '
+    + '(graded 0; costs measured 4; cost measured 4 of 5, imputed 0, unmeasured 1; '
     + 'estimated accounted USD 4.5; scale list_price_usd)');
   assert.equal(rendered.split('\n').filter((text) => text === line).length, 1);
 });
@@ -1435,10 +1435,10 @@ print(json.dumps(results))
       + '(graded 3; costs measured 4; cost measured 4 of 4, imputed 0, unmeasured 0; '
       + 'estimated accounted USD UNMEASURED; scale list_price_usd)',
     measured_zero: 'adjudicator shadow: cases 1, agree 0, disagree 0, cost 0 '
-      + '(graded 0; costs measured 1; cost measured 1 of 0, imputed 0, unmeasured 0; '
+      + '(graded 0; costs measured 1; cost measured 1 of 1, imputed 0, unmeasured 0; '
       + 'estimated accounted USD UNMEASURED; scale list_price_usd)',
     partial_cost: 'adjudicator shadow: cases 3, agree 0, disagree 0, cost 1.25 '
-      + '(graded 0; costs measured 2; cost measured 2 of 0, imputed 0, unmeasured 0; '
+      + '(graded 0; costs measured 2; cost measured 2 of 2, imputed 0, unmeasured 0; '
       + 'estimated accounted USD UNMEASURED; scale list_price_usd)',
     unmeasured: 'adjudicator shadow: cases 0, agree 0, disagree 0, cost UNKNOWN '
       + '(graded 0; costs measured 0; cost measured 0 of 0, imputed 0, unmeasured 0; '
@@ -1475,7 +1475,7 @@ print(json.dumps(True))
     graded: 0, agree: 0, disagree: 0,
     agreement_rate: null, merge_rule_agreement_rate: null,
     cost_usd: 5.25, cost_measured_cases: 5, cost_per_case: 1.05,
-    cost_attempted_cases: 5, cost_imputed_cases: 0, cost_unmeasured_cases: 1,
+    cost_attempted_cases: 5, cost_imputed_cases: 0, cost_unmeasured_cases: 0,
     cost_scale: 'list_price_usd', estimated_cost_usd: 5.25,
   });
   assert.deepEqual(w.report().summary, summary);
@@ -1568,7 +1568,7 @@ print(json.dumps(True))
     };
     assert.deepEqual(report.summary, {
       ...initial.summary, ...expectedCosts,
-      cost_unmeasured_cases: cost > 0 ? 2 : 3,
+      cost_unmeasured_cases: 1,
       estimated_cost_usd: 4 + cost,
     });
     assert.deepEqual(report.proposal_comparison,
@@ -1666,7 +1666,7 @@ print(json.dumps(True))
       assert.deepEqual(withoutCosts(report[section]), withoutCosts(initial[section]),
         'invalid responses must stay outside both agreement denominators');
     }
-    assert.equal(report.summary.cost_unmeasured_cases, expected > 0 ? 0 : 1);
+    assert.equal(report.summary.cost_unmeasured_cases, expected === null ? 1 : 0);
     assert.equal(report.summary.estimated_cost_usd, expected > 0 ? expected : null);
     assert.deepEqual([saved.case_id, saved.role_run_id, saved.backend_run_id], identity);
     assert.equal(saved.decision, undefined);
