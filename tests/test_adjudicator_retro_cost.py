@@ -383,15 +383,19 @@ def test_cost_coverage_uses_one_population_and_exclusive_categories():
     rows = [
         {"backend_run_id": "measured", "cost_usd": 2.0},
         {"backend_run_id": "imputed", "cost_report": {"status": "imputed", "cost_usd": 3.0}},
+        {
+            "backend_run_id": "null-imputed",
+            "cost_report": {"status": "imputed", "cost_usd": None},
+        },
         {"backend_run_id": "missing"},
         {"cost_usd": 0.0},  # Legacy receipt without retained backend identity.
         {},  # Preparation only, no evidence of an executed attempt.
     ]
     summary = retro.summarize(rows)
-    assert summary["cost_attempted_cases"] == 4
+    assert summary["cost_attempted_cases"] == 5
     assert summary["cost_measured_cases"] == 2
     assert summary["cost_imputed_cases"] == 1
-    assert summary["cost_unmeasured_cases"] == 1
+    assert summary["cost_unmeasured_cases"] == 2
     assert (
         sum(
             summary[key]

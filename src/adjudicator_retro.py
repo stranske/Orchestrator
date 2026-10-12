@@ -355,6 +355,7 @@ def summarize(rows: list[dict]) -> dict:
         row
         for row in attempted_rows
         if measured_amount(row) is None
+        and valid_amount((row.get("cost_report") or {}).get("cost_usd"))
         and (row.get("cost_report") or {}).get("status") == "imputed"
     ]
     estimated_costs = measured_costs + [
