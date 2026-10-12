@@ -1,3 +1,7 @@
+## Local closer resolution — 2026-10-12
+
+The historical hosted-runner limitation below is resolved locally: both named tests pass with `-m "not slow"`; exact production copies dropping token fields or printing null each produce intended RED, then byte-identical restoration produces GREEN. Hashes/raw logs are in issue-527-coverage-review-20261012. All102 focused tests/23subtests and390-file Black check pass. No human package repair is needed; final hosted CI remains required.
+
 # Named cost acceptance checks: runner blocker
 
 This run strengthens the two named tests in `tests/test_adjudicator_retro_cost.py`.
