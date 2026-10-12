@@ -135,8 +135,8 @@ async function verifyOriginalCI(root = path.resolve(__dirname, '..')) {
   assert.ok(job, 'missing original job binding');
   const log = job.excerpts.join('\n');
   assert.ok(log.includes(`Merge ${manifest.original_head} into `), 'original checkout mismatch');
-  const measured = /\b(\d+) passed, (\d+) skipped\b/.exec(log);
-  assert.ok(measured, 'missing original measured counts');
+  const measured = consistentSummary(log, /\b(\d+) passed, (\d+) skipped\b/g,
+    'original measured counts');
   const expectedFiles = [archiveName, extractionName, 'README.md',
     'independent-hash-check.json', 'independent-native.log', 'independent-native.xml'];
   assert.deepEqual(Object.keys(manifest.files).sort(), expectedFiles.sort(),
@@ -212,26 +212,71 @@ print(json.dumps({
     focused_command_transcript: 'UNKNOWN: recovered cases are from the original full run' };
 }
 
-function verifyMeasurement(receipt, expectedHead, name) {
-  const text = receipt.selected_authentic_lines.join('\n');
-  assert.ok(text.includes(`Merge ${expectedHead} into `), 'measurement checkout head mismatch');
-  const count = /pytest:\s+(\d+) passed, 0 failed, (\d+)\/(\d+) max[^\n]*skipped \((\d+) collected; floor (\d+)\)/.exec(text);
-  assert.ok(count, `missing test measurement: ${name}`);
+function consistentSummary(text, pattern, name, linePrefix) {
+  const matches = [...text.matchAll(pattern)];
+  assert.ok(matches.length, `missing ${name}`);
+  if (linePrefix) {
+    assert.equal(matches.length, text.split('\n').filter(line => linePrefix.test(line)).length,
+      `invalid ${name}`);
+  }
+  assert.equal(new Set(matches.map(match => JSON.stringify(match.slice(1).map(Number)))).size,
+    1, `conflicting ${name}`);
+  return matches[0];
+}
+
+// gh adds these two fields from job metadata and per-step archive members, not stdout.
+// Its whole-job API fallback uses UNKNOWN STEP and cannot establish producer identity.
+function stepLogLine(line) {
+  const match = /^([^\t]+)\t([^\t]+)\t(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z) (.*)$/.exec(line);
+  return match && { job: match[1], step: match[2], text: match[4] };
+}
+
+const measurementLine = /^\s*(?:pytest:|selftests:|gates:|VERIFIED —|== verify-before-sync: VERIFIED)/;
+
+function selectMeasurementLines(log, job, stepName) {
+  return log.split(/\r?\n/).filter(line => {
+    const record = stepLogLine(line);
+    return record && record.job === job.name && (
+      (record.step === stepName && measurementLine.test(record.text))
+      || (/^Run actions\/checkout@/.test(record.step)
+        && /^HEAD is now at .* Merge /.test(record.text)));
+  });
+}
+
+function verifyMeasurement(receipt, expectedHead, job, step) {
+  const name = job.name;
+  assert.ok(Number.isSafeInteger(step.number) && step.number > 0,
+    'missing measurement producer step number');
+  const records = receipt.selected_authentic_lines.map(stepLogLine);
+  assert.ok(records.every(record => record && record.job === name),
+    'missing or wrong measurement producer binding');
+  assert.ok(records.some(record => /^Run actions\/checkout@/.test(record.step)
+    && record.text.includes(`Merge ${expectedHead} into `)), 'measurement checkout head mismatch');
+  const producer = records.filter(record => record.step === step.name);
+  assert.ok(records.every(record => !measurementLine.test(record.text)
+    || record.step === step.name), 'measurement from unrelated producer step');
+  const text = producer.map(record => record.text).join('\n');
+  const count = consistentSummary(text,
+    /^\s*pytest:\s+(\d+) passed, 0 failed, (\d+)\/(\d+) max[^\n]*skipped \((\d+) collected; floor (\d+)\)/gm,
+    `test measurement: ${name}`, /^\s*pytest:/);
   const [passed, skipped, skippedMax, collected, floor] = count.slice(1).map(Number);
   assert.ok(passed > 0 && passed + skipped === collected && collected >= floor
     && skipped <= skippedMax, `invalid test measurement: ${name}`);
-  const selftests = /selftests:\s+(\d+) of (\d+) modules ran, (\d+)\/(\d+) max[^\n]*skipped/.exec(text);
-  assert.ok(selftests, `missing selftest measurement: ${name}`);
+  const selftests = consistentSummary(text,
+    /^\s*selftests:\s+(\d+) of (\d+) modules ran, (\d+)\/(\d+) max[^\n]*skipped/gm,
+    `selftest measurement: ${name}`, /^\s*selftests:/);
   const [ran, modules, absent, absentMax] = selftests.slice(1).map(Number);
   assert.ok(ran > 0 && ran + absent === modules && absent <= absentMax,
     `invalid selftest measurement: ${name}`);
-  const verdict = /VERIFIED — (\d+) tests actually executed and passed, (\d+) selftests spoke, (\d+) of (\d+) gates green/.exec(text);
-  assert.ok(verdict, `missing verifier verdict measurement: ${name}`);
+  const verdict = consistentSummary(text,
+    /^\s*VERIFIED — (\d+) tests actually executed and passed, (\d+) selftests spoke, (\d+) of (\d+) gates green/gm,
+    `verifier verdict measurement: ${name}`, /^\s*VERIFIED —/);
   assert.equal(Number(verdict[1]), passed, 'verifier verdict test count mismatch');
   assert.equal(Number(verdict[2]), ran, 'verifier verdict selftest count mismatch');
   const [green, gates] = verdict.slice(3).map(Number);
   assert.ok(green > 0 && green <= gates, `invalid gate measurement: ${name}`);
-  return { job_id: receipt.job_id, passed, skipped, collected, selftests: ran,
+  return { job_id: receipt.job_id, producer_step: { number: step.number, name: step.name },
+    passed, skipped, collected, selftests: ran,
     selftests_skipped: absent, gates_green: green, gates };
 }
 
@@ -281,7 +326,7 @@ function verifyDiscoveredCI(evidence, expectedHead) {
     if (name.startsWith('verify.py')) {
       const receipts = evidence.receipts.filter(receipt => receipt.job_id === job.id);
       assert.equal(receipts.length, 1, `missing or duplicate measurement receipt: ${name}`);
-      measurements.push(verifyMeasurement(receipts[0], expectedHead, name));
+      measurements.push(verifyMeasurement(receipts[0], expectedHead, job, steps[0]));
     }
   }
   assert.equal(evidence.receipts.length, measurements.length, 'unbound measurement receipt');
@@ -351,20 +396,21 @@ function verifyHostedCI(evidence, expectedHead) {
       assert.equal(steps.length, 1, `missing product step: ${stepName}`);
       assert.ok(steps[0].status === 'completed' && steps[0].conclusion === 'success',
         `product step did not execute: ${stepName}`);
-      executed.set(jobName, job.id);
+      executed.set(jobName, { job, step: steps[0] });
     }
   }
   const measurements = [];
-  for (const [name, jobID] of executed) {
+  for (const [name, { job, step }] of executed) {
     if (!name.startsWith('verify.py')) continue;
-    const receipts = evidence.receipts.filter(receipt => receipt.job_id === jobID);
+    const receipts = evidence.receipts.filter(receipt => receipt.job_id === job.id);
     assert.equal(receipts.length, 1, `missing or duplicate measurement receipt: ${name}`);
-    measurements.push(verifyMeasurement(receipts[0], expectedHead, name));
+    measurements.push(verifyMeasurement(receipts[0], expectedHead, job, step));
   }
   return { head_sha: expectedHead, product_jobs: executed.size, measurements };
 }
 
-module.exports = { verifyProof, verifyOriginalCI, verifyHostedCI, verifyDiscoveredCI };
+module.exports = { verifyProof, verifyOriginalCI, verifyHostedCI, verifyDiscoveredCI,
+  selectMeasurementLines };
 if (require.main === module) {
   Promise.all([verifyProof(), verifyOriginalCI()]).then(([result, original]) => {
     const args = process.argv.slice(2);

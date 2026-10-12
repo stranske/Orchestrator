@@ -97,6 +97,36 @@ test('full-run counts must come from actual case records', async (t) => {
   await assert.rejects(verifyOriginalCI(root), /original pass count mismatch/);
 });
 
+test('missing original measured summaries are rejected', async (t) => {
+  const root = copy(t);
+  reviseJSON(path.join(root, receiptPath, 'inherited-ci.json'), evidence => {
+    const job = evidence.jobs.find(job => job.run_id === 38176809124);
+    job.excerpts = job.excerpts.filter(line => !/\d+ passed, \d+ skipped/.test(line));
+  });
+  await assert.rejects(verifyOriginalCI(root), /missing original measured counts/);
+});
+
+test('conflicting original summaries are rejected regardless of their order', async (t) => {
+  for (const first of [true, false]) {
+    const root = copy(t);
+    reviseJSON(path.join(root, receiptPath, 'inherited-ci.json'), evidence => {
+      const job = evidence.jobs.find(job => job.run_id === 38176809124);
+      if (first) job.excerpts.unshift('2718 passed, 26 skipped');
+      else job.excerpts.push('2718 passed, 26 skipped');
+    });
+    await assert.rejects(verifyOriginalCI(root), /conflicting original measured counts/);
+  }
+});
+
+test('identical repeated original counts remain consistent with the immutable artifact', async (t) => {
+  const root = copy(t);
+  reviseJSON(path.join(root, receiptPath, 'inherited-ci.json'), evidence => {
+    evidence.jobs.find(job => job.run_id === 38176809124).excerpts
+      .push('2717 passed, 26 skipped', '2717 passed, 26 skipped');
+  });
+  assert.equal((await verifyOriginalCI(root)).passed, 2717);
+});
+
 test('a missing original focused case cannot be hidden by updating its extraction digest', async (t) => {
   const root = copy(t);
   reviseExtraction(root, text => text.replace(/\s*<testcase[^>]*test_no_boundary_changes_nothing[^>]*\/>/, ''));

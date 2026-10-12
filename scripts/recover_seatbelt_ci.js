@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const { execFileSync } = require('node:child_process');
-const { verifyDiscoveredCI } = require('./verify_seatbelt_receipts');
+const { verifyDiscoveredCI, selectMeasurementLines } = require('./verify_seatbelt_receipts');
 
 const repo = 'stranske/Orchestrator';
 const workflowPaths = {
@@ -72,10 +72,12 @@ async function recoverSeatbeltCI({ expectedHead, runIDs, fetchJSON, fetchLog, pa
       ['id', 'name', 'run_id', 'run_attempt', 'head_sha', 'status', 'conclusion',
         'html_url', 'steps'].map(key => [key, job[key]]))) } });
     for (const job of jobs.filter(job => run.name === 'CI' && job.name.startsWith('verify.py'))) {
-      const log = await fetchLog(job.id);
+      // fetchLog must return gh's job/step-prefixed log, never the raw whole-job API log.
+      const log = await fetchLog(job.id, run.run_attempt);
+      const stepName = job.name.includes('flat exec-mirror')
+        ? "Build the flat copy with the sync's copy contract and verify it there" : 'Verify';
       receipts.push({ job_id: job.id, url: job.html_url,
-        selected_authentic_lines: log.split(/\r?\n/).filter(line =>
-          /HEAD is now at .* Merge |\s+pytest:\s+|\s+selftests:\s+|\s+gates:\s+|VERIFIED — |== verify-before-sync: VERIFIED/.test(line)) });
+        selected_authentic_lines: selectMeasurementLines(log, job, stepName) });
     }
     // A concurrent rerun must not attach latest-attempt logs to older job metadata.
     assert.deepEqual(identity(await fetchJSON(endpoint)), identity(run),
@@ -181,7 +183,9 @@ if (require.main === module) {
     return evidence;
   })() : recoverSeatbeltCI({ expectedHead, runIDs: ids.map(Number),
     fetchJSON: async endpoint => JSON.parse(read(endpoint)),
-    fetchLog: async id => read(`repos/${repo}/actions/jobs/${id}/logs`),
+    fetchLog: async (id, attempt) => execFileSync('gh', ['run', 'view', '--repo', repo,
+      '--job', String(id), '--attempt', String(attempt), '--log'],
+    { encoding: 'utf8', timeout: 30000, maxBuffer: 32 * 1024 * 1024 }),
   });
   recovery.then(snapshot => console.log(JSON.stringify(snapshot, null, 2))).catch(error => {
     console.error(`CI recovery failed: ${error.message}`);

@@ -5,13 +5,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { test } = require('node:test');
 const { verifyDiscoveredCI, verifyHostedCI } = require('../scripts/verify_seatbelt_receipts');
+const { withStepLogs } = require('./seatbelt_ci_fixture');
 
-const snapshot = JSON.parse(fs.readFileSync(path.join(__dirname,
+const retained = JSON.parse(fs.readFileSync(path.join(__dirname,
   '../docs/verification/issue-532-seatbelt-regex/0f88580-ci-discovery.json'), 'utf8'));
+const snapshot = withStepLogs(retained);
 const head = snapshot.head_sha;
 const copy = () => structuredClone(snapshot);
 
-test('bounded discovery recovers both measured tree shapes and keeps full acceptance UNKNOWN', () => {
+test('synthetic step-bound discovery measures both tree shapes and keeps full acceptance UNKNOWN', () => {
   const result = verifyDiscoveredCI(snapshot, head);
   assert.deepEqual(result.measurements.map(m => [m.passed, m.skipped, m.collected]),
     [[2863, 31, 2894], [2842, 52, 2894]]);
@@ -21,14 +23,18 @@ test('bounded discovery recovers both measured tree shapes and keeps full accept
   assert.throws(() => verifyHostedCI(snapshot, head), /seatbelt-hosted-ci/);
 });
 
-test('checkout-head discovery retains authentic measurements without accepting skipped Gate', () => {
-  const evidence = JSON.parse(fs.readFileSync(path.join(__dirname,
-    '../docs/verification/issue-532-seatbelt-regex/1e25b0a-ci-discovery.json'), 'utf8'));
+test('synthetic checkout-head discovery measurements do not accept skipped Gate', () => {
+  const evidence = withStepLogs(JSON.parse(fs.readFileSync(path.join(__dirname,
+    '../docs/verification/issue-532-seatbelt-regex/1e25b0a-ci-discovery.json'), 'utf8')));
   const result = verifyDiscoveredCI(evidence, evidence.head_sha);
   assert.deepEqual(result.measurements.map(m => [m.passed, m.skipped, m.collected]),
     [[2877, 26, 2903], [2856, 47, 2903]]);
   assert.equal(evidence.runs[1].jobs.find(job => job.name === 'python ci').conclusion, 'skipped');
   assert.match(result.hosted_acceptance, /^UNKNOWN:/);
+});
+
+test('historical bounded whole-job excerpts cannot establish producer identity', () => {
+  assert.throws(() => verifyDiscoveredCI(retained, head), /producer binding/);
 });
 
 test('recovered measurements cannot accept a successor head', () => {

@@ -17,10 +17,8 @@ No installation, deployment or whole-system acceptance is claimed. Original focu
 command evidence, complete final-head CI discovery, review/floor gates and actual post-merge
 comparison remain pending.
 
-The GitHub connector rejected the PR-body reconciliation because mutations require approval
-and this run's approval policy is `never`. The remote checkboxes were not updated.
-
-The workspace's `.git` directory is read-only, preventing staging or committing here. The same
-five changed files are committed in `/tmp/issue532-seatbelt-commit`, based on the inherited
-head, with an apply-ready patch at `/tmp/issue532-seatbelt-ci-recovery.patch`. The workspace
-retains the implementation changes; the remote branch is unchanged.
+This reconciliation was retained in commit `77e7161`; it describes that historical validation,
+not the current workspace or remote checkbox state. Review repairs and their local validation
+are recorded in [README.md](README.md). Historical whole-job CI excerpts do not establish
+trusted producer-step identity under the repaired checker; complete final-head evidence remains
+pending.

@@ -6,11 +6,12 @@ const path = require('node:path');
 const { test } = require('node:test');
 const { recoverSeatbeltCI } = require('../scripts/recover_seatbelt_ci');
 const { verifyHostedCI } = require('../scripts/verify_seatbelt_receipts');
+const { withStepLogs } = require('./seatbelt_ci_fixture');
 
-const snapshot = JSON.parse(fs.readFileSync(path.join(__dirname,
-  '../docs/verification/issue-532-seatbelt-regex/380c160-hosted-ci.json'), 'utf8'));
-const current = JSON.parse(fs.readFileSync(path.join(__dirname,
-  '../docs/verification/issue-532-seatbelt-regex/c49b250-hosted-ci.json'), 'utf8'));
+const snapshot = withStepLogs(JSON.parse(fs.readFileSync(path.join(__dirname,
+  '../docs/verification/issue-532-seatbelt-regex/380c160-hosted-ci.json'), 'utf8')));
+const current = withStepLogs(JSON.parse(fs.readFileSync(path.join(__dirname,
+  '../docs/verification/issue-532-seatbelt-regex/c49b250-hosted-ci.json'), 'utf8')));
 
 function harness(input = snapshot) {
   const evidence = structuredClone(input);
@@ -28,8 +29,12 @@ function harness(input = snapshot) {
       return { total_count: entry.jobs.total_count,
         jobs: structuredClone(entry.jobs.jobs.slice(start, start + Number(match[3]))) };
     },
-    fetchLog: async id => evidence.receipts.find(receipt => receipt.job_id === id)
-      .selected_authentic_lines.join('\n'),
+    fetchLog: async (id, attempt) => {
+      const job = evidence.runs.flatMap(entry => entry.jobs.jobs).find(job => job.id === id);
+      assert.equal(attempt, job.run_attempt);
+      return evidence.receipts.find(receipt => receipt.job_id === id)
+        .selected_authentic_lines.join('\n');
+    },
   };
   return { evidence, calls, options };
 }
@@ -44,7 +49,7 @@ test('recovery follows all attempt-specific pages and retains measured exact-hea
     .every(endpoint => endpoint.includes('/attempts/1/')));
 });
 
-test('authentic current-head REST recovery retains all fifteen jobs without accepting skipped Gate', async () => {
+test('REST replay with synthetic step logs retains fifteen jobs without accepting skipped Gate', async () => {
   const { options } = harness(current);
   const recovered = await recoverSeatbeltCI(options);
   assert.deepEqual(recovered, current);
@@ -152,10 +157,47 @@ test('wrong checkout and missing measured logs cannot be recovered as valid evid
 test('receipt selection omits unrelated runner log lines', async () => {
   const { options } = harness();
   const original = options.fetchLog;
-  options.fetchLog = async id => 'unrelated setup output\n' + await original(id);
+  options.fetchLog = async (id, attempt) => 'unrelated setup output\n' + await original(id, attempt);
   const recovered = await recoverSeatbeltCI(options);
   assert.ok(recovered.receipts.every(receipt => receipt.selected_authentic_lines
     .every(line => !line.includes('unrelated setup'))));
+});
+
+test('matching measurements printed by setup, cleanup or UNKNOWN STEP cannot produce receipts', async () => {
+  for (const wrongStep of ['Install dependencies', 'Complete job', 'UNKNOWN STEP']) {
+    const { options } = harness();
+    const original = options.fetchLog;
+    options.fetchLog = async (id, attempt) => (await original(id, attempt)).split('\n')
+      .map(line => line.includes('HEAD is now at') ? line
+        : line.replace(/\t[^\t]+\t/, `\t${wrongStep}\t`)).join('\n');
+    await assert.rejects(recoverSeatbeltCI(options), /missing test measurement/);
+  }
+});
+
+test('unrelated valid-looking summaries cannot override actual producer measurements', async () => {
+  const { options } = harness();
+  const original = options.fetchLog;
+  options.fetchLog = async (id, attempt) => {
+    const log = await original(id, attempt);
+    const spoof = log.split('\n').filter(line => !line.includes('HEAD is now at'))
+      .map(line => line.replace(/\t[^\t]+\t/, '\tInstall dependencies\t')
+        .replace(/2863/g, '2862').replace(/2894/g, '2893')).join('\n');
+    return spoof + '\n' + log + '\n' + spoof;
+  };
+  const recovered = await recoverSeatbeltCI(options);
+  assert.deepEqual(recovered.receipts, snapshot.receipts.filter(receipt =>
+    receipt.selected_authentic_lines.some(line => line.includes('\tVerify\t')
+      || line.includes("\tBuild the flat copy"))));
+});
+
+test('conflicting summaries from the actual producer invalidate recovery', async () => {
+  const { options } = harness();
+  const original = options.fetchLog;
+  options.fetchLog = async (id, attempt) => {
+    const log = await original(id, attempt);
+    return log + '\n' + log.replace(/2863/g, '2862').replace(/2894/g, '2893');
+  };
+  await assert.rejects(recoverSeatbeltCI(options), /conflicting test measurement/);
 });
 
 test('unknown workflow sources and duplicate caller IDs are rejected', async () => {

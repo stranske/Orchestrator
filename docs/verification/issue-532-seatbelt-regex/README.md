@@ -1,5 +1,49 @@
 # Issue 532: Seatbelt regex literal repair
 
+## Bot review repair (2026-10-12)
+
+CI measurement recovery now reads `gh run view --job ID --attempt N --log` instead of
+the raw whole-job API log. GitHub CLI prefixes each line with its job and step names,
+derived from API metadata and numbered step-log archive members. Its whole-job fallback
+is labeled `UNKNOWN STEP` and cannot supply accepted measurements. See the upstream
+[step-log mapping](https://github.com/cli/cli/blob/v2.102.0/pkg/cmd/run/view/logs.go) and
+[line-prefix rendering](https://github.com/cli/cli/blob/v2.102.0/pkg/cmd/run/view/view.go).
+
+Recovery retains checkout lines and measurements only from the expected producer step.
+Both hosted and bounded checkers independently require the matching job/step prefix and
+successful product-step metadata before reading counts. They reject missing, malformed,
+or conflicting pytest/selftest/verdict summaries; identical repeated summaries are accepted.
+`verifyOriginalCI` similarly rejects missing or conflicting original measured counts while
+allowing identical repetitions. Original receipt files and archives remain unchanged.
+
+The historical JSON snapshots below contain whole-job excerpts without step provenance.
+They remain historical observations, but the repaired checker rejects their measurement
+acceptance. The tests add explicitly synthetic step prefixes to cloned snapshots; these
+fixtures are adversarial validation, not newly authenticated CI receipts. A fresh read of
+existing per-step logs is required before those measurements can be accepted. The shell
+cannot reach GitHub, so authentic producer-bound recovery and final-head CI remain pending.
+
+Current local validation for this review repair: **86 Node receipt/recovery tests** across
+the seven files below, four Python quoting regressions, and the retained native/original
+receipt checker pass. Hosted or bounded acceptance for the new commit is not established.
+
+```sh
+node tests/test_seatbelt_receipts.js
+node tests/test_seatbelt_original_ci.js
+node tests/test_seatbelt_hosted_ci.js
+node tests/test_seatbelt_discovered_ci.js
+node tests/test_seatbelt_measurement_producer.js
+node tests/test_recover_seatbelt_ci.js
+node tests/test_recover_seatbelt_artifact.js
+node scripts/verify_seatbelt_receipts.js
+PYTHONPATH=src python3 -m unittest discover -s tests -p test_seatbelt_regex_quoting.py -v
+```
+
+The sections below record earlier validation rounds. Their test totals belong to the
+named commits and test-file populations, not to this review repair. New native macOS
+acceptance, a separate original focused command transcript, exact-head review/floor gates,
+and actual post-merge comparison remain UNKNOWN or pending. No agents or workflows were rerun.
+
 ## Paginated artifact recovery and checkout-head measurements (2026-10-12)
 
 The repo-specific recovery helper now supports `--artifact`: it follows every run artifact
@@ -11,7 +55,7 @@ receipts cannot be overwritten. Artifact content is never extracted or executed 
 ```sh
 node scripts/recover_seatbelt_ci.js --artifact \
   2c4509df9b53a32b4eb4143d7ba396808e38b49a 38176809124 11716675610 \
-  /tmp/issue-532-original-gate.zip
+  original-gate-recovered.zip
 node tests/test_recover_seatbelt_artifact.js
 ```
 
@@ -27,10 +71,12 @@ metadata and selected authentic measurements for `1e25b0af197596f5ff8c4a2099fdb3
 tested as synthetic merge `d9f3894`. Checkout measured **2,877 passed / 26 skipped / 2,903
 collected**; the flat copy measured **2,856 passed / 47 skipped / 2,903 collected**. Each ran
 97 selftests and three of five gates. Gate's Python job was skipped. This bounded snapshot
-validates in the discovery checker and does not establish complete hosted acceptance.
+was accepted by the historical discovery checker and does not establish complete hosted
+acceptance. It lacks the producer binding now required above.
 
-All **66 Node receipt/recovery tests**, four local quoting tests, and adapters/dispatcher
-selftests pass. The retained native/original checker still validates production RED,
+Historical validation retained in `abd74a4`: **66 Node receipt/recovery tests** across six
+files, four local quoting tests, and adapters/dispatcher selftests passed. The native/original
+checker validated production RED,
 byte-identical restoration GREEN, five native probes and twelve original boundary passes.
 No Python files changed. The shell cannot reach GitHub, so live use of the new paginated
 artifact CLI is pending an authenticated runner. The original focused-only command transcript,
@@ -55,7 +101,7 @@ not establish full hosted acceptance.
 The repo-specific `scripts/recover_seatbelt_ci.js` reads existing run metadata, follows all
 attempt-specific job pages, requires stable totals and unique job identities, checks every
 head/attempt binding, and rereads each run to reject a concurrent rerun. It retains selected
-measurement lines and validates the measured CI products, preserving skipped Gate jobs.
+measurement lines and, at that revision, validated the measured CI products, preserving skipped Gate jobs.
 Its authenticated-runner CLI performs GET requests only:
 
 ```sh
@@ -63,7 +109,8 @@ node scripts/recover_seatbelt_ci.js c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f 382
 node tests/test_recover_seatbelt_ci.js
 ```
 
-All **55 Node receipt/recovery tests** and four local quoting tests pass. Thirteen new
+Historical validation retained in `1e25b0a`: **55 Node receipt/recovery tests** across five
+files and four local quoting tests passed. Thirteen new
 recovery tests exercise complete authentic REST replay, pagination omissions/overlaps,
 changed attempts/totals, wrong heads, late failed jobs and skipped Gate preservation.
 The native and original archive checkers still validate four production RED failures,
@@ -102,9 +149,11 @@ macOS probes). [542-task-reconciliation.md](542-task-reconciliation.md) records 
 checkbox update. GitHub rejected the PR-body mutation because approval is required but this
 run's approval policy is `never`; the remote checkboxes are unchanged.
 
-Local validation: all 42 receipt tests pass, including twelve new bounded-discovery tests;
-four quoting tests and adapters/dispatcher selftests pass. Both historical complete REST and
-new bounded snapshots validate in their respective CLI modes; wrong-head CLI input fails.
+Historical validation retained in `77e7161`: **42 receipt tests** across four files passed,
+including twelve new bounded-discovery tests;
+four quoting tests and adapters/dispatcher selftests passed. Both complete REST and bounded
+snapshots validated in the CLI modes at that revision; wrong-head CLI input failed. Those
+whole-job excerpts are rejected by the producer-binding checks in this review repair.
 No Python files changed. This environment refuses nested Node CLI launches, so CLI modes were
 exercised directly from the terminal rather than through a Node child-process test.
 Original PR/issue discussions were inspected without finding a separate authentic focused-only
@@ -134,8 +183,9 @@ node tests/test_seatbelt_receipts.js
 node scripts/verify_seatbelt_receipts.js
 ```
 
-All 30 receipt tests pass. The four existing production quoting regressions pass via
-stdlib unittest; adapters and dispatcher selftests pass. The existing native receipt
+Historical validation retained in `0f88580`: **30 receipt tests** across three files passed.
+The four existing production quoting regressions passed via
+stdlib unittest; adapters and dispatcher selftests passed. The existing native receipt
 still verifies four production RED failures, byte-identical restoration and five macOS
 GREEN probes against unchanged source/test bytes. This Linux execution establishes no
 new native acceptance. Pytest and Black are unavailable locally; no Python files changed.
@@ -175,12 +225,13 @@ node scripts/verify_seatbelt_receipts.js \
   380c16044a15ba9a0438f845eadc4a57bb8e8266
 ```
 
-Local validation: 13 hosted-receipt and seven native-receipt checks pass, as do the four
+Historical candidate validation: 13 hosted-receipt and seven native-receipt checks passed,
+as did the four
 quoting regressions and adapters/dispatcher selftests. The native checker still binds four
 production RED failures and byte-identical restoration GREEN (five real macOS probes) to
 the unchanged production/test bytes. This Linux run reports new native acceptance UNKNOWN.
 Local pytest is absent; its measured runner reports zero collected and exit 1. Installing
-pytest/Black into `/tmp` failed, and the full local verifier attempt was interrupted without
+pytest/Black into an isolated environment failed, and the full local verifier attempt was interrupted without
 a verdict. No Python files changed in this round.
 
 This snapshot accepts only the recorded head. The receipt-checker commit requires its own
@@ -192,7 +243,7 @@ The candidate first regex-escapes an allowed root, then quotes the entire patter
 _seatbelt_quote. The rule sequence remains protected denies, allowed subpaths, then .git
 denies. The admission and argv code, and the inherited offload tests, are unchanged.
 
-Local implementation progress (uncommitted; required Black gate is blocked):
+Historical implementation progress retained through bootstrap commit `4d4136d`:
 
 - [x] Correct string escaping while preserving rule order and decoded regex semantics.
 - [x] Add and execute production-generated regressions for quotes, backslashes, regex
@@ -237,10 +288,10 @@ Required checks remain blocked:
     black --line-length 100 src/adapters.py tests/test_seatbelt_regex_quoting.py
     black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
 
-Neither pytest nor Black is installed. An isolated /tmp virtual environment's installation
-attempt failed because pypi.org could not resolve. There is no candidate full-suite,
-formatting, exact-head review/floor-gate or post-merge acceptance claim, and no commit or push
-is permitted until the mandatory Black checks pass.
+At that historical validation, pytest and Black were unavailable and an isolated environment's
+installation failed because pypi.org could not resolve. That round did not establish candidate
+full-suite, formatting, exact-head review/floor-gate or post-merge acceptance. Later CI
+observations above cover only their named heads.
 
 Attempts to add a blocker comment and the needs-human label to PR 533 were rejected by
 the GitHub connector: approval is required but this run's approval policy is never.
@@ -258,8 +309,9 @@ Both logs identify the tested synthetic merge as ca0b19c, merging original head
 2c4509df9b53a32b4eb4143d7ba396808e38b49a into f6d3f9c3bd2a4c73fac68e680456eafaa15dcb32.
 They are original CI evidence for inherited PR 524, not a full run of this candidate.
 Selected authentic log lines and source bindings are retained in [inherited-ci.json](inherited-ci.json).
-The focused transcript is still UNKNOWN; the artifact ZIP was returned as a remote file
-reference and could not be inspected locally.
+The separate focused command transcript is still UNKNOWN. The original artifact ZIP was
+subsequently recovered and inspected as described in
+[original-ci-recovery-20261011/README.md](original-ci-recovery-20261011/README.md).
 
 The inherited [actual post-merge comparison](https://github.com/stranske/Orchestrator/pull/524#issuecomment-6114368956)
 is NON_PASS (CONCERNS/CONCERNS). It does not accept this correction.
