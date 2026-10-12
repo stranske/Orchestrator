@@ -1,0 +1,161 @@
+{
+  "schema": "seatbelt-artifact-discovery/v1",
+  "repo": "stranske/Orchestrator",
+  "run_id": 38176809124,
+  "head_sha": "2c4509df9b53a32b4eb4143d7ba396808e38b49a",
+  "discovery_limit": "Authentic connector first-page metadata; total_count and artifact attempt identity are unavailable. This snapshot does not prove complete artifact discovery.",
+  "artifacts": [
+    {
+      "id": 11716995091,
+      "name": "gate-coverage-summary.md",
+      "size_in_bytes": 644,
+      "url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/11716995091",
+      "archive_download_url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/11716995091/zip",
+      "expired": false,
+      "created_at": "2026-10-11T21:41:30Z",
+      "expires_at": "2026-10-18T21:41:30Z",
+      "updated_at": "2026-10-11T21:41:30Z",
+      "digest": "sha256:8fef67c22e8122565c04aafea6061b22eac3709bc741a4438f7adc18411b7bda",
+      "workflow_run": {
+        "id": 38176809124,
+        "repository_id": 1342306972,
+        "head_repository_id": 1342306972,
+        "head_branch": "claude/offload-write-boundary",
+        "head_sha": "2c4509df9b53a32b4eb4143d7ba396808e38b49a"
+      }
+    },
+    {
+      "id": 11716980108,
+      "name": "gate-coverage",
+      "size_in_bytes": 226,
+      "url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/11716980108",
+      "archive_download_url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/11716980108/zip",
+      "expired": false,
+      "created_at": "2026-10-11T21:41:29Z",
+      "expires_at": "2026-10-18T21:41:29Z",
+      "updated_at": "2026-10-11T21:41:29Z",
+      "digest": "sha256:502871c58a6494f3b901daaa69bcd73142ac8f126761eb70c43546a76ef8cd6a",
+      "workflow_run": {
+        "id": 38176809124,
+        "repository_id": 1342306972,
+        "head_repository_id": 1342306972,
+        "head_branch": "claude/offload-write-boundary",
+        "head_sha": "2c4509df9b53a32b4eb4143d7ba396808e38b49a"
+      }
+    },
+    {
+      "id": 11716970106,
+      "name": "gate-summary.md",
+      "size_in_bytes": 1003,
+      "url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/11716970106",
+      "archive_download_url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/11716970106/zip",
+      "expired": false,
+      "created_at": "2026-10-11T21:41:28Z",
+      "expires_at": "2026-10-18T21:41:28Z",
+      "updated_at": "2026-10-11T21:41:28Z",
+      "digest": "sha256:4175ef3bfa8ea4186756ec610ddfbc8f612b3792c8bbcadc1221fc9a00eaa8cb",
+      "workflow_run": {
+        "id": 38176809124,
+        "repository_id": 1342306972,
+        "head_repository_id": 1342306972,
+        "head_branch": "claude/offload-write-boundary",
+        "head_sha": "2c4509df9b53a32b4eb4143d7ba396808e38b49a"
+      }
+    },
+    {
+      "id": 11716890006,
+      "name": "gate-coverage-summary",
+      "size_in_bytes": 634,
+      "url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/11716890006",
+      "archive_download_url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/11716890006/zip",
+      "expired": false,
+      "created_at": "2026-10-11T21:38:44Z",
+      "expires_at": "2026-10-18T21:38:43Z",
+      "updated_at": "2026-10-11T21:38:44Z",
+      "digest": "sha256:1b538caa0de2c50cd269fd588556cfcefa6e8edf570802eff7e619fc1b8799fd",
+      "workflow_run": {
+        "id": 38176809124,
+        "repository_id": 1342306972,
+        "head_repository_id": 1342306972,
+        "head_branch": "claude/offload-write-boundary",
+        "head_sha": "2c4509df9b53a32b4eb4143d7ba396808e38b49a"
+      }
+    },
+    {
+      "id": 11716675610,
+      "name": "gate-coverage-3.12-1",
+      "size_in_bytes": 494947,
+      "url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/11716675610",
+      "archive_download_url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/11716675610/zip",
+      "expired": false,
+      "created_at": "2026-10-11T21:38:43Z",
+      "expires_at": "2026-10-18T21:38:41Z",
+      "updated_at": "2026-10-11T21:38:43Z",
+      "digest": "sha256:c64668c7ad38cac9cf207f7538b21f58cef204da1dca936af31123f53e9a7bbb",
+      "workflow_run": {
+        "id": 38176809124,
+        "repository_id": 1342306972,
+        "head_repository_id": 1342306972,
+        "head_branch": "claude/offload-write-boundary",
+        "head_sha": "2c4509df9b53a32b4eb4143d7ba396808e38b49a"
+      }
+    },
+    {
+      "id": 11716173285,
+      "name": "gate-coverage-3.13-1",
+      "size_in_bytes": 494622,
+      "url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/11716173285",
+      "archive_download_url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/11716173285/zip",
+      "expired": false,
+      "created_at": "2026-10-11T21:38:18Z",
+      "expires_at": "2026-10-18T21:38:17Z",
+      "updated_at": "2026-10-11T21:38:18Z",
+      "digest": "sha256:1b584d65926644e4c2652392fefaae52b7f048ac5d002b89d63d60a0a490e058",
+      "workflow_run": {
+        "id": 38176809124,
+        "repository_id": 1342306972,
+        "head_repository_id": 1342306972,
+        "head_branch": "claude/offload-write-boundary",
+        "head_sha": "2c4509df9b53a32b4eb4143d7ba396808e38b49a"
+      }
+    },
+    {
+      "id": 11716068850,
+      "name": "gate-coverage-trend-history",
+      "size_in_bytes": 772,
+      "url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/11716068850",
+      "archive_download_url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/11716068850/zip",
+      "expired": false,
+      "created_at": "2026-10-11T21:38:47Z",
+      "expires_at": "2026-10-18T21:38:46Z",
+      "updated_at": "2026-10-11T21:38:47Z",
+      "digest": "sha256:649f6f1f6acfcd20436781e837927b4f54a90dbc00dc27ecdc654a1bad066a79",
+      "workflow_run": {
+        "id": 38176809124,
+        "repository_id": 1342306972,
+        "head_repository_id": 1342306972,
+        "head_branch": "claude/offload-write-boundary",
+        "head_sha": "2c4509df9b53a32b4eb4143d7ba396808e38b49a"
+      }
+    },
+    {
+      "id": 11715974288,
+      "name": "gate-coverage-trend",
+      "size_in_bytes": 785,
+      "url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/11715974288",
+      "archive_download_url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/11715974288/zip",
+      "expired": false,
+      "created_at": "2026-10-11T21:38:46Z",
+      "expires_at": "2026-10-18T21:38:45Z",
+      "updated_at": "2026-10-11T21:38:46Z",
+      "digest": "sha256:bab9bdb155d215e294fb9f3b3ac0d17aa5983f6eae4edd8ca081e4e760bdd6eb",
+      "workflow_run": {
+        "id": 38176809124,
+        "repository_id": 1342306972,
+        "head_repository_id": 1342306972,
+        "head_branch": "claude/offload-write-boundary",
+        "head_sha": "2c4509df9b53a32b4eb4143d7ba396808e38b49a"
+      }
+    }
+  ]
+}

@@ -1,5 +1,44 @@
 # Issue 532: Seatbelt regex literal repair
 
+## Paginated artifact recovery and checkout-head measurements (2026-10-12)
+
+The repo-specific recovery helper now supports `--artifact`: it follows every run artifact
+page, requires stable declared totals and unique identities, checks every artifact's run/head,
+and verifies the requested ZIP's byte size and GitHub SHA256 before retaining it. It rereads
+the run after downloading to reject concurrent reruns. The destination must be new; existing
+receipts cannot be overwritten. Artifact content is never extracted or executed by this helper.
+
+```sh
+node scripts/recover_seatbelt_ci.js --artifact \
+  2c4509df9b53a32b4eb4143d7ba396808e38b49a 38176809124 11716675610 \
+  /tmp/issue-532-original-gate.zip
+node tests/test_recover_seatbelt_artifact.js
+```
+
+[original-artifact-discovery.json](original-artifact-discovery.json) retains eight authentic
+original Gate artifact records, including the retained Python 3.12 ZIP's run/head/digest
+binding. The connector supplies no total count; this first-page receipt does not establish
+complete discovery. The ten new regressions simulate REST pagination around those authentic
+records and ZIP bytes; they do not claim a live paginated REST retrieval. Run artifact metadata
+also lacks producing-attempt identity, which the helper reports as UNKNOWN.
+
+[1e25b0a-ci-discovery.json](1e25b0a-ci-discovery.json) retains existing checkout-head CI/Gate
+metadata and selected authentic measurements for `1e25b0af197596f5ff8c4a2099fdb3d502a224cc`,
+tested as synthetic merge `d9f3894`. Checkout measured **2,877 passed / 26 skipped / 2,903
+collected**; the flat copy measured **2,856 passed / 47 skipped / 2,903 collected**. Each ran
+97 selftests and three of five gates. Gate's Python job was skipped. This bounded snapshot
+validates in the discovery checker and does not establish complete hosted acceptance.
+
+All **66 Node receipt/recovery tests**, four local quoting tests, and adapters/dispatcher
+selftests pass. The retained native/original checker still validates production RED,
+byte-identical restoration GREEN, five native probes and twelve original boundary passes.
+No Python files changed. The shell cannot reach GitHub, so live use of the new paginated
+artifact CLI is pending an authenticated runner. The original focused-only command transcript,
+complete final-head CI, review/floor gates and actual post-merge comparison remain pending;
+both remaining checkboxes stay unchecked. These CI measurements cover the checkout head,
+not this new implementation. PR #542 was confirmed open with `draft=false`. No real agents
+or workflows were rerun, and no merge, mirror installation or deployment was performed.
+
 ## Complete pre-change-head job recovery (2026-10-12)
 
 [c49b250-hosted-ci.json](c49b250-hosted-ci.json) retains authenticated REST metadata for

@@ -21,6 +21,16 @@ test('bounded discovery recovers both measured tree shapes and keeps full accept
   assert.throws(() => verifyHostedCI(snapshot, head), /seatbelt-hosted-ci/);
 });
 
+test('checkout-head discovery retains authentic measurements without accepting skipped Gate', () => {
+  const evidence = JSON.parse(fs.readFileSync(path.join(__dirname,
+    '../docs/verification/issue-532-seatbelt-regex/1e25b0a-ci-discovery.json'), 'utf8'));
+  const result = verifyDiscoveredCI(evidence, evidence.head_sha);
+  assert.deepEqual(result.measurements.map(m => [m.passed, m.skipped, m.collected]),
+    [[2877, 26, 2903], [2856, 47, 2903]]);
+  assert.equal(evidence.runs[1].jobs.find(job => job.name === 'python ci').conclusion, 'skipped');
+  assert.match(result.hosted_acceptance, /^UNKNOWN:/);
+});
+
 test('recovered measurements cannot accept a successor head', () => {
   assert.throws(() => verifyDiscoveredCI(snapshot, 'a'.repeat(40)), /different head/);
 });
