@@ -249,3 +249,7 @@ comment were rejected with `MCP tool call requires approval, but approval policy
 None of those remote mutations occurred. PR #562 was observed open and ready for review.
 The automation runner must publish the checkout changes and complete the remaining lifecycle
 on the published head; the local checks above cannot substitute for that hosted receipt.
+
+## Closer integration, 2026-10-12
+
+This optional follow-up preserves seven unique late-evidence regression nodes after source #556 was independently closed. It introduces no new production behavior and does not reopen the original source. Rebased onto main 00d9f964a4f4d55955c329e4d4293b741b8c5035. Six affected suites pass 162 tests, both module selftests pass, and exact integrated collection is 3104. Current main's skip/mypy ceilings are preserved. Fresh hosted complete verification, full topology, review and post-push floor remain required. Historical provider NON_PASS stays unchanged.
