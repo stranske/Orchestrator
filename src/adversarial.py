@@ -506,6 +506,10 @@ def review(
     prompt = refute_prompt(context)
     verdicts, raw = [], {}
     for r in reviewers:
+        boundary = _git_write_boundary(r, worktree)
+        if boundary is None:
+            raw[r] = {"status": "no_seat", "reason": "reviewer write boundary unavailable"}
+            continue
         mode = "assess" if r == "codex" else "full"  # read-only where supported
         out = dispatcher.offload(
             r,
@@ -513,7 +517,7 @@ def review(
             cwd=worktree,
             mode=mode,
             timeout=timeout,
-            write_boundary=_git_write_boundary(r, worktree),
+            write_boundary=boundary,
         )
         v = _first_json(out.get("output", ""))
         raw[r] = v
@@ -722,7 +726,7 @@ def _worktree_head(worktree: str) -> str:
 
 def _worktree_state(worktree: str) -> dict:
     """HEAD and the tracked-file changes, the two things a reviewer must leave as it found them."""
-    status = _git(worktree, "status", "--porcelain", "--untracked-files=no")
+    status = _git(worktree, "status", "--porcelain", "--untracked-files=all")
     return {
         "head": _worktree_head(worktree),
         "dirty": (
@@ -734,31 +738,32 @@ def _worktree_state(worktree: str) -> dict:
 
 
 def _restore_worktree(worktree: str, head: str) -> None:
-    _git(worktree, "checkout", "-q", "--force", "--detach", head)
-    _git(worktree, "checkout", "-q", "--", ".")
+    for args in (("checkout", "-q", "--force", "--detach", head), ("checkout", "-q", "--", ".")):
+        out = _git(worktree, *args)
+        if out.returncode != 0:
+            raise RuntimeError(f"restore failed: {out.stderr.strip()[:200]}")
+    if _tree_changed(_worktree_state(worktree), head):
+        raise RuntimeError("restore left a changed or untracked worktree; refusing retry")
 
 
 def _git_write_boundary(agent: str, worktree: str) -> dict | None:
-    """Make the worktree's git metadata unwritable for a reviewer, where this machine can hold it.
+    """Protect sibling checkouts, live state and Git metadata with the existing enforced boundary.
 
-    MEASURED 2026-10-12 (33-PR concept test): reviewers run write-capable in the tree they judge,
-    and in 2 of 35 executions one changed it — an edit to audit.py that the next reviewer then
-    vetoed, and a checkout of an older commit that the next reviewer judged instead of the head.
-    `write_boundary_roots` always re-grants the run's own cwd, so the tree itself cannot be
-    protected here; its git directories can, which stops a moved HEAD or a commit. File edits are
-    caught by the after-check in `review_at_head`, which also covers a machine where no boundary
-    can be enforced (inside a codex sandbox seatbelt cannot nest), so None here is never unsafe."""
+    The private review tree remains writable and is checked after every attempt. An unavailable
+    boundary is refused by review(), never replaced with an unconfined dispatch.
+    """
     import adapters
 
-    if agent == "codex" or adapters.write_boundary_unenforceable(agent):
-        return None  # codex reviews in its own read-only sandbox (mode "assess")
-    dirs = []
+    if adapters.write_boundary_unenforceable(agent):
+        return None
+    dirs = [str(Path.home()), str(Path(worktree).resolve().parent)]
     for flag in ("--absolute-git-dir", "--git-common-dir"):
         out = _git(worktree, "rev-parse", flag)
-        if out.returncode == 0 and out.stdout.strip():
-            path = Path(out.stdout.strip())
-            dirs.append(str(path if path.is_absolute() else Path(worktree) / path))
-    return {"protect": list(dict.fromkeys(dirs)), "allow": []} if dirs else None
+        if out.returncode != 0 or not out.stdout.strip():
+            return None
+        path = Path(out.stdout.strip())
+        dirs.append(str(path if path.is_absolute() else Path(worktree) / path))
+    return {"protect": list(dict.fromkeys(dirs)), "allow": []}
 
 
 def _tree_changed(after: dict, head: str) -> bool:
@@ -853,8 +858,10 @@ def panel_worktree(target: str, head: str) -> str:
         state = _worktree_state(str(wt))
         if state["head"] == head and not state["dirty"]:
             return str(wt)
-        _git(str(canon), "worktree", "remove", "--force", str(wt))
-    _git(str(canon), "fetch", "-q", "origin", f"refs/pull/{num}/head")
+        raise RuntimeError("existing panel worktree is dirty or at another head; refusing reuse")
+    fetched = _git(str(canon), "fetch", "-q", "origin", head)
+    if fetched.returncode != 0:
+        raise RuntimeError("cannot fetch exact panel checkout commit")
     added = _git(str(canon), "worktree", "add", "-q", "--detach", str(wt), head)
     if added.returncode != 0:
         raise RuntimeError(
@@ -885,6 +892,7 @@ def review_at_head(
     reviewers: list[str] | None = None,
     context: str = "",
     worktree: str | None = None,
+    checkout_head: str | None = None,
     env: Mapping[str, str] | None = None,
     exclude: set[str] | frozenset[str] = frozenset(),
     lookup_fn=None,
@@ -911,6 +919,9 @@ def review_at_head(
     """
     reviewers = list(reviewers) if reviewers else reviewers_from_env(env)
     auto = reviewers == [AUTO_REVIEWER]
+    requested_reviewers = list(reviewers)
+    if not auto:
+        reviewers = [r for r in reviewers if r not in exclude]
     base: dict = {"target": target, "head": head, "reviewers": reviewers}
     if not _TARGET_RE.fullmatch(str(target or "")) or not _HEAD_RE.fullmatch(str(head or "")):
         return {
@@ -925,7 +936,16 @@ def review_at_head(
         key=lookup.get("key"),
         inconclusive_at_head=lookup.get("inconclusive_at_head"),
     )
-    if lookup.get("state") == "found":
+    evaluated_head = checkout_head or head
+    if not _HEAD_RE.fullmatch(evaluated_head):
+        return {**base, "status": "invalid", "detail": "invalid checkout head"}
+    if (
+        lookup.get("state") == "found"
+        and (auto or len(reviewers) == len(requested_reviewers))
+        and (
+            not checkout_head or (lookup.get("result") or {}).get("evaluated_head") == checkout_head
+        )
+    ):
         return {
             **base,
             "status": "reused",
@@ -938,11 +958,11 @@ def review_at_head(
         base["memo_error"] = lookup.get("error")
     try:
         if worktree is None:
-            worktree = str((provision_fn or panel_worktree)(target, head))
+            worktree = str((provision_fn or panel_worktree)(target, evaluated_head))
         observed = (head_fn or _worktree_head)(str(worktree))
     except Exception as exc:
         return {**base, "status": "failed", "error": str(exc)[:500]}
-    if observed != head:
+    if observed != evaluated_head:
         return {
             **base,
             "status": "head_mismatch",
@@ -964,6 +984,15 @@ def review_at_head(
     attempts: list[dict] = []
     result: dict | None = None
     used: list[str] = []
+    initial = state_of(worktree)
+    if _tree_changed(initial, evaluated_head):
+        return {
+            **base,
+            "status": "failed",
+            "verdict": INCONCLUSIVE,
+            "error": "initial worktree is dirty or untracked",
+            "worktree": worktree,
+        }
     for fixed in seats:
         seat: list[str] = list(fixed or [])
         if auto:
@@ -973,6 +1002,11 @@ def review_at_head(
                 break
             seat = [pick["agent"]]
             tried.add(pick["agent"])
+        if not seat:
+            attempts.append(
+                {"agent": None, "outcome": "no_seat", "reason": "all explicit reviewers excluded"}
+            )
+            break
         try:
             # A plain call on the default path, so the audit's static call graph sees this entry
             # reach `review`'s heartbeat (`(review_fn or review)(...)` hides it).
@@ -983,8 +1017,16 @@ def review_at_head(
         except Exception as exc:
             return {**base, "status": "failed", "error": str(exc)[:500], "worktree": worktree}
         after = state_of(worktree)
-        if _tree_changed(after, head):
-            restore(worktree, head)
+        if _tree_changed(after, evaluated_head):
+            try:
+                restore(worktree, evaluated_head)
+                if _tree_changed(state_of(worktree), evaluated_head):
+                    raise RuntimeError("restore did not return a clean tree")
+            except Exception as exc:
+                attempts.append(
+                    {"agent": ",".join(seat), "outcome": "restore_failed", "error": str(exc)[:300]}
+                )
+                break
             attempts.append(
                 {
                     "agent": ",".join(seat),
@@ -994,6 +1036,10 @@ def review_at_head(
                 }
             )
             continue
+        if not auto and len(seat) != len(requested_reviewers):
+            outcome = _shortfall(
+                "explicit author exclusion leaves incomplete reviewer coverage", attempts
+            )
         verdict = str(outcome.get("verdict") or "").upper()
         if auto and verdict not in CONCLUSIVE_VERDICTS:
             attempts.append({"agent": seat[0], "outcome": "no_verdict"})
@@ -1012,6 +1058,7 @@ def review_at_head(
         used = sorted(tried) or list(reviewers)
     else:
         result = {**result, "attempts": attempts}
+    result["evaluated_head"] = evaluated_head
     key = base.get("key") or panel_key(target, head, reviewers)
     verdict = str(result.get("verdict") or "").upper()
     return {
@@ -1179,7 +1226,9 @@ def _file_followup_locked(
         if prior.get("key") != key:
             raise RuntimeError("invalid follow-up record; no create permitted")
         if type(prior.get("issue")) is int and prior["issue"] > 0:
-            return {"filed": False, "reason": "already filed", **prior}
+            if prior.get("closure_complete"):
+                return {"filed": False, "reason": "already filed", **prior}
+            return _close_followup_sources(target, prior, run, record, filed=False)
         if prior.get("state") != "create_pending":
             raise RuntimeError("invalid follow-up state; no create permitted")
     repo, num = target.split("#")
@@ -1204,7 +1253,14 @@ def _file_followup_locked(
         labels_out = run(
             ["gh", "label", "list", "-R", repo, "--search", "priority", "--json", "name"]
         )
-        have = {row.get("name") for row in json.loads(labels_out.stdout or "[]")}
+        try:
+            have = (
+                {row.get("name") for row in json.loads(labels_out.stdout or "[]")}
+                if labels_out.returncode == 0
+                else set()
+            )
+        except (ValueError, TypeError, AttributeError):
+            have = set()
         label = wanted if wanted in have else None
         cmd = [
             "gh",
@@ -1236,13 +1292,27 @@ def _file_followup_locked(
     out = {"issue": issue, "repo": repo, "label": label, "closed_source": [], "key": key}
     # Filing must survive a failed source-issue lookup/close or a crash during disposition.
     _write_followup_record(record, out)
+    return _close_followup_sources(target, out, run, record, filed=existing is None)
+
+
+def _close_followup_sources(target, out, run, record, *, filed):
+    repo, num = target.split("#")
+    issue = out["issue"]
+    closed = list(out.get("closed_source") or [])
     try:
-        closed = []
         pr = run(["gh", "pr", "view", num, "-R", repo, "--json", "closingIssuesReferences,state"])
-        for ref in json.loads(pr.stdout or "{}").get("closingIssuesReferences") or []:
+        if pr.returncode != 0:
+            raise RuntimeError("source lookup failed")
+        metadata = json.loads(pr.stdout)
+        refs = metadata["closingIssuesReferences"]
+        if refs and metadata.get("state") != "MERGED":
+            raise RuntimeError("source closure requires a merged PR")
+        for ref in refs:
             src = f"{ref['repository']['owner']['login']}/{ref['repository']['name']}"
             state = run(["gh", "issue", "view", str(ref["number"]), "-R", src, "--json", "state"])
-            if json.loads(state.stdout or "{}").get("state") == "OPEN":
+            if state.returncode != 0:
+                raise RuntimeError("source state lookup failed")
+            if json.loads(state.stdout)["state"] == "OPEN":
                 done = run(
                     [
                         "gh",
@@ -1252,27 +1322,50 @@ def _file_followup_locked(
                         "-R",
                         src,
                         "--comment",
-                        f"Delivered by {target}. The adversarial panel's open finding on that "
-                        f"merge continues in {repo}#{issue}.",
+                        f"Delivered by {target}. The adversarial panel's open finding on that merge continues in {repo}#{issue}.",
                     ]
                 )
-                if done.returncode == 0:
-                    closed.append(f"{src}#{ref['number']}")
+                if done.returncode != 0:
+                    raise RuntimeError("source closure failed; retry remains required")
+                closed.append(f"{src}#{ref['number']}")
+        out.update(closed_source=closed, closure_complete=True)
     except Exception as exc:
-        return {"filed": existing is None, **out, "error": str(exc)[:300]}
-    out["closed_source"] = closed
+        out.update(closed_source=closed, closure_complete=False)
+        _write_followup_record(record, out)
+        return {"filed": filed, **out, "error": str(exc)[:300]}
     _write_followup_record(record, out)
-    return {"filed": existing is None, **out}
+    return {"filed": filed, **out}
 
 
 def spawn_post_merge_panel(
-    target: str, head: str, context: str, exclude: set[str], *, popen=None
+    target: str, head: str, context: str, exclude: set[str], *, popen=None, merge_head_fn=None
 ) -> dict:
     """Run the panel and its follow-up DETACHED, after the merge. Advisory work never holds a merge
     or a lane round: a ~13-minute panel (median 806 s in the concept test) inside merge_guard would
     stall every high-stakes merge, and a lane that timed out mid-panel would block it de facto."""
     import subprocess
 
+    try:
+        if merge_head_fn is not None:
+            checkout_head = merge_head_fn(target)
+        else:
+            repo, number = target.split("#")
+            merged = subprocess.run(
+                ["gh", "pr", "view", number, "-R", repo, "--json", "state,mergeCommit"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if merged.returncode != 0:
+                raise RuntimeError("merged commit lookup failed")
+            metadata = json.loads(merged.stdout)
+            if metadata.get("state") != "MERGED":
+                raise RuntimeError("PR is not merged")
+            checkout_head = (metadata.get("mergeCommit") or {}).get("oid")
+        if not isinstance(checkout_head, str) or not _HEAD_RE.fullmatch(checkout_head):
+            raise RuntimeError("merged commit is unavailable")
+    except Exception as exc:
+        return {"status": "spawn_failed", "error": str(exc)[:300]}
     log = _panel_artifact_path(panel_key(target, head, [AUTO_REVIEWER])).with_suffix(".log")
     cmd = [
         sys.executable,
@@ -1282,6 +1375,8 @@ def spawn_post_merge_panel(
         target,
         "--head",
         head,
+        "--checkout-head",
+        checkout_head,
         "--context",
         context,
         "--followup",
@@ -1460,6 +1555,7 @@ def _selftest_one_reviewer() -> None:
 
             def review_fn(wt, seat, ctx):
                 seen.append(seat[0])
+                state["moved"] = seat[0] == "cursor"
                 if seat[0] == "gemini":
                     return {"verdict": "INCONCLUSIVE"}
                 return {
@@ -1470,10 +1566,15 @@ def _selftest_one_reviewer() -> None:
             def state_fn(wt):
                 state["n"] += 1
                 # the second reviewer (cursor) leaves the tree on an older commit
-                return {"head": "f" * 40 if seen[-1] == "cursor" else state["sha"], "dirty": ""}
+                return {"head": "f" * 40 if state.get("moved") else state["sha"], "dirty": ""}
+
+            def restore_fn(wt, h):
+                restored.append(h)
+                state["moved"] = False
 
             def run(sha=head, **kw):
                 state["sha"] = sha
+                state["moved"] = False
                 kw.setdefault("state_fn", state_fn)
                 return review_at_head(
                     target,
@@ -1484,7 +1585,7 @@ def _selftest_one_reviewer() -> None:
                     head_fn=lambda wt: sha,
                     choose_fn=choose,
                     review_fn=review_fn,
-                    restore_fn=lambda wt, h: restored.append(h),
+                    restore_fn=restore_fn,
                     **kw,
                 )
 
@@ -1537,9 +1638,10 @@ def _selftest_one_reviewer() -> None:
                     ("issue", "create"): "https://github.com/o/r/issues/90\n",
                     ("pr", "view"): json.dumps(
                         {
+                            "state": "MERGED",
                             "closingIssuesReferences": [
                                 {"number": 40, "repository": {"name": "r", "owner": {"login": "o"}}}
-                            ]
+                            ],
                         }
                     ),
                     ("issue", "view"): json.dumps({"state": "OPEN"}),
@@ -1571,6 +1673,7 @@ def _selftest_one_reviewer() -> None:
                 "ctx",
                 {"codex"},
                 popen=fake_popen,
+                merge_head_fn=lambda target: "b" * 40,
             )
             assert sched["status"] == "scheduled_after_merge" and "--followup" in argv[0], argv
             assert argv[0][argv[0].index("--exclude-agents") + 1] == "codex", argv
@@ -1841,6 +1944,9 @@ def _review_cli(argv: list[str]) -> int:
     parser.add_argument("--target", required=True, help="owner/repo#N")
     parser.add_argument("--head", required=True, help="the PR's full head commit SHA")
     parser.add_argument(
+        "--checkout-head", help="actual merged commit to review; --head remains the memo key"
+    )
+    parser.add_argument(
         "--reviewers",
         default="",
         help="comma-separated; default ORCH_ADVERSARIAL_REVIEWERS, else one router-chosen "
@@ -1878,6 +1984,7 @@ def _review_cli(argv: list[str]) -> int:
     out = review_at_head(
         args.target,
         args.head,
+        checkout_head=args.checkout_head,
         reviewers=reviewers,
         context=args.context or f"Pull request {args.target} at head {args.head[:12]}.",
         worktree=args.worktree,
