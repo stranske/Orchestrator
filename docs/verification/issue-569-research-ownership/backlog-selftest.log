@@ -1,0 +1,1 @@
+backlog.py selftest: OK (ready-issue + in-flight-agent-PR discovery, body retention, label classification, open-PR-referenced-issue exclusion, scoped-blocker filter + expiry honoured/fail-safe, sentinel source distinguishes unreadable from empty)
