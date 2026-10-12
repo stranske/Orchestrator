@@ -301,3 +301,21 @@ def test_the_selftest_writes_nothing_to_the_brain_it_is_pointed_at(tmp_path, mon
         ).fetchone()[0]
     assert rows == 1, f"merge_guard's selftest wrote {rows - 1} rows into the Brain it was given"
     assert feedback.DB_PATH == live
+
+
+def test_cached_premerge_pass_still_schedules_merge_commit_review(brain):
+    _judge(Panel("PASS"))
+    spawned = []
+    out = _merge(spawned=spawned)
+    assert out["merge_executed"] is True
+    assert out["adversarial_review"]["post_merge"]["status"] == "scheduled_after_merge"
+    assert len(spawned) == 1 and spawned[0]["exclude"] == {"codex"}
+
+
+def test_disabled_panel_never_schedules_cached_blocker(brain):
+    _judge(Panel("BLOCKED"))
+    spawned = []
+    out = _merge(env=OFF, spawned=spawned)
+    assert out["merge_executed"] is True
+    assert spawned == []
+    assert "post_merge" not in out["adversarial_review"]

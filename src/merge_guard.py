@@ -236,7 +236,12 @@ def adversarial_review_status(
     if recorded.get("state") == "found" and adversarial.reuse_respects_exclusion(
         recorded.get("result"), exclude
     ):
-        return {"reason": reason, "status": "reused", **recorded}
+        return {
+            "reason": reason,
+            "status": "reused",
+            **recorded,
+            "exclude_agents": sorted(exclude),
+        }
     if not adversarial.review_enabled(env):
         return {
             "status": "required_but_not_run",
@@ -491,12 +496,15 @@ def guarded_merge(
     # and an injected merge must inject its spawn too (guard tests must forbid spawns).
     if spawn_fn is None and merge_fn is not subprocess.run:
         spawn_fn = _no_spawn
-    if panel.get("status") == "deferred_to_post_merge" or (
-        panel.get("status") == "reused" and str(panel.get("verdict")).upper() == "BLOCKED"
-    ):
+    import adversarial
+
+    if adversarial.review_enabled(env) and panel.get("status") in {
+        "deferred_to_post_merge",
+        "reused",
+    }:
         # After the merge and outside it: the detached job judges the merged head (or reuses the
         # verdict already recorded for it) and, on BLOCKED, files the follow-up. Never blocks.
-        import adversarial
+        # A PR-head PASS is advisory evidence, never a substitute for the actual merge commit.
 
         try:
             panel["post_merge"] = (spawn_fn or adversarial.spawn_post_merge_panel)(

@@ -1,0 +1,14 @@
+{
+  "prior_head": "1ad37474619892a22d5e87dc3459c3684b35b80e",
+  "files": {
+    "560-second-red.log": "b4b9b1f04d1fbc69c5a97d704a2f35635a77e956074c31cd1c6d406e6b3c6d1c",
+    "560-second-red.xml": "bc7a90ee30d4b6abddaaa99a4e3643582fbf1daad96d74490dd85cf0edffaf3f",
+    "560-second-green.log": "c744439c895a0dfd417791c9cf21d3c55cb3d416ccc724bad6fd66da615d5c70",
+    "560-second-green.xml": "25c9b571af32ee113f7bbfe55f2df65401276aea992122bd0697ba7054198bc8",
+    "560-second-selftest.log": "eab9aec501826590f4765a01ad84a22f0ee013f00654e02bddd9d24f96840db0",
+    "560-second-mypy.log": "f8447ed78cbabb8c133e3925cfb176aa95c8565d8a9756051d90a652e4a685c7",
+    "560-second-collection.log": "e14d9c348d42b456f214f35cd88b19af1a2a83fef9c9cf843d77210518d8dcd4"
+  },
+  "source_sha256": "c6dbad99b84c32612fab993885366658f19eced877e58e0e83cb7e3b40c842e1",
+  "tests_sha256": "2197c90f827d565bbb7f0b9ef1997d49217160f9ae0cc4352e59edcc49dcbdfa"
+}
