@@ -1,0 +1,60 @@
+{
+  "production_commit": "4d4136d83a26f69f1ffc0cffbcf3cd8ae7fa38b1",
+  "production_sha256": "29b68c2cf7eb8244b53cb275a79317fc132c8b96e6251b640550cc6cc52ce472",
+  "candidate_sha256_before": "746a69887e9be4e34fdfafb08fdec447481cdc11bca1245a30eb369e4cf6f9cb",
+  "candidate_sha256_after": "746a69887e9be4e34fdfafb08fdec447481cdc11bca1245a30eb369e4cf6f9cb",
+  "candidate_never_modified_for_red": true,
+  "runs": [
+    {
+      "phase": "red",
+      "command": [
+        "node",
+        "--test",
+        "--test-isolation=none",
+        "--test-reporter=tap",
+        "--test-reporter-destination=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-541/bash-alias-red.log",
+        "--test-reporter=junit",
+        "--test-reporter-destination=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-541/bash-alias-red.xml",
+        "tests/test_agent_gh_guard_bash.js"
+      ],
+      "source_root": "/tmp/issue-541-production",
+      "exit_code": 1,
+      "tests": 4,
+      "failed": 4,
+      "passed": 0,
+      "skipped": 0
+    },
+    {
+      "phase": "green",
+      "command": [
+        "node",
+        "--test",
+        "--test-isolation=none",
+        "--test-reporter=tap",
+        "--test-reporter-destination=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-541/bash-alias-green.log",
+        "--test-reporter=junit",
+        "--test-reporter-destination=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-541/bash-alias-green.xml",
+        "tests/test_agent_gh_guard_bash.js"
+      ],
+      "source_root": "/home/runner/work/Orchestrator/Orchestrator",
+      "exit_code": 0,
+      "tests": 4,
+      "failed": 0,
+      "passed": 4,
+      "skipped": 0
+    }
+  ],
+  "scope": "Supplemental Bash tests only; native zsh unavailable on this runner.",
+  "hashes": {
+    "src/dispatcher.py": "746a69887e9be4e34fdfafb08fdec447481cdc11bca1245a30eb369e4cf6f9cb",
+    "tests/test_agent_gh_guard_bash.js": "62895cf1ce6e25879c362423c7fd926dc55f56a94d4325b1eefb9095848aff1f",
+    ".verify-floor.json": "38f92d9b0d68652c819c2889e7151ae14d5c46b63aa3881350efaad6ae700b7e"
+  },
+  "archive_sha256": "122e09608d3fdbfe62e79652d1731bb1ce49361a149b1e6bcc9b878908ee5c25",
+  "archive_members": {
+    "bash-alias-red.log": "7fcc71780a88eb0fae7d19b1e75a09a289ee107e44a8a6f7201313f2693b9bb0",
+    "bash-alias-red.xml": "a741ff70f5c312a7d298403b0b8545ed7fbaa716bca40ee2b8b07aaa2b604986",
+    "bash-alias-green.log": "0ccc5bb5a60da04cf1a2e24447c1be7a1d1c3bf6520c17475d1443ec9f127841",
+    "bash-alias-green.xml": "f3286dfc1ed6ef5b05af7fa7c846c3237c83a50bdd3f551052cb211e648f4071"
+  }
+}

@@ -1,0 +1,12 @@
+✔ owner BASH_ENV alias preserves startup and refusal precedence: -c auth logout (103.58375ms)
+✔ owner BASH_ENV alias preserves startup and refusal precedence: -c auth status (310.265125ms)
+✔ owner BASH_ENV alias preserves startup and refusal precedence: -lc auth logout (103.22375ms)
+✔ owner BASH_ENV alias preserves startup and refusal precedence: -lc auth status (294.432125ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 866.930416
