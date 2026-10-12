@@ -220,3 +220,41 @@ def test_a_failed_guard_write_leaves_no_temp_file(world, monkeypatch):
         dispatcher._ensure_gh_guard()
     leftovers = list((dispatcher.AGENT_RUNTIME_DIR / "gh-guard").rglob("*.tmp"))
     assert leftovers == [], leftovers
+
+
+@pytest.mark.parametrize(
+    "dotfile,flags",
+    [(".zshenv", "-c"), (".zprofile", "-lc"), (".zshrc", "-ic"), (".zlogin", "-lic")],
+)
+@pytest.mark.parametrize("args,expected", [("auth logout", 77), ("auth status", 0)])
+@NEEDS_ZSH
+def test_owner_startup_alias_cannot_replace_the_guard(world, dotfile, flags, args, expected):
+    startup = world["home"] / dotfile
+    startup.write_text(
+        f'export PATH={shlex.quote(str(world["real"]))}:"$PATH"\n'
+        'alias gh="command gh"\nexport ORCH_TEST_ALIAS_STARTUP=ran\n'
+    )
+    command = 'printf "%s\\n" "$ORCH_TEST_ALIAS_STARTUP"; gh ' + args
+    ran = _agent(world, f"exec {shlex.quote(ZSH)} {flags} {shlex.quote(command)}")
+    assert ran.returncode == expected, (ran.stdout, ran.stderr)
+    assert ran.stdout == "ran\n"
+    assert "parse error" not in ran.stderr and "defining function based on alias" not in ran.stderr
+    assert _logged(world) == ("" if expected else f"REAL-GH {args}\n")
+
+
+@NEEDS_ZSH
+def test_owner_zlogout_runs_once_for_login_shell_and_preserves_status(world):
+    logout = world["tmp"] / "logout.log"
+    (world["home"] / ".zlogout").write_text(
+        f"printf 'owner logout\\n' >> {shlex.quote(str(logout))}\n" "gh auth status\n"
+    )
+    ran = _agent(world, f"exec {shlex.quote(ZSH)} -lic 'gh pr view 1; exit 23'")
+    assert ran.returncode == 23, (ran.stdout, ran.stderr)
+    assert logout.exists(), "interactive login must source the owner's logout file"
+    assert logout.read_text() == "owner logout\n"
+    assert _logged(world) == "REAL-GH pr view 1\nREAL-GH auth status\n"
+    logout.unlink()
+    for flags in ("-c", "-lc", "-ic"):
+        ran = _agent(world, f"exec {shlex.quote(ZSH)} {flags} 'gh pr view 1'")
+        assert ran.returncode == 0
+        assert not logout.exists(), "only interactive login shells source the owner's logout file"

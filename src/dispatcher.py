@@ -656,7 +656,7 @@ GH_GUARD_REFUSED = (
     "alias import",
 )
 GH_GUARD_EXIT = 77  # EX_NOPERM
-_ZSH_DOTFILES = (".zshenv", ".zprofile", ".zshrc", ".zlogin")
+_ZSH_DOTFILES = (".zshenv", ".zprofile", ".zshrc", ".zlogin", ".zlogout")
 
 
 def agent_gh_guard_disabled() -> bool:
@@ -690,7 +690,11 @@ def _gh_guard_check(leave: str) -> str:
 
 
 def _gh_guard_function() -> str:
-    return "gh() {\n" + _gh_guard_check("return") + 'command gh "$@"\n}\n'
+    # zsh expands an owner's alias while parsing a function definition; remove it
+    # after sourcing startup files so the function can enforce refusal precedence.
+    return (
+        "unalias gh 2>/dev/null || :\ngh() {\n" + _gh_guard_check("return") + 'command gh "$@"\n}\n'
+    )
 
 
 def _gh_guard_files(guard: Path) -> dict[Path, str]:

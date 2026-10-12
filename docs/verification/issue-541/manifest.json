@@ -1,0 +1,29 @@
+{
+  "archive_sha256": "e4bdfd5d1afd1832b0e014ecdd336b7132a51345961385bc4349e2af49619fc9",
+  "members": {
+    "541-production-green.log": "e10bb30e69d6c1258ecc72f485f9a09dffe27fe5ebfe84271f3a866f11baa375",
+    "541-production-red.xml": "4eb0dc750d40ca116d0d22c307f054d27095d5d0e606f251eed5cbfff0d00676",
+    "541-production-red.log": "9f87ae82f0573a791c49e80df72287cf35630cd0678d935a7062856e1e72771c",
+    "541-production-proof.json": "50c24b1962973c0d976dfd7b23bea49f8efd5f29d54d3c0e256519e14af506a7",
+    "541-production-green.xml": "4dd295eb4d71558cdc4508f296d66b816b19a5fc488a4524142f58cd0dcb60fc",
+    "541-focused-green.xml": "d64f5de83265993a55d490ea393dbf4ec65c3dfbf4638d8e17deadd1129e4978",
+    "541-focused-green.log": "cbba8417b9a8a736ae27340083d24af0748ad5fd7a9d460b82486c04bea353f8",
+    "inputs/dispatcher.py": "746a69887e9be4e34fdfafb08fdec447481cdc11bca1245a30eb369e4cf6f9cb",
+    "inputs/test_agent_gh_guard.py": "a758dd35300ba647a703b814c6673c3fac289fae4a24060a0dfd7aa3268fd083",
+    "full-verify.log": "951f4ef32e0575126d49d357b4f4eacd04710fff28e3df6ff78bf82400de7380",
+    "full-verify-command.json": "eea33034cf86f74d52bda691b46a08d830734625c950f9b658e2c2d55da01573",
+    "inputs/.verify-floor.json": "38f92d9b0d68652c819c2889e7151ae14d5c46b63aa3881350efaad6ae700b7e"
+  },
+  "source_base": "4d4136d83a26f69f1ffc0cffbcf3cd8ae7fa38b1",
+  "scope": "fake HOME/fake gh, actual bash/zsh processes; no real authentication/owner files",
+  "full_verifier": {
+    "exit": 0,
+    "pytest_passed": 2903,
+    "pytest_failed": 0,
+    "pytest_skipped": 0,
+    "module_selftests": 104,
+    "gates": 5,
+    "mypy_checked": 122,
+    "private_state_deleted": true
+  }
+}
