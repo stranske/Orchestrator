@@ -234,9 +234,10 @@ def test_no_route_learner_scores_an_unattributed_row(brain, learner):
     assert posterior < prior, "the control FAIL must still lower the posterior"
 
 
-def test_the_capability_tally_reads_an_unattributed_fail_as_churn(brain, monkeypatch):
-    """A legacy row relabelled by class alone keeps its FAIL; the tally must still not count it,
-    because NONATTRIBUTABLE_FAILURE_CLASSES is derived from the excluded set."""
+def test_the_capability_tally_never_counts_an_unattributed_fail(brain, monkeypatch):
+    """A legacy row relabelled by class alone keeps its FAIL; the tally must still not count it.
+    Since 2026-10-12 every class in the excluded set tallies `learning_excluded`, whichever branch
+    made the row a failure (it was `churn_unattributed` here, and a verifier FAIL was not refused)."""
     ledger = brain / "capabilities.json"
     now = int(time.time())
     cap = capabilities.register_compiled_version(
@@ -279,7 +280,7 @@ def test_the_capability_tally_reads_an_unattributed_fail_as_churn(brain, monkeyp
         failure_class=feedback.UNATTRIBUTED_CLOSING_PR,
     )
     (row,) = feedback.capability_causal_evidence(cap["capability_id"], cap["capability_version_id"])
-    assert row["tally_class"] == "churn_unattributed", row
+    assert row["tally_class"] == "learning_excluded", row
 
 
 def test_a_role_run_inherits_the_exclusion_with_the_verdict(brain):
