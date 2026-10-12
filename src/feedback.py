@@ -842,6 +842,8 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
         _apply_data_migration_once(
             c, REJECTED_ROLE_CAPABILITY_EDGES_MIGRATION, _delete_rejected_role_capability_edges
         )
+    # After the runs columns above exist; reads role runs and research rounds, writes runs only.
+    _apply_data_migration_once(c, OFFLOAD_SUBJECTS_MIGRATION, _key_offload_subjects)
     if "agent_switches" in tables:
         switch_cols = {row[1] for row in c.execute("PRAGMA table_info(agent_switches)").fetchall()}
         if "source" not in switch_cols:
@@ -993,6 +995,149 @@ def _rebase_agent_switch_rows(c: sqlite3.Connection) -> dict[str, Any]:
         "zone": list(time.tzname),
         "standard_offset": time.timezone,
     }
+
+
+# A WORK ITEM IS NAMED THE WAY KEEPALIVE AND DELEGATED RUNS NAME THEIR TARGET (`owner/repo#N`), so an
+# offload run done for an issue and a keepalive run on that issue are one subject to both capability
+# readers. Matched on a structured field the caller passed, never on notes or a prompt.
+_WORK_ITEM_SUBJECT = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+")
+
+
+def work_item_subject(target: Any) -> str | None:
+    """`target` when it names one work item (`owner/repo#N`), else None.
+
+    A role's target is sometimes a placeholder (`redirect-role`), a batch (`triage:9-items`), a
+    whole repo or an issue not yet filed (`#new`); none of those is one piece of work, so the run it
+    produced stays unkeyed rather than pooling every such run into one false subject."""
+    text = str(target or "").strip()
+    return text if _WORK_ITEM_SUBJECT.fullmatch(text) else None
+
+
+OFFLOAD_SUBJECTS_MIGRATION = "runs.offload-subjects-2026-10-12"
+
+
+def _offload_subject_sources(c: sqlite3.Connection) -> tuple[dict[str, str], dict[str, set[str]]]:
+    """The two structured links from an offload run to the work it was for, read once.
+
+    * a research ROUND: the run's `experiment_id`, registered to one subject by
+      `research_subjects.record_research_round` (read by `read_round_identity`, the one reader);
+    * a ROLE: the role run whose recorded `backend_run_id` is this offload, when its own target is
+      one work item (`work_item_subject`).
+    Returns (round -> subject, offload run id -> role subjects)."""
+    import research_subjects  # local: research_subjects imports this module
+
+    rounds: dict[str, str] = {}
+    for (round_id,) in c.execute(
+        "SELECT DISTINCT experiment_id FROM runs "
+        "WHERE run_id LIKE 'offload:%' AND experiment_id IS NOT NULL"
+    ).fetchall():
+        # The read-only reader: `round_identity` creates the schema, which commits mid-migration.
+        identity = research_subjects.read_round_identity(c, str(round_id))
+        if identity and identity.get("subject_id"):
+            rounds[str(round_id)] = str(identity["subject_id"])
+    roles: dict[str, set[str]] = {}
+    for backend_run_id, target in c.execute(
+        "SELECT json_extract(decomposition,'$.backend_run_id'),target FROM runs "
+        "WHERE role_name IS NOT NULL AND json_valid(decomposition) "
+        "AND json_extract(decomposition,'$.backend_run_id') LIKE 'offload:%'"
+    ).fetchall():
+        subject = work_item_subject(target)
+        if subject:
+            roles.setdefault(str(backend_run_id), set()).add(subject)
+    return rounds, roles
+
+
+def _key_offload_subjects(c: sqlite3.Connection) -> dict[str, Any]:
+    """Record, once, the subject of every offload run a structured link names.
+
+    Until 2026-10-12 `dispatcher.offload` recorded no subject, so every offload run's subject was its
+    `offload:<cwd>` target: 591 role-backend runs since 2026-09-01 were one subject (`offload:/`)
+    and every research-program round another. The writer now records `subject_id` and
+    `subject_source`; this gives earlier rows the same two keys from the same two links, in the
+    same order (a round first, then a role's target). A role link naming two different work items
+    is ambiguous and keys nothing. Everything else (a lane's worktree, a scratch dir) names its work
+    only in prose and stays unkeyed. Each changed row's original metadata is kept in the marker's
+    `detail`; `python3 src/feedback.py restore-offload-subjects` puts it back."""
+    rounds, roles = _offload_subject_sources(c)
+    keyed: list[list[Any]] = []
+    by_source: dict[str, int] = {}
+    ambiguous = 0
+    examined = 0
+    for run_id, experiment_id, raw in c.execute(
+        "SELECT run_id,experiment_id,routing_metadata FROM runs WHERE run_id LIKE 'offload:%' "
+        "ORDER BY run_id"
+    ).fetchall():
+        examined += 1
+        metadata = _routing_metadata_dict(raw)
+        if metadata.get("subject_id"):
+            continue
+        subject, source = rounds.get(str(experiment_id or "")), "research_round"
+        if subject is None:
+            named = roles.get(str(run_id)) or set()
+            if len(named) > 1:
+                ambiguous += 1
+                continue
+            subject, source = (next(iter(named)), "role_target") if named else (None, "")
+        if subject is None:
+            continue
+        updated = {**metadata, "subject_id": subject, "subject_source": source}
+        c.execute(
+            "UPDATE runs SET routing_metadata=? WHERE run_id=?",
+            (json.dumps(updated, sort_keys=True), run_id),
+        )
+        keyed.append([run_id, raw])
+        by_source[source] = by_source.get(source, 0) + 1
+    return {
+        "examined": examined,
+        "keyed": len(keyed),
+        "keyed_by_source": by_source,
+        "ambiguous_role_links": ambiguous,
+        "unkeyed": examined - len(keyed),
+        "rows": keyed,
+    }
+
+
+def restore_offload_subjects(*, conn: sqlite3.Connection | None = None) -> dict[str, Any]:
+    """Undo `_key_offload_subjects`: put back each keyed row's original routing metadata.
+
+    A row whose subject was changed since (it no longer carries the backfilled subject) is left as
+    it is. The marker stays and records the restore, so the next open does not key the rows again.
+    """
+    c = conn or _conn()
+    close = conn is None
+    try:
+        found = c.execute(
+            "SELECT detail FROM data_migrations WHERE name=?", (OFFLOAD_SUBJECTS_MIGRATION,)
+        ).fetchone()
+        if found is None:
+            return {"restored": 0, "reason": "not applied on this Brain"}
+        detail = json.loads(found[0])
+        if detail.get("restored_ts"):
+            return {
+                "restored": 0,
+                "reason": "already restored",
+                "restored_ts": detail["restored_ts"],
+            }
+        restored = 0
+        for run_id, original in detail["rows"]:
+            row = c.execute(
+                "SELECT routing_metadata FROM runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+            current = _routing_metadata_dict(row[0]) if row else {}
+            if current.get("subject_source") in ("research_round", "role_target"):
+                c.execute("UPDATE runs SET routing_metadata=? WHERE run_id=?", (original, run_id))
+                restored += 1
+        detail["restored_ts"] = int(time.time())
+        detail["restored"] = restored
+        c.execute(
+            "UPDATE data_migrations SET detail=? WHERE name=?",
+            (json.dumps(detail, sort_keys=True), OFFLOAD_SUBJECTS_MIGRATION),
+        )
+        c.commit()
+        return {"restored": restored, "of": len(detail["rows"])}
+    finally:
+        if close:
+            c.close()
 
 
 REFUSAL_ROLE_EDGES_MIGRATION = "influence_edges.refusal-role-edges-2026-10-05"
@@ -7892,6 +8037,9 @@ def main(argv):
     if argv and argv[0] == "migrate-execution-attempts":
         report = migrate_legacy_execution_attempts(apply="--apply" in argv[1:])
         print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+    if argv and argv[0] == "restore-offload-subjects":
+        print(json.dumps(restore_offload_subjects(), indent=2, sort_keys=True))
         return 0
     if argv and argv[0] == "restore-refusal-role-edges":
         print(json.dumps(restore_refusal_role_edges(), indent=2, sort_keys=True))
