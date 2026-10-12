@@ -1,0 +1,18 @@
+{
+  "observed_head": "7fcb8ecfb9ae2fedfb13e6637eb59184b3047288",
+  "failed_run": 38198757026,
+  "checkout_skipped": 40,
+  "checkout_ceiling": 31,
+  "mirror_skipped": 61,
+  "mirror_ceiling": 52,
+  "cause": "Nine new zsh cases cannot run without runner zsh",
+  "repair": "Install zsh before all four repo-specific CI verification consumers; no floor/ceiling or permission changes",
+  "native_focused": "45 passed, zero skips",
+  "bash_native": "4 passed, zero skips",
+  "hosted_fixed_result": "UNKNOWN until new exact-head CI",
+  "files": {
+    "543-native.log": "56404f18f66e4e8fe5c8d816553856737f40dacb9727ead4892d738f02264a44",
+    "543-native.xml": "d2f96f86fef0800c4e10259687972ca4670495e48f6dbefdbb65c995d3483096",
+    "543-bash.log": "271ffe90e2c00bd8cadddd7c3765525f8f3bc91c1c2f0cb4f0979a6b3ec54fab"
+  }
+}
