@@ -397,7 +397,9 @@ in its own field and printed beside it with a legend:
 - `assoc`: an edge onto a role run, whose outcome is a copy of the acting run's (set aside at
   `acted_on` since 2026-10-12, below);
 - `sweep`: a merge the durability sweep has not judged;
-- `unres`: an unmerged run nothing will judge;
+- `nomerge` (`unres` until 2026-10-12): a run that never merges. Since the owner's decision that
+  day, it is set aside here and scored by verdict in `capability_effectiveness`, so the FAIL
+  among them no longer counts at this step (agy-runtime-isolation's 8);
 - `open`: no outcome yet.
 
 `no_outcome` now means something can still resolve, which is only `open` or `sweep`. When every
@@ -442,6 +444,24 @@ component or surface moved, so the loop diagram is unchanged.
 
 No first break changes on today's data: every row these touch breaks earlier or has unmeasured
 demand. No stage, component or surface moved, so the loop diagram is unchanged.
+
+**An experiment member run has no outcome path (2026-10-12, owner decision "trace and wire
+winner").** `exp_abcd` records each member run with the `abcd-experiment` capability and never
+writes its `outcomes` row, by design: a member commits on an isolated branch, never pushes, and is
+judged in `evaluations_v2`. A winner reaches delivery only through `synthesis_promotion`, whose
+outcome lands on the SYNTHESIS run. The trace, on a copy of the live Brain and the live mirror's
+`experiments/`: 257 promotions; 254 expired in `evaluated` before any synthesis (about 24
+experiments a day against a ship gate that launches one a day); 2 synthesized no commit; 1
+(strategy434) reached `candidate_ready`; 0 were linked to a delivery, because `link-delivery` is a
+CLI with no production caller. Over REST, no `exp/*` branch was ever a PR in the seven repos the
+experiments ran on. So abcd-experiment's 12 edges read as "awaiting outcomes" for a wait nothing
+could end. `feedback.experiment_member_target` names a member run (identity v2 with a member id,
+and not a synthesis run). `capability_effectiveness` counts such an edge as `no_outcome_path`,
+never scored, even when another writer put an outcome on it: that is not the arm's delivery. The
+value-chain monitor sets it aside at `acted_on`, as it does an association. On the same copy,
+abcd-experiment moves from `not_yet_measurable` to `unscoreable`, and its `acted_on` from 12 to 0.
+Every other row is identical. No stage, component or surface moved, so the loop diagram is
+unchanged.
 
 `issue_size_quality` extends that weekly caller with a read-only join: every closed issue in
 the 90-day reviewed-fleet population contributes its checkbox-count band, and only PRs merged
@@ -518,7 +538,7 @@ a merge that read did not reach is never `durable`: it waits under the `fix_sear
 `unjudgeable` with that class seven days after the first run that missed it. Until then the read was the 200
 best matches of a repo's whole history, so in the two repos with more fix PRs than that a merge's own weeks were
 read by chance, and 436 rows were judged durable on an unread window; each run now prints how many merges the
-read covered and how many it did not (again no stage moved; the diagram is unchanged). The rows already recorded `durable` on the cut-short read are read again by the same sweep, by the owner's decision: each one up to its own verdict's moment, so a fix named by then makes it `broke_later` and otherwise only the note changes. Each run prints `truncated N` until none remain; `durability_sweep.py --undo-truncated-recheck` restores the snapshot it took first, and `ORCH_DURABILITY_TRUNCATED_RECHECK=0` stops it. Since 2026-10-05 the `retry` drain has the same bound on the same per-row clock: a merge lookup or a revert check GitHub never answers (a renamed or deleted repository, lost access) is asked again by every run for `durability_sweep.RETRY_HORIZON_DAYS` from the first run that went unanswered, then closes as `unjudgeable` with `unjudgeable_merge`, the class an answered revert check that cannot decide already gets. Until then such a row stayed pending forever, scoring as a provisional PASS and counted drainable (latent: no row was in it). A clock lives only while its row stays unanswered, and each run prints the next retry close beside drainable (again no stage moved; the diagram is unchanged). This keeps role learning separate from normal
+read covered and how many it did not (again no stage moved; the diagram is unchanged). The rows already recorded `durable` on the cut-short read are read again by the same sweep, by the owner's decision: each one up to its own verdict's moment, so a fix named by then makes it `broke_later` and otherwise only the note changes. Each run prints `truncated N` until none remain; `durability_sweep.py --undo-truncated-recheck` restores the snapshot it took first, and `ORCH_DURABILITY_TRUNCATED_RECHECK=0` stops it. Since 2026-10-05 the `retry` drain has the same bound on the same per-row clock: a merge lookup or a revert check GitHub never answers (a renamed or deleted repository, lost access) is asked again by every run for `durability_sweep.RETRY_HORIZON_DAYS` from the first run that went unanswered, then closes as `unjudgeable` with `unjudgeable_merge`, the class an answered revert check that cannot decide already gets. Until then such a row stayed pending forever, scoring as a provisional PASS and counted drainable (latent: no row was in it). A clock lives only while its row stays unanswered, and each run prints the next retry close beside drainable (again no stage moved; the diagram is unchanged). Since 2026-10-12 a later fix PR makes a merge `broke_later` only where a sentence naming it STATES a repair (repairs, follows up, reverts, corrects; `durability_sweep.reference_relation`); one that names it without saying how closes it as `unjudgeable` / `broke_later_unstated`, never durable. Until then any `#N` in a fix-titled PR counted, and 87 of the 129 naming pairs behind the 134 live `broke_later` rows were siblings, rebase bases, coverage-round targets or "Related Issues/PRs" links. Those rows are judged again by the same sweep over their own verdict's window, print `bare-reference N` until none remain, share the truncated re-check's undo log, and stop on `ORCH_DURABILITY_STATED_RECHECK=0` (no stage moved; the diagram is unchanged). This keeps role learning separate from normal
 implement/review weights while still using the same `relearn_quality()` machinery. Since 2026-09-21
 that machinery reads the fleet's keepalive outcomes (`assignment` `assigned`/`none`) as well as the
 tool's own `experimental` rows, under the 2026-08-29 broke-later detection floor the receiver rail

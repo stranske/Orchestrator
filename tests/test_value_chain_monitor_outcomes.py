@@ -361,21 +361,29 @@ def test_a_capability_only_on_role_runs_was_never_acted_on(brain):
     assert "acted_on 0 (+3 assoc); outcome 0; success 0; first_break not_acted_on" in line, line
 
 
-def test_awaiting_the_sweep_waits_and_unresolvable_does_not(brain):
+def test_awaiting_the_sweep_waits_and_a_run_that_never_merges_does_not(brain):
     _consumed(1, adjudicated_verdict="PASS", merged=1, durability="pending")
     row = _row(brain)
     assert _steps(row) == (1, 0, 0, "no_outcome") and row["outcome_awaiting_sweep"] == 1, row
     _relabel("remote:o/r#1:gemini", merged=0)  # an unmerged run: nothing will ever judge it
     row = _row(brain)
-    assert _steps(row) == (1, 0, 0, "outcome_unscoreable") and row["outcome_unresolvable"] == 1, row
+    assert _steps(row) == (1, 0, 0, "outcome_unscoreable") and row["outcome_no_merge"] == 1, row
 
 
-def test_a_failure_is_terminal_whatever_its_durability(brain):
-    # `feedback.outcome_is_terminal`: a failure verdict is final, and so is a verifier failure
-    # under an adjudicated PASS. The monitor's own sets counted neither until #540's predicates.
-    _consumed(1, adjudicated_verdict="FAIL", merged=0, durability="pending")
+def test_a_verifier_failure_under_a_pass_is_terminal(brain):
+    # `feedback.outcome_is_terminal`: a verifier failure under an adjudicated PASS is final. The
+    # monitor's own sets did not count it until #540's predicates.
     _consumed(2, adjudicated_verdict="PASS", verifier_verdict="NON_PASS", merged=1)
-    assert _steps(_row(brain)) == (2, 2, 0, "no_success")
+    assert _steps(_row(brain)) == (1, 1, 0, "no_success")
+
+
+def test_a_failure_that_never_merges_is_not_the_outcome_step(brain):
+    # Owner decision 2026-10-12 ("separate verdict rate"): a run that never merges is scored by
+    # its verdict in capability_effectiveness. Before it, this FAIL was a terminal outcome while a
+    # PASS in the same place could never be one.
+    _consumed(1, adjudicated_verdict="FAIL", merged=0, durability="pending")
+    row = _row(brain)
+    assert (row["outcome"], row["outcome_no_merge"]) == (0, 1), row
 
 
 def test_the_monitor_classifies_with_the_one_classifier(brain, monkeypatch):
@@ -384,9 +392,9 @@ def test_the_monitor_classifies_with_the_one_classifier(brain, monkeypatch):
     _consumed(1, adjudicated_verdict="PASS", merged=1, durability="durable")
     assert _row(brain)["outcome"] == 1
     # Whatever the effectiveness reader decides an edge is, the monitor counts it the same way.
-    monkeypatch.setattr(capability_effectiveness, "_classify", lambda edge: "unresolvable")
+    monkeypatch.setattr(capability_effectiveness, "_classify", lambda edge: "no_merge")
     row = _row(brain)
-    assert (row["outcome"], row["outcome_unresolvable"]) == (0, 1), row
+    assert (row["outcome"], row["outcome_no_merge"]) == (0, 1), row
 
 
 # ---- `works` needs a durable success; the readable report reaches a reader (2026-10-12) ---------

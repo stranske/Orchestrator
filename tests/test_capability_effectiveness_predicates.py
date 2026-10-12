@@ -20,8 +20,9 @@ wrote their own predicates and disagreed:
 THE RULE THIS PINS. Terminal and durable success are `feedback.outcome_is_terminal` and
 `feedback.outcome_is_durable_success`, which `capability_causal_evidence` also calls. An edge onto a
 role run is an association (`feedback.role_target_kind`), counted and never scored. A merge the
-sweep has not judged is `awaiting_sweep`; a pending run no sweep selects is `unresolvable`. An arm
-none of whose edges can ever be scored reads `unscoreable`, never `not_yet_measurable`.
+sweep has not judged is `awaiting_sweep`; a run that never merges is `no_merge`, scored by its
+verdict. An arm none of whose edges can ever be scored reads `unscoreable`, never
+`not_yet_measurable`.
 
 Every row is written by the production writers: `record_role_run` and `record_run`'s role
 inheritance for role advice, `record_capability_consumption` for a consumed capability (as
