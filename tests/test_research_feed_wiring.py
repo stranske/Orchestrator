@@ -10,7 +10,14 @@ import paths
 
 
 class ResearchFeedWiringTests(unittest.TestCase):
-    def run_discovery(self, *, deferred=False, fail=False, arm=None, dispatch=False):
+    def run_discovery(
+        self,
+        *,
+        deferred=False,
+        fail=False,
+        arm=None,
+        dispatch=False,
+    ):
         script = (paths.REPO_ROOT / "orchestrate.sh").read_text()
         start = script.index("# DISCOVERY FEEDS ONLY THIS TOOL'S OWN DISPATCH LANE")
         end = script.index("# ORCH-ANCHOR: frontend-verify-doctor", start)
@@ -46,7 +53,11 @@ class ResearchFeedWiringTests(unittest.TestCase):
                 + '\nprintf "discovery completed\\n"\n'
             )
             result = subprocess.run(
-                ["bash", str(replay)], capture_output=True, text=True, env=env, timeout=10
+                ["bash", str(replay)],
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=10,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("discovery completed", result.stdout)
