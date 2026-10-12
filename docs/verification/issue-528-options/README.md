@@ -15,3 +15,7 @@ checks physical script/preload generation paths and unchanged relative data,
 then checks actual old-generation parent/child execution after publication.
 Its regenerated unchanged-base mutation fails five intended operand assertions
 and restored candidate passes; no setup error is counted as the RED proof.
+
+Raw production RED stdout and JUnit are losslessly gzip-retained as
+production-red.log.gz and production-red.xml.gz to preserve pytest whitespace
+without adding trailing-whitespace source diffs.

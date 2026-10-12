@@ -34,7 +34,10 @@
       "exit": 1,
       "failures": 5,
       "errors": 0,
-      "source_sha256": "1b6f5068be7c179e5d9980cc42a9899f863bcf8ec253c42b24f0060efe97964a"
+      "source_sha256": "1b6f5068be7c179e5d9980cc42a9899f863bcf8ec253c42b24f0060efe97964a",
+      "raw_log": "production-red.log.gz",
+      "junit_xml": "production-red.xml.gz",
+      "retention": "gzip lossless raw output; decompress to original argv paths for XML inspection"
     },
     {
       "phase": "restored-green",
