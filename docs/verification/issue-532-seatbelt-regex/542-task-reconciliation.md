@@ -1,5 +1,30 @@
 # PR 542 task reconciliation
 
+## Follow-up bot-comment audit (2026-10-12)
+
+Reviewed the recent commits through incoming head
+`235e2a41c1842272cda1acfa4a196d7edfc1fc60` before continuing. GitHub's review-thread
+readback reports all four findings below resolved in `cd40f4f`; the implementation
+and documentation still address them, so no additional code change is needed.
+
+Revalidation on that incoming head passed **86 individual Node receipt/recovery tests**
+across the seven documented files, all four Python quoting regressions, and the retained
+native/original receipt checker. The original-count tests explicitly reject missing
+summaries and conflicts in either order, and accept identical repeated summaries.
+The original receipts and archives were not modified. Linux quoting tests continue to
+report new native parser/enforcement acceptance UNKNOWN.
+
+Skipped the recommendation to reject all repeated original summaries: identical counts
+corroborated by the immutable JUnit case records are consistent evidence. Also skipped
+the command-injection finding on regex `.exec(log)`: it parses text and does not execute
+a command. The subprocess calls use argument arrays.
+
+Attempted to reconcile the three verified review-fix checkboxes in the live PR body.
+The connector again rejected that update with `MCP tool call requires approval, but
+approval policy is never`. The checked tasks below therefore remain proposed remote
+state. PR #542 was read back as open and ready for review at the incoming head.
+Original focused-command/current-head CI recovery and final acceptance remain incomplete.
+
 ## Review-fix revalidation (2026-10-12)
 
 Commit `cd40f4ff33e980244ded636900cf5425dbadbc2c` implements all four review

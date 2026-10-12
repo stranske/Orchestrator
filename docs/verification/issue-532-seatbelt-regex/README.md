@@ -24,7 +24,8 @@ existing per-step logs is required before those measurements can be accepted. Th
 cannot reach GitHub, so authentic producer-bound recovery and final-head CI remain pending.
 
 Local validation of repair commit `cd40f4ff33e980244ded636900cf5425dbadbc2c`, reverified
-on 2026-10-12: **86 Node receipt/recovery tests** across the seven files below, four Python
+on incoming head `235e2a41c1842272cda1acfa4a196d7edfc1fc60` on 2026-10-12:
+**86 individual Node receipt/recovery tests** across the seven files below, four Python
 quoting regressions, and the retained native/original receipt checker pass. Hosted or bounded
 acceptance for that commit is not established. The verified task state and rejected PR-body
 update are recorded in [542-task-reconciliation.md](542-task-reconciliation.md).
