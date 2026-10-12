@@ -1,0 +1,124 @@
+{
+  "schema": "seatbelt-ci-run-discovery/v1",
+  "repo": "stranske/Orchestrator",
+  "head_sha": "f8fff1164cb969a0a52ab60a08ed102cf0410ea4",
+  "total_count": 9,
+  "runs": [
+    {
+      "id": 38212775049,
+      "name": "Health 45 Agents Guard",
+      "path": ".github/workflows/agents-guard.yml",
+      "event": "pull_request",
+      "head_sha": "f8fff1164cb969a0a52ab60a08ed102cf0410ea4",
+      "run_attempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38212775049"
+    },
+    {
+      "id": 38212775055,
+      "name": "CI",
+      "path": ".github/workflows/ci.yml",
+      "event": "pull_request",
+      "head_sha": "f8fff1164cb969a0a52ab60a08ed102cf0410ea4",
+      "run_attempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38212775055"
+    },
+    {
+      "id": 38212775500,
+      "name": "Gate",
+      "path": ".github/workflows/pr-00-gate.yml",
+      "event": "pull_request",
+      "head_sha": "f8fff1164cb969a0a52ab60a08ed102cf0410ea4",
+      "run_attempt": 1,
+      "status": "completed",
+      "conclusion": "cancelled",
+      "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38212775500"
+    },
+    {
+      "id": 38212775526,
+      "name": "Cross-Repo Smoke",
+      "path": ".github/workflows/cross-repo-smoke.yml",
+      "event": "pull_request",
+      "head_sha": "f8fff1164cb969a0a52ab60a08ed102cf0410ea4",
+      "run_attempt": 1,
+      "status": "completed",
+      "conclusion": "skipped",
+      "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38212775526"
+    },
+    {
+      "id": 38212775619,
+      "name": "Agents PR Event Hub",
+      "path": ".github/workflows/agents-80-pr-event-hub.yml",
+      "event": "pull_request",
+      "head_sha": "f8fff1164cb969a0a52ab60a08ed102cf0410ea4",
+      "run_attempt": 1,
+      "status": "completed",
+      "conclusion": "cancelled",
+      "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38212775619"
+    },
+    {
+      "id": 38212780300,
+      "name": "Claude Code Review (Opt-in)",
+      "path": ".github/workflows/maint-76-claude-code-review.yml",
+      "event": "pull_request",
+      "head_sha": "f8fff1164cb969a0a52ab60a08ed102cf0410ea4",
+      "run_attempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38212780300"
+    },
+    {
+      "id": 38212780344,
+      "name": "Agents Auto-Pilot",
+      "path": ".github/workflows/agents-auto-pilot.yml",
+      "event": "pull_request",
+      "head_sha": "f8fff1164cb969a0a52ab60a08ed102cf0410ea4",
+      "run_attempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38212780344"
+    },
+    {
+      "id": 38212780773,
+      "name": "Gate",
+      "path": ".github/workflows/pr-00-gate.yml",
+      "event": "pull_request",
+      "head_sha": "f8fff1164cb969a0a52ab60a08ed102cf0410ea4",
+      "run_attempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38212780773"
+    },
+    {
+      "id": 38212780805,
+      "name": "Agents PR Event Hub",
+      "path": ".github/workflows/agents-80-pr-event-hub.yml",
+      "event": "pull_request",
+      "head_sha": "f8fff1164cb969a0a52ab60a08ed102cf0410ea4",
+      "run_attempt": 1,
+      "status": "completed",
+      "conclusion": "cancelled",
+      "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38212780805"
+    }
+  ],
+  "candidates": {
+    "CI": [
+      38212775055
+    ],
+    "Gate": [
+      38212775500,
+      38212780773
+    ]
+  },
+  "hosted_acceptance": "UNKNOWN: run discovery alone does not prove jobs or producer measurements",
+  "recovery": {
+    "transport": "authenticated GitHub connector REST GET",
+    "page_size": 2,
+    "collection_scans": 2,
+    "read_count": 10,
+    "measurement_acceptance": "UNKNOWN: no producer-step log archive recovered"
+  }
+}
