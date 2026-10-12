@@ -9,9 +9,13 @@ relabels had cleared to `unattributed_delegation` (Trend_Model_Project#5913 and 
 made role-triage the only capability whose value chain read `works`. offload counted the same two.
 
 THE RULE THIS PINS. `_brain` replaces the edge's copied columns with the outcome's, read when the
-report is made. An acted-on run whose class is in `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES` is
-counted in `outcome_excluded` and never in `outcome`. When EVERY acted-on run is excluded the first
-break is `outcome_excluded`, not `no_outcome`: waiting will not change it, attribution has to. An
+report is made, and each acted-on edge is classified by `capability_effectiveness._classify`, the
+one classifier of these edges, from `feedback`'s predicates (#540). Only a terminal outcome is the
+`outcome` step. An acted-on run whose class is in `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES` is
+counted in `outcome_excluded`; an edge onto a role run in `outcome_associations`; a merge the sweep
+has not judged, an unmerged run nothing will judge, and a run with no outcome yet each in its own
+field. `no_outcome` only while something can still resolve: when every evidence edge is excluded
+the break is `outcome_excluded`, and when nothing can ever be scored `outcome_unscoreable`. An
 unread Brain stays unmeasured, never zero.
 
 Rows are written by the production writers on a controlled clock: `record_run`, then
@@ -40,7 +44,7 @@ import value_chain_monitor as monitor
 T0 = 1_786_516_882  # 2026-08-12T06:41:22Z
 NOW = T0 + 60
 CAP = "role-triage"
-VERSIONS = {CAP: "cv:triage", "offload": "cv:offload"}
+VERSIONS = {CAP: "cv:triage", "offload": "cv:offload", "role-redirect": "cv:redirect"}
 EDGE = (
     "SELECT outcome_verdict, durability FROM influence_edges "
     "WHERE influence_type='capability' AND capability_id=? AND target_run_id=?"
@@ -89,6 +93,22 @@ def _consumed(n: int, cap_id: str = CAP, **outcome) -> str:
     return run
 
 
+def _advised(n: int, role: str = "triage") -> tuple[str, str]:
+    """A role run an offload produced, and the run that acted on its advice (as in #540's tests)."""
+    role_run, run = f"role:{role}:gemini:{n}", f"remote:o/r#{n}:gemini"
+    feedback.record_role_run(role_run, role, f"o/r#{n}", "gemini", backend_run_id=f"offload:{n}")
+    feedback.record_run(
+        run,
+        f"o/r#{n}",
+        "implement",
+        "gemini",
+        mode="remote",
+        pr_number=n,
+        influenced_by_role_run_ids=[role_run],
+    )
+    return role_run, run
+
+
 def _relabel(run: str, **fields) -> None:
     sets = ", ".join(f"{name}=?" for name in fields)
     with feedback._conn() as c:
@@ -103,7 +123,8 @@ def _edge(run: str, cap_id: str = CAP) -> tuple:
 def _section(ledger, db=None) -> dict:
     inputs = monitor._brain(db or feedback.DB_PATH, NOW - monitor.WINDOW_DAYS * 86400, NOW)
     inputs["fleet_issues"] = [OPEN_ISSUE]  # role-triage's demand: open issues
-    inputs["cadence_inputs"] = {"offload": 1}  # offload declares no situation query
+    # offload and role-redirect declare no situation query of their own.
+    inputs["cadence_inputs"] = {"offload": 1, "role-redirect": 1}
     return monitor.report(now=NOW, path=ledger, env={}, inputs=inputs)
 
 
@@ -238,7 +259,7 @@ def test_an_unread_outcome_table_is_unmeasured_never_the_edge_copy(brain, tmp_pa
     assert any("Brain evidence unavailable" in e for e in section["errors"])
     text = "\n".join(monitor.format_lines(section))
     assert "outcome None; first_break unmeasured" in text
-    assert "excluded" not in text
+    assert "(+" not in text and "`excl`" not in text
 
 
 def test_the_report_prints_the_excluded_count_and_writes_nothing(brain):
@@ -256,13 +277,15 @@ def test_the_report_prints_the_excluded_count_and_writes_nothing(brain):
     assert hashlib.sha256(feedback.DB_PATH.read_bytes()).hexdigest() == before
     assert brain.read_bytes() == ledger_before
     triage = next(line for line in lines if line.startswith(f"  {CAP}:"))
-    assert "outcome 0 (+1 excluded); first_break outcome_excluded" in triage, triage
+    assert "outcome 0 (+1 excl); first_break outcome_excluded" in triage, triage
     offload = next(line for line in lines if line.startswith("  offload:"))
     assert "outcome 1; first_break works" in offload, offload
     assert sum("LEARNING_EXCLUDED_FAILURE_CLASSES" in line for line in lines) == 1
-    # Nothing set aside anywhere: no count and no footnote.
+    assert sum(line.startswith("  `") for line in lines) == 1, "one legend line per label shown"
+    # Nothing set aside anywhere: no count and no legend.
     _relabel("remote:o/r#1:gemini", failure_class=None)
-    assert not any("excluded" in line for line in monitor.format_lines(_section(brain)))
+    lines = monitor.format_lines(_section(brain))
+    assert not any("(+" in line or line.startswith("  `") for line in lines), lines
 
 
 def test_the_weekly_consumer_carries_the_count(brain, monkeypatch):
@@ -304,4 +327,59 @@ def test_the_weekly_consumer_carries_the_count(brain, monkeypatch):
     row = next(r for r in rep["value_chain"]["rows"] if r["capability"] == CAP)
     assert _steps(row) == (1, 0, 1, "outcome_excluded"), row
     text = switch_review.format_report(rep)
-    assert "outcome 0 (+1 excluded); first_break outcome_excluded" in text
+    assert "outcome 0 (+1 excl); first_break outcome_excluded" in text
+
+
+# ---- the one classifier: #540's predicates, never a second copy ------------------------------
+
+
+def test_a_role_runs_copied_outcome_is_an_association_never_a_second_outcome(brain):
+    role_run, run = _advised(1)
+    feedback.record_outcome(run, adjudicated_verdict="PASS", merged=1, durability="durable")
+    # Propagation copied the acting run's outcome onto the role run: one delivery, two edges.
+    with feedback._conn() as c:
+        copied = c.execute("SELECT durability FROM outcomes WHERE run_id=?", (role_run,)).fetchone()
+    assert copied == ("durable",)
+    for cap_id in (CAP, "offload"):  # advisory_self and role_association
+        row = _row(brain, cap_id)
+        assert _steps(row) == (2, 1, 0, "works"), (cap_id, row)
+        assert row["outcome_associations"] == 1, (cap_id, row)
+
+
+def test_a_capability_only_on_role_runs_is_unscoreable_not_awaiting(brain):
+    # role-redirect: its role runs are recorded, and no run is ever joined to their advice.
+    for n in range(1, 4):
+        feedback.record_role_run(f"role:redirect:cursor:{n}", "redirect", f"o/r#{n}", "cursor")
+    row = _row(brain, "role-redirect")
+    assert _steps(row) == (3, 0, 0, "outcome_unscoreable"), row
+    assert row["outcome_associations"] == 3, row
+    line = next(x for x in monitor.format_lines(_section(brain)) if "role-redirect:" in x)
+    assert "outcome 0 (+3 assoc); first_break outcome_unscoreable" in line, line
+
+
+def test_awaiting_the_sweep_waits_and_unresolvable_does_not(brain):
+    _consumed(1, adjudicated_verdict="PASS", merged=1, durability="pending")
+    row = _row(brain)
+    assert _steps(row) == (1, 0, 0, "no_outcome") and row["outcome_awaiting_sweep"] == 1, row
+    _relabel("remote:o/r#1:gemini", merged=0)  # an unmerged run: nothing will ever judge it
+    row = _row(brain)
+    assert _steps(row) == (1, 0, 0, "outcome_unscoreable") and row["outcome_unresolvable"] == 1, row
+
+
+def test_a_failure_is_terminal_whatever_its_durability(brain):
+    # `feedback.outcome_is_terminal`: a failure verdict is final, and so is a verifier failure
+    # under an adjudicated PASS. The monitor's own sets counted neither until #540's predicates.
+    _consumed(1, adjudicated_verdict="FAIL", merged=0, durability="pending")
+    _consumed(2, adjudicated_verdict="PASS", verifier_verdict="NON_PASS", merged=1)
+    assert _steps(_row(brain)) == (2, 2, 0, "works")
+
+
+def test_the_monitor_classifies_with_the_one_classifier(brain, monkeypatch):
+    import capability_effectiveness
+
+    _consumed(1, adjudicated_verdict="PASS", merged=1, durability="durable")
+    assert _row(brain)["outcome"] == 1
+    # Whatever the effectiveness reader decides an edge is, the monitor counts it the same way.
+    monkeypatch.setattr(capability_effectiveness, "_classify", lambda edge: "unresolvable")
+    row = _row(brain)
+    assert (row["outcome"], row["outcome_unresolvable"]) == (0, 1), row
