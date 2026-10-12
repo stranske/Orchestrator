@@ -354,3 +354,25 @@ def test_cost_coverage_uses_one_population_and_exclusive_categories():
         )
         == summary["cost_attempted_cases"]
     )
+
+
+@pytest.mark.parametrize(
+    "row, expected",
+    [
+        (
+            {
+                "backend_run_id": "saved-abstention",
+                "cost_usd": None,
+                "cost_report": {"status": "measured", "cost_usd": 3.0},
+            },
+            3.0,
+        ),
+        ({"cost_usd": 2.0}, 2.0),
+    ],
+)
+def test_summary_classifies_and_totals_one_effective_receipt(row, expected):
+    summary = retro.summarize([row])
+    assert summary["cost_measured_cases"] == 1
+    assert summary["cost_unmeasured_cases"] == 0
+    assert summary["cost_usd"] == expected
+    assert summary["estimated_cost_usd"] == expected

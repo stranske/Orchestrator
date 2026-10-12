@@ -331,24 +331,37 @@ def summarize(rows: list[dict]) -> dict:
     # A legacy dollar receipt proves an attempt even if its backend ID was not
     # retained. Preparation-only rows do not. Classify each attempt once, so
     # coverage numerators and denominator describe the same population.
-    def measured(row):
-        value = row.get("cost_usd")
+    def valid_amount(value):
         return type(value) in (int, float) and math.isfinite(value) and value >= 0
+
+    def measured_amount(row):
+        report = row.get("cost_report") or {}
+        if report.get("status") == "measured" and valid_amount(report.get("cost_usd")):
+            return report["cost_usd"]
+        value = row.get("cost_usd")
+        return value if valid_amount(value) else None
 
     attempted_rows = [
         row
         for row in rows
         if row.get("backend_run_id")
-        or measured(row)
+        or measured_amount(row) is not None
         or (row.get("cost_report") or {}).get("status") in {"measured", "imputed"}
     ]
-    measured_rows = [row for row in attempted_rows if measured(row)]
+    measured_costs = [
+        measured_amount(row) for row in attempted_rows if measured_amount(row) is not None
+    ]
     imputed_rows = [
         row
         for row in attempted_rows
-        if not measured(row) and (row.get("cost_report") or {}).get("status") == "imputed"
+        if measured_amount(row) is None
+        and (row.get("cost_report") or {}).get("status") == "imputed"
     ]
-    measured_costs = [row["cost_usd"] for row in measured_rows]
+    estimated_costs = measured_costs + [
+        row["cost_report"]["cost_usd"]
+        for row in imputed_rows
+        if valid_amount(row["cost_report"].get("cost_usd"))
+    ]
     return {
         "cases": len(rows),
         "adjudicated": len(accepted),
@@ -364,15 +377,9 @@ def summarize(rows: list[dict]) -> dict:
         "cost_usd": sum(measured_costs) if measured_costs else None,
         "cost_attempted_cases": len(attempted_rows),
         "cost_imputed_cases": len(imputed_rows),
-        "cost_unmeasured_cases": len(attempted_rows) - len(measured_rows) - len(imputed_rows),
+        "cost_unmeasured_cases": len(attempted_rows) - len(measured_costs) - len(imputed_rows),
         "cost_scale": feedback.COST_SCALE,
-        "estimated_cost_usd": (
-            sum((r.get("cost_report") or {}).get("cost_usd") or 0 for r in rows)
-            if any(
-                (r.get("cost_report") or {}).get("status") in {"measured", "imputed"} for r in rows
-            )
-            else None
-        ),
+        "estimated_cost_usd": sum(estimated_costs) if estimated_costs else None,
         "cost_measured_cases": len(measured_costs),
         "cost_per_case": sum(measured_costs) / len(measured_costs) if measured_costs else None,
     }
