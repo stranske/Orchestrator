@@ -1,0 +1,1253 @@
+{
+  "schema": "seatbelt-hosted-ci/v1",
+  "repo": "stranske/Orchestrator",
+  "head_sha": "c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f",
+  "runs": [
+    {
+      "run": {
+        "id": 38201036896,
+        "name": "CI",
+        "path": ".github/workflows/ci.yml",
+        "event": "pull_request",
+        "head_sha": "c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f",
+        "run_attempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38201036896"
+      },
+      "jobs": {
+        "total_count": 4,
+        "jobs": [
+          {
+            "id": 114654285488,
+            "name": "verify.py (real pytest counts + selftests + capability gates)",
+            "run_id": 38201036896,
+            "run_attempt": 1,
+            "head_sha": "c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38201036896/job/114654285488",
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1,
+                "started_at": "2026-10-12T03:45:54Z",
+                "completed_at": "2026-10-12T03:45:55Z"
+              },
+              {
+                "name": "Run actions/checkout@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2,
+                "started_at": "2026-10-12T03:45:55Z",
+                "completed_at": "2026-10-12T03:45:57Z"
+              },
+              {
+                "name": "Run actions/setup-python@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 3,
+                "started_at": "2026-10-12T03:45:57Z",
+                "completed_at": "2026-10-12T03:45:57Z"
+              },
+              {
+                "name": "Install native shell test prerequisite",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 4,
+                "started_at": "2026-10-12T03:45:57Z",
+                "completed_at": "2026-10-12T03:46:06Z"
+              },
+              {
+                "name": "Install dependencies",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 5,
+                "started_at": "2026-10-12T03:46:06Z",
+                "completed_at": "2026-10-12T03:46:10Z"
+              },
+              {
+                "name": "Verify",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 6,
+                "started_at": "2026-10-12T03:46:10Z",
+                "completed_at": "2026-10-12T03:48:23Z"
+              },
+              {
+                "name": "Post Run actions/setup-python@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 11,
+                "started_at": "2026-10-12T03:48:23Z",
+                "completed_at": "2026-10-12T03:48:23Z"
+              },
+              {
+                "name": "Post Run actions/checkout@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 12,
+                "started_at": "2026-10-12T03:48:23Z",
+                "completed_at": "2026-10-12T03:48:23Z"
+              },
+              {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 13,
+                "started_at": "2026-10-12T03:48:23Z",
+                "completed_at": "2026-10-12T03:48:23Z"
+              }
+            ]
+          },
+          {
+            "id": 114654285704,
+            "name": "combined coverage (pytest + selftests, the honest number)",
+            "run_id": 38201036896,
+            "run_attempt": 1,
+            "head_sha": "c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38201036896/job/114654285704",
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1,
+                "started_at": "2026-10-12T03:45:54Z",
+                "completed_at": "2026-10-12T03:45:55Z"
+              },
+              {
+                "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2,
+                "started_at": "2026-10-12T03:45:55Z",
+                "completed_at": "2026-10-12T03:45:57Z"
+              },
+              {
+                "name": "Run actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 3,
+                "started_at": "2026-10-12T03:45:57Z",
+                "completed_at": "2026-10-12T03:45:57Z"
+              },
+              {
+                "name": "Install native shell test prerequisite",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 4,
+                "started_at": "2026-10-12T03:45:57Z",
+                "completed_at": "2026-10-12T03:46:12Z"
+              },
+              {
+                "name": "Install dependencies",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 5,
+                "started_at": "2026-10-12T03:46:12Z",
+                "completed_at": "2026-10-12T03:46:17Z"
+              },
+              {
+                "name": "Measure combined coverage",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 6,
+                "started_at": "2026-10-12T03:46:17Z",
+                "completed_at": "2026-10-12T03:50:04Z"
+              },
+              {
+                "name": "Build the trend record the coverage guard reads",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 7,
+                "started_at": "2026-10-12T03:50:04Z",
+                "completed_at": "2026-10-12T03:50:04Z"
+              },
+              {
+                "name": "Publish the payload the coverage guard reads",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 8,
+                "started_at": "2026-10-12T03:50:04Z",
+                "completed_at": "2026-10-12T03:50:05Z"
+              },
+              {
+                "name": "Publish the coverage trend",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 9,
+                "started_at": "2026-10-12T03:50:05Z",
+                "completed_at": "2026-10-12T03:50:07Z"
+              },
+              {
+                "name": "Publish the figure",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 10,
+                "started_at": "2026-10-12T03:50:07Z",
+                "completed_at": "2026-10-12T03:50:07Z"
+              },
+              {
+                "name": "Upload the coverage data",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 11,
+                "started_at": "2026-10-12T03:50:07Z",
+                "completed_at": "2026-10-12T03:50:08Z"
+              },
+              {
+                "name": "Post Run actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 21,
+                "started_at": "2026-10-12T03:50:08Z",
+                "completed_at": "2026-10-12T03:50:08Z"
+              },
+              {
+                "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 22,
+                "started_at": "2026-10-12T03:50:08Z",
+                "completed_at": "2026-10-12T03:50:08Z"
+              },
+              {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 23,
+                "started_at": "2026-10-12T03:50:08Z",
+                "completed_at": "2026-10-12T03:50:08Z"
+              }
+            ]
+          },
+          {
+            "id": 114654285860,
+            "name": "verify.py in the flat exec-mirror shape (the tree a sync ships)",
+            "run_id": 38201036896,
+            "run_attempt": 1,
+            "head_sha": "c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38201036896/job/114654285860",
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1,
+                "started_at": "2026-10-12T03:45:54Z",
+                "completed_at": "2026-10-12T03:45:55Z"
+              },
+              {
+                "name": "Run actions/checkout@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2,
+                "started_at": "2026-10-12T03:45:55Z",
+                "completed_at": "2026-10-12T03:45:57Z"
+              },
+              {
+                "name": "Run actions/setup-python@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 3,
+                "started_at": "2026-10-12T03:45:57Z",
+                "completed_at": "2026-10-12T03:45:57Z"
+              },
+              {
+                "name": "Install native shell test prerequisite",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 4,
+                "started_at": "2026-10-12T03:45:57Z",
+                "completed_at": "2026-10-12T03:46:09Z"
+              },
+              {
+                "name": "Install dependencies",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 5,
+                "started_at": "2026-10-12T03:46:09Z",
+                "completed_at": "2026-10-12T03:46:13Z"
+              },
+              {
+                "name": "Build the flat copy with the sync's copy contract and verify it there",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 6,
+                "started_at": "2026-10-12T03:46:13Z",
+                "completed_at": "2026-10-12T03:48:44Z"
+              },
+              {
+                "name": "Post Run actions/setup-python@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 11,
+                "started_at": "2026-10-12T03:48:44Z",
+                "completed_at": "2026-10-12T03:48:44Z"
+              },
+              {
+                "name": "Post Run actions/checkout@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 12,
+                "started_at": "2026-10-12T03:48:44Z",
+                "completed_at": "2026-10-12T03:48:44Z"
+              },
+              {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 13,
+                "started_at": "2026-10-12T03:48:44Z",
+                "completed_at": "2026-10-12T03:48:44Z"
+              }
+            ]
+          },
+          {
+            "id": 114654286617,
+            "name": "reconcile the collection floor (main only)",
+            "run_id": 38201036896,
+            "run_attempt": 1,
+            "head_sha": "c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f",
+            "status": "completed",
+            "conclusion": "skipped",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38201036896/job/114654286617",
+            "steps": []
+          }
+        ]
+      }
+    },
+    {
+      "run": {
+        "id": 38201037364,
+        "name": "Gate",
+        "path": ".github/workflows/pr-00-gate.yml",
+        "event": "pull_request",
+        "head_sha": "c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f",
+        "run_attempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38201037364"
+      },
+      "jobs": {
+        "total_count": 11,
+        "jobs": [
+          {
+            "id": 114654286982,
+            "name": "generated delivery seal",
+            "run_id": 38201037364,
+            "run_attempt": 1,
+            "head_sha": "c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38201037364/job/114654286982",
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1,
+                "started_at": "2026-10-12T03:45:54Z",
+                "completed_at": "2026-10-12T03:45:57Z"
+              },
+              {
+                "name": "Require an exact-head delivery seal",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2,
+                "started_at": "2026-10-12T03:45:57Z",
+                "completed_at": "2026-10-12T03:46:00Z"
+              },
+              {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 3,
+                "started_at": "2026-10-12T03:46:00Z",
+                "completed_at": "2026-10-12T03:46:00Z"
+              }
+            ]
+          },
+          {
+            "id": 114654287214,
+            "name": "detect changed files",
+            "run_id": 38201037364,
+            "run_attempt": 1,
+            "head_sha": "c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38201037364/job/114654287214",
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1,
+                "started_at": "2026-10-12T03:45:54Z",
+                "completed_at": "2026-10-12T03:45:56Z"
+              },
+              {
+                "name": "Mint GitHub App Token",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2,
+                "started_at": "2026-10-12T03:45:56Z",
+                "completed_at": "2026-10-12T03:45:56Z"
+              },
+              {
+                "name": "Checkout workflow helpers",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 3,
+                "started_at": "2026-10-12T03:45:56Z",
+                "completed_at": "2026-10-12T03:45:57Z"
+              },
+              {
+                "name": "Classify changed paths",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 4,
+                "started_at": "2026-10-12T03:45:57Z",
+                "completed_at": "2026-10-12T03:46:01Z"
+              },
+              {
+                "name": "Detect changes via API",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 5,
+                "started_at": "2026-10-12T03:46:01Z",
+                "completed_at": "2026-10-12T03:46:01Z"
+              },
+              {
+                "name": "Compute Python CI toggles",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 6,
+                "started_at": "2026-10-12T03:46:01Z",
+                "completed_at": "2026-10-12T03:46:01Z"
+              },
+              {
+                "name": "Post Checkout workflow helpers",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 11,
+                "started_at": "2026-10-12T03:46:01Z",
+                "completed_at": "2026-10-12T03:46:01Z"
+              },
+              {
+                "name": "Post Mint GitHub App Token",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 12,
+                "started_at": "2026-10-12T03:46:01Z",
+                "completed_at": "2026-10-12T03:46:02Z"
+              },
+              {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 13,
+                "started_at": "2026-10-12T03:46:02Z",
+                "completed_at": "2026-10-12T03:46:02Z"
+              }
+            ]
+          },
+          {
+            "id": 114654329316,
+            "name": "issue consistency",
+            "run_id": 38201037364,
+            "run_attempt": 1,
+            "head_sha": "c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38201037364/job/114654329316",
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1,
+                "started_at": "2026-10-12T03:46:07Z",
+                "completed_at": "2026-10-12T03:46:08Z"
+              },
+              {
+                "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2,
+                "started_at": "2026-10-12T03:46:08Z",
+                "completed_at": "2026-10-12T03:46:12Z"
+              },
+              {
+                "name": "Fetch base ref",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 3,
+                "started_at": "2026-10-12T03:46:12Z",
+                "completed_at": "2026-10-12T03:46:12Z"
+              },
+              {
+                "name": "Run actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 4,
+                "started_at": "2026-10-12T03:46:12Z",
+                "completed_at": "2026-10-12T03:46:12Z"
+              },
+              {
+                "name": "Check issue number consistency",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 5,
+                "started_at": "2026-10-12T03:46:12Z",
+                "completed_at": "2026-10-12T03:46:12Z"
+              },
+              {
+                "name": "Skip issue consistency check",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 6,
+                "started_at": "2026-10-12T03:46:12Z",
+                "completed_at": "2026-10-12T03:46:12Z"
+              },
+              {
+                "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 12,
+                "started_at": "2026-10-12T03:46:12Z",
+                "completed_at": "2026-10-12T03:46:13Z"
+              },
+              {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 13,
+                "started_at": "2026-10-12T03:46:13Z",
+                "completed_at": "2026-10-12T03:46:13Z"
+              }
+            ]
+          },
+          {
+            "id": 114654329357,
+            "name": "privilege environment gate",
+            "run_id": 38201037364,
+            "run_attempt": 1,
+            "head_sha": "c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38201037364/job/114654329357",
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1,
+                "started_at": "2026-10-12T03:46:07Z",
+                "completed_at": "2026-10-12T03:46:07Z"
+              },
+              {
+                "name": "Log environment selection",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2,
+                "started_at": "2026-10-12T03:46:07Z",
+                "completed_at": "2026-10-12T03:46:07Z"
+              },
+              {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 3,
+                "started_at": "2026-10-12T03:46:07Z",
+                "completed_at": "2026-10-12T03:46:07Z"
+              }
+            ]
+          },
+          {
+            "id": 114654350436,
+            "name": "github scripts tests",
+            "run_id": 38201037364,
+            "run_attempt": 1,
+            "head_sha": "c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38201037364/job/114654350436",
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1,
+                "started_at": "2026-10-12T03:46:12Z",
+                "completed_at": "2026-10-12T03:46:13Z"
+              },
+              {
+                "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2,
+                "started_at": "2026-10-12T03:46:13Z",
+                "completed_at": "2026-10-12T03:46:15Z"
+              },
+              {
+                "name": "Detect optional script test suites",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 3,
+                "started_at": "2026-10-12T03:46:15Z",
+                "completed_at": "2026-10-12T03:46:15Z"
+              },
+              {
+                "name": "Run actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 4,
+                "started_at": "2026-10-12T03:46:15Z",
+                "completed_at": "2026-10-12T03:46:15Z"
+              },
+              {
+                "name": "Run node --test .github/scripts/__tests__/*.test.js",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 5,
+                "started_at": "2026-10-12T03:46:15Z",
+                "completed_at": "2026-10-12T03:46:15Z"
+              },
+              {
+                "name": "Run actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 6,
+                "started_at": "2026-10-12T03:46:15Z",
+                "completed_at": "2026-10-12T03:46:15Z"
+              },
+              {
+                "name": "Run python -m pip install --upgrade pip pytest requests",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 7,
+                "started_at": "2026-10-12T03:46:15Z",
+                "completed_at": "2026-10-12T03:46:15Z"
+              },
+              {
+                "name": "Run pytest tests/workflows/github_scripts",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 8,
+                "started_at": "2026-10-12T03:46:15Z",
+                "completed_at": "2026-10-12T03:46:15Z"
+              },
+              {
+                "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 16,
+                "started_at": "2026-10-12T03:46:15Z",
+                "completed_at": "2026-10-12T03:46:15Z"
+              },
+              {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 17,
+                "started_at": "2026-10-12T03:46:15Z",
+                "completed_at": "2026-10-12T03:46:15Z"
+              }
+            ]
+          },
+          {
+            "id": 114654350445,
+            "name": "test-quality",
+            "run_id": 38201037364,
+            "run_attempt": 1,
+            "head_sha": "c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38201037364/job/114654350445",
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1,
+                "started_at": "2026-10-12T03:46:12Z",
+                "completed_at": "2026-10-12T03:46:13Z"
+              },
+              {
+                "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2,
+                "started_at": "2026-10-12T03:46:13Z",
+                "completed_at": "2026-10-12T03:46:16Z"
+              },
+              {
+                "name": "Fetch base ref",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 3,
+                "started_at": "2026-10-12T03:46:16Z",
+                "completed_at": "2026-10-12T03:46:16Z"
+              },
+              {
+                "name": "Run actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 4,
+                "started_at": "2026-10-12T03:46:16Z",
+                "completed_at": "2026-10-12T03:46:17Z"
+              },
+              {
+                "name": "Install test-quality dependencies",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 5,
+                "started_at": "2026-10-12T03:46:17Z",
+                "completed_at": "2026-10-12T03:46:20Z"
+              },
+              {
+                "name": "Check deliberate-break acceptance criterion",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 6,
+                "started_at": "2026-10-12T03:46:20Z",
+                "completed_at": "2026-10-12T03:46:20Z"
+              },
+              {
+                "name": "Skip deliberate-break check",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 7,
+                "started_at": "2026-10-12T03:46:20Z",
+                "completed_at": "2026-10-12T03:46:20Z"
+              },
+              {
+                "name": "Apply runtime acceptance-criteria label",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 8,
+                "started_at": "2026-10-12T03:46:20Z",
+                "completed_at": "2026-10-12T03:46:20Z"
+              },
+              {
+                "name": "Post Run actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 15,
+                "started_at": "2026-10-12T03:46:20Z",
+                "completed_at": "2026-10-12T03:46:21Z"
+              },
+              {
+                "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 16,
+                "started_at": "2026-10-12T03:46:21Z",
+                "completed_at": "2026-10-12T03:46:21Z"
+              },
+              {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 17,
+                "started_at": "2026-10-12T03:46:21Z",
+                "completed_at": "2026-10-12T03:46:21Z"
+              }
+            ]
+          },
+          {
+            "id": 114654350601,
+            "name": "ledger validation",
+            "run_id": 38201037364,
+            "run_attempt": 1,
+            "head_sha": "c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38201037364/job/114654350601",
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1,
+                "started_at": "2026-10-12T03:46:13Z",
+                "completed_at": "2026-10-12T03:46:14Z"
+              },
+              {
+                "name": "Mint GitHub App Token",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2,
+                "started_at": "2026-10-12T03:46:14Z",
+                "completed_at": "2026-10-12T03:46:14Z"
+              },
+              {
+                "name": "Checkout repository",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 3,
+                "started_at": "2026-10-12T03:46:14Z",
+                "completed_at": "2026-10-12T03:46:17Z"
+              },
+              {
+                "name": "Set up Python",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 4,
+                "started_at": "2026-10-12T03:46:17Z",
+                "completed_at": "2026-10-12T03:46:17Z"
+              },
+              {
+                "name": "Install PyYAML",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 5,
+                "started_at": "2026-10-12T03:46:17Z",
+                "completed_at": "2026-10-12T03:46:20Z"
+              },
+              {
+                "name": "Validate ledger files",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 6,
+                "started_at": "2026-10-12T03:46:20Z",
+                "completed_at": "2026-10-12T03:46:20Z"
+              },
+              {
+                "name": "Post Set up Python",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 10,
+                "started_at": "2026-10-12T03:46:20Z",
+                "completed_at": "2026-10-12T03:46:20Z"
+              },
+              {
+                "name": "Post Checkout repository",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 11,
+                "started_at": "2026-10-12T03:46:20Z",
+                "completed_at": "2026-10-12T03:46:20Z"
+              },
+              {
+                "name": "Post Mint GitHub App Token",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 12,
+                "started_at": "2026-10-12T03:46:20Z",
+                "completed_at": "2026-10-12T03:46:21Z"
+              },
+              {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 13,
+                "started_at": "2026-10-12T03:46:21Z",
+                "completed_at": "2026-10-12T03:46:21Z"
+              }
+            ]
+          },
+          {
+            "id": 114654350753,
+            "name": "docs guard",
+            "run_id": 38201037364,
+            "run_attempt": 1,
+            "head_sha": "c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38201037364/job/114654350753",
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1,
+                "started_at": "2026-10-12T03:46:13Z",
+                "completed_at": "2026-10-12T03:46:14Z"
+              },
+              {
+                "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2,
+                "started_at": "2026-10-12T03:46:14Z",
+                "completed_at": "2026-10-12T03:46:16Z"
+              },
+              {
+                "name": "Run actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 3,
+                "started_at": "2026-10-12T03:46:16Z",
+                "completed_at": "2026-10-12T03:46:16Z"
+              },
+              {
+                "name": "Run reusable workflow docs guards",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 4,
+                "started_at": "2026-10-12T03:46:16Z",
+                "completed_at": "2026-10-12T03:46:16Z"
+              },
+              {
+                "name": "Warn on stale managed AGENTS.md playbook refs",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 5,
+                "started_at": "2026-10-12T03:46:16Z",
+                "completed_at": "2026-10-12T03:46:16Z"
+              },
+              {
+                "name": "Post Run actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 9,
+                "started_at": "2026-10-12T03:46:16Z",
+                "completed_at": "2026-10-12T03:46:16Z"
+              },
+              {
+                "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 10,
+                "started_at": "2026-10-12T03:46:16Z",
+                "completed_at": "2026-10-12T03:46:16Z"
+              },
+              {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 11,
+                "started_at": "2026-10-12T03:46:16Z",
+                "completed_at": "2026-10-12T03:46:16Z"
+              }
+            ]
+          },
+          {
+            "id": 114654351381,
+            "name": "docker smoke",
+            "run_id": 38201037364,
+            "run_attempt": 1,
+            "head_sha": "c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f",
+            "status": "completed",
+            "conclusion": "skipped",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38201037364/job/114654351381",
+            "steps": []
+          },
+          {
+            "id": 114654351695,
+            "name": "python ci",
+            "run_id": 38201037364,
+            "run_attempt": 1,
+            "head_sha": "c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f",
+            "status": "completed",
+            "conclusion": "skipped",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38201037364/job/114654351695",
+            "steps": []
+          },
+          {
+            "id": 114654399993,
+            "name": "summary",
+            "run_id": 38201037364,
+            "run_attempt": 1,
+            "head_sha": "c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://github.com/stranske/Orchestrator/actions/runs/38201037364/job/114654399993",
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1,
+                "started_at": "2026-10-12T03:46:27Z",
+                "completed_at": "2026-10-12T03:46:29Z"
+              },
+              {
+                "name": "Mint GitHub App Token",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2,
+                "started_at": "2026-10-12T03:46:29Z",
+                "completed_at": "2026-10-12T03:46:30Z"
+              },
+              {
+                "name": "Checkout workflow helpers",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 3,
+                "started_at": "2026-10-12T03:46:30Z",
+                "completed_at": "2026-10-12T03:46:31Z"
+              },
+              {
+                "name": "Setup API client",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 4,
+                "started_at": "2026-10-12T03:46:31Z",
+                "completed_at": "2026-10-12T03:46:35Z"
+              },
+              {
+                "name": "Set up Node",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 5,
+                "started_at": "2026-10-12T03:46:35Z",
+                "completed_at": "2026-10-12T03:46:36Z"
+              },
+              {
+                "name": "Install GitHub API dependencies",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 6,
+                "started_at": "2026-10-12T03:46:36Z",
+                "completed_at": "2026-10-12T03:46:37Z"
+              },
+              {
+                "name": "Handle docs-only change",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 7,
+                "started_at": "2026-10-12T03:46:37Z",
+                "completed_at": "2026-10-12T03:46:37Z"
+              },
+              {
+                "name": "Ensure docs-only fast-pass comment",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 8,
+                "started_at": "2026-10-12T03:46:37Z",
+                "completed_at": "2026-10-12T03:46:37Z"
+              },
+              {
+                "name": "Remove docs-only fast-pass comment when not needed",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 9,
+                "started_at": "2026-10-12T03:46:37Z",
+                "completed_at": "2026-10-12T03:46:39Z"
+              },
+              {
+                "name": "Discover Gate workflow runs",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 10,
+                "started_at": "2026-10-12T03:46:39Z",
+                "completed_at": "2026-10-12T03:46:42Z"
+              },
+              {
+                "name": "Download Gate artifacts",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 11,
+                "started_at": "2026-10-12T03:46:42Z",
+                "completed_at": "2026-10-12T03:46:42Z"
+              },
+              {
+                "name": "Load coverage summary snippet",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 12,
+                "started_at": "2026-10-12T03:46:42Z",
+                "completed_at": "2026-10-12T03:46:42Z"
+              },
+              {
+                "name": "Compute coverage stats",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 13,
+                "started_at": "2026-10-12T03:46:42Z",
+                "completed_at": "2026-10-12T03:46:42Z"
+              },
+              {
+                "name": "Summarize results",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 14,
+                "started_at": "2026-10-12T03:46:42Z",
+                "completed_at": "2026-10-12T03:46:42Z"
+              },
+              {
+                "name": "Auto-apply autofix label for cosmetic failures",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 15,
+                "started_at": "2026-10-12T03:46:42Z",
+                "completed_at": "2026-10-12T03:46:42Z"
+              },
+              {
+                "name": "Prepare summary body",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 16,
+                "started_at": "2026-10-12T03:46:42Z",
+                "completed_at": "2026-10-12T03:46:42Z"
+              },
+              {
+                "name": "Compose PR summary comment",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 17,
+                "started_at": "2026-10-12T03:46:42Z",
+                "completed_at": "2026-10-12T03:46:42Z"
+              },
+              {
+                "name": "Append keepalive checklists",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 18,
+                "started_at": "2026-10-12T03:46:42Z",
+                "completed_at": "2026-10-12T03:46:44Z"
+              },
+              {
+                "name": "Add autofix label status notes",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 19,
+                "started_at": "2026-10-12T03:46:44Z",
+                "completed_at": "2026-10-12T03:46:44Z"
+              },
+              {
+                "name": "Upload Gate summary artifact",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 20,
+                "started_at": "2026-10-12T03:46:44Z",
+                "completed_at": "2026-10-12T03:46:46Z"
+              },
+              {
+                "name": "Upload coverage stats artifact",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 21,
+                "started_at": "2026-10-12T03:46:46Z",
+                "completed_at": "2026-10-12T03:46:47Z"
+              },
+              {
+                "name": "Upload coverage delta artifact",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 22,
+                "started_at": "2026-10-12T03:46:47Z",
+                "completed_at": "2026-10-12T03:46:47Z"
+              },
+              {
+                "name": "Upload coverage summary artifact copy",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 23,
+                "started_at": "2026-10-12T03:46:47Z",
+                "completed_at": "2026-10-12T03:46:47Z"
+              },
+              {
+                "name": "Classify pull request origin",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 24,
+                "started_at": "2026-10-12T03:46:47Z",
+                "completed_at": "2026-10-12T03:46:47Z"
+              },
+              {
+                "name": "Ensure consolidated summary comment",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 25,
+                "started_at": "2026-10-12T03:46:47Z",
+                "completed_at": "2026-10-12T03:46:49Z"
+              },
+              {
+                "name": "Report Gate commit status",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 26,
+                "started_at": "2026-10-12T03:46:49Z",
+                "completed_at": "2026-10-12T03:46:50Z"
+              },
+              {
+                "name": "Dispatch autofix notification",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 27,
+                "started_at": "2026-10-12T03:46:50Z",
+                "completed_at": "2026-10-12T03:46:50Z"
+              },
+              {
+                "name": "Enforce Gate success",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 28,
+                "started_at": "2026-10-12T03:46:50Z",
+                "completed_at": "2026-10-12T03:46:51Z"
+              },
+              {
+                "name": "Post Set up Node",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 54,
+                "started_at": "2026-10-12T03:46:51Z",
+                "completed_at": "2026-10-12T03:46:51Z"
+              },
+              {
+                "name": "Post Checkout workflow helpers",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 55,
+                "started_at": "2026-10-12T03:46:51Z",
+                "completed_at": "2026-10-12T03:46:51Z"
+              },
+              {
+                "name": "Post Mint GitHub App Token",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 56,
+                "started_at": "2026-10-12T03:46:51Z",
+                "completed_at": "2026-10-12T03:46:51Z"
+              },
+              {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 57,
+                "started_at": "2026-10-12T03:46:51Z",
+                "completed_at": "2026-10-12T03:46:51Z"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "receipts": [
+    {
+      "job_id": 114654285488,
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38201036896/job/114654285488",
+      "selected_authentic_lines": [
+        "2026-10-12T03:45:57.2957065Z HEAD is now at cc91b16 Merge c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f into 6acf73175c9751b632e6a309f29dcbdcd8a0f1c3",
+        "2026-10-12T03:48:23.4548171Z   pytest:     2877 passed, 0 failed, 26/31 max skipped (2903 collected; floor 2903)",
+        "2026-10-12T03:48:23.4548506Z   selftests:  97 of 104 modules ran, 7/7 max skipped",
+        "2026-10-12T03:48:23.4551200Z   gates:      2/2 max skipped",
+        "2026-10-12T03:48:23.4613976Z   VERIFIED — 2877 tests actually executed and passed, 97 selftests spoke, 3 of 5 gates green; 26 test(s), 7 selftest(s) and 2 gate(s) SKIPPED for a named missing prerequisite, listed above"
+      ]
+    },
+    {
+      "job_id": 114654285860,
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/38201036896/job/114654285860",
+      "selected_authentic_lines": [
+        "2026-10-12T03:45:57.4272350Z HEAD is now at cc91b16 Merge c49b250f2cf97d6c8e1629e7b1ca51fa5582a50f into 6acf73175c9751b632e6a309f29dcbdcd8a0f1c3",
+        "2026-10-12T03:48:43.8728332Z   pytest:     2856 passed, 0 failed, 47/52 max [bare_mirror_skipped_max] skipped (2903 collected; floor 2903)",
+        "2026-10-12T03:48:43.8728980Z   selftests:  97 of 104 modules ran, 7/7 max [bare_mirror_selftest_skipped_max] skipped",
+        "2026-10-12T03:48:43.8731598Z   gates:      2/2 max [bare_mirror_gate_skipped_max] skipped",
+        "2026-10-12T03:48:43.8794622Z   VERIFIED — 2856 tests actually executed and passed, 97 selftests spoke, 3 of 5 gates green; 47 test(s), 7 selftest(s) and 2 gate(s) SKIPPED for a named missing prerequisite, listed above",
+        "2026-10-12T03:48:44.3140868Z == verify-before-sync: VERIFIED for /home/runner/work/Orchestrator/Orchestrator @ cc91b16 (0 uncommitted)"
+      ]
+    }
+  ]
+}

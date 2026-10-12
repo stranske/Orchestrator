@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="5" time="1.681" timestamp="2026-10-11T23:12:05.364568-05:00" hostname="server.trs.private"><testcase classname="tests.test_strategy_experiment_subject" name="test_experiment_directory_resolution_matches_checkout_and_shared_tick_store[False-flat]" time="0.051" /><testcase classname="tests.test_strategy_experiment_subject" name="test_experiment_directory_resolution_matches_checkout_and_shared_tick_store[False-src]" time="0.020"><failure message="AssertionError: assert PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-905/test_experiment_directory_reso1/alternate-checkout/src/experiments') == PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-905/test_experiment_directory_reso1/alternate-checkout/experiments')">tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-905/test_experiment_directory_reso1')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x107aa8860&gt;
+layout = 'src', shared_override = False
+
+    @pytest.mark.parametrize("layout", ["flat", "src"])
+    @pytest.mark.parametrize("shared_override", [False, True])
+    def test_experiment_directory_resolution_matches_checkout_and_shared_tick_store(
+        tmp_path, monkeypatch, layout, shared_override
+    ):
+        """Execute the real module initializer in both deployed directory shapes."""
+        checkout = tmp_path / "alternate-checkout"
+        modules = checkout / "src" if layout == "src" else checkout
+        modules.mkdir(parents=True)
+        module = modules / "exp_abcd.py"
+        module.write_bytes(Path(exp_abcd.__file__).read_bytes())
+        caller = tmp_path / "automation-runner"
+        caller.mkdir()
+        monkeypatch.chdir(caller)
+        monkeypatch.delenv("ORCH_EXP_DIR", raising=False)
+        expected = checkout / "experiments"
+        if shared_override:
+            expected = tmp_path / "tick-store" / "experiments"
+            monkeypatch.setenv("ORCH_EXP_DIR", str(expected))
+        loaded = runpy.run_path(str(module))
+&gt;       assert loaded["EXP_DIR"] == expected
+E       AssertionError: assert PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-905/test_experiment_directory_reso1/alternate-checkout/src/experiments') == PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-905/test_experiment_directory_reso1/alternate-checkout/experiments')
+
+/Users/teacher/.codex/automations/pd-workloop-resume/worktrees/orch526-shared-experiments-20261012/tests/test_strategy_experiment_subject.py:96: AssertionError</failure></testcase><testcase classname="tests.test_strategy_experiment_subject" name="test_experiment_directory_resolution_matches_checkout_and_shared_tick_store[True-flat]" time="0.020" /><testcase classname="tests.test_strategy_experiment_subject" name="test_experiment_directory_resolution_matches_checkout_and_shared_tick_store[True-src]" time="0.020" /><testcase classname="tests.test_strategy_experiment_subject" name="test_strategy_experiment_directory_lands_in_followup_exp_dir" time="1.217" /></testsuite></testsuites>

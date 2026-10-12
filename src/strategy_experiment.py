@@ -623,7 +623,7 @@ def prepare_subject_experiment(
 ) -> dict[str, Any]:
     """Claim, freeze, then prepare the one explicitly confirmed subject experiment."""
     target = str(subject["target"])
-    edir = (exp_dir or exp_abcd.EXP_DIR) / exp_id
+    edir = exp_abcd.exp_paths(exp_id) if exp_dir is None else exp_dir / exp_id
     if (edir / "strategy.json").exists():
         raise RuntimeError(f"experiment already exists; use its followup path: {exp_id}")
     if not claim_fn(target, "research"):

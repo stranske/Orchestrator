@@ -45,7 +45,14 @@ def ledger(tmp_path, names=("role-prompt",)):
 
 def complete_row(**changes):
     return dict(
-        situation_count=2, offered=1, invocation_count=1, usable=1, acted_on=1, outcome=1, **changes
+        situation_count=2,
+        offered=1,
+        invocation_count=1,
+        usable=1,
+        acted_on=1,
+        outcome=1,
+        outcome_success=1,
+        **changes,
     )
 
 
@@ -89,6 +96,8 @@ def test_unmeasured_demand_never_prints_as_zero(tmp_path):
 def test_first_break_is_the_earliest_failed_step():
     row = complete_row()
     assert monitor.first_break(row) == "works"
+    row["outcome_success"] = 0
+    assert monitor.first_break(row) == "no_success"
     row["outcome"] = 0
     assert monitor.first_break(row) == "no_outcome"
     row["acted_on"] = 0

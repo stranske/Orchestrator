@@ -561,7 +561,12 @@ six down, in this order, with the numbers:
 **Machine side.** The value-chain monitor reports `situation_count` and `invocation_count` as two
 numbers and prints `demand unmeasured` for a capability that declares no situation query; it never
 prints `no demand` from an invocation count. Every renewal and every decided retirement cites the
-measurement it rests on.
+measurement it rests on, and the monitor's row is that measurement: the weekly switch review writes
+its readable report to `$ORCH_STATE_DIR/switch-review.md` (the tick passes `--text-out`), so a
+verdict cites the capability's line there (demand, invocations, acted on, outcome, success, first
+break), or runs `python3 src/switch_review.py` for a fresh one when the file predates its evidence.
+Until 2026-10-12 the tick wrote only the JSON, the monitor's declared consumer `format_report` never
+ran, and its section reached no reader.
 
 **Audit side.** `ADDING_CAPABILITIES.md` Part 3 keeps the register of assessment failures that have
 recurred here (A1–A7); an audit or exercise verdict states, per capability, which of them it checked

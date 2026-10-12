@@ -7,9 +7,12 @@ complete population. Reads use existing ledger events, Brain rows and fleet issu
 
 The `outcome` step reads what became of an acted-on run from `outcomes` when the
 report is made, never from the influence edge's cached copy (see `_brain`), and
-classifies it as `capability_effectiveness` does, with `feedback`'s predicates: only
-a terminal outcome counts; a learning-excluded one, an edge onto a role run, and an
-outcome that is awaiting the sweep, unresolvable or open are counted beside it.
+classifies it as `capability_effectiveness` does, with `feedback`'s predicates. An
+edge onto a role run is not acted on; it is counted beside `acted_on`. Only a terminal
+outcome is the `outcome` step, and a learning-excluded one, one awaiting the sweep, an
+unresolvable one and an open one are counted beside it. `works` needs a durable
+success (`outcome_success`). The tick writes the readable section to
+`switch-review.md`, the file a capability verdict cites (CLAUDE.md §6).
 """
 
 from __future__ import annotations
@@ -33,40 +36,50 @@ import feedback
 
 CAPABILITY_ID = "value-chain-monitor"
 WINDOW_DAYS = 90
-# What an acted-on edge's target can say, as `capability_effectiveness._classify` names it, and
-# the row field each class is counted in. `terminal` is the step itself.
-OUTCOME_FIELDS = {
+# What an accepted edge's target can say, as `capability_effectiveness._classify` names it, and the
+# row field each class is counted in. An association is set aside at the `acted_on` step (2026-10-12,
+# owner decision): an edge onto a role run is not a run acting on the capability's output, because
+# the run that took the role's advice carries the capability's own edge. Every other class is an
+# acted-on run, and `terminal` is the `outcome` step itself.
+CLASS_FIELDS = {
+    "association": "acted_on_associations",
     "terminal": "outcome",
     "excluded": "outcome_excluded",
-    "association": "outcome_associations",
     "awaiting_sweep": "outcome_awaiting_sweep",
     "unresolvable": "outcome_unresolvable",
     "open": "outcome_open",
 }
-# Printed beside `outcome`: (row field, label, legend). Labels as `capability_effectiveness` prints.
+# The acted-on runs, partitioned by what became of them.
+OUTCOME_SPLIT = tuple(f for c, f in CLASS_FIELDS.items() if c != "association")
+# Printed beside a step: (step, row field, label, legend). Labels as `capability_effectiveness` prints.
 SET_ASIDE = (
     (
+        "acted_on",
+        "acted_on_associations",
+        "assoc",
+        "edges onto role runs, whose outcome is a copy of the acting run's; never counted as "
+        "acted on.",
+    ),
+    (
+        "outcome",
         "outcome_excluded",
         "excl",
         "acted-on runs whose outcome is in feedback.LEARNING_EXCLUDED_FAILURE_CLASSES; "
         "counted, never scored.",
     ),
     (
-        "outcome_associations",
-        "assoc",
-        "edges onto role runs, whose outcome is a copy of the acting run's; never scored.",
-    ),
-    (
+        "outcome",
         "outcome_awaiting_sweep",
         "sweep",
         "merges the durability sweep has not judged yet; they resolve, so they wait.",
     ),
     (
+        "outcome",
         "outcome_unresolvable",
         "unres",
         "unmerged runs whose durability nothing will ever judge; never scored.",
     ),
-    ("outcome_open", "open", "acted-on runs with no outcome recorded yet."),
+    ("outcome", "outcome_open", "open", "acted-on runs with no outcome recorded yet."),
 )
 # Explicit dependence, not a guess from a capability name or lack of heartbeats.
 INPUT_FLAGS = {
@@ -150,8 +163,11 @@ def first_break(row: Mapping[str, Any]) -> str | None:
         ("usable", "unusable"),
         ("acted_on", "not_acted_on"),
         ("outcome", "no_outcome"),
+        # A terminal outcome is not yet value: `works` needs a durable success (2026-10-12, owner
+        # decision). Three capabilities held one terminal outcome and no success each.
+        ("outcome_success", "no_success"),
     ):
-        if row[field] is None:
+        if row.get(field) is None:
             return None
         if row[field] == 0:
             if field == "offered" and row.get("invocation_count"):
@@ -169,41 +185,54 @@ def _no_outcome_break(row: Mapping[str, Any]) -> str:
     merge the durability sweep has not judged. Otherwise nothing here can ever be scored, and one
     sentinel for both would read a dead end as patience. `outcome_excluded`: every acted-on run
     that is evidence resolved into a class no learner may score; attribution, not time, would
-    change it. `outcome_unscoreable`: the rest (edges onto role runs, unmerged runs nothing will
-    judge, a mix with excluded ones). The same split `capability_effectiveness` reports as
+    change it. `outcome_unscoreable`: the rest (unmerged runs nothing will judge, a mix with
+    excluded ones). The same split `capability_effectiveness` reports as
     `excluded_only` and `unscoreable`. A row that does not carry the split stays `no_outcome`.
     """
-    split = [row.get(f) for f in OUTCOME_FIELDS.values()]
+    split = [row.get(f) for f in OUTCOME_SPLIT]
     if not all(isinstance(n, int) for n in split):
         return "no_outcome"
     if row["outcome_open"] or row["outcome_awaiting_sweep"]:
         return "no_outcome"
-    evidence = row["acted_on"] - row["outcome_associations"]
-    return "outcome_excluded" if 0 < evidence == row["outcome_excluded"] else "outcome_unscoreable"
+    excluded = row["outcome_excluded"]
+    return "outcome_excluded" if 0 < excluded == row["acted_on"] else "outcome_unscoreable"
 
 
 def outcome_counts(cid: str, own_edges: list[dict] | None) -> dict[str, int | None]:
-    """The last two value-chain steps over one capability's non-counterfactual edges.
+    """The last three value-chain steps over one capability's non-counterfactual edges.
 
-    `outcome` counts acted-on runs whose outcome is TERMINAL, good or bad. Each acted-on edge is
-    classified by `capability_effectiveness._classify`, the one classifier of these edges, from
-    `feedback`'s predicates (`outcome_is_terminal`, `role_target_kind` and
-    `LEARNING_EXCLUDED_FAILURE_CLASSES`, all read at call time): an edge onto a role run is an
-    association whatever its target holds, because the acting run carries the capability's own
-    edge; a learning-excluded outcome is counted, never scored. Every class has its own field, so
-    nothing set aside is hidden in a smaller `outcome`. None when the edges are unread:
+    Each accepted edge is classified by `capability_effectiveness._classify`, the one classifier of
+    these edges, from `feedback`'s predicates (`role_target_kind`, `LEARNING_EXCLUDED_FAILURE_CLASSES`
+    and `outcome_is_terminal`, all read at call time). An edge onto a role run is an association,
+    set aside beside `acted_on`. `outcome` counts acted-on runs whose outcome is TERMINAL, good or
+    bad, and `outcome_success` those of them that are a durable success
+    (`feedback.outcome_is_durable_success`, the lifecycle's predicate). Every class has its own
+    field, so nothing set aside is hidden in a smaller count. None when the edges are unread:
     unmeasured, never zero.
     """
+    fields = ("acted_on", *CLASS_FIELDS.values(), "outcome_success")
     if own_edges is None:
-        return {"acted_on": None, **{field: None for field in OUTCOME_FIELDS.values()}}
-    acted = [e for e in own_edges if e.get("accepted") == 1]
-    classes = Counter(
-        capability_effectiveness._classify(
-            {**e, "role_kind": feedback.role_target_kind(cid, e.get("target_role_name"))}
+        return {field: None for field in fields}
+    accepted = [e for e in own_edges if e.get("accepted") == 1]
+    classified = [
+        (
+            capability_effectiveness._classify(
+                {**e, "role_kind": feedback.role_target_kind(cid, e.get("target_role_name"))}
+            ),
+            e,
         )
-        for e in acted
-    )
-    return {"acted_on": len(acted), **{f: classes[c] for c, f in OUTCOME_FIELDS.items()}}
+        for e in accepted
+    ]
+    classes = Counter(c for c, _ in classified)
+    return {
+        "acted_on": len(accepted) - classes["association"],
+        **{field: classes[c] for c, field in CLASS_FIELDS.items()},
+        "outcome_success": sum(
+            c == "terminal"
+            and feedback.outcome_is_durable_success(**capability_effectiveness._outcome_fields(e))
+            for c, e in classified
+        ),
+    }
 
 
 def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
@@ -442,18 +471,24 @@ def format_lines(section: dict) -> list[str]:
             else f"demand {row['situation_count']}"
         )
         first = row["first_break"] or "unmeasured"
-        aside = [f"+{row[f]} {label}" for f, label, _ in SET_ASIDE if row.get(f)]
+
+        def aside(step: str) -> str:
+            parts = [
+                f"+{row[f]} {label}" for s, f, label, _ in SET_ASIDE if s == step and row.get(f)
+            ]
+            return f" ({', '.join(parts)})" if parts else ""
+
         lines.append(
             f"  {row['capability']}: {demand}; invocation {row['invocation_count']}; usable {row['usable']}; "
-            f"acted_on {row['acted_on']}; outcome {row['outcome']}"
-            + (f" ({', '.join(aside)})" if aside else "")
-            + f"; first_break {first}"
+            f"acted_on {row['acted_on']}{aside('acted_on')}; "
+            f"outcome {row['outcome']}{aside('outcome')}; success {row.get('outcome_success')}; "
+            f"first_break {first}"
             + ("; " + ", ".join(row["input_off"]) if row["input_off"] else "")
         )
     # One legend line per label that appears, so a count is never printed without its meaning.
     lines.extend(
         f"  `{label}`: {meaning}"
-        for f, label, meaning in SET_ASIDE
+        for _, f, label, meaning in SET_ASIDE
         if any(row.get(f) for row in section["rows"])
     )
     lines.extend(f"  evidence UNKNOWN: {e}" for e in section.get("errors", []))
@@ -488,19 +523,23 @@ def recurrence_fixture() -> bool:
     assert first_break(row) == "not_offered"
     row.update(offered=1, invocation_count=1, usable=1, acted_on=1)
     assert first_break(row) == "no_outcome"
-    # Each class an acted-on edge can be in has its own field; only a terminal one is the step.
+    # Each class an accepted edge can be in has its own field; only a terminal one is the step,
+    # and only a durable success among them makes the chain `works`.
     done = {"accepted": 1, "adjudicated_verdict": "PASS", "merged": 1, "durability": "durable"}
-    assert outcome_counts("cap", [done])["outcome"] == 1
+    row.update(outcome_counts("cap", [done]))
+    assert (row["outcome"], row["outcome_success"], first_break(row)) == (1, 1, "works"), row
+    row.update(outcome_counts("cap", [{**done, "adjudicated_verdict": "FAIL"}]))
+    assert (row["outcome"], row["outcome_success"], first_break(row)) == (1, 0, "no_success"), row
     for failure_class in feedback.LEARNING_EXCLUDED_FAILURE_CLASSES:
         counts = outcome_counts("cap", [{**done, "failure_class": failure_class}])
         assert (counts["outcome"], counts["outcome_excluded"]) == (0, 1), counts
         row.update(counts)
         assert first_break(row) == "outcome_excluded"
-    # An edge onto a role run is an association, whatever its target holds: never evidence.
+    # An edge onto a role run is an association, whatever its target holds: never acted on.
     counts = outcome_counts("cap", [{**done, "target_role_name": "triage"}])
-    assert (counts["outcome"], counts["outcome_associations"]) == (0, 1), counts
+    assert (counts["acted_on"], counts["acted_on_associations"], counts["outcome"]) == (0, 1, 0)
     row.update(counts)
-    assert first_break(row) == "outcome_unscoreable"
+    assert first_break(row) == "not_acted_on"
     row.update(outcome_counts("cap", [{"accepted": 1}]))  # acted on, nothing recorded yet
     assert first_break(row) == "no_outcome"
     assert all(v is None for v in outcome_counts("cap", None).values())
