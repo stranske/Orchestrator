@@ -179,7 +179,9 @@ The model role uses the existing read-only offload transport and a private cwd.
    exit. Closer items are set aside unexamined: discovery lists only PRs already in the agent
    pipeline, which the dispatcher never re-delegates. Their review hooks run at the decision they
    face, the terminal merge (`merge_guard.py`): the runtime-AC gate, and for a high-stakes PR the
-   **adversarial.py** refute-mode veto panel, advisory and judged once per exact head.
+   **adversarial.py** refute-mode panel, advisory and judged once per exact head: on by default since
+   2026-10-12 (`ORCH_RUN_ADVERSARIAL_REVIEW=0` is the kill switch), run detached after the merge by one
+   router-chosen reviewer that did not write the change, filing a follow-up issue on BLOCKED.
 5. **exp_abcd.py followup** — collects + cross-evaluates finished A/B/C experiments (nothing used to;
    this drained a 249-experiment backlog in July 2026), records objective anchors, and resumes the
    `synthesis_promotion.py` lifecycle. Useful syntheses must complete, pass scope/secret/local

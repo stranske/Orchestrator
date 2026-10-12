@@ -73,10 +73,11 @@
 <rect class="role" x="560" y="342" width="76" height="24" rx="4"/><text class="ct" x="598" y="358" text-anchor="middle">ux_review</text>
 <!-- ADVERSARIAL PANEL AT THE TERMINAL MERGE (2026-10-05). Until this date the tick ran it before a
      remote delegation that no closer PR can reach, so it sat in Delegate with no consumer. It now
-     runs at merge_guard's merge gate, once per (PR, head SHA), advisory. -->
+     runs at merge_guard's merge gate, once per (PR, head SHA), advisory. Since 2026-10-12 it runs
+     detached after the merge with one router-chosen reviewer and files a follow-up on BLOCKED. -->
 <g>
 <title>adversarial panel</title>
-<desc>The adversarial review panel runs at the terminal merge gate (merge_guard), judged once per exact PR head and reused until the head moves; it is advisory, reported beside the merge decision and never blocking. The tick no longer examines closer PRs, which it could never delegate.</desc>
+<desc>The adversarial review panel belongs to the terminal merge gate (merge_guard): on by default since 2026-10-12, it runs detached right after a high-stakes merge, judged once per exact PR head by one router-chosen reviewer that did not write the change. It is advisory and never blocks; a BLOCKED verdict files one follow-up issue and closes the source issue. The tick no longer examines closer PRs, which it could never delegate.</desc>
 <rect class="role" x="190" y="342" width="54" height="24" rx="4"/><text class="ct" x="217" y="358" text-anchor="middle">panel</text>
 </g>
 

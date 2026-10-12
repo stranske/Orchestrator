@@ -26,7 +26,14 @@ import dispatcher
 
 # Reviewer auth/PATH handled by dispatcher.offload (read-only). Severity that counts as a veto.
 VETO_SEVERITIES = {"high", "critical", "fatal"}
-DEFAULT_REVIEWERS = ("codex", "vibe", "gemini")
+# One reviewer, chosen per run by the router (ability on the `review` route first, then capacity and
+# load, with its exploration re-testing the alternatives), never the agent that wrote the change, and
+# vibe only when no other agent is selectable. The panel key carries this token instead of a name,
+# so a head is judged once whichever agent took the seat.
+AUTO_REVIEWER = "auto"
+REVIEW_TASK_TYPE = "review"
+LAST_RESORT_REVIEWERS = frozenset({"vibe"})
+MAX_REVIEWER_ATTEMPTS = 3
 HIGH_STAKES_LABELS = {
     # Fleet risk vocabulary. `risk:major` was ABSENT until 2026-08-20 while being the label the
     # fleet actually writes: `high_stakes_reason()` therefore returned None for every genuinely
@@ -270,15 +277,22 @@ def is_high_stakes(item: dict) -> bool:
 
 
 def reviewers_from_env(env: Mapping[str, str] | None = None) -> list[str]:
+    """An explicit `ORCH_ADVERSARIAL_REVIEWERS` list, or `[AUTO_REVIEWER]`: one reviewer the router
+    chooses at run time (`choose_reviewer`). The fixed default (codex, vibe, gemini) ended
+    2026-10-12: in the 33-PR concept test vibe vetoed 30 of 33, so a two-seat panel at threshold 2
+    was gemini's verdict paid twice, and a fixed seat cannot fall back when that one provider is
+    out of capacity."""
     env = env or {}
     raw = env.get("ORCH_ADVERSARIAL_REVIEWERS", "")
     reviewers = [part.strip() for part in raw.split(",") if part.strip()]
-    return reviewers or list(DEFAULT_REVIEWERS)
+    return reviewers or [AUTO_REVIEWER]
 
 
 def review_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """On by default since 2026-10-12 (owner decision after the concept test); `0` is the kill
+    switch. Advisory either way: nothing the panel returns blocks a merge."""
     env = env or {}
-    return env.get("ORCH_RUN_ADVERSARIAL_REVIEW") == "1"
+    return str(env.get("ORCH_RUN_ADVERSARIAL_REVIEW", "1")).strip() != "0"
 
 
 def refute_prompt(context: str) -> str:
@@ -493,7 +507,14 @@ def review(
     verdicts, raw = [], {}
     for r in reviewers:
         mode = "assess" if r == "codex" else "full"  # read-only where supported
-        out = dispatcher.offload(r, prompt, cwd=worktree, mode=mode, timeout=timeout)
+        out = dispatcher.offload(
+            r,
+            prompt,
+            cwd=worktree,
+            mode=mode,
+            timeout=timeout,
+            write_boundary=_git_write_boundary(r, worktree),
+        )
         v = _first_json(out.get("output", ""))
         raw[r] = v
         if v:
@@ -684,15 +705,177 @@ def _record_panel(target: str, head: str, reviewers: list[str], key: str, result
         return {"recorded": False, "error": str(exc)[:300]}
 
 
-def _worktree_head(worktree: str) -> str:
+def _git(worktree: str, *args: str):
     import subprocess
 
-    out = subprocess.run(
-        ["git", "-C", worktree, "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+    return subprocess.run(
+        ["git", "-C", worktree, *args], capture_output=True, text=True, check=False
     )
+
+
+def _worktree_head(worktree: str) -> str:
+    out = _git(worktree, "rev-parse", "HEAD")
     if out.returncode != 0:
         raise RuntimeError(f"git rev-parse HEAD failed in {worktree}: {out.stderr.strip()[:200]}")
     return out.stdout.strip()
+
+
+def _worktree_state(worktree: str) -> dict:
+    """HEAD and the tracked-file changes, the two things a reviewer must leave as it found them."""
+    status = _git(worktree, "status", "--porcelain", "--untracked-files=no")
+    return {
+        "head": _worktree_head(worktree),
+        "dirty": (
+            status.stdout.strip()
+            if status.returncode == 0
+            else f"unreadable: {status.stderr[:200]}"
+        ),
+    }
+
+
+def _restore_worktree(worktree: str, head: str) -> None:
+    _git(worktree, "checkout", "-q", "--force", "--detach", head)
+    _git(worktree, "checkout", "-q", "--", ".")
+
+
+def _git_write_boundary(agent: str, worktree: str) -> dict | None:
+    """Make the worktree's git metadata unwritable for a reviewer, where this machine can hold it.
+
+    MEASURED 2026-10-12 (33-PR concept test): reviewers run write-capable in the tree they judge,
+    and in 2 of 35 executions one changed it — an edit to audit.py that the next reviewer then
+    vetoed, and a checkout of an older commit that the next reviewer judged instead of the head.
+    `write_boundary_roots` always re-grants the run's own cwd, so the tree itself cannot be
+    protected here; its git directories can, which stops a moved HEAD or a commit. File edits are
+    caught by the after-check in `review_at_head`, which also covers a machine where no boundary
+    can be enforced (inside a codex sandbox seatbelt cannot nest), so None here is never unsafe."""
+    import adapters
+
+    if agent == "codex" or adapters.write_boundary_unenforceable(agent):
+        return None  # codex reviews in its own read-only sandbox (mode "assess")
+    dirs = []
+    for flag in ("--absolute-git-dir", "--git-common-dir"):
+        out = _git(worktree, "rev-parse", flag)
+        if out.returncode == 0 and out.stdout.strip():
+            path = Path(out.stdout.strip())
+            dirs.append(str(path if path.is_absolute() else Path(worktree) / path))
+    return {"protect": list(dict.fromkeys(dirs)), "allow": []} if dirs else None
+
+
+def _tree_changed(after: dict, head: str) -> bool:
+    """A reviewer left the tree at another commit or with tracked changes: its verdict judged other
+    code than the head it would be recorded under."""
+    return after.get("head") != head or bool(after.get("dirty"))
+
+
+def author_agents(labels: list) -> set[str]:
+    """The agents that wrote the change, read from its `agent:<name>` labels. Status labels share
+    the prefix (agent:auto, agent:retry, agent:needs-attention), so only routable names count."""
+    import router
+
+    known = {e["agent"] for spec in router.ROUTE_TABLE.values() for e in spec["agents"]}
+    names = set()
+    for label in labels or []:
+        name = str(label.get("name", "") if isinstance(label, dict) else label).strip().lower()
+        if name.startswith("agent:") and name[6:] in known:
+            names.add(name[6:])
+    return names
+
+
+def choose_reviewer(
+    exclude: set[str] | frozenset[str] = frozenset(),
+    *,
+    cap: dict | None = None,
+    learned: dict | None = None,
+    select_fn=None,
+) -> dict:
+    """ONE reviewer for the panel, by the router's own rule: ability on the `review` route (its
+    learned ranks), then capacity and load, with its exploration re-testing the others. Never an
+    agent in `exclude` (the change's authors, and any that already failed this run); vibe only when
+    nothing else is selectable. Returns {agent, reason}; agent None when no seat is available."""
+    import router
+
+    route = [e["agent"] for e in router.ROUTE_TABLE[REVIEW_TASK_TYPE]["agents"]]
+    pool = [a for a in route if a not in exclude]
+    cap = router.load_capacity() if cap is None else cap
+    if learned is None:
+        learned = (router.learned_ranks() or {}).get(REVIEW_TASK_TYPE)
+    select = select_fn or router.select_agent
+    for tier, only in (
+        ("primary", {a for a in pool if a not in LAST_RESORT_REVIEWERS}),
+        ("last resort", {a for a in pool if a in LAST_RESORT_REVIEWERS}),
+    ):
+        if not only:
+            continue
+        picked = select(REVIEW_TASK_TYPE, cap, only=only, learned=learned)
+        agent = picked.get("agent") if isinstance(picked, dict) else None
+        if agent:
+            return {
+                "agent": agent,
+                "reason": f"router {REVIEW_TASK_TYPE} route, {tier}; excluded "
+                f"{', '.join(sorted(exclude)) or 'none'}",
+            }
+    # The router skips agents whose capacity is UNKNOWN as well as shed. A missing or stale snapshot
+    # makes every agent unknown, and that must not leave every high-stakes merge unjudged: take the
+    # best-ranked agent not known to be shed, vibe still last. If it cannot run, the caller's
+    # attempts loop moves on to the next choice. (Found 2026-10-12 running the panel end to end.)
+    ranks = learned or {}
+    unshed = [a for a in pool if router._state(cap, a) != "shed"]
+    ordered = sorted(
+        unshed,
+        key=lambda a: (
+            a in LAST_RESORT_REVIEWERS,
+            (ranks.get(a) or {}).get("rank", len(route)),
+            route.index(a),
+        ),
+    )
+    if ordered:
+        return {
+            "agent": ordered[0],
+            "reason": f"router selected none (capacity unknown); learned {REVIEW_TASK_TYPE} order, "
+            f"excluded {', '.join(sorted(exclude)) or 'none'}",
+        }
+    return {
+        "agent": None,
+        "reason": f"no {REVIEW_TASK_TYPE} agent outside {sorted(exclude)} that is not shed",
+    }
+
+
+def panel_worktree(target: str, head: str) -> str:
+    """A detached checkout of exactly `head`, private to the panel. The closer's worktree tracks
+    the PR branch by name (gone once a merge deletes it) and is the tree agents push from, so a
+    reviewer never runs there; `refs/pull/N/head` outlives the branch."""
+    import provision
+
+    repo, num = provision.parse_target(target)
+    canon = provision.ensure_canonical(repo)
+    wt = provision.WORKTREES_DIR / f"panel-{provision.repo_slug(repo)}-{num}-{head[:12]}"
+    if wt.exists():
+        state = _worktree_state(str(wt))
+        if state["head"] == head and not state["dirty"]:
+            return str(wt)
+        _git(str(canon), "worktree", "remove", "--force", str(wt))
+    _git(str(canon), "fetch", "-q", "origin", f"refs/pull/{num}/head")
+    added = _git(str(canon), "worktree", "add", "-q", "--detach", str(wt), head)
+    if added.returncode != 0:
+        raise RuntimeError(
+            f"cannot check out {head[:12]} for {target}: {added.stderr.strip()[:300]}"
+        )
+    return str(wt)
+
+
+def _shortfall(reason: str, attempts: list) -> dict:
+    return {
+        "verdict": INCONCLUSIVE,
+        "n_reviewers": 0,
+        "reviewers_requested": 1,
+        "reviewers_missing": 1,
+        "n_vetoes": 0,
+        "veto_threshold": 1,
+        "summary": f"0 vetoes / threshold 1, reviewers returned 0 of 1 ({reason})",
+        "blockers": [],
+        "inconclusive_reason": reason + " — this is NOT a pass; re-run the missing coverage",
+        "attempts": attempts,
+    }
 
 
 def review_at_head(
@@ -703,19 +886,31 @@ def review_at_head(
     context: str = "",
     worktree: str | None = None,
     env: Mapping[str, str] | None = None,
+    exclude: set[str] | frozenset[str] = frozenset(),
     lookup_fn=None,
     provision_fn=None,
     head_fn=None,
+    state_fn=None,
+    restore_fn=None,
+    choose_fn=None,
     review_fn=None,
     record_fn=None,
 ) -> dict:
     """The panel on `target` at exactly `head`, judged once: a conclusive verdict recorded for this
-    (target, head, reviewers) is reused (`status: reused`), and otherwise the panel runs on a
+    (target, head, reviewer mode) is reused (`status: reused`), and otherwise the panel runs on a
     worktree proven to sit at that head and its verdict is recorded (`status: executed`). A
     worktree at any other commit is refused (`head_mismatch`) and nothing is reviewed or recorded,
     so no head is ever credited with a judgment of another. Advisory like `review`: the caller
-    adjudicates the blockers against ground truth."""
+    adjudicates the blockers against ground truth.
+
+    Default mode is ONE router-chosen reviewer (`choose_reviewer`) at threshold 1, outside
+    `exclude` (the change's authors). A reviewer that returns no verdict, or leaves the tree
+    changed, is replaced by the next choice, up to MAX_REVIEWER_ATTEMPTS, so one provider out of
+    capacity does not leave the merge unjudged. The tree is checked AFTER every reviewer as well
+    as before: a changed tree is restored and that verdict discarded, because it judged other code.
+    """
     reviewers = list(reviewers) if reviewers else reviewers_from_env(env)
+    auto = reviewers == [AUTO_REVIEWER]
     base: dict = {"target": target, "head": head, "reviewers": reviewers}
     if not _TARGET_RE.fullmatch(str(target or "")) or not _HEAD_RE.fullmatch(str(head or "")):
         return {
@@ -743,11 +938,7 @@ def review_at_head(
         base["memo_error"] = lookup.get("error")
     try:
         if worktree is None:
-            if provision_fn is None:
-                import provision
-
-                provision_fn = provision.provision
-            worktree = str(provision_fn(target, "closer"))
+            worktree = str((provision_fn or panel_worktree)(target, head))
         observed = (head_fn or _worktree_head)(str(worktree))
     except Exception as exc:
         return {**base, "status": "failed", "error": str(exc)[:500]}
@@ -759,15 +950,68 @@ def review_at_head(
             "detail": "the worktree is not at the head this verdict would be recorded under; "
             "nothing was reviewed or recorded",
         }
-    try:
-        # A plain call on the default path, so the audit's static call graph sees this entry
-        # reach `review`'s heartbeat (`(review_fn or review)(...)` hides it).
-        if review_fn is None:
-            result = review(str(worktree), reviewers, context)
-        else:
-            result = review_fn(str(worktree), reviewers, context)
-    except Exception as exc:
-        return {**base, "status": "failed", "error": str(exc)[:500], "worktree": str(worktree)}
+    worktree = str(worktree)
+    if state_fn is None and head_fn is not None:
+        # a test seam that fakes the head fakes the whole tree: nothing on disk to read
+
+        def state_fn(wt):
+            return {"head": head_fn(wt), "dirty": ""}
+
+    state_of = state_fn or _worktree_state
+    restore = restore_fn or _restore_worktree
+    seats: list[list[str] | None] = [None] * MAX_REVIEWER_ATTEMPTS if auto else [reviewers]
+    tried: set[str] = set()
+    attempts: list[dict] = []
+    result: dict | None = None
+    used: list[str] = []
+    for fixed in seats:
+        seat: list[str] = list(fixed or [])
+        if auto:
+            pick = (choose_fn or choose_reviewer)(set(exclude) | tried)
+            if not pick.get("agent"):
+                attempts.append({"agent": None, "outcome": "no_seat", "reason": pick.get("reason")})
+                break
+            seat = [pick["agent"]]
+            tried.add(pick["agent"])
+        try:
+            # A plain call on the default path, so the audit's static call graph sees this entry
+            # reach `review`'s heartbeat (`(review_fn or review)(...)` hides it).
+            if review_fn is None:
+                outcome = review(worktree, seat, context, veto_threshold=1 if auto else 2)
+            else:
+                outcome = review_fn(worktree, seat, context)
+        except Exception as exc:
+            return {**base, "status": "failed", "error": str(exc)[:500], "worktree": worktree}
+        after = state_of(worktree)
+        if _tree_changed(after, head):
+            restore(worktree, head)
+            attempts.append(
+                {
+                    "agent": ",".join(seat),
+                    "outcome": "changed_tree",
+                    "head_after": after.get("head"),
+                    "dirty": str(after.get("dirty"))[:300],
+                }
+            )
+            continue
+        verdict = str(outcome.get("verdict") or "").upper()
+        if auto and verdict not in CONCLUSIVE_VERDICTS:
+            attempts.append({"agent": seat[0], "outcome": "no_verdict"})
+            continue
+        attempts.append({"agent": ",".join(seat), "outcome": verdict.lower()})
+        result, used = outcome, seat
+        break
+    if result is None:
+        result = _shortfall(
+            "no reviewer returned a verdict on an unchanged tree "
+            f"({len(attempts)} attempt(s): "
+            + "; ".join(f"{a['agent']} {a['outcome']}" for a in attempts)
+            + ")",
+            attempts,
+        )
+        used = sorted(tried) or list(reviewers)
+    else:
+        result = {**result, "attempts": attempts}
     key = base.get("key") or panel_key(target, head, reviewers)
     verdict = str(result.get("verdict") or "").upper()
     return {
@@ -775,10 +1019,199 @@ def review_at_head(
         "status": "executed",
         "verdict": verdict,
         "conclusive": verdict in CONCLUSIVE_VERDICTS,
-        "worktree": str(worktree),
+        "reviewed_by": used,
+        "worktree": worktree,
         "result": result,
-        "lineage": (record_fn or _record_panel)(target, head, reviewers, key, result),
+        "lineage": (record_fn or _record_panel)(target, head, used, key, result),
     }
+
+
+# THE CONSUMER (owner decision 2026-10-12). Until this date nothing read a BLOCKED verdict: the
+# value chain broke at "acted on" with 0 of 0 findings acted on. A BLOCKED panel now files ONE
+# follow-up issue in the target repo for the fleet to fix or close, and the PR's source issue is
+# closed at that time rather than left hanging (the owner's condition). Idempotent per panel key:
+# a local record first, then a title search, so a re-run at the same head never files twice.
+FOLLOWUP_TITLE = "Adversarial review follow-up: {target} @ {short}"
+FOLLOWUP_PRIORITY = {
+    "critical": "priority:high",
+    "fatal": "priority:high",
+    "high": "priority:normal",
+}
+
+
+def _followup_record_path(key: str) -> Path:
+    return _panel_artifact_path(key).with_suffix(".followup.json")
+
+
+def followup_body(target: str, head: str, outcome: dict) -> str:
+    result = outcome.get("result") or {}
+    blockers = result.get("blockers") or []
+    reviewer = ", ".join(outcome.get("reviewed_by") or []) or "unrecorded"
+    findings = (
+        "\n".join(
+            f"- **{b.get('severity')}** (confidence {b.get('confidence')}): {b.get('finding')}"
+            for b in blockers
+        )
+        or "- (the verdict carried no finding text)"
+    )
+    repo, num = target.split("#")
+    return (
+        f"<!-- adversarial-panel:{outcome.get('key')} -->\n"
+        "## Why\n\n"
+        f"The adversarial review panel judged merged PR {repo}#{num} at head `{head}` and returned "
+        f"BLOCKED (reviewer: {reviewer}). The merge was not held: the panel is advisory. Its finding "
+        "is a claim to verify, not a confirmed defect.\n\n"
+        f"{findings}\n\n"
+        "## Scope\n\n"
+        f"Only the finding above, in the code {repo}#{num} merged.\n\n"
+        "## Non-Goals\n\n"
+        "- Re-reviewing the rest of the PR.\n- Unrelated refactors.\n\n"
+        "## Tasks\n\n"
+        "- [ ] Reproduce the finding against current main (a failing test, or a cited code path).\n"
+        "- [ ] If it reproduces: fix it, with a regression test that fails before the fix.\n"
+        "- [ ] If it does not reproduce or is intended behaviour: close this issue as not planned, "
+        "with the evidence.\n\n"
+        "## Acceptance criteria\n\n"
+        "- [ ] Either a merged fix with a regression test that fails on the pre-fix code, or a "
+        "closing comment citing the code or test that shows the finding is not a defect.\n"
+    )
+
+
+def file_followup(target: str, head: str, outcome: dict, *, gh=None) -> dict:
+    """File the follow-up for a BLOCKED panel and close the PR's still-open source issues.
+    Never raises: the merge it follows has already happened."""
+    import subprocess
+
+    run = gh or (lambda cmd: subprocess.run(cmd, capture_output=True, text=True, check=False))
+    if str(outcome.get("verdict") or "").upper() != "BLOCKED":
+        return {"filed": False, "reason": f"verdict {outcome.get('verdict')}, nothing to follow up"}
+    key = str(outcome.get("key") or panel_key(target, head, outcome.get("reviewers") or []))
+    record = _followup_record_path(key)
+    try:
+        prior = json.loads(record.read_text(encoding="utf-8"))
+        if prior.get("issue"):
+            return {"filed": False, "reason": "already filed", **prior}
+    except (OSError, ValueError):
+        pass
+    repo, num = target.split("#")
+    title = FOLLOWUP_TITLE.format(target=target, short=head[:7])
+    try:
+        found = run(
+            [
+                "gh",
+                "issue",
+                "list",
+                "-R",
+                repo,
+                "--state",
+                "all",
+                "--search",
+                f'"{title}" in:title',
+                "--json",
+                "number,title",
+            ]
+        )
+        existing = [i for i in json.loads(found.stdout or "[]") if i.get("title") == title]
+        severities = [
+            str(b.get("severity", "")).lower()
+            for b in (outcome.get("result") or {}).get("blockers") or []
+        ]
+        wanted = next(
+            (FOLLOWUP_PRIORITY[s] for s in ("critical", "fatal", "high") if s in severities), None
+        )
+        labels_out = run(
+            ["gh", "label", "list", "-R", repo, "--search", "priority", "--json", "name"]
+        )
+        have = {row.get("name") for row in json.loads(labels_out.stdout or "[]")}
+        label = wanted if wanted in have else None
+        if existing:
+            issue = existing[0]["number"]
+        else:
+            cmd = [
+                "gh",
+                "issue",
+                "create",
+                "-R",
+                repo,
+                "--title",
+                title,
+                "--body",
+                followup_body(target, head, {**outcome, "key": key}),
+            ]
+            if label:
+                cmd += ["--label", label]
+            made = run(cmd)
+            if made.returncode != 0:
+                return {"filed": False, "error": (made.stderr or "")[:300]}
+            issue = int(str(made.stdout).strip().rstrip("/").rsplit("/", 1)[-1])
+        closed = []
+        pr = run(["gh", "pr", "view", num, "-R", repo, "--json", "closingIssuesReferences,state"])
+        for ref in json.loads(pr.stdout or "{}").get("closingIssuesReferences") or []:
+            src = f"{ref['repository']['owner']['login']}/{ref['repository']['name']}"
+            state = run(["gh", "issue", "view", str(ref["number"]), "-R", src, "--json", "state"])
+            if json.loads(state.stdout or "{}").get("state") == "OPEN":
+                done = run(
+                    [
+                        "gh",
+                        "issue",
+                        "close",
+                        str(ref["number"]),
+                        "-R",
+                        src,
+                        "--comment",
+                        f"Delivered by {target}. The adversarial panel's open finding on that "
+                        f"merge continues in {repo}#{issue}.",
+                    ]
+                )
+                if done.returncode == 0:
+                    closed.append(f"{src}#{ref['number']}")
+    except Exception as exc:
+        return {"filed": False, "error": str(exc)[:300]}
+    out = {"issue": issue, "repo": repo, "label": label, "closed_source": closed, "key": key}
+    try:
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(json.dumps(out), encoding="utf-8")
+    except OSError:
+        pass
+    return {"filed": not existing, **out}
+
+
+def spawn_post_merge_panel(
+    target: str, head: str, context: str, exclude: set[str], *, popen=None
+) -> dict:
+    """Run the panel and its follow-up DETACHED, after the merge. Advisory work never holds a merge
+    or a lane round: a ~13-minute panel (median 806 s in the concept test) inside merge_guard would
+    stall every high-stakes merge, and a lane that timed out mid-panel would block it de facto."""
+    import subprocess
+
+    log = _panel_artifact_path(panel_key(target, head, [AUTO_REVIEWER])).with_suffix(".log")
+    cmd = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "review",
+        "--target",
+        target,
+        "--head",
+        head,
+        "--context",
+        context,
+        "--followup",
+    ]
+    if exclude:
+        cmd += ["--exclude-agents", ",".join(sorted(exclude))]
+    try:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with open(log, "ab") as fh:
+            proc = (popen or subprocess.Popen)(
+                cmd,
+                stdout=fh,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+    except Exception as exc:
+        return {"status": "spawn_failed", "error": str(exc)[:300]}
+    return {"status": "scheduled_after_merge", "pid": getattr(proc, "pid", None), "log": str(log)}
 
 
 def _selftest_review_at_head() -> None:
@@ -878,8 +1311,196 @@ def _selftest_review_at_head() -> None:
     )
 
 
+def _selftest_one_reviewer() -> None:
+    """One router-chosen reviewer, never the author, vibe last; a reviewer that fails or changes the
+    tree is replaced; a BLOCKED verdict files one follow-up and closes the source issue. Offline:
+    disposable Brain and state dir, stubbed router, git and gh — nothing is spawned."""
+    import tempfile
+
+    import feedback
+
+    target, head = "o/r#7", "a" * 40
+    # --- choose_reviewer: the author is never offered, vibe only when nothing else is selectable
+    offered: list[set] = []
+
+    def select(task, cap, *, only, learned):
+        offered.append(set(only))
+        live = sorted(only - {"cursor", "gemini", "codex", "claude"} if dead_primary else only)
+        return {"agent": live[0]} if live else None
+
+    dead_primary = False
+    pick = choose_reviewer({"codex"}, cap={}, learned={}, select_fn=select)
+    assert pick["agent"] and pick["agent"] != "codex" and pick["agent"] != "vibe", pick
+    assert "codex" not in offered[0] and "vibe" not in offered[0], offered
+    dead_primary = True
+    last = choose_reviewer({"codex"}, cap={}, learned={}, select_fn=select)
+    assert last["agent"] == "vibe" and "last resort" in last["reason"], last
+    # capacity unknown (no snapshot): the router selects nothing, the learned order still seats one
+    blind = choose_reviewer(
+        {"codex"},
+        cap={},
+        learned={"claude": {"rank": 0}, "gemini": {"rank": 1}},
+        select_fn=lambda *a, **k: None,
+    )
+    assert blind["agent"] == "claude" and "capacity unknown" in blind["reason"], blind
+    everything_shed = {"agents": {a: {"state": "shed"} for a in ("cursor", "gemini", "claude")}}
+    assert (
+        choose_reviewer(
+            {"vibe", "codex"}, cap=everything_shed, learned={}, select_fn=lambda *a, **k: None
+        )["agent"]
+        is None
+    )
+    assert author_agents(["agent:codex", "agent:auto", "agent:retry", "bug"]) == {"codex"}
+
+    saved_db, saved_state = feedback.DB_PATH, os.environ.get("ORCH_STATE_DIR")
+    with tempfile.TemporaryDirectory(prefix="adversarial-one-") as tmp:
+        feedback.DB_PATH = Path(tmp) / "brain.db"
+        os.environ["ORCH_STATE_DIR"] = tmp
+        try:
+            # --- a reviewer with no verdict, then one that MOVED HEAD, then a clean verdict
+            queue = ["gemini", "cursor", "claude"]
+            excluded: list[set] = []
+            restored: list[str] = []
+            seen: list[str] = []
+            state: dict = {"n": 0, "sha": head}
+
+            def choose(exclude):
+                excluded.append(set(exclude))
+                rest = [a for a in queue if a not in exclude]
+                return {"agent": rest[0] if rest else None, "reason": "stub"}
+
+            def review_fn(wt, seat, ctx):
+                seen.append(seat[0])
+                if seat[0] == "gemini":
+                    return {"verdict": "INCONCLUSIVE"}
+                return {
+                    "verdict": "BLOCKED",
+                    "blockers": [{"severity": "critical", "finding": "x"}],
+                }
+
+            def state_fn(wt):
+                state["n"] += 1
+                # the second reviewer (cursor) leaves the tree on an older commit
+                return {"head": "f" * 40 if seen[-1] == "cursor" else state["sha"], "dirty": ""}
+
+            def run(sha=head, **kw):
+                state["sha"] = sha
+                kw.setdefault("state_fn", state_fn)
+                return review_at_head(
+                    target,
+                    sha,
+                    reviewers=[AUTO_REVIEWER],
+                    worktree="/wt",
+                    exclude={"codex"},
+                    head_fn=lambda wt: sha,
+                    choose_fn=choose,
+                    review_fn=review_fn,
+                    restore_fn=lambda wt, h: restored.append(h),
+                    **kw,
+                )
+
+            out = run()
+            assert out["status"] == "executed" and out["verdict"] == "BLOCKED", out
+            assert out["reviewed_by"] == ["claude"], out
+            assert [a["outcome"] for a in out["result"]["attempts"]] == [
+                "no_verdict",
+                "changed_tree",
+                "blocked",
+            ], out["result"]["attempts"]
+            assert restored == [head], restored  # the moved tree was put back
+            assert all("codex" in e for e in excluded) and {"gemini", "cursor"} <= excluded[-1]
+            # the verdict is keyed on the auto mode, so the next merge attempt reuses it
+            assert run()["status"] == "reused"
+            # --- no seat at all: a shortfall, recorded INCONCLUSIVE, re-run next time (not reused)
+            queue.clear()
+            none = run(sha="b" * 40)
+            assert none["verdict"] == INCONCLUSIVE and none["conclusive"] is False, none
+            assert run(sha="b" * 40)["status"] == "executed"
+
+            # --- DELIBERATE BREAK -> REVERT: an after-check that sees no change records the
+            # moved-tree verdict as the head's, the defect measured in the 2026-10-12 test.
+            queue[:] = ["cursor", "claude"]
+            seen.clear()
+            saved_changed = _tree_changed
+            try:
+                globals()["_tree_changed"] = lambda after, h: False
+                broken = run(sha="c" * 40)
+                assert broken["reviewed_by"] == [
+                    "cursor"
+                ], "break did not change behaviour — vacuous"
+            finally:
+                globals()["_tree_changed"] = saved_changed
+            seen.clear()
+            fixed = run(sha="d" * 40)
+            assert fixed["reviewed_by"] == ["claude"], "revert did not restore the after-check"
+
+            # --- the consumer: one follow-up, the open source issue closed, idempotent
+            calls: list[list[str]] = []
+
+            def gh(cmd):
+                import subprocess
+
+                calls.append(cmd)
+                verb = cmd[1:3]
+                reply = {
+                    ("issue", "list"): "[]",
+                    ("label", "list"): json.dumps([{"name": "priority:high"}]),
+                    ("issue", "create"): "https://github.com/o/r/issues/90\n",
+                    ("pr", "view"): json.dumps(
+                        {
+                            "closingIssuesReferences": [
+                                {"number": 40, "repository": {"name": "r", "owner": {"login": "o"}}}
+                            ]
+                        }
+                    ),
+                    ("issue", "view"): json.dumps({"state": "OPEN"}),
+                    ("issue", "close"): "",
+                }[tuple(verb)]
+                return subprocess.CompletedProcess(cmd, 0, reply, "")
+
+            filed = file_followup(target, head, out, gh=gh)
+            assert (
+                filed["filed"] and filed["issue"] == 90 and filed["label"] == "priority:high"
+            ), filed
+            assert filed["closed_source"] == ["o/r#40"], filed
+            create = next(c for c in calls if c[1:3] == ["issue", "create"])
+            assert "## Acceptance criteria" in create[create.index("--body") + 1], create
+            n = len(calls)
+            again = file_followup(target, head, out, gh=gh)
+            assert again["filed"] is False and again["issue"] == 90 and len(calls) == n, again
+            assert file_followup(target, "e" * 40, {"verdict": "PASS"}, gh=gh)["filed"] is False
+            # --- the detached job carries --followup and the author exclusion; nothing really runs
+            argv: list = []
+
+            def fake_popen(cmd, **kw):
+                argv.append(cmd)
+                return type("P", (), {"pid": 1})()
+
+            sched = spawn_post_merge_panel(
+                target,
+                head,
+                "ctx",
+                {"codex"},
+                popen=fake_popen,
+            )
+            assert sched["status"] == "scheduled_after_merge" and "--followup" in argv[0], argv
+            assert argv[0][argv[0].index("--exclude-agents") + 1] == "codex", argv
+        finally:
+            feedback.DB_PATH = saved_db
+            if saved_state is None:
+                os.environ.pop("ORCH_STATE_DIR", None)
+            else:
+                os.environ["ORCH_STATE_DIR"] = saved_state
+    print(
+        "adversarial.py one-reviewer selftest: OK (author excluded, vibe last resort, failed and "
+        "tree-changing reviewers replaced, shortfall re-run, auto-mode memo, follow-up filed once "
+        "with the source issue closed, detached job argv; after-check break->revert)"
+    )
+
+
 def _selftest():
     _selftest_review_at_head()
+    _selftest_one_reviewer()
     p = refute_prompt("merge a payments change")
     assert "REFUTE" in p and "broken until proven sound" in p.lower() and '"blocker"' in p, p
     # minority-veto: 2 substantiated high vetoes meet threshold 2 -> BLOCKED
@@ -1013,9 +1634,10 @@ def _selftest():
     assert not is_high_stakes({"lane": "closer", "labels": ["routine"], "title": "update copy"})
     assert is_high_stakes({"lane": "closer", "labels": ["risk:high"], "title": "update copy"})
     assert is_high_stakes({"lane": "closer", "labels": ["routine"], "title": "security fix"})
-    assert reviewers_from_env({}) == list(DEFAULT_REVIEWERS)
+    assert reviewers_from_env({}) == [AUTO_REVIEWER]
+    assert reviewers_from_env({"ORCH_ADVERSARIAL_REVIEWERS": ""}) == [AUTO_REVIEWER]
     assert reviewers_from_env({"ORCH_ADVERSARIAL_REVIEWERS": "vibe, gemini"}) == ["vibe", "gemini"]
-    assert review_enabled({"ORCH_RUN_ADVERSARIAL_REVIEW": "1"})
+    assert review_enabled({}) and review_enabled({"ORCH_RUN_ADVERSARIAL_REVIEW": "1"})
     assert not review_enabled({"ORCH_RUN_ADVERSARIAL_REVIEW": "0"})
     assert high_stakes_from_shape({"paths": [".github/workflows/gate.yml"]})
     assert high_stakes_from_shape({"paths": ["src/auth/session.py"]})
@@ -1063,8 +1685,18 @@ def _review_cli(argv: list[str]) -> int:
     parser.add_argument(
         "--reviewers",
         default="",
-        help="comma-separated; default ORCH_ADVERSARIAL_REVIEWERS, else codex,vibe,gemini. A "
-        "verdict is reused only for the same reviewer set",
+        help="comma-separated; default ORCH_ADVERSARIAL_REVIEWERS, else one router-chosen "
+        "reviewer. A verdict is reused only for the same reviewer set (or the same auto mode)",
+    )
+    parser.add_argument(
+        "--exclude-agents",
+        default="",
+        help="comma-separated agents that may not review (the change's authors)",
+    )
+    parser.add_argument(
+        "--followup",
+        action="store_true",
+        help="after a BLOCKED verdict, file the follow-up issue and close the PR's open source issues",
     )
     parser.add_argument("--context", default="", help="what the reviewers are told about the PR")
     parser.add_argument("--worktree", help="a checkout already at --head (else one is provisioned)")
@@ -1092,7 +1724,10 @@ def _review_cli(argv: list[str]) -> int:
         context=args.context or f"Pull request {args.target} at head {args.head[:12]}.",
         worktree=args.worktree,
         env=os.environ,
+        exclude={a.strip() for a in args.exclude_agents.split(",") if a.strip()},
     )
+    if args.followup and out.get("status") in {"reused", "executed"}:
+        out["followup"] = file_followup(args.target, args.head, out)
     print(json.dumps(out, indent=2, default=str))
     return 0 if out.get("status") in {"reused", "executed"} else 2
 
