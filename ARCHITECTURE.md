@@ -382,6 +382,44 @@ step and input switches held off. Unknown demand never becomes zero. It changes 
 selection, gate, dispatcher or lifecycle decision; the existing weekly artifact carries
 the section rather than a second audit log or inventory.
 
+**Its `outcome` step reads what became of a run from `outcomes`, and counts it with the one
+classifier of these edges (2026-10-11).** It counted an acted-on edge's own `outcome_verdict` and
+`durability`, the copy that `capability_effectiveness` stopped trusting the same day (see the
+feedback loop below), against a private verdict-and-durability set, and never read `failure_class`.
+`_brain` now replaces the edge's copied columns with its target's `outcomes` row, read when the
+report is made, and adds the target's `runs.role_name`. Each acted-on edge is then classified by
+`capability_effectiveness._classify`, which applies `feedback`'s predicates
+(`LEARNING_EXCLUDED_FAILURE_CLASSES`, `role_target_kind`, `outcome_is_terminal`). So the monitor is
+the third reader that agrees with the lifecycle on what an outcome says, and it has no predicate of
+its own. Only a terminal outcome, good or bad, is the `outcome` step. Every other class is counted
+in its own field and printed beside it with a legend:
+- `excl`: learning-excluded;
+- `assoc`: an edge onto a role run, whose outcome is a copy of the acting run's;
+- `sweep`: a merge the durability sweep has not judged;
+- `unres`: an unmerged run nothing will judge;
+- `open`: no outcome yet.
+
+`no_outcome` now means something can still resolve, which is only `open` or `sweep`. When every
+evidence edge is excluded, the first break is `outcome_excluded`. When nothing can ever be scored,
+it is `outcome_unscoreable`. This is the split `capability_effectiveness` reports as
+`excluded_only` and `unscoreable`. An unread Brain still leaves every count unmeasured.
+
+Measured on a copy of the live Brain, with the same inputs and clock on both sides:
+- role-triage's `outcome` fell from 2 to 0 (12 excluded, 281 associations), and its first break
+  from `works` to `outcome_excluded`. Its two outcomes were edges still reading PASS/durable on
+  Trend_Model_Project#5913 and #5944, whose outcomes the 2026-10-04 relabels had cleared to
+  `unattributed_delegation`. They had been the report's only `works`.
+- offload moved from 48 to 46 (15 excluded, 1,742 associations).
+- deliberate-break-verifier moved from 64 to 106 (5 awaiting the sweep). The 42 new ones are merges
+  the fleet verifier marked `NON_PASS` while their durability is pending, which
+  `outcome_is_terminal` treats as final.
+- agy-runtime-isolation moved from 4 to 12: 8 FAILs, plus 11 excluded and 38 unresolvable set aside.
+- role-adjudicator, runtime-ac-checks and testgen-lane each moved from 0 to 1, a `NON_PASS` merge.
+- role-redirect's 762, role-prompt's 8 and role-decomposer's 4 acted-on edges are all associations.
+
+The other 37 rows are identical. No first break other than role-triage's changed. No stage,
+component or surface moved, so the loop diagram is unchanged.
+
 `issue_size_quality` extends that weekly caller with a read-only join: every closed issue in
 the 90-day reviewed-fleet population contributes its checkbox-count band, and only PRs merged
 by the issue's close can contribute canonical Brain outcomes. PASS uses the final adjudication;
