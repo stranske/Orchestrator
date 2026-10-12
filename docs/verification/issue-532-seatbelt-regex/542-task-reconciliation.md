@@ -1,5 +1,33 @@
 # PR 542 task reconciliation
 
+## Review-fix revalidation (2026-10-12)
+
+Commit `cd40f4ff33e980244ded636900cf5425dbadbc2c` implements all four review
+findings. Revalidation supports checking these three added PR tasks:
+
+- [x] Bind CI measurements to the successful producer step and reject unrelated-step
+  output and conflicting producer summaries (thread 4244569781).
+- [x] Remove stale workspace/temporary-path claims and qualify historical/current test
+  totals (threads 4244510354 and 4244510358).
+- [x] Reject missing/conflicting original measured counts and accept identical repeated
+  summaries without changing original receipts (thread 4244510362).
+
+All **86 Node receipt/recovery tests** in the seven files listed in [README.md](README.md)
+passed, as did four Python quoting regressions and the retained native/original receipt
+checker. The Node tests include adversarial producer-binding and original-count cases.
+Rejecting every repeated summary would discard consistent evidence, so identical repeated
+counts remain accepted. The command-injection warning on the former regex `.exec(log)`
+call does not apply: that method parses text; subprocesses use argument arrays.
+
+The PR-body update for these three verified tasks was rejected by the GitHub connector
+because it requires approval and the run's approval policy is `never`. This is the proposed
+checkbox state, not evidence of a successful remote update. PR #542 was read back as open
+and ready for review at the commit above. Original focused-command/current-head CI recovery
+and the combined final acceptance criterion remain unchecked: complete final-head CI,
+exact-head review/floor gates and actual post-merge comparison are still pending.
+
+## Historical implementation reconciliation
+
 Verified on inherited head `0f8858061385e52c141c9da5134e0d7bf22478fa`:
 
 - [x] Correct regex string escaping, preserving rule order and semantics.
