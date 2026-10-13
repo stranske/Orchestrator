@@ -1,0 +1,10 @@
+........................................................................ [ 68%]
+.................................                                        [100%]
+=============================== warnings summary ===============================
+tests/test_synthesis_promotion.py::test_hollow_synthesis_never_becomes_candidate_ready
+tests/test_synthesis_promotion.py::test_a_passing_break_names_the_tautologies_it_carried
+  /home/runner/work/Orchestrator/Orchestrator/src/local_verify.py:591: DeprecationWarning: Python 3.14 will, by default, filter extracted tar archives and reject files or modify their metadata. Use the filter argument to control this behavior.
+    tf.extractall(dest)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+105 passed, 2 warnings in 6.46s
