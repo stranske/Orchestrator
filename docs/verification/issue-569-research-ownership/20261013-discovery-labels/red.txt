@@ -1,0 +1,80 @@
+FFFFFEE
+======================================================================
+ERROR: test_paused_issue_is_excluded (test_research_ownership.ResearchOwnershipTests.test_paused_issue_is_excluded) (unknown_labels=['priority:high', {'name': None}])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_research_ownership.py", line 83, in test_paused_issue_is_excluded
+    feed = backlog.build_research_items(
+        ["o/r"], lambda repo: [unread, unowned], lambda repo: []
+    )
+  File "/home/runner/work/Orchestrator/Orchestrator/src/backlog.py", line 512, in build_research_items
+    reason = research_skip_reason(labels)
+  File "/home/runner/work/Orchestrator/Orchestrator/src/backlog.py", line 470, in research_skip_reason
+    low = {lab.strip().lower() for lab in labels}
+           ^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'strip'
+
+======================================================================
+ERROR: test_paused_issue_is_excluded (test_research_ownership.ResearchOwnershipTests.test_paused_issue_is_excluded) (unknown_labels=['priority:high', {'name': ['agents:paused']}])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_research_ownership.py", line 83, in test_paused_issue_is_excluded
+    feed = backlog.build_research_items(
+        ["o/r"], lambda repo: [unread, unowned], lambda repo: []
+    )
+  File "/home/runner/work/Orchestrator/Orchestrator/src/backlog.py", line 512, in build_research_items
+    reason = research_skip_reason(labels)
+  File "/home/runner/work/Orchestrator/Orchestrator/src/backlog.py", line 470, in research_skip_reason
+    low = {lab.strip().lower() for lab in labels}
+           ^^^^^^^^^
+AttributeError: 'list' object has no attribute 'strip'
+
+======================================================================
+FAIL: test_paused_issue_is_excluded (test_research_ownership.ResearchOwnershipTests.test_paused_issue_is_excluded) (unknown_labels=None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_research_ownership.py", line 88, in test_paused_issue_is_excluded
+    self.assertEqual(feed["counts"].get("owned_or_paused"), 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: None != 1
+
+======================================================================
+FAIL: test_paused_issue_is_excluded (test_research_ownership.ResearchOwnershipTests.test_paused_issue_is_excluded) (unknown_labels={})
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_research_ownership.py", line 88, in test_paused_issue_is_excluded
+    self.assertEqual(feed["counts"].get("owned_or_paused"), 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: None != 1
+
+======================================================================
+FAIL: test_paused_issue_is_excluded (test_research_ownership.ResearchOwnershipTests.test_paused_issue_is_excluded) (unknown_labels='agents:paused')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_research_ownership.py", line 88, in test_paused_issue_is_excluded
+    self.assertEqual(feed["counts"].get("owned_or_paused"), 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: None != 1
+
+======================================================================
+FAIL: test_paused_issue_is_excluded (test_research_ownership.ResearchOwnershipTests.test_paused_issue_is_excluded) (unknown_labels=['priority:high', None])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_research_ownership.py", line 87, in test_paused_issue_is_excluded
+    self.assertEqual(feed["counts"]["eligible"], 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 2 != 1
+
+======================================================================
+FAIL: test_paused_issue_is_excluded (test_research_ownership.ResearchOwnershipTests.test_paused_issue_is_excluded) (unknown_labels=['priority:high', {}])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_research_ownership.py", line 87, in test_paused_issue_is_excluded
+    self.assertEqual(feed["counts"]["eligible"], 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 2 != 1
+
+----------------------------------------------------------------------
+Ran 1 test in 0.008s
+
+FAILED (failures=5, errors=2)

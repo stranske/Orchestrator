@@ -58,6 +58,39 @@ class ResearchOwnershipTests(unittest.TestCase):
         self.assertEqual(feed["counts"]["eligible"], 0)
         self.assertEqual(self.candidates(feed["items"]), [])
 
+        # An incomplete label read cannot prove that a pause or writer is absent.
+        # Refuse only that issue, keeping a readable unowned neighbour in the feed.
+        for labels in (
+            None,
+            {},
+            "agents:paused",
+            ["priority:high", None],
+            ["priority:high", {}],
+            ["priority:high", {"name": None}],
+            ["priority:high", {"name": ["agents:paused"]}],
+            ["priority:high", "agents:paused", None],
+        ):
+            with self.subTest(unknown_labels=labels):
+                unread = {"number": 1, "title": "Unread ownership"}
+                if labels is not None:
+                    unread["labels"] = labels
+                unowned = {
+                    "number": 2,
+                    "labels": [{"name": "priority:high"}],
+                    "title": "Unowned research subject",
+                    "body": "Implement the parser",
+                }
+                feed = backlog.build_research_items(
+                    ["o/r"], lambda repo: [unread, unowned], lambda repo: []
+                )
+                self.assertEqual(feed["counts"]["open_issues"], 2)
+                self.assertEqual(feed["counts"]["eligible"], 1)
+                self.assertEqual(feed["counts"].get("owned_or_paused"), 1)
+                self.assertEqual([item["target"] for item in feed["items"]], ["o/r#2"])
+                self.assertEqual(
+                    [job["target"] for job in self.candidates(feed["items"])], ["o/r#2"]
+                )
+
     def test_assigned_issue_is_excluded(self):
         feed = self.feed("agent:codex")
         self.assertEqual(feed["counts"]["eligible"], 0)

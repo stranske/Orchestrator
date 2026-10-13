@@ -1,5 +1,42 @@
 # Issue #569: research ownership recovery
 
+## Discovery ownership validation, 2026-10-13, based on `3695464`
+
+The two unchecked reproduction tasks are already fixed in current production:
+
+- [x] `priority:high` + `agents:paused` contributes zero eligible subjects.
+- [x] `priority:high` + `agent:codex` contributes zero eligible subjects.
+- [x] The auto-pilot pause exclusion and eligible unowned control still pass.
+
+This round extends the existing paused-issue regression through production discovery and
+scheduler intake. Before correction, unreadable discovery labels yielded five incorrect results
+and two crashes. Discovery now validates the original label list before `_labels` can coerce
+unknown ownership into strings. Invalid lists use the incumbent dispatch unknown-ownership
+refusal; a readable unowned neighbour remains schedulable. Raw local RED/GREEN outputs are in
+`20261013-discovery-labels/`. All 23 ownership/feed-validation/wiring unittest cases and all four
+affected module selftests pass. Existing test methods were extended; collection floor, ceilings,
+exemptions and workflow files are unchanged. Research launching remains off.
+
+The source/test changes are **uncommitted**. Black and pytest are unavailable, and installing
+them into a temporary virtual environment failed because `pypi.org` cannot resolve. Both mandated
+Black commands failed with `command not found`; original intake/control/usage/followup targeted
+pytest failed with `No module named pytest`. The required formatting gate prevents a commit or
+push. A runner with Black, pytest and GitHub CLI network access is needed to finish validation,
+commit/push and delivery. No Brain, installed mirror, dispatch or deployment activation occurred.
+
+Connector readback confirms PR570 is open and ready at
+`36954643ba714fdc959fb3c3e9b57a2d4d32e53a`: all 82 returned check runs are success/skipped;
+all 20 suites were read, including seven queued suites; zero active unresolved review threads
+were returned. The expected-check reporter cannot connect through `gh`; merge-guard dry-run
+blocks on `review-thread GraphQL query failed`. No actual `verify:compare` verdict was found in
+the read checks/statuses. These observations apply to the existing head, not the local correction.
+No new push/update review-floor anchor exists, and no merge or terminal delivery is claimed.
+
+The proposed PR-body reconciliation checks both reproduced tasks and unchecks the unsupported
+terminal-delivery criterion. Automatic approval rejected that update, the blocker comment and
+the `needs-human` label because those actions require approval while policy is `never`; none
+occurred. This local section records the verified task results and remaining blockers.
+
 ## Review follow-up validation, 2026-10-13
 
 Recent commits through `4ce9912` already implement the three concrete exclusions,

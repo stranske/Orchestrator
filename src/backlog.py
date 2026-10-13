@@ -507,9 +507,20 @@ def build_research_items(repos, fetch_issues, fetch_prs, scoped: set[str] | None
                 counts["malformed"] = counts.get("malformed", 0) + 1
                 continue
             counts["open_issues"] += 1
-            labels = _labels(issue)
             target = f"{repo}#{issue['number']}"
-            reason = research_skip_reason(labels)
+            raw_labels = issue.get("labels")
+            # Discovery must establish readable ownership before the permissive
+            # dispatch label parser can turn missing names into empty strings.
+            if isinstance(raw_labels, list) and all(
+                isinstance(label, str)
+                or (isinstance(label, dict) and isinstance(label.get("name"), str))
+                for label in raw_labels
+            ):
+                labels = _labels(issue)
+                reason = research_skip_reason(labels)
+            else:
+                labels = []
+                reason = research_ownership_skip_reason(None)
             if reason is None and target in scoped:
                 reason = "scoped_blocker"
             if reason is None and target in referenced:
