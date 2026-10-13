@@ -84,7 +84,7 @@ def test_the_feed_keeps_prioritised_open_unworked_issues_and_counts_the_rest():
 def test_the_lane_accepts_research_items():
     skipped: list = []
     research_scheduler.research_job_candidates(
-        [{"target": "o/a#1", "task_type": "implement", "lane": "research"}],
+        [{"target": "o/a#1", "task_type": "implement", "lane": "research", "labels": []}],
         {"codex": 2, "cursor": 2},
         [],
         skipped=skipped,

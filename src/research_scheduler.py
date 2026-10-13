@@ -607,7 +607,7 @@ def research_job_candidates(
         if item.get("lane") == "research":
             import backlog
 
-            reason = backlog.research_ownership_skip_reason(item.get("labels") or [])
+            reason = backlog.research_ownership_skip_reason(item.get("labels"))
             if reason:
                 if skipped is not None:
                     skipped.append(

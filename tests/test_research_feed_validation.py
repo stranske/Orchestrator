@@ -44,10 +44,15 @@ class ResearchFeedValidationTests(unittest.TestCase):
         self.assertEqual((result["status"], result["items"]), ("unreadable", []))
 
     def test_malformed_items_are_unreadable(self):
-        for items in (None, {}, "items", [None], [1], ["o/r#1"]):
+        for items in (None, {}, "items", [None], [1], ["o/r#1"], [{}], [{"target": ""}]):
             with self.subTest(items=items):
                 result = self.load({"generated_at": 1000, "items": items})
                 self.assertEqual((result["status"], result["items"]), ("unreadable", []))
+
+        valid = {"target": "o/r#1"}
+        result = self.load({"generated_at": 1000, "items": [{}, None, valid]})
+        self.assertEqual((result["status"], result["items"]), ("fresh", [valid]))
+        self.assertEqual(self.load({"generated_at": 1000, "items": []})["status"], "fresh")
 
     def test_fresh_stale_absent_and_invalid_json_statuses(self):
         self.assertEqual(tick.load_research_feed(self.path)["status"], "absent")

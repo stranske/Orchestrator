@@ -12,6 +12,7 @@ import research_scheduler
 import tick
 
 PAUSE_LABELS = ("agents:paused", "agents:auto-pilot-pause")
+IN_PROGRESS_LABELS = ("status:in-progress", "status: in-progress")
 OWNERSHIP_LABELS = (
     "agent:codex",
     "agent:claude",
@@ -93,7 +94,7 @@ class ResearchOwnershipTests(unittest.TestCase):
         self.assertEqual([job["target"] for job in self.candidates(feed["items"])], ["o/r#4"])
 
     def test_every_pause_and_agent_family_is_excluded(self):
-        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS):
+        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS, *IN_PROGRESS_LABELS):
             for spelling in (label, f"  {label.upper()}  "):
                 with self.subTest(label=spelling):
                     feed = self.feed(spelling)
@@ -106,7 +107,7 @@ class ResearchOwnershipTests(unittest.TestCase):
                     self.assertEqual(self.candidates(feed["items"]), [])
 
     def test_scheduler_rechecks_injected_research_ownership(self):
-        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS):
+        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS, *IN_PROGRESS_LABELS):
             for spelling in (label, f"  {label.upper()}  "):
                 with self.subTest(label=spelling):
                     item = {
@@ -119,6 +120,34 @@ class ResearchOwnershipTests(unittest.TestCase):
                     with patch.object(research_scheduler, "should_test") as select:
                         self.assertEqual(self.candidates([item]), [])
                         select.assert_not_called()
+
+        # Missing or malformed feed labels cannot establish that the subject is unowned.
+        # An explicitly empty list remains a known unowned subject (positive control below).
+        for labels in (None, {}, "agent:codex", [None], [{"name": "agent:codex"}]):
+            with self.subTest(unknown_labels=labels):
+                item = {
+                    "target": "o/r#1",
+                    "task_type": "implement",
+                    "lane": "research",
+                    "body": "Implement the parser",
+                }
+                if labels is not None:
+                    item["labels"] = labels
+                skipped = []
+                with patch.object(research_scheduler, "should_test") as select:
+                    jobs = research_scheduler.research_job_candidates(
+                        [item],
+                        {"codex": 3, "cursor": 3, "gemini": 3},
+                        [],
+                        conn=self.conn,
+                        weights=[],
+                        skipped=skipped,
+                    )
+                    self.assertEqual(jobs, [])
+                    self.assertEqual(skipped[0]["reason"], "owned_or_paused")
+                    select.assert_not_called()
+                jobs = self.candidates([item, *self.feed()["items"]])
+                self.assertEqual([job["target"] for job in jobs], ["o/r#1"])
 
     def test_unowned_prioritised_issue_reaches_scheduler(self):
         for label in (None, "agent-ready", "agents:keepalive"):
@@ -133,7 +162,7 @@ class ResearchOwnershipTests(unittest.TestCase):
         # the production tick before it reserves the subject or prepares any arms.
         items = self.feed()["items"]
         cap = {"agents": {agent: {"state": "ok"} for agent in ("codex", "cursor", "gemini")}}
-        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS, "status:in-progress"):
+        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS, *IN_PROGRESS_LABELS):
             with self.subTest(label=label):
                 payload = {
                     "title": "Research subject",

@@ -132,9 +132,7 @@ def load_research_feed(path: Path | None = None, now: float | None = None) -> di
         items = data.get("items")
         if not isinstance(items, list):
             raise ValueError("research feed items must be a list")
-        if any(not isinstance(item, dict) for item in items) and not any(
-            isinstance(item, dict) and item.get("target") for item in items
-        ):
+        if items and not any(isinstance(item, dict) and item.get("target") for item in items):
             raise ValueError("research feed has no usable item objects")
         age = int(now - generated_at)
     except (TypeError, ValueError):

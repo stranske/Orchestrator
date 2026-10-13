@@ -1,5 +1,41 @@
 # Issue #569: research ownership recovery
 
+## Review follow-up validation, 2026-10-13
+
+Recent commits through `4ce9912` already implement the three concrete exclusions,
+the bounded P2 controls and the launch-off gates. All 23 ownership/feed/wiring
+unittest cases pass in this run. The verified reconciliation would check the
+three tasks and ownership, P2 and launch-off criteria; original pytest suites and
+terminal delivery remain unchecked. Automatic approval rejected the PR-body
+update, blocker comment and `needs-human` label (approval policy `never`).
+
+This round fixes two additional reproduced review gaps: malformed scheduler
+labels caused two exceptions and three incorrect refusal reasons, and wholly
+targetless object feeds reported `fresh` in two cases. Both regressions were RED
+before correction and GREEN afterward. Unknown labels now use the dispatcher's
+ownership refusal, while readable unowned items still reach scheduling beside a
+malformed item. Targetless nonempty feeds are unreadable; empty and mixed usable
+feeds retain their contracts. Both in-progress spellings now have discovery,
+scheduler and launch controls. Existing test methods were extended; collection
+floor, skip ceilings and exemptions are unchanged. The original lane fixture
+now supplies explicit empty labels without changing its assertion.
+
+All 23 unittest cases and the four affected module selftests pass. Black and
+pytest are absent; package installation failed. Both mandated Black commands
+failed, so the source/test changes remain **uncommitted**, with no push or new
+review-floor anchor. No live Brain, installed mirror, research, dispatch or
+deployment was activated.
+
+Existing head `4ce9912fb062e2f7bc778eed16e76de84e35b5b1` remains open and ready.
+Connector readback returned all 71 check runs and 18 suites at that head,
+including seven queued suites, and three active unresolved review threads.
+The expected-check reporter cannot connect through `gh`; merge-guard dry-run
+blocks on `review-thread GraphQL query failed`. No actual `verify:compare`
+verdict was found in the checks/comments read. No merge or delivery is claimed.
+Complete formatting and original pytest validation before committing, then
+reconcile checkboxes and perform the full guarded delivery sequence at the
+resulting pushed head. Earlier sections below retain historical run evidence.
+
 ## Current keepalive validation, 2026-10-13
 
 The existing launch ownership test now carries an eligible unowned production feed through

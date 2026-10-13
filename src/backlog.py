@@ -440,12 +440,18 @@ RESEARCH_EXCLUDED_PREFIXES = ("tracker:", "campaign:")
 RESEARCH_EXCLUDED_CLASSES = {"epic", "cross_repo", "mechanical"}
 
 
-def research_ownership_skip_reason(labels: list[str]) -> str | None:
+def research_ownership_skip_reason(labels: list[str] | None) -> str | None:
     """Use the incumbent dispatch ownership rule at discovery, intake and launch."""
     import dispatcher
 
-    low = {lab.strip().lower() for lab in labels}
-    if dispatcher._remote_skip_reason(low, "research") or low & {
+    # Only a readable list of label names establishes ownership. Feed corruption or
+    # an unanswered read uses the dispatcher's existing unknown-ownership refusal.
+    low = None
+    if isinstance(labels, list) and all(isinstance(lab, str) for lab in labels):
+        low = {lab.strip().lower() for lab in labels}
+    if dispatcher._remote_skip_reason(low, "research"):
+        return "owned_or_paused"
+    if low and low & {
         "agents:auto-pilot-pause",
         "status:in-progress",
         "status: in-progress",
