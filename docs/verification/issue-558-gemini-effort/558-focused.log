@@ -1,0 +1,64 @@
+.FF..................................................................... [ 80%]
+.................F                                                       [100%]
+=================================== FAILURES ===================================
+________________________ test_default_pin_is_advertised ________________________
+
+    def test_default_pin_is_advertised():
+        """The pinned fallback must be live too — it is what ships when the probe can't run."""
+        advertised = _live_advertised_models()
+>       assert adapters.DEFAULT_GEMINI_MODEL in advertised, (
+            f"DEFAULT_GEMINI_MODEL {adapters.DEFAULT_GEMINI_MODEL!r} has been renamed away; "
+            f"agy now offers: {', '.join(advertised)}"
+        )
+E       AssertionError: DEFAULT_GEMINI_MODEL 'gemini-3.1-pro-high' has been renamed away; agy now offers: gemini-3.8-flash-high, gemini-3.8-flash-medium, gemini-3.8-flash-low, claude-opus-5-5-low, claude-opus-5-5-medium, claude-opus-5-5-high, claude-sonnet-5-5-low, claude-sonnet-5-5-medium, claude-sonnet-5-5-high, gpt-oss-120b-medium
+E       assert 'gemini-3.1-pro-high' in ['gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', 'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high', ...]
+E        +  where 'gemini-3.1-pro-high' = adapters.DEFAULT_GEMINI_MODEL
+
+tests/test_model_tier_resolution.py:115: AssertionError
+___________________ test_every_gemini_tier_pin_is_advertised ___________________
+
+    def test_every_gemini_tier_pin_is_advertised():
+        """All three tiers dispatch, so all three pins must be live — not just `full`."""
+        advertised = _live_advertised_models()
+        stale = {t: m for t, m in adapters.MODEL_TIERS["gemini"].items() if m not in advertised}
+>       assert (
+            not stale
+        ), f"gemini tier pins no longer advertised by agy: {stale}. Offered: {', '.join(advertised)}"
+E       AssertionError: gemini tier pins no longer advertised by agy: {'full': 'gemini-3.1-pro-high'}. Offered: gemini-3.8-flash-high, gemini-3.8-flash-medium, gemini-3.8-flash-low, claude-opus-5-5-low, claude-opus-5-5-medium, claude-opus-5-5-high, claude-sonnet-5-5-low, claude-sonnet-5-5-medium, claude-sonnet-5-5-high, gpt-oss-120b-medium
+E       assert not {'full': 'gemini-3.1-pro-high'}
+
+tests/test_model_tier_resolution.py:125: AssertionError
+_________________ test_gemini_model_is_one_the_seat_advertises _________________
+
+    def test_gemini_model_is_one_the_seat_advertises():
+        """gemini's requested model must appear in agy's OWN advertised-models probe.
+    
+        Skips with the missing file named when the probe cache is absent (a runner). The point is that
+        the id is not guessed: agy publishes what it serves, and drifting off that list would request a
+        model the seat cannot route.
+        """
+        import json
+    
+        import adapters
+        import env_prereq
+        import execution_profiles
+    
+        cache = adapters.GEMINI_MODEL_CACHE
+        env_prereq.require(None if cache.is_file() else f"agy advertised-models cache absent: {cache}")
+        advertised = set((json.loads(cache.read_text()) or {}).get("models") or [])
+        assert advertised, f"cache present but lists no models: {cache}"
+        for profile in execution_profiles.PROFILE_REGISTRY.values():
+            if profile["agent"] == "gemini":
+>               assert profile["requested_model"] in advertised, (
+                    profile["requested_model"],
+                    sorted(advertised),
+                )
+E               AssertionError: ('gemini-3.1-pro-high', ['claude-opus-5-5-high', 'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-sonnet-5-5-high', 'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', ...])
+E               assert 'gemini-3.1-pro-high' in {'claude-opus-5-5-high', 'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-sonnet-5-5-high', 'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', ...}
+
+tests/test_capacity_profiles.py:749: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_model_tier_resolution.py::test_default_pin_is_advertised - ...
+FAILED tests/test_model_tier_resolution.py::test_every_gemini_tier_pin_is_advertised
+FAILED tests/test_capacity_profiles.py::test_gemini_model_is_one_the_seat_advertises
+3 failed, 87 passed in 19.39s

@@ -421,7 +421,9 @@ The model role uses the existing read-only offload transport and a private cwd.
   historical identities, but automatic and learned selection excludes them. Profile routing is
   fail-closed, capacity-aware, and shadow-learns per-agent/provider priors before any live
   promotion. `feedback.py completion-events --jsonl` exports the canonical phase envelope used by
-  downstream learning; it never fabricates historical observations.
+  downstream learning; it never fabricates historical observations. Gemini Flash3.8 high/low
+  profiles track the adapter rungs, and catalog renames preserve effort when available. The
+  retained Pro3.1 pin is still independently checked against the installed catalog.
 - **Sol/Terra/Luna trial bridge**: `model_profile_trial_bridge.py preflight|prepare|collect-remote|ingest|qualify`
   binds the frozen trial packet to replayable per-profile request IDs, one live shared-capacity
   snapshot, external quarantine artifacts, and strict requested/selected/reported identity while

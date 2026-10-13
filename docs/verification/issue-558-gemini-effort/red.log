@@ -1,0 +1,64 @@
+FF.                                                                      [100%]
+=================================== FAILURES ===================================
+_____________ test_gemini_rename_preserves_advertised_effort[low] ______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1077d6540>
+effort = 'low'
+
+    @pytest.mark.parametrize("effort", ["low", "medium", "high"])
+    def test_gemini_rename_preserves_advertised_effort(monkeypatch, effort):
+        """A renamed low-cost rung must not silently become high-effort work."""
+        monkeypatch.delenv("ORCH_GEMINI_MODEL_CHEAP", raising=False)
+        monkeypatch.setitem(adapters.MODEL_TIERS["gemini"], "cheap", f"gemini-3.7-flash-{effort}")
+        _fake_catalog(
+            monkeypatch,
+            [
+                "gemini-3.8-flash-high",
+                "gemini-3.8-flash-medium",
+                "gemini-3.8-flash-low",
+            ],
+        )
+        health = adapters.model_health("gemini", "cheap")
+        assert health["source"] == "auto_from_catalog"
+>       assert health["model"] == f"gemini-3.8-flash-{effort}"
+E       AssertionError: assert 'gemini-3.8-flash-high' == 'gemini-3.8-flash-low'
+E         
+E         - gemini-3.8-flash-low
+E         ?                  ^^^
+E         + gemini-3.8-flash-high
+E         ?                  ^^^^
+
+tests/test_model_tier_resolution.py:1070: AssertionError
+____________ test_gemini_rename_preserves_advertised_effort[medium] ____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107872930>
+effort = 'medium'
+
+    @pytest.mark.parametrize("effort", ["low", "medium", "high"])
+    def test_gemini_rename_preserves_advertised_effort(monkeypatch, effort):
+        """A renamed low-cost rung must not silently become high-effort work."""
+        monkeypatch.delenv("ORCH_GEMINI_MODEL_CHEAP", raising=False)
+        monkeypatch.setitem(adapters.MODEL_TIERS["gemini"], "cheap", f"gemini-3.7-flash-{effort}")
+        _fake_catalog(
+            monkeypatch,
+            [
+                "gemini-3.8-flash-high",
+                "gemini-3.8-flash-medium",
+                "gemini-3.8-flash-low",
+            ],
+        )
+        health = adapters.model_health("gemini", "cheap")
+        assert health["source"] == "auto_from_catalog"
+>       assert health["model"] == f"gemini-3.8-flash-{effort}"
+E       AssertionError: assert 'gemini-3.8-flash-high' == 'gemini-3.8-flash-medium'
+E         
+E         - gemini-3.8-flash-medium
+E         ?                  ^^^ ^^
+E         + gemini-3.8-flash-high
+E         ?                  ^ ^^
+
+tests/test_model_tier_resolution.py:1070: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_model_tier_resolution.py::test_gemini_rename_preserves_advertised_effort[low]
+FAILED tests/test_model_tier_resolution.py::test_gemini_rename_preserves_advertised_effort[medium]
+2 failed, 1 passed, 67 deselected in 0.26s

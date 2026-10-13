@@ -105,6 +105,9 @@ the task and lane to an immutable profile, `router` records the selected profile
 bounded offload or delegation chooses that exact profile; it does not create a new role or
 change the feedback loop. Operator `ORCH_CODEX_MODEL_*` pins and `ORCH_CODEX_MAX_TIER` ceilings
 continue through the tier adapter for automatic routes; the explicit profile stays exact.
+Gemini catalog renames retain the pinned effort when the newest available family offers it.
+Flash3.8 high/low profiles match the current adapter rungs; the explicit Pro3.1 profile remains
+separate, and live catalog guards continue to report its absence.
 
 **An offload run records which work it was for (2026-10-12).** Both capability readers key a run's
 subject by a `subject_id` in its routing metadata, else by `runs.target`, and an offload's target is
