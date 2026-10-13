@@ -1,0 +1,25 @@
+test_paused_issue_is_excluded (test_research_ownership.ResearchOwnershipTests.test_paused_issue_is_excluded) ... FAIL
+test_assigned_issue_is_excluded (test_research_ownership.ResearchOwnershipTests.test_assigned_issue_is_excluded) ... FAIL
+
+======================================================================
+FAIL: test_paused_issue_is_excluded (test_research_ownership.ResearchOwnershipTests.test_paused_issue_is_excluded)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_research_ownership.py", line 57, in test_paused_issue_is_excluded
+    self.assertEqual(feed["counts"]["eligible"], 0)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0
+
+======================================================================
+FAIL: test_assigned_issue_is_excluded (test_research_ownership.ResearchOwnershipTests.test_assigned_issue_is_excluded)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_research_ownership.py", line 62, in test_assigned_issue_is_excluded
+    self.assertEqual(feed["counts"]["eligible"], 0)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.004s
+
+FAILED (failures=2)

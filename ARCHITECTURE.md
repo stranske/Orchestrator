@@ -1970,3 +1970,5 @@ work order and existing codemod/range capability tags. A capability-program proj
 reports target PR heads/merges and attributed Brain durability/cost, preserving UNKNOWN.
 No role, stage, learning store or recurring dispatch policy is added. The diagram's
 backlog rail also represents this exact campaign input.
+
+Research intake recovery (#569) reuses dispatcher ownership policy at discovery, scheduler selection and launch. Full issue/PR pages are incomplete and fail closed; feed timestamps must be finite, nonnegative and not future dated. Shadow intake and both existing launch gates remain unchanged.

@@ -1,0 +1,21 @@
+{
+  "source_revision": "4a3dcf25addce6399d3267df42fb3b7063150651",
+  "source_sha256": {
+    "src/backlog.py": "6ce66422bafff61e015cbfc644443be662cda63eb1ce9f27dcded9ab7b1250f8",
+    "src/tick.py": "15ec48554286c1428eecc0ca975772cea7ae000de83467b89938e846e2be7002",
+    "src/research_scheduler.py": "f63e231b12adbf2e14c4215e45c4fd83716ec0b5f567edb44679c6b6966f3cdc",
+    "src/research_subjects.py": "a2d39a8e5bd0c8309ffbbe30f5eb0a0d8f7fb8186af6131d716bc1f5eb5e5404",
+    "tests/test_research_intake.py": "bb1fca5717ddb0f7c4b9209b16395a78a2663afccfe427b95f602b77274c6c84",
+    "tests/test_tick_cap_counts_delegations.py": "70d203faeab260cf269b425eb7f574a0c7a2e068d73c1a63e1513ed3da4b35ed"
+  },
+  "candidate_sha256": {
+    "src/backlog.py": "b2f69163689eb1310fc26ff63afd2ca310dcff10fac88fc93fd9001d339da292",
+    "src/tick.py": "c21e421b88fe6177c488c95041423977cd84aece20e8660ed3aea4538699cb7a",
+    "src/research_scheduler.py": "3ba98ae8b0093b865fcd3633b012ca49b5bfd7beb851eabab1dfb3195a502c1d",
+    "src/research_subjects.py": "a2d39a8e5bd0c8309ffbbe30f5eb0a0d8f7fb8186af6131d716bc1f5eb5e5404",
+    "tests/test_research_intake.py": "5b8d2e1e2746b59c497f3e5f22d1f5165e65a7f170d311ba59e84d1592bf32bb",
+    "tests/test_tick_cap_counts_delegations.py": "70d203faeab260cf269b425eb7f574a0c7a2e068d73c1a63e1513ed3da4b35ed",
+    "tests/test_research_ownership.py": "643e08200e5b0f56ee2db49c81ea48bd19631c68d7aeca1833f1d9b39acf033d",
+    "tests/test_research_feed_validation.py": "e19ea96c7986b7a137bc3a9bbdffa54b3f4911c6b5b5d570154473a90357db65"
+  }
+}

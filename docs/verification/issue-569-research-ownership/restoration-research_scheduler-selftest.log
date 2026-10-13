@@ -1,0 +1,1 @@
+research_scheduler.py selftest: OK (spare-capacity gate, info/cost knapsack intensity, Top-Two variable-N arm selection, staleness/model-drift acquisition, hypothesis/opportunistic triggers, live capacity/backlog research plan, subject dedup/cooldown/backlog gate, production reserve, strategy arms = multi-agent value learnable)

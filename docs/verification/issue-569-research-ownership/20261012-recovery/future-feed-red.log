@@ -1,0 +1,22 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ ResearchFeedValidationTests.test_future_timestamps_contribute_no_items ____
+
+self = <test_research_feed_validation.ResearchFeedValidationTests testMethod=test_future_timestamps_contribute_no_items>
+
+    def test_future_timestamps_contribute_no_items(self):
+        result = self.load({"generated_at": 1001, "items": [{"target": "o/r#1"}]})
+>       self.assertEqual((result["status"], result["items"]), ("unreadable", []))
+E       AssertionError: Tuples differ: ('fresh', [{'target': 'o/r#1'}]) != ('unreadable', [])
+E       
+E       First differing element 0:
+E       'fresh'
+E       'unreadable'
+E       
+E       - ('fresh', [{'target': 'o/r#1'}])
+E       + ('unreadable', [])
+
+tests/test_research_feed_validation.py:44: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_research_feed_validation.py::ResearchFeedValidationTests::test_future_timestamps_contribute_no_items
+1 failed in 0.24s

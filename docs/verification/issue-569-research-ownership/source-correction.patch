@@ -1,0 +1,444 @@
+--- a/src/backlog.py
++++ b/src/backlog.py
+@@ -426,25 +426,38 @@
+ # or sync issue, paused or already in progress, not epic/cross-repo/mechanical, and with no open PR.
+ # Measured 2026-10-12: of 24 issues open across the fleet from the last 30 days, the
+ # `status: ready` filter alone kept 1, and an open PR excluded that one.
++RESEARCH_OWNERSHIP_LABELS = {
++    "agents:auto-pilot-pause",
++    "agents:paused",
++    "status:in-progress",
++    "status: in-progress",
++}
+ RESEARCH_EXCLUDED_LABELS = {
+     "automation",
+     "automated",
+     "consumer-sync",
+     "sync",
+     "sync-failure",
+-    "agents:auto-pilot-pause",
+-    "status:in-progress",
+-    "status: in-progress",
+-}
++} | RESEARCH_OWNERSHIP_LABELS
+ RESEARCH_EXCLUDED_PREFIXES = ("tracker:", "campaign:")
+ RESEARCH_EXCLUDED_CLASSES = {"epic", "cross_repo", "mechanical"}
++
++
++def research_ownership_skip_reason(labels: list[str]) -> str | None:
++    """Respect the dispatcher ownership family and both pause surfaces, including at launch."""
++    low = {lab.strip().lower() for lab in labels}
++    if low & RESEARCH_OWNERSHIP_LABELS or _has_agent_label(labels):
++        return "excluded_label"
++    return None
+ 
+ 
+ def research_skip_reason(labels: list[str]) -> str | None:
+     """Why an open issue is not a research subject, or None when it is one."""
+     low = {lab.strip().lower() for lab in labels}
+-    if low & RESEARCH_EXCLUDED_LABELS or any(
+-        lab.startswith(RESEARCH_EXCLUDED_PREFIXES) for lab in low
++    if (
++        research_ownership_skip_reason(labels)
++        or low & RESEARCH_EXCLUDED_LABELS
++        or any(lab.startswith(RESEARCH_EXCLUDED_PREFIXES) for lab in low)
+     ):
+         return "excluded_label"
+     if classify(labels) in RESEARCH_EXCLUDED_CLASSES:
+@@ -533,7 +546,7 @@
+ 
+ 
+ def strict_fetch_prs(repo: str) -> list:
+-    return _gh_strict(
++    prs = _gh_strict(
+         [
+             "pr",
+             "list",
+@@ -547,6 +560,11 @@
+             "number,labels,title,body,closingIssuesReferences,headRefName,isDraft",
+         ]
+     )
++    # A full page cannot establish that no later PR owns the issue. Refuse this repo until
++    # discovery can read every open PR, rather than treating a bounded result as complete.
++    if len(prs) >= 200:
++        raise RuntimeError("open PR discovery reached its limit; ownership is incomplete")
++    return prs
+ 
+ 
+ # --- live gh fetchers -------------------------------------------------------
+--- a/src/tick.py
++++ b/src/tick.py
+@@ -17,6 +17,7 @@
+ from __future__ import annotations
+ 
+ import json
++import math
+ import os
+ import sys
+ import tempfile
+@@ -61,9 +62,11 @@
+         return None
+     import subprocess
+ 
++    import backlog
++
+     try:
+         out = subprocess.run(
+-            ["gh", "issue", "view", number, "-R", repo, "--json", "title,body,state"],
++            ["gh", "issue", "view", number, "-R", repo, "--json", "title,body,state,labels"],
+             capture_output=True,
+             text=True,
+             timeout=60,
+@@ -71,10 +74,19 @@
+         if out.returncode != 0:
+             return None
+         data = json.loads(out.stdout or "{}")
++        if not isinstance(data, dict) or not isinstance(data.get("labels"), list):
++            return None
++        labels = []
++        for entry in data["labels"]:
++            label = entry.get("name") if isinstance(entry, dict) else entry
++            if not isinstance(label, str):
++                return None
++            labels.append(label)
++        if backlog.research_ownership_skip_reason(labels):
++            return None
+     except Exception:
+         return None
+-    # A subject closed since the feed was read is never launched: the research feed can be up to
+-    # RESEARCH_FEED_MAX_AGE_S old, and nothing else re-reads the issue before agents start on it.
++    # Recheck state and ownership because either may change after discovery.
+     if str(data.get("state") or "").upper() != "OPEN":
+         return None
+     title = (data.get("title") or "").strip()
+@@ -96,11 +108,25 @@
+     now = time.time() if now is None else now
+     try:
+         data = json.loads(path.read_text())
++        if not isinstance(data, dict):
++            raise ValueError("research feed must be an object")
++        generated_at = data.get("generated_at")
++        if (
++            isinstance(generated_at, bool)
++            or not isinstance(generated_at, (int, float))
++            or generated_at < 0
++            or generated_at > now
++            or not math.isfinite(generated_at)
++        ):
++            raise ValueError("research feed timestamp must be finite and not in the future")
++        items = data.get("items")
++        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
++            raise ValueError("research feed items must be a list of objects")
++        age = int(now - generated_at)
+     except FileNotFoundError:
+         return {"status": "absent", "items": []}
+     except (OSError, ValueError) as exc:
+         return {"status": "unreadable", "error": str(exc)[:200], "items": []}
+-    age = max(0, int(now - int(data.get("generated_at") or 0)))
+     info = {
+         "age_seconds": age,
+         "counts": data.get("counts"),
+@@ -108,7 +134,7 @@
+     }
+     if age > RESEARCH_FEED_MAX_AGE_S:
+         return {"status": "stale", **info, "items": []}
+-    return {"status": "fresh", **info, "items": list(data.get("items") or [])}
++    return {"status": "fresh", **info, "items": items}
+ 
+ 
+ def _public_research_plan(plan: dict) -> dict:
+--- a/src/research_scheduler.py
++++ b/src/research_scheduler.py
+@@ -21,6 +21,7 @@
+ import time
+ from pathlib import Path
+ 
++import backlog
+ import capacity
+ import feedback
+ import research_subjects
+@@ -604,6 +605,18 @@
+     jobs = []
+     seen_subject_families: set[str] = set()
+     for item in items:
++        if item.get("lane") == "research":
++            reason = backlog.research_ownership_skip_reason(item.get("labels") or [])
++            if reason:
++                if skipped is not None:
++                    skipped.append(
++                        {
++                            "target": item.get("target"),
++                            "task_type": item.get("task_type", "implement"),
++                            "reason": reason,
++                        }
++                    )
++                continue
+         # `research` items come from the research lane's own feed (`backlog.py --research`).
+         if item.get("lane") and item.get("lane") not in ("opener", "research"):
+             if skipped is not None:
+--- a/tests/test_research_intake.py
++++ b/tests/test_research_intake.py
+@@ -145,7 +145,7 @@
+ def test_a_closed_issue_is_never_launched(monkeypatch, state, launchable):
+     def run(argv, **kwargs):
+         assert "state" in argv[-1], argv
+-        payload = {"title": "T", "body": "B", "state": state}
++        payload = {"title": "T", "body": "B", "state": state, "labels": []}
+         return subprocess.CompletedProcess(argv, 0, json.dumps(payload), "")
+ 
+     monkeypatch.setattr(subprocess, "run", run)
+--- /dev/null
++++ b/tests/test_research_ownership.py
+@@ -0,0 +1,150 @@
++"""Production research discovery must respect pause and sole-writer ownership labels."""
++
++import json
++import sqlite3
++import subprocess
++import unittest
++from unittest.mock import patch
++
++import backlog
++import feedback
++import research_scheduler
++import tick
++
++
++PAUSE_LABELS = ("agents:paused", "agents:auto-pilot-pause")
++OWNERSHIP_LABELS = (
++    "agent:codex",
++    "agent:claude",
++    "agent:cursor",
++    "agent:gemini",
++    "agent:aider",
++    "agent:auto",
++    "agent:retry",
++    "agent:rate-limited",
++    "agent:needs-attention",
++    "agent:codex-invite",
++    "agent:future-worker",
++)
++
++
++class ResearchOwnershipTests(unittest.TestCase):
++    def setUp(self):
++        self.conn = sqlite3.connect(":memory:")
++        self.conn.executescript(feedback.SCHEMA)
++        feedback._migrate_schema(self.conn)
++        self.addCleanup(self.conn.close)
++
++    def feed(self, *labels):
++        issue = {
++            "number": 1,
++            "labels": [{"name": lab} for lab in ("priority:high", *labels)],
++            "title": "Unowned research subject",
++            "body": "Implement the parser",
++        }
++        return backlog.build_research_items(["o/r"], lambda repo: [issue], lambda repo: [])
++
++    def candidates(self, items):
++        return research_scheduler.research_job_candidates(
++            items,
++            {"codex": 3, "cursor": 3, "gemini": 3},
++            [],
++            conn=self.conn,
++            weights=[],
++        )
++
++    def test_paused_issue_is_excluded(self):
++        feed = self.feed("agents:paused")
++        self.assertEqual(feed["counts"]["eligible"], 0)
++        self.assertEqual(self.candidates(feed["items"]), [])
++
++    def test_assigned_issue_is_excluded(self):
++        feed = self.feed("agent:codex")
++        self.assertEqual(feed["counts"]["eligible"], 0)
++        self.assertEqual(self.candidates(feed["items"]), [])
++
++    def test_auto_pilot_pause_remains_excluded(self):
++        feed = self.feed("agents:auto-pilot-pause")
++        self.assertEqual(feed["counts"]["eligible"], 0)
++        self.assertEqual(self.candidates(feed["items"]), [])
++
++    def test_every_pause_and_agent_family_is_excluded(self):
++        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS):
++            for spelling in (label, f"  {label.upper()}  "):
++                with self.subTest(label=spelling):
++                    feed = self.feed(spelling)
++                    self.assertEqual(feed["counts"]["eligible"], 0)
++                    self.assertEqual(feed["counts"]["excluded_label"], 1)
++                    self.assertEqual(self.candidates(feed["items"]), [])
++
++    def test_scheduler_rechecks_injected_research_ownership(self):
++        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS):
++            with self.subTest(label=label):
++                item = {
++                    "target": "o/r#1",
++                    "task_type": "implement",
++                    "lane": "research",
++                    "labels": ["priority:high", label],
++                    "body": "Implement the parser",
++                }
++                with patch.object(research_scheduler, "should_test") as select:
++                    self.assertEqual(self.candidates([item]), [])
++                    select.assert_not_called()
++
++    def test_unowned_prioritised_issue_reaches_scheduler(self):
++        for label in (None, "agent-ready", "agents:keepalive"):
++            with self.subTest(label=label):
++                feed = self.feed(*([label] if label else []))
++                self.assertEqual(feed["counts"]["eligible"], 1)
++                jobs = self.candidates(feed["items"])
++                self.assertEqual([job["target"] for job in jobs], ["o/r#1"])
++
++    def test_ownership_is_rechecked_at_launch(self):
++        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS, "status:in-progress"):
++            with self.subTest(label=label):
++                payload = {
++                    "title": "Research subject",
++                    "body": "Implement the parser",
++                    "state": "OPEN",
++                    "labels": [{"name": label}],
++                }
++                result = subprocess.CompletedProcess([], 0, json.dumps(payload), "")
++                with patch("subprocess.run", return_value=result) as read:
++                    self.assertIsNone(tick._fetch_issue_body("o/r#1"))
++                    self.assertIn("labels", read.call_args.args[0][-1])
++
++    def test_launch_refuses_unknown_labels_and_accepts_unowned_open_issue(self):
++        payload = {"title": "Subject", "body": "Implement the parser", "state": "OPEN"}
++        for labels in (None, {}, [None], [{"name": None}], []):
++            with self.subTest(labels=labels):
++                result = subprocess.CompletedProcess(
++                    [], 0, json.dumps({**payload, "labels": labels}), ""
++                )
++                with patch("subprocess.run", return_value=result):
++                    self.assertEqual(
++                        tick._fetch_issue_body("o/r#1"),
++                        "# Subject\n\nImplement the parser" if labels == [] else None,
++                    )
++
++    def test_launch_stays_off_in_shadow_or_without_arm_flag(self):
++        items = self.feed()["items"]
++        cap = {"agents": {agent: {"state": "ok"} for agent in ("codex", "cursor", "gemini")}}
++        for dry_run, env in ((True, {"ORCH_RESEARCH_ARM": "1"}), (False, {})):
++            with self.subTest(dry_run=dry_run, env=env):
++                with (
++                    patch.object(tick.claims, "active_claims", return_value={}),
++                    patch.object(tick.claims, "reap_stale"),
++                    patch.object(tick, "_fetch_issue_body") as read,
++                    patch.object(tick.exp_abcd, "prepare") as prepare,
++                ):
++                    result = tick.research_tick(
++                        items, cap, dry_run=dry_run, env=env, conn=self.conn, hyps=[]
++                    )
++                    self.assertTrue(result["planned"])
++                    self.assertFalse(result["active"])
++                    read.assert_not_called()
++                    prepare.assert_not_called()
++
++
++if __name__ == "__main__":
++    unittest.main()
+--- /dev/null
++++ b/tests/test_research_feed_validation.py
+@@ -0,0 +1,99 @@
++"""Research intake fails closed on unreadable feeds and incomplete ownership discovery."""
++
++import json
++import subprocess
++import tempfile
++import unittest
++from pathlib import Path
++from unittest.mock import patch
++
++import backlog
++import tick
++
++
++class ResearchFeedValidationTests(unittest.TestCase):
++    def setUp(self):
++        scratch = tempfile.TemporaryDirectory()
++        self.addCleanup(scratch.cleanup)
++        self.path = Path(scratch.name) / "research-backlog.json"
++
++    def load(self, data, now=1000):
++        self.path.write_text(json.dumps(data))
++        return tick.load_research_feed(self.path, now=now)
++
++    def test_array_and_scalar_feeds_are_unreadable(self):
++        for data in ([], [1], None, 1, "feed"):
++            with self.subTest(data=data):
++                result = self.load(data)
++                self.assertEqual((result["status"], result["items"]), ("unreadable", []))
++
++    def test_invalid_timestamps_are_unreadable(self):
++        for timestamp in (None, "today", "1000", True, [], {}, -1, 10**1000):
++            with self.subTest(timestamp=timestamp):
++                result = self.load({"generated_at": timestamp, "items": []})
++                self.assertEqual((result["status"], result["items"]), ("unreadable", []))
++
++    def test_nonfinite_timestamps_are_unreadable(self):
++        for timestamp in (float("nan"), float("inf"), -float("inf")):
++            with self.subTest(timestamp=timestamp):
++                result = self.load({"generated_at": timestamp, "items": []})
++                self.assertEqual((result["status"], result["items"]), ("unreadable", []))
++
++    def test_future_timestamps_contribute_no_items(self):
++        result = self.load({"generated_at": 1001, "items": [{"target": "o/r#1"}]})
++        self.assertEqual((result["status"], result["items"]), ("unreadable", []))
++
++    def test_malformed_items_are_unreadable(self):
++        for items in (None, {}, "items", [None], [1], ["o/r#1"]):
++            with self.subTest(items=items):
++                result = self.load({"generated_at": 1000, "items": items})
++                self.assertEqual((result["status"], result["items"]), ("unreadable", []))
++
++    def test_fresh_stale_absent_and_invalid_json_statuses(self):
++        self.assertEqual(tick.load_research_feed(self.path)["status"], "absent")
++        self.path.write_text("{bad JSON")
++        self.assertEqual(tick.load_research_feed(self.path)["status"], "unreadable")
++        items = [{"target": "o/r#1"}]
++        data = {"generated_at": 1000, "items": items}
++        self.assertEqual(self.load(data)["items"], items)
++        result = self.load(data, now=1000 + tick.RESEARCH_FEED_MAX_AGE_S + 1)
++        self.assertEqual((result["status"], result["items"]), ("stale", []))
++
++    def test_pr_discovery_refuses_a_full_page(self):
++        for count in (200, 201):
++            with self.subTest(count=count):
++                response = subprocess.CompletedProcess([], 0, json.dumps([{}] * count), "")
++                with patch("subprocess.run", return_value=response):
++                    with self.assertRaisesRegex(RuntimeError, "ownership is incomplete"):
++                        backlog.strict_fetch_prs("o/r")
++
++    def test_complete_pr_discovery_keeps_open_pr_exclusion(self):
++        prs = [{"number": 2, "body": "Closes #1"}, *([{}] * 198)]
++        response = subprocess.CompletedProcess([], 0, json.dumps(prs), "")
++        issue = {"number": 1, "labels": ["priority:high"]}
++        with patch("subprocess.run", return_value=response):
++            feed = backlog.build_research_items(
++                ["o/r"], lambda repo: [issue], backlog.strict_fetch_prs
++            )
++        self.assertEqual(feed["repos_failed"], [])
++        self.assertEqual(feed["counts"]["open_pr"], 1)
++        self.assertEqual(feed["items"], [])
++
++    def test_truncated_repo_is_named_and_contributes_nothing(self):
++        issue = {"number": 1, "labels": ["priority:high"]}
++
++        def read(argv, **kwargs):
++            count = 200 if argv[argv.index("-R") + 1] == "o/truncated" else 0
++            return subprocess.CompletedProcess(argv, 0, json.dumps([{}] * count), "")
++
++        with patch("subprocess.run", side_effect=read):
++            feed = backlog.build_research_items(
++                ["o/truncated", "o/complete"], lambda repo: [issue], backlog.strict_fetch_prs
++            )
++        self.assertEqual(feed["repos_failed"], ["o/truncated"])
++        self.assertEqual(feed["repos_read"], 1)
++        self.assertEqual([item["target"] for item in feed["items"]], ["o/complete#1"])
++
++
++if __name__ == "__main__":
++    unittest.main()

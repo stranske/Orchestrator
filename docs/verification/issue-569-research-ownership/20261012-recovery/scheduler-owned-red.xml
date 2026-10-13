@@ -1,0 +1,482 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="13" skipped="0" tests="14" time="0.457" timestamp="2026-10-12T18:44:10.980394-05:00" hostname="server.trs.private"><testcase classname="tests.test_research_ownership.ResearchOwnershipTests" name="test_scheduler_rechecks_injected_research_ownership" time="0.385"><failure message="AssertionError: Expected 'should_test' to not have been called. Called 1 times.&#10;Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agents:paused'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),&#10; call().__bool__(),&#10; call().get('arms'),&#10; call().get().__bool__(),&#10; call().get().__len__()].">self = &lt;test_research_ownership.ResearchOwnershipTests testMethod=test_scheduler_rechecks_injected_research_ownership&gt;
+
+    def test_scheduler_rechecks_injected_research_ownership(self):
+        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS):
+            with self.subTest(label=label):
+                item = {
+                    "target": "o/r#1",
+                    "task_type": "implement",
+                    "lane": "research",
+                    "labels": ["priority:high", label],
+                    "body": "Implement the parser",
+                }
+                with patch.object(research_scheduler, "should_test") as select:
+                    self.assertEqual(self.candidates([item]), [])
+&gt;                   select.assert_not_called()
+
+tests/test_research_ownership.py:95: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;MagicMock name='should_test' id='4484212512'&gt;
+
+    def assert_not_called(self):
+        """assert that the mock was never called.
+        """
+        if self.call_count != 0:
+            msg = ("Expected '%s' to not have been called. Called %s times.%s"
+                   % (self._mock_name or 'mock',
+                      self.call_count,
+                      self._calls_repr()))
+&gt;           raise AssertionError(msg)
+E           AssertionError: Expected 'should_test' to not have been called. Called 1 times.
+E           Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agents:paused'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),
+E            call().__bool__(),
+E            call().get('arms'),
+E            call().get().__bool__(),
+E            call().get().__len__()].
+
+/opt/anaconda3/lib/python3.12/unittest/mock.py:905: AssertionError</failure><failure message="AssertionError: Expected 'should_test' to not have been called. Called 1 times.&#10;Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agents:auto-pilot-pause'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),&#10; call().__bool__(),&#10; call().get('arms'),&#10; call().get().__bool__(),&#10; call().get().__len__()].">self = &lt;test_research_ownership.ResearchOwnershipTests testMethod=test_scheduler_rechecks_injected_research_ownership&gt;
+
+    def test_scheduler_rechecks_injected_research_ownership(self):
+        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS):
+            with self.subTest(label=label):
+                item = {
+                    "target": "o/r#1",
+                    "task_type": "implement",
+                    "lane": "research",
+                    "labels": ["priority:high", label],
+                    "body": "Implement the parser",
+                }
+                with patch.object(research_scheduler, "should_test") as select:
+                    self.assertEqual(self.candidates([item]), [])
+&gt;                   select.assert_not_called()
+
+tests/test_research_ownership.py:95: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;MagicMock name='should_test' id='4459411216'&gt;
+
+    def assert_not_called(self):
+        """assert that the mock was never called.
+        """
+        if self.call_count != 0:
+            msg = ("Expected '%s' to not have been called. Called %s times.%s"
+                   % (self._mock_name or 'mock',
+                      self.call_count,
+                      self._calls_repr()))
+&gt;           raise AssertionError(msg)
+E           AssertionError: Expected 'should_test' to not have been called. Called 1 times.
+E           Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agents:auto-pilot-pause'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),
+E            call().__bool__(),
+E            call().get('arms'),
+E            call().get().__bool__(),
+E            call().get().__len__()].
+
+/opt/anaconda3/lib/python3.12/unittest/mock.py:905: AssertionError</failure><failure message="AssertionError: Expected 'should_test' to not have been called. Called 1 times.&#10;Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:codex'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),&#10; call().__bool__(),&#10; call().get('arms'),&#10; call().get().__bool__(),&#10; call().get().__len__()].">self = &lt;test_research_ownership.ResearchOwnershipTests testMethod=test_scheduler_rechecks_injected_research_ownership&gt;
+
+    def test_scheduler_rechecks_injected_research_ownership(self):
+        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS):
+            with self.subTest(label=label):
+                item = {
+                    "target": "o/r#1",
+                    "task_type": "implement",
+                    "lane": "research",
+                    "labels": ["priority:high", label],
+                    "body": "Implement the parser",
+                }
+                with patch.object(research_scheduler, "should_test") as select:
+                    self.assertEqual(self.candidates([item]), [])
+&gt;                   select.assert_not_called()
+
+tests/test_research_ownership.py:95: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;MagicMock name='should_test' id='4485836496'&gt;
+
+    def assert_not_called(self):
+        """assert that the mock was never called.
+        """
+        if self.call_count != 0:
+            msg = ("Expected '%s' to not have been called. Called %s times.%s"
+                   % (self._mock_name or 'mock',
+                      self.call_count,
+                      self._calls_repr()))
+&gt;           raise AssertionError(msg)
+E           AssertionError: Expected 'should_test' to not have been called. Called 1 times.
+E           Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:codex'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),
+E            call().__bool__(),
+E            call().get('arms'),
+E            call().get().__bool__(),
+E            call().get().__len__()].
+
+/opt/anaconda3/lib/python3.12/unittest/mock.py:905: AssertionError</failure><failure message="AssertionError: Expected 'should_test' to not have been called. Called 1 times.&#10;Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:claude'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),&#10; call().__bool__(),&#10; call().get('arms'),&#10; call().get().__bool__(),&#10; call().get().__len__()].">self = &lt;test_research_ownership.ResearchOwnershipTests testMethod=test_scheduler_rechecks_injected_research_ownership&gt;
+
+    def test_scheduler_rechecks_injected_research_ownership(self):
+        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS):
+            with self.subTest(label=label):
+                item = {
+                    "target": "o/r#1",
+                    "task_type": "implement",
+                    "lane": "research",
+                    "labels": ["priority:high", label],
+                    "body": "Implement the parser",
+                }
+                with patch.object(research_scheduler, "should_test") as select:
+                    self.assertEqual(self.candidates([item]), [])
+&gt;                   select.assert_not_called()
+
+tests/test_research_ownership.py:95: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;MagicMock name='should_test' id='4485749056'&gt;
+
+    def assert_not_called(self):
+        """assert that the mock was never called.
+        """
+        if self.call_count != 0:
+            msg = ("Expected '%s' to not have been called. Called %s times.%s"
+                   % (self._mock_name or 'mock',
+                      self.call_count,
+                      self._calls_repr()))
+&gt;           raise AssertionError(msg)
+E           AssertionError: Expected 'should_test' to not have been called. Called 1 times.
+E           Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:claude'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),
+E            call().__bool__(),
+E            call().get('arms'),
+E            call().get().__bool__(),
+E            call().get().__len__()].
+
+/opt/anaconda3/lib/python3.12/unittest/mock.py:905: AssertionError</failure><failure message="AssertionError: Expected 'should_test' to not have been called. Called 1 times.&#10;Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:cursor'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),&#10; call().__bool__(),&#10; call().get('arms'),&#10; call().get().__bool__(),&#10; call().get().__len__()].">self = &lt;test_research_ownership.ResearchOwnershipTests testMethod=test_scheduler_rechecks_injected_research_ownership&gt;
+
+    def test_scheduler_rechecks_injected_research_ownership(self):
+        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS):
+            with self.subTest(label=label):
+                item = {
+                    "target": "o/r#1",
+                    "task_type": "implement",
+                    "lane": "research",
+                    "labels": ["priority:high", label],
+                    "body": "Implement the parser",
+                }
+                with patch.object(research_scheduler, "should_test") as select:
+                    self.assertEqual(self.candidates([item]), [])
+&gt;                   select.assert_not_called()
+
+tests/test_research_ownership.py:95: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;MagicMock name='should_test' id='4485751120'&gt;
+
+    def assert_not_called(self):
+        """assert that the mock was never called.
+        """
+        if self.call_count != 0:
+            msg = ("Expected '%s' to not have been called. Called %s times.%s"
+                   % (self._mock_name or 'mock',
+                      self.call_count,
+                      self._calls_repr()))
+&gt;           raise AssertionError(msg)
+E           AssertionError: Expected 'should_test' to not have been called. Called 1 times.
+E           Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:cursor'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),
+E            call().__bool__(),
+E            call().get('arms'),
+E            call().get().__bool__(),
+E            call().get().__len__()].
+
+/opt/anaconda3/lib/python3.12/unittest/mock.py:905: AssertionError</failure><failure message="AssertionError: Expected 'should_test' to not have been called. Called 1 times.&#10;Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:gemini'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),&#10; call().__bool__(),&#10; call().get('arms'),&#10; call().get().__bool__(),&#10; call().get().__len__()].">self = &lt;test_research_ownership.ResearchOwnershipTests testMethod=test_scheduler_rechecks_injected_research_ownership&gt;
+
+    def test_scheduler_rechecks_injected_research_ownership(self):
+        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS):
+            with self.subTest(label=label):
+                item = {
+                    "target": "o/r#1",
+                    "task_type": "implement",
+                    "lane": "research",
+                    "labels": ["priority:high", label],
+                    "body": "Implement the parser",
+                }
+                with patch.object(research_scheduler, "should_test") as select:
+                    self.assertEqual(self.candidates([item]), [])
+&gt;                   select.assert_not_called()
+
+tests/test_research_ownership.py:95: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;MagicMock name='should_test' id='4485771152'&gt;
+
+    def assert_not_called(self):
+        """assert that the mock was never called.
+        """
+        if self.call_count != 0:
+            msg = ("Expected '%s' to not have been called. Called %s times.%s"
+                   % (self._mock_name or 'mock',
+                      self.call_count,
+                      self._calls_repr()))
+&gt;           raise AssertionError(msg)
+E           AssertionError: Expected 'should_test' to not have been called. Called 1 times.
+E           Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:gemini'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),
+E            call().__bool__(),
+E            call().get('arms'),
+E            call().get().__bool__(),
+E            call().get().__len__()].
+
+/opt/anaconda3/lib/python3.12/unittest/mock.py:905: AssertionError</failure><failure message="AssertionError: Expected 'should_test' to not have been called. Called 1 times.&#10;Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:aider'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),&#10; call().__bool__(),&#10; call().get('arms'),&#10; call().get().__bool__(),&#10; call().get().__len__()].">self = &lt;test_research_ownership.ResearchOwnershipTests testMethod=test_scheduler_rechecks_injected_research_ownership&gt;
+
+    def test_scheduler_rechecks_injected_research_ownership(self):
+        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS):
+            with self.subTest(label=label):
+                item = {
+                    "target": "o/r#1",
+                    "task_type": "implement",
+                    "lane": "research",
+                    "labels": ["priority:high", label],
+                    "body": "Implement the parser",
+                }
+                with patch.object(research_scheduler, "should_test") as select:
+                    self.assertEqual(self.candidates([item]), [])
+&gt;                   select.assert_not_called()
+
+tests/test_research_ownership.py:95: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;MagicMock name='should_test' id='4485770672'&gt;
+
+    def assert_not_called(self):
+        """assert that the mock was never called.
+        """
+        if self.call_count != 0:
+            msg = ("Expected '%s' to not have been called. Called %s times.%s"
+                   % (self._mock_name or 'mock',
+                      self.call_count,
+                      self._calls_repr()))
+&gt;           raise AssertionError(msg)
+E           AssertionError: Expected 'should_test' to not have been called. Called 1 times.
+E           Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:aider'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),
+E            call().__bool__(),
+E            call().get('arms'),
+E            call().get().__bool__(),
+E            call().get().__len__()].
+
+/opt/anaconda3/lib/python3.12/unittest/mock.py:905: AssertionError</failure><failure message="AssertionError: Expected 'should_test' to not have been called. Called 1 times.&#10;Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:auto'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),&#10; call().__bool__(),&#10; call().get('arms'),&#10; call().get().__bool__(),&#10; call().get().__len__()].">self = &lt;test_research_ownership.ResearchOwnershipTests testMethod=test_scheduler_rechecks_injected_research_ownership&gt;
+
+    def test_scheduler_rechecks_injected_research_ownership(self):
+        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS):
+            with self.subTest(label=label):
+                item = {
+                    "target": "o/r#1",
+                    "task_type": "implement",
+                    "lane": "research",
+                    "labels": ["priority:high", label],
+                    "body": "Implement the parser",
+                }
+                with patch.object(research_scheduler, "should_test") as select:
+                    self.assertEqual(self.candidates([item]), [])
+&gt;                   select.assert_not_called()
+
+tests/test_research_ownership.py:95: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;MagicMock name='should_test' id='4485769664'&gt;
+
+    def assert_not_called(self):
+        """assert that the mock was never called.
+        """
+        if self.call_count != 0:
+            msg = ("Expected '%s' to not have been called. Called %s times.%s"
+                   % (self._mock_name or 'mock',
+                      self.call_count,
+                      self._calls_repr()))
+&gt;           raise AssertionError(msg)
+E           AssertionError: Expected 'should_test' to not have been called. Called 1 times.
+E           Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:auto'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),
+E            call().__bool__(),
+E            call().get('arms'),
+E            call().get().__bool__(),
+E            call().get().__len__()].
+
+/opt/anaconda3/lib/python3.12/unittest/mock.py:905: AssertionError</failure><failure message="AssertionError: Expected 'should_test' to not have been called. Called 1 times.&#10;Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:retry'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),&#10; call().__bool__(),&#10; call().get('arms'),&#10; call().get().__bool__(),&#10; call().get().__len__()].">self = &lt;test_research_ownership.ResearchOwnershipTests testMethod=test_scheduler_rechecks_injected_research_ownership&gt;
+
+    def test_scheduler_rechecks_injected_research_ownership(self):
+        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS):
+            with self.subTest(label=label):
+                item = {
+                    "target": "o/r#1",
+                    "task_type": "implement",
+                    "lane": "research",
+                    "labels": ["priority:high", label],
+                    "body": "Implement the parser",
+                }
+                with patch.object(research_scheduler, "should_test") as select:
+                    self.assertEqual(self.candidates([item]), [])
+&gt;                   select.assert_not_called()
+
+tests/test_research_ownership.py:95: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;MagicMock name='should_test' id='4485757216'&gt;
+
+    def assert_not_called(self):
+        """assert that the mock was never called.
+        """
+        if self.call_count != 0:
+            msg = ("Expected '%s' to not have been called. Called %s times.%s"
+                   % (self._mock_name or 'mock',
+                      self.call_count,
+                      self._calls_repr()))
+&gt;           raise AssertionError(msg)
+E           AssertionError: Expected 'should_test' to not have been called. Called 1 times.
+E           Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:retry'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),
+E            call().__bool__(),
+E            call().get('arms'),
+E            call().get().__bool__(),
+E            call().get().__len__()].
+
+/opt/anaconda3/lib/python3.12/unittest/mock.py:905: AssertionError</failure><failure message="AssertionError: Expected 'should_test' to not have been called. Called 1 times.&#10;Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:rate-limited'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),&#10; call().__bool__(),&#10; call().get('arms'),&#10; call().get().__bool__(),&#10; call().get().__len__()].">self = &lt;test_research_ownership.ResearchOwnershipTests testMethod=test_scheduler_rechecks_injected_research_ownership&gt;
+
+    def test_scheduler_rechecks_injected_research_ownership(self):
+        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS):
+            with self.subTest(label=label):
+                item = {
+                    "target": "o/r#1",
+                    "task_type": "implement",
+                    "lane": "research",
+                    "labels": ["priority:high", label],
+                    "body": "Implement the parser",
+                }
+                with patch.object(research_scheduler, "should_test") as select:
+                    self.assertEqual(self.candidates([item]), [])
+&gt;                   select.assert_not_called()
+
+tests/test_research_ownership.py:95: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;MagicMock name='should_test' id='4485825024'&gt;
+
+    def assert_not_called(self):
+        """assert that the mock was never called.
+        """
+        if self.call_count != 0:
+            msg = ("Expected '%s' to not have been called. Called %s times.%s"
+                   % (self._mock_name or 'mock',
+                      self.call_count,
+                      self._calls_repr()))
+&gt;           raise AssertionError(msg)
+E           AssertionError: Expected 'should_test' to not have been called. Called 1 times.
+E           Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:rate-limited'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),
+E            call().__bool__(),
+E            call().get('arms'),
+E            call().get().__bool__(),
+E            call().get().__len__()].
+
+/opt/anaconda3/lib/python3.12/unittest/mock.py:905: AssertionError</failure><failure message="AssertionError: Expected 'should_test' to not have been called. Called 1 times.&#10;Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:needs-attention'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),&#10; call().__bool__(),&#10; call().get('arms'),&#10; call().get().__bool__(),&#10; call().get().__len__()].">self = &lt;test_research_ownership.ResearchOwnershipTests testMethod=test_scheduler_rechecks_injected_research_ownership&gt;
+
+    def test_scheduler_rechecks_injected_research_ownership(self):
+        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS):
+            with self.subTest(label=label):
+                item = {
+                    "target": "o/r#1",
+                    "task_type": "implement",
+                    "lane": "research",
+                    "labels": ["priority:high", label],
+                    "body": "Implement the parser",
+                }
+                with patch.object(research_scheduler, "should_test") as select:
+                    self.assertEqual(self.candidates([item]), [])
+&gt;                   select.assert_not_called()
+
+tests/test_research_ownership.py:95: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;MagicMock name='should_test' id='4485187872'&gt;
+
+    def assert_not_called(self):
+        """assert that the mock was never called.
+        """
+        if self.call_count != 0:
+            msg = ("Expected '%s' to not have been called. Called %s times.%s"
+                   % (self._mock_name or 'mock',
+                      self.call_count,
+                      self._calls_repr()))
+&gt;           raise AssertionError(msg)
+E           AssertionError: Expected 'should_test' to not have been called. Called 1 times.
+E           Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:needs-attention'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),
+E            call().__bool__(),
+E            call().get('arms'),
+E            call().get().__bool__(),
+E            call().get().__len__()].
+
+/opt/anaconda3/lib/python3.12/unittest/mock.py:905: AssertionError</failure><failure message="AssertionError: Expected 'should_test' to not have been called. Called 1 times.&#10;Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:codex-invite'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),&#10; call().__bool__(),&#10; call().get('arms'),&#10; call().get().__bool__(),&#10; call().get().__len__()].">self = &lt;test_research_ownership.ResearchOwnershipTests testMethod=test_scheduler_rechecks_injected_research_ownership&gt;
+
+    def test_scheduler_rechecks_injected_research_ownership(self):
+        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS):
+            with self.subTest(label=label):
+                item = {
+                    "target": "o/r#1",
+                    "task_type": "implement",
+                    "lane": "research",
+                    "labels": ["priority:high", label],
+                    "body": "Implement the parser",
+                }
+                with patch.object(research_scheduler, "should_test") as select:
+                    self.assertEqual(self.candidates([item]), [])
+&gt;                   select.assert_not_called()
+
+tests/test_research_ownership.py:95: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;MagicMock name='should_test' id='4485625616'&gt;
+
+    def assert_not_called(self):
+        """assert that the mock was never called.
+        """
+        if self.call_count != 0:
+            msg = ("Expected '%s' to not have been called. Called %s times.%s"
+                   % (self._mock_name or 'mock',
+                      self.call_count,
+                      self._calls_repr()))
+&gt;           raise AssertionError(msg)
+E           AssertionError: Expected 'should_test' to not have been called. Called 1 times.
+E           Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:codex-invite'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),
+E            call().__bool__(),
+E            call().get('arms'),
+E            call().get().__bool__(),
+E            call().get().__len__()].
+
+/opt/anaconda3/lib/python3.12/unittest/mock.py:905: AssertionError</failure><failure message="AssertionError: Expected 'should_test' to not have been called. Called 1 times.&#10;Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:future-worker'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),&#10; call().__bool__(),&#10; call().get('arms'),&#10; call().get().__bool__(),&#10; call().get().__len__()].">self = &lt;test_research_ownership.ResearchOwnershipTests testMethod=test_scheduler_rechecks_injected_research_ownership&gt;
+
+    def test_scheduler_rechecks_injected_research_ownership(self):
+        for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS):
+            with self.subTest(label=label):
+                item = {
+                    "target": "o/r#1",
+                    "task_type": "implement",
+                    "lane": "research",
+                    "labels": ["priority:high", label],
+                    "body": "Implement the parser",
+                }
+                with patch.object(research_scheduler, "should_test") as select:
+                    self.assertEqual(self.candidates([item]), [])
+&gt;                   select.assert_not_called()
+
+tests/test_research_ownership.py:95: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;MagicMock name='should_test' id='4485124928'&gt;
+
+    def assert_not_called(self):
+        """assert that the mock was never called.
+        """
+        if self.call_count != 0:
+            msg = ("Expected '%s' to not have been called. Called %s times.%s"
+                   % (self._mock_name or 'mock',
+                      self.call_count,
+                      self._calls_repr()))
+&gt;           raise AssertionError(msg)
+E           AssertionError: Expected 'should_test' to not have been called. Called 1 times.
+E           Calls: [call({'target': 'o/r#1', 'task_type': 'implement', 'lane': 'research', 'labels': ['priority:high', 'agent:future-worker'], 'body': 'Implement the parser'}, [], {'codex': 3, 'cursor': 3, 'gemini': 3}, conn=&lt;sqlite3.Connection object at 0x10b3f33d0&gt;, weights=[]),
+E            call().__bool__(),
+E            call().get('arms'),
+E            call().get().__bool__(),
+E            call().get().__len__()].
+
+/opt/anaconda3/lib/python3.12/unittest/mock.py:905: AssertionError</failure></testcase></testsuite></testsuites>

@@ -1,0 +1,135 @@
+diff --git a/ARCHITECTURE.md b/ARCHITECTURE.md
+index 918210b..ef1617a 100644
+--- a/ARCHITECTURE.md
++++ b/ARCHITECTURE.md
+@@ -517,6 +517,21 @@ repository's issue/PR workflow. The first real trial is strategy434, delivered t
+ remaining break, intake, is unchanged. No stage, component or surface moved, so the loop diagram
+ is unchanged.
+ 
++**The research lane has its own input (2026-10-12, owner decision: build intake, keep launching
++off).** Its only input was `backlog.json`, written by dispatch discovery, which retired with the
++dispatch lane: the file was last written 2026-09-17 with 0 issues, and every tick printed
++`no_subject`. `backlog.py --research` now writes `research-backlog.json` each tick (orchestrate.sh,
++skipped when gh is deferred): open issues that are prioritised or ready, minus trackers, automated
++and sync issues, paused or in-progress ones, epic/cross-repo/mechanical ones and anything with an
++open PR, with a count per reason; a repo it cannot read is named, never read as empty. The tick
++plans research from it only while it is under two hours old, and the TICK-PLAN line prints the
++research status beside its inputs and skip reasons. At launch an issue that is no longer open is
++refused, and the subject cooldown is per issue whatever arm set is proposed (Workflows#2710 was
++launched 123 times because a new arm mix passed it). First live read: 7 eligible of 70 open issues
++in 16 repos; a shadow tick planned 1. Launching stays off, and it is held by TWO switches, not
++one: `ORCH_RESEARCH_ARM=1`, and a non-dry-run research tick, which `tick.main` grants only when
++the dispatch lane is live. No stage moved, so the loop diagram is unchanged.
++
+ `issue_size_quality` extends that weekly caller with a read-only join: every closed issue in
+ the 90-day reviewed-fleet population contributes its checkbox-count band, and only PRs merged
+ by the issue's close can contribute canonical Brain outcomes. PASS uses the final adjudication;
+diff --git a/orchestrate.sh b/orchestrate.sh
+index 3cbaaab..3135a3e 100755
+--- a/orchestrate.sh
++++ b/orchestrate.sh
+@@ -372,6 +372,16 @@ elif [[ "${ORCH_DISPATCH_LANE:-0}" == "1" ]]; then
+ else
+   echo "  discovery: skipped (dispatch lane shadow; ORCH_DISPATCH_LANE=1 to run backlog discovery)"
+ fi
++# THE RESEARCH LANE'S OWN FEED (2026-10-12). Discovery above is retired with the dispatch lane, and it
++# was the research lane's only input: the lane planned from a backlog last written 2026-09-17 with 0
++# issues and printed `no_subject` every tick. This feed is read whatever ORCH_RESEARCH_ARM says, so a
++# shadow tick measures real candidates; launching still needs ORCH_RESEARCH_ARM=1. The tick ignores a
++# feed older than two hours and prints its status on the TICK-PLAN line.
++if _gh_deferred; then
++  echo "  research feed: SKIPPED — gh deferred by the preflight (feed left as it was)"
++else
++  python3 "$ORCH/backlog.py" --research 2>&1 | sed 's/^/  /' || echo "  warn: research feed failed (continuing)"
++fi
+ # ORCH-ANCHOR: frontend-verify-doctor -- the ONLY tick caller of the frontend-verifier capability.
+ if [[ "${ORCH_FRONTEND_VERIFY_START_BROWSER:-0}" == "1" ]]; then
+   if python3 "$ORCH/frontend_verify.py" --doctor --require-browser-endpoint --start-browser >/dev/null 2>&1; then
+diff --git a/tests/test_research_feed_wiring.py b/tests/test_research_feed_wiring.py
+new file mode 100644
+index 0000000..99cc0e7
+--- /dev/null
++++ b/tests/test_research_feed_wiring.py
+@@ -0,0 +1,82 @@
++"""Run the research discovery shell boundary without running a live orchestration tick."""
++
++import os
++import subprocess
++import tempfile
++import unittest
++from pathlib import Path
++
++import paths
++
++
++class ResearchFeedWiringTests(unittest.TestCase):
++    def run_discovery(self, *, deferred=False, fail=False, arm=None, dispatch=False):
++        script = (paths.REPO_ROOT / "orchestrate.sh").read_text()
++        start = script.index("# DISCOVERY FEEDS ONLY THIS TOOL'S OWN DISPATCH LANE")
++        end = script.index("# ORCH-ANCHOR: frontend-verify-doctor", start)
++        fragment = script[start:end]
++        with tempfile.TemporaryDirectory() as scratch:
++            root = Path(scratch)
++            calls = root / "calls"
++            fake_python = root / "python3"
++            fake_python.write_text(
++                '#!/usr/bin/env bash\n'
++                'printf "%s\\n" "$*" >> "$RESEARCH_TEST_CALLS"\n'
++                'exit "$RESEARCH_TEST_EXIT"\n'
++            )
++            fake_python.chmod(0o755)
++            env = {
++                **os.environ,
++                "PATH": f"{root}{os.pathsep}{os.environ['PATH']}",
++                "ORCH": str(root),
++                "ORCH_DISPATCH_LANE": "1" if dispatch else "0",
++                "RESEARCH_TEST_CALLS": str(calls),
++                "RESEARCH_TEST_EXIT": "1" if fail else "0",
++            }
++            env.pop("ORCH_RESEARCH_ARM", None)
++            if arm is not None:
++                env["ORCH_RESEARCH_ARM"] = arm
++            replay = root / "discovery.sh"
++            replay.write_text(
++                "set -euo pipefail\n"
++                + "_gh_deferred() { "
++                + ("true" if deferred else "false")
++                + "; }\n"
++                + fragment
++                + '\nprintf "discovery completed\\n"\n'
++            )
++            result = subprocess.run(
++                ["bash", str(replay)], capture_output=True, text=True, env=env, timeout=10
++            )
++            self.assertEqual(result.returncode, 0, result.stderr)
++            self.assertIn("discovery completed", result.stdout)
++            return calls.read_text().splitlines() if calls.exists() else [], result.stdout
++
++    def test_shadow_dispatch_builds_research_feed_with_launching_off(self):
++        for arm in (None, "0", "1"):
++            with self.subTest(arm=arm):
++                calls, _ = self.run_discovery(arm=arm)
++                self.assertEqual(len(calls), 1, calls)
++                self.assertTrue(calls[0].endswith("/backlog.py --research"), calls)
++
++    def test_deferred_github_skips_both_discovery_reads(self):
++        for dispatch in (False, True):
++            with self.subTest(dispatch=dispatch):
++                calls, output = self.run_discovery(deferred=True, dispatch=dispatch)
++                self.assertEqual(calls, [])
++                self.assertIn("research feed: SKIPPED", output)
++
++    def test_research_read_failure_warns_and_continues(self):
++        calls, output = self.run_discovery(fail=True)
++        self.assertEqual(len(calls), 1, calls)
++        self.assertIn("warn: research feed failed (continuing)", output)
++
++    def test_live_dispatch_keeps_its_feed_and_builds_research_feed(self):
++        calls, _ = self.run_discovery(dispatch=True)
++        self.assertEqual(len(calls), 2, calls)
++        self.assertTrue(calls[0].endswith("/backlog.py --live"), calls)
++        self.assertTrue(calls[1].endswith("/backlog.py --research"), calls)
++
++
++if __name__ == "__main__":
++    unittest.main()

@@ -1,0 +1,29 @@
+test_assigned_issue_is_excluded (test_research_ownership.ResearchOwnershipTests.test_assigned_issue_is_excluded) ... ok
+test_auto_pilot_pause_remains_excluded (test_research_ownership.ResearchOwnershipTests.test_auto_pilot_pause_remains_excluded) ... ok
+test_every_pause_and_agent_family_is_excluded (test_research_ownership.ResearchOwnershipTests.test_every_pause_and_agent_family_is_excluded) ... ok
+test_launch_refuses_unknown_labels_and_accepts_unowned_open_issue (test_research_ownership.ResearchOwnershipTests.test_launch_refuses_unknown_labels_and_accepts_unowned_open_issue) ... ok
+test_launch_stays_off_in_shadow_or_without_arm_flag (test_research_ownership.ResearchOwnershipTests.test_launch_stays_off_in_shadow_or_without_arm_flag) ... ok
+test_ownership_is_rechecked_at_launch (test_research_ownership.ResearchOwnershipTests.test_ownership_is_rechecked_at_launch) ... ok
+test_paused_issue_is_excluded (test_research_ownership.ResearchOwnershipTests.test_paused_issue_is_excluded) ... ok
+test_scheduler_rechecks_injected_research_ownership (test_research_ownership.ResearchOwnershipTests.test_scheduler_rechecks_injected_research_ownership) ... ok
+test_unowned_prioritised_issue_reaches_scheduler (test_research_ownership.ResearchOwnershipTests.test_unowned_prioritised_issue_reaches_scheduler) ... ok
+test_array_and_scalar_feeds_are_unreadable (test_research_feed_validation.ResearchFeedValidationTests.test_array_and_scalar_feeds_are_unreadable) ... ok
+test_complete_pr_discovery_keeps_open_pr_exclusion (test_research_feed_validation.ResearchFeedValidationTests.test_complete_pr_discovery_keeps_open_pr_exclusion) ... ok
+test_fresh_stale_absent_and_invalid_json_statuses (test_research_feed_validation.ResearchFeedValidationTests.test_fresh_stale_absent_and_invalid_json_statuses) ... ok
+test_future_timestamps_contribute_no_items (test_research_feed_validation.ResearchFeedValidationTests.test_future_timestamps_contribute_no_items) ... ok
+test_invalid_timestamps_are_unreadable (test_research_feed_validation.ResearchFeedValidationTests.test_invalid_timestamps_are_unreadable) ... ok
+test_issue_discovery_refuses_a_full_page (test_research_feed_validation.ResearchFeedValidationTests.test_issue_discovery_refuses_a_full_page) ... ok
+test_malformed_items_are_unreadable (test_research_feed_validation.ResearchFeedValidationTests.test_malformed_items_are_unreadable) ... ok
+test_nonfinite_timestamps_are_unreadable (test_research_feed_validation.ResearchFeedValidationTests.test_nonfinite_timestamps_are_unreadable) ... ok
+test_pr_discovery_refuses_a_full_page (test_research_feed_validation.ResearchFeedValidationTests.test_pr_discovery_refuses_a_full_page) ... ok
+test_truncated_repo_is_named_and_contributes_nothing (test_research_feed_validation.ResearchFeedValidationTests.test_truncated_repo_is_named_and_contributes_nothing) ... research feed: o/truncated unreadable: open PR discovery reached its limit; ownership is incomplete
+ok
+test_deferred_github_skips_both_discovery_reads (test_research_feed_wiring.ResearchFeedWiringTests.test_deferred_github_skips_both_discovery_reads) ... ok
+test_live_dispatch_keeps_its_feed_and_builds_research_feed (test_research_feed_wiring.ResearchFeedWiringTests.test_live_dispatch_keeps_its_feed_and_builds_research_feed) ... ok
+test_research_read_failure_warns_and_continues (test_research_feed_wiring.ResearchFeedWiringTests.test_research_read_failure_warns_and_continues) ... ok
+test_shadow_dispatch_builds_research_feed_with_launching_off (test_research_feed_wiring.ResearchFeedWiringTests.test_shadow_dispatch_builds_research_feed_with_launching_off) ... ok
+
+----------------------------------------------------------------------
+Ran 23 tests in 0.059s
+
+OK

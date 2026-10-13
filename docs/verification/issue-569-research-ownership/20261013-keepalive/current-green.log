@@ -1,0 +1,12 @@
+Production backlog SHA256: 73d229e259104b9896d5f11a3a9c444df3ca6c291b76b4a6b4e6621379026223
+agent:codex eligible= 0
+agents:auto-pilot-pause eligible= 0
+agents:paused eligible= 0
+test_assigned (__main__.Reproductions.test_assigned) ... ok
+test_existing_pause_control (__main__.Reproductions.test_existing_pause_control) ... ok
+test_paused (__main__.Reproductions.test_paused) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.165s
+
+OK

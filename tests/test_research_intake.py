@@ -84,7 +84,7 @@ def test_the_feed_keeps_prioritised_open_unworked_issues_and_counts_the_rest():
 def test_the_lane_accepts_research_items():
     skipped: list = []
     research_scheduler.research_job_candidates(
-        [{"target": "o/a#1", "task_type": "implement", "lane": "research"}],
+        [{"target": "o/a#1", "task_type": "implement", "lane": "research", "labels": []}],
         {"codex": 2, "cursor": 2},
         [],
         skipped=skipped,
@@ -145,7 +145,7 @@ def test_the_tick_plans_research_from_the_feed_and_reports_its_inputs():
 def test_a_closed_issue_is_never_launched(monkeypatch, state, launchable):
     def run(argv, **kwargs):
         assert "state" in argv[-1], argv
-        payload = {"title": "T", "body": "B", "state": state}
+        payload = {"title": "T", "body": "B", "state": state, "labels": []}
         return subprocess.CompletedProcess(argv, 0, json.dumps(payload), "")
 
     monkeypatch.setattr(subprocess, "run", run)
@@ -176,7 +176,8 @@ def test_the_cooldown_holds_the_issue_whatever_arms_are_proposed():
     edited = research_subjects.assess_candidate(**{**base, "spec": "edited body"}, arms=["vibe"])
     assert edited["reason"] == "subject_cooldown", "an edited body must not reopen the issue"
     later = research_subjects.assess_candidate(
-        **{**base, "now": now + 200 * 3600}, arms=["gemini", "vibe"]
+        **{**base, "now": now + 200 * 3600},
+        arms=["gemini", "vibe"],
     )
     assert later["eligible"], later
     conn.close()
