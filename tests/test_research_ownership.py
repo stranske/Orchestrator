@@ -94,6 +94,42 @@ class ResearchOwnershipTests(unittest.TestCase):
         self.assertEqual([item["target"] for item in loaded["items"]], ["o/r#2"])
         self.assertEqual([job["target"] for job in self.candidates(loaded["items"])], ["o/r#2"])
 
+        # A fresh file written by the old producer can still contain a paused or
+        # assigned issue. Intake must distrust its eligible count and recheck labels.
+        legacy_feed = {
+            **feed,
+            "counts": {**feed["counts"], "eligible": 2},
+            "items": [
+                {
+                    **feed["items"][0],
+                    "target": "o/r#1",
+                    "labels": ["priority:high", label],
+                },
+                *feed["items"],
+            ],
+        }
+        with tempfile.TemporaryDirectory() as scratch:
+            path = Path(scratch) / "research-backlog.json"
+            path.write_text(json.dumps(legacy_feed))
+            loaded = tick.load_research_feed(path, now=feed["generated_at"])
+        self.assertEqual(loaded["status"], "fresh")
+        self.assertEqual(loaded["counts"]["eligible"], 2)
+        self.assertEqual([item["target"] for item in loaded["items"]], ["o/r#1", "o/r#2"])
+        skipped = []
+        jobs = research_scheduler.research_job_candidates(
+            loaded["items"],
+            {"codex": 3, "cursor": 3, "gemini": 3},
+            [],
+            conn=self.conn,
+            weights=[],
+            skipped=skipped,
+        )
+        self.assertEqual([job["target"] for job in jobs], ["o/r#2"])
+        self.assertEqual(
+            skipped,
+            [{"target": "o/r#1", "task_type": "implement", "reason": "owned_or_paused"}],
+        )
+
     def test_paused_issue_is_excluded(self):
         feed = self.feed("agents:paused")
         self.assertEqual(feed["counts"]["eligible"], 0)

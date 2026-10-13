@@ -1,5 +1,33 @@
 # Issue #569: research ownership recovery
 
+## Persisted legacy-feed intake validation, based on `84915db`
+
+- [x] `priority:high` + `agents:paused` contributes zero eligible subjects.
+- [x] `priority:high` + `agent:codex` contributes zero eligible subjects.
+- [x] The auto-pilot pause exclusion and eligible unowned control still pass.
+- [ ] Format, run original pytest suites, commit/push and complete guarded delivery.
+
+The existing paused/assigned regression tests now also load a fresh persisted feed from an
+older producer that admits the excluded issue and reports two eligible subjects. Production
+intake rejects that issue with `owned_or_paused` and schedules only its unowned neighbour.
+Removing the scheduler ownership guard in a temporary source copy produces two assertion
+failures at the new intake assertion; current production passes all 23 ownership/feed/wiring
+unittest cases. All four affected module selftests pass. Existing test methods are extended;
+the collection floor, ceilings, exemptions, workflows and launch settings are unchanged.
+
+Changes remain **uncommitted**: Black and pytest are missing, installation failed, both
+mandatory Black commands fail with `command not found`, and targeted pytest fails with
+`No module named pytest`. The mandatory formatting gate prevents a Python commit or push.
+No research, Brain, mirror, dispatch or deployment activation occurred.
+
+PR570 is open and ready at `84915dbd1bd8b6793c289375915890077a21dac8`; connector readback
+returns three resolved review threads and no active unresolved threads. GitHub CLI cannot
+connect; the merge-guard dry-run blocks on `review-thread GraphQL query failed`. No new head,
+complete expected-check verification, seven-minute delivery anchor or actual `verify:compare`
+verdict was obtained. The checked terminal-delivery criterion remains unsupported by this run.
+Automatic approval rejected the verified task-checkbox reconciliation, blocker comment and
+`needs-human` label because each requires approval while policy is `never`; none occurred.
+
 ## Persisted discovery validation, based on `fa48d82`
 
 Recent commits were reviewed before extending the regressions. Both reported defects are
