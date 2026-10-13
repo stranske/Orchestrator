@@ -1,5 +1,45 @@
 # Issue #569: research ownership recovery
 
+## Persisted discovery validation, based on `fa48d82`
+
+Recent commits were reviewed before extending the regressions. Both reported defects are
+already corrected in production and verified in this run:
+
+- [x] `priority:high` + `agents:paused` contributes zero eligible subjects.
+- [x] `priority:high` + `agent:codex` contributes zero eligible subjects.
+- [x] The auto-pilot pause exclusion and eligible unowned control still pass.
+- [ ] Complete required formatting, pytest validation, commit/push and terminal delivery.
+
+The existing paused/assigned tests now exercise strict GitHub discovery with mocked responses,
+persist the production feed as JSON, load it through `tick.load_research_feed`, and pass its
+items to the production scheduler. Each case includes an eligible unowned neighbour, verifies
+the ownership counts, and admits only that neighbour. Existing test methods were extended;
+the collection floor, ceilings, exemptions and workflows are unchanged.
+
+All 23 ownership/feed-validation/wiring unittest cases and all four affected module selftests
+pass. A fresh four-case reproduction against the exact original production module at
+`4a3dcf25addce6399d3267df42fb3b7063150651` has two assertion failures (`eligible=1`) for
+the reported labels and two passing controls; current production passes all four. The original
+module's Git blob was verified as `5a824ddd63cefee8390dcbd28a8fee91704348b9`.
+
+The test changes remain **uncommitted**. Black and pytest are missing; installation in a
+temporary virtual environment failed. Both required Black commands return `command not found`,
+and targeted pytest returns `No module named pytest`. The mandatory Black gate prohibits a
+Python commit or push. Original pytest suites were not rerun, and no new review-floor anchor
+exists. Research launching remains off; no live Brain, mirror, dispatch or deployment was used.
+
+Connector readback at existing head `fa48d82816f8f9384f818d00f133110ce79372a4` confirms PR570
+is open and ready, all 60 returned check runs are success/skipped, all 16 suites were read
+(seven queued), and there are zero active unresolved review threads. The expected-check
+reporter cannot connect through `gh`; merge-guard dry-run blocks on `review-thread GraphQL query
+failed`. No actual `verify:compare` verdict appears in the read checks, statuses or comments;
+the automated completion checkpoint is not such a verdict. Terminal delivery is unverified.
+
+PR-body reconciliation was attempted to check both reproduced tasks and uncheck the unsupported
+terminal-delivery criterion. Automatic approval rejected the body update, `needs-human`
+label and blocker comment because approval policy is `never`; none occurred. The verified local
+checkboxes above record the reconciliation pending an authorized remote update.
+
 ## Discovery ownership validation, 2026-10-13, based on `3695464`
 
 The two unchecked reproduction tasks are already fixed in current production:

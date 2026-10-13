@@ -3,7 +3,9 @@
 import json
 import sqlite3
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import backlog
@@ -53,10 +55,50 @@ class ResearchOwnershipTests(unittest.TestCase):
             weights=[],
         )
 
+    def assert_persisted_discovery_excludes(self, label):
+        issues = [
+            {
+                "number": number,
+                "labels": [{"name": name} for name in labels],
+                "title": "Research subject",
+                "body": "Implement the parser",
+            }
+            for number, labels in (
+                (1, ["priority:high", label]),
+                (2, ["priority:high"]),
+            )
+        ]
+
+        def read(argv, **kwargs):
+            self.assertEqual(argv[0], "gh")
+            self.assertEqual(argv[argv.index("-R") + 1], "o/r")
+            self.assertEqual(argv[argv.index("--state") + 1], "open")
+            return subprocess.CompletedProcess(
+                argv, 0, json.dumps(issues if argv[1] == "issue" else []), ""
+            )
+
+        with patch("subprocess.run", side_effect=read) as gh:
+            feed = backlog.build_research_items(
+                ["o/r"], backlog.strict_fetch_issues, backlog.strict_fetch_prs
+            )
+        self.assertEqual([call.args[0][1] for call in gh.call_args_list], ["issue", "pr"])
+        self.assertEqual(feed["repos_failed"], [])
+        self.assertEqual(feed["counts"]["open_issues"], 2)
+        self.assertEqual(feed["counts"]["owned_or_paused"], 1)
+        self.assertEqual(feed["counts"]["eligible"], 1)
+        with tempfile.TemporaryDirectory() as scratch:
+            path = Path(scratch) / "research-backlog.json"
+            path.write_text(json.dumps(feed))
+            loaded = tick.load_research_feed(path, now=feed["generated_at"])
+        self.assertEqual(loaded["status"], "fresh")
+        self.assertEqual([item["target"] for item in loaded["items"]], ["o/r#2"])
+        self.assertEqual([job["target"] for job in self.candidates(loaded["items"])], ["o/r#2"])
+
     def test_paused_issue_is_excluded(self):
         feed = self.feed("agents:paused")
         self.assertEqual(feed["counts"]["eligible"], 0)
         self.assertEqual(self.candidates(feed["items"]), [])
+        self.assert_persisted_discovery_excludes("agents:paused")
 
         # An incomplete label read cannot prove that a pause or writer is absent.
         # Refuse only that issue, keeping a readable unowned neighbour in the feed.
@@ -95,6 +137,7 @@ class ResearchOwnershipTests(unittest.TestCase):
         feed = self.feed("agent:codex")
         self.assertEqual(feed["counts"]["eligible"], 0)
         self.assertEqual(self.candidates(feed["items"]), [])
+        self.assert_persisted_discovery_excludes("agent:codex")
 
     def test_auto_pilot_pause_remains_excluded(self):
         feed = self.feed("agents:auto-pilot-pause")
