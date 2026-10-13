@@ -1,0 +1,10 @@
+........................................................................ [ 68%]
+.................................                                        [100%]
+=============================== warnings summary ===============================
+tests/test_synthesis_promotion.py::test_hollow_synthesis_never_becomes_candidate_ready
+tests/test_synthesis_promotion.py::test_a_passing_break_names_the_tautologies_it_carried
+  /opt/anaconda3/lib/python3.12/tarfile.py:2221: DeprecationWarning: Python 3.14 will, by default, filter extracted tar archives and reject files or modify their metadata. Use the filter argument to control this behavior.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+105 passed, 2 warnings in 17.05s

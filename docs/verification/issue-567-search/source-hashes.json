@@ -27,5 +27,71 @@
       "unchanged": true
     }
   },
-  "uncompressed_red_log_sha256": "6c6c761d9abe4889729e2ab3801c3bf34a9b0e1e964329af3a19b1f32c796b1c"
+  "uncompressed_red_log_sha256": "6c6c761d9abe4889729e2ab3801c3bf34a9b0e1e964329af3a19b1f32c796b1c",
+  "phase": "Original author validation before closer integration; original/corrected hashes below are historical snapshot hashes, not final merged hashes.",
+  "merged_validation": {
+    "evaluated_commit": "4357db40177f16f33722c2fe2eb999957170044d",
+    "head": "6ca019fc39054d830165bf4c763e4677d4620ae3",
+    "floor_base_commit": "f1a269b62fdd08b25819db81f56647fc45e26945",
+    "floor_original_sha256": "3c9d799eff02f0e46cdb729e22811e55c58005915f1a8fae29b86ddd6d4ccd9d",
+    "floor_merged_sha256": "36300624c1b4cf651051a0790f2d6640da46f8d41c278ee3ae9a2230261bedb8",
+    "floor_unchanged": false,
+    "collected": {
+      "base": 3213,
+      "merged": 3269
+    },
+    "passed_floor": {
+      "base": 3213,
+      "merged": 3269
+    },
+    "ceilings": {
+      "skipped_max": {
+        "base": 31,
+        "merged": 31,
+        "unchanged": true
+      },
+      "mirror_skipped_max": {
+        "base": 21,
+        "merged": 21,
+        "unchanged": true
+      },
+      "bare_mirror_skipped_max": {
+        "base": 52,
+        "merged": 52,
+        "unchanged": true
+      },
+      "bare_mirror_selftest_skipped_max": {
+        "base": 7,
+        "merged": 7,
+        "unchanged": true
+      },
+      "bare_mirror_gate_skipped_max": {
+        "base": 2,
+        "merged": 2,
+        "unchanged": true
+      },
+      "selftest_skipped_max": {
+        "base": 7,
+        "merged": 7,
+        "unchanged": true
+      },
+      "gate_skipped_max": {
+        "base": 2,
+        "merged": 2,
+        "unchanged": true
+      },
+      "mypy_exempt_max": {
+        "base": 0,
+        "merged": 0,
+        "unchanged": true
+      }
+    },
+    "files_sha256": {
+      "src/synthesis_promotion.py": "513e14a2055619e1fc5c3699cff6b469ceae90e177fbf0986895c5784624c024",
+      "tests/test_synthesis_delivery_discovery.py": "4bcdb17e46def5160bcddc407d75789a4ae7c27dcca6690017df775929fb919d",
+      ".verify-floor.json": "36300624c1b4cf651051a0790f2d6640da46f8d41c278ee3ae9a2230261bedb8",
+      "pyproject.toml": "c863c0b169e759f20d763ed13a0a32fa39b6e07a77d0839b42baa06b562e5cb2",
+      "ruff.toml": "4e5f88fbb7465e9f20aa115acaa7e1c21f0fa03321ee03834d934559db42b451"
+    }
+  }
 }
