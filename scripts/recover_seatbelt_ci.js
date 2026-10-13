@@ -18,6 +18,65 @@ function identity(run) {
     run.status, run.conclusion];
 }
 
+// Discover every exact-head PR run before choosing IDs for receipt recovery. In particular,
+// never filter for success: a later green Gate must not hide an earlier failed/cancelled run.
+async function discoverSeatbeltCIRuns({ expectedHead, fetchJSON, pageSize = 100 }) {
+  assert.match(expectedHead, /^[a-f0-9]{40}$/, 'expected head must be an exact SHA');
+  assert.ok(Number.isInteger(pageSize) && pageSize > 0 && pageSize <= 100, 'invalid page size');
+  const endpoint = `repos/${repo}/actions/runs?head_sha=${expectedHead}`
+    + `&event=pull_request&per_page=${pageSize}`;
+  async function scan() {
+    const runs = [];
+    const seen = new Set();
+    let total;
+    for (let page = 1; ; page += 1) {
+      const population = await fetchJSON(`${endpoint}&page=${page}`);
+      assert.ok(Number.isSafeInteger(population.total_count) && population.total_count >= 0,
+        'missing run total');
+      // Filtered Actions run searches are capped at 1,000 results. At the cap even a
+      // stable declared total cannot establish that no additional runs were omitted.
+      assert.ok(population.total_count < 1000, 'run discovery reaches the GitHub search cap');
+      if (total === undefined) total = population.total_count;
+      assert.equal(population.total_count, total, 'run population changed during discovery');
+      assert.ok(Array.isArray(population.workflow_runs)
+        && population.workflow_runs.length <= pageSize, 'invalid run page');
+      for (const run of population.workflow_runs) {
+        assert.ok(Number.isSafeInteger(run.id) && run.id > 0, 'missing run identity');
+        assert.ok(!seen.has(run.id), 'duplicate run identity across pages');
+        seen.add(run.id);
+        assert.equal(run.head_sha, expectedHead, 'workflow head mismatch');
+        assert.equal(run.event, 'pull_request', 'wrong workflow event');
+        assert.ok(Number.isSafeInteger(run.run_attempt) && run.run_attempt > 0,
+          'missing run attempt');
+        assert.ok(typeof run.name === 'string' && run.name.trim()
+          && typeof run.path === 'string' && run.path.trim(), 'missing workflow source');
+        assert.ok(typeof run.status === 'string' && run.status.trim()
+          && (run.conclusion === null || typeof run.conclusion === 'string'),
+          'missing workflow status');
+        if (Object.hasOwn(workflowPaths, run.name)) {
+          assert.equal(run.path, workflowPaths[run.name], 'wrong workflow source');
+        }
+        runs.push(Object.fromEntries(['id', 'name', 'path', 'event', 'head_sha',
+          'run_attempt', 'status', 'conclusion', 'html_url'].map(key => [key, run[key]])));
+      }
+      assert.ok(runs.length <= total, 'run population exceeds total');
+      if (runs.length === total) break;
+      assert.equal(population.workflow_runs.length, pageSize, 'truncated run page');
+    }
+    return { total_count: total, runs: runs.sort((a, b) => a.id - b.id) };
+  }
+  const population = await scan();
+  // Rescan the collection, not just known IDs: a new run can appear while older pages are read.
+  const rechecked = await scan();
+  assert.deepEqual(rechecked.runs.map(identity), population.runs.map(identity),
+    'run population changed during discovery');
+  return { schema: 'seatbelt-ci-run-discovery/v1', repo, head_sha: expectedHead,
+    ...population,
+    candidates: Object.fromEntries(Object.keys(workflowPaths).map(name => [name,
+      population.runs.filter(run => run.name === name).map(run => run.id)])),
+    hosted_acceptance: 'UNKNOWN: run discovery alone does not prove jobs or producer measurements' };
+}
+
 async function recoverSeatbeltCI({ expectedHead, runIDs, fetchJSON, fetchLog, pageSize = 100 }) {
   assert.match(expectedHead, /^[a-f0-9]{40}$/, 'expected head must be an exact SHA');
   assert.equal(runIDs.length, 2, 'supply the existing CI and Gate run IDs');
@@ -161,16 +220,21 @@ async function recoverSeatbeltArtifact({ expectedHead, runID, artifactID,
     hosted_acceptance: 'UNKNOWN: artifact recovery alone does not prove product execution' } };
 }
 
-module.exports = { recoverSeatbeltCI, recoverSeatbeltArtifact };
+module.exports = { discoverSeatbeltCIRuns, recoverSeatbeltCI, recoverSeatbeltArtifact };
 
 if (require.main === module) {
   const args = process.argv.slice(2);
   const artifactMode = args[0] === '--artifact';
-  if (artifactMode) args.shift();
+  const discoveryMode = args[0] === '--discover';
+  if (artifactMode || discoveryMode) args.shift();
   const [expectedHead, ...ids] = args;
   const read = endpoint => execFileSync('gh', ['api', endpoint],
     { encoding: 'utf8', timeout: 30000, maxBuffer: 32 * 1024 * 1024 });
-  const recovery = artifactMode ? (async () => {
+  const recovery = discoveryMode ? (async () => {
+    assert.equal(ids.length, 0, 'discovery accepts only an exact head SHA');
+    return discoverSeatbeltCIRuns({ expectedHead,
+      fetchJSON: async endpoint => JSON.parse(read(endpoint)) });
+  })() : artifactMode ? (async () => {
     assert.equal(ids.length, 3, 'supply run ID, artifact ID and a new archive destination');
     const { evidence, archive } = await recoverSeatbeltArtifact({ expectedHead,
       runID: Number(ids[0]), artifactID: Number(ids[1]),

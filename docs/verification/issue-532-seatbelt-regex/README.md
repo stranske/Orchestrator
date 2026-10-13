@@ -1,5 +1,47 @@
 # Issue 532: Seatbelt regex literal repair
 
+## Complete run discovery for original and incoming heads (2026-10-12)
+
+The repo-specific recovery helper now supports `--discover HEAD`: it reads every
+exact-head pull-request run page without filtering for success, then rescans the
+whole collection to reject added, removed, replaced or rerun identities and changing
+statuses. Declared totals must remain stable, pages must be complete and identities
+unique. Counts at or above GitHub's [1,000-result filtered search cap](https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository)
+are rejected rather than declared complete. All CI/Gate candidates are retained; the
+helper does not choose a green run over a cancelled or failed one. Discovery alone
+grants no job or measurement acceptance.
+
+```sh
+node scripts/recover_seatbelt_ci.js --discover EXACT_HEAD_SHA
+node tests/test_discover_seatbelt_ci.js
+```
+
+Authenticated connector REST GETs used **two records per page and two complete scans**.
+The retained records contain assembled run lists. The new helper replayed those
+stored runs with simulated pagination and reproduced:
+
+- [original-run-discovery-20261012.json](original-run-discovery-20261012.json):
+  all 13 original-head runs from 14 GETs. CI `38176808788` and both Gate runs
+  `38176809124` / `38178578389` completed successfully.
+- [f8fff11-run-discovery.json](f8fff11-run-discovery.json): all 9 incoming-head
+  runs from 10 GETs. CI `38212775055` completed successfully; Gate `38212775500`
+  was cancelled and Gate `38212780773` completed successfully. These observations
+  cover incoming head `f8fff1164cb969a0a52ab60a08ed102cf0410ea4`, before this discovery
+  implementation, and cannot establish CI acceptance for its successor commit.
+
+Thirteen new discovery tests cover adversarial pagination, the API search cap, changing
+collections and attempts, retained non-green history and replay of the authentic run
+records with simulated pagination. The existing seven receipt/recovery test files still contain
+86 individual tests; the eight files together now contain 99. Four Python quoting
+regressions and the retained native/original receipt checker also pass. New native
+acceptance on this Linux runner remains UNKNOWN.
+
+The shell cannot reach GitHub, and the connector exposes whole-job text rather than
+the trusted per-step log archive needed for accepted measurements. The original
+focused-only command transcript, final implementation-head CI, review/floor gates and
+actual post-merge comparison remain pending. The recovery task stays unchecked.
+Original receipts were not modified; no agents or workflows were rerun.
+
 ## Bot review repair (2026-10-12)
 
 CI measurement recovery now reads `gh run view --job ID --attempt N --log` instead of
