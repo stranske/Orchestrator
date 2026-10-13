@@ -10,9 +10,9 @@ decide binding. Word characters, colon, period, slash, plus and hyphen extend id
 whitespace, backticks, parentheses and commas delimit the exact, case-sensitive candidate marker.
 
 The two reported regressions ran against the original production source before its first edit:
-`red.log.gz` records two failures, both with `delivery_linked:owner/repo#77`. No production source was
+`red-transcript.txt` is the byte-identical UTF-8 expansion of `red.log.gz` and records two failures, both with `delivery_linked:owner/repo#77`. No production source was
 swapped or restored. `source-hashes.json` identifies the original committed bytes and corrected
-bytes, and proves that the floor, ceilings and lint/type configuration remained unchanged. Each
+bytes, for the original author-validation phase. Closer integration subsequently raised the collection and passed floors from 3213 to 3269; the original claim that the floor remained unchanged was stale. The `merged_validation` section records actual final hashes, the strict floor increase, and unchanged skip/selftest/gate/mypy ceilings. Each
 rejection test compares its disposable Brain's bytes before/after reconciliation, checks that the
 persisted promotion has no delivery, and confirms that no outcome was written. All fixtures use
 temporary experiments, repositories and Brain databases.
@@ -54,7 +54,13 @@ their official repositories, loaded only under `/tmp`. Black's unmodified CLI us
 and a periodic asyncio wake-up timer because the sandbox stalled completion notifications in
 multi-file runs. This changes scheduling only; every formatting check still runs.
 
-Full remote checks, review timing/threads, guarded terminal merge and actual postmerge
-`verify:compare` disposition remain pending. PR #568 was confirmed open and ready for review.
+PR #568 was squash merged as `4357db40177f16f33722c2fe2eb999957170044d`.
+`delivery-receipt.json` retains the successful guard: exact head `6ca019fc`, all reported
+checks SUCCESS, zero active threads, and 435.369 seconds since the conservative review anchor.
+Both authored topology qualifications passed before merge. Actual comparison run 38330291488
+returned CONCERNS/CONCERNS because the binary RED transcript was omitted, the floor evidence
+was stale, and final delivery evidence was not in the captured input. Source #567 remains OPEN.
+The final checklist item remains unchecked until this follow-up receives its own guarded
+delivery and actual provider disposition; these corrections do not relabel NON_PASS as PASS.
 Any terminal merge must use `src/merge_guard.py` with the expected head; these local receipts do
 not authorize deployment or mirror activation.

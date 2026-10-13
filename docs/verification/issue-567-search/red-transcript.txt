@@ -1,0 +1,63 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_____________ test_incomplete_search_never_binds_the_visible_match _____________
+
+brain = PosixPath('/tmp/pytest-of-runner/pytest-0/test_incomplete_search_never_b0/capabilities.json')
+tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_incomplete_search_never_b0')
+
+    def test_incomplete_search_never_binds_the_visible_match(brain, tmp_path):
+        exp, state = _verified_candidate(tmp_path)
+        _synth_run(exp)
+        _keepalive_run(77)
+        page = _page([(77, state["candidate"]["candidate_id"])], total=2, incomplete=True)
+>       _assert_unlinked(exp, lambda argv: page)
+
+tests/test_synthesis_delivery_discovery.py:222: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+exp = PosixPath('/tmp/pytest-of-runner/pytest-0/test_incomplete_search_never_b0/exp-verified')
+gh = <function test_incomplete_search_never_binds_the_visible_match.<locals>.<lambda> at 0x7f306882b6a0>
+status = 'unavailable'
+
+    def _assert_unlinked(exp, gh, status="unavailable"):
+        """Exercise the real controller: rejected discovery cannot bind or write to Brain."""
+        before = feedback.DB_PATH.read_bytes()
+        out = promotion.reconcile(exp, delivery_fn=_discover(gh), now=300)
+>       assert f"delivery_discovery:{status}" in out["actions"], out["actions"]
+E       AssertionError: ['delivery_linked:owner/repo#77', 'awaiting_delivery_outcome']
+E       assert 'delivery_discovery:unavailable' in ['delivery_linked:owner/repo#77', 'awaiting_delivery_outcome']
+
+tests/test_synthesis_delivery_discovery.py:208: AssertionError
+________ test_stale_search_marker_removed_from_current_body_never_binds ________
+
+brain = PosixPath('/tmp/pytest-of-runner/pytest-0/test_stale_search_marker_remov0/capabilities.json')
+tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_stale_search_marker_remov0')
+
+    def test_stale_search_marker_removed_from_current_body_never_binds(brain, tmp_path):
+        exp, state = _verified_candidate(tmp_path)
+        _synth_run(exp)
+        _keepalive_run(77)
+        gh = _search((77, state["candidate"]["candidate_id"]), current={77: "Marker removed"})
+>       _assert_unlinked(exp, gh, "no_pr")
+
+tests/test_synthesis_delivery_discovery.py:230: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+exp = PosixPath('/tmp/pytest-of-runner/pytest-0/test_stale_search_marker_remov0/exp-verified')
+gh = <function _search.<locals>.gh at 0x7f306786d260>, status = 'no_pr'
+
+    def _assert_unlinked(exp, gh, status="unavailable"):
+        """Exercise the real controller: rejected discovery cannot bind or write to Brain."""
+        before = feedback.DB_PATH.read_bytes()
+        out = promotion.reconcile(exp, delivery_fn=_discover(gh), now=300)
+>       assert f"delivery_discovery:{status}" in out["actions"], out["actions"]
+E       AssertionError: ['delivery_linked:owner/repo#77', 'awaiting_delivery_outcome']
+E       assert 'delivery_discovery:no_pr' in ['delivery_linked:owner/repo#77', 'awaiting_delivery_outcome']
+
+tests/test_synthesis_delivery_discovery.py:208: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_synthesis_delivery_discovery.py::test_incomplete_search_never_binds_the_visible_match - AssertionError: ['delivery_linked:owner/repo#77', 'awaiting_delivery_outcome']
+assert 'delivery_discovery:unavailable' in ['delivery_linked:owner/repo#77', 'awaiting_delivery_outcome']
+FAILED tests/test_synthesis_delivery_discovery.py::test_stale_search_marker_removed_from_current_body_never_binds - AssertionError: ['delivery_linked:owner/repo#77', 'awaiting_delivery_outcome']
+assert 'delivery_discovery:no_pr' in ['delivery_linked:owner/repo#77', 'awaiting_delivery_outcome']
+2 failed, 53 deselected in 0.84s

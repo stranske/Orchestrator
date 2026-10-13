@@ -1,0 +1,88 @@
+{
+  "target": "stranske/Orchestrator#568",
+  "premerge_head": "6ca019fc39054d830165bf4c763e4677d4620ae3",
+  "merge_commit": "4357db40177f16f33722c2fe2eb999957170044d",
+  "merge_method": "squash",
+  "merge_guard": {
+    "target": "stranske/Orchestrator#568",
+    "dry_run": false,
+    "metadata": {
+      "target": "stranske/Orchestrator#568",
+      "title": "Codex bootstrap for #567",
+      "labels": [
+        "agent:codex",
+        "agent:auto",
+        "agents:keepalive",
+        "autofix"
+      ],
+      "state": "OPEN",
+      "is_draft": false,
+      "merge_state_status": "CLEAN",
+      "closing_issues": [
+        "stranske/Orchestrator#567"
+      ]
+    },
+    "gate": null,
+    "blocked": false,
+    "reason": null,
+    "merge_cmd": [
+      "gh",
+      "pr",
+      "merge",
+      "568",
+      "-R",
+      "stranske/Orchestrator",
+      "--squash",
+      "--match-head-commit",
+      "6ca019fc39054d830165bf4c763e4677d4620ae3"
+    ],
+    "merge_executed": true,
+    "merge_returncode": 0,
+    "adversarial_review": {
+      "status": "routine"
+    },
+    "final_preflight": {
+      "blocked": false,
+      "reason": null,
+      "head": "6ca019fc39054d830165bf4c763e4677d4620ae3",
+      "active_threads": 0,
+      "check_state": "SUCCESS",
+      "review_floor_remaining_seconds": 0.0,
+      "review_age_seconds": 435.36917877197266,
+      "review_not_before": 1791852944.0,
+      "review_anchor": "pr_updated_at",
+      "review_anchor_at": "2026-10-13T00:55:44Z",
+      "review_anchors": {
+        "head_ref_moved_at": "2026-10-13T00:46:41Z",
+        "pr_created_at": "2026-10-12T22:49:56Z",
+        "pr_updated_at": "2026-10-13T00:55:44Z"
+      },
+      "head_ref_activity": "force_push"
+    },
+    "stdout_tail": "",
+    "stderr_tail": "",
+    "outcome": {
+      "recorded": false,
+      "reason": "no remote run_id found for target",
+      "deferred_to_ingest": [],
+      "delegations_already_recorded": []
+    }
+  },
+  "verifier": {
+    "run": "https://github.com/stranske/Orchestrator/actions/runs/38330291488",
+    "report": "https://github.com/stranske/Orchestrator/pull/568#issuecomment-6135885583",
+    "provider_verdicts": [
+      "CONCERNS",
+      "CONCERNS"
+    ],
+    "disposition": "source567 stays OPEN; this follow-up exposes omitted proof and corrects stale evidence; no PASS inferred"
+  },
+  "private_full": {
+    "passed": 3266,
+    "failed": 3,
+    "collected": 3269,
+    "selftests": 104,
+    "gates": 5,
+    "scope": "exact premerge source; three live Pro catalog guards failed, not full PASS"
+  }
+}
