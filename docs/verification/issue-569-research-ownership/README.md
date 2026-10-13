@@ -1,6 +1,45 @@
 # Issue #569: research ownership recovery
 
-## Current keepalive validation
+## Current keepalive validation, 2026-10-13
+
+The existing launch ownership test now carries an eligible unowned production feed through
+`research_tick` after the live issue gains each tested pause/ownership label or in-progress status.
+The tick rejects the subject before claiming it or preparing any arms. The launch-off test now
+mocks the actual production entry point, `prepare_arms`, checks that no claim occurs, and covers
+the explicit `ORCH_RESEARCH_ARM=0` case. Heartbeat calls are mocked and the database is in memory.
+These extend existing test methods without changing the collection floor, ceilings or exemptions.
+
+All 23 ownership/feed-validation/wiring unittest cases pass; all four affected module selftests
+pass. Fresh original-production reproduction uses the exact `backlog.py` fetched at
+`4a3dcf25addce6399d3267df42fb3b7063150651`, hash-checked against the existing manifest:
+both reported ownership assertions fail with `eligible=1`, the auto-pilot pause control passes,
+and current production passes all three assertions. Raw logs and a receipt are in
+`20261013-keepalive/`.
+
+The changes remain **uncommitted**. Black and pytest are unavailable in every checked Python
+interpreter, dependency installation failed, both required Black commands return `command not
+found`, and targeted pytest returns `No module named pytest`. The formatting gate forbids a
+Python commit or push until Black passes. The original intake/control/followup pytest suites
+have not been rerun in this round. Launching remains off; no live Brain, installed mirror,
+dispatch or deployment activation occurred.
+
+PR570 remains open and ready at `22c90ee122f0203f73b40cc649145cb696679c34`. Connector readback
+covered all 110 check runs and all 29 suites returned at that head, including queued application
+suites and an in-progress Actions suite. The maintained expected-check reporter cannot connect
+through `gh`, so complete expected topology remains unknown. The connector returned zero review
+threads, but the mandatory merge-guard dry-run independently blocks on `review-thread GraphQL
+query failed`; no merge occurred. No actual `verify:compare` verdict was found in read checks,
+statuses or comments. These remote facts apply to the existing head, not the local test changes;
+there is no new pushed head or verified seven-minute delivery anchor.
+
+Task reconciliation would check the three concrete tasks plus the ownership, bounded P2 and
+launch-off acceptance criteria based on verified implementation. The original-suite and final
+delivery criteria stay unchecked. Automatic approval rejected the PR-body update, `needs-human`
+label and blocker comment because each requires approval while policy is `never`; none occurred.
+The next capable run must format, run the original targeted suites, commit/push, reconcile the
+checkboxes, and complete the exact-head checks/review-floor/merge-guard/verify:compare sequence.
+
+## Previous keepalive validation, at 22c90ee
 
 The working-tree change strengthens the existing auto-pilot pause regression with a single
 production feed containing both reproduced ownership failures, the existing pause control,

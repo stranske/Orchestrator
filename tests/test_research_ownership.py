@@ -129,6 +129,10 @@ class ResearchOwnershipTests(unittest.TestCase):
                 self.assertEqual([job["target"] for job in jobs], ["o/r#1"])
 
     def test_ownership_is_rechecked_at_launch(self):
+        # The feed was unowned when read. A writer or pause added afterward must stop
+        # the production tick before it reserves the subject or prepares any arms.
+        items = self.feed()["items"]
+        cap = {"agents": {agent: {"state": "ok"} for agent in ("codex", "cursor", "gemini")}}
         for label in (*PAUSE_LABELS, *OWNERSHIP_LABELS, "status:in-progress"):
             with self.subTest(label=label):
                 payload = {
@@ -138,9 +142,29 @@ class ResearchOwnershipTests(unittest.TestCase):
                     "labels": [{"name": label}],
                 }
                 result = subprocess.CompletedProcess([], 0, json.dumps(payload), "")
-                with patch("subprocess.run", return_value=result) as read:
+                with (
+                    patch("subprocess.run", return_value=result) as read,
+                    patch.object(tick.claims, "active_claims", return_value={}),
+                    patch.object(tick.claims, "reap_stale"),
+                    patch.object(tick.claims, "claim") as claim,
+                    patch.object(tick.exp_abcd, "prepare_arms") as prepare,
+                    patch.object(tick.capabilities, "production_heartbeat"),
+                ):
                     self.assertIsNone(tick._fetch_issue_body("o/r#1"))
                     self.assertIn("labels", read.call_args.args[0][-1])
+                    outcome = tick.research_tick(
+                        items,
+                        cap,
+                        dry_run=False,
+                        env={"ORCH_RESEARCH_ARM": "1"},
+                        conn=self.conn,
+                        hyps=[],
+                    )
+                    self.assertTrue(outcome["planned"])
+                    self.assertEqual(outcome["planned"][0]["active_status"], "no_issue_body")
+                    self.assertFalse(outcome["active"])
+                    claim.assert_not_called()
+                    prepare.assert_not_called()
 
     def test_launch_refuses_unknown_labels_and_accepts_unowned_open_issue(self):
         payload = {"title": "Subject", "body": "Implement the parser", "state": "OPEN"}
@@ -158,13 +182,19 @@ class ResearchOwnershipTests(unittest.TestCase):
     def test_launch_stays_off_in_shadow_or_without_arm_flag(self):
         items = self.feed()["items"]
         cap = {"agents": {agent: {"state": "ok"} for agent in ("codex", "cursor", "gemini")}}
-        for dry_run, env in ((True, {"ORCH_RESEARCH_ARM": "1"}), (False, {})):
+        for dry_run, env in (
+            (True, {"ORCH_RESEARCH_ARM": "1"}),
+            (False, {}),
+            (False, {"ORCH_RESEARCH_ARM": "0"}),
+        ):
             with self.subTest(dry_run=dry_run, env=env):
                 with (
                     patch.object(tick.claims, "active_claims", return_value={}),
                     patch.object(tick.claims, "reap_stale"),
+                    patch.object(tick.claims, "claim") as claim,
                     patch.object(tick, "_fetch_issue_body") as read,
-                    patch.object(tick.exp_abcd, "prepare") as prepare,
+                    patch.object(tick.exp_abcd, "prepare_arms") as prepare,
+                    patch.object(tick.capabilities, "production_heartbeat"),
                 ):
                     result = tick.research_tick(
                         items,
@@ -177,6 +207,7 @@ class ResearchOwnershipTests(unittest.TestCase):
                     self.assertTrue(result["planned"])
                     self.assertFalse(result["active"])
                     read.assert_not_called()
+                    claim.assert_not_called()
                     prepare.assert_not_called()
 
 

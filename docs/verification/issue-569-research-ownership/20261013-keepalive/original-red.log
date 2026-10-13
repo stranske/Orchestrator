@@ -1,0 +1,36 @@
+Production backlog SHA256: 6ce66422bafff61e015cbfc644443be662cda63eb1ce9f27dcded9ab7b1250f8
+agent:codex eligible= 1
+agents:auto-pilot-pause eligible= 0
+agents:paused eligible= 1
+test_assigned (__main__.Reproductions.test_assigned) ... FAIL
+test_existing_pause_control (__main__.Reproductions.test_existing_pause_control) ... ok
+test_paused (__main__.Reproductions.test_paused) ... FAIL
+
+======================================================================
+FAIL: test_assigned (__main__.Reproductions.test_assigned)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/orch-research-validation-cnjjrdv_/reproductions.py", line 15, in test_assigned
+    self.check_label('agent:codex')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "/tmp/orch-research-validation-cnjjrdv_/reproductions.py", line 11, in check_label
+    self.assertEqual(feed['counts']['eligible'], 0)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0
+
+======================================================================
+FAIL: test_paused (__main__.Reproductions.test_paused)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/orch-research-validation-cnjjrdv_/reproductions.py", line 13, in test_paused
+    self.check_label('agents:paused')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/tmp/orch-research-validation-cnjjrdv_/reproductions.py", line 11, in check_label
+    self.assertEqual(feed['counts']['eligible'], 0)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.001s
+
+FAILED (failures=2)

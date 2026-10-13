@@ -1,0 +1,216 @@
+{
+  "checked_at": "2026-10-13 00:13:32 UTC",
+  "remote_head": "22c90ee122f0203f73b40cc649145cb696679c34",
+  "pr_state": "open",
+  "isDraft": false,
+  "check_runs_read": 110,
+  "check_runs_total": 110,
+  "check_suites_read": 29,
+  "check_suites_total": 29,
+  "suites": [
+    {
+      "id": 103837361408,
+      "status": "queued",
+      "conclusion": null,
+      "app": "stranske-keepalive"
+    },
+    {
+      "id": 103837361734,
+      "status": "queued",
+      "conclusion": null,
+      "app": "claude"
+    },
+    {
+      "id": 103837361959,
+      "status": "queued",
+      "conclusion": null,
+      "app": "render"
+    },
+    {
+      "id": 103837362198,
+      "status": "queued",
+      "conclusion": null,
+      "app": "cursor"
+    },
+    {
+      "id": 103837362468,
+      "status": "queued",
+      "conclusion": null,
+      "app": "mistralai"
+    },
+    {
+      "id": 103837362715,
+      "status": "queued",
+      "conclusion": null,
+      "app": "coderabbitai"
+    },
+    {
+      "id": 103837362964,
+      "status": "queued",
+      "conclusion": null,
+      "app": "renovate"
+    },
+    {
+      "id": 103837372057,
+      "status": "completed",
+      "conclusion": "skipped",
+      "app": "github-actions"
+    },
+    {
+      "id": 103837372570,
+      "status": "completed",
+      "conclusion": "success",
+      "app": "github-actions"
+    },
+    {
+      "id": 103837375043,
+      "status": "completed",
+      "conclusion": "success",
+      "app": "github-actions"
+    },
+    {
+      "id": 103837375066,
+      "status": "completed",
+      "conclusion": "success",
+      "app": "github-actions"
+    },
+    {
+      "id": 103837375084,
+      "status": "completed",
+      "conclusion": "success",
+      "app": "github-actions"
+    },
+    {
+      "id": 103837376507,
+      "status": "completed",
+      "conclusion": "success",
+      "app": "github-actions"
+    },
+    {
+      "id": 103837376614,
+      "status": "completed",
+      "conclusion": "success",
+      "app": "github-actions"
+    },
+    {
+      "id": 103837376667,
+      "status": "completed",
+      "conclusion": "success",
+      "app": "github-actions"
+    },
+    {
+      "id": 103837376676,
+      "status": "completed",
+      "conclusion": "skipped",
+      "app": "github-actions"
+    },
+    {
+      "id": 103837471970,
+      "status": "completed",
+      "conclusion": "success",
+      "app": "github-actions"
+    },
+    {
+      "id": 103837473655,
+      "status": "completed",
+      "conclusion": "skipped",
+      "app": "github-actions"
+    },
+    {
+      "id": 103839393069,
+      "status": "completed",
+      "conclusion": "success",
+      "app": "github-actions"
+    },
+    {
+      "id": 103839393095,
+      "status": "completed",
+      "conclusion": "success",
+      "app": "github-actions"
+    },
+    {
+      "id": 103839393965,
+      "status": "completed",
+      "conclusion": "skipped",
+      "app": "github-actions"
+    },
+    {
+      "id": 103839394288,
+      "status": "completed",
+      "conclusion": "success",
+      "app": "github-actions"
+    },
+    {
+      "id": 103839394467,
+      "status": "completed",
+      "conclusion": "success",
+      "app": "github-actions"
+    },
+    {
+      "id": 103839395058,
+      "status": "in_progress",
+      "conclusion": null,
+      "app": "github-actions"
+    },
+    {
+      "id": 103839395810,
+      "status": "completed",
+      "conclusion": "skipped",
+      "app": "github-actions"
+    },
+    {
+      "id": 103839395939,
+      "status": "completed",
+      "conclusion": "success",
+      "app": "github-actions"
+    },
+    {
+      "id": 103839395954,
+      "status": "completed",
+      "conclusion": "success",
+      "app": "github-actions"
+    },
+    {
+      "id": 103839396054,
+      "status": "completed",
+      "conclusion": "cancelled",
+      "app": "github-actions"
+    },
+    {
+      "id": 103839396111,
+      "status": "completed",
+      "conclusion": "success",
+      "app": "github-actions"
+    }
+  ],
+  "expected_check_report": "blocked: gh could not connect; config ratchet read but merged-PR reference comparison did not run",
+  "review_threads": "connector returned zero review threads; merge guard independently failed GraphQL read",
+  "verify_compare": "no actual verdict found in read checks, statuses or comments",
+  "merge_guard": {
+    "dry_run": true,
+    "blocked": true,
+    "reason": "review-thread GraphQL query failed",
+    "merge_executed": false
+  },
+  "format_gate": "both required Black commands failed: command not found",
+  "pytest": "targeted original intake/control suites blocked: No module named pytest",
+  "local_validation": {
+    "original_source_sha256": "6ce66422bafff61e015cbfc644443be662cda63eb1ce9f27dcded9ab7b1250f8",
+    "original_reproductions": "two ownership assertions FAIL; existing pause control PASS",
+    "current_reproductions": "3 PASS",
+    "focused_unittests": "23 PASS",
+    "selftests": [
+      "backlog PASS",
+      "research_scheduler PASS",
+      "research_subjects PASS",
+      "tick PASS"
+    ]
+  },
+  "mutations_rejected": [
+    "PR task checkbox reconciliation",
+    "needs-human label",
+    "blocker comment"
+  ],
+  "commit_push": "not attempted: Black formatting gate unsatisfied",
+  "activation": "launching stays off; no live Brain, mirror, dispatch or deployment activation"
+}
