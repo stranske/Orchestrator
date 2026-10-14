@@ -1,0 +1,30 @@
+{
+  "base_revision": "81fbab57e6622cd67c28dd7b7b3507a8d3ff55c0",
+  "previous_head": "6cb7a3cc6ad7f1cc445c93509e1378fe7742ed25",
+  "argv": [
+    "python3",
+    "-m",
+    "pytest",
+    "tests/test_adjudicator_packet_binding.py",
+    "tests/test_adjudicator_retro.py",
+    "tests/test_adjudicator_retro_evidence.py",
+    "tests/test_redirect_chain_gate.py",
+    "-q"
+  ],
+  "collection_argv": [
+    "python3",
+    "-m",
+    "pytest",
+    "--collect-only",
+    "-q"
+  ],
+  "tested_file_sha256": {
+    "src/roles.py": "989ffc5ca44de2b3e0921e528279de673a1797c9f8ae08d57e62bf5508c52fd0",
+    "tests/test_adjudicator_packet_binding.py": "d2f9beffba630c36c8c1ca7ab2cd0e4a56845afadc50eef20e8601342ee07c4b",
+    "tests/test_redirect_chain_gate.py": "d11e9fc79d3d9c5b641e84edc5988a1ecd7a49ba1e2a813e0fead7a8757317b1"
+  },
+  "green_log_sha256": "a8ec9781c398aa16e268f34450f625559b4a362a5a46bdaebbb94d335af7db9c",
+  "collected": 3369,
+  "focused": "105 passed,23 subtests passed",
+  "original_acceptance": "native/dated UNKNOWN"
+}
