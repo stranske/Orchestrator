@@ -443,6 +443,8 @@ def linked_consumptions(consumed: list[dict]) -> dict[str, dict]:
             if len(matches) != 1:
                 raise ValueError("ambiguous legacy consumption timestamp")
             key = consumption_key(matches[0])
+        if key in result:
+            raise ValueError("duplicate linked consumption identity")
         result[key] = link
     return result
 

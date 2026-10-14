@@ -916,3 +916,26 @@ def test_unlinked_legacy_retry_preserves_brain_attempt_identity(consumable, monk
         assert (
             conn.execute("SELECT COUNT(*) FROM influence_edges WHERE accepted=1").fetchone()[0] == 1
         )
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("second_status", ["followed", "not_followed"])
+def test_duplicate_link_receipts_refuse_before_any_credit(consumable, legacy, second_status):
+    result = triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+    row = json.loads(triage_shadow.consumed_path().read_text())
+    link = {"consumed_ts": row["ts"], "status": "followed", "run_id": "fixture-worker"}
+    if not legacy:
+        link["consumption_id"] = row["consumption_id"]
+    triage_shadow._append(triage_shadow.linked_path(), link)
+    triage_shadow._append(triage_shadow.linked_path(), dict(link, status=second_status))
+    feedback.record_run(
+        "fixture-worker", result["ordered_targets"][0], "implement", "codex", mode="local", ts=102
+    )
+    feedback.record_completion_event("fixture-worker", status="succeeded")
+    before = triage_shadow.linked_path().read_bytes()
+    assert "UNKNOWN" in triage_shadow.summary_line()
+    with pytest.raises(ValueError, match="duplicate linked consumption identity"):
+        outcomes.link_triage_consumption(now=104)
+    assert triage_shadow.linked_path().read_bytes() == before
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 0
