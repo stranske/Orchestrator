@@ -104,6 +104,19 @@ checkout is removed after observation, including failed verification. Shadow spe
 implicitly enable merge enforcement or patch delivery outcomes. Coverage-only pytest options
 are removed for named acceptance checks so test success and coverage policy cannot disagree.
 
+Durability sweep also rechecks existing issue specs on the exact merge commit, at most
+three disposable executions per sweep. It reuses the runtime runner, compares deliberate
+breaks against the merge parent, and records one `post_merge_recheck` completion event per
+source issue and merge SHA, including UNRUNNABLE observations. Assertion failures comment
+once with the transcript; tool/collection/manual-evidence failures remain UNRUNNABLE and
+never reopen an issue. Transcript artifacts are hash-bound under the existing runtime-AC
+spec directory; failed GitHub delivery retries from the event without executing again.
+`ORCH_RUNTIME_AC_REOPEN=1` additionally permits FAIL to reopen and label the source issue
+`runtime-ac:reopened`; it defaults OFF and expires after 2026-10-27. Unset it to roll back;
+comments remain. Existing runtime/command switches still govern execution. Switch review
+prints `runtime-AC post-merge: rechecked N, failed F, reopened R, unrunnable U`. This remains
+post-merge observation and adds no merge authority or delivery-outcome verdict.
+
 Codex model and reasoning selection is also a deterministic rail: `execution_profiles` maps
 the task and lane to an immutable profile, `router` records the selected profile, and
 `dispatcher` passes its model and effort to `adapters`. An explicit `--profile-id` on a

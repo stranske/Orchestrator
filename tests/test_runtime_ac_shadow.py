@@ -40,6 +40,9 @@ def private_brain(tmp_path, monkeypatch):
 
 
 def test_author_builds_checks_from_tasks_and_acceptance_lines():
+    assert gate.spec_path(
+        "owner/repo#2", env={"ORCH_STATE_DIR": "/private/fixture"}
+    ).parent == Path("/private/fixture/runtime-ac")
     spec = runtime_ac.author_issue_spec("owner/repo#1", BODY, target="owner/repo#2")
     assert runtime_ac.validate_spec(spec) == []
     checks = [check for ac in spec["acceptance_criteria"] for check in ac["checks"]]
@@ -1173,6 +1176,358 @@ def test_ingest_cleans_checkout_when_verifier_raises(private_brain, monkeypatch)
     assert cleaned == ["owner/repo#20"]
     assert summary["runtime_ac_checkout_failures"] == 0
     assert summary["runtime_ac_shadow_errors"] == ["owner/repo#20: verifier error"]
+
+
+@pytest.fixture
+def post_merge_case(private_brain, monkeypatch):
+    import backlog
+    import durability_sweep as sweep
+
+    checkout = private_brain / "merged-checkout"
+    _shadow_git_repo(checkout)
+    (checkout / "tests").mkdir()
+    (checkout / "tests/test_merged.py").write_text(
+        "def test_delivered():\n    assert False, 'delivery missing on merged tip'\n"
+    )
+    clean_env = _shadow_git_env()
+    subprocess.run(["git", "-C", str(checkout), "add", "tests"], check=True, env=clean_env)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(checkout),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "merged fixture",
+        ],
+        check=True,
+        capture_output=True,
+        env=clean_env,
+    )
+    sha = subprocess.check_output(
+        ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True, env=clean_env
+    ).strip()
+    root = private_brain / "specs"
+    root.mkdir()
+    spec = runtime_ac.author_issue_spec(
+        "owner/repo#1",
+        "## Acceptance Criteria\n- Named test: `tests/test_merged.py::test_delivered`.\n",
+        target="owner/repo#2",
+    )
+    spec["acceptance_criteria"][0]["checks"][0][
+        "command"
+    ] = f"{shlex.quote(sys.executable)} -m pytest -p no:cov tests/test_merged.py::test_delivered -q"
+    path = gate.spec_path("owner/repo#2", spec_dir=root)
+    path.write_text(json.dumps(spec))
+    monkeypatch.setenv("ORCH_STATE_DIR", str(private_brain))
+    monkeypatch.setenv("ORCH_RUN_RUNTIME_AC", "1")
+    monkeypatch.setenv("ORCH_RUNTIME_AC_ALLOW_COMMANDS", "1")
+    monkeypatch.setenv("ORCH_RUNTIME_AC_REOPEN", "1")
+    monkeypatch.setattr(backlog, "SUPPORTED_REPOS", ["owner/repo"])
+    monkeypatch.setattr(
+        sweep, "_merged_verifier_candidates", lambda: {("owner/repo", 2): {"fixture"}}
+    )
+    for name in ["_pending_merged_runs", "_truncated_durable_runs", "_bare_reference_runs"]:
+        monkeypatch.setattr(sweep, name, lambda: [])
+    provisions = []
+
+    @contextmanager
+    def provider(target, head):
+        assert target == "owner/repo#2" and head == sha
+        provisions.append(head)
+        yield str(checkout)
+
+    monkeypatch.setattr(provision, "temporary_exact_head_worktree", provider)
+    calls, comments = [], []
+    fail_comment = [False]
+
+    def gh(args):
+        calls.append(args)
+        if args[1:3] == ["pr", "view"]:
+            return {
+                "state": "MERGED",
+                "mergeCommit": {"oid": sha},
+                "closingIssuesReferences": [{"number": 1}],
+            }, None
+        if "--slurp" in args:
+            return [comments], None
+        if "POST" in args and args[4].endswith("/comments"):
+            if fail_comment[0]:
+                return None, "temporary comment API failure"
+            comments.append({"body": args[-1].removeprefix("body=")})
+        return {}, None
+
+    def run(**kwargs):
+        return sweep.sweep_durability(
+            _gh=gh, _state_fn=lambda _: None, _spec_dir=root, _now=1792022400, **kwargs
+        )
+
+    return {
+        "run": run,
+        "calls": calls,
+        "comments": comments,
+        "provisions": provisions,
+        "sha": sha,
+        "spec": spec,
+        "path": path,
+        "checkout": checkout,
+        "fail_comment": fail_comment,
+    }
+
+
+def _post_merge_events():
+    with feedback._conn() as conn:
+        return conn.execute(
+            "SELECT phase,validation_status,payload_json FROM completion_events WHERE producer='runtime_ac_gate' AND phase='post_merge_recheck'"
+        ).fetchall()
+
+
+def test_post_merge_recheck_reopens_on_fail(post_merge_case):
+    case = post_merge_case
+    summary = case["run"]()
+    assert summary["runtime_ac_post_merge"] == {"rechecked": 1, "errors": []}
+    reopens = [a for a in case["calls"] if "PATCH" in a]
+    assert len(reopens) == 1 and reopens[0][-1] == "state=open"
+    assert any("labels[]=runtime-ac:reopened" in a for a in case["calls"])
+    assert len(case["comments"]) == 1
+    assert case["comments"][0]["body"].startswith(f"runtime-AC post-merge FAIL on {case['sha']}")
+    assert "delivery missing on merged tip" in case["comments"][0]["body"]
+    rows = _post_merge_events()
+    assert len(rows) == 1 and rows[0][:2] == ("post_merge_recheck", "accepted")
+    payload = json.loads(rows[0][2])["runtime_ac_post_merge"]
+    assert payload["result"] == "FAIL" and payload["reopened"] is True
+    assert gate.post_merge_summary() == {
+        "rechecked": 1,
+        "failed": 1,
+        "reopened": 1,
+        "unrunnable": 0,
+    }
+    line = gate.format_post_merge_summary(gate.post_merge_summary())
+    assert line == "runtime-AC post-merge: rechecked 1, failed 1, reopened 1, unrunnable 0"
+    assert line in switch_review.format_report(
+        {
+            "generated_at": 1792022400,
+            "review_days": 7,
+            "raise_count": 0,
+            "held_off": [],
+            "on_but_idle": [],
+            "unconditioned": [],
+            "runtime_ac_post_merge": gate.post_merge_summary(),
+        }
+    )
+
+
+def test_post_merge_recheck_is_idempotent(post_merge_case):
+    case = post_merge_case
+    case["run"]()
+    events = _post_merge_events()
+    case["run"]()
+    assert _post_merge_events() == events
+    assert len(case["provisions"]) == len(case["comments"]) == 1
+    assert len([a for a in case["calls"] if "PATCH" in a]) == 1
+
+
+def test_post_merge_recheck_never_reopens_without_the_flag(post_merge_case, monkeypatch):
+    monkeypatch.delenv("ORCH_RUNTIME_AC_REOPEN")
+    case = post_merge_case
+    case["run"]()
+    assert len(case["comments"]) == 1
+    assert not any("PATCH" in a or "labels[]=runtime-ac:reopened" in a for a in case["calls"])
+    assert gate.post_merge_summary()["reopened"] == 0
+
+
+def test_post_merge_recheck_unrunnable_comments_once(post_merge_case, monkeypatch):
+    case = post_merge_case
+    monkeypatch.setenv("ORCH_RUNTIME_AC_ALLOW_COMMANDS", "0")
+    case["run"]()
+    case["run"]()
+    assert len(case["comments"]) == 1
+    assert "UNRUNNABLE" in case["comments"][0]["body"]
+    assert "allow-command-checks" in case["comments"][0]["body"]
+    assert not any("PATCH" in a for a in case["calls"])
+    assert gate.post_merge_summary()["unrunnable"] == 1
+
+
+def test_post_merge_recheck_retries_delivery_without_reexecution(post_merge_case):
+    case = post_merge_case
+    case["fail_comment"][0] = True
+    assert case["run"]()["runtime_ac_post_merge"]["errors"]
+    case["fail_comment"][0] = False
+    case["run"]()
+    assert len(case["provisions"]) == len(case["comments"]) == 1
+    assert len(_post_merge_events()) == 1
+    assert gate.post_merge_summary()["reopened"] == 1
+
+
+def test_post_merge_recheck_dry_run_and_execution_off_write_nothing(post_merge_case, monkeypatch):
+    case = post_merge_case
+    case["run"](dry_run=True)
+    monkeypatch.setenv("ORCH_RUN_RUNTIME_AC", "0")
+    case["run"]()
+    assert case["calls"] == case["provisions"] == []
+    assert _post_merge_events() == []
+
+
+def test_post_merge_recheck_expired_reopen_canary_comments_only(post_merge_case, monkeypatch):
+    declaration = gate.capabilities.KNOWN_GATES["runtime-ac-checks"]
+    assert declaration["flags_defaults"]["post_merge_reopen_default"] == {
+        "ORCH_RUNTIME_AC_REOPEN": "0"
+    }
+    assert gate.capabilities.RUNTIME_AC_REOPEN_EXPIRY in declaration["gate_evidence"]
+    assert "rollback: unset ORCH_RUNTIME_AC_REOPEN" in declaration["gate_evidence"]
+    assert gate.capabilities.artifact_lifecycle(declaration) is None
+    monkeypatch.setattr(gate.capabilities, "RUNTIME_AC_REOPEN_EXPIRY", "2026-10-01T00:00:00+00:00")
+    case = post_merge_case
+    case["run"]()
+    assert len(case["comments"]) == 1
+    assert not any("PATCH" in a for a in case["calls"])
+
+
+def test_post_merge_recheck_reuses_named_and_deliberate_break_runner(post_merge_case, monkeypatch):
+    case = post_merge_case
+    original = json.dumps(case["spec"], sort_keys=True)
+    calls = []
+
+    def verify(spec, **kwargs):
+        calls.append((spec, kwargs))
+        return {
+            "gate": {"verdict": "PASS"},
+            "check_results": [
+                {"type": "command", "status": "PASS"},
+                {"type": "deliberate_break", "status": "PASS"},
+            ],
+        }
+
+    monkeypatch.setattr(runtime_ac, "run_verification", verify)
+    result = gate.recheck_merged(case["spec"], case["checkout"])
+    assert result["result"] == "PASS" and "deliberate_break" in result["transcript"]
+    assert calls[0][0]["runtime_context"]["worktree"] == str(case["checkout"])
+    assert calls[0][1] == {"confirm_run": True, "allow_command_checks": True, "timeout": 120}
+    assert json.dumps(case["spec"], sort_keys=True) == original
+    case["run"]()
+    assert case["comments"] == [] and not any("PATCH" in a for a in case["calls"])
+    assert gate.post_merge_summary() == {
+        "rechecked": 1,
+        "failed": 0,
+        "reopened": 0,
+        "unrunnable": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    "returncode,output",
+    [
+        (2, "ERROR collecting tests: ImportError"),
+        (4, "ERROR: not found: tests/missing.py"),
+        (5, "no tests ran"),
+        (1, "No module named pytest"),
+    ],
+)
+def test_post_merge_recheck_tool_failures_never_reopen(
+    post_merge_case, monkeypatch, returncode, output
+):
+    case = post_merge_case
+    monkeypatch.setattr(
+        runtime_ac,
+        "run_verification",
+        lambda *_a, **_kw: {
+            "gate": {"verdict": "FAIL"},
+            "check_results": [
+                {
+                    "type": "command",
+                    "status": "FAIL",
+                    "returncode": returncode,
+                    "stdout_tail": output,
+                }
+            ],
+        },
+    )
+    case["run"]()
+    assert gate.post_merge_summary()["unrunnable"] == 1
+    assert not any("PATCH" in a for a in case["calls"])
+
+
+def test_post_merge_recheck_refuses_wrong_merge_checkout(post_merge_case, monkeypatch):
+    case = post_merge_case
+
+    @contextmanager
+    def wrong_checkout(*_):
+        other = case["checkout"].parent / "other"
+        _shadow_git_repo(other)
+        yield str(other)
+
+    monkeypatch.setattr(provision, "temporary_exact_head_worktree", wrong_checkout)
+    case["run"]()
+    assert gate.post_merge_summary()["unrunnable"] == 1
+    assert "does not match merge commit" in case["comments"][0]["body"]
+    assert not any("PATCH" in a for a in case["calls"])
+
+
+def test_post_merge_recheck_refuses_unbound_issue(post_merge_case):
+    case = post_merge_case
+    spec = case["spec"]
+    spec["verification"]["source_issue"] = "owner/repo#9"
+    case["path"].write_text(json.dumps(spec))
+    summary = case["run"]()
+    assert "closing references" in summary["runtime_ac_post_merge"]["errors"][0]
+    assert case["provisions"] == case["comments"] == []
+    assert _post_merge_events() == []
+
+
+def test_post_merge_recheck_honors_configured_timeout(post_merge_case, monkeypatch):
+    monkeypatch.setenv("ORCH_RUNTIME_AC_TIMEOUT", "37")
+    calls = []
+
+    def verify(spec, **kwargs):
+        calls.append(kwargs)
+        return {
+            "gate": {"verdict": "PASS"},
+            "check_results": [{"type": "command", "status": "PASS"}],
+        }
+
+    monkeypatch.setattr(runtime_ac, "run_verification", verify)
+    case = post_merge_case
+    assert gate.recheck_merged(case["spec"], case["checkout"])["result"] == "PASS"
+    assert calls == [{"confirm_run": True, "allow_command_checks": True, "timeout": 37}]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "not JSON",
+        "[]",
+        '{"runtime_ac_post_merge": []}',
+        '{"runtime_ac_post_merge":{"result":"UNKNOWN"}}',
+        '{"runtime_ac_post_merge":{"result":{}}}',
+    ],
+)
+def test_post_merge_summary_preserves_valid_rows_when_one_is_malformed(
+    post_merge_case, monkeypatch, payload
+):
+    class Connection:
+        def execute(self, *_args):
+            return self
+
+        def fetchall(self):
+            return [
+                (payload,),
+                ('{"runtime_ac_post_merge":{"result":"FAIL","reopened":true}}',),
+                ('{"rejection_codes":["invalid"]}',),
+            ]
+
+    @contextmanager
+    def connection():
+        yield Connection()
+
+    monkeypatch.setattr(feedback, "_conn", connection)
+    summary = gate.post_merge_summary()
+    assert summary == {"rechecked": 1, "failed": 1, "reopened": 1, "unrunnable": 0, "malformed": 2}
+    assert "rechecked 1" in gate.format_post_merge_summary(summary)
+    assert "malformed 2" in gate.format_post_merge_summary(summary)
 
 
 @pytest.mark.parametrize("body_fails", [False, True])

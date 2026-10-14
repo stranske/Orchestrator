@@ -1,0 +1,19 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________________ test_post_merge_recheck_reopens_on_fail ____________________
+
+post_merge_case = {'run': <function post_merge_case.<locals>.run at 0x1120bff60>, 'calls': [['gh', 'pr', 'view', '2', '--repo', 'owner/repo', ...]], 'comments': [], 'provisions': ['36aed1a2053663420608ac5e098a58f3ba715200'], ...}
+
+    def test_post_merge_recheck_reopens_on_fail(post_merge_case):
+        case = post_merge_case
+        summary = case["run"]()
+        assert summary["runtime_ac_post_merge"] == {"rechecked": 1, "errors": []}
+        reopens = [a for a in case["calls"] if "PATCH" in a]
+>       assert len(reopens) == 1 and reopens[0][-1] == "state=open"
+E       assert (0 == 1)
+E        +  where 0 = len([])
+
+tests/test_runtime_ac_shadow.py:1294: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_runtime_ac_shadow.py::test_post_merge_recheck_reopens_on_fail
+1 failed in 0.37s

@@ -378,6 +378,11 @@ Live execution is observable only after the normal manual mirror sync.
   outcome linkage in the existing `completion_events` plane. Range-lane specs are installed only by
   `runtime_ac_gate.py --materialize-range-spec <artifact> --target owner/repo#N`; cross-target or
   invalid artifacts terminate as non-installed evidence instead of becoming gate inputs.
+  Durability sweep rechecks existing specs on exact merge commits (three per sweep) and
+  reports rechecked/failed/reopened/unrunnable counts. FAIL comments its transcript and
+  reopens only with default-OFF `ORCH_RUNTIME_AC_REOPEN=1`, expiring after 2026-10-27;
+  unset the flag to roll back. UNRUNNABLE never reopens. Existing execution switches apply.
+
 - **Verified synthesis delivery lifecycle** — each evaluated experiment can persist
   `synthesis-promotion.json` through `evaluated → synth_running → synth_complete → synth_verified →
   candidate_ready → delegated_or_pr → merged → durable`, with discarded/reverted work retired.

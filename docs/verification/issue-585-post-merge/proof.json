@@ -1,0 +1,7 @@
+{
+  "mutation": "recheck_merged returns PASS unconditionally",
+  "red_exit": 1,
+  "green_exit": 0,
+  "restored_sha256": "3f8c793c0354fa58003ab984f70f2bf5fdcf4a91c807a168c2717114861da69e",
+  "byte_identical_restore": true
+}
