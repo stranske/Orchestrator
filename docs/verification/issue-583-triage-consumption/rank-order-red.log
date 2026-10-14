@@ -1,0 +1,26 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows ____
+
+consumable = ['stranske/Orchestrator#1', 'stranske/Orchestrator#3', 'stranske/Orchestrator#2', 'stranske/Orchestrator#4']
+
+    def test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows(consumable):
+        targets = consumable + ["stranske/Orchestrator#5"]
+        result = triage_shadow.consume(targets, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+        assert result["consumed"] is True
+>       assert result["ordered_targets"] == [
+            consumable[1],
+            consumable[2],
+            consumable[3],
+            consumable[0],
+            targets[-1],
+        ]
+E       AssertionError: assert ['stranske/Or...chestrator#5'] == ['stranske/Or...chestrator#5']
+E         
+E         At index 0 diff: 'stranske/Orchestrator#1' != 'stranske/Orchestrator#3'
+E         Use -v to get more diff
+
+tests/test_triage_shadow.py:493: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_triage_shadow.py::test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows
+1 failed in 0.35s
