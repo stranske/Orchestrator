@@ -1,0 +1,27 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________ test_same_timestamp_consumptions_link_and_report_independently ________
+
+consumable = ['stranske/Orchestrator#1', 'stranske/Orchestrator#3', 'stranske/Orchestrator#2', 'stranske/Orchestrator#4']
+
+    def test_same_timestamp_consumptions_link_and_report_independently(consumable):
+        first = triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+        remaining = [t for t in consumable if t != first["ordered_targets"][0]]
+        second = triage_shadow.consume(remaining, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+        assert first["consumed"] and second["consumed"]
+        for index, result in enumerate([first, second]):
+            run_id = f"collision-worker-{index}"
+            feedback.record_run(
+                run_id, result["ordered_targets"][0], "implement", "codex", mode="local", ts=102
+            )
+            feedback.record_completion_event(run_id, status="succeeded")
+        assert len(outcomes.link_triage_consumption(now=103, limit=1)["followed"]) == 1
+>       assert "consumed 2, followed 1, not followed 0, open 1" in triage_shadow.summary_line()
+E       AssertionError: assert 'consumed 2, followed 1, not followed 0, open 1' in 'triage shadow: cycles 20, valid 20, triage top-1 merged+durable n/a (0 judged), rule pick n/a (0 judged), malformed rows 0; consumed 2, followed 2, not followed 0, open 0; unresolved 0; top-1 agrees with the rule pick 0 of 20 valid cycles'
+E        +  where 'triage shadow: cycles 20, valid 20, triage top-1 merged+durable n/a (0 judged), rule pick n/a (0 judged), malformed rows 0; consumed 2, followed 2, not followed 0, open 0; unresolved 0; top-1 agrees with the rule pick 0 of 20 valid cycles' = <function summary_line at 0x1075afec0>()
+E        +    where <function summary_line at 0x1075afec0> = triage_shadow.summary_line
+
+tests/test_triage_shadow.py:591: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_triage_shadow.py::test_same_timestamp_consumptions_link_and_report_independently
+1 failed, 45 deselected in 0.60s

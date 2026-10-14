@@ -16,6 +16,7 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -414,17 +415,51 @@ def summary(path: Path | None = None) -> dict:
     }
 
 
+def consumption_key(row: dict) -> str:
+    """New receipts carry a unique ID; old receipts retain a stable content identity."""
+    if "consumption_id" in row and (
+        not isinstance(row["consumption_id"], str) or not row["consumption_id"]
+    ):
+        raise ValueError("invalid consumption_id")
+    return (
+        row.get("consumption_id")
+        or "legacy:"
+        + hashlib.sha256(
+            json.dumps(row, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
+
+
+def linked_consumptions(consumed: list[dict]) -> dict[str, dict]:
+    keys = [consumption_key(row) for row in consumed]
+    if len(keys) != len(set(keys)):
+        raise ValueError("duplicate consumption identity")
+    result = {}
+    for link in _read_rows(linked_path()):
+        if "consumption_id" in link:
+            key = consumption_key(link)
+        else:
+            matches = [row for row in consumed if row["ts"] == link["consumed_ts"]]
+            if len(matches) != 1:
+                raise ValueError("ambiguous legacy consumption timestamp")
+            key = consumption_key(matches[0])
+        result[key] = link
+    return result
+
+
 def summary_line(path: Path | None = None) -> str:
     try:
         data = summary(path)
         consumed = _read_rows(consumed_path())
-        linked = {row["consumed_ts"]: row for row in _read_rows(linked_path())}
-        followed = sum(linked.get(row["ts"], {}).get("status") == "followed" for row in consumed)
+        linked = linked_consumptions(consumed)
+        followed = sum(
+            linked.get(consumption_key(row), {}).get("status") == "followed" for row in consumed
+        )
         not_followed = sum(
-            linked.get(row["ts"], {}).get("status") == "not_followed" for row in consumed
+            linked.get(consumption_key(row), {}).get("status") == "not_followed" for row in consumed
         )
         unresolved = sum(
-            linked.get(row["ts"], {}).get("status") == "unresolved" for row in consumed
+            linked.get(consumption_key(row), {}).get("status") == "unresolved" for row in consumed
         )
     except (OSError, UnicodeError, ValueError, KeyError, sqlite3.Error) as exc:
         return f"triage shadow: UNKNOWN — outcome evidence unreadable ({type(exc).__name__})"
@@ -514,6 +549,7 @@ def consume(candidates: list[str], *, env=None, now=None) -> dict:
             consumed_path(),
             {
                 "ts": int(now * 1_000_000_000),
+                "consumption_id": uuid.uuid4().hex,
                 "role_run_id": ranking["role_run_id"],
                 "ranking_ts": ranking["ts"],
                 "snapshot_sha256": ranking["snapshot_sha256"],

@@ -562,6 +562,7 @@ def test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows(consu
         ]
     assert json.loads(triage_shadow.linked_path().read_text()) == {
         "consumed_ts": consumed["ts"],
+        "consumption_id": consumed["consumption_id"],
         "status": "followed",
         "run_id": "fixture-worker",
     }
@@ -574,6 +575,28 @@ def test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows(consu
     text = triage_shadow.summary_line()
     assert "consumed 1, followed 1, not followed 0, open 0" in text
     assert "top-1 agrees with the rule pick 0 of 20 valid cycles" in text
+
+
+def test_same_timestamp_consumptions_link_and_report_independently(consumable):
+    first = triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+    remaining = [t for t in consumable if t != first["ordered_targets"][0]]
+    second = triage_shadow.consume(remaining, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+    assert first["consumed"] and second["consumed"]
+    for index, result in enumerate([first, second]):
+        run_id = f"collision-worker-{index}"
+        feedback.record_run(
+            run_id, result["ordered_targets"][0], "implement", "codex", mode="local", ts=102
+        )
+        feedback.record_completion_event(run_id, status="succeeded")
+    assert len(outcomes.link_triage_consumption(now=103, limit=1)["followed"]) == 1
+    assert "consumed 2, followed 1, not followed 0, open 1" in triage_shadow.summary_line()
+    assert len(outcomes.link_triage_consumption(now=104)["followed"]) == 1
+    assert "consumed 2, followed 2, not followed 0, open 0" in triage_shadow.summary_line()
+    assert outcomes.link_triage_consumption(now=105)["followed"] == []
+    with feedback._conn() as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM influence_edges WHERE accepted=1").fetchone()[0] == 2
+        )
 
 
 @pytest.mark.parametrize(
@@ -725,6 +748,7 @@ def test_consumption_never_injects_removed_targets_and_never_hides_new_ones(cons
 
 def test_unfollowed_consumption_times_out_without_credit(consumable):
     triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+    consumed = json.loads(triage_shadow.consumed_path().read_text())
     # An earlier run and a later unrelated run cannot earn credit.
     feedback.record_run("old-worker", consumable[1], "implement", "codex", mode="local", ts=100)
     feedback.record_completion_event("old-worker", status="succeeded")
@@ -734,7 +758,12 @@ def test_unfollowed_consumption_times_out_without_credit(consumable):
     feedback.record_completion_event("unrelated", status="succeeded")
     assert outcomes.link_triage_consumption(now=101 + 48 * 3600 - 1)["not_followed"] == []
     assert outcomes.link_triage_consumption(now=101 + 48 * 3600)["not_followed"] == [
-        {"consumed_ts": 101_000_000_000, "status": "not_followed", "run_id": None}
+        {
+            "consumed_ts": 101_000_000_000,
+            "consumption_id": consumed["consumption_id"],
+            "status": "not_followed",
+            "run_id": None,
+        }
     ]
     with feedback._conn() as conn:
         assert conn.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 0
@@ -785,3 +814,105 @@ def test_disjoint_ranking_cannot_claim_the_new_rule_pick(consumable):
         "role_run_id": None,
     }
     assert not triage_shadow.consumed_path().exists()
+
+
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_legacy_timestamp_links_require_unique_receipts(consumable, ambiguous):
+    first = triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+    if ambiguous:
+        triage_shadow.consume(
+            [t for t in consumable if t != first["ordered_targets"][0]],
+            env={"ORCH_TRIAGE_CONSUME": "1"},
+            now=101,
+        )
+    rows = triage_shadow._read_rows(triage_shadow.consumed_path())
+    for row in rows:
+        row.pop("consumption_id")
+    triage_shadow.consumed_path().write_text("".join(json.dumps(row) + "\n" for row in rows))
+    triage_shadow._append(
+        triage_shadow.linked_path(),
+        {"consumed_ts": rows[0]["ts"], "status": "followed", "run_id": "legacy-worker"},
+    )
+    if ambiguous:
+        assert "UNKNOWN" in triage_shadow.summary_line()
+        with pytest.raises(ValueError, match="ambiguous legacy"):
+            outcomes.link_triage_consumption(now=104)
+    else:
+        assert "consumed 1, followed 1, not followed 0, open 0" in triage_shadow.summary_line()
+        assert outcomes.link_triage_consumption(now=104)["followed"] == []
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("invalid_id", [["bad"], {}, True, None, ""])
+def test_malformed_persisted_consumption_ids_are_unknown(consumable, invalid_id):
+    triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+    row = json.loads(triage_shadow.consumed_path().read_text())
+    row["consumption_id"] = invalid_id
+    triage_shadow.consumed_path().write_text(json.dumps(row) + "\n")
+    assert "UNKNOWN" in triage_shadow.summary_line()
+    with pytest.raises(ValueError, match="invalid consumption_id"):
+        outcomes.link_triage_consumption(now=104)
+    # Linked receipts must use the same validation, even with a valid consumption.
+    row["consumption_id"] = "valid-id"
+    triage_shadow.consumed_path().write_text(json.dumps(row) + "\n")
+    triage_shadow._append(
+        triage_shadow.linked_path(),
+        {
+            "consumed_ts": row["ts"],
+            "consumption_id": invalid_id,
+            "status": "followed",
+            "run_id": "fixture-worker",
+        },
+    )
+    assert "UNKNOWN" in triage_shadow.summary_line()
+
+
+def test_duplicate_legacy_receipts_refuse_before_any_credit(consumable):
+    result = triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+    row = json.loads(triage_shadow.consumed_path().read_text())
+    row.pop("consumption_id")
+    triage_shadow.consumed_path().write_text((json.dumps(row) + "\n") * 2)
+    feedback.record_run(
+        "legacy-worker", result["ordered_targets"][0], "implement", "codex", mode="local", ts=102
+    )
+    feedback.record_completion_event("legacy-worker", status="succeeded")
+    with pytest.raises(ValueError, match="duplicate consumption identity"):
+        outcomes.link_triage_consumption(now=104, limit=1)
+    assert "UNKNOWN" in triage_shadow.summary_line()
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 0
+
+
+def test_unlinked_legacy_retry_preserves_brain_attempt_identity(consumable, monkeypatch):
+    result = triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+    row = json.loads(triage_shadow.consumed_path().read_text())
+    row.pop("consumption_id")
+    triage_shadow.consumed_path().write_text(json.dumps(row) + "\n")
+    feedback.record_run(
+        "legacy-worker", result["ordered_targets"][0], "implement", "codex", mode="local", ts=102
+    )
+    feedback.record_completion_event("legacy-worker", status="succeeded")
+    original = feedback.record_capability_consumption
+    attempts = []
+
+    def record(**kwargs):
+        attempts.append(kwargs["attempt_id"])
+        return original(**kwargs)
+
+    monkeypatch.setattr(feedback, "record_capability_consumption", record)
+    with monkeypatch.context() as interrupted:
+
+        def fail_append(path, record):
+            raise OSError("legacy append interrupted")
+
+        interrupted.setattr(triage_shadow, "_append", fail_append)
+        with pytest.raises(OSError, match="legacy append interrupted"):
+            outcomes.link_triage_consumption(now=103)
+    assert len(outcomes.link_triage_consumption(now=104)["followed"]) == 1
+    assert attempts == [str(row["ts"]), str(row["ts"])]
+    assert outcomes.link_triage_consumption(now=105)["followed"] == []
+    with feedback._conn() as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM influence_edges WHERE accepted=1").fetchone()[0] == 1
+        )
