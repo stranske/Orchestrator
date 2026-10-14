@@ -1998,3 +1998,11 @@ No role, stage, learning store or recurring dispatch policy is added. The diagra
 backlog rail also represents this exact campaign input.
 
 Research intake recovery (#569) reuses dispatcher ownership policy at discovery, scheduler selection and launch. Full issue/PR pages are incomplete and fail closed; feed timestamps must be finite, nonnegative and not future dated. Shadow intake and both existing launch gates remain unchanged.
+
+
+Consumer admission deadlines use the first invocation's fixed 14-day interval. The value-chain
+monitor supplies the same accepted, non-counterfactual edge classifier through
+`acted_on_window_index`; its weekly 90-day rolling view remains separate. A late first action
+cannot repair a missed admission deadline, and timely evidence remains creditable after it leaves
+the weekly view. Missing Brain evidence remains unmeasured. Reads are cached per Brain path,
+hour, and first-invocation binding; this change does not activate the installed mirror.
