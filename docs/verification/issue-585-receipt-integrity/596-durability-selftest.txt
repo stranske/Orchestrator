@@ -1,0 +1,1 @@
+durability_sweep.py selftest: OK (old clean->durable, revert->reverted, open->reopened, young/ambiguous stay pending, ambiguous closes at the retry horizon, live revert scan covered, searches cached per repo not per PR, and broke_later only on a stated later repair)

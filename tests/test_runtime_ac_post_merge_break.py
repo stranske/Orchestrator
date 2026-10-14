@@ -276,6 +276,48 @@ class PostMergeBreakTests(unittest.TestCase):
         self.assertEqual(payloads[0]["result"], "UNRUNNABLE")
         self.assertFalse(payloads[0]["reopened"])
 
+    def test_completed_receipt_rejects_tampered_transcript(self):
+        run, calls, comments, provisions, head = self.sweep_case(delivered=True)
+        self.assertEqual(run(), {"rechecked": 1, "errors": []})
+        payload = self.post_merge_payloads()[0]
+        Path(payload["transcript_path"]).write_text("CORRUPTED transcript")
+        writes = [call for call in calls if "POST" in call or "PATCH" in call]
+        second = run()
+        self.assertEqual(second["rechecked"], 0)
+        self.assertIn("post-merge transcript hash mismatch", second["errors"][0])
+        self.assertEqual(provisions, [head])
+        self.assertEqual([call for call in calls if "POST" in call or "PATCH" in call], writes)
+
+    def test_completed_receipt_rejects_redirected_transcript(self):
+        run, calls, comments, provisions, head = self.sweep_case(delivered=True)
+        self.assertEqual(run(), {"rechecked": 1, "errors": []})
+        with feedback._conn() as conn:
+            event_id, raw = conn.execute(
+                "SELECT event_id,payload_json FROM completion_events "
+                "WHERE producer='runtime_ac_gate' AND phase='post_merge_recheck'"
+            ).fetchone()
+            payload = json.loads(raw)
+            receipt = payload["runtime_ac_post_merge"]
+            redirect = self.root / "redirect.txt"
+            redirect.write_bytes(Path(receipt["transcript_path"]).read_bytes())
+            receipt["transcript_path"] = str(redirect)
+            conn.execute(
+                "UPDATE completion_events SET payload_json=? WHERE event_id=?",
+                (json.dumps(payload), event_id),
+            )
+        self.assertIn("not the canonical artifact", run()["errors"][0])
+        self.assertEqual(provisions, [head])
+
+    def test_partial_receipt_rejects_missing_transcript_before_delivery(self):
+        run, calls, comments, provisions, head = self.sweep_case(fail_reopen=True)
+        self.assertEqual(run()["rechecked"], 1)
+        Path(self.post_merge_payloads()[0]["transcript_path"]).unlink()
+        writes = [call for call in calls if "POST" in call or "PATCH" in call]
+        self.assertTrue(run()["errors"])
+        self.assertFalse(self.post_merge_payloads()[0]["delivery_complete"])
+        self.assertEqual(provisions, [head])
+        self.assertEqual([call for call in calls if "POST" in call or "PATCH" in call], writes)
+
     def test_real_break_label_retry_preserves_execution_comment_and_reopen(self):
         run, calls, comments, provisions, head = self.sweep_case(fail_label=True)
         first = run()

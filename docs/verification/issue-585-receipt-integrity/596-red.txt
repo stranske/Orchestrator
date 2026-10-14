@@ -1,0 +1,150 @@
+FFFFF                                                                    [100%]
+=================================== FAILURES ===================================
+____ PostMergeBreakTests.test_completed_receipt_rejects_tampered_transcript ____
+
+self = <test_runtime_ac_post_merge_break.PostMergeBreakTests testMethod=test_completed_receipt_rejects_tampered_transcript>
+
+    def test_completed_receipt_rejects_tampered_transcript(self):
+        run, calls, comments, provisions, head = self.sweep_case(delivered=True)
+        self.assertEqual(run(), {"rechecked": 1, "errors": []})
+        payload = self.post_merge_payloads()[0]
+        Path(payload["transcript_path"]).write_text("CORRUPTED transcript")
+        writes = [call for call in calls if "POST" in call or "PATCH" in call]
+        second = run()
+        self.assertEqual(second["rechecked"], 0)
+>       self.assertIn("post-merge transcript hash mismatch", second["errors"][0])
+                                                             ^^^^^^^^^^^^^^^^^^^
+E       IndexError: list index out of range
+
+tests/test_runtime_ac_post_merge_break.py:287: IndexError
+_ PostMergeBreakTests.test_partial_receipt_rejects_missing_transcript_before_delivery _
+
+self = <test_runtime_ac_post_merge_break.PostMergeBreakTests testMethod=test_partial_receipt_rejects_missing_transcript_before_delivery>
+
+    def test_partial_receipt_rejects_missing_transcript_before_delivery(self):
+        run, calls, comments, provisions, head = self.sweep_case(fail_reopen=True)
+        self.assertEqual(run()["rechecked"], 1)
+        Path(self.post_merge_payloads()[0]["transcript_path"]).unlink()
+        writes = [call for call in calls if "POST" in call or "PATCH" in call]
+>       self.assertTrue(run()["errors"])
+E       AssertionError: [] is not true
+
+tests/test_runtime_ac_post_merge_break.py:296: AssertionError
+_ test_post_merge_summary_preserves_valid_rows_when_one_is_malformed[not JSON] _
+
+post_merge_case = {'run': <function post_merge_case.<locals>.run at 0x11159d760>, 'calls': [], 'comments': [], 'provisions': [], ...}
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107f534d0>
+payload = 'not JSON'
+
+    @pytest.mark.parametrize("payload", ["not JSON", "[]", '{"runtime_ac_post_merge": []}'])
+    def test_post_merge_summary_preserves_valid_rows_when_one_is_malformed(
+        post_merge_case, monkeypatch, payload
+    ):
+        class Connection:
+            def execute(self, *_args):
+                return self
+    
+            def fetchall(self):
+                return [
+                    (payload,),
+                    ('{"runtime_ac_post_merge":{"result":"FAIL","reopened":true}}',),
+                    ('{"rejection_codes":["invalid"]}',),
+                ]
+    
+        @contextmanager
+        def connection():
+            yield Connection()
+    
+        monkeypatch.setattr(feedback, "_conn", connection)
+        summary = gate.post_merge_summary()
+>       assert summary == {"rechecked": 1, "failed": 1, "reopened": 1, "unrunnable": 0, "malformed": 2}
+E       AssertionError: assert {'rechecked':...able': 0, ...} == {'rechecked':...able': 0, ...}
+E         
+E         Omitting 3 identical items, use -vv to show
+E         Differing items:
+E         {'rechecked': 2} != {'rechecked': 1}
+E         {'malformed': 1} != {'malformed': 2}
+E         Use -v to get more diff
+
+tests/test_runtime_ac_shadow.py:1519: AssertionError
+____ test_post_merge_summary_preserves_valid_rows_when_one_is_malformed[[]] ____
+
+post_merge_case = {'run': <function post_merge_case.<locals>.run at 0x11159d580>, 'calls': [], 'comments': [], 'provisions': [], ...}
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107f52de0>
+payload = '[]'
+
+    @pytest.mark.parametrize("payload", ["not JSON", "[]", '{"runtime_ac_post_merge": []}'])
+    def test_post_merge_summary_preserves_valid_rows_when_one_is_malformed(
+        post_merge_case, monkeypatch, payload
+    ):
+        class Connection:
+            def execute(self, *_args):
+                return self
+    
+            def fetchall(self):
+                return [
+                    (payload,),
+                    ('{"runtime_ac_post_merge":{"result":"FAIL","reopened":true}}',),
+                    ('{"rejection_codes":["invalid"]}',),
+                ]
+    
+        @contextmanager
+        def connection():
+            yield Connection()
+    
+        monkeypatch.setattr(feedback, "_conn", connection)
+        summary = gate.post_merge_summary()
+>       assert summary == {"rechecked": 1, "failed": 1, "reopened": 1, "unrunnable": 0, "malformed": 2}
+E       AssertionError: assert {'rechecked':...able': 0, ...} == {'rechecked':...able': 0, ...}
+E         
+E         Omitting 3 identical items, use -vv to show
+E         Differing items:
+E         {'rechecked': 2} != {'rechecked': 1}
+E         {'malformed': 1} != {'malformed': 2}
+E         Use -v to get more diff
+
+tests/test_runtime_ac_shadow.py:1519: AssertionError
+_ test_post_merge_summary_preserves_valid_rows_when_one_is_malformed[{"runtime_ac_post_merge": []}] _
+
+post_merge_case = {'run': <function post_merge_case.<locals>.run at 0x11159c9a0>, 'calls': [], 'comments': [], 'provisions': [], ...}
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107e77a40>
+payload = '{"runtime_ac_post_merge": []}'
+
+    @pytest.mark.parametrize("payload", ["not JSON", "[]", '{"runtime_ac_post_merge": []}'])
+    def test_post_merge_summary_preserves_valid_rows_when_one_is_malformed(
+        post_merge_case, monkeypatch, payload
+    ):
+        class Connection:
+            def execute(self, *_args):
+                return self
+    
+            def fetchall(self):
+                return [
+                    (payload,),
+                    ('{"runtime_ac_post_merge":{"result":"FAIL","reopened":true}}',),
+                    ('{"rejection_codes":["invalid"]}',),
+                ]
+    
+        @contextmanager
+        def connection():
+            yield Connection()
+    
+        monkeypatch.setattr(feedback, "_conn", connection)
+        summary = gate.post_merge_summary()
+>       assert summary == {"rechecked": 1, "failed": 1, "reopened": 1, "unrunnable": 0, "malformed": 2}
+E       AssertionError: assert {'rechecked':...able': 0, ...} == {'rechecked':...able': 0, ...}
+E         
+E         Omitting 3 identical items, use -vv to show
+E         Differing items:
+E         {'rechecked': 2} != {'rechecked': 1}
+E         {'malformed': 1} != {'malformed': 2}
+E         Use -v to get more diff
+
+tests/test_runtime_ac_shadow.py:1519: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_runtime_ac_post_merge_break.py::PostMergeBreakTests::test_completed_receipt_rejects_tampered_transcript
+FAILED tests/test_runtime_ac_post_merge_break.py::PostMergeBreakTests::test_partial_receipt_rejects_missing_transcript_before_delivery
+FAILED tests/test_runtime_ac_shadow.py::test_post_merge_summary_preserves_valid_rows_when_one_is_malformed[not JSON]
+FAILED tests/test_runtime_ac_shadow.py::test_post_merge_summary_preserves_valid_rows_when_one_is_malformed[[]]
+FAILED tests/test_runtime_ac_shadow.py::test_post_merge_summary_preserves_valid_rows_when_one_is_malformed[{"runtime_ac_post_merge": []}]
+5 failed, 65 deselected in 2.81s

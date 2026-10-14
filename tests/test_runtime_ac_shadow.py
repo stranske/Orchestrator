@@ -1495,7 +1495,16 @@ def test_post_merge_recheck_honors_configured_timeout(post_merge_case, monkeypat
     assert calls == [{"confirm_run": True, "allow_command_checks": True, "timeout": 37}]
 
 
-@pytest.mark.parametrize("payload", ["not JSON", "[]", '{"runtime_ac_post_merge": []}'])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "not JSON",
+        "[]",
+        '{"runtime_ac_post_merge": []}',
+        '{"runtime_ac_post_merge":{"result":"UNKNOWN"}}',
+        '{"runtime_ac_post_merge":{"result":{}}}',
+    ],
+)
 def test_post_merge_summary_preserves_valid_rows_when_one_is_malformed(
     post_merge_case, monkeypatch, payload
 ):
@@ -1516,8 +1525,9 @@ def test_post_merge_summary_preserves_valid_rows_when_one_is_malformed(
 
     monkeypatch.setattr(feedback, "_conn", connection)
     summary = gate.post_merge_summary()
-    assert summary == {"rechecked": 2, "failed": 1, "reopened": 1, "unrunnable": 0, "malformed": 1}
-    assert "rechecked 2" in gate.format_post_merge_summary(summary)
+    assert summary == {"rechecked": 1, "failed": 1, "reopened": 1, "unrunnable": 0, "malformed": 2}
+    assert "rechecked 1" in gate.format_post_merge_summary(summary)
+    assert "malformed 2" in gate.format_post_merge_summary(summary)
 
 
 @pytest.mark.parametrize("body_fails", [False, True])

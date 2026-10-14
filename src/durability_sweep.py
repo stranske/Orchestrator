@@ -1215,6 +1215,15 @@ def _post_merge_rechecks(*, dry_run: bool, gh, now: int, spec_dir=None) -> dict:
                             result = stored
                     except (ValueError, TypeError, AttributeError):
                         pass  # Invalid/rejected rows are not execution or delivery receipts.
+                if result:
+                    # A database receipt is not proof that its artifact is still intact.
+                    # Check before both the completion shortcut and partial-delivery retries.
+                    transcript = root / f"post-merge-{identity}.txt"
+                    if Path(result["transcript_path"]) != transcript or transcript.is_symlink():
+                        raise RuntimeError("post-merge transcript is not the canonical artifact")
+                    raw = transcript.read_bytes()
+                    if hashlib.sha256(raw).hexdigest() != result["transcript_hash"]:
+                        raise RuntimeError("post-merge transcript hash mismatch")
                 if result and result.get("delivery_complete"):
                     continue
 

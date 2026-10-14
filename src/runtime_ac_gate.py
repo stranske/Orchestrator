@@ -420,8 +420,12 @@ def post_merge_summary() -> dict:
         try:
             payload = json.loads(row[0])
             result = payload.get("runtime_ac_post_merge", {})
-            if not isinstance(result, dict):
-                raise ValueError("post-merge result is not an object")
+            if not isinstance(result, dict) or result.get("result") not in {
+                "PASS",
+                "FAIL",
+                "UNRUNNABLE",
+            }:
+                raise ValueError("post-merge result is missing a valid execution verdict")
         except (ValueError, TypeError, AttributeError):
             malformed += 1
             continue
@@ -444,6 +448,7 @@ def format_post_merge_summary(section: dict) -> str:
         f"runtime-AC post-merge: rechecked {section['rechecked']}, "
         f"failed {section['failed']}, reopened {section['reopened']}, "
         f"unrunnable {section['unrunnable']}"
+        + (f", malformed {section['malformed']}" if section.get("malformed") else "")
     )
 
 
