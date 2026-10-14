@@ -1,0 +1,79 @@
+.....FFF                                                                 [100%]
+=================================== FAILURES ===================================
+_ test_conditional_recommendation_prose_remains_allowed[Merge is, however, appropriate after manual review.] _
+
+prose = 'Merge is, however, appropriate after manual review.'
+
+    @pytest.mark.parametrize(
+        "prose",
+        [
+            "After review, recommend merging the PR",
+            "Once CI passes, inspect whether the merge is appropriate",
+            "If useful, recommend a push after manual approval",
+            "When approved, consider whether to create the branch",
+            "If useful, then consider whether a merge is appropriate",
+            "Merge is, however, appropriate after manual review.",
+            "Push may, after review, be appropriate.",
+            "After review, merge could, if approved, be appropriate.",
+        ],
+    )
+    def test_conditional_recommendation_prose_remains_allowed(prose):
+>       assert not roles._recommended_next_step_is_imperative(prose)
+E       AssertionError: assert not True
+E        +  where True = <function _recommended_next_step_is_imperative at 0x114b4e480>('Merge is, however, appropriate after manual review.')
+E        +    where <function _recommended_next_step_is_imperative at 0x114b4e480> = roles._recommended_next_step_is_imperative
+
+tests/test_adjudicator_packet_binding.py:102: AssertionError
+_ test_conditional_recommendation_prose_remains_allowed[Push may, after review, be appropriate.] _
+
+prose = 'Push may, after review, be appropriate.'
+
+    @pytest.mark.parametrize(
+        "prose",
+        [
+            "After review, recommend merging the PR",
+            "Once CI passes, inspect whether the merge is appropriate",
+            "If useful, recommend a push after manual approval",
+            "When approved, consider whether to create the branch",
+            "If useful, then consider whether a merge is appropriate",
+            "Merge is, however, appropriate after manual review.",
+            "Push may, after review, be appropriate.",
+            "After review, merge could, if approved, be appropriate.",
+        ],
+    )
+    def test_conditional_recommendation_prose_remains_allowed(prose):
+>       assert not roles._recommended_next_step_is_imperative(prose)
+E       AssertionError: assert not True
+E        +  where True = <function _recommended_next_step_is_imperative at 0x114b4e480>('Push may, after review, be appropriate.')
+E        +    where <function _recommended_next_step_is_imperative at 0x114b4e480> = roles._recommended_next_step_is_imperative
+
+tests/test_adjudicator_packet_binding.py:102: AssertionError
+_ test_conditional_recommendation_prose_remains_allowed[After review, merge could, if approved, be appropriate.] _
+
+prose = 'After review, merge could, if approved, be appropriate.'
+
+    @pytest.mark.parametrize(
+        "prose",
+        [
+            "After review, recommend merging the PR",
+            "Once CI passes, inspect whether the merge is appropriate",
+            "If useful, recommend a push after manual approval",
+            "When approved, consider whether to create the branch",
+            "If useful, then consider whether a merge is appropriate",
+            "Merge is, however, appropriate after manual review.",
+            "Push may, after review, be appropriate.",
+            "After review, merge could, if approved, be appropriate.",
+        ],
+    )
+    def test_conditional_recommendation_prose_remains_allowed(prose):
+>       assert not roles._recommended_next_step_is_imperative(prose)
+E       AssertionError: assert not True
+E        +  where True = <function _recommended_next_step_is_imperative at 0x114b4e480>('After review, merge could, if approved, be appropriate.')
+E        +    where <function _recommended_next_step_is_imperative at 0x114b4e480> = roles._recommended_next_step_is_imperative
+
+tests/test_adjudicator_packet_binding.py:102: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_adjudicator_packet_binding.py::test_conditional_recommendation_prose_remains_allowed[Merge is, however, appropriate after manual review.]
+FAILED tests/test_adjudicator_packet_binding.py::test_conditional_recommendation_prose_remains_allowed[Push may, after review, be appropriate.]
+FAILED tests/test_adjudicator_packet_binding.py::test_conditional_recommendation_prose_remains_allowed[After review, merge could, if approved, be appropriate.]
+3 failed, 5 passed, 23 deselected in 0.25s
