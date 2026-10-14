@@ -212,21 +212,26 @@ def temporary_exact_head_worktree(target: str, head: str):
     try:
         yield wt
     finally:
+        body_error = sys.exc_info()[1]
         canon = canonical_path(parse_target(target)[0])
         removed = _run(
             ["git", "-C", str(canon), "worktree", "remove", "--force", wt],
             check=False,
             timeout=60,
         )
+        prune_error = ""
         if removed.returncode != 0:
             shutil.rmtree(wt, ignore_errors=True)
-            _run(["git", "-C", str(canon), "worktree", "prune"], check=False, timeout=60)
-        if Path(wt).exists():
+            pruned = _run(["git", "-C", str(canon), "worktree", "prune"], check=False, timeout=60)
+            if pruned.returncode != 0:
+                prune_error = f"git worktree prune failed: {pruned.stderr.strip()[:300]}"
+        if Path(wt).exists() or prune_error:
             cleanup_err = RuntimeError(
-                f"cannot remove runtime-AC checkout {wt}: {removed.stderr.strip()[:300]}"
+                f"cannot remove runtime-AC checkout {wt}: "
+                f"{prune_error or removed.stderr.strip()[:300]}"
             )
-            if sys.exc_info()[0] is None:
-                raise cleanup_err
+            # Retain both failures rather than silently hiding cleanup behind verification.
+            raise cleanup_err from body_error
 
 
 def _pr_head_branch(repo: str, num: int) -> str:
