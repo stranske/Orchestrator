@@ -686,7 +686,14 @@ def test_unterminated_named_node_cannot_disappear_into_pass():
 
 def _shadow_git_env() -> dict[str, str]:
     env = os.environ.copy()
-    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"):
+    for key in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ):
         env.pop(key, None)
     return env
 
@@ -711,6 +718,82 @@ def _shadow_git_repo(path):
     return subprocess.check_output(
         ["git", "-C", str(path), "rev-parse", "HEAD"], text=True, env=env
     ).strip()
+
+
+@pytest.mark.parametrize(
+    "storage_override",
+    ["GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"],
+)
+def test_shadow_git_repo_isolates_caller_storage(tmp_path, monkeypatch, storage_override):
+    # Establish caller storage without any runner-supplied repository overrides.
+    for key in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    clean_env = os.environ.copy()
+    caller = tmp_path / "caller"
+    _shadow_git_repo(caller)
+    (caller / "caller-only.txt").write_text("staged caller contents\n")
+    subprocess.run(
+        ["git", "-C", str(caller), "add", "caller-only.txt"],
+        check=True,
+        capture_output=True,
+        env=clean_env,
+    )
+    caller_git = caller / ".git"
+    before = {
+        path.relative_to(caller_git): path.read_bytes()
+        for path in caller_git.rglob("*")
+        if path.is_file()
+    }
+    storage = caller_git / ("index" if storage_override == "GIT_INDEX_FILE" else "objects")
+    monkeypatch.setenv(storage_override, str(storage))
+    for key, value in (
+        ("GIT_DIR", str(caller_git)),
+        ("GIT_WORK_TREE", str(caller)),
+        ("GIT_COMMON_DIR", str(caller_git)),
+    ):
+        monkeypatch.setenv(key, value)
+
+    checkout = tmp_path / "checkout"
+    head = _shadow_git_repo(checkout)
+
+    assert os.environ[storage_override] == str(storage)
+    assert os.environ["GIT_DIR"] == str(caller_git)
+    assert os.environ["GIT_WORK_TREE"] == str(caller)
+    assert os.environ["GIT_COMMON_DIR"] == str(caller_git)
+    after = {
+        path.relative_to(caller_git): path.read_bytes()
+        for path in caller_git.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+    # Use the independent clean environment so a borrowed object cannot hide a failure.
+    assert (
+        subprocess.check_output(
+            ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True, env=clean_env
+        ).strip()
+        == head
+    )
+    assert (
+        subprocess.check_output(
+            ["git", "-C", str(checkout), "ls-tree", "-r", "--name-only", "HEAD"],
+            text=True,
+            env=clean_env,
+        )
+        == ""
+    )
+    subprocess.run(
+        ["git", "-C", str(checkout), "fsck", "--full"],
+        check=True,
+        capture_output=True,
+        env=clean_env,
+    )
 
 
 def _shadow_ingest_pr(number, head):
