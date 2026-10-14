@@ -25,6 +25,8 @@
     "tests/test_capability_admission.py": "a5eb7c4872723763a9ba28bb561c5d166906754a8e5c156915bb5075d7d9a5df",
     "tests/test_value_chain_monitor.py": "1a906fc933b59a52fd0307a2a9ae2427b97795c48803869132e98b85c00b3d38"
   },
-  "collected": 3357,
-  "limitations": "no deployed mirror/native acceptance or full-suite/providerPASS claim"
+  "collected": 3377,
+  "limitations": "no deployed mirror/native acceptance or full-suite/providerPASS claim",
+  "integrated_main": "28f12766e84818508b37173a86e0be5817bfb0a2",
+  "integrated_focused_result": "........................................................................ [ 54%]\n...........................................................              [100%]\n131 passed in 54.43s"
 }
