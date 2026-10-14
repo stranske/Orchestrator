@@ -583,7 +583,7 @@ def test_ranking_publication_is_live_only_and_covers_remaining_rule_order(brain)
     assert triage_shadow.summary()["valid_cycles"] == 1
 
 
-@pytest.mark.parametrize("stage", ["write", "flush", "fsync", "close", "replace"])
+@pytest.mark.parametrize("stage", ["create", "write", "flush", "fsync", "close", "replace"])
 def test_atomic_ranking_failure_preserves_previous_snapshot_and_cleans_up(
     brain, monkeypatch, stage
 ):
@@ -598,6 +598,8 @@ def test_atomic_ranking_failure_preserves_previous_snapshot_and_cleans_up(
 
     class FailingStream:
         def __init__(self, **kwargs):
+            if stage == "create":
+                fail()
             self.stream = original_tempfile(**kwargs)
             self.name = self.stream.name
 
