@@ -1,5 +1,6 @@
 """Dispute evidence, read-only outcomes, strict offers and honest grading."""
 
+import hashlib
 import json
 import sqlite3
 import time
@@ -548,6 +549,7 @@ HISTORICAL_RECOMMENDATION_PROSE = [
     "Human review is required before any merge decision.",
     "The maintainer may delegate follow-up to the runtime owner after inspection.",
     "Opening a follow-up PR may be warranted after acceptance is documented.",
+    "Commit history needs inspection before disposition.",
 ]
 
 
@@ -574,6 +576,14 @@ def test_adjudicator_validator_accepts_recommendation_prose():
     for text in HISTORICAL_RECOMMENDATION_PROSE:
         assert role.validate({**base, "recommended_next_step": text}) == []
     assert role.validate({**base, "recommended_next_step": "merge this PR now"}) != []
+    for text in (
+        "open a PR",
+        "create a branch",
+        "Please open PR",
+        "Please create branch",
+        "commit the changes",
+    ):
+        assert role.validate({**base, "recommended_next_step": text}) != []
 
 
 def test_floor_still_demotes_a_metadata_only_packet():
@@ -620,14 +630,20 @@ def test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria(
         }
     ]
     monkeypatch.setattr(retro, "disputes", lambda **_: population)
-    saved = {
+    identity = {
         "run_id": "r1",
         "verifier_verdict": "NON_PASS",
         "adjudicated_verdict": "PASS",
-        "case_id": "case-1",
+    }
+    case_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+    saved = {
+        **identity,
+        "case_id": case_id,
         "target": "owner/repo#1",
         "decision": "needs_more_evidence",
         "packet": {"metadata_only": True, "target": "owner/repo#1"},
+        "backend_run_id": "paid-attempt-1",
+        "cost_usd": 0.12,
     }
     path.write_text(json.dumps({"rows": [saved], "population": 1}))
     calls = {"n": 0}
@@ -653,8 +669,11 @@ def test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria(
         evidence_reader=reader,
     )
     assert calls["n"] == 1
-
-    import hashlib
+    refreshed = json.loads(path.read_text())["rows"][0]
+    assert refreshed["case_id"] == case_id
+    assert refreshed["backend_run_id"] == "paid-attempt-1"
+    assert refreshed["packet"]["metadata_only"] is False
+    assert len(json.loads(path.read_text())["rows"]) == 1
 
     identity = {
         "run_id": "r1",

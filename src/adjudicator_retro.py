@@ -179,7 +179,7 @@ def fetch_evidence(row: dict) -> dict:
         raise ValueError("dispute target is not a PR key")
     owner, name = repo.split("/")
     query = """query($owner:String!,$name:String!,$n:Int!){repository(owner:$owner,name:$name){
-      pullRequest(number:$n){number state headRefOid mergeCommit{oid}
+      pullRequest(number:$n){number state headRefOid mergedAt mergeCommit{oid}
       files(first:100){pageInfo{hasNextPage} nodes{path additions deletions}}
       comments(last:100){pageInfo{hasPreviousPage} nodes{body url author{login}}}
       closingIssuesReferences(first:5){nodes{number body updatedAt}}
@@ -283,29 +283,58 @@ def fetch_evidence(row: dict) -> dict:
             "utf-8", errors="ignore"
         )
     acceptance_criteria: list[dict[str, str]] = []
+    acceptance_criteria_errors: list[dict[str, str | int]] = []
     criteria_revision = pr["headRefOid"]
+    merged_at = str(pr.get("mergedAt") or "")
     for issue in (pr.get("closingIssuesReferences") or {}).get("nodes") or []:
         if not isinstance(issue, dict):
             continue
         body = issue.get("body")
         if not isinstance(body, str):
             continue
+        issue_updated = str(issue.get("updatedAt") or "")
+        if merged_at and issue_updated and issue_updated > merged_at:
+            acceptance_criteria_errors.append(
+                {
+                    "issue": int(issue["number"]) if str(issue.get("number", "")).isdigit() else 0,
+                    "error": (
+                        "linked issue body was edited after merge; "
+                        "merge-time acceptance criteria are unavailable"
+                    ),
+                }
+            )
+            continue
         try:
             texts = _criterion_texts(body)
-        except ValueError:
+        except ValueError as exc:
+            acceptance_criteria_errors.append(
+                {
+                    "issue": int(issue["number"]) if str(issue.get("number", "")).isdigit() else 0,
+                    "error": str(exc),
+                }
+            )
             continue
-        criteria_revision = str(issue.get("updatedAt") or criteria_revision)
-        acceptance_criteria = [{"text": text, "revision": criteria_revision} for text in texts]
+        criteria_revision = issue_updated or criteria_revision
+        acceptance_criteria = [
+            {
+                "text": text,
+                "revision": criteria_revision,
+                "source": f"issue#{issue.get('number')}@{criteria_revision}",
+            }
+            for text in texts
+        ]
         break
     return {
         "disputed_finding": {"ref": finding["url"], "body": finding["body"], "decision": decision},
         "ground_truth_evidence": {
             "head_sha": pr["headRefOid"],
             "merge_sha": pr["mergeCommit"]["oid"],
+            "merge_bound_at": merged_at or None,
             "diff_ref": f"https://github.com/{repo}/pull/{number}/files",
             "diff_summary": pr["files"]["nodes"],
             "diff_patch": {"revision": pr["headRefOid"], "text": patch_text},
             "acceptance_criteria": acceptance_criteria,
+            "acceptance_criteria_errors": acceptance_criteria_errors,
             "acceptance_criteria_revision": criteria_revision,
             "gate_runs": gates,
         },
@@ -1103,6 +1132,7 @@ def run(
         if attempted >= max(0, limit):
             continue
         attempted += 1
+        preserved = dict(old) if reattempt_abstention else None
         entry = {
             **identity,
             "case_id": case_id,
@@ -1113,6 +1143,12 @@ def run(
             ),
             "cost_usd": None,
         }
+        if reattempt_abstention and preserved is not None:
+            entry = {
+                **preserved,
+                "later_truth": entry["later_truth"],
+                "merge_rule_verdict": entry["merge_rule_verdict"],
+            }
         try:
             packet = build_packet(row, reader(row))
             entry["packet"] = packet
@@ -1159,7 +1195,14 @@ def run(
             sqlite3.Error,
             subprocess.TimeoutExpired,
         ) as exc:
-            entry["error"] = str(exc)
+            if preserved is not None:
+                preserved["retry_error"] = str(exc)
+                saved[case_id] = preserved
+            else:
+                entry["error"] = str(exc)
+                saved[case_id] = entry
+            _persist_report(path, list(saved.values()), len(population), db=db)
+            continue
         saved[case_id] = entry
         # Persist every attempt so an interrupted batch does not repeat successful paid calls.
         _persist_report(path, list(saved.values()), len(population), db=db)
