@@ -710,7 +710,13 @@ def test_replay_requires_backend_only_when_dispatched(private_brain, monkeypatch
                 "goal": "Reject a proposal that changed the selected task type",
                 "task_type": "implement",
                 "proposal_json": rail_mismatch,
-            }
+            },
+            {
+                "target": "owner/repo#4",
+                "goal": "Publish the valid neighbor of a rejected dispatch replay",
+                "task_type": "implement",
+                "proposal_json": rail_mismatch | {"task_type": "implement"},
+            },
         ],
         output="dispatch_prompt",
     )
@@ -721,8 +727,9 @@ def test_replay_requires_backend_only_when_dispatched(private_brain, monkeypatch
     assert failed["backend_run_id"] is None and failed["role_run_id"] is None
     assert failed["raw_output"] is None
     directory = private_brain / "rejected-dispatch-task-type"
-    roles.write_prompt_batch(result, directory)
-    item = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))["items"][0]
+    manifest = roles.write_prompt_batch(result, directory)
+    assert manifest == json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+    item, accepted = manifest["items"]
     assert item["valid"] is False
     assert item["errors"] == [
         "task_type must stay on the deterministic rail-selected value 'implement'; got 'review'"
@@ -730,7 +737,18 @@ def test_replay_requires_backend_only_when_dispatched(private_brain, monkeypatch
     assert item["body_file"] is None and item["raw_output_file"] is None
     assert Path(item["failed_body_file"]) == directory / "001.failed.md"
     assert Path(item["failed_body_file"]).read_bytes() == scoped_prompt.encode("utf-8")
-    assert {path.name for path in directory.iterdir()} == {"manifest.json", "001.failed.md"}
+    assert accepted["target"] == "owner/repo#4"
+    assert accepted["valid"] is True and accepted["errors"] == []
+    assert accepted["failed_body_file"] is None and accepted["raw_output_file"] is None
+    assert accepted["role_run_id"] is None and accepted["role_record_error"] is None
+    assert Path(accepted["body_file"]) == directory / "002.md"
+    published = result["items"][1]["dispatch_prompt"].rstrip() + "\n"
+    assert Path(accepted["body_file"]).read_bytes() == published.encode("utf-8")
+    assert {path.name for path in directory.iterdir()} == {
+        "manifest.json",
+        "001.failed.md",
+        "002.md",
+    }
 
     replay = roles.run_prompt_batch(items, output="issue_body", dispatch=True, backend="cursor")
     assert replay["items"][0]["errors"] == []

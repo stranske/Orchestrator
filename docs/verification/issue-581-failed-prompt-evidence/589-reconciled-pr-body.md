@@ -66,7 +66,7 @@ Evidence, re-read on `main` (`eef7c2c`) on 2026-10-14:
 
 #### Acceptance criteria
 - [x] Named test: `tests/test_role_prompt_batch.py::test_failed_body_and_raw_output_are_retained_in_the_manifest` — one valid item, one item rejected by the validator (`proposal("Bad body")` through `proposal_json`) and one item whose backend output is unparseable text: the manifest holds `failed_body_file` with `Bad body` for the second, `raw_output_file` with the unparseable text for the third, `valid` false and a non-empty `errors` for both, and `null` in both new keys for the valid item.
-- [x] `python3 -m pytest tests/test_role_prompt_batch.py -q` exits 0 with the two extended tests above passing.
+- [ ] `python3 -m pytest tests/test_role_prompt_batch.py -q` exits 0 with the two extended tests above passing.
 - [x] Deliberate-break → revert: delete the `rejected_proposal` assignment at `src/roles.py:2289` so only `proposal = None` remains → the named test FAILS; then make `write_prompt_batch` write a failed body to `NNN.md` → the assertion at `tests/test_role_prompt_batch.py:303` FAILS; revert both.
 - [ ] Smallest full test and check date: the next real role-authored batch of at least 5 bodies (the next audit or research-program filing batch, or the 2026-10-27 program check). Verdicts: retained equals failed means every first-try failure is diagnosable and the per-half first-pass rate is computable from the manifest alone; any gap names the item whose failure left no file.
 - [ ] Pass number (closing-plan row C3, 2026-10-13): on that batch the query `python3 -c "import json,sys; m=json.load(open(sys.argv[1])); f=[i for i in m['items'] if not i['valid']]; print(sum(bool(i.get('failed_body_file') or i.get('raw_output_file')) for i in f), len(f))" <batch dir>/manifest.json` prints two equal integers, checked 2026-10-27.
@@ -81,3 +81,14 @@ Evidence, re-read on `main` (`eef7c2c`) on 2026-10-14:
 * **Documentation**
   * Updated guidance explains how batch results identify failed-body and raw-output evidence, how rejected proposals are distinguished from accepted prompts, and how failed and accepted outputs are recorded.
 <!-- end of auto-generated comment: release notes by coderabbit.ai -->
+
+## Opener routed review recovery — 2026-10-14
+
+- [x] `src/roles.py::write_prompt_batch`: when an invalid backend-free dispatch_prompt has rejected_proposal.scoped_prompt, preserve its exact UTF-8 bytes in failed_body_file. Verified in five isolated backend-free rejected/valid replay batches; discussion_r4266549279 and discussion_r4266667328 are already resolved.
+- [ ] `tests/test_role_prompt_batch.py`: add the rejected dispatch_prompt/scoped_prompt replay regression requested by discussion_r4266667328; run `python3 -m pytest tests/test_role_prompt_batch.py -q` without a provider call. Preserve the source issue's future real-batch acceptance as program-owned pending evidence; do not convert CI/review recovery into a human hold.
+
+## Current validation — 2026-10-14
+
+The scoped-prompt writer fix is present in recent commits. The replay regression now includes a valid neighboring dispatch item and checks its persisted body and null failure fields without adding collected test nodes. Five isolated backend-free production-function replay checks pass for Unicode/CRLF/trailing whitespace, empty and whitespace-only authored text, and malformed text. `python3 src/roles.py --selftest` and `git diff --check` pass.
+
+The current interpreter has neither pytest nor Black, and PyPI is unreachable. The required pytest run and both Black commands cannot execute; no fresh pytest or formatting pass is claimed. The new Python test changes remain uncommitted under the mandatory formatting gate. The PR-body update was rejected by the connector because writes require approval while approval policy is `never`; this file is the prepared reconciliation. No real-batch qualification or human hold is asserted.
