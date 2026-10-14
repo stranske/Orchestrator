@@ -1,0 +1,19 @@
+{
+  "original_head": "ee2503fd4ad58703ab6572839854aa047e069b03",
+  "accepted_base": "ad61e84e6d585c47084235eed50e84cdc2e115bf",
+  "actual_collection": 3310,
+  "focused": "65PASS+6subtests",
+  "bindings": [
+    {
+      "path": "src/roles.py",
+      "current_sha256": "6d17644c429421cf748844e66f2b22e55a7b11abb9898262c74b6dc3e465aab0",
+      "same_as_accepted_original_head": true
+    },
+    {
+      "path": "tests/test_role_prompt_batch.py",
+      "current_sha256": "49f2b6e17e7ec9c60571bc2de7b283b01be0bcf5d3dab2d29472c5d8e5d92e6e",
+      "same_as_accepted_original_head": true
+    }
+  ],
+  "limits": "No new production or provider acceptance; historical proofs remain historical"
+}
