@@ -530,8 +530,27 @@ def test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows(consu
     with feedback._conn() as conn:
         assert conn.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 0
     feedback.record_completion_event("fixture-worker", status="succeeded")
+    # The Brain commits before the JSONL link is appended. An interruption in
+    # that gap must leave a retryable row without awarding a second edge.
+    def interrupted_append(path, row):
+        assert path == triage_shadow.linked_path()
+        raise OSError("fixture link append interrupted")
+
+    with monkeypatch.context() as interrupted:
+        interrupted.setattr(triage_shadow, "_append", interrupted_append)
+        with pytest.raises(OSError, match="fixture link append interrupted"):
+            outcomes.link_triage_consumption(now=104)
+    assert not triage_shadow.linked_path().exists()
+    with feedback._conn() as conn:
+        edge_before_retry = conn.execute(
+            "SELECT edge_id FROM influence_edges WHERE accepted=1"
+        ).fetchall()
+    assert len(edge_before_retry) == 1
     assert len(outcomes.link_triage_consumption(now=104)["followed"]) == 1
     with feedback._conn() as conn:
+        assert conn.execute(
+            "SELECT edge_id FROM influence_edges WHERE accepted=1"
+        ).fetchall() == edge_before_retry
         assert conn.execute(
             "SELECT e.capability_id,e.capability_version_id,e.accepted,e.source_run_id,"
             "e.target_run_id,r.target FROM influence_edges e "
