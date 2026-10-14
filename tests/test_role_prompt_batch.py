@@ -295,6 +295,8 @@ def test_cli_batch_writes_valid_bodies_and_invalid_item_verdicts(
     assert Path(manifest["items"][0]["body_file"]).read_text() == BODY
     assert manifest["items"][0]["valid"] is True
     assert manifest["items"][0]["errors"] == []
+    assert manifest["items"][0]["failed_body_file"] is None
+    assert manifest["items"][0]["raw_output_file"] is None
     assert manifest["items"][0]["role_run_id"]
     assert manifest["items"][1]["role_run_id"]
     assert manifest["items"][1]["body_file"] is None
@@ -364,6 +366,28 @@ def test_failed_body_and_raw_output_are_retained_in_the_manifest(private_brain, 
     assert retained == len(failed) == 3
     assert len(saved["items"]) == 5
     assert sum(item["valid"] for item in saved["items"]) / len(saved["items"]) == 2 / 5
+
+    # Empty backend output is evidence too: only None means there was no output.
+    roles.reset_role_invocation_counts()
+    monkeypatch.setattr(
+        roles.dispatcher,
+        "offload",
+        lambda *a, **kw: {"run_id": "fake:empty-output", "output": "", "exit": 0},
+    )
+    empty_result = roles.run_prompt_batch(
+        [{"target": "owner/repo#6", "goal": "Empty backend output"}],
+        output="issue_body",
+        dispatch=True,
+        backend="cursor",
+    )
+    empty_directory = private_brain / "empty-output"
+    roles.write_prompt_batch(empty_result, empty_directory)
+    empty_item = json.loads((empty_directory / "manifest.json").read_text())["items"][0]
+    assert empty_item["valid"] is False and empty_item["errors"]
+    assert empty_item["body_file"] is None and empty_item["failed_body_file"] is None
+    assert Path(empty_item["raw_output_file"]) == empty_directory / "001.raw.txt"
+    assert Path(empty_item["raw_output_file"]).read_bytes() == b""
+    assert {path.name for path in empty_directory.iterdir()} == {"manifest.json", "001.raw.txt"}
 
 
 @pytest.mark.parametrize("failure", ["validation", "backend", "recording"])
@@ -637,18 +661,25 @@ def test_batch_recording_failure_withholds_body(private_brain, monkeypatch):
         raise RuntimeError("role recording failed")
 
     monkeypatch.setattr(feedback, "record_role_run", fail_record)
+    body = BODY.replace("batch authoring", "café authoring").replace("\n", "\r\n") + "  "
     result = roles.run_prompt_batch(
-        [{"target": "owner/repo#1", "goal": "Issue", "proposal_json": proposal()}],
+        [{"target": "owner/repo#1", "goal": "Issue", "proposal_json": proposal(body)}],
         output="issue_body",
         dispatch=True,
         backend="cursor",
     )
-    manifest = roles.write_prompt_batch(result, private_brain / "recording-failed")
+    directory = private_brain / "recording-failed"
+    manifest = roles.write_prompt_batch(result, directory)
+    assert manifest == json.loads((directory / "manifest.json").read_text())
     assert manifest["items"][0]["valid"] is False
     assert manifest["items"][0]["body_file"] is None
+    assert manifest["items"][0]["errors"] == []
     assert manifest["items"][0]["role_record_error"] == "role recording failed"
-    assert Path(manifest["items"][0]["failed_body_file"]).read_text() == BODY
+    assert Path(manifest["items"][0]["failed_body_file"]) == directory / "001.failed.md"
+    assert Path(manifest["items"][0]["failed_body_file"]).read_bytes() == body.encode("utf-8")
     assert manifest["items"][0]["raw_output_file"] is None
+    assert not (directory / "001.md").exists()
+    assert {path.name for path in directory.iterdir()} == {"manifest.json", "001.failed.md"}
 
 
 def test_batch_cli_without_dispatch_emits_manifest_only(private_brain, monkeypatch, capsys):
