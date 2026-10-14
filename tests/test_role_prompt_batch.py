@@ -481,6 +481,39 @@ def test_replay_requires_backend_only_when_dispatched(private_brain, monkeypatch
     preview = roles.run_prompt_batch(items, output="issue_body")
     assert preview["items"][0]["errors"] == []
     assert preview["items"][0]["issue_body"] == BODY
+    assert preview["items"][0]["rejected_proposal"] is None
+
+    # Backend-free replays have no raw-output copy: preserve even an empty rejected body.
+    for index, body in enumerate(("Bad café body\r\n  ", "", " \r\n\t", None, {"bad": "body"})):
+        rejected_proposal = proposal(body)
+        failed_replay = roles.run_prompt_batch(
+            [
+                {
+                    "target": "owner/repo#2",
+                    "goal": "Rejected replay",
+                    "proposal_json": rejected_proposal,
+                }
+            ],
+            output="issue_body",
+        )
+        failed = failed_replay["items"][0]
+        assert failed["proposal"] is None and failed["issue_body"] is None
+        assert failed["rejected_proposal"] == rejected_proposal
+        assert failed["errors"]
+        assert failed["backend_run_id"] is None and failed["role_run_id"] is None
+        assert failed["raw_output"] is None
+        directory = private_brain / f"rejected-replay-{index}"
+        manifest_item = roles.write_prompt_batch(failed_replay, directory)["items"][0]
+        assert manifest_item["valid"] is False and manifest_item["errors"]
+        assert manifest_item["body_file"] is None and manifest_item["raw_output_file"] is None
+        assert not (directory / "001.md").exists()
+        if isinstance(body, str):
+            assert Path(manifest_item["failed_body_file"]) == directory / "001.failed.md"
+            assert Path(manifest_item["failed_body_file"]).read_bytes() == body.encode("utf-8")
+        else:
+            assert manifest_item["failed_body_file"] is None
+            assert not (directory / "001.failed.md").exists()
+
     replay = roles.run_prompt_batch(items, output="issue_body", dispatch=True, backend="cursor")
     assert replay["items"][0]["errors"] == []
     assert replay["items"][0]["role_run_id"]
