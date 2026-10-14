@@ -212,6 +212,14 @@ def shadow_summary(*, now: int, events=None) -> dict:
         if row.get("gate_status") == "executed":
             latest[row["target"]] = row
     executed = set(latest)
+    # Report observed causes within the weekly window, counting each PR once
+    # per reason. A PR may have several causes; any execution removes it from
+    # this unmeasured population, even if a later ingest runs out of budget.
+    unmeasured_reasons: dict[str, set[str]] = {}
+    for row in rows:
+        if row["target"] not in executed and row.get("gate_status") == "planned":
+            reason = row.get("terminal_reason") or "unrecorded"
+            unmeasured_reasons.setdefault(reason, set()).add(row["target"])
     failed = {target for target, row in latest.items() if row.get("verifier_verdict") == "FAIL"}
     audited = [row for row in latest.values() if row.get("false_fail_audit") is not None]
     return {
@@ -229,11 +237,21 @@ def shadow_summary(*, now: int, events=None) -> dict:
         "false_fail_count": sum(row["false_fail_audit"] is True for row in audited),
         "audit_sample": sorted({row["target"] for row in audited}),
         "execution_unmeasured": len(targets - executed),
+        "execution_unmeasured_reasons": {
+            reason: len(prs) for reason, prs in sorted(unmeasured_reasons.items())
+        },
     }
 
 
 def observe_shadow_spec(
-    target: str, run_id: str, *, spec_dir=None, env=None, worktree=None, head_sha=None
+    target: str,
+    run_id: str,
+    *,
+    spec_dir=None,
+    env=None,
+    worktree=None,
+    head_sha=None,
+    unavailable_reason: str | None = None,
 ) -> dict:
     """Shadow execution needs the existing opt-in and an exact PR checkout.
 
@@ -250,10 +268,10 @@ def observe_shadow_spec(
     status, reason, verdict, audit = "planned", "shadow_execution_disabled", None, None
     evidence = []
     if env_flag(resolved, "ORCH_RUN_RUNTIME_AC"):
-        reason = "shadow_exact_checkout_missing"
+        reason = unavailable_reason or "shadow_exact_checkout_missing"
         # The authored head is historical context; every observation independently
         # pins the current PR checkout, without rewriting the once-authored spec.
-        if worktree and head_sha:
+        if unavailable_reason is None and worktree and head_sha:
             current = subprocess.run(
                 ["git", "-C", str(worktree), "rev-parse", "HEAD"],
                 capture_output=True,
@@ -323,11 +341,18 @@ def format_shadow_summary(section: dict) -> str:
         if sample
         else "unmeasured (0 audited PRs)"
     )
+    reasons = section.get("execution_unmeasured_reasons", {})
+    reason_text = (
+        "; recorded reasons (PRs per reason): "
+        + ", ".join(f"{reason} {count}" for reason, count in sorted(reasons.items()))
+        if reasons
+        else ""
+    )
     return (
         f"runtime-AC shadow: PRs {section['prs']}, specs authored {section['specs_authored']}, "
         f"executed {section['executed']}, would-FAIL {section['would_fail']} (unmet ACs), "
         f"merged with unmet ACs {section['merged_with_unmet']}, false-FAIL audit {audit}; "
-        f"execution unmeasured {section['execution_unmeasured']}"
+        f"execution unmeasured {section['execution_unmeasured']}{reason_text}"
     )
 
 

@@ -27,8 +27,11 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -77,10 +80,15 @@ def canonical_path(repo: str) -> Path:
 
 # --- live git/gh ops --------------------------------------------------------
 def _run(
-    args: list[str], cwd: Path | None = None, check: bool = True
+    args: list[str], cwd: Path | None = None, check: bool = True, timeout: int | None = None
 ) -> subprocess.CompletedProcess:
     return subprocess.run(
-        args, cwd=str(cwd) if cwd else None, capture_output=True, text=True, check=check
+        args,
+        cwd=str(cwd) if cwd else None,
+        capture_output=True,
+        text=True,
+        check=check,
+        timeout=timeout,
     )
 
 
@@ -154,6 +162,71 @@ def ensure_canonical(repo: str) -> Path:
     REPOS_DIR.mkdir(parents=True, exist_ok=True)
     _run(["gh", "repo", "clone", repo, str(path)])  # uses gh auth; normal-fs => push works
     return path
+
+
+def exact_head_worktree(target: str, head: str, *, purpose: str = "panel") -> str:
+    """Share exact-commit provisioning without sharing a caller's mutable branch tree."""
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", head or ""):
+        raise RuntimeError("exact checkout requires a full commit SHA")
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", purpose):
+        raise RuntimeError("invalid exact checkout purpose")
+    repo, num = parse_target(target)
+    canon = ensure_canonical(repo)
+    WORKTREES_DIR.mkdir(parents=True, exist_ok=True)
+    wt = WORKTREES_DIR / f"{purpose}-{repo_slug(repo)}-{num}-{head[:12]}"
+    if wt.exists():
+        current = _run(["git", "-C", str(wt), "rev-parse", "HEAD"], check=False, timeout=60)
+        status = _run(
+            ["git", "-C", str(wt), "status", "--porcelain", "--untracked-files=all"],
+            check=False,
+            timeout=60,
+        )
+        if (
+            current.returncode == status.returncode == 0
+            and current.stdout.strip() == head
+            and not status.stdout.strip()
+        ):
+            return str(wt)
+        raise RuntimeError("existing exact worktree is dirty or at another head; refusing reuse")
+    fetched = _run(
+        ["git", "-C", str(canon), "fetch", "-q", "origin", head], check=False, timeout=60
+    )
+    if fetched.returncode != 0:
+        raise RuntimeError("cannot fetch exact checkout commit")
+    added = _run(
+        ["git", "-C", str(canon), "worktree", "add", "-q", "--detach", str(wt), head],
+        check=False,
+        timeout=60,
+    )
+    if added.returncode != 0:
+        raise RuntimeError(
+            f"cannot check out {head[:12]} for {target}: {added.stderr.strip()[:300]}"
+        )
+    return str(wt)
+
+
+@contextmanager
+def temporary_exact_head_worktree(target: str, head: str):
+    """Remove only this invocation's disposable checkout, including test-created caches."""
+    wt = exact_head_worktree(target, head, purpose=f"runtime-ac-{uuid.uuid4().hex}")
+    try:
+        yield wt
+    finally:
+        canon = canonical_path(parse_target(target)[0])
+        removed = _run(
+            ["git", "-C", str(canon), "worktree", "remove", "--force", wt],
+            check=False,
+            timeout=60,
+        )
+        if removed.returncode != 0:
+            shutil.rmtree(wt, ignore_errors=True)
+            _run(["git", "-C", str(canon), "worktree", "prune"], check=False, timeout=60)
+        if Path(wt).exists():
+            cleanup_err = RuntimeError(
+                f"cannot remove runtime-AC checkout {wt}: {removed.stderr.strip()[:300]}"
+            )
+            if sys.exc_info()[0] is None:
+                raise cleanup_err
 
 
 def _pr_head_branch(repo: str, num: int) -> str:

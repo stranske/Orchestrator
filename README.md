@@ -158,6 +158,15 @@ durability, and unavailable GitHub evidence stays pending. This observes local
 state and uses read-only GitHub calls; it never labels, claims or delegates work.
 The model role uses the existing read-only offload transport and a private cwd.
 
+Keepalive ingest executes existing issue-derived shadow specs only with `ORCH_RUN_RUNTIME_AC=1`,
+on private exact-head detached checkouts shared with the panel provisioning rail. The per-ingest
+`MAX_RUNTIME_AC_SHADOW_EXECUTIONS=3` bound includes failed provisioning; excess specs remain
+planned with `shadow_execution_budget`. `runtime_ac_checkout_failures` and per-target
+`runtime_ac_checkout_errors` distinguish checkout/cleanup failures from disabled execution.
+Disposable trees are removed after each observation. Command checks retain their separate
+`ORCH_RUNTIME_AC_ALLOW_COMMANDS` opt-in; shadow verdicts never write outcomes or enforce merges.
+Live execution is observable only after the normal manual mirror sync.
+
 ### The tick (hourly `orchestrate.sh --active`)
 1. **capacity.py** — per-seat budget/policy across 5h + weekly quota windows (steady/reserve/drain),
    plus two **dispatchability gates that run before any budget math**: a seat sheds if its CLI

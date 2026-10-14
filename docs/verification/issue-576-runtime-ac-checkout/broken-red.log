@@ -1,0 +1,48 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______________ test_ingest_executes_shadow_spec_on_exact_checkout ______________
+
+private_brain = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1690/test_ingest_executes_shadow_sp0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1069c6ae0>
+
+    def test_ingest_executes_shadow_spec_on_exact_checkout(private_brain, monkeypatch):
+        checkout = private_brain / "checkout"
+        head = _shadow_git_repo(checkout)
+        calls = []
+        cleaned = []
+
+        @contextmanager
+        def provider(target, requested_head):
+            calls.append((target, requested_head))
+            try:
+                yield str(checkout)
+            finally:
+                cleaned.append(target)
+
+        def verify(spec, **kwargs):
+            assert spec["runtime_context"]["worktree"] == str(checkout)
+            assert kwargs["confirm_run"] is True
+            return {"gate": {"verdict": "PASS"}, "check_results": []}
+
+        monkeypatch.setattr(provision, "temporary_exact_head_worktree", provider, raising=False)
+        monkeypatch.setattr(keepalive_outcomes, "_gh_throttle", lambda _: None)
+        monkeypatch.setattr(runtime_ac, "run_verification", verify)
+        monkeypatch.setenv("ORCH_RUN_RUNTIME_AC", "1")
+        kwargs = {
+            "_pr_fetch_fn": lambda *_: [_shadow_ingest_pr(20, head)],
+            "_issue_fetch_fn": lambda *_: BODY,
+            "_spec_dir": private_brain / "specs",
+        }
+        summary = keepalive_outcomes.ingest_keepalive_outcomes(["owner/repo"], **kwargs)
+        observed = [
+            row for row in feedback.runtime_ac_gate_events() if row["gate_status"] == "executed"
+        ]
+>       assert len(observed) == 1, feedback.runtime_ac_gate_events()
+E       AssertionError: [{'event_id': 'event:runtime-ac-gate:f07b7313d26aa442d13557f7', 'run_id': 'keepalive:owner/repo#20:codex', 'status': '...0c4093b940ce4a', 'run_id': 'keepalive:owner/repo#20:codex', 'status': 'planned', 'validation_status': 'accepted', ...}]
+E       assert 0 == 1
+E        +  where 0 = len([])
+
+tests/test_runtime_ac_shadow.py:719: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_runtime_ac_shadow.py::test_ingest_executes_shadow_spec_on_exact_checkout
+1 failed in 0.32s

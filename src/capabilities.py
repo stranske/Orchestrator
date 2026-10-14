@@ -422,7 +422,9 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "the gate's executable seat is merge_guard's terminal merge, unchanged (PR labels or a "
         "spec). merge_guard's selftest no longer writes its o/r#5 and o/r#6 fixtures into the Brain "
         "it is pointed at: 3,702 such rows since 2026-08-21 were read by the flow monitor as live "
-        "firing while real fleet executions were 0.",
+        "firing while real fleet executions were 0. Issue576 dedup: existing authoring, gate, "
+        "ingest, weekly reader and panel exact-head provisioner are reused; wire the ingest "
+        "to bounded disposable checkouts without a new capability, outcome store or merge gate.",
         "status": "canary",
         "entrypoint": "runtime_ac_gate.py",
         "matcher": {"kind": "env", "name": "ORCH_RUN_RUNTIME_AC", "equals": "1"},

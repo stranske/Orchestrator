@@ -1,0 +1,2 @@
+Command: python3 -m pytest --collect-only -q -o addopts=
+3303 tests collected in 1.27s
