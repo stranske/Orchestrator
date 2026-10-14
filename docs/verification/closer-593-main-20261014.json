@@ -1,0 +1,8 @@
+{
+  "base": "25f0fc42b7b64ea57ae50021e4550f5bc6f54518",
+  "collected": 3316,
+  "focused_test_receipt": ".................................................................        [100%]\n65 passed in 4.82s\n",
+  "ceiling_policy": "all current-main ceilings preserved",
+  "conflicts": "only .verify-floor.json",
+  "hosted_verification": "pending"
+}
