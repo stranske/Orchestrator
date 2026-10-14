@@ -355,6 +355,14 @@ class RetrospectiveEvidenceTests(unittest.TestCase):
         )
         read.start()
         self.addCleanup(read.stop)
+        patch_text = "diff --git a/tests/test_acceptance.py b/tests/test_acceptance.py\n"
+        read_patch = patch.object(
+            retro.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess([], 0, patch_text, ""),
+        )
+        read_patch.start()
+        self.addCleanup(read_patch.stop)
         packet = retro.build_packet(
             {"target": "owner/repo#1"},
             retro.fetch_evidence({"target": "owner/repo#1", "verifier_verdict": "NON_PASS"}),
@@ -367,7 +375,38 @@ class RetrospectiveEvidenceTests(unittest.TestCase):
         assert packet["ground_truth_evidence"]["head_sha"] == decision["head_sha"]
         assert packet["ground_truth_evidence"]["merge_sha"] == decision["evaluated_sha"]
         assert packet["ground_truth_evidence"]["diff_summary"] == [diff]
+        assert packet["ground_truth_evidence"]["diff_patch"] == {
+            "revision": decision["head_sha"],
+            "text": patch_text,
+        }
         assert packet["ground_truth_evidence"]["gate_runs"] == [gate]
+
+        # Every linked source retains its own criteria revision, including duplicate text.
+        pr["closingIssuesReferences"] = {
+            "nodes": [
+                {
+                    "number": 2,
+                    "body": "## Acceptance Criteria\n- [ ] first requirement",
+                    "updatedAt": "2026-10-01T01:00:00Z",
+                },
+                {
+                    "number": 3,
+                    "body": "## Acceptance Criteria\n- [ ] second requirement",
+                    "updatedAt": "2026-10-01T02:00:00Z",
+                },
+            ]
+        }
+        ground = retro.fetch_evidence({"target": "owner/repo#1", "verifier_verdict": "NON_PASS"})[
+            "ground_truth_evidence"
+        ]
+        assert [c["text"] for c in ground["acceptance_criteria"]] == [
+            "first requirement",
+            "second requirement",
+        ]
+        assert [c["source"] for c in ground["acceptance_criteria"]] == [
+            "issue#2@2026-10-01T01:00:00Z",
+            "issue#3@2026-10-01T02:00:00Z",
+        ]
 
         # Even without malformed JSON, a matching marker on another PR is not the finding.
         pr["comments"]["nodes"] = [finding, wrong_pr]

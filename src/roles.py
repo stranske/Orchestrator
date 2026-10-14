@@ -852,6 +852,28 @@ def _adjudicator_prompt(ctx: dict) -> str:
     )
 
 
+_ADJUDICATOR_IMPERATIVE_NEXT_STEP = re.compile(
+    r"^\s*(?:"
+    r"(?:please\s+)?(?:merge|push|label|claim|delegate)\b"
+    r"|(?:please\s+)?commit(?:\s+(?:the|these|your|all|changes|updates|files|code)\b|\s+and\b)"
+    r"|(?:please\s+)?kill\b(?!\-)"
+    r"|(?:please\s+)?open\s+(?:a\s+)?pr\b"
+    r"|(?:please\s+)?create\s+(?:a\s+)?branch\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _recommended_next_step_is_imperative(text: str) -> bool:
+    """Reject direct execution commands; allow recommendation prose that names verbs."""
+    stripped = text.strip()
+    if not stripped:
+        return False
+    # Inspect every explicit clause boundary, not only the opening inspection clause.
+    clauses = re.split(r"[;\n]|(?<=[.!?])\s+", stripped)
+    return any(_ADJUDICATOR_IMPERATIVE_NEXT_STEP.match(clause) for clause in clauses)
+
+
 def _validate_adjudicator(proposal: Any) -> list[str]:
     errs: list[str] = []
     if not isinstance(proposal, dict):
@@ -886,11 +908,8 @@ def _validate_adjudicator(proposal: Any) -> list[str]:
         and proposal["recommended_next_step"].strip()
     ):
         errs.append("recommended_next_step must be a non-empty string")
-    next_step = str(proposal.get("recommended_next_step") or "").lower()
-    if re.search(
-        r"\b(merge|push|label|claim|delegate|kill|commit|open pr|create branch)\b",
-        next_step,
-    ):
+    next_step = str(proposal.get("recommended_next_step") or "")
+    if _recommended_next_step_is_imperative(next_step):
         errs.append("recommended_next_step must not contain mutating execution instructions")
 
     refs = proposal.get("ground_truth_refs")

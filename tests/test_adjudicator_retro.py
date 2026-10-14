@@ -1,5 +1,6 @@
 """Dispute evidence, read-only outcomes, strict offers and honest grading."""
 
+import hashlib
 import json
 import sqlite3
 import time
@@ -405,6 +406,13 @@ def test_legacy_false_flag_and_saved_decisions_resume_without_redispatch(private
     )
     row["packet"].pop("metadata_only", None)
     row["packet"]["metadata_only"] = False
+    row["packet"]["ground_truth_evidence"].update(
+        {
+            "diff_patch": {"revision": "head", "text": "diff --git a/file"},
+            "acceptance_criteria": [{"text": "named test passes", "revision": "head"}],
+        }
+    )
+    row["disposition"] = "reject_blocker"
     path.write_text(json.dumps(first))
     with sqlite3.connect(private_brain) as conn:
         conn.execute("UPDATE costs SET cost_usd=2,source='ccusage' WHERE run_id='backend-one'")
@@ -422,11 +430,10 @@ def test_legacy_false_flag_and_saved_decisions_resume_without_redispatch(private
     saved = resumed["rows"][0]
     assert saved["proposal"] == raw
     assert saved["decision"] == "reject_blocker"
-    assert saved["raw_shadow_verdict"] == "PASS"
-    assert saved["shadow_verdict"] is None
-    assert saved["disposition"] == "needs_more_evidence"
+    assert saved["shadow_verdict"] == "PASS"
+    assert saved["disposition"] == "reject_blocker"
     assert resumed["summary"]["cost_usd"] == 2
-    assert resumed["summary"]["adjudicated"] == resumed["summary"]["graded"] == 0
+    assert resumed["summary"]["adjudicated"] == resumed["summary"]["graded"] == 1
 
 
 @pytest.mark.parametrize("paginated", [False, True])
@@ -533,3 +540,191 @@ def test_malformed_gate_contexts_are_evidence_gap(monkeypatch, paginated, rollup
     )
     with pytest.raises(ValueError, match="complete gate evidence unavailable"):
         retro.fetch_evidence({"target": "owner/repo#1", "verifier_verdict": "NON_PASS"})
+
+
+HISTORICAL_RECOMMENDATION_PROSE = [
+    "Recommend merge after manual review once gate logs confirm the regression.",
+    "After manual review, merge may be appropriate once gates are green.",
+    "Inspect whether labeling is appropriate after reviewing the diff.",
+    "Human review is required before any merge decision.",
+    "The maintainer may delegate follow-up to the runtime owner after inspection.",
+    "Opening a follow-up PR may be warranted after acceptance is documented.",
+    "Commit history needs inspection before disposition.",
+    "Inspect the logs; recommend merge after manual review.",
+]
+
+
+def test_build_packet_includes_diff_and_acceptance_criteria():
+    row = {"target": "owner/repo#1"}
+    evidence = {
+        "disputed_finding": {"ref": "finding", "body": "Finding body"},
+        "ground_truth_evidence": {
+            "diff_summary": [{"path": "tests/a.py", "additions": 1, "deletions": 0}],
+            "gate_runs": [{"name": "Gate", "conclusion": "SUCCESS", "detailsUrl": "gate"}],
+            "diff_patch": {"revision": "abc", "text": "diff --git a/tests/a.py"},
+            "acceptance_criteria": [{"text": "pytest passes", "revision": "abc"}],
+        },
+    }
+    packet = retro.build_packet(row, evidence)
+    assert packet["metadata_only"] is False
+    assert packet["ground_truth_evidence"]["diff_patch"]["text"].startswith("diff")
+    assert packet["ground_truth_evidence"]["acceptance_criteria"][0]["text"] == "pytest passes"
+
+
+def test_adjudicator_validator_accepts_recommendation_prose():
+    role = roles.ROLE_REGISTRY["adjudicator"]
+    base = proposal()
+    for text in HISTORICAL_RECOMMENDATION_PROSE:
+        assert role.validate({**base, "recommended_next_step": text}) == []
+    assert role.validate({**base, "recommended_next_step": "merge this PR now"}) != []
+    for text in (
+        "open a PR",
+        "create a branch",
+        "Please open PR",
+        "Please create branch",
+        "commit the changes",
+        "Commit changes to the branch",
+        "Please commit updates",
+        "Inspect the logs; merge this PR now",
+        "Inspect the logs. Push the branch",
+    ):
+        assert role.validate({**base, "recommended_next_step": text}) != []
+
+
+def test_floor_still_demotes_a_metadata_only_packet():
+    metadata_row = {
+        "decision": "reject_blocker",
+        "packet": {"metadata_only": True},
+        "later_truth": "PASS",
+        "shadow_verdict": "PASS",
+    }
+    retro._apply_evidence_floor(metadata_row)
+    assert metadata_row["disposition"] == "needs_more_evidence"
+    summary = retro.summarize([metadata_row])
+    assert summary["graded"] == 0
+
+    full_row = {
+        "decision": "reject_blocker",
+        "disposition": "reject_blocker",
+        "packet": {
+            "metadata_only": False,
+            "ground_truth_evidence": {
+                "diff_patch": {"revision": "a", "text": "patch"},
+                "acceptance_criteria": [{"text": "named test passes", "revision": "a"}],
+            },
+        },
+        "later_truth": "PASS",
+        "merge_rule_verdict": "PASS",
+        "shadow_verdict": "PASS",
+    }
+    summary = retro.summarize([full_row])
+    assert summary["graded"] == 1
+
+
+def test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria(
+    private_brain, tmp_path, monkeypatch
+):
+    path = tmp_path / "retro.json"
+    population = [
+        {
+            "run_id": "r1",
+            "target": "owner/repo#1",
+            "verifier_verdict": "NON_PASS",
+            "adjudicated_verdict": "PASS",
+            "merged": 1,
+        }
+    ]
+    monkeypatch.setattr(retro, "disputes", lambda **_: population)
+    identity = {
+        "run_id": "r1",
+        "verifier_verdict": "NON_PASS",
+        "adjudicated_verdict": "PASS",
+    }
+    case_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+    saved = {
+        **identity,
+        "case_id": case_id,
+        "target": "owner/repo#1",
+        "decision": "needs_more_evidence",
+        "packet": {"metadata_only": True, "target": "owner/repo#1"},
+        "backend_run_id": "paid-attempt-1",
+        "cost_usd": 0.12,
+    }
+    path.write_text(json.dumps({"rows": [saved], "population": 1}))
+    calls = {"n": 0}
+
+    def reader(_row):
+        calls["n"] += 1
+        return {
+            "disputed_finding": {"ref": "f", "body": "Finding"},
+            "ground_truth_evidence": {
+                "diff_summary": [{"path": "a.py", "additions": 1, "deletions": 0}],
+                "gate_runs": [{"name": "Gate", "conclusion": "SUCCESS", "detailsUrl": "g"}],
+                "diff_patch": {"revision": "sha", "text": "diff"},
+                "acceptance_criteria": [{"text": "test passes", "revision": "sha"}],
+            },
+        }
+
+    retro.run(
+        dispatch=False,
+        retry=True,
+        limit=1,
+        path=path,
+        db=private_brain,
+        evidence_reader=reader,
+    )
+    assert calls["n"] == 1
+    refreshed = json.loads(path.read_text())["rows"][0]
+    assert refreshed["case_id"] == case_id
+    assert refreshed["backend_run_id"] == "paid-attempt-1"
+    assert refreshed["packet"]["metadata_only"] is True
+
+    failed = retro.run(
+        dispatch=True,
+        retry=True,
+        limit=1,
+        path=path,
+        db=private_brain,
+        evidence_reader=reader,
+        runner=lambda **_: {"errors": ["runner failed"], "backend_run_id": "paid-failed-retry"},
+    )["rows"][0]
+    assert failed["packet"]["metadata_only"] is True
+    assert failed["backend_run_id"] == "paid-attempt-1"
+    assert failed["retry_attempts"][-1]["backend_run_id"] == "paid-failed-retry"
+    succeeded = retro.run(
+        dispatch=True,
+        retry=True,
+        limit=1,
+        path=path,
+        db=private_brain,
+        evidence_reader=reader,
+        runner=lambda **_: {"proposal": proposal(), "backend_run_id": "paid-success"},
+    )["rows"][0]
+    assert succeeded["packet"]["metadata_only"] is False
+    assert succeeded["decision"] == "uphold_blocker"
+    assert succeeded["backend_run_id"] == "paid-success"
+    assert len(json.loads(path.read_text())["rows"]) == 1
+
+    identity = {
+        "run_id": "r1",
+        "verifier_verdict": "NON_PASS",
+        "adjudicated_verdict": "PASS",
+    }
+    case_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+    decided = {
+        **saved,
+        "case_id": case_id,
+        "decision": "reject_blocker",
+        "packet": {"metadata_only": True},
+    }
+    path.write_text(json.dumps({"rows": [decided], "population": 1}))
+    calls["n"] = 0
+    retro.run(
+        dispatch=False,
+        retry=True,
+        limit=1,
+        path=path,
+        db=private_brain,
+        evidence_reader=lambda _row: pytest.fail("must not re-read decided row"),
+    )
+    assert calls["n"] == 0

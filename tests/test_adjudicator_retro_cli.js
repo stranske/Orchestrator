@@ -192,6 +192,109 @@ function world(t) {
   };
 }
 
+// These representative inputs exercise the validator without claiming to be the
+// six rejected proposals from the operator's unavailable historical report.
+test('adjudicator validator distinguishes recommendation prose from mutation commands', (t) => {
+  const w = world(t);
+  const commands = [
+    'merge this PR now',
+    'push the branch',
+    'label this PR',
+    'claim the issue',
+    'delegate the task',
+    'kill the worker',
+    'commit the changes',
+    'open PR',
+    'create branch',
+    'Please MERGE this PR now',
+  ];
+  const recommendations = [
+    'Recommend merge after manual review.',
+    'Inspect the diff before deciding whether to push the branch.',
+    'Review whether the label matches the evidence.',
+    'Inspect the claim against the acceptance criteria.',
+    'The maintainer may delegate follow-up after inspecting the findings.',
+    'Inspect whether the kill switch covers the reported regression.',
+    'Review the commit against the acceptance criteria.',
+    'Consider whether to open PR after manual inspection.',
+    'Assess whether to create branch after reviewing the evidence.',
+    'Inspect the logs; recommend merge after manual review.',
+    'Kill-switch evidence needs inspection.',
+  ];
+  const result = w.run(['-c', `
+import json
+import sys
+from unittest.mock import patch
+import re
+import roles
+
+commands, recommendations = json.loads(sys.argv[1])
+proposal = {
+    "decision": "reject_blocker", "confidence": "high",
+    "rationale": "The supplied test contradicts the finding.",
+    "evidence_assessment": [{"claim": "Missing test", "status": "contradicted",
+        "evidence_ref": "test-diff", "reason": "The supplied diff contains the test."}],
+    "ground_truth_refs": ["test-diff"],
+    "recommended_next_step": "Inspect the test diff", "evidence_gaps": [],
+}
+validate = roles.ROLE_REGISTRY["adjudicator"].validate
+def check(text):
+    return validate({**proposal, "recommended_next_step": text})
+accepted = [check(text) for text in recommendations]
+rejected = [check(text) for text in commands]
+# A negative control demonstrates that the previous whole-word rule would
+# reject these prose inputs. Only the in-process predicate is replaced.
+old_rule = re.compile(
+    r"\\b(merge|push|label|claim|delegate|kill|commit|open pr|create branch)\\b",
+    re.IGNORECASE,
+)
+with patch.object(roles, "_recommended_next_step_is_imperative",
+                  side_effect=lambda text: bool(old_rule.search(text))):
+    old_errors = [check(text) for text in recommendations]
+restored = [check(text) for text in recommendations]
+print(json.dumps({"accepted": accepted, "rejected": rejected,
+                  "old_errors": old_errors, "restored": restored}))
+`, JSON.stringify([commands, recommendations])]);
+  assert.deepEqual(result.accepted, recommendations.map(() => []));
+  for (const [index, errors] of result.rejected.entries()) {
+    assert.deepEqual(errors, [
+      'recommended_next_step must not contain mutating execution instructions',
+    ], commands[index]);
+  }
+  assert.ok(result.old_errors.every((errors) => errors.includes(
+    'recommended_next_step must not contain mutating execution instructions',
+  )), 'the whole-word negative control must reject recommendation prose');
+  assert.deepEqual(result.restored, result.accepted, 'the predicate must be restored');
+  assert.deepEqual(w.brain().outcomes, [], 'validator checks must not write outcomes');
+});
+
+test('adjudicator prose validation retains every forbidden terminal and mutating key', (t) => {
+  const w = world(t);
+  const keys = ['verdict', 'verifier_verdict', 'merge', 'agent', 'backend', 'label', 'claim'];
+  const result = w.run(['-c', `
+import json
+import sys
+import roles
+proposal = {
+    "decision": "needs_more_evidence", "confidence": "low",
+    "rationale": "Acceptance evidence is missing.",
+    "evidence_assessment": [{"claim": "Missing test", "status": "insufficient",
+        "evidence_ref": None, "reason": "The diff is unavailable."}],
+    "ground_truth_refs": [],
+    "recommended_next_step": "Inspect the evidence before any merge decision.",
+    "evidence_gaps": ["Missing diff"],
+}
+validate = roles.ROLE_REGISTRY["adjudicator"].validate
+print(json.dumps({key: validate({**proposal, key: True})
+                  for key in json.loads(sys.argv[1])}))
+`, JSON.stringify(keys)]);
+  for (const key of keys) {
+    assert.ok(result[key].includes(
+      `forbidden terminal/mutating keys present: ['${key}']`,
+    ), key);
+  }
+});
+
 function localGit(w, checkout, ...args) {
   const output = path.join(w.root, 'git-stdout');
   const errors = path.join(w.root, 'git-stderr');
@@ -1100,7 +1203,7 @@ def response(args):
     return {"data": {"repository": {"pullRequest": pr}}}
 
 proposal = {
-    "decision": "needs_more_evidence", "confidence": "low",
+    "decision": "uphold_blocker" if recovery else "needs_more_evidence", "confidence": "low",
     "rationale": "Gate statuses alone do not prove acceptance.",
     "evidence_assessment": [{"claim": "Missing test", "status": "insufficient",
                              "evidence_ref": "last-gate", "reason": "Inspect source"}],
@@ -1121,6 +1224,9 @@ def checkpoint(report, route, transport):
 
 with (
     patch.object(retro, "_gh_json", side_effect=response),
+    patch.object(retro.subprocess, "run", return_value=subprocess.CompletedProcess(
+        [], 0, "diff --git a/tests/test_acceptance.py b/tests/test_acceptance.py", ""
+    )),
     patch.object(roles, "route_role", return_value={"agent": "gemini"}) as route,
     patch.object(roles, "_role_capability_event"),
     patch.object(roles.dispatcher, "offload", return_value={
@@ -1243,7 +1349,7 @@ for (const [scenario, reads] of [
     assert.equal(failed.decision, undefined);
     assert.equal(successful.target, 'owner/repo#2');
     assert.equal(successful.error, undefined);
-    assert.equal(successful.decision, 'needs_more_evidence', JSON.stringify(successful));
+    assert.equal(successful.decision, 'uphold_blocker', JSON.stringify(successful));
     assert.equal(initial.routes, 1);
     assert.equal(initial.calls, 1);
     assert.deepEqual(initial.role_ids, [successful.role_run_id]);
@@ -1258,7 +1364,7 @@ for (const [scenario, reads] of [
     const repaired = recovered.report.rows[0];
     assert.equal(repaired.case_id, failed.case_id);
     assert.equal(repaired.error, undefined);
-    assert.equal(repaired.decision, 'needs_more_evidence');
+    assert.equal(repaired.decision, 'uphold_blocker');
     assert.ok(repaired.role_run_id);
     assert.notEqual(repaired.role_run_id, successful.role_run_id);
     assert.deepEqual(recovered.report.rows[1], successful,
