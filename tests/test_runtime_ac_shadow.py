@@ -915,7 +915,7 @@ def test_shared_exact_head_checkout_reuse_and_temporary_cleanup(tmp_path, monkey
     assert (Path(panel) / "dirty.txt").read_text() == "dirty"
 
 
-def test_ingest_runs_real_named_test_and_removes_its_checkout(private_brain, monkeypatch):
+def test_ingest_runs_real_named_test_and_removes_its_checkout(private_brain, monkeypatch, capsys):
     remote = private_brain / "remote"
     initial_head = _shadow_git_repo(remote)
     source = private_brain / "source"
@@ -1004,23 +1004,55 @@ def test_ingest_runs_real_named_test_and_removes_its_checkout(private_brain, mon
     assert weekly["specs_authored"] == 1
     assert weekly["executed"] == 1
     assert weekly["execution_unmeasured"] == 0
-    report = {
-        "review_days": 7,
-        "raise_count": 0,
-        "held_off": [],
-        "on_but_idle": [],
-        "unconditioned": [],
-        "runtime_ac_shadow": weekly,
-    }
+    # Exercise the weekly CLI's real review -> database reader -> formatter path.
+    # Only unrelated fleet readers/writers are isolated; no shadow result or
+    # report is injected, and a removed review() field must fail this assertion.
+    import adjudicator_retro
+
+    monkeypatch.setenv("ORCH_VALUE_CHAIN_MONITOR", "0")
+    monkeypatch.setenv("ORCH_DISABLE_STEPS", "issue-size-quality")
+    monkeypatch.setattr(switch_review, "_capability_heartbeat", lambda: None)
+    monkeypatch.setattr(
+        switch_review, "switch_states", lambda **_: {"held_off": [], "on_but_idle": []}
+    )
+    monkeypatch.setattr(switch_review, "stale_runners", lambda: [])
+    monkeypatch.setattr(switch_review, "mirror_drift", lambda: {"status": "ok"})
+    monkeypatch.setattr(switch_review, "fleet_gates", lambda **_: {})
+    monkeypatch.setattr(switch_review, "firing_regressions", lambda **_: {})
+    monkeypatch.setattr(switch_review, "_exploration_gate", lambda: {})
+    monkeypatch.setattr(switch_review, "gate_expiry", lambda **_: None)
+    monkeypatch.setattr(switch_review, "capacity_shed", lambda: None)
+    monkeypatch.setattr(switch_review, "worktree_git_refusals", lambda: None)
+    monkeypatch.setattr(switch_review, "credential_exposure", lambda: None)
+    monkeypatch.setattr(switch_review, "adversarial_shape_population", lambda **_: {})
+    monkeypatch.setattr(adjudicator_retro, "weekly_line", lambda: "unmeasured")
+    monkeypatch.setattr(adversarial, "record_shape_measurement", lambda *_, **__: None)
+
+    def unexpected_github(*_, **__):
+        raise AssertionError("shadow report attempted an unrelated GitHub request")
+
+    monkeypatch.setattr(switch_review, "_GH_CALL_RUNNER", unexpected_github)
+    capsys.readouterr()
+    assert switch_review.main(["--env", "process"]) == 0
+    printed = capsys.readouterr().out
     shadow_lines = [
         line
-        for line in switch_review.format_report(report).splitlines()
+        for line in printed.splitlines()
         if line.startswith("runtime-AC shadow:")
     ]
     assert len(shadow_lines) == 1
     assert "PRs 1, specs authored 1, executed 1, would-FAIL 0" in shadow_lines[0]
     assert "false-FAIL audit 0 of 1 (owner/repo#20)" in shadow_lines[0]
     assert "execution unmeasured 0" in shadow_lines[0]
+    # The weekly machine-readable artifact and its readable companion must
+    # agree with stdout, without creating any new runtime-AC observations.
+    text_out = private_brain / "switch-review.txt"
+    events_before_report = feedback.runtime_ac_gate_events()
+    assert switch_review.main(["--env", "process", "--json", "--text-out", str(text_out)]) == 0
+    cli_report = json.loads(capsys.readouterr().out)
+    assert cli_report["runtime_ac_shadow"] == weekly
+    assert shadow_lines[0] in text_out.read_text()
+    assert feedback.runtime_ac_gate_events() == events_before_report
     fetched_head = subprocess.check_output(
         ["git", "-C", str(source), "rev-parse", "FETCH_HEAD"], text=True
     ).strip()
