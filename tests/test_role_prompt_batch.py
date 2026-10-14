@@ -645,6 +645,45 @@ def test_replay_requires_backend_only_when_dispatched(private_brain, monkeypatch
             assert manifest_item["failed_body_file"] is None
             assert not (directory / "001.failed.md").exists()
 
+    baseline = "Deterministic baseline prompt"
+    monkeypatch.setattr(roles.dispatcher, "build_prompt", lambda *a, **kw: baseline)
+
+    # Even empty authored text is evidence; absent or malformed text is not a body.
+    for index, scoped_prompt in enumerate(("Bad café prompt — 日本語\r\n  \t", "", None, {})):
+        rejected_proposal = {"task_type": "implement", "scoped_prompt": scoped_prompt}
+        result = roles.run_prompt_batch(
+            [
+                {
+                    "target": "owner/repo#1",
+                    "goal": "Rejected dispatch replay",
+                    "proposal_json": rejected_proposal,
+                }
+            ],
+            output="dispatch_prompt",
+        )
+        failed = result["items"][0]
+        assert failed["proposal"] is None
+        assert failed["rejected_proposal"] == rejected_proposal
+        assert failed["dispatch_prompt"] == baseline
+        assert failed["errors"]
+        assert failed["backend_run_id"] is None and failed["role_run_id"] is None
+        assert failed["raw_output"] is None
+
+        directory = private_brain / f"rejected-dispatch-replay-{index}"
+        manifest = roles.write_prompt_batch(result, directory)
+        assert manifest == json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+        item = manifest["items"][0]
+        assert item["valid"] is False and item["errors"] == failed["errors"]
+        assert item["body_file"] is None and item["raw_output_file"] is None
+        assert not (directory / "001.md").exists()
+        assert not (directory / "001.raw.txt").exists()
+        if isinstance(scoped_prompt, str):
+            assert Path(item["failed_body_file"]) == directory / "001.failed.md"
+            assert Path(item["failed_body_file"]).read_bytes() == scoped_prompt.encode("utf-8")
+        else:
+            assert item["failed_body_file"] is None
+            assert not (directory / "001.failed.md").exists()
+
     replay = roles.run_prompt_batch(items, output="issue_body", dispatch=True, backend="cursor")
     assert replay["items"][0]["errors"] == []
     assert replay["items"][0]["role_run_id"]

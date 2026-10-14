@@ -2497,6 +2497,8 @@ def write_prompt_batch(result: dict, directory: Path) -> dict:
             rejected = item.get("rejected_proposal")
             if result["output"] == "issue_body" and isinstance(rejected, dict):
                 failed_text = rejected.get("issue_body")
+            elif result["output"] == "dispatch_prompt" and isinstance(rejected, dict):
+                failed_text = rejected.get("scoped_prompt")
             if isinstance(failed_text, str):
                 path = directory / f"{index:03d}.failed.md"
                 path.write_text(failed_text, encoding="utf-8", newline="")
