@@ -775,10 +775,6 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
-
-
 def _deadline_evidence(monkeypatch, tmp_path, *, action_day, now_day):
     import feedback
     import value_chain_monitor as monitor
@@ -815,3 +811,7 @@ def test_consumer_deadline_rejects_first_action_on_day_fifteen(monkeypatch, tmp_
 def test_consumer_deadline_retains_timely_action_after_monitor_window(monkeypatch, tmp_path):
     category, ok, _ = _deadline_evidence(monkeypatch, tmp_path, action_day=1, now_day=100)
     assert category == "acting" and ok
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

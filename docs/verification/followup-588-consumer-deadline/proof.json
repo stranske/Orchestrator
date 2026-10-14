@@ -22,11 +22,30 @@
   "file_sha256": {
     "src/capability_admission.py": "d0ba9f4054c991dab382d6b4dc7626e27f0441336578e9f759af0940bcea5643",
     "src/value_chain_monitor.py": "b5394e1cb4182fb04603d5032979c78f5b796f101ce46bef46941e7f5c884bd2",
-    "tests/test_capability_admission.py": "a5eb7c4872723763a9ba28bb561c5d166906754a8e5c156915bb5075d7d9a5df",
+    "tests/test_capability_admission.py": "9e9dad653c47f4a52b2e66f12f5ea9ad661ce80130ed994373322798ca5bb146",
     "tests/test_value_chain_monitor.py": "1a906fc933b59a52fd0307a2a9ae2427b97795c48803869132e98b85c00b3d38"
   },
   "collected": 3377,
   "limitations": "no deployed mirror/native acceptance or full-suite/providerPASS claim",
   "integrated_main": "28f12766e84818508b37173a86e0be5817bfb0a2",
-  "integrated_focused_result": "........................................................................ [ 54%]\n...........................................................              [100%]\n131 passed in 54.43s"
+  "integrated_focused_result": "........................................................................ [ 54%]\n...........................................................              [100%]\n131 passed in 54.43s",
+  "ci_recovery": "Moved CLI entry point below new test definitions; exact2replay failures nowPASS;143focusedPASS",
+  "full_verify": {
+    "argv": [
+      "python3",
+      "src/verify.py",
+      "--floor-may-lag"
+    ],
+    "private_empty_state": true,
+    "passed": 3366,
+    "failed": 3,
+    "skipped": 8,
+    "collected": 3377,
+    "failures": [
+      "test_gemini_model_is_one_the_seat_advertises",
+      "test_default_pin_is_advertised",
+      "test_every_gemini_tier_pin_is_advertised"
+    ],
+    "limitation": "Installed pinnedPro catalog guards remain existing578 native qualification; no fullPASS or modelpinchange"
+  }
 }

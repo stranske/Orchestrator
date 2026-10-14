@@ -1,1 +1,3 @@
 Actual588 NON_PASS temporal finding:2 independent baseline failures; fixed first-invocation intervals reuse monitor classification. Boundary test includes both endpoints, rejected/counterfactual edges, distinct capability windows and unread Brain. No paid trial, database write, model pin, live flag or deployment. Full current-head hosted review required.
+
+Hosted CI exposed CLI entrypoint above new tests: fixed; exact replay controls2PASS and143focusedPASS. Full isolated local verify:3366PASS/3existing installed-Pro-catalog failures/8SKIP/3377collected; no fullPASS, no changed pin or guard relaxation. Fresh hosted currenthead qualification required.
