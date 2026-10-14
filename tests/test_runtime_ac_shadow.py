@@ -417,6 +417,40 @@ def test_weekly_line_carries_prs_specs_executed_and_would_fail(private_brain):
     assert line in switch_review.format_report(report)
     # Repeat observations do not double-count a PR.
     assert gate.shadow_summary(now=now, events=rows + rows)["would_fail"] == 1
+    # Reasons describe recorded observations, not event volume or the last
+    # ingest's budget. A PR that executed remains measured after a planned retry.
+    planned = [
+        {
+            "target": target,
+            "shadow_only": True,
+            "gate_status": "planned",
+            "terminal_reason": reason,
+        }
+        for target, reason in [
+            ("owner/repo#2", "shadow_execution_budget"),
+            ("owner/repo#3", "shadow_checkout_failed"),
+            ("owner/repo#3", "shadow_execution_budget"),
+            ("owner/repo#5", "shadow_execution_disabled"),
+            ("owner/repo#6", None),
+        ]
+    ]
+    reasons = gate.shadow_summary(now=now, events=rows + planned + planned)
+    assert reasons["executed"] == 1
+    assert reasons["execution_unmeasured"] == 3
+    assert reasons["execution_unmeasured_reasons"] == {
+        "shadow_checkout_failed": 1,
+        "shadow_execution_budget": 1,
+        "shadow_execution_disabled": 1,
+        "unrecorded": 1,
+    }
+    reason_line = gate.format_shadow_summary(reasons)
+    assert "recorded reasons (PRs per reason): shadow_checkout_failed 1" in reason_line
+    assert "shadow_execution_budget 1, shadow_execution_disabled 1, unrecorded 1" in reason_line
+    assert reason_line in switch_review.format_report({**report, "runtime_ac_shadow": reasons})
+    assert "recorded reasons" not in line
+    assert "recorded reasons" not in gate.format_shadow_summary(
+        {key: value for key, value in summary.items() if key != "execution_unmeasured_reasons"}
+    )
 
 
 def test_no_audit_is_unmeasured_not_zero_false_fail():
@@ -808,6 +842,15 @@ def test_ingest_counts_checkout_failures_and_bounds_failed_attempts(private_brai
     assert sum(row["terminal_reason"] == "shadow_checkout_failed" for row in events) == 3
     assert sum(row["terminal_reason"] == "shadow_execution_budget" for row in events) == 1
     assert not any(row["terminal_reason"] == "shadow_exact_checkout_missing" for row in events)
+    weekly = gate.shadow_summary(now=int(time.time()))
+    assert weekly["executed"] == 0
+    assert weekly["execution_unmeasured_reasons"] == {
+        "shadow_checkout_failed": 3,
+        "shadow_execution_budget": 1,
+    }
+    line = gate.format_shadow_summary(weekly)
+    assert "executed 0" in line
+    assert "shadow_checkout_failed 3, shadow_execution_budget 1" in line
 
 
 @pytest.mark.parametrize("disabled,dry_run", [(True, False), (False, True)])
