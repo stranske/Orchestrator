@@ -1804,6 +1804,14 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
     # moved: a machine-local declaration is green where it was typed, absent on a fresh checkout,
     # and invisible to review.
     "capability-admission-gate": {
+        # The tenth part applied to the gate itself (2026-10-14): the consumer that ACTS on the
+        # admission report is verify.py's gate runner, which fails the run on a blocking row, and
+        # format_report, which prints it. Declared here, as `file.py:symbol`, so the gate can
+        # resolve its own consumer in the tree; the live row's prose had named a suite file.
+        "downstream_consumer": (
+            "verify.py:run_gates fails the verify run on a blocking row; "
+            "capability_admission.py:format_report prints it"
+        ),
         "findability_category": "exercise_bound",
         "findability_rationale": (
             "verify.py runs this gate on every PR unconditionally, as one of its five gates. No "

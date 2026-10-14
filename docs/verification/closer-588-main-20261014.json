@@ -1,0 +1,6 @@
+{
+  "base": "25f0fc42b7b64ea57ae50021e4550f5bc6f54518",
+  "collected": 3315,
+  "tests": ".....................................                                    [100%]\n37 passed in 54.40s",
+  "conflicts": "floor only"
+}

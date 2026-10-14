@@ -41,11 +41,13 @@ here queues anything for a human.
 from __future__ import annotations
 
 import argparse
+import ast
 import datetime
 import json
 import os
 import pathlib
 import re
+import tempfile
 from typing import Any
 
 import capabilities
@@ -278,7 +280,11 @@ FINDABILITY_ENFORCED_FROM = 1787443200  # 2026-08-23T00:00:00Z, the day findabil
 # writing: a gate red on arrival gets switched off, and then it protects nothing. ONE constant per
 # requirement, defined here and read only by `admit()`, so the window a requirement MEASURES and the
 # window it can be DRAINED over are the same window by construction.
-REQUIREMENT_ENFORCED_FROM: dict[str, int] = {"findable": FINDABILITY_ENFORCED_FROM}
+REQUIREMENT_ENFORCED_FROM: dict[str, int] = {
+    "findable": FINDABILITY_ENFORCED_FROM,
+    # Set below the tenth part's definition; the dict is completed there so the date lives beside
+    # the predicate it scopes.
+}
 
 # The one declared exemption, shaped exactly like `kill_switch_category`: a category AND a written
 # rationale, neither sufficient alone. It is for a capability that is INVOKED rather than OFFERED —
@@ -396,12 +402,302 @@ def req_findable(cap: dict, ctx: dict) -> tuple[bool, str]:
     return cause in FINDABLE_OK, detail
 
 
+# --------------------------------------------------------------------------------------------
+# The tenth part — THE CONSUMER MUST ACT (the owner's closing-loop plan, M1, 2026-10-14).
+#
+# The fifth part made a DECLARED consumer the price of admission, as a string. Measured on the
+# value-chain monitor of 2026-10-13: role-redirect invoked 743 times, 736 usable proposals, acted on
+# by nothing; role-triage 690 / 631 / 12 acted on, 0 outcomes; every chain in the capability program
+# broke AFTER "usable", at the step the declaration promised. Every one of those rows had passed
+# admission, because a declaration is checked for presence, never for truth — the ledger's own note
+# on `redirect-plan` says the record "asserted a consumer that did not" exist.
+#
+# Dedup finding (CLAUDE.md §0): the concept exists twice and neither instance gates a NEW
+# capability. `req_outcome_path` requires the declaration, satisfied by prose; and
+# `capabilities.reconcile_causal_lifecycle` writes `consumer_probe` evidence once an accepted
+# producer/consumer edge is observed, which arrives later or never. So this part adds no field; it
+# VERIFIES the field the fifth part already requires, in two steps:
+#
+#   static  — the declaration names `file.py:symbol` (or `file.sh:symbol`) and that symbol is
+#             defined in that file in this tree, as `req_caller_exists` checks the entrypoint.
+#             Prose ("the weekly review and the closer") cannot be checked and no longer passes.
+#   dynamic — for a capability agents select (anything not `exercise_bound`), the value-chain
+#             monitor's `acted_on` is above zero within CONSUMER_GRACE_SECONDS of the FIRST
+#             `invocation` event. The count is `value_chain_monitor.acted_on_index`, the same
+#             Brain edges, window and classifier the weekly row prints — consumed, never
+#             re-derived. An `exercise_bound` rail is consumed by other rails and leaves no Brain
+#             edge; its acting is proven by the rail exercise, so only the static step applies.
+#
+# Latched-gate check. (1) What decrements it: wiring the consumer so an influence edge is recorded,
+# or editing the declaration to a real symbol — code changes that need nothing from this gate.
+# (2) Can that run while the gate is closed: yes, nothing here blocks a consumer from being wired.
+# (3) One window: the grace is read from the ledger's first `invocation` event and the acting from
+# the monitor's WINDOW_DAYS, both consumed here. (4) What it prints when drained: `format_report`
+# prints "every declared consumer resolves; none is prose, missing or never acted" with every
+# passing state counted beside it; a Brain this machine cannot read prints "unmeasured", which is
+# a word and never a zero. "Acting" is CAPABILITY-LEVEL: an edge records the consuming run, not
+# the rail, so the declared symbol is verified statically and the acting is verified per
+# capability; attribution per rail would need an edge field no writer records today.
+# --------------------------------------------------------------------------------------------
+CONSUMER_ACTS_ENFORCED_FROM = (
+    1791936000  # 2026-10-14T00:00:00Z, the day a consumer had to be shown to act
+)
+CONSUMER_GRACE_SECONDS = 14 * 86400
+REQUIREMENT_ENFORCED_FROM["consumer_acts"] = CONSUMER_ACTS_ENFORCED_FROM
+CONSUMER_TOKEN_RE = re.compile(
+    r"([A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:py|sh)):([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
+)
+CONSUMER_CLASSES = (
+    "acting",
+    "grace",
+    "exercise_bound",
+    "unmeasured",
+    "not_invoked",
+    "never_acted",
+    "prose",
+    "unresolved",
+    "undeclared",
+)
+
+
+def consumer_tokens(declaration: Any) -> list[tuple[str, str]]:
+    """Every `file.py:symbol` / `file.sh:symbol` a declaration names, in order."""
+    return [(m.group(1), m.group(2)) for m in CONSUMER_TOKEN_RE.finditer(str(declaration or ""))]
+
+
+def _definition_in(body, name: str):
+    for node in body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name == name:
+                return node
+        elif isinstance(node, ast.Assign):
+            if any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+                return node
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == name:
+                return node
+    return None
+
+
+def _python_symbol_defined(text: str, symbol: str) -> bool:
+    """`Outer.inner` must be `inner` INSIDE `class Outer`, never any `inner` in the file.
+
+    A leaf-name search would accept `x.py:Expected.consume` on the strength of a top-level
+    `def consume` or a method on another class — a consumer that does not exist, passing the
+    static check. So the definition path is walked through the parsed module.
+    """
+    try:
+        body = ast.parse(text).body
+    except (SyntaxError, ValueError):
+        return False
+    parts = symbol.split(".")
+    for i, part in enumerate(parts):
+        node = _definition_in(body, part)
+        if node is None:
+            return False
+        if i == len(parts) - 1:
+            return True
+        if not isinstance(node, ast.ClassDef):
+            return False
+        body = node.body
+    return False
+
+
+def _symbol_defined(text: str, symbol: str, *, shell: bool) -> bool:
+    if not shell:
+        return _python_symbol_defined(text, symbol)
+    leaf = re.escape(symbol.rsplit(".", 1)[-1])
+    pattern = rf"^\s*(?:function\s+)?{leaf}\s*\(\)|^\s*{leaf}="
+    return re.search(pattern, text, re.MULTILINE) is not None
+
+
+def consumer_resolution(cap: dict, *, module_dir=None, repo_root=None) -> dict:
+    """Which of a declaration's `file:symbol` tokens this tree actually defines."""
+    module_dir = pathlib.Path(module_dir or paths.MODULE_DIR)
+    repo_root = pathlib.Path(repo_root or paths.REPO_ROOT)
+    tokens = consumer_tokens(cap.get("downstream_consumer"))
+    resolved: list[str] = []
+    unresolved: list[str] = []
+    for file, symbol in tokens:
+        shell = file.endswith(".sh")
+        bases = (repo_root, module_dir) if shell else (module_dir, repo_root, repo_root / "tests")
+        found = False
+        for base in bases:
+            # Resolved and kept INSIDE the search root: `src/../../elsewhere.py` must not let a
+            # file outside this tree pass as a consumer defined in it.
+            root = base.resolve()
+            candidate = (root / file).resolve()
+            if not candidate.is_relative_to(root):
+                continue
+            try:
+                text = candidate.read_text()
+            except OSError:
+                continue
+            if _symbol_defined(text, symbol, shell=shell):
+                found = True
+                break
+        (resolved if found else unresolved).append(f"{file}:{symbol}")
+    return {
+        "tokens": [f"{file}:{symbol}" for file, symbol in tokens],
+        "resolved": resolved,
+        "unresolved": unresolved,
+    }
+
+
+def first_invocation_ts(cap: dict) -> int | None:
+    stamps = [
+        int(e.get("timestamp") or 0)
+        for e in cap.get("event_history") or []
+        if e.get("type") == "invocation" and e.get("timestamp")
+    ]
+    return min(stamps) if stamps else None
+
+
+_ACTED_ON_CACHE: dict[tuple, dict] = {}
+
+
+def acted_on_context(ledger: dict, *, now: int | None = None) -> dict:
+    """The monitor's `acted_on` per ledger row, or None with the reason it could not be read.
+
+    Cached per Brain path and hour, because `report()` admits every live row with one context and
+    the tests beside this module build several; the Brain read is seconds, not free.
+    """
+    import feedback
+
+    now = _now() if now is None else now
+    db = feedback.DB_PATH
+    key = (str(db), now // 3600, tuple(sorted(ledger)))
+    if key not in _ACTED_ON_CACHE:
+        try:
+            import value_chain_monitor as monitor
+
+            index, reason = monitor.acted_on_index(db, now, sorted(ledger))
+        except Exception as exc:  # noqa: BLE001
+            index, reason = None, f"{type(exc).__name__}: {str(exc)[:80]}"
+        _ACTED_ON_CACHE[key] = {"acted_on": index, "acted_on_reason": reason}
+    return _ACTED_ON_CACHE[key]
+
+
+def consumer_class(cap: dict, ctx: dict) -> tuple[str, bool, str]:
+    """(class, ok, detail) for the tenth part; `req_consumer_acts` and `consumer_report` share it."""
+    if not _has(cap, "downstream_consumer"):
+        return "undeclared", False, "no consumer declared (the fifth part names the field)"
+    res = consumer_resolution(cap, module_dir=ctx.get("module_dir"), repo_root=ctx.get("repo_root"))
+    if not res["tokens"]:
+        return (
+            "prose",
+            False,
+            (
+                "consumer named in prose, so nothing can check it: name the acting rail as "
+                "file.py:symbol"
+            ),
+        )
+    if res["unresolved"]:
+        return (
+            "unresolved",
+            False,
+            (f"declared consumer not found in this tree: {', '.join(res['unresolved'])}"),
+        )
+    consumer = res["resolved"][0]
+    if cap.get("findability_category") == EXERCISE_CATEGORY:
+        return (
+            "exercise_bound",
+            True,
+            (
+                f"consumer {consumer} resolves; an exercise-bound rail's acting is proven by the rail "
+                "exercise, not by Brain edges"
+            ),
+        )
+    index = ctx.get("acted_on")
+    if index is None or cap["capability_id"] not in index:
+        reason = ctx.get("acted_on_reason") or "no Brain on this machine"
+        return (
+            "unmeasured",
+            True,
+            f"consumer {consumer} resolves; acting unmeasured here ({reason})",
+        )
+    acted = int(index[cap["capability_id"]] or 0)
+    if acted > 0:
+        # CAPABILITY-LEVEL. An influence edge records the run that consumed this capability's
+        # output, never the rail that did it (the target event's `producer` is the Brain writer:
+        # feedback.record_run, feedback.record_outcome). So "acted" means the output reached a
+        # consumer that acted; whether it was the DECLARED symbol is not recorded anywhere today,
+        # and this detail says so rather than implying an attribution the Brain cannot make.
+        return (
+            "acting",
+            True,
+            (
+                f"consumer {consumer} resolves; this capability's output was acted on by {acted} "
+                "run(s) (value-chain monitor) — the Brain records the consuming run, not the rail, so "
+                "attribution to the declared symbol is not verified"
+            ),
+        )
+    first = first_invocation_ts(cap)
+    if first is None:
+        return (
+            "not_invoked",
+            True,
+            (
+                f"consumer {consumer} resolves; not invoked yet, the grace window opens at the first "
+                "invocation"
+            ),
+        )
+    now = int(ctx.get("now") or _now())
+    left = CONSUMER_GRACE_SECONDS - (now - first)
+    if left >= 0:
+        return (
+            "grace",
+            True,
+            (
+                f"consumer {consumer} resolves; acting unverified, {left // 86400} day(s) of grace left"
+            ),
+        )
+    return (
+        "never_acted",
+        False,
+        (
+            f"declared consumer {consumer} never acted: first invoked {(now - first) // 86400} days "
+            "ago, acted_on 0 in the monitor's window — declared, not wired"
+        ),
+    )
+
+
+def req_consumer_acts(cap: dict, ctx: dict) -> tuple[bool, str]:
+    """The declared consumer is a real symbol, and for a selected capability it has acted."""
+    _, ok, detail = consumer_class(cap, ctx)
+    return ok, detail
+
+
+def consumer_report(ledger: dict, ctx: dict, rows: list[dict]) -> dict:
+    """The tenth part over the live catalogue, with the drainable set named."""
+    classes: dict[str, list[str]] = {name: [] for name in CONSUMER_CLASSES}
+    for row in rows:
+        cls, _, _ = consumer_class(ledger[row["capability_id"]], ctx)
+        classes[cls].append(row["capability_id"])
+    return {
+        "total": len(rows),
+        "by_class": classes,
+        # `enforced`, as `findability_report` reads it: a waived row keeps the requirement in its
+        # `blocking` list but cannot fail the suite, so it is not reported as blocking here.
+        "blocking": [
+            r["capability_id"] for r in rows if "consumer_acts" in r["blocking"] and r["enforced"]
+        ],
+        "deferred": [r["capability_id"] for r in rows if "consumer_acts" in r["deferred"]],
+        # A declaration edit each: no code, no evidence to wait for.
+        "drainable": sorted(classes["prose"] + classes["unresolved"] + classes["undeclared"]),
+        "drained": not any(
+            classes[c] for c in ("never_acted", "prose", "unresolved", "undeclared")
+        ),
+    }
+
+
 REQUIREMENTS = (
     ("dedup_recorded", req_dedup_recorded),
     ("caller_exists", req_caller_exists),
     ("heartbeat", req_heartbeat),
     ("fixture", req_fixture),
     ("outcome_path", req_outcome_path),
+    ("consumer_acts", req_consumer_acts),
     ("kill_switch", req_kill_switch),
     ("rollback", req_rollback),
     ("expiry_or_cadence", req_expiry_or_cadence),
@@ -487,6 +783,8 @@ def _context(path: pathlib.Path | None = None, *, ledger: dict | None = None) ->
         "audit_rows": rows,
         "fixtures": coverage._fixture_capabilities(),
         "known_controls": known_controls(),
+        "now": _now(),
+        **acted_on_context(ledger),
         **_findability_context(sorted(ledger), path=path, ledger=ledger),
     }
 
@@ -854,6 +1152,7 @@ def report(*, path: pathlib.Path | None = None, ctx: dict | None = None) -> dict
             r["capability_id"] for r in rows if r["legacy"] and not r["admitted"]
         ),
         "findability": findability_report(ledger, ctx, rows),
+        "consumers": consumer_report(ledger, ctx, rows),
         "rows": rows,
         "commitments": commitments(),
     }
@@ -867,7 +1166,7 @@ def format_report(rep: dict) -> str:
         f"  ENFORCED (new):  {rep['enforced_total']} capability(ies) — "
         f"{len(rep['enforced_failing'])} failing",
         f"  LEGACY DEBT:     {len(rep['legacy_debt'])} pre-gate capability(ies) short of the "
-        f"full nine (visible every run, not forgiven)",
+        f"full ten (visible every run, not forgiven)",
         "",
     ]
     if rep["enforced_failing"]:
@@ -906,6 +1205,30 @@ def format_report(rep: dict) -> str:
                 + ", ".join(u["surface"] for u in find["consult_sites_unverified"])
             )
         out.append(f"                   NOT CHECKED: {find['not_checked'][:96]}...")
+    cons = rep.get("consumers") or {}
+    if cons:
+        by = {name: len(ids) for name, ids in cons["by_class"].items()}
+        out += [
+            "",
+            f"  CONSUMERS (10th): {cons['total'] - by['prose'] - by['unresolved'] - by['undeclared']}"
+            f" of {cons['total']} declare a consumer this tree can find — acting (capability-level) "
+            f"{by['acting']}, "
+            f"in grace {by['grace']}, not invoked {by['not_invoked']}, exercise-bound "
+            f"{by['exercise_bound']}, unmeasured {by['unmeasured']}",
+            f"                   never acted {by['never_acted']} (blocking {len(cons['blocking'])}, "
+            f"pre-cutoff debt {len(cons['deferred'])}); prose {by['prose']}, missing "
+            f"{by['unresolved']}, undeclared {by['undeclared']} — DRAINABLE {len(cons['drainable'])} "
+            "(a declaration edit each)",
+        ]
+        if cons["drained"]:
+            out.append(
+                "                   every declared consumer resolves; none is prose, missing or never "
+                f"acted — acting (capability-level) {by['acting']}, in grace {by['grace']}, not "
+                f"invoked {by['not_invoked']}, exercise-bound {by['exercise_bound']}, unmeasured "
+                f"{by['unmeasured']}"
+            )
+        for cid in cons["by_class"]["never_acted"]:
+            out.append(f"                   NEVER ACTED {cid}")
     if rep["legacy_debt"]:
         out += ["", "  legacy debt (pay down opportunistically; never a human queue):"]
         counts: dict[str, int] = {}
@@ -1056,20 +1379,27 @@ def _selftest() -> None:
         "rollback": "revert PR",
         "trigger_cadence": "daily",
     }
-    ctx_full = {
-        "audit_rows": {"capability:nothing-declared": {"reachable": True, "defects": []}},
-        "fixtures": {"capability:nothing-declared"},
-        # Findability is satisfied by DATA, so the satisfiable case is a synthetic binding to a
-        # synthetic consulted surface. Driving it from ctx rather than from the real table keeps
-        # this assertion independent of whatever the live binding table happens to say.
-        "bound_surfaces": {"capability:nothing-declared": ["t-consulted"]},
-        "reached_surfaces": {"t-consulted"},
-    }
-    for name, fn in REQUIREMENTS:
-        if name == "heartbeat":
-            continue  # needs real module introspection; covered on live rows
-        ok, detail = fn(full, ctx_full)
-        assert ok, f"requirement {name!r} cannot be satisfied even when declared: {detail}"
+    # The tenth part resolves the declared consumer IN A TREE, so the satisfiable case brings its
+    # own: a scratch module directory holding `x.py:consume`, handed in through ctx exactly as the
+    # findability data is, so this assertion is independent of the live tree's contents.
+    with tempfile.TemporaryDirectory(prefix="admission-selftest-") as scratch:
+        pathlib.Path(scratch, "x.py").write_text("def consume(report):\n    return report\n")
+        ctx_full = {
+            "audit_rows": {"capability:nothing-declared": {"reachable": True, "defects": []}},
+            "fixtures": {"capability:nothing-declared"},
+            # Findability is satisfied by DATA, so the satisfiable case is a synthetic binding to a
+            # synthetic consulted surface. Driving it from ctx rather than from the real table keeps
+            # this assertion independent of whatever the live binding table happens to say.
+            "bound_surfaces": {"capability:nothing-declared": ["t-consulted"]},
+            "reached_surfaces": {"t-consulted"},
+            "module_dir": scratch,
+            "repo_root": scratch,
+        }
+        for name, fn in REQUIREMENTS:
+            if name == "heartbeat":
+                continue  # needs real module introspection; covered on live rows
+            ok, detail = fn(full, ctx_full)
+            assert ok, f"requirement {name!r} cannot be satisfied even when declared: {detail}"
 
     # EVERY CAUSE THE CLASSIFIER CAN RETURN IS EITHER A PASS OR CARRIES ITS OWN FIX. A gate that
     # cannot say what would clear it is already defective, and `FINDABILITY_DRAIN` is where that
@@ -1148,7 +1478,6 @@ def _selftest() -> None:
     # the real tree and attributes what it finds correctly. Read its docstring before changing
     # either block; between them they cover the detector (synthetic input) and the live wiring
     # (real input), and dropping one leaves the other passing over nothing.
-    import tempfile
 
     with tempfile.TemporaryDirectory(prefix="cap-adm-") as td:
         probe = pathlib.Path(td)
@@ -1180,12 +1509,19 @@ def _selftest() -> None:
     spec = {
         "capability_id": "capability:proposed-thing",
         "notes": "dedup: checked X; absent",
-        "downstream_consumer": "a.py:b",
+        # A consumer that EXISTS in this tree: the tenth part resolves it before the build.
+        "downstream_consumer": "capability_admission.py:format_report",
         "learning_sink": "feedback.outcomes",
         "kill_switch": "F=0",
         "rollback": "revert",
         "trigger_cadence": "daily",
     }
+    # THE CONSUMER IS THE OTHER THING THE AUTHOR LEARNS HERE (the tenth part, 2026-10-14): a spec
+    # naming a consumer this tree does not define is told so before any code exists, which is the
+    # point of resolving the declaration rather than reading it as prose.
+    pf_unresolved = preflight({**spec, "downstream_consumer": "a.py:b"})
+    assert "consumer_acts" in pf_unresolved["declarable_missing"], pf_unresolved
+    assert "not found in this tree" in pf_unresolved["checks"]["consumer_acts"]["detail"]
     # FINDABILITY IS THE ONE THE AUTHOR MUST LEARN HERE, before writing code — a proposed
     # capability no surface will offer is the 13.62% case, and discovering that after the build is
     # a second project. So a spec with the first eight parts and no surface is NOT ready to build.
@@ -1226,7 +1562,6 @@ def _selftest() -> None:
     # ONE LEDGER READ PER REPORT: the rows are judged against the read the report made, never a
     # fresh read per row. Counted on a private ledger with a thin context, so `_context` (which
     # reads the ledger for itself) is not what is measured.
-    import tempfile
 
     with tempfile.TemporaryDirectory(prefix="admission-reads-") as td:
         one_read = pathlib.Path(td) / "capabilities.json"
