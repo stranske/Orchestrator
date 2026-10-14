@@ -75,9 +75,27 @@ def disputes(*, db: Path | None = None, now: int | None = None, days: int = 90) 
 def _packet_metadata_only(ground_truth: dict) -> bool:
     patch = ground_truth.get("diff_patch")
     patch_text = patch.get("text") if isinstance(patch, dict) else ""
-    has_patch = isinstance(patch_text, str) and bool(patch_text.strip())
+    has_patch = (
+        isinstance(patch, dict)
+        and isinstance(patch_text, str)
+        and bool(patch_text.strip())
+        and isinstance(patch.get("revision"), str)
+        and bool(patch["revision"].strip())
+        and not patch.get("truncated", False)
+    )
     criteria = ground_truth.get("acceptance_criteria")
-    has_criteria = isinstance(criteria, list) and bool(criteria)
+    has_criteria = (
+        isinstance(criteria, list)
+        and bool(criteria)
+        and all(
+            isinstance(item, dict)
+            and isinstance(item.get("text"), str)
+            and bool(item["text"].strip())
+            and isinstance(item.get("revision"), str)
+            and bool(item["revision"].strip())
+            for item in criteria
+        )
+    )
     return not (has_patch and has_criteria)
 
 
@@ -278,7 +296,8 @@ def fetch_evidence(row: dict) -> dict:
     if patch_proc.returncode:
         raise ValueError("merged PR diff patch unavailable")
     patch_text = patch_proc.stdout
-    if len(patch_text.encode("utf-8")) > MAX_DIFF_PATCH_BYTES:
+    patch_truncated = len(patch_text.encode("utf-8")) > MAX_DIFF_PATCH_BYTES
+    if patch_truncated:
         patch_text = patch_text.encode("utf-8")[:MAX_DIFF_PATCH_BYTES].decode(
             "utf-8", errors="ignore"
         )
@@ -333,7 +352,11 @@ def fetch_evidence(row: dict) -> dict:
             "merge_bound_at": merged_at or None,
             "diff_ref": f"https://github.com/{repo}/pull/{number}/files",
             "diff_summary": pr["files"]["nodes"],
-            "diff_patch": {"revision": pr["headRefOid"], "text": patch_text},
+            "diff_patch": {
+                "revision": pr["headRefOid"],
+                "text": patch_text,
+                **({"truncated": True} if patch_truncated else {}),
+            },
             "acceptance_criteria": acceptance_criteria,
             "acceptance_criteria_errors": acceptance_criteria_errors,
             "acceptance_criteria_revision": criteria_revision,

@@ -1,0 +1,18 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_adjudicator_validator_accepts_recommendation_prose ____________
+
+    def test_adjudicator_validator_accepts_recommendation_prose():
+        role = roles.ROLE_REGISTRY["adjudicator"]
+        base = proposal()
+        for text in HISTORICAL_RECOMMENDATION_PROSE:
+>           assert role.validate({**base, "recommended_next_step": text}) == []
+E           AssertionError: assert ['recommended...instructions'] == []
+E             
+E             Left contains one more item: 'recommended_next_step must not contain mutating execution instructions'
+E             Use -v to get more diff
+
+tests/test_adjudicator_retro.py:578: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_adjudicator_retro.py::test_adjudicator_validator_accepts_recommendation_prose
+1 failed in 0.38s

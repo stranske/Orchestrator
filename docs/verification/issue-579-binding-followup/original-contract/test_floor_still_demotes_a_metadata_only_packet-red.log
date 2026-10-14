@@ -1,0 +1,20 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______________ test_floor_still_demotes_a_metadata_only_packet ________________
+
+    def test_floor_still_demotes_a_metadata_only_packet():
+        metadata_row = {
+            "decision": "reject_blocker",
+            "packet": {"metadata_only": True},
+            "later_truth": "PASS",
+            "shadow_verdict": "PASS",
+        }
+        retro._apply_evidence_floor(metadata_row)
+>       assert metadata_row["disposition"] == "needs_more_evidence"
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'disposition'
+
+tests/test_adjudicator_retro.py:602: KeyError
+=========================== short test summary info ============================
+FAILED tests/test_adjudicator_retro.py::test_floor_still_demotes_a_metadata_only_packet
+1 failed in 0.26s
