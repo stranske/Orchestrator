@@ -871,7 +871,10 @@ def _recommended_next_step_is_imperative(text: str) -> bool:
     if _ADJUDICATOR_IMPERATIVE_NEXT_STEP.match(stripped):
         return True
     lowered = stripped.lower()
-    return bool(re.match(r"^\s*merge\b", lowered) and re.search(r"\b(now|this pr|immediately)\b", lowered))
+    return bool(
+        re.match(r"^\s*merge\b", lowered)
+        and re.search(r"\b(now|this pr|immediately)\b", lowered)
+    )
 
 
 def _validate_adjudicator(proposal: Any) -> list[str]:

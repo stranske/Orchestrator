@@ -283,7 +283,9 @@ def fetch_evidence(row: dict) -> dict:
         raise ValueError("merged PR diff patch unavailable")
     patch_text = patch_proc.stdout
     if len(patch_text.encode("utf-8")) > MAX_DIFF_PATCH_BYTES:
-        patch_text = patch_text.encode("utf-8")[:MAX_DIFF_PATCH_BYTES].decode("utf-8", errors="ignore")
+        patch_text = patch_text.encode("utf-8")[:MAX_DIFF_PATCH_BYTES].decode(
+            "utf-8", errors="ignore"
+        )
     acceptance_criteria: list[dict[str, str]] = []
     criteria_revision = pr["headRefOid"]
     for issue in (pr.get("closingIssuesReferences") or {}).get("nodes") or []:
