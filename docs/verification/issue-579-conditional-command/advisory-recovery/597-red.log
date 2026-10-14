@@ -1,0 +1,127 @@
+......FFFFFF.....                                                        [100%]
+=================================== FAILURES ===================================
+_ test_conditional_mutation_commands_remain_forbidden[If checks pass, then merge the PR] _
+
+command = 'If checks pass, then merge the PR'
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "After review, merge the PR",
+            "Once CI passes, please push the branch",
+            "When approved, go ahead and label the issue",
+            "If checks pass, please create the branch",
+            "After manual review, open the PR",
+            "Once approved, after review, commit the changes",
+            "If checks pass, then merge the PR",
+            "Once approved, then please push the branch",
+            "After review, then go ahead and label the issue",
+        ],
+    )
+    def test_conditional_mutation_commands_remain_forbidden(command):
+>       assert roles._recommended_next_step_is_imperative(command)
+E       AssertionError: assert False
+E        +  where False = <function _recommended_next_step_is_imperative at 0x1150ca340>('If checks pass, then merge the PR')
+E        +    where <function _recommended_next_step_is_imperative at 0x1150ca340> = roles._recommended_next_step_is_imperative
+
+tests/test_adjudicator_packet_binding.py:73: AssertionError
+_ test_conditional_mutation_commands_remain_forbidden[Once approved, then please push the branch] _
+
+command = 'Once approved, then please push the branch'
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "After review, merge the PR",
+            "Once CI passes, please push the branch",
+            "When approved, go ahead and label the issue",
+            "If checks pass, please create the branch",
+            "After manual review, open the PR",
+            "Once approved, after review, commit the changes",
+            "If checks pass, then merge the PR",
+            "Once approved, then please push the branch",
+            "After review, then go ahead and label the issue",
+        ],
+    )
+    def test_conditional_mutation_commands_remain_forbidden(command):
+>       assert roles._recommended_next_step_is_imperative(command)
+E       AssertionError: assert False
+E        +  where False = <function _recommended_next_step_is_imperative at 0x1150ca340>('Once approved, then please push the branch')
+E        +    where <function _recommended_next_step_is_imperative at 0x1150ca340> = roles._recommended_next_step_is_imperative
+
+tests/test_adjudicator_packet_binding.py:73: AssertionError
+_ test_conditional_mutation_commands_remain_forbidden[After review, then go ahead and label the issue] _
+
+command = 'After review, then go ahead and label the issue'
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "After review, merge the PR",
+            "Once CI passes, please push the branch",
+            "When approved, go ahead and label the issue",
+            "If checks pass, please create the branch",
+            "After manual review, open the PR",
+            "Once approved, after review, commit the changes",
+            "If checks pass, then merge the PR",
+            "Once approved, then please push the branch",
+            "After review, then go ahead and label the issue",
+        ],
+    )
+    def test_conditional_mutation_commands_remain_forbidden(command):
+>       assert roles._recommended_next_step_is_imperative(command)
+E       AssertionError: assert False
+E        +  where False = <function _recommended_next_step_is_imperative at 0x1150ca340>('After review, then go ahead and label the issue')
+E        +    where <function _recommended_next_step_is_imperative at 0x1150ca340> = roles._recommended_next_step_is_imperative
+
+tests/test_adjudicator_packet_binding.py:73: AssertionError
+_ test_modal_prefixed_branch_operands_remain_forbidden[Merge is-ready into main] _
+
+command = 'Merge is-ready into main'
+
+    @pytest.mark.parametrize("command", [
+        "Merge is-ready into main", "Push can-fix to origin", "Merge should-fix into main",
+    ])
+    def test_modal_prefixed_branch_operands_remain_forbidden(command):
+>       assert roles._recommended_next_step_is_imperative(command)
+E       AssertionError: assert False
+E        +  where False = <function _recommended_next_step_is_imperative at 0x1150ca340>('Merge is-ready into main')
+E        +    where <function _recommended_next_step_is_imperative at 0x1150ca340> = roles._recommended_next_step_is_imperative
+
+tests/test_adjudicator_packet_binding.py:80: AssertionError
+_ test_modal_prefixed_branch_operands_remain_forbidden[Push can-fix to origin] _
+
+command = 'Push can-fix to origin'
+
+    @pytest.mark.parametrize("command", [
+        "Merge is-ready into main", "Push can-fix to origin", "Merge should-fix into main",
+    ])
+    def test_modal_prefixed_branch_operands_remain_forbidden(command):
+>       assert roles._recommended_next_step_is_imperative(command)
+E       AssertionError: assert False
+E        +  where False = <function _recommended_next_step_is_imperative at 0x1150ca340>('Push can-fix to origin')
+E        +    where <function _recommended_next_step_is_imperative at 0x1150ca340> = roles._recommended_next_step_is_imperative
+
+tests/test_adjudicator_packet_binding.py:80: AssertionError
+_ test_modal_prefixed_branch_operands_remain_forbidden[Merge should-fix into main] _
+
+command = 'Merge should-fix into main'
+
+    @pytest.mark.parametrize("command", [
+        "Merge is-ready into main", "Push can-fix to origin", "Merge should-fix into main",
+    ])
+    def test_modal_prefixed_branch_operands_remain_forbidden(command):
+>       assert roles._recommended_next_step_is_imperative(command)
+E       AssertionError: assert False
+E        +  where False = <function _recommended_next_step_is_imperative at 0x1150ca340>('Merge should-fix into main')
+E        +    where <function _recommended_next_step_is_imperative at 0x1150ca340> = roles._recommended_next_step_is_imperative
+
+tests/test_adjudicator_packet_binding.py:80: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_adjudicator_packet_binding.py::test_conditional_mutation_commands_remain_forbidden[If checks pass, then merge the PR]
+FAILED tests/test_adjudicator_packet_binding.py::test_conditional_mutation_commands_remain_forbidden[Once approved, then please push the branch]
+FAILED tests/test_adjudicator_packet_binding.py::test_conditional_mutation_commands_remain_forbidden[After review, then go ahead and label the issue]
+FAILED tests/test_adjudicator_packet_binding.py::test_modal_prefixed_branch_operands_remain_forbidden[Merge is-ready into main]
+FAILED tests/test_adjudicator_packet_binding.py::test_modal_prefixed_branch_operands_remain_forbidden[Push can-fix to origin]
+FAILED tests/test_adjudicator_packet_binding.py::test_modal_prefixed_branch_operands_remain_forbidden[Merge should-fix into main]
+6 failed, 11 passed, 11 deselected in 0.35s

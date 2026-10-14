@@ -64,9 +64,24 @@ def test_definite_article_mutation_commands_remain_forbidden(command):
         "If checks pass, please create the branch",
         "After manual review, open the PR",
         "Once approved, after review, commit the changes",
+        "If checks pass, then merge the PR",
+        "Once approved, then please push the branch",
+        "After review, then go ahead and label the issue",
     ],
 )
 def test_conditional_mutation_commands_remain_forbidden(command):
+    assert roles._recommended_next_step_is_imperative(command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "Merge is-ready into main",
+        "Push can-fix to origin",
+        "Merge should-fix into main",
+    ],
+)
+def test_modal_prefixed_branch_operands_remain_forbidden(command):
     assert roles._recommended_next_step_is_imperative(command)
 
 
@@ -77,6 +92,7 @@ def test_conditional_mutation_commands_remain_forbidden(command):
         "Once CI passes, inspect whether the merge is appropriate",
         "If useful, recommend a push after manual approval",
         "When approved, consider whether to create the branch",
+        "If useful, then consider whether a merge is appropriate",
     ],
 )
 def test_conditional_recommendation_prose_remains_allowed(prose):

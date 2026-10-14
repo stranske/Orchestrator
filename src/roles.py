@@ -853,10 +853,10 @@ def _adjudicator_prompt(ctx: dict) -> str:
 
 
 _ADJUDICATOR_IMPERATIVE_NEXT_STEP = re.compile(
-    r"^\s*(?:(?:after|once|when|if)\b[^,;\n]+,\s*)*"
+    r"^\s*(?:(?:after|once|when|if)\b[^,;\n]+,\s*)*(?:then\s+)?"
     r"(?:please\s+)?(?:go\s+ahead\s+and\s+)?(?:"
     r"(?:please\s+)?(?:merge|push|label|claim|delegate)\b"
-    r"(?!\s+(?:may|might|could|would|should|can|is)\b)"
+    r"(?!\s+(?:may|might|could|would|should|can|is)(?:\s|$))"
     r"|(?:please\s+)?commit(?:\s+(?:the|these|your|all|changes|updates|files|code)\b|\s+and\b)"
     r"|(?:please\s+)?kill\b(?!\-)"
     r"|(?:please\s+)?open\s+(?:(?:a|the)\s+)?pr\b"
