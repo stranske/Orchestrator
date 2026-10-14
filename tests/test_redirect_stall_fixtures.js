@@ -79,7 +79,7 @@ with ExitStack() as guards:
 
     result = redirect_apply.replay_stalls(fixtures)
     assert result["total"] == 12, result
-    assert result["authorized"] >= 9, result["results"]
+    assert result["authorized"] == 12, result["results"]
     assert result["dry_run"] is True
     assert {row["fixture"] for row in result["results"]} == {
         f"historical-{n:02d}.json" for n in range(1, 13)
@@ -126,7 +126,7 @@ print(expected)
     });
     assert.equal(result.status, 0,
       [result.error?.message, result.stderr, result.stdout].filter(Boolean).join('\n'));
-    assert.match(result.stdout.trim(), /^authorized (9|1[0-2])\/12 with named agents \(dry-run\)$/);
+    assert.match(result.stdout.trim(), /^authorized 12\/12 with named agents \(dry-run\)$/);
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }
