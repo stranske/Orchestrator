@@ -1,0 +1,187 @@
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+______________ test_post_merge_recheck_honors_configured_timeout _______________
+
+post_merge_case = {'run': <function post_merge_case.<locals>.run at 0x114ae63e0>, 'calls': [], 'comments': [], 'provisions': [], ...}
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x114b9cad0>
+
+    def test_post_merge_recheck_honors_configured_timeout(post_merge_case, monkeypatch):
+        monkeypatch.setenv("ORCH_RUNTIME_AC_TIMEOUT", "37")
+        calls = []
+    
+        def verify(spec, **kwargs):
+            calls.append(kwargs)
+            return {
+                "gate": {"verdict": "PASS"},
+                "check_results": [{"type": "command", "status": "PASS"}],
+            }
+    
+        monkeypatch.setattr(runtime_ac, "run_verification", verify)
+        case = post_merge_case
+        assert gate.recheck_merged(case["spec"], case["checkout"])["result"] == "PASS"
+>       assert calls == [{"confirm_run": True, "allow_command_checks": True, "timeout": 37}]
+E       AssertionError: assert [{'confirm_ru...hecks': True}] == [{'confirm_ru...timeout': 37}]
+E         
+E         At index 0 diff: {'confirm_run': True, 'allow_command_checks': True} != {'confirm_run': True, 'allow_command_checks': True, 'timeout': 37}
+E         Use -v to get more diff
+
+tests/test_runtime_ac_shadow.py:1495: AssertionError
+_ test_post_merge_summary_preserves_valid_rows_when_one_is_malformed[not JSON] _
+
+post_merge_case = {'run': <function post_merge_case.<locals>.run at 0x114a702c0>, 'calls': [], 'comments': [], 'provisions': [], ...}
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x114b87ec0>
+payload = 'not JSON'
+
+    @pytest.mark.parametrize("payload", ["not JSON", "[]", '{"runtime_ac_post_merge": []}'])
+    def test_post_merge_summary_preserves_valid_rows_when_one_is_malformed(
+        post_merge_case, monkeypatch, payload
+    ):
+        class Connection:
+            def execute(self, *_args):
+                return self
+    
+            def fetchall(self):
+                return [
+                    (payload,),
+                    ('{"runtime_ac_post_merge":{"result":"FAIL","reopened":true}}',),
+                    ('{"rejection_codes":["invalid"]}',),
+                ]
+    
+        @contextmanager
+        def connection():
+            yield Connection()
+    
+        monkeypatch.setattr(feedback, "_conn", connection)
+>       summary = gate.post_merge_summary()
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_runtime_ac_shadow.py:1518: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/runtime_ac_gate.py:416: in post_merge_summary
+    results = [json.loads(row[0]).get("runtime_ac_post_merge", {}) for row in rows]
+               ^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/json/__init__.py:346: in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/json/decoder.py:337: in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <json.decoder.JSONDecoder object at 0x105d5c440>, s = 'not JSON', idx = 0
+
+    def raw_decode(self, s, idx=0):
+        """Decode a JSON document from ``s`` (a ``str`` beginning with
+        a JSON document) and return a 2-tuple of the Python
+        representation and the index in ``s`` where the document ended.
+    
+        This can be used to decode a JSON document from a string that may
+        have extraneous data at the end.
+    
+        """
+        try:
+            obj, end = self.scan_once(s, idx)
+        except StopIteration as err:
+>           raise JSONDecodeError("Expecting value", s, err.value) from None
+E           json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+
+/opt/anaconda3/lib/python3.12/json/decoder.py:355: JSONDecodeError
+____ test_post_merge_summary_preserves_valid_rows_when_one_is_malformed[[]] ____
+
+post_merge_case = {'run': <function post_merge_case.<locals>.run at 0x114ba3ba0>, 'calls': [], 'comments': [], 'provisions': [], ...}
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x114be9ac0>
+payload = '[]'
+
+    @pytest.mark.parametrize("payload", ["not JSON", "[]", '{"runtime_ac_post_merge": []}'])
+    def test_post_merge_summary_preserves_valid_rows_when_one_is_malformed(
+        post_merge_case, monkeypatch, payload
+    ):
+        class Connection:
+            def execute(self, *_args):
+                return self
+    
+            def fetchall(self):
+                return [
+                    (payload,),
+                    ('{"runtime_ac_post_merge":{"result":"FAIL","reopened":true}}',),
+                    ('{"rejection_codes":["invalid"]}',),
+                ]
+    
+        @contextmanager
+        def connection():
+            yield Connection()
+    
+        monkeypatch.setattr(feedback, "_conn", connection)
+>       summary = gate.post_merge_summary()
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_runtime_ac_shadow.py:1518: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    def post_merge_summary() -> dict:
+        """Read the existing event plane, including successful and unknown rechecks."""
+        try:
+            with feedback._conn() as conn:
+                rows = conn.execute(
+                    "SELECT payload_json FROM completion_events "
+                    "WHERE producer='runtime_ac_gate' AND phase='post_merge_recheck'"
+                ).fetchall()
+        except Exception as exc:
+            return {"error": str(exc)}
+>       results = [json.loads(row[0]).get("runtime_ac_post_merge", {}) for row in rows]
+                   ^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'list' object has no attribute 'get'
+
+src/runtime_ac_gate.py:416: AttributeError
+_ test_post_merge_summary_preserves_valid_rows_when_one_is_malformed[{"runtime_ac_post_merge": []}] _
+
+post_merge_case = {'run': <function post_merge_case.<locals>.run at 0x114ba00e0>, 'calls': [], 'comments': [], 'provisions': [], ...}
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x114bd8980>
+payload = '{"runtime_ac_post_merge": []}'
+
+    @pytest.mark.parametrize("payload", ["not JSON", "[]", '{"runtime_ac_post_merge": []}'])
+    def test_post_merge_summary_preserves_valid_rows_when_one_is_malformed(
+        post_merge_case, monkeypatch, payload
+    ):
+        class Connection:
+            def execute(self, *_args):
+                return self
+    
+            def fetchall(self):
+                return [
+                    (payload,),
+                    ('{"runtime_ac_post_merge":{"result":"FAIL","reopened":true}}',),
+                    ('{"rejection_codes":["invalid"]}',),
+                ]
+    
+        @contextmanager
+        def connection():
+            yield Connection()
+    
+        monkeypatch.setattr(feedback, "_conn", connection)
+>       summary = gate.post_merge_summary()
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_runtime_ac_shadow.py:1518: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/runtime_ac_gate.py:419: in post_merge_summary
+    "failed": sum(r.get("result") == "FAIL" for r in results),
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+.0 = <list_iterator object at 0x114bd9120>
+
+>       "failed": sum(r.get("result") == "FAIL" for r in results),
+                      ^^^^^
+        "reopened": sum(r.get("reopened") is True for r in results),
+        "unrunnable": sum(r.get("result") == "UNRUNNABLE" for r in results),
+    }
+E   AttributeError: 'list' object has no attribute 'get'
+
+src/runtime_ac_gate.py:419: AttributeError
+=========================== short test summary info ============================
+FAILED tests/test_runtime_ac_shadow.py::test_post_merge_recheck_honors_configured_timeout
+FAILED tests/test_runtime_ac_shadow.py::test_post_merge_summary_preserves_valid_rows_when_one_is_malformed[not JSON]
+FAILED tests/test_runtime_ac_shadow.py::test_post_merge_summary_preserves_valid_rows_when_one_is_malformed[[]]
+FAILED tests/test_runtime_ac_shadow.py::test_post_merge_summary_preserves_valid_rows_when_one_is_malformed[{"runtime_ac_post_merge": []}]
+4 failed in 0.91s

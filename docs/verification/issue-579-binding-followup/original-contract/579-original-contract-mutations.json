@@ -1,0 +1,18 @@
+[
+  {
+    "test": "test_adjudicator_validator_accepts_recommendation_prose",
+    "red_exit": 1,
+    "restored_green_exit": 0,
+    "restored_sha256": "262167f7283f30f7beeeec73f38959af2a6cab49842cc47788e96a16b4688da7",
+    "mutation": "return bool(re.search(r\"\\b(merge|push|label|claim|delegate|kill|commit|open pr|create branch)\\b\", text.lower()))",
+    "legacy_regex_source": "ad61e84e roles.py"
+  },
+  {
+    "test": "test_floor_still_demotes_a_metadata_only_packet",
+    "red_exit": 1,
+    "restored_green_exit": 0,
+    "restored_sha256": "a5a5ef0d7f153d80ea3c74543c7508fc9f0f1d1270397384530e9ee6307325bc",
+    "mutation": "return None",
+    "legacy_regex_source": "exempt all floor calls"
+  }
+]
