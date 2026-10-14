@@ -872,8 +872,7 @@ def _recommended_next_step_is_imperative(text: str) -> bool:
         return True
     lowered = stripped.lower()
     return bool(
-        re.match(r"^\s*merge\b", lowered)
-        and re.search(r"\b(now|this pr|immediately)\b", lowered)
+        re.match(r"^\s*merge\b", lowered) and re.search(r"\b(now|this pr|immediately)\b", lowered)
     )
 
 

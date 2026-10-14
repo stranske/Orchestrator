@@ -83,10 +83,6 @@ def _packet_metadata_only(ground_truth: dict) -> bool:
 
 def _row_metadata_only(row: dict) -> bool:
     packet = row.get("packet")
-    if isinstance(packet, dict) and "metadata_only" in packet:
-        return bool(packet.get("metadata_only"))
-    if row.get("metadata_only") is not None:
-        return bool(row.get("metadata_only"))
     ground_truth = (packet or {}).get("ground_truth_evidence") if isinstance(packet, dict) else None
     if isinstance(ground_truth, dict):
         return _packet_metadata_only(ground_truth)

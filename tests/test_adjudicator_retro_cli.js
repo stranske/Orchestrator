@@ -1203,7 +1203,7 @@ def response(args):
     return {"data": {"repository": {"pullRequest": pr}}}
 
 proposal = {
-    "decision": "needs_more_evidence", "confidence": "low",
+    "decision": "uphold_blocker" if recovery else "needs_more_evidence", "confidence": "low",
     "rationale": "Gate statuses alone do not prove acceptance.",
     "evidence_assessment": [{"claim": "Missing test", "status": "insufficient",
                              "evidence_ref": "last-gate", "reason": "Inspect source"}],
@@ -1224,6 +1224,9 @@ def checkpoint(report, route, transport):
 
 with (
     patch.object(retro, "_gh_json", side_effect=response),
+    patch.object(retro.subprocess, "run", return_value=subprocess.CompletedProcess(
+        [], 0, "diff --git a/tests/test_acceptance.py b/tests/test_acceptance.py", ""
+    )),
     patch.object(roles, "route_role", return_value={"agent": "gemini"}) as route,
     patch.object(roles, "_role_capability_event"),
     patch.object(roles.dispatcher, "offload", return_value={
@@ -1346,7 +1349,7 @@ for (const [scenario, reads] of [
     assert.equal(failed.decision, undefined);
     assert.equal(successful.target, 'owner/repo#2');
     assert.equal(successful.error, undefined);
-    assert.equal(successful.decision, 'needs_more_evidence', JSON.stringify(successful));
+    assert.equal(successful.decision, 'uphold_blocker', JSON.stringify(successful));
     assert.equal(initial.routes, 1);
     assert.equal(initial.calls, 1);
     assert.deepEqual(initial.role_ids, [successful.role_run_id]);
@@ -1361,7 +1364,7 @@ for (const [scenario, reads] of [
     const repaired = recovered.report.rows[0];
     assert.equal(repaired.case_id, failed.case_id);
     assert.equal(repaired.error, undefined);
-    assert.equal(repaired.decision, 'needs_more_evidence');
+    assert.equal(repaired.decision, 'uphold_blocker');
     assert.ok(repaired.role_run_id);
     assert.notEqual(repaired.role_run_id, successful.role_run_id);
     assert.deepEqual(recovered.report.rows[1], successful,
