@@ -53,3 +53,31 @@ def test_definite_article_mutation_commands_remain_forbidden(command):
         assert roles._recommended_next_step_is_imperative(
             prefix + command.removeprefix("Please ").removeprefix("Go ahead and ")
         )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "After review, merge the PR",
+        "Once CI passes, please push the branch",
+        "When approved, go ahead and label the issue",
+        "If checks pass, please create the branch",
+        "After manual review, open the PR",
+        "Once approved, after review, commit the changes",
+    ],
+)
+def test_conditional_mutation_commands_remain_forbidden(command):
+    assert roles._recommended_next_step_is_imperative(command)
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "After review, recommend merging the PR",
+        "Once CI passes, inspect whether the merge is appropriate",
+        "If useful, recommend a push after manual approval",
+        "When approved, consider whether to create the branch",
+    ],
+)
+def test_conditional_recommendation_prose_remains_allowed(prose):
+    assert not roles._recommended_next_step_is_imperative(prose)

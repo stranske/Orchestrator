@@ -1,0 +1,124 @@
+...........FFFFFF....                                                    [100%]
+=================================== FAILURES ===================================
+_ test_conditional_mutation_commands_remain_forbidden[After review, merge the PR] _
+
+command = 'After review, merge the PR'
+
+    @pytest.mark.parametrize("command", [
+        "After review, merge the PR",
+        "Once CI passes, please push the branch",
+        "When approved, go ahead and label the issue",
+        "If checks pass, please create the branch",
+        "After manual review, open the PR",
+        "Once approved, after review, commit the changes",
+    ])
+    def test_conditional_mutation_commands_remain_forbidden(command):
+>       assert roles._recommended_next_step_is_imperative(command)
+E       AssertionError: assert False
+E        +  where False = <function _recommended_next_step_is_imperative at 0x106766520>('After review, merge the PR')
+E        +    where <function _recommended_next_step_is_imperative at 0x106766520> = roles._recommended_next_step_is_imperative
+
+tests/test_adjudicator_packet_binding.py:67: AssertionError
+_ test_conditional_mutation_commands_remain_forbidden[Once CI passes, please push the branch] _
+
+command = 'Once CI passes, please push the branch'
+
+    @pytest.mark.parametrize("command", [
+        "After review, merge the PR",
+        "Once CI passes, please push the branch",
+        "When approved, go ahead and label the issue",
+        "If checks pass, please create the branch",
+        "After manual review, open the PR",
+        "Once approved, after review, commit the changes",
+    ])
+    def test_conditional_mutation_commands_remain_forbidden(command):
+>       assert roles._recommended_next_step_is_imperative(command)
+E       AssertionError: assert False
+E        +  where False = <function _recommended_next_step_is_imperative at 0x106766520>('Once CI passes, please push the branch')
+E        +    where <function _recommended_next_step_is_imperative at 0x106766520> = roles._recommended_next_step_is_imperative
+
+tests/test_adjudicator_packet_binding.py:67: AssertionError
+_ test_conditional_mutation_commands_remain_forbidden[When approved, go ahead and label the issue] _
+
+command = 'When approved, go ahead and label the issue'
+
+    @pytest.mark.parametrize("command", [
+        "After review, merge the PR",
+        "Once CI passes, please push the branch",
+        "When approved, go ahead and label the issue",
+        "If checks pass, please create the branch",
+        "After manual review, open the PR",
+        "Once approved, after review, commit the changes",
+    ])
+    def test_conditional_mutation_commands_remain_forbidden(command):
+>       assert roles._recommended_next_step_is_imperative(command)
+E       AssertionError: assert False
+E        +  where False = <function _recommended_next_step_is_imperative at 0x106766520>('When approved, go ahead and label the issue')
+E        +    where <function _recommended_next_step_is_imperative at 0x106766520> = roles._recommended_next_step_is_imperative
+
+tests/test_adjudicator_packet_binding.py:67: AssertionError
+_ test_conditional_mutation_commands_remain_forbidden[If checks pass, please create the branch] _
+
+command = 'If checks pass, please create the branch'
+
+    @pytest.mark.parametrize("command", [
+        "After review, merge the PR",
+        "Once CI passes, please push the branch",
+        "When approved, go ahead and label the issue",
+        "If checks pass, please create the branch",
+        "After manual review, open the PR",
+        "Once approved, after review, commit the changes",
+    ])
+    def test_conditional_mutation_commands_remain_forbidden(command):
+>       assert roles._recommended_next_step_is_imperative(command)
+E       AssertionError: assert False
+E        +  where False = <function _recommended_next_step_is_imperative at 0x106766520>('If checks pass, please create the branch')
+E        +    where <function _recommended_next_step_is_imperative at 0x106766520> = roles._recommended_next_step_is_imperative
+
+tests/test_adjudicator_packet_binding.py:67: AssertionError
+_ test_conditional_mutation_commands_remain_forbidden[After manual review, open the PR] _
+
+command = 'After manual review, open the PR'
+
+    @pytest.mark.parametrize("command", [
+        "After review, merge the PR",
+        "Once CI passes, please push the branch",
+        "When approved, go ahead and label the issue",
+        "If checks pass, please create the branch",
+        "After manual review, open the PR",
+        "Once approved, after review, commit the changes",
+    ])
+    def test_conditional_mutation_commands_remain_forbidden(command):
+>       assert roles._recommended_next_step_is_imperative(command)
+E       AssertionError: assert False
+E        +  where False = <function _recommended_next_step_is_imperative at 0x106766520>('After manual review, open the PR')
+E        +    where <function _recommended_next_step_is_imperative at 0x106766520> = roles._recommended_next_step_is_imperative
+
+tests/test_adjudicator_packet_binding.py:67: AssertionError
+_ test_conditional_mutation_commands_remain_forbidden[Once approved, after review, commit the changes] _
+
+command = 'Once approved, after review, commit the changes'
+
+    @pytest.mark.parametrize("command", [
+        "After review, merge the PR",
+        "Once CI passes, please push the branch",
+        "When approved, go ahead and label the issue",
+        "If checks pass, please create the branch",
+        "After manual review, open the PR",
+        "Once approved, after review, commit the changes",
+    ])
+    def test_conditional_mutation_commands_remain_forbidden(command):
+>       assert roles._recommended_next_step_is_imperative(command)
+E       AssertionError: assert False
+E        +  where False = <function _recommended_next_step_is_imperative at 0x106766520>('Once approved, after review, commit the changes')
+E        +    where <function _recommended_next_step_is_imperative at 0x106766520> = roles._recommended_next_step_is_imperative
+
+tests/test_adjudicator_packet_binding.py:67: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_adjudicator_packet_binding.py::test_conditional_mutation_commands_remain_forbidden[After review, merge the PR]
+FAILED tests/test_adjudicator_packet_binding.py::test_conditional_mutation_commands_remain_forbidden[Once CI passes, please push the branch]
+FAILED tests/test_adjudicator_packet_binding.py::test_conditional_mutation_commands_remain_forbidden[When approved, go ahead and label the issue]
+FAILED tests/test_adjudicator_packet_binding.py::test_conditional_mutation_commands_remain_forbidden[If checks pass, please create the branch]
+FAILED tests/test_adjudicator_packet_binding.py::test_conditional_mutation_commands_remain_forbidden[After manual review, open the PR]
+FAILED tests/test_adjudicator_packet_binding.py::test_conditional_mutation_commands_remain_forbidden[Once approved, after review, commit the changes]
+6 failed, 15 passed in 0.53s
