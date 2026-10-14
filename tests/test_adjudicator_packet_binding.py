@@ -49,3 +49,7 @@ def test_complete_versioned_evidence_remains_gradeable():
 )
 def test_definite_article_mutation_commands_remain_forbidden(command):
     assert roles._recommended_next_step_is_imperative(command)
+    for prefix in ("Please go ahead and ", "Go ahead and please "):
+        assert roles._recommended_next_step_is_imperative(
+            prefix + command.removeprefix("Please ").removeprefix("Go ahead and ")
+        )
