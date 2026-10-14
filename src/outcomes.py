@@ -1875,6 +1875,59 @@ def backfill_triage_disagreements(*, limit: int = 100, _state_fn=None) -> dict:
     return result
 
 
+def link_triage_consumption(*, now: float | None = None, limit: int = 100) -> dict:
+    """Credit only a completed first downstream run matching the consumed pick.
+
+    Stable attempt identities make retry after an interrupted link append safe.
+    Nothing launches a worker or upgrades rejected counterfactual role edges.
+    """
+    import triage_shadow
+
+    now = time.time() if now is None else now
+    consumed = triage_shadow._read_rows(triage_shadow.consumed_path())
+    linked = {row["consumed_ts"] for row in triage_shadow._read_rows(triage_shadow.linked_path())}
+    result: dict = {"followed": [], "not_followed": [], "pending": []}
+    for row in [r for r in consumed if r["ts"] not in linked][: max(0, limit)]:
+        with feedback._conn() as conn:
+            source = conn.execute(
+                "SELECT role_name FROM runs WHERE run_id=? AND mode='role'", (row["role_run_id"],)
+            ).fetchone()
+            run = conn.execute(
+                "SELECT run_id FROM runs WHERE target=? AND mode != 'role' "
+                "AND ts > ? ORDER BY ts,run_id LIMIT 1",
+                (row["picked"], row["ts"] / 1_000_000_000),
+            ).fetchone()
+            completed = (
+                run
+                and conn.execute(
+                    "SELECT 1 FROM completion_events WHERE run_id=? "
+                    "AND event_type='completion' AND phase IN ('execution','outcome','durability') "
+                    "AND validation_status != 'rejected' LIMIT 1",
+                    (run[0],),
+                ).fetchone()
+            )
+        if run and completed and source and source[0] == "triage":
+            edge = feedback.record_capability_consumption(
+                capability_id="role-triage",
+                capability_version_id=row["capability_version_id"],
+                source_run_id=row["role_run_id"],
+                target_run_id=run[0],
+                accepted=True,
+                producer="triage_consumption",
+                attempt_id=str(row["ts"]),
+            )
+            record = {"consumed_ts": row["ts"], "status": "followed", "run_id": run[0]}
+            triage_shadow._append(triage_shadow.linked_path(), record)
+            result["followed"].append({**record, "edge": edge})
+        elif not run and now - row["ts"] / 1_000_000_000 >= 48 * 3600:
+            record = {"consumed_ts": row["ts"], "status": "not_followed", "run_id": None}
+            triage_shadow._append(triage_shadow.linked_path(), record)
+            result["not_followed"].append(record)
+        else:
+            result["pending"].append(row["ts"])
+    return result
+
+
 def ingest_outcomes(
     mode: str = "remote", dry_run: bool = False, _state_fn=None, *, now: int | None = None
 ) -> dict:

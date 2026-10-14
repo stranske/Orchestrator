@@ -1,0 +1,38 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows ____
+
+consumable = ['stranske/Orchestrator#1', 'stranske/Orchestrator#3', 'stranske/Orchestrator#2', 'stranske/Orchestrator#4']
+
+    def test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows(consumable):
+        targets = consumable + ["stranske/Orchestrator#5"]
+        result = triage_shadow.consume(targets, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+        assert result["consumed"] is True
+        assert result["ordered_targets"] == [
+            consumable[1],
+            consumable[2],
+            consumable[3],
+            consumable[0],
+            targets[-1],
+        ]
+        assert len(result["ordered_targets"]) == len(set(targets))
+        feedback.record_run(
+            "fixture-worker", result["ordered_targets"][0], "implement", "codex", mode="local", ts=102
+        )
+        # Trigger/decision events from record_run are not a completed worker.
+        assert outcomes.link_triage_consumption(now=103)["followed"] == []
+        feedback.record_completion_event("fixture-worker", status="succeeded")
+        assert len(outcomes.link_triage_consumption(now=104)["followed"]) == 1
+        with feedback._conn() as conn:
+>           assert conn.execute(
+                "SELECT capability_id,capability_version_id,accepted,target_run_id FROM influence_edges WHERE influence_type='capability'"
+            ).fetchall() == [("role-triage", "triage-v1", 1, "fixture-worker")]
+E           AssertionError: assert [] == [('role-triag...ture-worker')]
+E             
+E             Right contains one more item: ('role-triage', 'triage-v1', 1, 'fixture-worker')
+E             Use -v to get more diff
+
+tests/test_triage_shadow.py:509: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_triage_shadow.py::test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows
+1 failed in 0.31s
