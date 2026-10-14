@@ -17,6 +17,7 @@ import marshal
 import os
 import re
 import shlex
+import sqlite3
 import tempfile
 import time
 from collections import OrderedDict
@@ -1685,6 +1686,7 @@ DECLARATION_FIELDS: tuple[str, ...] = (
     "kill_switch_category",
     "control_point",
     "kill_switch_rationale",
+    "verdict_exempt",
     # The findability exemption, carried here for the same reason as the kill-switch categories: a
     # declaration typed into the running instance's JSON is machine-local and invisible to review.
     # `capability_admission.req_findable` reads these two, and both are required together.
@@ -1782,7 +1784,12 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
             "ORCH_DISABLE_STEPS, plus ORCH_OFFLOAD_DISABLED on the transport."
         ),
     },
+    "capability-propensity": {
+        "verdict_exempt": "observer",
+        "notes": "Dedup #584: existing propensity report and selection exemption; report comparison is not a delivery verdict.",
+    },
     "redirect-policy": {
+        "verdict_exempt": "observer",
         "kill_switch_category": "compute_only",
         "control_point": "ORCH_DISABLE_STEPS",
         "kill_switch_rationale": (
@@ -3319,6 +3326,28 @@ def production_run_verdicts(cap: dict[str, Any]) -> int:
     )
 
 
+def _consumer_action_counts(*, now: int, path: Path, conn=None) -> dict[str, int | None]:
+    """Reuse the value-chain monitor's window and accepted-edge classification, read-only."""
+    import value_chain_monitor
+
+    try:
+        db = feedback.DB_PATH
+        if conn is not None:
+            db_name = next(
+                (r[2] for r in conn.execute("PRAGMA database_list") if r[1] == "main"), ""
+            )
+            if not db_name:
+                return {}
+            db = Path(db_name)
+        inputs = value_chain_monitor._brain(
+            Path(db), now - value_chain_monitor.WINDOW_DAYS * 86400, now
+        )
+        report = value_chain_monitor.report(now=now, path=path, inputs=inputs)
+        return {r["capability"]: r["acted_on"] for r in report["rows"]}
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
+        return {}  # An unread monitor is unmeasured, never zero actions.
+
+
 def usage_report(
     report: dict[str, Any], *, now: int | None = None, conn=None, path: Path | None = None
 ) -> dict[str, Any]:
@@ -3358,10 +3387,25 @@ def usage_report(
     import capability_propensity  # lazy: that module imports THIS one at load time
 
     verdict_stats = capability_propensity.usefulness(path=verdict_path, now=current)
+    action_counts = _consumer_action_counts(now=current, path=verdict_path, conn=conn)
     for row in rows:
         verdict = verdict_stats["rows"].get(row["capability_id"], {})
         row["production_useful"] = verdict.get("useful", 0)
         row["fixture_passes"] = verdict.get("fixture_passes", 0)
+        exemption = capability_propensity.verdict_exempt_reason(
+            report["capabilities"][row["capability_id"]]
+        )
+        row["verdict_exempt_reason"] = exemption
+        row["observer_noise"] = verdict.get("observer_noise", {})
+        row["consumer_actions"] = action_counts.get(row["capability_id"])
+        if exemption:
+            row["production_run_verdicts"] = 0
+            row["unblock"] = {
+                **row["unblock"],
+                "action": "observe consumer actions; verdict n/a",
+                "feed": False,
+                "blocker": "verdict exempt",
+            }
     capabilities_with_verdict = sum(1 for row in verdict_stats["rows"].values() if row["resolved"])
     capabilities_with_outcome_link = (
         None
@@ -3499,12 +3543,19 @@ def format_usage_report(usage: dict[str, Any]) -> str:
     ]
     for row in usage["rows"]:
         d = row["debt"]
+        exemption = row.get("verdict_exempt_reason")
+        actions = row.get("consumer_actions")
+        verdict_text = (
+            f"verdict n/a ({exemption}); consumer actions {actions if actions is not None else 'unmeasured'}"
+            if exemption
+            else f"production useful {row['production_useful']} / fixture passes {row['fixture_passes']}"
+        )
         lines.append(
             f"| {row['capability_id']} | {row['status']} | {row['liveness']} | "
             f"{row['usage']['invocations_per_week']} | "
             f"{row['fleet_edges'] if row['fleet_edges'] is not None else 'unavailable'} | "
             f"{row.get('production_run_verdicts', 0)} | "
-            f"production useful {row['production_useful']} / fixture passes {row['fixture_passes']} | "
+            f"{verdict_text} | "
             f"{d['durable_reuses']} | {d['required']} | "
             f"{row['unblock']['action']} |"
         )

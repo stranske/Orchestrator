@@ -1,0 +1,7 @@
+capabilities.py rollback-drain selftest: OK (pending set by regression evidence drains with it, through a named event, and a pending written by other machinery is left alone)
+capabilities.py attributable-failure selftest: OK (churn and advisory self-edges are excluded from alpha/beta and named in the readiness view, one tally_class feeds both consumers, and the role-id naming convention is pinned)
+capabilities.py renewal selftest: OK (the old way back fails, evidence required, an expiry retirement revives to its prior status, renewals never stack, a decision stays even worded like the timeout, an artifact-owned expiry is refused)
+capabilities.py read-cache selftest: OK (an unchanged ledger is parsed once, a mutated result is never shared, and a same-size rewrite with its mtime restored is still seen)
+capabilities.py shared-lock selftest: OK (a read lets another reader in and keeps a writer out; a write keeps out both)
+capabilities.py split-invocations selftest: OK (an advice: ref is a trial and nothing else is, only invocation events count, a tie goes to the later event, the field is unread)
+capabilities.py selftest: OK (+ usage rate / evidence debt / unblock classification, gate readiness w/ never-pass-on-silence)

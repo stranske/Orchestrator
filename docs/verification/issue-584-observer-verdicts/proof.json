@@ -1,0 +1,32 @@
+{
+  "source": "src/capability_propensity.py",
+  "sha256": "467410e9274ca8ced75dc2d91482a6a250764ec939a21923eea7ab6a3aa409d4",
+  "cases": [
+    {
+      "mutation": "refusal",
+      "command": [
+        "python3",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_capabilities.py::test_record_usefulness_refuses_an_exempt_capability"
+      ],
+      "red_exit": 1,
+      "green_exit": 0,
+      "restored_sha256": "467410e9274ca8ced75dc2d91482a6a250764ec939a21923eea7ab6a3aa409d4"
+    },
+    {
+      "mutation": "tick",
+      "command": [
+        "python3",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_capabilities.py::test_tick_evidence_records_no_verdict_for_an_observer"
+      ],
+      "red_exit": 1,
+      "green_exit": 0,
+      "restored_sha256": "467410e9274ca8ced75dc2d91482a6a250764ec939a21923eea7ab6a3aa409d4"
+    }
+  ]
+}

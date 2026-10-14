@@ -64,7 +64,7 @@ def test_a_changed_projection_rebaselines_instead_of_minting_a_verdict(tmp_path,
     cp.tick_evidence(now=now, state_dir=state, path=ledger, steps=steps)
     write({"a": [{"id": "a"}], "b": [{"id": "b"}]}, now + 1)
     second = cp.tick_evidence(now=now + 86400, state_dir=state, path=ledger, steps=steps)
-    assert second["evaluated"][0]["useful"] is False
+    assert second["evaluated"][0]["report_changed"] is False
     monkeypatch.setattr(cp, "TICK_FINDING_FIELDS", {"obs": {"a": ("id",)}})
     write({"a": [{"id": "a"}], "b": [{"id": "changed"}]}, now + 2)
     changed = cp.tick_evidence(now=now + 2 * 86400, state_dir=state, path=ledger, steps=steps)
@@ -72,10 +72,10 @@ def test_a_changed_projection_rebaselines_instead_of_minting_a_verdict(tmp_path,
     assert changed["evaluated"] == [] and changed["verdicts_recorded"] == 0
     write({"a": [{"id": "a"}], "b": [{"id": "changed"}]}, now + 3)
     third = cp.tick_evidence(now=now + 3 * 86400, state_dir=state, path=ledger, steps=steps)
-    assert third["evaluated"][0]["useful"] is False
+    assert third["evaluated"][0]["report_changed"] is False
     write({"a": [{"id": "new"}], "b": [{"id": "changed"}]}, now + 4)
     fourth = cp.tick_evidence(now=now + 4 * 86400, state_dir=state, path=ledger, steps=steps)
-    assert fourth["evaluated"][0]["useful"] is True
+    assert fourth["evaluated"][0]["report_changed"] is True
 
 
 def test_a_report_dropping_a_declared_key_rebaselines(tmp_path, monkeypatch):
@@ -100,4 +100,4 @@ def test_a_legacy_state_entry_with_unchanged_keys_is_still_graded(tmp_path, monk
     state_path.write_text(json.dumps(blob), encoding="utf-8")
     write({"a": [{"id": "changed"}], "b": [{"id": "b"}]}, now + 1)
     out = cp.tick_evidence(now=now + 86400, state_dir=state, path=ledger, steps=steps)
-    assert out["evaluated"][0]["useful"] is True
+    assert out["evaluated"][0]["report_changed"] is True

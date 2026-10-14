@@ -1238,6 +1238,15 @@ def usefulness(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = N
                         )
                     )
     for cap_id, row in rows.items():
+        exemption = verdict_exempt_reason(caps[cap_id])
+        row["verdict_exempt_reason"] = exemption
+        row["observer_noise"] = {}
+        if exemption:
+            # Append-only history remains intact; these never belonged in delivery rates.
+            for key in ("useful", "not_useful", "fixture_passes", "fixture_failures"):
+                row["observer_noise"][key] = row[key]
+                row[key] = 0
+            verdicts[cap_id] = []
         row["declines_by_kind"] = dict(sorted(row["declines_by_kind"].items()))
         resolved = row["useful"] + row["not_useful"]
         row["resolved"] = resolved
@@ -1796,6 +1805,10 @@ def record_usefulness(
     discount. It cannot be inferred, and inferring independence is exactly the error that turned
     three runs of one model into eleven independent successes.
     """
+    cap = capabilities.load_declared(path or capabilities.REG).get(capability_id)
+    exemption = verdict_exempt_reason(cap)
+    if exemption:
+        raise ValueError(f"{capability_id}: usefulness verdict exempt ({exemption})")
     if not str(evidence).strip():
         raise ValueError("a usefulness verdict requires evidence naming what changed")
     source_tag = verdict_source(experiment_id, source)
@@ -2685,7 +2698,7 @@ TICK_VERDICT_KIND = "observer_output_change"
 # "useful" on every run it will ever make -- a 100% usefulness rate that measures the calendar. So a
 # projection keeps IDENTITY and VERDICT fields and drops everything else, and
 # `_selftest_tick_evidence` re-feeds identical findings with moved counters and timestamps and
-# asserts the verdict is NOT useful.
+# asserts the report delta is unchanged, without recording a verdict.
 #
 # An empty tuple means the value needs no field selection: a list of ids, or a map of id lists, is
 # already identity-only.
@@ -2925,7 +2938,7 @@ def tick_evidence(
     record: bool = True,
     budget_s: float | None = None,
 ) -> dict:
-    """Consult the advisor for the `tick` surface and record earned usefulness verdicts.
+    """Consult the tick surface and retain report deltas without scoring exempt observers.
 
     Called every tick from `orchestrate.sh`, BELOW `ORCH-ANCHOR: heartbeat-export` (a producer above
     it records nothing, and `capability_activation_audit.heartbeat_env_gate` fails the suite if one
@@ -3028,7 +3041,9 @@ def tick_evidence(
             "verdicts_recorded": 0,
             "triggers_recorded": 0,
             "matches_recorded": 0,
-            "gradable": sorted(_tick_gradable(bound, caps)),
+            "gradable": [
+                c for c in sorted(_tick_gradable(bound, caps)) if not verdict_exempt_reason(caps[c])
+            ],
             "awaiting_regeneration": sorted(_tick_gradable(bound, caps)),
             "reason": "no cadence artifact was regenerated since the last evaluation, and "
             "today's consult is already recorded — nothing to add",
@@ -3185,7 +3200,8 @@ def tick_evidence(
                     f"new was reported, and silence is not usefulness"
                 )
             recorded = False
-            if record:
+            exemption = verdict_exempt_reason(cap_row)
+            if record and not exemption:
                 try:
                     recorded = record_usefulness(
                         cap_id,
@@ -3222,8 +3238,13 @@ def tick_evidence(
             evaluated.append(
                 {
                     **entry,
-                    "graded": True,
-                    "useful": changed,
+                    "graded": not bool(exemption),
+                    **(
+                        {"reason": "verdict_exempt", "detail": exemption}
+                        if exemption
+                        else {"useful": changed}
+                    ),
+                    "report_changed": changed,
                     "previous_fingerprint": prev_fp,
                     "changed_keys": delta,
                     "recorded": recorded,
@@ -3244,7 +3265,8 @@ def tick_evidence(
 
     state["last_consult_day"] = day
     state["schema"] = 1
-    gradable = sorted(_tick_gradable(bound, caps))
+    projectable = sorted(_tick_gradable(bound, caps))
+    gradable = [c for c in projectable if not verdict_exempt_reason(caps[c])]
     acted = {e["capability_id"] for e in evaluated} | {b["capability_id"] for b in baselined}
     report_out = {
         **base,
@@ -3262,17 +3284,15 @@ def tick_evidence(
         "skipped": skipped,
         "matches_recorded": matches,
         "triggers_recorded": triggers,
-        # BOTH QUANTITIES, ALWAYS, IN ONE PLACE. `verdicts_recorded` is what landed;
-        # `gradable`/`awaiting_regeneration` is what CAN still land. "0 verdicts" beside "3 gradable,
-        # awaiting regeneration" reads as cadence; "0 verdicts, 0 gradable" reads as a deadlock, and
-        # that difference is the whole point of printing them together.
+        # Reporting cadence remains observable even when its rows are verdict-exempt.
+        # Regeneration can produce a delta, without producing a usefulness verdict.
         "verdicts_recorded": verdicts,
         "gradable": gradable,
-        "awaiting_regeneration": [c for c in gradable if c not in acted],
+        "awaiting_regeneration": [c for c in projectable if c not in acted],
         "not_gradable": {s["capability_id"]: s["reason"] for s in skipped},
         "ceiling": {
             "ticks_per_day": 24,
-            "structural_verdicts_per_day": len(bound),
+            "structural_verdicts_per_day": len(gradable),
             "structural_basis": "the experiment id is scoped to the UTC day, so the "
             "record_usefulness idempotency key admits at most one verdict per "
             "bound capability per day however many ticks run",
@@ -3675,7 +3695,7 @@ def _selftest_tick_evidence() -> None:
                 "obs-daily",
                 "obs-weekly",
             ], r1["advice_capabilities"]
-            assert r1["gradable"] == ["obs-daily", "obs-weekly"], r1["gradable"]
+            assert r1["gradable"] == [], r1["gradable"]
 
             # 2. NO FRESH ARTIFACT -> NOTHING RECORDED AT ALL. This is the bound that keeps 24
             #    ticks a day from becoming 96 data points.
@@ -3685,18 +3705,18 @@ def _selftest_tick_evidence() -> None:
                 assert rn["triggers_recorded"] == 0, (tick, rn)
                 assert rn["matches_recorded"] == 0, (tick, rn)
 
-            # 3. AN IDENTICAL REPORT IS NOT USEFUL, even though every counter and timestamp in it
+            # 3. AN IDENTICAL REPORT REMAINS UNSCORED, even though every counter and timestamp in it
             #    moved. THE central assertion: without the field projection this is `useful=True`
             #    and the ranking measures the calendar.
             write("obs-daily.json", daily(["range-lane-rollout"], [], 99), now + 1000)
             r3 = tick_evidence(now=now + 86400, state_dir=state_dir, path=ledger, steps=t_steps)
             got = {e["capability_id"]: e for e in r3["evaluated"]}
-            assert got["obs-daily"]["graded"] is True, got
-            assert got["obs-daily"]["useful"] is False, got["obs-daily"]
+            assert got["obs-daily"]["graded"] is False, got
+            assert got["obs-daily"]["report_changed"] is False, got["obs-daily"]
             assert "IDENTICAL" in got["obs-daily"]["evidence"], got["obs-daily"]["evidence"]
-            assert r3["verdicts_recorded"] == 1, r3
+            assert r3["verdicts_recorded"] == 0, r3
 
-            # 4. A NEW FINDING IS USEFUL, and the evidence names what moved.
+            # 4. A NEW FINDING IS A REPORT DELTA, never a usefulness verdict.
             write(
                 "obs-daily.json",
                 daily(["range-lane-rollout", "new-defect"], [], 5),
@@ -3704,7 +3724,7 @@ def _selftest_tick_evidence() -> None:
             )
             r4 = tick_evidence(now=now + 2 * 86400, state_dir=state_dir, path=ledger, steps=t_steps)
             got = {e["capability_id"]: e for e in r4["evaluated"]}
-            assert got["obs-daily"]["useful"] is True, got["obs-daily"]
+            assert got["obs-daily"]["report_changed"] is True, got["obs-daily"]
             assert any(d.startswith("overdue +1") for d in got["obs-daily"]["changed_keys"]), got[
                 "obs-daily"
             ]["changed_keys"]
@@ -3714,14 +3734,14 @@ def _selftest_tick_evidence() -> None:
                 now=now + 3 * 86400, state_dir=state_dir, path=ledger, steps=t_steps
             )
             got = {e["capability_id"]: e for e in r4b["evaluated"]}
-            assert got["obs-daily"]["useful"] is True, got["obs-daily"]
+            assert got["obs-daily"]["report_changed"] is True, got["obs-daily"]
             # SILENCE IS NOT USEFULNESS: an empty finding set that STAYS empty is not useful.
             write("obs-daily.json", daily([], [], 8), now + 4000)
             r4c = tick_evidence(
                 now=now + 4 * 86400, state_dir=state_dir, path=ledger, steps=t_steps
             )
             got = {e["capability_id"]: e for e in r4c["evaluated"]}
-            assert got["obs-daily"]["useful"] is False, got["obs-daily"]
+            assert got["obs-daily"]["report_changed"] is False, got["obs-daily"]
 
             # 5. A NON-OBSERVER GETS NO OUTPUT-CHANGE VERDICT, but its production IS recorded, so it
             #    never reads as "offered and skipped" when it really ran.
@@ -3753,16 +3773,16 @@ def _selftest_tick_evidence() -> None:
             assert got["obs-weekly"].get("reason") == "unprojectable", got["obs-weekly"]
             assert got["obs-weekly"]["graded"] is False, got["obs-weekly"]
 
-            # 7. THE VERDICT LANDS AS REAL PROPENSITY EVIDENCE — assert through the PUBLIC surface
+            # 7. NO OBSERVER VERDICT ENTERS PROPENSITY — assert through the PUBLIC surface
             #    the ranking actually reads, not through the state file this module wrote.
             # REAL clock, deliberately: `capabilities.heartbeat` stamps events with `_now()`, so
             # the 90-day window must be evaluated against the same clock that wrote them. Passing
             # the fixture clock here reads every event as out-of-window and the assertions below
             # would pass vacuously against zeroes.
             u = usefulness(path=ledger)["rows"]
-            assert u["obs-daily"]["resolved"] >= 3, u["obs-daily"]
-            assert u["obs-daily"]["useful"] >= 2, u["obs-daily"]
-            assert u["obs-daily"]["usefulness_rate"] is not None, u["obs-daily"]
+            assert u["obs-daily"]["resolved"] == 0, u["obs-daily"]
+            assert u["obs-daily"]["useful"] == 0, u["obs-daily"]
+            assert u["obs-daily"]["usefulness_rate"] is None, u["obs-daily"]
             assert u["deliverer"]["resolved"] == 0, "a non-observer must earn no output verdict"
             # The trial carries a real control arm: a bound candidate that did not run that day.
             trials = {t["experiment_id"]: t for t in experiments(path=ledger)}
@@ -3781,9 +3801,7 @@ def _selftest_tick_evidence() -> None:
                 now=now + 6 * 86400, state_dir=state_dir, path=ledger, steps=t_steps
             )  # consumes day 6's single allowance
             before = usefulness(path=ledger)["rows"]["obs-daily"]["resolved"]
-            assert (
-                before >= 1
-            ), f"the fixture produced no verdicts, so 'no further verdicts' is vacuous: {before}"
+            assert before == 0, f"an exempt observer produced a verdict: {before}"
             for bump in range(1, 6):
                 # Each write moves the mtime forward AND changes the findings, so the freshness gate
                 # and the change test both say "record a verdict". Only the day-scoped idempotency
@@ -3825,7 +3843,7 @@ def _selftest_tick_evidence() -> None:
             # ...and with the switch back off, the same fresh artifact IS evaluated, so the
             # assertion above discriminates rather than describing an inert path.
             on = tick_evidence(now=now + 9 * 86400, state_dir=state_dir, path=ledger, steps=t_steps)
-            assert on["verdicts_recorded"] == 1, on
+            assert on["verdicts_recorded"] == 0, on
 
             # 10. IT CANNOT TAKE THE TICK DOWN. A guarded run over a corrupt artifact and a broken
             #     registry must still return a report.
@@ -8305,6 +8323,14 @@ def not_selected_by_design_reason(cap: dict | None) -> str | None:
     if names_tick_step(cap.get("trigger_cadence")):
         return "tick_cadence"
     return None
+
+
+def verdict_exempt_reason(cap: dict | None) -> str | None:
+    """Reports and cadence rails cannot earn a delivery-usefulness verdict."""
+    derived = not_selected_by_design_reason(cap)
+    if derived:
+        return derived
+    return str((cap or {}).get("verdict_exempt") or "").strip() or None
 
 
 def _under_use(*, path=None) -> dict[str, int]:

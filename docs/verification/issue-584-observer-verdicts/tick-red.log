@@ -1,0 +1,57 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_tick_evidence_records_no_verdict_for_an_observer _____________
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1862/test_tick_evidence_records_no_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x112fd7050>
+
+    def test_tick_evidence_records_no_verdict_for_an_observer(tmp_path, monkeypatch):
+        import os
+    
+        import capability_advisor
+        import capability_propensity as cp
+    
+        rows = {}
+        for cid in ("changed", "unchanged"):
+            row = capabilities._blank_capability(cid)
+            row.update(status="wired", matcher={"kind": "tick_phase"})
+            rows[cid] = row
+        ledger = tmp_path / "caps.json"
+        capabilities.save(rows, ledger)
+        state = tmp_path / "state"
+        state.mkdir()
+        steps = {cid: {"key": cid, "artifact": f"{cid}.json", "cadence_days": 0} for cid in rows}
+        monkeypatch.setattr(cp, "TICK_FINDING_FIELDS", {cid: {"findings": ("id",)} for cid in rows})
+        monkeypatch.setitem(
+            capability_advisor.SURFACE_BINDINGS,
+            cp.TICK_SURFACE,
+            {cid: "fixture observer" for cid in rows},
+        )
+        now = 1_800_000_000
+        for cid in rows:
+            artifact = state / f"{cid}.json"
+            artifact.write_text(json.dumps({"findings": [{"id": "old"}]}))
+            os.utime(artifact, (now, now))
+        cp.tick_evidence(now=now, state_dir=state, path=ledger, steps=steps)
+        for cid in rows:
+            artifact = state / f"{cid}.json"
+            artifact.write_text(
+                json.dumps({"findings": [{"id": "new" if cid == "changed" else "old"}]})
+            )
+            os.utime(artifact, (now + 1, now + 1))
+        out = cp.tick_evidence(now=now + 86400, state_dir=state, path=ledger, steps=steps)
+        assert out["verdicts_recorded"] == 0
+        evaluated = {r["capability_id"]: r for r in out["evaluated"]}
+        assert set(evaluated) == set(rows)
+        for cid, row in evaluated.items():
+>           assert row["reason"] == "verdict_exempt", row
+E           AssertionError: {'capability_id': 'changed', 'artifact': 'changed.json', 'fingerprint': '8d62effcfa218867', 'finding_count': 1, ...}
+E           assert 'verdict_failed' == 'verdict_exempt'
+E             
+E             - verdict_exempt
+E             + verdict_failed
+
+tests/test_capabilities.py:1222: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_capabilities.py::test_tick_evidence_records_no_verdict_for_an_observer
+1 failed in 0.25s
