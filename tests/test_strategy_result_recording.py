@@ -152,7 +152,7 @@ def test_scored_result_compares_three_instances_and_all_pair_attempt_costs(measu
 
 
 @pytest.mark.parametrize("missing", ["judge", "cost"])
-def test_partial_evaluation_or_missing_cost_stays_unknown(measured, missing):
+def test_partial_evaluation_stays_unknown_but_missing_cost_only_unmeasures_cost(measured, missing):
     exp_id, plan, _edir = measured
     arm = plan["arms"][-1]
     with feedback._conn() as conn:
@@ -168,10 +168,17 @@ def test_partial_evaluation_or_missing_cost_stays_unknown(measured, missing):
     result = json.loads(
         strategy_experiment.write_evaluation_result(exp_id, ["j1", "j2"]).read_text()
     )
-    assert result["status"] == "UNKNOWN"
-    assert result["scores"] is None and result["comparison"] is None
-    if missing == "cost":
+    if missing == "judge":
+        assert result["status"] == "UNKNOWN"
+        assert result["unknown_reason"] == "incomplete scored evaluation"
+        assert result["scores"] is None and result["comparison"] is None
+    else:
+        # the score verdict stands; the cost is reported as what it is, never as a number
+        assert result["status"] == "completed"
+        assert result["cost_status"] == "unmeasured"
         assert result["costs"][arm["arm_id"]]["cost_usd"] is None
+        assert result["comparison"][arm["strategy"]]["cost_usd"] is None
+        assert result["comparison"][arm["strategy"]]["cost_status"] == "unmeasured"
 
 
 def test_direct_evaluation_records_final_pair_candidates_and_state(measured, monkeypatch):
@@ -246,7 +253,8 @@ def test_followup_refreshes_late_costs_and_preserves_promotion_receipt(measured,
         conn.execute("DELETE FROM costs")
     strategy_experiment.refresh_evaluation_result(exp_id)
     receipt_path = edir / "strategy-receipt.json"
-    assert json.loads(receipt_path.read_text())["acceptance_status"] == "UNKNOWN"
+    before = json.loads(receipt_path.read_text())
+    assert before["acceptance_status"] == "completed" and before["cost_status"] == "unmeasured"
     for arm in plan["arms"]:
         for run_id in arm["attempt_run_ids"]:
             feedback.record_cost(run_id, cost_usd=0.25, source="ccusage")

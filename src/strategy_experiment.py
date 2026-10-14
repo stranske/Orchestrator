@@ -736,9 +736,20 @@ def write_scored_result(
     state_dir: Path | None = None,
     result_path: Path | None = None,
 ) -> Path:
-    """Write a comparison only when every arm has scored and cost coverage.
+    """Write the score comparison when every arm has scored; report cost beside it, never through it.
 
-    Partial rows are explicitly UNKNOWN rather than a zero-cost, completed score.
+    The SCORE verdict and the COST measure are two quantities. `status` is the score verdict and
+    completes when every expected arm carries a finite score from every evaluator. Cost is reported
+    per arm and per strategy exactly as measured: a strategy whose arms all carry a whole-run cost
+    (feedback.COMPLETE_COST_SOURCES) gets a summed `cost_usd`; any other strategy gets
+    `cost_usd: None` with `cost_status: "unmeasured"` and the exact unmeasured attempt ids, never a
+    partial or imputed number (CLAUDE.md §2: a partial number is UNMEASURED, not cheap).
+
+    Until 2026-10-13 cost coverage GATED the score verdict, and that was a latched gate: a cursor or
+    vibe arm has no complete-source cost (ccusage attributes codex and claude sessions only), so no
+    experiment with such an arm could ever reach `completed` — strategy434-20261006 sat UNKNOWN with
+    six scored arms and a merged synthesis (PAEM#2352). Nothing could drain it: the drain was a cost
+    row no source produces. Now the score verdict completes and the cost line says what it is.
     """
     costs = strategy_arm_costs(plan, cost_rows)
     unmeasured = [arm_id for arm_id, row in costs.items() if row["unmeasured_attempt_run_ids"]]
@@ -755,15 +766,24 @@ def write_scored_result(
             for key in expected_arms
         )
     )
-    status = "completed" if score_complete and not unmeasured else "UNKNOWN"
+    status = "completed" if score_complete else "UNKNOWN"
+    cost_status = "measured" if not unmeasured else "unmeasured"
     comparison = {}
     if status == "completed":
         for strategy in sorted({str(arm.get("strategy", "unknown")) for arm in plan["arms"]}):
             ids = [arm["arm_id"] for arm in plan["arms"] if arm.get("strategy") == strategy]
+            strategy_unmeasured = [key for key in ids if key in unmeasured]
             comparison[strategy] = {
                 "instances": len(ids),
                 "score_mean": sum(float(scores[key]) for key in ids) / len(ids),
-                "cost_usd": round(sum(costs[key]["cost_usd"] for key in ids), 8),
+                # measured only when EVERY arm of the strategy is; a partial sum is a wrong number
+                "cost_usd": (
+                    round(sum(costs[key]["cost_usd"] for key in ids), 8)
+                    if not strategy_unmeasured
+                    else None
+                ),
+                "cost_status": "measured" if not strategy_unmeasured else "unmeasured",
+                "unmeasured_arm_ids": strategy_unmeasured,
                 "arm_ids": ids,
             }
     payload = {
@@ -775,11 +795,17 @@ def write_scored_result(
         "comparison": comparison if status == "completed" else None,
         "costs": costs,
         "cost_scale": feedback.COST_SCALE,
-        "unknown_reason": (
+        "cost_status": cost_status,
+        "unmeasured_arm_ids": unmeasured,
+        "cost_note": (
             None
-            if status == "completed"
-            else "incomplete scored evaluation or explicitly measured cost coverage"
+            if not unmeasured
+            else (
+                f"cost unmeasured for {len(unmeasured)} arm(s): no whole-run cost row from "
+                f"{'/'.join(sorted(feedback.COMPLETE_COST_SOURCES))}; reported as None, never imputed"
+            )
         ),
+        "unknown_reason": (None if status == "completed" else "incomplete scored evaluation"),
         "written_ts": int(time.time()),
     }
     path = result_path or strategy_result_path(state_dir)
@@ -792,8 +818,9 @@ def write_evaluation_result(
 ) -> Path | None:
     """Project exact v2 evaluation rows and measured costs into the strategy state.
 
-    A missing judge cell or cost row writes UNKNOWN; it never manufactures a
-    completed comparison from an evaluator process merely having exited.
+    A missing judge cell writes UNKNOWN; it never manufactures a completed comparison from an
+    evaluator process merely having exited. A missing cost row leaves the score verdict standing
+    and the cost `unmeasured` (see write_scored_result).
     """
     strategy_path = strategy_metadata_path(exp_id, exp_dir)
     if not strategy_path.exists():
