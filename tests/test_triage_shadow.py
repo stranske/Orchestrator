@@ -486,7 +486,11 @@ def consumable(brain, monkeypatch):
     return [row["target"] for row in items()]
 
 
-def test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows(consumable):
+def test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows(
+    consumable, monkeypatch
+):
+    import capabilities
+
     targets = consumable + ["stranske/Orchestrator#5"]
     result = triage_shadow.consume(targets, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
     assert result["consumed"] is True
@@ -498,17 +502,50 @@ def test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows(consu
         targets[-1],
     ]
     assert len(result["ordered_targets"]) == len(set(targets))
+    consumed = json.loads(triage_shadow.consumed_path().read_text())
+    assert consumed["picked"] == result["ordered_targets"][0]
+    assert consumed["role_run_id"] == result["role_run_id"] == "fixture-triage"
+    assert consumed["capability_version_id"] == "triage-v1"
+    # A ledger revision after consumption cannot change the version receiving credit.
+    monkeypatch.setattr(
+        capabilities, "load", lambda **kw: {"role-triage": {"capability_version_id": "triage-v2"}}
+    )
+    feedback.record_run(
+        "earlier-worker", consumed["picked"], "implement", "codex", mode="local", ts=100
+    )
+    feedback.record_completion_event("earlier-worker", status="succeeded")
     feedback.record_run(
         "fixture-worker", result["ordered_targets"][0], "implement", "codex", mode="local", ts=102
     )
-    # Trigger/decision events from record_run are not a completed worker.
-    assert outcomes.link_triage_consumption(now=103)["followed"] == []
+    feedback.record_run(
+        "later-worker", consumed["picked"], "implement", "codex", mode="local", ts=103
+    )
+    feedback.record_completion_event("later-worker", status="succeeded")
+    # Wait for the first subsequent matching run, even if a later run completes first.
+    assert outcomes.link_triage_consumption(now=103) == {
+        "followed": [],
+        "not_followed": [],
+        "unresolved": [],
+        "pending": [consumed["ts"]],
+    }
+    assert not triage_shadow.linked_path().exists()
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 0
     feedback.record_completion_event("fixture-worker", status="succeeded")
     assert len(outcomes.link_triage_consumption(now=104)["followed"]) == 1
     with feedback._conn() as conn:
         assert conn.execute(
-            "SELECT capability_id,capability_version_id,accepted,target_run_id FROM influence_edges WHERE influence_type='capability'"
-        ).fetchall() == [("role-triage", "triage-v1", 1, "fixture-worker")]
+            "SELECT e.capability_id,e.capability_version_id,e.accepted,e.source_run_id,"
+            "e.target_run_id,r.target FROM influence_edges e "
+            "JOIN runs r ON r.run_id=e.target_run_id WHERE e.influence_type='capability'"
+        ).fetchall() == [
+            ("role-triage", "triage-v1", 1, "fixture-triage", "fixture-worker", consumed["picked"])
+        ]
+    assert json.loads(triage_shadow.linked_path().read_text()) == {
+        "consumed_ts": consumed["ts"],
+        "status": "followed",
+        "run_id": "fixture-worker",
+    }
     assert outcomes.link_triage_consumption(now=105) == {
         "followed": [],
         "not_followed": [],
