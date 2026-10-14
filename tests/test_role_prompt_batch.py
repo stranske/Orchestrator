@@ -335,6 +335,15 @@ def test_failed_body_and_raw_output_are_retained_in_the_manifest(private_brain, 
     directory = private_brain / "mixed-batch"
     manifest = roles.write_prompt_batch(result, directory)
     assert manifest == json.loads((directory / "manifest.json").read_text())
+    # Retained evidence must still identify the item and role run that produced it.
+    assert manifest["batch_id"] == result["batch_id"]
+    assert manifest["output"] == "issue_body"
+    assert [item["target"] for item in manifest["items"]] == [
+        f"owner/repo#{index}" for index in range(1, 6)
+    ]
+    run_ids = [item["role_run_id"] for item in manifest["items"]]
+    assert run_ids == [item["role_run_id"] for item in result["items"]]
+    assert all(run_ids) and len(set(run_ids)) == 5
     good, rejected, unparseable, backend_rejected, later_good = manifest["items"]
     assert good["valid"] is True
     assert Path(good["body_file"]).read_text() == BODY

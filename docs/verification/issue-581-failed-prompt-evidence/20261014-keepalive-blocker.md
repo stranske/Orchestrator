@@ -78,3 +78,24 @@ The connector rejected posting the blocker comment and adding `needs-human` with
 `MCP tool call requires approval, but approval policy is never`. PR #589 was read
 and remains open with `draft=false`. Its checked real-batch task still needs
 reopening until the actual post-merge batch and required program check are verified.
+
+## Follow-up at 27dc63f
+
+Reviewed the implementation, subsequent test commits and committed mutation logs.
+The production source still matches the corrected mutation SHA256. The first three
+local acceptance criteria have historical verification; the checked post-merge
+real-batch task has no supporting production evidence and must be reopened. The
+complete proposed PR body is now saved in `589-reconciled-pr-body.md` beside this
+note. Updating PR #589 was rejected: `MCP tool call requires approval, but approval
+policy is never`.
+
+The named regression now verifies persisted batch/output identity, item targets,
+and the original, unique role-run IDs, so retained artifacts remain attributable.
+An isolated five-item production replay passes these assertions and exact retained
+byte checks; wrong-target and duplicate-run negative controls are detected. This
+does not substitute for pytest or a real role-authored batch.
+
+Focused pytest exits 1 because pytest is absent. Both mandatory Black commands
+exit 127 because Black is absent; package installation also fails. The Python
+change must remain uncommitted until the required formatting gate passes. No new
+acceptance completion, deployment, or 2026-10-27 qualification is claimed.
