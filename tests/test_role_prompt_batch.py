@@ -338,10 +338,18 @@ def test_failed_body_and_raw_output_are_retained_in_the_manifest(private_brain, 
     assert Path(good["body_file"]).read_text() == BODY
     assert good["failed_body_file"] is None and good["raw_output_file"] is None
     assert rejected["valid"] is False and rejected["errors"]
+    assert rejected["errors"] == [
+        "issue_body requires a non-empty ## Why section",
+        "issue_body requires a non-empty ## Tasks section",
+        "issue_body requires a non-empty ## Acceptance Criteria section",
+        "issue_body requires a non-empty ## Non-Goals section",
+        "issue_body Tasks requires unchecked task checkboxes",
+    ]
     assert rejected["body_file"] is None and rejected["raw_output_file"] is None
     assert Path(rejected["failed_body_file"]).name == "002.failed.md"
     assert Path(rejected["failed_body_file"]).read_bytes() == b"Bad body"
     assert unparseable["valid"] is False and unparseable["errors"]
+    assert unparseable["errors"] == ["could not parse a JSON proposal from the backend output"]
     assert unparseable["body_file"] is None and unparseable["failed_body_file"] is None
     assert Path(unparseable["raw_output_file"]).name == "003.raw.txt"
     assert Path(unparseable["raw_output_file"]).read_bytes() == raw.encode("utf-8")
@@ -357,6 +365,15 @@ def test_failed_body_and_raw_output_are_retained_in_the_manifest(private_brain, 
     assert not (directory / "002.md").exists()
     assert not (directory / "003.md").exists()
     assert not (directory / "004.md").exists()
+    assert {path.name for path in directory.iterdir()} == {
+        "manifest.json",
+        "001.md",
+        "002.failed.md",
+        "003.raw.txt",
+        "004.failed.md",
+        "004.raw.txt",
+        "005.md",
+    }
 
     # Exercise the source issue's qualification query using only the persisted manifest.
     del result, manifest
