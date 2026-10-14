@@ -306,16 +306,21 @@ def test_cli_batch_writes_valid_bodies_and_invalid_item_verdicts(
 
 def test_failed_body_and_raw_output_are_retained_in_the_manifest(private_brain, monkeypatch):
     raw = "Unparseable café output\r\nwith trailing whitespace  \r\n"
+    backend_body = "Rejected café body\r\nwith trailing whitespace  \r\n"
+    backend_raw = json.dumps(proposal(backend_body), ensure_ascii=False) + "\r\n"
+    outputs = iter((raw, backend_raw, json.dumps(proposal())))
     monkeypatch.setattr(
         roles.dispatcher,
         "offload",
-        lambda *a, **kw: {"run_id": "fake:unparseable", "output": raw, "exit": 0},
+        lambda *a, **kw: {"run_id": "fake:mixed-batch", "output": next(outputs), "exit": 0},
     )
     result = roles.run_prompt_batch(
         [
             {"target": "owner/repo#1", "goal": "Good", "proposal_json": proposal()},
             {"target": "owner/repo#2", "goal": "Bad", "proposal_json": proposal("Bad body")},
             {"target": "owner/repo#3", "goal": "Unparseable"},
+            {"target": "owner/repo#4", "goal": "Backend rejection"},
+            {"target": "owner/repo#5", "goal": "Good after failures"},
         ],
         output="issue_body",
         dispatch=True,
@@ -326,7 +331,7 @@ def test_failed_body_and_raw_output_are_retained_in_the_manifest(private_brain, 
     directory = private_brain / "mixed-batch"
     manifest = roles.write_prompt_batch(result, directory)
     assert manifest == json.loads((directory / "manifest.json").read_text())
-    good, rejected, unparseable = manifest["items"]
+    good, rejected, unparseable, backend_rejected, later_good = manifest["items"]
     assert good["valid"] is True
     assert Path(good["body_file"]).read_text() == BODY
     assert good["failed_body_file"] is None and good["raw_output_file"] is None
@@ -338,8 +343,27 @@ def test_failed_body_and_raw_output_are_retained_in_the_manifest(private_brain, 
     assert unparseable["body_file"] is None and unparseable["failed_body_file"] is None
     assert Path(unparseable["raw_output_file"]).name == "003.raw.txt"
     assert Path(unparseable["raw_output_file"]).read_bytes() == raw.encode("utf-8")
+    assert backend_rejected["valid"] is False and backend_rejected["errors"]
+    assert backend_rejected["body_file"] is None
+    assert Path(backend_rejected["failed_body_file"]).name == "004.failed.md"
+    assert Path(backend_rejected["failed_body_file"]).read_bytes() == backend_body.encode("utf-8")
+    assert Path(backend_rejected["raw_output_file"]).read_bytes() == backend_raw.encode("utf-8")
+    assert later_good["valid"] is True and later_good["errors"] == []
+    assert Path(later_good["body_file"]).name == "005.md"
+    assert Path(later_good["body_file"]).read_text() == BODY
+    assert later_good["failed_body_file"] is None and later_good["raw_output_file"] is None
     assert not (directory / "002.md").exists()
     assert not (directory / "003.md").exists()
+    assert not (directory / "004.md").exists()
+
+    # Exercise the source issue's qualification query using only the persisted manifest.
+    del result, manifest
+    saved = json.loads((directory / "manifest.json").read_text())
+    failed = [item for item in saved["items"] if not item["valid"]]
+    retained = sum(bool(item["failed_body_file"] or item["raw_output_file"]) for item in failed)
+    assert retained == len(failed) == 3
+    assert len(saved["items"]) == 5
+    assert sum(item["valid"] for item in saved["items"]) / len(saved["items"]) == 2 / 5
 
 
 @pytest.mark.parametrize("failure", ["validation", "backend", "recording"])
