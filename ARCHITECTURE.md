@@ -1956,6 +1956,12 @@ python3 src/adjudicator_retro.py --dispatch --limit 5  # resume shadow evidence;
 with a shared `batch_id`; proposal validity and downstream outcomes remain per item.
 `python3 src/roles.py prompt --batch items.json --output issue_body --dispatch --output-dir bodies`
 exports valid Markdown files and a manifest containing role-run IDs and all validator verdicts.
+Each manifest item also names `failed_body_file` and `raw_output_file` (or `null`):
+failed items retain any authored body as `NNN.failed.md` and any raw backend output as
+`NNN.raw.txt`, including bodies withheld after role-recording failure. These evidence files
+preserve the text exactly and are never published as the valid-only `NNN.md`. A rejected
+proposal survives validation in the item result as `rejected_proposal`; the validator and
+role-run admission rules are unchanged. Valid items have `null` in both evidence-file fields.
 This extends the existing PromptAgent role with explicit batch-authoring bindings at
 `research-program` and `repo-audit:phase-4`. Automatic dispatch roles remain shadow-gated;
 these bindings do not enable autonomous dispatch.

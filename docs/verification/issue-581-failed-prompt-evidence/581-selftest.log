@@ -1,0 +1,2 @@
+role activation off (ORCH_ROLE_SHADOW unset)
+roles.py selftest: OK (route_role + RedirectAgent dry-run + PromptAgent + DecomposerAgent + TriageAgent + AdjudicatorAgent + bounded selectors + role learning + replay-path role_run_id -> plan stamp -> delegate CLI -> mirrored outcome)

@@ -1,0 +1,239 @@
+........FFFFF..........F.                                                [100%]
+=================================== FAILURES ===================================
+_________ test_cli_batch_writes_valid_bodies_and_invalid_item_verdicts _________
+
+private_brain = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1774/test_cli_batch_writes_valid_bo0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x115a0ff20>
+capsys = <_pytest.capture.CaptureFixture object at 0x115a0dd00>
+
+    def test_cli_batch_writes_valid_bodies_and_invalid_item_verdicts(
+        private_brain, monkeypatch, capsys
+    ):
+        items = [
+            {"target": "owner/repo#1", "goal": "Good", "proposal_json": proposal()},
+            {"target": "owner/repo#2", "goal": "Bad", "proposal_json": proposal("Bad body")},
+        ]
+        batch = private_brain / "items.json"
+        batch.write_text(json.dumps(items))
+        directory = private_brain / "bodies"
+        assert (
+            roles.main(
+                [
+                    "prompt",
+                    "--batch",
+                    str(batch),
+                    "--output",
+                    "issue_body",
+                    "--dispatch",
+                    "--backend",
+                    "cursor",
+                    "--output-dir",
+                    str(directory),
+                ]
+            )
+            == 1
+        )
+        manifest = json.loads(capsys.readouterr().out)
+        assert manifest == json.loads((directory / "manifest.json").read_text())
+        assert manifest["output"] == "issue_body" and manifest["batch_id"]
+        assert Path(manifest["items"][0]["body_file"]).read_text() == BODY
+        assert manifest["items"][0]["valid"] is True
+        assert manifest["items"][0]["errors"] == []
+        assert manifest["items"][0]["role_run_id"]
+        assert manifest["items"][1]["role_run_id"]
+        assert manifest["items"][1]["body_file"] is None
+        assert manifest["items"][1]["valid"] is False
+        assert manifest["items"][1]["errors"]
+        assert not (directory / "002.md").exists()
+>       assert Path(manifest["items"][1]["failed_body_file"]).read_text() == "Bad body"
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'failed_body_file'
+
+tests/test_role_prompt_batch.py:304: KeyError
+_________ test_failed_body_and_raw_output_are_retained_in_the_manifest _________
+
+private_brain = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1774/test_failed_body_and_raw_outpu0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x115a1fd70>
+
+    def test_failed_body_and_raw_output_are_retained_in_the_manifest(private_brain, monkeypatch):
+        raw = "Unparseable café output\r\nwith trailing whitespace  \r\n"
+        monkeypatch.setattr(
+            roles.dispatcher,
+            "offload",
+            lambda *a, **kw: {"run_id": "fake:unparseable", "output": raw, "exit": 0},
+        )
+        result = roles.run_prompt_batch(
+            [
+                {"target": "owner/repo#1", "goal": "Good", "proposal_json": proposal()},
+                {"target": "owner/repo#2", "goal": "Bad", "proposal_json": proposal("Bad body")},
+                {"target": "owner/repo#3", "goal": "Unparseable"},
+            ],
+            output="issue_body",
+            dispatch=True,
+            backend="cursor",
+        )
+        assert result["items"][1]["proposal"] is None
+>       assert result["items"][1]["rejected_proposal"] == proposal("Bad body")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'rejected_proposal'
+
+tests/test_role_prompt_batch.py:325: KeyError
+_____ test_backend_failures_retain_authored_body_and_raw_bytes[validation] _____
+
+private_brain = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1774/test_backend_failures_retain_a0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x115abcd70>
+failure = 'validation'
+
+    @pytest.mark.parametrize("failure", ["validation", "backend", "recording"])
+    def test_backend_failures_retain_authored_body_and_raw_bytes(
+        private_brain, monkeypatch, failure
+    ):
+        body = "Bad café body\r\n  " if failure == "validation" else BODY
+        raw = json.dumps(proposal(body), ensure_ascii=False) + "\r\n  "
+        monkeypatch.setattr(
+            roles.dispatcher,
+            "offload",
+            lambda *a, **kw: {
+                "run_id": "fake:failed",
+                "output": raw,
+                "exit": 1 if failure == "backend" else 0,
+            },
+        )
+        if failure == "recording":
+    
+            def fail_record(*args, **kwargs):
+                raise RuntimeError("role recording failed")
+    
+            monkeypatch.setattr(feedback, "record_role_run", fail_record)
+        result = roles.run_prompt_batch(
+            [{"target": "../../unsafe/target", "goal": "Retain evidence"}],
+            output="issue_body",
+            dispatch=True,
+            backend="cursor",
+        )
+        directory = private_brain / "backend-failed"
+        item = roles.write_prompt_batch(result, directory)["items"][0]
+        assert item["valid"] is False and item["body_file"] is None
+        assert item["errors"] or item["role_record_error"]
+>       assert Path(item["failed_body_file"]) == directory / "001.failed.md"
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'failed_body_file'
+
+tests/test_role_prompt_batch.py:376: KeyError
+______ test_backend_failures_retain_authored_body_and_raw_bytes[backend] _______
+
+private_brain = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1774/test_backend_failures_retain_a1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x116070fe0>
+failure = 'backend'
+
+    @pytest.mark.parametrize("failure", ["validation", "backend", "recording"])
+    def test_backend_failures_retain_authored_body_and_raw_bytes(
+        private_brain, monkeypatch, failure
+    ):
+        body = "Bad café body\r\n  " if failure == "validation" else BODY
+        raw = json.dumps(proposal(body), ensure_ascii=False) + "\r\n  "
+        monkeypatch.setattr(
+            roles.dispatcher,
+            "offload",
+            lambda *a, **kw: {
+                "run_id": "fake:failed",
+                "output": raw,
+                "exit": 1 if failure == "backend" else 0,
+            },
+        )
+        if failure == "recording":
+    
+            def fail_record(*args, **kwargs):
+                raise RuntimeError("role recording failed")
+    
+            monkeypatch.setattr(feedback, "record_role_run", fail_record)
+        result = roles.run_prompt_batch(
+            [{"target": "../../unsafe/target", "goal": "Retain evidence"}],
+            output="issue_body",
+            dispatch=True,
+            backend="cursor",
+        )
+        directory = private_brain / "backend-failed"
+        item = roles.write_prompt_batch(result, directory)["items"][0]
+        assert item["valid"] is False and item["body_file"] is None
+        assert item["errors"] or item["role_record_error"]
+>       assert Path(item["failed_body_file"]) == directory / "001.failed.md"
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'failed_body_file'
+
+tests/test_role_prompt_batch.py:376: KeyError
+_____ test_backend_failures_retain_authored_body_and_raw_bytes[recording] ______
+
+private_brain = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1774/test_backend_failures_retain_a2')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1160757c0>
+failure = 'recording'
+
+    @pytest.mark.parametrize("failure", ["validation", "backend", "recording"])
+    def test_backend_failures_retain_authored_body_and_raw_bytes(
+        private_brain, monkeypatch, failure
+    ):
+        body = "Bad café body\r\n  " if failure == "validation" else BODY
+        raw = json.dumps(proposal(body), ensure_ascii=False) + "\r\n  "
+        monkeypatch.setattr(
+            roles.dispatcher,
+            "offload",
+            lambda *a, **kw: {
+                "run_id": "fake:failed",
+                "output": raw,
+                "exit": 1 if failure == "backend" else 0,
+            },
+        )
+        if failure == "recording":
+    
+            def fail_record(*args, **kwargs):
+                raise RuntimeError("role recording failed")
+    
+            monkeypatch.setattr(feedback, "record_role_run", fail_record)
+        result = roles.run_prompt_batch(
+            [{"target": "../../unsafe/target", "goal": "Retain evidence"}],
+            output="issue_body",
+            dispatch=True,
+            backend="cursor",
+        )
+        directory = private_brain / "backend-failed"
+        item = roles.write_prompt_batch(result, directory)["items"][0]
+        assert item["valid"] is False and item["body_file"] is None
+        assert item["errors"] or item["role_record_error"]
+>       assert Path(item["failed_body_file"]) == directory / "001.failed.md"
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'failed_body_file'
+
+tests/test_role_prompt_batch.py:376: KeyError
+_________________ test_batch_recording_failure_withholds_body __________________
+
+private_brain = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1774/test_batch_recording_failure_w0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x115a813d0>
+
+    def test_batch_recording_failure_withholds_body(private_brain, monkeypatch):
+        def fail_record(*args, **kwargs):
+            raise RuntimeError("role recording failed")
+    
+        monkeypatch.setattr(feedback, "record_role_run", fail_record)
+        result = roles.run_prompt_batch(
+            [{"target": "owner/repo#1", "goal": "Issue", "proposal_json": proposal()}],
+            output="issue_body",
+            dispatch=True,
+            backend="cursor",
+        )
+        manifest = roles.write_prompt_batch(result, private_brain / "recording-failed")
+        assert manifest["items"][0]["valid"] is False
+        assert manifest["items"][0]["body_file"] is None
+        assert manifest["items"][0]["role_record_error"] == "role recording failed"
+>       assert Path(manifest["items"][0]["failed_body_file"]).read_text() == BODY
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'failed_body_file'
+
+tests/test_role_prompt_batch.py:595: KeyError
+=========================== short test summary info ============================
+FAILED tests/test_role_prompt_batch.py::test_cli_batch_writes_valid_bodies_and_invalid_item_verdicts
+FAILED tests/test_role_prompt_batch.py::test_failed_body_and_raw_output_are_retained_in_the_manifest
+FAILED tests/test_role_prompt_batch.py::test_backend_failures_retain_authored_body_and_raw_bytes[validation]
+FAILED tests/test_role_prompt_batch.py::test_backend_failures_retain_authored_body_and_raw_bytes[backend]
+FAILED tests/test_role_prompt_batch.py::test_backend_failures_retain_authored_body_and_raw_bytes[recording]
+FAILED tests/test_role_prompt_batch.py::test_batch_recording_failure_withholds_body
+6 failed, 19 passed in 3.47s
