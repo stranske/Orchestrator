@@ -1890,6 +1890,30 @@ def profile_trial_summary_line() -> str | None:
     )
 
 
+def strategy_completed_line(result: dict, costs: dict) -> str:
+    """One line for a completed strategy experiment: the score verdict, then the cost.
+
+    A completed verdict no longer implies a measured cost (strategy_experiment.write_scored_result
+    completes on scores alone), so an arm whose ``cost_usd`` is None is UNMEASURED and the line says
+    so with the count; it never sums None as zero into a ``$0.0000`` total, which would print a
+    measured zero for a cost nobody measured (the latched-gate question 4 failure, in the consumer).
+    """
+    unmeasured = sorted(key for key, row in costs.items() if row.get("cost_usd") is None)
+    if result.get("cost_status") == "unmeasured" or unmeasured:
+        cost_bit = f"cost unmeasured ({len(unmeasured)} of {len(costs)} arm(s) without a whole-run cost row)"
+    else:
+        total = sum(float(row["cost_usd"]) for row in costs.values())
+        cost_bit = f"total_cost=${total:.4f}"
+    comparison = result.get("comparison") or {}
+    score_bits = "/".join(
+        f"{name} {float(row['score_mean']):.2f}"
+        for name, row in sorted(comparison.items())
+        if isinstance(row, dict) and isinstance(row.get("score_mean"), (int, float))
+    )
+    score_bit = f" scores {score_bits}" if score_bits else ""
+    return f"  strategy experiment: completed {result.get('exp_id')}{score_bit} {cost_bit}"
+
+
 def format_report(rep: dict) -> str:
     lines = [
         "# Switch review — held switches must be revisited, not forgotten",
@@ -1913,11 +1937,7 @@ def format_report(rep: dict) -> str:
                 not isinstance(row, dict) for row in costs.values()
             ):
                 raise ValueError("strategy costs must contain objects")
-            total = sum(float(row.get("cost_usd") or 0) for row in costs.values())
-            lines += [
-                f"  strategy experiment: completed {result.get('exp_id')} total_cost=${total:.4f}",
-                "",
-            ]
+            lines += [strategy_completed_line(result, costs), ""]
         else:
             lines += [
                 f"  strategy experiment: UNKNOWN — {result.get('unknown_reason', 'incomplete evidence')}",
