@@ -1518,3 +1518,26 @@ def test_post_merge_summary_preserves_valid_rows_when_one_is_malformed(
     summary = gate.post_merge_summary()
     assert summary == {"rechecked": 2, "failed": 1, "reopened": 1, "unrunnable": 0, "malformed": 1}
     assert "rechecked 2" in gate.format_post_merge_summary(summary)
+
+
+@pytest.mark.parametrize("body_fails", [False, True])
+def test_temporary_checkout_retains_prune_failure_even_after_path_removal(
+    tmp_path, monkeypatch, body_fails
+):
+    checkout = tmp_path / "private-checkout"
+    checkout.mkdir()
+    monkeypatch.setattr(provision, "exact_head_worktree", lambda *a, **kw: str(checkout))
+    monkeypatch.setattr(provision, "canonical_path", lambda _repo: tmp_path)
+
+    def failed_cleanup(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 1, "", "cleanup denied")
+
+    monkeypatch.setattr(provision, "_run", failed_cleanup)
+    with pytest.raises(RuntimeError, match="cleanup denied") as caught:
+        with provision.temporary_exact_head_worktree("owner/repo#1", "a" * 40):
+            if body_fails:
+                raise ValueError("original verifier failure")
+    assert not checkout.exists()
+    if body_fails:
+        assert isinstance(caught.value.__cause__, ValueError)
+        assert str(caught.value.__cause__) == "original verifier failure"
