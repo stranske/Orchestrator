@@ -928,7 +928,9 @@ def test_ingest_runs_real_named_test_and_removes_its_checkout(private_brain, mon
     summary = keepalive_outcomes.ingest_keepalive_outcomes(
         ["owner/repo"],
         _pr_fetch_fn=lambda *_: [_shadow_ingest_pr(20, head)],
-        _issue_fetch_fn=lambda *_: "## Acceptance Criteria\n- Named test: `tests/test_acceptance.py::test_delivered`.\n",
+        _issue_fetch_fn=lambda *_: (
+            "## Acceptance Criteria\n- Named test: `tests/test_acceptance.py::test_delivered`.\n"
+        ),
         _spec_dir=private_brain / "specs",
     )
     executed = [
