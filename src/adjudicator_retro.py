@@ -1132,7 +1132,10 @@ def run(
         if attempted >= max(0, limit):
             continue
         attempted += 1
-        preserved = dict(old) if reattempt_abstention else None
+        # `reattempt_abstention` is derived from `old`, but keep the optional
+        # value narrowed here as well: this copy must only be made for an
+        # existing persisted row.
+        preserved = dict(old) if reattempt_abstention and old is not None else None
         entry = {
             **identity,
             "case_id": case_id,
