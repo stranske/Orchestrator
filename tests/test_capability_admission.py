@@ -644,7 +644,7 @@ def test_consumer_acts_fails_a_declared_consumer_that_never_acted(tmp_path):
     ok, detail = admission.req_consumer_acts(
         _consumer_cap("t-acting", "x.py:consume", first_invocation=old), ctx
     )
-    assert ok and "acted on 5" in detail
+    assert ok and "acted on by 5" in detail and "not verified" in detail
     ok, detail = admission.req_consumer_acts(
         _consumer_cap(
             "t-rail", "x.py:consume", first_invocation=old, category=admission.EXERCISE_CATEGORY
