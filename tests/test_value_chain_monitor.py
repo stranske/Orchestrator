@@ -630,3 +630,31 @@ def test_acted_on_index_is_the_report_s_own_count(monkeypatch, tmp_path):
         monitor, "_brain", lambda db, since, now: {"edges": None, "errors": ["Brain unavailable"]}
     )
     assert monitor.acted_on_index(tmp_path / "brain.db", NOW, ["c1"]) == (None, "Brain unavailable")
+
+
+def test_deadline_index_uses_each_fixed_window_and_existing_edge_classifier(monkeypatch, tmp_path):
+    edges = [{"capability_id": "c1", "accepted": 1, "created_ts": t} for t in (9, 10, 20, 21)] + [
+        {"capability_id": "c1", "accepted": 0, "created_ts": 15},
+        {"capability_id": "c1", "accepted": 1, "counterfactual": 1, "created_ts": 15},
+        {"capability_id": "c2", "accepted": 1, "created_ts": 30},
+    ]
+    calls = []
+
+    def brain(db, since, until):
+        calls.append((since, until))
+        return {"edges": edges, "errors": []}
+
+    monkeypatch.setattr(monitor, "_brain", brain)
+    index, _ = monitor.acted_on_window_index(
+        tmp_path / "brain.db", {"c1": (10, 20), "c2": (25, 35), "c3": (10, 20)}
+    )
+    assert index == {"c1": 2, "c2": 1, "c3": 0}
+    assert calls == [(10, 35)]
+    monkeypatch.setattr(
+        monitor, "_brain", lambda *args: {"edges": None, "errors": ["Brain unavailable"]}
+    )
+    assert monitor.acted_on_window_index(tmp_path / "brain.db", {"c1": (10, 20)}) == (
+        None,
+        "Brain unavailable",
+    )
+    assert monitor.acted_on_window_index(tmp_path / "brain.db", {})[0] == {}

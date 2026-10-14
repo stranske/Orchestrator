@@ -423,16 +423,16 @@ def req_findable(cap: dict, ctx: dict) -> tuple[bool, str]:
 #             Prose ("the weekly review and the closer") cannot be checked and no longer passes.
 #   dynamic — for a capability agents select (anything not `exercise_bound`), the value-chain
 #             monitor's `acted_on` is above zero within CONSUMER_GRACE_SECONDS of the FIRST
-#             `invocation` event. The count is `value_chain_monitor.acted_on_index`, the same
-#             Brain edges, window and classifier the weekly row prints — consumed, never
-#             re-derived. An `exercise_bound` rail is consumed by other rails and leaves no Brain
+#             `invocation` event. The count is `value_chain_monitor.acted_on_window_index`, the same
+#             Brain edges and classifier as the weekly row, bounded to the first-invocation
+#             deadline instead of the report's rolling window. An `exercise_bound` rail is consumed by other rails and leaves no Brain
 #             edge; its acting is proven by the rail exercise, so only the static step applies.
 #
 # Latched-gate check. (1) What decrements it: wiring the consumer so an influence edge is recorded,
 # or editing the declaration to a real symbol — code changes that need nothing from this gate.
 # (2) Can that run while the gate is closed: yes, nothing here blocks a consumer from being wired.
 # (3) One window: the grace is read from the ledger's first `invocation` event and the acting from
-# the monitor's WINDOW_DAYS, both consumed here. (4) What it prints when drained: `format_report`
+# that fixed first-invocation window, both consumed here. (4) What it prints when drained: `format_report`
 # prints "every declared consumer resolves; none is prose, missing or never acted" with every
 # passing state counted beside it; a Brain this machine cannot read prints "unmeasured", which is
 # a word and never a zero. "Acting" is CAPABILITY-LEVEL: an edge records the consuming run, not
@@ -557,7 +557,7 @@ _ACTED_ON_CACHE: dict[tuple, dict] = {}
 
 
 def acted_on_context(ledger: dict, *, now: int | None = None) -> dict:
-    """The monitor's `acted_on` per ledger row, or None with the reason it could not be read.
+    """The monitor's acts within each first-invocation deadline, or None when unreadable.
 
     Cached per Brain path and hour, because `report()` admits every live row with one context and
     the tests beside this module build several; the Brain read is seconds, not free.
@@ -566,12 +566,20 @@ def acted_on_context(ledger: dict, *, now: int | None = None) -> dict:
 
     now = _now() if now is None else now
     db = feedback.DB_PATH
-    key = (str(db), now // 3600, tuple(sorted(ledger)))
+    firsts = {cid: first_invocation_ts(cap) for cid, cap in ledger.items()}
+    windows = {
+        cid: (first, min(now, first + CONSUMER_GRACE_SECONDS))
+        for cid, first in firsts.items()
+        if first is not None and first <= now
+    }
+    key = (str(db), now // 3600, tuple(sorted(firsts.items())))
     if key not in _ACTED_ON_CACHE:
         try:
             import value_chain_monitor as monitor
 
-            index, reason = monitor.acted_on_index(db, now, sorted(ledger))
+            index, reason = monitor.acted_on_window_index(db, windows)
+            if index is not None:
+                index = {cid: index.get(cid, 0) for cid in ledger}
         except Exception as exc:  # noqa: BLE001
             index, reason = None, f"{type(exc).__name__}: {str(exc)[:80]}"
         _ACTED_ON_CACHE[key] = {"acted_on": index, "acted_on_reason": reason}
@@ -628,7 +636,7 @@ def consumer_class(cap: dict, ctx: dict) -> tuple[str, bool, str]:
             True,
             (
                 f"consumer {consumer} resolves; this capability's output was acted on by {acted} "
-                "run(s) (value-chain monitor) — the Brain records the consuming run, not the rail, so "
+                "run(s) within its first 14 days (value-chain monitor) — the Brain records the consuming run, not the rail, so "
                 "attribution to the declared symbol is not verified"
             ),
         )
@@ -657,7 +665,7 @@ def consumer_class(cap: dict, ctx: dict) -> tuple[str, bool, str]:
         False,
         (
             f"declared consumer {consumer} never acted: first invoked {(now - first) // 86400} days "
-            "ago, acted_on 0 in the monitor's window — declared, not wired"
+            "ago, acted_on 0 within its first 14 days — declared, not wired"
         ),
     )
 

@@ -283,6 +283,31 @@ def acted_on_index(db: Path, now: int, capability_ids) -> tuple[dict[str, int] |
     return index, f"value-chain monitor, {WINDOW_DAYS}d window, {db.name}"
 
 
+def acted_on_window_index(
+    db: Path, windows: dict[str, tuple[int, int]]
+) -> tuple[dict[str, int] | None, str]:
+    """Count the monitor's accepted, non-counterfactual acts inside fixed per-capability windows.
+
+    Admission deadlines are relative to first invocation, so a rolling report window cannot
+    establish them. Reuse the monitor's edge selection and classifier without expiring timely
+    evidence or crediting acts after the deadline.
+    """
+    if not windows:
+        return {}, "value-chain monitor, no invoked capabilities"
+    inputs = _brain(
+        db, min(start for start, _ in windows.values()), max(end for _, end in windows.values())
+    )
+    edges = inputs.get("edges")
+    if edges is None:
+        return None, (inputs.get("errors") or ["Brain evidence unavailable"])[0]
+    index = {}
+    for cid, (start, end) in windows.items():
+        own = own_edges_of(edges, cid)
+        bounded = [e for e in (own or []) if start <= int(e.get("created_ts") or 0) <= end]
+        index[cid] = int(outcome_counts(cid, bounded)["acted_on"] or 0)
+    return index, "value-chain monitor, first-invocation deadline windows"
+
+
 def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
     """Accepted completion events and influence edges in the window, read-only.
 
