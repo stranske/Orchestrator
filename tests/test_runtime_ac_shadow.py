@@ -922,6 +922,9 @@ def test_ingest_runs_real_named_test_and_removes_its_checkout(private_brain, mon
     monkeypatch.setenv("ORCH_RUN_RUNTIME_AC", "1")
     monkeypatch.setenv("ORCH_RUNTIME_AC_ALLOW_COMMANDS", "1")
     monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
+    # The weekly reader must consume persisted ingest events, not a hand-built
+    # summary or a verifier result supplied directly to observe_shadow_spec.
+    assert gate.shadow_summary(now=int(time.time()))["executed"] == 0
     summary = keepalive_outcomes.ingest_keepalive_outcomes(
         ["owner/repo"],
         _pr_fetch_fn=lambda *_: [_shadow_ingest_pr(20, head)],
@@ -945,6 +948,28 @@ def test_ingest_runs_real_named_test_and_removes_its_checkout(private_brain, mon
     assert audit["passing_named_test"] is True
     assert summary["runtime_ac_checkout_failures"] == 0
     assert summary["runtime_ac_shadow_errors"] == []
+    weekly = gate.shadow_summary(now=int(time.time()))
+    assert weekly["prs"] == 1
+    assert weekly["specs_authored"] == 1
+    assert weekly["executed"] == 1
+    assert weekly["execution_unmeasured"] == 0
+    report = {
+        "review_days": 7,
+        "raise_count": 0,
+        "held_off": [],
+        "on_but_idle": [],
+        "unconditioned": [],
+        "runtime_ac_shadow": weekly,
+    }
+    shadow_lines = [
+        line
+        for line in switch_review.format_report(report).splitlines()
+        if line.startswith("runtime-AC shadow:")
+    ]
+    assert len(shadow_lines) == 1
+    assert "PRs 1, specs authored 1, executed 1, would-FAIL 0" in shadow_lines[0]
+    assert "false-FAIL audit 0 of 1 (owner/repo#20)" in shadow_lines[0]
+    assert "execution unmeasured 0" in shadow_lines[0]
     fetched_head = subprocess.check_output(
         ["git", "-C", str(source), "rev-parse", "FETCH_HEAD"], text=True
     ).strip()
