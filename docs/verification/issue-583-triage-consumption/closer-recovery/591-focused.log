@@ -1,0 +1,61 @@
+.........................F.............................................. [ 26%]
+........................................................................ [ 53%]
+........................................................................ [ 79%]
+.......................................................                  [100%]
+=================================== FAILURES ===================================
+____ test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows ____
+
+consumable = ['stranske/Orchestrator#1', 'stranske/Orchestrator#3', 'stranske/Orchestrator#2', 'stranske/Orchestrator#4']
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10dfc6030>
+
+    def test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows(consumable, monkeypatch):
+        import capabilities
+    
+        targets = consumable + ["stranske/Orchestrator#5"]
+        result = triage_shadow.consume(targets, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+        assert result["consumed"] is True
+        assert result["ordered_targets"] == [
+            consumable[1],
+            consumable[2],
+            consumable[3],
+            consumable[0],
+            targets[-1],
+        ]
+        assert len(result["ordered_targets"]) == len(set(targets))
+        consumed = json.loads(triage_shadow.consumed_path().read_text())
+        assert consumed["picked"] == result["ordered_targets"][0]
+        assert consumed["role_run_id"] == result["role_run_id"] == "fixture-triage"
+        assert consumed["capability_version_id"] == "triage-v1"
+        # A ledger revision after consumption cannot change the version receiving credit.
+        monkeypatch.setattr(
+            capabilities, "load", lambda **kw: {"role-triage": {"capability_version_id": "triage-v2"}}
+        )
+        feedback.record_run(
+            "earlier-worker", consumed["picked"], "implement", "codex", mode="local", ts=100
+        )
+        feedback.record_completion_event("earlier-worker", status="succeeded")
+        feedback.record_run(
+            "fixture-worker", result["ordered_targets"][0], "implement", "codex", mode="local", ts=102
+        )
+        feedback.record_run(
+            "later-worker", consumed["picked"], "implement", "codex", mode="local", ts=103
+        )
+        feedback.record_completion_event("later-worker", status="succeeded")
+        # Wait for the first subsequent matching run, even if a later run completes first.
+>       assert outcomes.link_triage_consumption(now=103) == {
+            "followed": [],
+            "not_followed": [],
+            "unresolved": [],
+            "pending": [consumed["ts"]],
+        }
+E       AssertionError: assert {'followed': ...101000000000]} == {'followed': ...101000000000]}
+E         
+E         Omitting 3 identical items, use -vv to show
+E         Right contains 1 more item:
+E         {'unresolved': []}
+E         Use -v to get more diff
+
+tests/test_triage_shadow.py:523: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_triage_shadow.py::test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows
+1 failed, 270 passed in 11.82s

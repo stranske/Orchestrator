@@ -2,8 +2,8 @@
 """Compare the existing TriageAgent with opener ordering; never drive a worker.
 
 The active tick calls this independently of ORCH_DISPATCH_LANE. GitHub access
-is search/read only. Observations are local, and neither ranking changes the
-opener's selection. ORCH_TRIAGE_SHADOW=0 disables the caller.
+is search/read only. Observations are local; a fresh ranking may be consumed behind the default-OFF
+ORCH_TRIAGE_CONSUME flag. Consumption never dispatches or hides candidates. ORCH_TRIAGE_SHADOW=0 disables the caller.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import backlog
+import capabilities
 import feedback
 import outcomes
 import roles
@@ -29,6 +30,63 @@ def corpus_path() -> Path:
     return Path(os.environ.get("ORCH_STATE_DIR", str(Path.home() / ".codex/orchestrator"))) / (
         "capability-program/triage-shadow.jsonl"
     )
+
+
+RANKING_MAX_AGE_S = 7200
+MIN_CONSUME_CYCLES = 20
+
+
+def ranking_path() -> Path:
+    return corpus_path().with_name("triage-ranking.json")
+
+
+def consumed_path() -> Path:
+    return corpus_path().with_name("triage-consumed.jsonl")
+
+
+def linked_path() -> Path:
+    return corpus_path().with_name("triage-linked.jsonl")
+
+
+def _append(path: Path, row: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def _read_rows(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    if any(not isinstance(row, dict) for row in rows):
+        raise ValueError(f"malformed rows: {path.name}")
+    return rows
+
+
+def _publish_ranking(row: dict, ordered_targets: list[str]) -> None:
+    path = ranking_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ranking = {key: row[key] for key in ("ts", "role_run_id", "snapshot_sha256")}
+    ranking.update(ordered_targets=ordered_targets, max_age_s=RANKING_MAX_AGE_S)
+    # Replace only after complete bytes are durable; readers see one snapshot.
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, prefix=".triage-ranking-", delete=False
+        ) as stream:
+            tmp = Path(stream.name)
+            json.dump(ranking, stream, sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
 
 
 def rule_key(item: dict) -> tuple:
@@ -279,6 +337,9 @@ def record_cycle(
     }
     with path.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(row, sort_keys=True) + "\n")
+    if row["triage_valid"] and row["live_proposal"]:
+        ranked = [rec["target"] for rec in rank]
+        _publish_ranking(row, ranked + [i["target"] for i in ordered if i["target"] not in ranked])
     return row
 
 
@@ -310,7 +371,11 @@ def summary(path: Path | None = None) -> dict:
         return {
             "cycles": len(rows),
             "malformed_rows": malformed,
-            "valid_cycles": sum(bool(row.get("triage_valid")) for row in rows),
+            "valid_cycles": len(live_rows),
+            "top1_agrees": sum(
+                row.get("rule_pick") == next(iter(row["triage_top_three"]), None)
+                for row in live_rows
+            ),
             **totals,
         }
     with feedback._conn() as conn:
@@ -341,7 +406,10 @@ def summary(path: Path | None = None) -> dict:
     return {
         "cycles": len(rows),
         "malformed_rows": malformed,
-        "valid_cycles": sum(bool(row.get("triage_valid")) for row in rows),
+        "valid_cycles": len(live_rows),
+        "top1_agrees": sum(
+            row.get("rule_pick") == next(iter(row["triage_top_three"]), None) for row in live_rows
+        ),
         **totals,
     }
 
@@ -349,7 +417,16 @@ def summary(path: Path | None = None) -> dict:
 def summary_line(path: Path | None = None) -> str:
     try:
         data = summary(path)
-    except (OSError, UnicodeError, sqlite3.Error) as exc:
+        consumed = _read_rows(consumed_path())
+        linked = {row["consumed_ts"]: row for row in _read_rows(linked_path())}
+        followed = sum(linked.get(row["ts"], {}).get("status") == "followed" for row in consumed)
+        not_followed = sum(
+            linked.get(row["ts"], {}).get("status") == "not_followed" for row in consumed
+        )
+        unresolved = sum(
+            linked.get(row["ts"], {}).get("status") == "unresolved" for row in consumed
+        )
+    except (OSError, UnicodeError, ValueError, KeyError, sqlite3.Error) as exc:
         return f"triage shadow: UNKNOWN — outcome evidence unreadable ({type(exc).__name__})"
     if data["malformed_rows"]:
         return (
@@ -368,8 +445,95 @@ def summary_line(path: Path | None = None) -> str:
     return (
         f"triage shadow: cycles {data['cycles']}, valid {data['valid_cycles']}, "
         f"triage top-1 merged+durable {percent('triage')}, rule pick {percent('rule')}, "
-        f"malformed rows {data['malformed_rows']}"
+        f"malformed rows {data['malformed_rows']}; "
+        f"consumed {len(consumed)}, followed {followed}, not followed {not_followed}, "
+        f"open {len(consumed) - followed - not_followed - unresolved}; unresolved {unresolved}; "
+        f"top-1 agrees with the rule pick {data['top1_agrees']} of {data['valid_cycles']} valid cycles"
     )
+
+
+def consume(candidates: list[str], *, env=None, now=None) -> dict:
+    """Offer an order, retaining the entire caller-filtered population; never claim work."""
+    env = os.environ if env is None else env
+    now = time.time() if now is None else now
+    result = {
+        "consumed": False,
+        "reason": "flag_off",
+        "ordered_targets": candidates,
+        "role_run_id": None,
+    }
+    if env.get("ORCH_TRIAGE_CONSUME", "0") != "1":
+        return result
+    try:
+        if (
+            not isinstance(candidates, list)
+            or any(not isinstance(c, str) or not c for c in candidates)
+            or len(set(candidates)) != len(candidates)
+        ):
+            raise ValueError("invalid candidate population")
+        data = summary()
+        if data["malformed_rows"]:
+            raise ValueError("malformed corpus")
+        valid = data["valid_cycles"]
+        if valid < MIN_CONSUME_CYCLES:
+            result["reason"] = f"cycles_below_minimum:{valid}/{MIN_CONSUME_CYCLES}"
+            return result
+        if not ranking_path().exists():
+            result["reason"] = "no_ranking"
+            return result
+        ranking = json.loads(ranking_path().read_text(encoding="utf-8"))
+        if (
+            not isinstance(ranking, dict)
+            or type(ranking.get("ts")) is not int
+            or not isinstance(ranking.get("role_run_id"), str)
+            or not ranking["role_run_id"]
+            or not isinstance(ranking.get("snapshot_sha256"), str)
+            or not isinstance(ranking.get("ordered_targets"), list)
+            or any(not isinstance(t, str) for t in ranking["ordered_targets"])
+            or len(set(ranking["ordered_targets"])) != len(ranking["ordered_targets"])
+        ):
+            raise ValueError("invalid ranking")
+        age = now - ranking["ts"] / 1_000_000_000
+        if age < 0 or age > RANKING_MAX_AGE_S:
+            result["reason"] = f"ranking_stale:{int(age)}/{RANKING_MAX_AGE_S}"
+            return result
+        if not candidates:
+            result["reason"] = "no_candidates"
+            return result
+        version = (capabilities.load(create=False).get("role-triage") or {}).get(
+            "capability_version_id"
+        )
+        if not version:
+            raise ValueError("capability version unavailable")
+        ranked = [t for t in ranking["ordered_targets"] if t in candidates]
+        if not ranked:
+            result["reason"] = "ranking_no_candidates"
+            return result
+        ordered = ranked + [t for t in candidates if t not in ranked]
+        _append(
+            consumed_path(),
+            {
+                "ts": int(now * 1_000_000_000),
+                "role_run_id": ranking["role_run_id"],
+                "ranking_ts": ranking["ts"],
+                "snapshot_sha256": ranking["snapshot_sha256"],
+                "capability_version_id": version,
+                "picked": ordered[0],
+                "ordered_targets": ordered,
+                "candidate_sha256": hashlib.sha256(
+                    json.dumps(candidates, sort_keys=True).encode()
+                ).hexdigest(),
+            },
+        )
+        return {
+            "consumed": True,
+            "reason": "consumed",
+            "ordered_targets": ordered,
+            "role_run_id": ranking["role_run_id"],
+        }
+    except (OSError, ValueError, TypeError, sqlite3.Error) as exc:
+        result["reason"] = f"evidence_unknown:{exc}"
+        return result
 
 
 def main(argv=None) -> int:
@@ -379,11 +543,23 @@ def main(argv=None) -> int:
     parser.add_argument("--snapshot", type=Path)
     parser.add_argument("--proposal-json", type=Path)
     parser.add_argument("--backfill", action="store_true")
+    parser.add_argument("--consume", action="store_true")
+    parser.add_argument("--candidates", type=Path)
     args = parser.parse_args(argv)
+    if args.consume:
+        if not args.candidates:
+            parser.error("--consume requires --candidates")
+        try:
+            candidates = json.loads(args.candidates.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(consume(candidates), sort_keys=True))
+        return 0
     if args.selftest:
         with tempfile.TemporaryDirectory() as tmp:
             row = record_cycle([], path=Path(tmp) / "shadow.jsonl", dispatch=False)
             assert row["candidate_count"] == 0 and row["rule_pick"] is None
+            assert consume(["example/repo#1"], env={})["reason"] == "flag_off"
         print("triage_shadow.py selftest: OK (empty cycle recorded, no agent or worker mutation)")
         return 0
     if args.summary:
@@ -398,6 +574,7 @@ def main(argv=None) -> int:
         row = record_cycle(items, dispatch=proposal is None, proposal_json=proposal)
         if args.backfill:
             row["backfill"] = outcomes.backfill_triage_disagreements()
+            row["consumption_links"] = outcomes.link_triage_consumption()
         print(json.dumps(row, sort_keys=True))
         return int(bool(row["errors"]))
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
