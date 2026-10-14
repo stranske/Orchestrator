@@ -46,6 +46,7 @@ import verifier_evidence
 # This collector deliberately has no GitHub, Brain, role-routing, or artifact
 # transport dependency.  It is a local, immutable-commit evidence boundary.
 MAX_COLLECTION_SOURCE_BYTES = 1_048_576
+MAX_DIFF_PATCH_BYTES = 256_000
 
 
 def report_path() -> Path:
@@ -71,14 +72,38 @@ def disputes(*, db: Path | None = None, now: int | None = None, days: int = 90) 
         ]
 
 
+def _packet_metadata_only(ground_truth: dict) -> bool:
+    patch = ground_truth.get("diff_patch")
+    patch_text = patch.get("text") if isinstance(patch, dict) else ""
+    has_patch = isinstance(patch_text, str) and bool(patch_text.strip())
+    criteria = ground_truth.get("acceptance_criteria")
+    has_criteria = isinstance(criteria, list) and bool(criteria)
+    return not (has_patch and has_criteria)
+
+
+def _row_metadata_only(row: dict) -> bool:
+    packet = row.get("packet")
+    if isinstance(packet, dict) and "metadata_only" in packet:
+        return bool(packet.get("metadata_only"))
+    if row.get("metadata_only") is not None:
+        return bool(row.get("metadata_only"))
+    ground_truth = (packet or {}).get("ground_truth_evidence") if isinstance(packet, dict) else None
+    if isinstance(ground_truth, dict):
+        return _packet_metadata_only(ground_truth)
+    return True
+
+
 def build_packet(row: dict, evidence: dict) -> dict:
     """Require actual finding text and merge-bound diff/gate evidence, not merge=PASS."""
+    ground_truth = evidence.get("ground_truth_evidence")
+    if not isinstance(ground_truth, dict):
+        ground_truth = {}
     case = {
         "target": row.get("target"),
         "source": "retrospective",
-        "metadata_only": True,
+        "metadata_only": _packet_metadata_only(ground_truth),
         "disputed_finding": evidence.get("disputed_finding"),
-        "ground_truth_evidence": evidence.get("ground_truth_evidence"),
+        "ground_truth_evidence": ground_truth,
     }
     if roles._validate_adjudication_case(case):
         raise ValueError("packet requires target, disputed_finding and ground_truth_evidence")
@@ -161,6 +186,7 @@ def fetch_evidence(row: dict) -> dict:
       pullRequest(number:$n){number state headRefOid mergeCommit{oid}
       files(first:100){pageInfo{hasNextPage} nodes{path additions deletions}}
       comments(last:100){pageInfo{hasPreviousPage} nodes{body url author{login}}}
+      closingIssuesReferences(first:5){nodes{number body updatedAt}}
       commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){
         pageInfo{hasNextPage endCursor} nodes{__typename ... on CheckRun{name conclusion detailsUrl}
         ... on StatusContext{context state targetUrl}}}}}}}}}}"""
@@ -241,6 +267,38 @@ def fetch_evidence(row: dict) -> dict:
     ]
     if not gates:
         raise ValueError("no gate run in exact-head evidence")
+    patch_proc = subprocess.run(
+        [
+            "gh",
+            "api",
+            f"repos/{owner}/{name}/pulls/{number}",
+            "-H",
+            "Accept: application/vnd.github.v3.diff",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if patch_proc.returncode:
+        raise ValueError("merged PR diff patch unavailable")
+    patch_text = patch_proc.stdout
+    if len(patch_text.encode("utf-8")) > MAX_DIFF_PATCH_BYTES:
+        patch_text = patch_text.encode("utf-8")[:MAX_DIFF_PATCH_BYTES].decode("utf-8", errors="ignore")
+    acceptance_criteria: list[dict[str, str]] = []
+    criteria_revision = pr["headRefOid"]
+    for issue in (pr.get("closingIssuesReferences") or {}).get("nodes") or []:
+        if not isinstance(issue, dict):
+            continue
+        body = issue.get("body")
+        if not isinstance(body, str):
+            continue
+        try:
+            texts = _criterion_texts(body)
+        except ValueError:
+            continue
+        criteria_revision = str(issue.get("updatedAt") or criteria_revision)
+        acceptance_criteria = [{"text": text, "revision": criteria_revision} for text in texts]
+        break
     return {
         "disputed_finding": {"ref": finding["url"], "body": finding["body"], "decision": decision},
         "ground_truth_evidence": {
@@ -248,6 +306,9 @@ def fetch_evidence(row: dict) -> dict:
             "merge_sha": pr["mergeCommit"]["oid"],
             "diff_ref": f"https://github.com/{repo}/pull/{number}/files",
             "diff_summary": pr["files"]["nodes"],
+            "diff_patch": {"revision": pr["headRefOid"], "text": patch_text},
+            "acceptance_criteria": acceptance_criteria,
+            "acceptance_criteria_revision": criteria_revision,
             "gate_runs": gates,
         },
     }
@@ -305,6 +366,8 @@ def _apply_evidence_floor(row: dict) -> None:
     Legacy rows and explicit false flags therefore cannot upgrade its evidence.
     Applying the floor is local and requires no repeated backend call.
     """
+    if not _row_metadata_only(row):
+        return
     row["metadata_only"] = True
     row["disposition"] = "needs_more_evidence"
     if row.get("shadow_verdict") is not None:
@@ -316,16 +379,29 @@ def _apply_evidence_floor(row: dict) -> None:
     )
 
 
+def _shadow_verdict_for_row(row: dict) -> str | None:
+    verdicts = {"uphold_blocker": "FAIL", "reject_blocker": "PASS"}
+    if row.get("shadow_verdict") in {"PASS", "FAIL"}:
+        return row["shadow_verdict"]
+    decision = row.get("decision")
+    return verdicts.get(decision) if isinstance(decision, str) else None
+
+
 def summarize(rows: list[dict]) -> dict:
     # Classify independently of stored flags, including pre-floor legacy rows.
     classified = [dict(row) for row in rows]
     for row in classified:
-        _apply_evidence_floor(row)
+        if _row_metadata_only(row):
+            _apply_evidence_floor(row)
+        else:
+            row["metadata_only"] = False
+            row.setdefault("disposition", row.get("decision"))
+            row["shadow_verdict"] = _shadow_verdict_for_row(row)
     accepted = [
         row for row in classified if row.get("disposition") in {"uphold_blocker", "reject_blocker"}
     ]
     graded = [r for r in accepted if r.get("later_truth")]
-    agree = sum(r["shadow_verdict"] == r["later_truth"] for r in graded)
+    agree = sum(_shadow_verdict_for_row(r) == r["later_truth"] for r in graded)
     baseline = sum(r["merge_rule_verdict"] == r["later_truth"] for r in graded)
 
     # A legacy dollar receipt proves an attempt even if its backend ID was not
@@ -369,7 +445,7 @@ def summarize(rows: list[dict]) -> dict:
         "proposed_decisions": sum(
             r.get("decision") in {"uphold_blocker", "reject_blocker"} for r in rows
         ),
-        "metadata_only_cases": len(rows),
+        "metadata_only_cases": sum(1 for row in rows if _row_metadata_only(row)),
         "graded": len(graded),
         "agree": agree,
         "disagree": len(graded) - agree,
@@ -1015,7 +1091,13 @@ def run(
         identity = {k: row[k] for k in ("run_id", "verifier_verdict", "adjudicated_verdict")}
         case_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         old = saved.get(case_id)
-        if old and (old.get("decision") or not retry):
+        reattempt_abstention = (
+            retry
+            and old
+            and old.get("decision") == "needs_more_evidence"
+            and _row_metadata_only(old)
+        )
+        if old and not reattempt_abstention and (old.get("decision") or not retry):
             if old.get("decision"):
                 old["later_truth"] = later_truth(row)
                 old["cost_usd"] = measured_cost(old.get("backend_run_id"), db)
@@ -1064,7 +1146,11 @@ def run(
                     entry["disposition"] = (result.get("advisory_plan") or {}).get(
                         "decision", "needs_more_evidence"
                     )
-                    _apply_evidence_floor(entry)
+                    entry["shadow_verdict"] = _shadow_verdict_for_row(
+                        {**entry, "decision": entry.get("decision")}
+                    )
+                    if packet.get("metadata_only"):
+                        _apply_evidence_floor(entry)
                 entry["cost_usd"] = measured_cost(result.get("backend_run_id"), db)
         except (
             ValueError,
@@ -1087,7 +1173,8 @@ def run(
 def _persist_report(path: Path, rows: list[dict], population: int, db: Path | None = None) -> dict:
     """Atomically publish the same shadow evidence returned to the caller."""
     for row in rows:
-        _apply_evidence_floor(row)
+        if _row_metadata_only(row):
+            _apply_evidence_floor(row)
     for row in rows:
         if row.get("backend_run_id"):
             row["cost_report"] = feedback.role_cost_report(
