@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import ast
 import json
 import os
 import pathlib
@@ -431,8 +432,11 @@ def req_findable(cap: dict, ctx: dict) -> tuple[bool, str]:
 # (2) Can that run while the gate is closed: yes, nothing here blocks a consumer from being wired.
 # (3) One window: the grace is read from the ledger's first `invocation` event and the acting from
 # the monitor's WINDOW_DAYS, both consumed here. (4) What it prints when drained: `format_report`
-# prints "every declared consumer resolves and has acted or is within grace"; a Brain this machine
-# cannot read prints "unmeasured", which is a word and never a zero.
+# prints "every declared consumer resolves; none is prose, missing or never acted" with every
+# passing state counted beside it; a Brain this machine cannot read prints "unmeasured", which is
+# a word and never a zero. "Acting" is CAPABILITY-LEVEL: an edge records the consuming run, not
+# the rail, so the declared symbol is verified statically and the acting is verified per
+# capability; attribution per rail would need an edge field no writer records today.
 # --------------------------------------------------------------------------------------------
 CONSUMER_ACTS_ENFORCED_FROM = (
     1791936000  # 2026-10-14T00:00:00Z, the day a consumer had to be shown to act
@@ -460,12 +464,49 @@ def consumer_tokens(declaration: Any) -> list[tuple[str, str]]:
     return [(m.group(1), m.group(2)) for m in CONSUMER_TOKEN_RE.finditer(str(declaration or ""))]
 
 
+def _definition_in(body, name: str):
+    for node in body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name == name:
+                return node
+        elif isinstance(node, ast.Assign):
+            if any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+                return node
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == name:
+                return node
+    return None
+
+
+def _python_symbol_defined(text: str, symbol: str) -> bool:
+    """`Outer.inner` must be `inner` INSIDE `class Outer`, never any `inner` in the file.
+
+    A leaf-name search would accept `x.py:Expected.consume` on the strength of a top-level
+    `def consume` or a method on another class — a consumer that does not exist, passing the
+    static check. So the definition path is walked through the parsed module.
+    """
+    try:
+        body = ast.parse(text).body
+    except (SyntaxError, ValueError):
+        return False
+    parts = symbol.split(".")
+    for i, part in enumerate(parts):
+        node = _definition_in(body, part)
+        if node is None:
+            return False
+        if i == len(parts) - 1:
+            return True
+        if not isinstance(node, ast.ClassDef):
+            return False
+        body = node.body
+    return False
+
+
 def _symbol_defined(text: str, symbol: str, *, shell: bool) -> bool:
+    if not shell:
+        return _python_symbol_defined(text, symbol)
     leaf = re.escape(symbol.rsplit(".", 1)[-1])
-    if shell:
-        pattern = rf"^\s*(?:function\s+)?{leaf}\s*\(\)|^\s*{leaf}="
-    else:
-        pattern = rf"^\s*(?:async\s+)?def\s+{leaf}\s*\(|^\s*class\s+{leaf}\b|^{leaf}\s*[:=]"
+    pattern = rf"^\s*(?:function\s+)?{leaf}\s*\(\)|^\s*{leaf}="
     return re.search(pattern, text, re.MULTILINE) is not None
 
 
@@ -481,8 +522,14 @@ def consumer_resolution(cap: dict, *, module_dir=None, repo_root=None) -> dict:
         bases = (repo_root, module_dir) if shell else (module_dir, repo_root, repo_root / "tests")
         found = False
         for base in bases:
+            # Resolved and kept INSIDE the search root: `src/../../elsewhere.py` must not let a
+            # file outside this tree pass as a consumer defined in it.
+            root = base.resolve()
+            candidate = (root / file).resolve()
+            if not candidate.is_relative_to(root):
+                continue
             try:
-                text = (base / file).read_text()
+                text = candidate.read_text()
             except OSError:
                 continue
             if _symbol_defined(text, symbol, shell=shell):
@@ -570,7 +617,20 @@ def consumer_class(cap: dict, ctx: dict) -> tuple[str, bool, str]:
         )
     acted = int(index[cap["capability_id"]] or 0)
     if acted > 0:
-        return "acting", True, f"consumer {consumer} acted on {acted} run(s) (value-chain monitor)"
+        # CAPABILITY-LEVEL. An influence edge records the run that consumed this capability's
+        # output, never the rail that did it (the target event's `producer` is the Brain writer:
+        # feedback.record_run, feedback.record_outcome). So "acted" means the output reached a
+        # consumer that acted; whether it was the DECLARED symbol is not recorded anywhere today,
+        # and this detail says so rather than implying an attribution the Brain cannot make.
+        return (
+            "acting",
+            True,
+            (
+                f"consumer {consumer} resolves; this capability's output was acted on by {acted} "
+                "run(s) (value-chain monitor) — the Brain records the consuming run, not the rail, so "
+                "attribution to the declared symbol is not verified"
+            ),
+        )
     first = first_invocation_ts(cap)
     if first is None:
         return (
@@ -616,7 +676,11 @@ def consumer_report(ledger: dict, ctx: dict, rows: list[dict]) -> dict:
     return {
         "total": len(rows),
         "by_class": classes,
-        "blocking": [r["capability_id"] for r in rows if "consumer_acts" in r["blocking"]],
+        # `enforced`, as `findability_report` reads it: a waived row keeps the requirement in its
+        # `blocking` list but cannot fail the suite, so it is not reported as blocking here.
+        "blocking": [
+            r["capability_id"] for r in rows if "consumer_acts" in r["blocking"] and r["enforced"]
+        ],
         "deferred": [r["capability_id"] for r in rows if "consumer_acts" in r["deferred"]],
         # A declaration edit each: no code, no evidence to wait for.
         "drainable": sorted(classes["prose"] + classes["unresolved"] + classes["undeclared"]),
@@ -1146,7 +1210,8 @@ def format_report(rep: dict) -> str:
         out += [
             "",
             f"  CONSUMERS (10th): {cons['total'] - by['prose'] - by['unresolved'] - by['undeclared']}"
-            f" of {cons['total']} declare a consumer this tree can find — acting {by['acting']}, "
+            f" of {cons['total']} declare a consumer this tree can find — acting (capability-level) "
+            f"{by['acting']}, "
             f"in grace {by['grace']}, not invoked {by['not_invoked']}, exercise-bound "
             f"{by['exercise_bound']}, unmeasured {by['unmeasured']}",
             f"                   never acted {by['never_acted']} (blocking {len(cons['blocking'])}, "
@@ -1156,7 +1221,10 @@ def format_report(rep: dict) -> str:
         ]
         if cons["drained"]:
             out.append(
-                "                   every declared consumer resolves and has acted or is within grace"
+                "                   every declared consumer resolves; none is prose, missing or never "
+                f"acted — acting (capability-level) {by['acting']}, in grace {by['grace']}, not "
+                f"invoked {by['not_invoked']}, exercise-bound {by['exercise_bound']}, unmeasured "
+                f"{by['unmeasured']}"
             )
         for cid in cons["by_class"]["never_acted"]:
             out.append(f"                   NEVER ACTED {cid}")

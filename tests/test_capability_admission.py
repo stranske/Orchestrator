@@ -606,6 +606,25 @@ def test_consumer_acts_needs_a_symbol_this_tree_can_find(tmp_path):
     ok, detail = admission.req_consumer_acts(_consumer_cap("t-ok", "x.py:consume"), ctx)
     # No Brain in this context: unmeasured is a word, never a zero, and never a failure.
     assert ok and "unmeasured" in detail
+    # The whole path, not the leaf: a `consume` on another class or at top level is not
+    # `Expected.consume`, and a dotted path through a function is nothing.
+    (tmp_path / "x.py").write_text(
+        "class Other:\n    def consume(self):\n        return 1\n\n\ndef consume():\n    return 2\n"
+    )
+    ok, _ = admission.req_consumer_acts(_consumer_cap("t-leaf", "x.py:Expected.consume"), ctx)
+    assert not ok
+    ok, _ = admission.req_consumer_acts(_consumer_cap("t-path", "x.py:Other.consume"), ctx)
+    assert ok
+    ok, _ = admission.req_consumer_acts(_consumer_cap("t-top", "x.py:consume"), ctx)
+    assert ok
+    ok, _ = admission.req_consumer_acts(_consumer_cap("t-deep", "x.py:consume.inner"), ctx)
+    assert not ok
+    # A declaration cannot walk out of the search root.
+    (tmp_path.parent / "outside.py").write_text("def consume():\n    return 3\n")
+    ok, detail = admission.req_consumer_acts(
+        _consumer_cap("t-escape", "../outside.py:consume"), ctx
+    )
+    assert not ok and "not found" in detail
 
 
 def test_consumer_acts_fails_a_declared_consumer_that_never_acted(tmp_path):
@@ -663,6 +682,44 @@ def test_consumer_acts_binds_from_its_date_and_reports_older_rows_as_debt(tmp_pa
     assert rep["by_class"]["prose"] == ["t-old", "t-new"]
     assert rep["drainable"] == ["t-new", "t-old"] and not rep["drained"]  # sorted
     assert rep["blocking"] == ["t-new"] and rep["deferred"] == ["t-old"]
+
+
+def test_consumer_report_excludes_waived_rows_and_names_the_drained_states(tmp_path, monkeypatch):
+    ctx = _consumer_ctx(tmp_path)
+    ledger = {}
+    cap = _consumer_cap("t-waived", "the weekly review")
+    cap["event_history"] = [
+        {"timestamp": admission.CONSUMER_ACTS_ENFORCED_FROM + 3600, "type": "registered"}
+    ]
+    ledger["t-waived"] = cap
+    monkeypatch.setitem(
+        admission.WAIVERS, "t-waived", {"expires": admission._now() + 3600, "reason": "test"}
+    )
+    row = admission.admit("t-waived", ctx=ctx, ledger=ledger)
+    assert "consumer_acts" in row["blocking"] and not row["enforced"]
+    rep = admission.consumer_report(ledger, ctx, [row])
+    assert rep["blocking"] == [], "a waived row cannot fail the suite, so it is not blocking"
+    # Drained is a statement about what is absent; the sentence names every passing state so a
+    # catalogue of never-invoked rows is not read as one that has acted.
+    unmeasured = _consumer_cap("t-unmeasured", "x.py:consume")
+    row = admission.admit("t-unmeasured", ctx=ctx, ledger={"t-unmeasured": unmeasured})
+    cons = admission.consumer_report({"t-unmeasured": unmeasured}, ctx, [row])
+    assert cons["drained"] and cons["by_class"]["unmeasured"] == ["t-unmeasured"]
+    text = admission.format_report(
+        {
+            "admitted": 1,
+            "total": 1,
+            "enforced_total": 0,
+            "enforced_failing": [],
+            "legacy_debt": [],
+            "rows": [row],
+            "findability": {},
+            "consumers": cons,
+            "commitments": {"clean": True, "dangling_citations": [], "overdue_without_record": []},
+        }
+    )
+    drained_line = next(line for line in text.splitlines() if "none is prose" in line)
+    assert "unmeasured 1" in drained_line and "has acted" not in drained_line
 
 
 def main() -> int:

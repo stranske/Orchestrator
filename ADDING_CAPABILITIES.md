@@ -87,6 +87,8 @@ field; it verifies the one part 5 requires.
   Before the first invocation, and while the grace runs, the row passes and says so; a Brain the
   machine cannot read prints `unmeasured`, never `0`. An `exercise_bound` rail leaves no Brain edge
   and is judged by the rail exercise, so only the static step applies to it.
+  Acting is capability-level: an influence edge records the run that consumed the output, not
+  the rail, so the declared symbol is verified statically and the acting per capability.
 - **Printed.** `format_report` prints one CONSUMERS line with every class counted (acting, in
   grace, not invoked, exercise-bound, unmeasured, never acted, prose, missing, undeclared) and the
   DRAINABLE set, which is a declaration edit each; when nothing is prose, missing or never-acted it
