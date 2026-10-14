@@ -1,0 +1,18 @@
+[
+  {
+    "mutation": "drop-rejected-proposal",
+    "test": "tests/test_role_prompt_batch.py::test_failed_body_and_raw_output_are_retained_in_the_manifest",
+    "red_exit": 1,
+    "green_exit": 0,
+    "corrected_sha256": "210d62e1a61a15f23a7a7a7cb8b31059cc6c679f417498cd2b49dd4d11fcba54",
+    "mutated_sha256": "a3c0c4d00fb8c7bc7f87ee8beafdc26e3b7b903d2b944ae1c8671aaf0bc54b88"
+  },
+  {
+    "mutation": "publish-failed-body",
+    "test": "tests/test_role_prompt_batch.py::test_cli_batch_writes_valid_bodies_and_invalid_item_verdicts",
+    "red_exit": 1,
+    "green_exit": 0,
+    "corrected_sha256": "210d62e1a61a15f23a7a7a7cb8b31059cc6c679f417498cd2b49dd4d11fcba54",
+    "mutated_sha256": "bdcfb4e09c648b4712d6e88b47dbf5724bee56cee9a013638dec9fdb7334c65b"
+  }
+]

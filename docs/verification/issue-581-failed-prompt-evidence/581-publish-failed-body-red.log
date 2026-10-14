@@ -1,0 +1,55 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_cli_batch_writes_valid_bodies_and_invalid_item_verdicts _________
+
+private_brain = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1780/test_cli_batch_writes_valid_bo0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111156540>
+capsys = <_pytest.capture.CaptureFixture object at 0x1111f8c20>
+
+    def test_cli_batch_writes_valid_bodies_and_invalid_item_verdicts(
+        private_brain, monkeypatch, capsys
+    ):
+        items = [
+            {"target": "owner/repo#1", "goal": "Good", "proposal_json": proposal()},
+            {"target": "owner/repo#2", "goal": "Bad", "proposal_json": proposal("Bad body")},
+        ]
+        batch = private_brain / "items.json"
+        batch.write_text(json.dumps(items))
+        directory = private_brain / "bodies"
+        assert (
+            roles.main(
+                [
+                    "prompt",
+                    "--batch",
+                    str(batch),
+                    "--output",
+                    "issue_body",
+                    "--dispatch",
+                    "--backend",
+                    "cursor",
+                    "--output-dir",
+                    str(directory),
+                ]
+            )
+            == 1
+        )
+        manifest = json.loads(capsys.readouterr().out)
+        assert manifest == json.loads((directory / "manifest.json").read_text())
+        assert manifest["output"] == "issue_body" and manifest["batch_id"]
+        assert Path(manifest["items"][0]["body_file"]).read_text() == BODY
+        assert manifest["items"][0]["valid"] is True
+        assert manifest["items"][0]["errors"] == []
+        assert manifest["items"][0]["role_run_id"]
+        assert manifest["items"][1]["role_run_id"]
+        assert manifest["items"][1]["body_file"] is None
+        assert manifest["items"][1]["valid"] is False
+        assert manifest["items"][1]["errors"]
+>       assert not (directory / "002.md").exists()
+E       AssertionError: assert not True
+E        +  where True = exists()
+E        +    where exists = (PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1780/test_cli_batch_writes_valid_bo0/bodies') / '002.md').exists
+
+tests/test_role_prompt_batch.py:303: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_role_prompt_batch.py::test_cli_batch_writes_valid_bodies_and_invalid_item_verdicts
+1 failed in 0.45s
