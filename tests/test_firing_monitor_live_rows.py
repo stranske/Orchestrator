@@ -5,7 +5,8 @@ then on: a retired or superseded row is not expected to fire, and the activation
 report and the advisor already skipped it. These tests pin the rule where the monitor applies it,
 pin that a not-live row is NAMED rather than silently dropped, and pin the grading side effect: the
 fix changes the CONTENT of the monitor's finding set without changing its keys or its projection,
-so without a declared population the tick would have minted a "useful" verdict for the fix itself.
+so without a declared population a pre-C8 grader would have minted a "useful" verdict for the fix
+itself; observers are now verdict-exempt and only report deltas.
 """
 
 from __future__ import annotations
@@ -122,8 +123,16 @@ def test_the_report_declares_its_population_under_the_graders_key(tmp_path, monk
     }
 
 
+def _exempt_observer_eval(rep, *, report_changed):
+    ev = rep["evaluated"][0]
+    assert ev["graded"] is False and ev["reason"] == "verdict_exempt", ev
+    assert ev["report_changed"] is report_changed, ev
+    assert rep["verdicts_recorded"] == 0, rep
+    return ev
+
+
 def test_the_repair_rebaselines_instead_of_minting_a_useful_verdict(tmp_path, monkeypatch):
-    """Grade the monitor's REAL report through its REAL projection, across the fix."""
+    """Project the monitor's REAL report across the fix without recording usefulness verdicts."""
     after = _review(tmp_path, monkeypatch)
     # What the monitor emitted before the fix: the same report, with the retired row back in the
     # lists it used to reach and no declared population. Derived from the real report, so the two
@@ -153,12 +162,12 @@ def test_the_repair_rebaselines_instead_of_minting_a_useful_verdict(tmp_path, mo
         return cp.tick_evidence(now=NOW + day * 86400, state_dir=state, path=ledger, steps=steps)
 
     tick(before, 0)  # first sight: baseline
-    assert tick(before, 1)["evaluated"][0]["useful"] is False  # grading works on this projection
+    _exempt_observer_eval(tick(before, 1), report_changed=False)
     repaired = tick(after, 2)
     assert repaired["verdicts_recorded"] == 0 and repaired["evaluated"] == [], repaired
     assert repaired["baselined"][0]["rebaselined"] is True
     assert "population" in repaired["baselined"][0]["reason"]
-    assert tick(after, 3)["evaluated"][0]["useful"] is False  # comparable again, and unchanged
-    # A genuinely new finding afterwards is still graded useful: the guard is one re-baseline.
+    _exempt_observer_eval(tick(after, 3), report_changed=False)
+    # A genuinely new finding is still observed, but observers never earn a usefulness verdict.
     moved = {**after, "never_fired": sorted([*after["never_fired"], "live-new"])}
-    assert tick(moved, 4)["evaluated"][0]["useful"] is True
+    _exempt_observer_eval(tick(moved, 4), report_changed=True)
