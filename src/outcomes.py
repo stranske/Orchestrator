@@ -1885,9 +1885,12 @@ def link_triage_consumption(*, now: float | None = None, limit: int = 100) -> di
 
     now = time.time() if now is None else now
     consumed = triage_shadow._read_rows(triage_shadow.consumed_path())
-    linked = {row["consumed_ts"] for row in triage_shadow._read_rows(triage_shadow.linked_path())}
+    linked = triage_shadow.linked_consumptions(consumed)
     result: dict = {"followed": [], "not_followed": [], "unresolved": [], "pending": []}
-    for row in [r for r in consumed if r["ts"] not in linked][: max(0, limit)]:
+    for row in [r for r in consumed if triage_shadow.consumption_key(r) not in linked][
+        : max(0, limit)
+    ]:
+        consumption_id = triage_shadow.consumption_key(row)
         with feedback._conn() as conn:
             source = conn.execute(
                 "SELECT role_name FROM runs WHERE run_id=? AND mode='role'", (row["role_run_id"],)
@@ -1914,13 +1917,23 @@ def link_triage_consumption(*, now: float | None = None, limit: int = 100) -> di
                 target_run_id=run[0],
                 accepted=True,
                 producer="triage_consumption",
-                attempt_id=str(row["ts"]),
+                attempt_id=row.get("consumption_id") or str(row["ts"]),
             )
-            record = {"consumed_ts": row["ts"], "status": "followed", "run_id": run[0]}
+            record = {
+                "consumed_ts": row["ts"],
+                "consumption_id": consumption_id,
+                "status": "followed",
+                "run_id": run[0],
+            }
             triage_shadow._append(triage_shadow.linked_path(), record)
             result["followed"].append({**record, "edge": edge})
         elif not run and now - row["ts"] / 1_000_000_000 >= 48 * 3600:
-            record = {"consumed_ts": row["ts"], "status": "not_followed", "run_id": None}
+            record = {
+                "consumed_ts": row["ts"],
+                "consumption_id": consumption_id,
+                "status": "not_followed",
+                "run_id": None,
+            }
             triage_shadow._append(triage_shadow.linked_path(), record)
             result["not_followed"].append(record)
         elif now - row["ts"] / 1_000_000_000 >= 48 * 3600:
@@ -1931,6 +1944,7 @@ def link_triage_consumption(*, now: float | None = None, limit: int = 100) -> di
             )
             record = {
                 "consumed_ts": row["ts"],
+                "consumption_id": consumption_id,
                 "status": "unresolved",
                 "run_id": run[0] if run else None,
                 "reason": reason,
