@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 import uuid
@@ -211,13 +212,21 @@ def temporary_exact_head_worktree(target: str, head: str):
     try:
         yield wt
     finally:
+        canon = ensure_canonical(parse_target(target)[0])
         removed = _run(
-            ["git", "-C", wt, "worktree", "remove", "--force", wt], check=False, timeout=60
+            ["git", "-C", str(canon), "worktree", "remove", "--force", wt],
+            check=False,
+            timeout=60,
         )
         if removed.returncode != 0:
-            raise RuntimeError(
+            shutil.rmtree(wt, ignore_errors=True)
+            _run(["git", "-C", str(canon), "worktree", "prune"], check=False, timeout=60)
+        if Path(wt).exists():
+            cleanup_err = RuntimeError(
                 f"cannot remove runtime-AC checkout {wt}: {removed.stderr.strip()[:300]}"
             )
+            if sys.exc_info()[0] is None:
+                raise cleanup_err
 
 
 def _pr_head_branch(repo: str, num: int) -> str:

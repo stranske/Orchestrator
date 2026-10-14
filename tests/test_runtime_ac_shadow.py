@@ -650,8 +650,16 @@ def test_unterminated_named_node_cannot_disappear_into_pass():
     assert runtime_ac.evaluate_results(spec, {"check_results": results})["verdict"] != "PASS"
 
 
+def _shadow_git_env() -> dict[str, str]:
+    env = os.environ.copy()
+    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"):
+        env.pop(key, None)
+    return env
+
+
 def _shadow_git_repo(path):
     path.mkdir()
+    env = _shadow_git_env()
     for args in (
         ["init", "-q"],
         [
@@ -665,8 +673,12 @@ def _shadow_git_repo(path):
             "initial",
         ],
     ):
-        subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True)
-    return subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"], text=True).strip()
+        subprocess.run(
+            ["git", "-C", str(path), *args], check=True, capture_output=True, env=env
+        )
+    return subprocess.check_output(
+        ["git", "-C", str(path), "rev-parse", "HEAD"], text=True, env=env
+    ).strip()
 
 
 def _shadow_ingest_pr(number, head):
