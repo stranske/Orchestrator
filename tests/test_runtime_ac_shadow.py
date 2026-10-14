@@ -673,9 +673,7 @@ def _shadow_git_repo(path):
             "initial",
         ],
     ):
-        subprocess.run(
-            ["git", "-C", str(path), *args], check=True, capture_output=True, env=env
-        )
+        subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True, env=env)
     return subprocess.check_output(
         ["git", "-C", str(path), "rev-parse", "HEAD"], text=True, env=env
     ).strip()
