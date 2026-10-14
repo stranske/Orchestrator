@@ -375,7 +375,10 @@ def test_findability_blocks_new_capabilities_and_reports_older_ones_as_debt():
         path, ctx = _findability_ledger(td)
         new = admission.admit("t-nowhere", path=path, ctx=ctx)
         assert "findable" in new["missing"] and "findable" in new["blocking"], new
-        assert new["deferred"] == [], new
+        # This row is registered an hour after the findability cutoff (2026-08-23), so the only
+        # requirement that can be deferred for it is one dated LATER: the tenth part binds from
+        # 2026-10-14 and is correctly debt here, not a block. Findability itself must not be.
+        assert new["deferred"] == ["consumer_acts"], new
 
         old = admission.admit("t-old-nowhere", path=path, ctx=ctx)
         assert "findable" in old["missing"], "pre-cutoff debt must still be REPORTED"
@@ -560,6 +563,163 @@ def test_the_gate_admits_itself():
     env_prereq.require(env_prereq.ledger_rows_absent("capability-admission-gate"))
     own = admission.admit("capability-admission-gate")
     assert own["admitted"], f"the admission gate fails its own requirements: {own['missing']}"
+
+
+# ---------------------------------------------------------------------------------------------
+# The tenth part: a declared consumer must resolve in the tree and, for a selected capability, act.
+# ---------------------------------------------------------------------------------------------
+
+
+def _consumer_ctx(tmp_path, *, acted=None, reason="no Brain here", now=None):
+    (tmp_path / "x.py").write_text("def consume(report):\n    return report\n")
+    return {
+        "audit_rows": {},
+        "fixtures": set(),
+        "module_dir": tmp_path,
+        "repo_root": tmp_path,
+        "acted_on": acted,
+        "acted_on_reason": reason,
+        "now": now or admission._now(),
+    }
+
+
+def _consumer_cap(cid, consumer, *, first_invocation=None, category=None):
+    cap = capabilities._blank_capability(cid)
+    cap["downstream_consumer"] = consumer
+    cap["learning_sink"] = "feedback.outcomes"
+    if first_invocation:
+        cap["event_history"] = [{"timestamp": first_invocation, "type": "invocation"}]
+    if category:
+        cap["findability_category"] = category
+    return cap
+
+
+def test_consumer_acts_needs_a_symbol_this_tree_can_find(tmp_path):
+    """Prose passed the fifth part for two months; a symbol can be checked, prose cannot."""
+    ctx = _consumer_ctx(tmp_path)
+    ok, detail = admission.req_consumer_acts(
+        _consumer_cap("t-prose", "the weekly review and the closer"), ctx
+    )
+    assert not ok and "prose" in detail
+    ok, detail = admission.req_consumer_acts(_consumer_cap("t-missing", "x.py:vanish"), ctx)
+    assert not ok and "x.py:vanish" in detail
+    ok, detail = admission.req_consumer_acts(_consumer_cap("t-ok", "x.py:consume"), ctx)
+    # No Brain in this context: unmeasured is a word, never a zero, and never a failure.
+    assert ok and "unmeasured" in detail
+    # The whole path, not the leaf: a `consume` on another class or at top level is not
+    # `Expected.consume`, and a dotted path through a function is nothing.
+    (tmp_path / "x.py").write_text(
+        "class Other:\n    def consume(self):\n        return 1\n\n\ndef consume():\n    return 2\n"
+    )
+    ok, _ = admission.req_consumer_acts(_consumer_cap("t-leaf", "x.py:Expected.consume"), ctx)
+    assert not ok
+    ok, _ = admission.req_consumer_acts(_consumer_cap("t-path", "x.py:Other.consume"), ctx)
+    assert ok
+    ok, _ = admission.req_consumer_acts(_consumer_cap("t-top", "x.py:consume"), ctx)
+    assert ok
+    ok, _ = admission.req_consumer_acts(_consumer_cap("t-deep", "x.py:consume.inner"), ctx)
+    assert not ok
+    # A declaration cannot walk out of the search root.
+    (tmp_path.parent / "outside.py").write_text("def consume():\n    return 3\n")
+    ok, detail = admission.req_consumer_acts(
+        _consumer_cap("t-escape", "../outside.py:consume"), ctx
+    )
+    assert not ok and "not found" in detail
+
+
+def test_consumer_acts_fails_a_declared_consumer_that_never_acted(tmp_path):
+    now = admission._now()
+    old = now - admission.CONSUMER_GRACE_SECONDS - 86400
+    fresh = now - 3 * 86400
+    acted = {"t-never": 0, "t-grace": 0, "t-acting": 5, "t-rail": 0}
+    ctx = _consumer_ctx(tmp_path, acted=acted, now=now)
+    ok, detail = admission.req_consumer_acts(
+        _consumer_cap("t-never", "x.py:consume", first_invocation=old), ctx
+    )
+    assert not ok and "never acted" in detail
+    ok, detail = admission.req_consumer_acts(
+        _consumer_cap("t-grace", "x.py:consume", first_invocation=fresh), ctx
+    )
+    assert ok and "grace" in detail
+    ok, detail = admission.req_consumer_acts(
+        _consumer_cap("t-acting", "x.py:consume", first_invocation=old), ctx
+    )
+    assert ok and "acted on by 5" in detail and "not verified" in detail
+    ok, detail = admission.req_consumer_acts(
+        _consumer_cap(
+            "t-rail", "x.py:consume", first_invocation=old, category=admission.EXERCISE_CATEGORY
+        ),
+        ctx,
+    )
+    assert ok and "exercise" in detail
+    # Deliberate break, in place: take the monitor's count away and the same never-acted row reads
+    # as unmeasured and passes — which is exactly why "unmeasured" must stay a distinct word.
+    ok, detail = admission.req_consumer_acts(
+        _consumer_cap("t-never", "x.py:consume", first_invocation=old),
+        _consumer_ctx(tmp_path, acted=None, now=now),
+    )
+    assert ok and "unmeasured" in detail
+
+
+def test_consumer_acts_binds_from_its_date_and_reports_older_rows_as_debt(tmp_path):
+    """A requirement added later is red on arrival for the whole catalogue unless it is dated."""
+    ctx = _consumer_ctx(tmp_path)
+    ledger = {}
+    for cid, created in (
+        ("t-old", admission.CONSUMER_ACTS_ENFORCED_FROM - 86400),
+        ("t-new", admission.CONSUMER_ACTS_ENFORCED_FROM + 3600),
+    ):
+        cap = _consumer_cap(cid, "the weekly review")  # prose: fails the static step
+        cap["event_history"] = [{"timestamp": created, "type": "registered"}]
+        ledger[cid] = cap
+    old = admission.admit("t-old", ctx=ctx, ledger=ledger)
+    new = admission.admit("t-new", ctx=ctx, ledger=ledger)
+    assert "consumer_acts" in old["missing"] and "consumer_acts" in old["deferred"]
+    assert "consumer_acts" not in old["blocking"]
+    assert "consumer_acts" in new["blocking"]
+    assert admission.CONSUMER_ACTS_ENFORCED_FROM <= admission._now()
+    rep = admission.consumer_report(ledger, ctx, [old, new])
+    assert rep["by_class"]["prose"] == ["t-old", "t-new"]
+    assert rep["drainable"] == ["t-new", "t-old"] and not rep["drained"]  # sorted
+    assert rep["blocking"] == ["t-new"] and rep["deferred"] == ["t-old"]
+
+
+def test_consumer_report_excludes_waived_rows_and_names_the_drained_states(tmp_path, monkeypatch):
+    ctx = _consumer_ctx(tmp_path)
+    ledger = {}
+    cap = _consumer_cap("t-waived", "the weekly review")
+    cap["event_history"] = [
+        {"timestamp": admission.CONSUMER_ACTS_ENFORCED_FROM + 3600, "type": "registered"}
+    ]
+    ledger["t-waived"] = cap
+    monkeypatch.setitem(
+        admission.WAIVERS, "t-waived", {"expires": admission._now() + 3600, "reason": "test"}
+    )
+    row = admission.admit("t-waived", ctx=ctx, ledger=ledger)
+    assert "consumer_acts" in row["blocking"] and not row["enforced"]
+    rep = admission.consumer_report(ledger, ctx, [row])
+    assert rep["blocking"] == [], "a waived row cannot fail the suite, so it is not blocking"
+    # Drained is a statement about what is absent; the sentence names every passing state so a
+    # catalogue of never-invoked rows is not read as one that has acted.
+    unmeasured = _consumer_cap("t-unmeasured", "x.py:consume")
+    row = admission.admit("t-unmeasured", ctx=ctx, ledger={"t-unmeasured": unmeasured})
+    cons = admission.consumer_report({"t-unmeasured": unmeasured}, ctx, [row])
+    assert cons["drained"] and cons["by_class"]["unmeasured"] == ["t-unmeasured"]
+    text = admission.format_report(
+        {
+            "admitted": 1,
+            "total": 1,
+            "enforced_total": 0,
+            "enforced_failing": [],
+            "legacy_debt": [],
+            "rows": [row],
+            "findability": {},
+            "consumers": cons,
+            "commitments": {"clean": True, "dangling_citations": [], "overdue_without_record": []},
+        }
+    )
+    drained_line = next(line for line in text.splitlines() if "none is prose" in line)
+    assert "unmeasured 1" in drained_line and "has acted" not in drained_line
 
 
 def main() -> int:
