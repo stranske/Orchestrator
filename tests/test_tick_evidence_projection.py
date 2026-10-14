@@ -101,3 +101,41 @@ def test_a_legacy_state_entry_with_unchanged_keys_is_still_graded(tmp_path, monk
     write({"a": [{"id": "changed"}], "b": [{"id": "b"}]}, now + 1)
     out = cp.tick_evidence(now=now + 86400, state_dir=state, path=ledger, steps=steps)
     assert out["evaluated"][0]["report_changed"] is True
+
+
+def test_exempt_observer_changes_are_visible_without_usefulness_verdicts(tmp_path, monkeypatch):
+    ledger, state, steps, write = _fixture(tmp_path, monkeypatch, {"a": ("id",)})
+    now = 1_700_000_000
+    write({"a": [{"id": "old"}]}, now)
+    cp.tick_evidence(now=now, state_dir=state, path=ledger, steps=steps)
+    write({"a": [{"id": "new"}]}, now + 1)
+    out = cp.tick_evidence(now=now + 86400, state_dir=state, path=ledger, steps=steps)
+    text = cp.format_tick_evidence(out)
+    assert "report changed: obs" in text
+    assert "USEFUL" not in text
+    assert out["verdicts_recorded"] == 0
+
+
+def test_tick_refuses_delivery_rows_but_direct_delivery_scoring_still_records(
+    tmp_path, monkeypatch
+):
+    ledger, state, steps, write = _fixture(tmp_path, monkeypatch, {"a": ("id",)})
+    rows = capabilities.load(ledger)
+    rows["obs"]["matcher"] = {"kind": "task_type", "name": "delivery"}
+    capabilities.save(rows, ledger)
+    now = 1_700_000_000
+    write({"a": [{"id": "old"}]}, now)
+    cp.tick_evidence(now=now, state_dir=state, path=ledger, steps=steps)
+    write({"a": [{"id": "new"}]}, now + 1)
+    out = cp.tick_evidence(now=now + 86400, state_dir=state, path=ledger, steps=steps)
+    assert out["evaluated"][0]["reason"] == "not_an_observer"
+    assert out["verdicts_recorded"] == 0
+    assert cp.record_usefulness(
+        "obs",
+        "advice:delivery5840001",
+        useful=True,
+        evidence="delivery review isolated the demonstrated defect",
+        provenance="machine_observed",
+        path=ledger,
+    )
+    assert cp.usefulness(path=ledger)["rows"]["obs"]["resolved"] == 1

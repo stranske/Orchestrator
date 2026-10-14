@@ -3440,6 +3440,11 @@ def format_tick_evidence(rep: dict) -> str:
         for e in rep.get("evaluated") or []
         if e.get("graded") and not e.get("useful")
     ]
+    report_changed = [
+        e["capability_id"]
+        for e in rep.get("evaluated") or []
+        if e.get("report_changed") and not e.get("graded")
+    ]
     lines = [
         f"  [tick-evidence] advisor consulted for surface 'tick': "
         f"{len(rep.get('advice_capabilities') or [])} bound capability(ies); "
@@ -3447,8 +3452,10 @@ def format_tick_evidence(rep: dict) -> str:
         f"gradable {len(rep.get('gradable') or [])}, "
         f"awaiting regeneration {len(rep.get('awaiting_regeneration') or [])}"
     ]
-    if useful or quiet or rep.get("baselined"):
+    if useful or quiet or report_changed or rep.get("baselined"):
         detail = []
+        if report_changed:
+            detail.append("report changed: " + ", ".join(report_changed))
         if useful:
             detail.append("USEFUL(output changed): " + ", ".join(useful))
         if quiet:
