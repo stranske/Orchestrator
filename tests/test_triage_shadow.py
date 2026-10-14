@@ -583,6 +583,76 @@ def test_ranking_publication_is_live_only_and_covers_remaining_rule_order(brain)
     assert triage_shadow.summary()["valid_cycles"] == 1
 
 
+@pytest.mark.parametrize("stage", ["write", "flush", "fsync", "close", "replace"])
+def test_atomic_ranking_failure_preserves_previous_snapshot_and_cleans_up(
+    brain, monkeypatch, stage
+):
+    row = {"ts": 100_000_000_000, "role_run_id": "fixture-role", "snapshot_sha256": "fixture"}
+    triage_shadow._publish_ranking(row, ["stranske/Orchestrator#1"])
+    path = triage_shadow.ranking_path()
+    previous = path.read_bytes()
+    original_tempfile = triage_shadow.tempfile.NamedTemporaryFile
+
+    def fail(*args, **kwargs):
+        raise OSError(f"{stage} failed")
+
+    class FailingStream:
+        def __init__(self, **kwargs):
+            self.stream = original_tempfile(**kwargs)
+            self.name = self.stream.name
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.stream.close()
+            if stage == "close":
+                fail()
+
+        def write(self, text):
+            if stage == "write":
+                self.stream.write(text[:1])
+                fail()
+            return self.stream.write(text)
+
+        def flush(self):
+            if stage == "flush":
+                fail()
+            self.stream.flush()
+
+        def fileno(self):
+            return self.stream.fileno()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(triage_shadow.tempfile, "NamedTemporaryFile", FailingStream)
+        if stage in {"fsync", "replace"}:
+            patch.setattr(triage_shadow.os, stage, fail)
+        with pytest.raises(OSError, match=f"{stage} failed"):
+            triage_shadow.record_cycle(
+                items(),
+                runner=lambda **kwargs: {
+                    "proposal": proposal(),
+                    "role_run_id": "next-role",
+                    "backend_run_id": "next-backend",
+                },
+            )
+    assert path.read_bytes() == previous
+    assert not list(path.parent.glob(".triage-ranking-*"))
+    # Publication failure must not erase the completed shadow observation.
+    assert json.loads(triage_shadow.corpus_path().read_text())["role_run_id"] == "next-role"
+    recovered = triage_shadow.record_cycle(
+        items(),
+        runner=lambda **kwargs: {
+            "proposal": proposal(),
+            "role_run_id": "recovered-role",
+            "backend_run_id": "recovered-backend",
+        },
+    )
+    assert json.loads(path.read_text())["ts"] == recovered["ts"]
+    assert json.loads(path.read_text())["role_run_id"] == "recovered-role"
+    assert not list(path.parent.glob(".triage-ranking-*"))
+
+
 def test_consumption_never_injects_removed_targets_and_never_hides_new_ones(consumable):
     current = ["stranske/Orchestrator#99", consumable[0], consumable[1]]
     result = triage_shadow.consume(current, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)

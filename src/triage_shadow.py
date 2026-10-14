@@ -69,21 +69,19 @@ def _publish_ranking(row: dict, ordered_targets: list[str]) -> None:
     ranking = {key: row[key] for key in ("ts", "role_run_id", "snapshot_sha256")}
     ranking.update(ordered_targets=ordered_targets, max_age_s=RANKING_MAX_AGE_S)
     # Replace only after complete bytes are durable; readers see one snapshot.
-    with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=path.parent, prefix=".triage-ranking-", delete=False
-    ) as stream:
-        tmp = Path(stream.name)
-        try:
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, prefix=".triage-ranking-", delete=False
+        ) as stream:
+            tmp = Path(stream.name)
             json.dump(ranking, stream, sort_keys=True)
             stream.flush()
             os.fsync(stream.fileno())
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            raise
-    try:
         os.replace(tmp, path)
     finally:
-        tmp.unlink(missing_ok=True)
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
 
 
 def rule_key(item: dict) -> tuple:
