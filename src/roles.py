@@ -2260,6 +2260,7 @@ def run_prompt_agent(
         else None
     )
     proposal: dict | None = None
+    rejected_proposal: dict | None = None
     errors: list[str] = []
     raw_output: str | None = None
     backend_run_id: str | None = None
@@ -2305,6 +2306,7 @@ def run_prompt_agent(
             )
         if verrs:
             errors.extend(verrs)
+            rejected_proposal = proposal
             proposal = None
 
     if proposal is not None:
@@ -2368,6 +2370,7 @@ def run_prompt_agent(
         "errors": errors,
         "baseline_prompt": baseline_prompt,
         "dispatch_prompt": dispatch_prompt,
+        "rejected_proposal": rejected_proposal,
         "raw_output": raw_output,
         "backend_error_detail": backend_error_detail,
     }
@@ -2466,7 +2469,7 @@ def run_prompt_batch(
 
 
 def write_prompt_batch(result: dict, directory: Path) -> dict:
-    """Publish valid bodies only; persist every validator/recording verdict in a manifest."""
+    """Publish valid bodies; retain failed authoring evidence beside the verdict manifest."""
     directory.mkdir(parents=True, exist_ok=False)
     manifest = {"batch_id": result["batch_id"], "output": result["output"], "items": []}
     for index, item in enumerate(result["items"], 1):
@@ -2476,6 +2479,8 @@ def write_prompt_batch(result: dict, directory: Path) -> dict:
             else item.get("dispatch_prompt")
         )
         body_file = None
+        failed_body_file = None
+        raw_output_file = None
         valid = (
             item.get("proposal") is not None
             and not item["errors"]
@@ -2486,11 +2491,30 @@ def write_prompt_batch(result: dict, directory: Path) -> dict:
             path = directory / f"{index:03d}.md"
             path.write_text(text.rstrip() + "\n", encoding="utf-8")
             body_file = str(path)
+        if not valid:
+            # A deterministic baseline is not the rejected author's output.
+            failed_text = text if item.get("proposal") is not None else None
+            rejected = item.get("rejected_proposal")
+            if result["output"] == "issue_body" and isinstance(rejected, dict):
+                failed_text = rejected.get("issue_body")
+            elif result["output"] == "dispatch_prompt" and isinstance(rejected, dict):
+                failed_text = rejected.get("scoped_prompt")
+            if isinstance(failed_text, str):
+                path = directory / f"{index:03d}.failed.md"
+                path.write_text(failed_text, encoding="utf-8", newline="")
+                failed_body_file = str(path)
+            raw_output = item.get("raw_output")
+            if raw_output is not None:
+                path = directory / f"{index:03d}.raw.txt"
+                path.write_text(raw_output, encoding="utf-8", newline="")
+                raw_output_file = str(path)
         manifest["items"].append(
             {
                 "target": item["target"],
                 "role_run_id": item["role_run_id"],
                 "body_file": body_file,
+                "failed_body_file": failed_body_file,
+                "raw_output_file": raw_output_file,
                 "valid": valid,
                 "errors": item["errors"],
                 "role_record_error": item["role_record_error"],

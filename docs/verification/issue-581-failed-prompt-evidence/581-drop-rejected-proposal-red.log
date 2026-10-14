@@ -1,0 +1,33 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_failed_body_and_raw_output_are_retained_in_the_manifest _________
+
+private_brain = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1778/test_failed_body_and_raw_outpu0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x119fd7d40>
+
+    def test_failed_body_and_raw_output_are_retained_in_the_manifest(private_brain, monkeypatch):
+        raw = "Unparseable café output\r\nwith trailing whitespace  \r\n"
+        monkeypatch.setattr(
+            roles.dispatcher,
+            "offload",
+            lambda *a, **kw: {"run_id": "fake:unparseable", "output": raw, "exit": 0},
+        )
+        result = roles.run_prompt_batch(
+            [
+                {"target": "owner/repo#1", "goal": "Good", "proposal_json": proposal()},
+                {"target": "owner/repo#2", "goal": "Bad", "proposal_json": proposal("Bad body")},
+                {"target": "owner/repo#3", "goal": "Unparseable"},
+            ],
+            output="issue_body",
+            dispatch=True,
+            backend="cursor",
+        )
+        assert result["items"][1]["proposal"] is None
+>       assert result["items"][1]["rejected_proposal"] == proposal("Bad body")
+E       AssertionError: assert None == {'summary': 'Author one bounded issue.', 'issue_body': 'Bad body', 'confidence': 'high'}
+E        +  where {'summary': 'Author one bounded issue.', 'issue_body': 'Bad body', 'confidence': 'high'} = proposal('Bad body')
+
+tests/test_role_prompt_batch.py:325: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_role_prompt_batch.py::test_failed_body_and_raw_output_are_retained_in_the_manifest
+1 failed in 0.58s
