@@ -79,6 +79,11 @@ def _publish_ranking(row: dict, ordered_targets: list[str]) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(tmp, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
         if tmp is not None:
             tmp.unlink(missing_ok=True)
@@ -418,6 +423,9 @@ def summary_line(path: Path | None = None) -> str:
         not_followed = sum(
             linked.get(row["ts"], {}).get("status") == "not_followed" for row in consumed
         )
+        unresolved = sum(
+            linked.get(row["ts"], {}).get("status") == "unresolved" for row in consumed
+        )
     except (OSError, UnicodeError, ValueError, KeyError, sqlite3.Error) as exc:
         return f"triage shadow: UNKNOWN — outcome evidence unreadable ({type(exc).__name__})"
     if data["malformed_rows"]:
@@ -439,7 +447,7 @@ def summary_line(path: Path | None = None) -> str:
         f"triage top-1 merged+durable {percent('triage')}, rule pick {percent('rule')}, "
         f"malformed rows {data['malformed_rows']}; "
         f"consumed {len(consumed)}, followed {followed}, not followed {not_followed}, "
-        f"open {len(consumed) - followed - not_followed}; "
+        f"open {len(consumed) - followed - not_followed - unresolved}; unresolved {unresolved}; "
         f"top-1 agrees with the rule pick {data['top1_agrees']} of {data['valid_cycles']} valid cycles"
     )
 

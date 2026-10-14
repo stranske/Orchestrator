@@ -530,6 +530,7 @@ def test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows(consu
     with feedback._conn() as conn:
         assert conn.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 0
     feedback.record_completion_event("fixture-worker", status="succeeded")
+
     # The Brain commits before the JSONL link is appended. An interruption in
     # that gap must leave a retryable row without awarding a second edge.
     def interrupted_append(path, row):
@@ -567,6 +568,7 @@ def test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows(consu
     assert outcomes.link_triage_consumption(now=105) == {
         "followed": [],
         "not_followed": [],
+        "unresolved": [],
         "pending": [],
     }
     text = triage_shadow.summary_line()

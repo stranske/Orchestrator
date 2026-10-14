@@ -411,9 +411,9 @@ accepted downstream outcomes, `route_role()` prefers learned weights for `role:<
 | role | replaces / upgrades | judgment it adds | status |
 |---|---|---|---|
 | **RedirectAgent** | `redirect_policy` heuristics | read log+diff+AC → action + corrected prompt | **built, shadow (2026-06-19)** |
-| **PromptAgent** | dispatcher generic templates | issue → dispatch prompt or issue body; batch routes once, per-item scored runs | **built, shadow; optional fresh ranking consumption behind `ORCH_TRIAGE_CONSUME` (default off)** |
+| **PromptAgent** | dispatcher generic templates | issue → dispatch prompt or issue body; batch routes once, per-item scored runs | **built, shadow** |
 | **DecomposerAgent** | `epic_lane` planner prompts | vague/large goal → subtask DAG | **built, shadow (2026-06-20)** |
-| **TriageAgent** | `backlog` worth-it filter | which items now, skip underspecified, batch | **built, shadow (2026-06-20)** |
+| **TriageAgent** | `backlog` worth-it filter | which items now, skip underspecified, batch | **built, shadow (2026-06-20); optional fresh ranking consumption behind `ORCH_TRIAGE_CONSUME` (default off)** |
 | **AdjudicatorAgent** | `runtime_ac_panel` / `adversarial` dispute step | verify a lone reviewer veto vs. ground truth | **built, shadow (2026-06-20)** |
 
 PromptAgent is offered at the `research-program` and `repo-audit:phase-4` batch-filing
