@@ -417,6 +417,10 @@ def summary(path: Path | None = None) -> dict:
 
 def consumption_key(row: dict) -> str:
     """New receipts carry a unique ID; old receipts retain a stable content identity."""
+    if "consumption_id" in row and (
+        not isinstance(row["consumption_id"], str) or not row["consumption_id"]
+    ):
+        raise ValueError("invalid consumption_id")
     return (
         row.get("consumption_id")
         or "legacy:"
@@ -427,10 +431,14 @@ def consumption_key(row: dict) -> str:
 
 
 def linked_consumptions(consumed: list[dict]) -> dict[str, dict]:
+    keys = [consumption_key(row) for row in consumed]
+    if len(keys) != len(set(keys)):
+        raise ValueError("duplicate consumption identity")
     result = {}
     for link in _read_rows(linked_path()):
-        key = link.get("consumption_id")
-        if not key:
+        if "consumption_id" in link:
+            key = consumption_key(link)
+        else:
             matches = [row for row in consumed if row["ts"] == link["consumed_ts"]]
             if len(matches) != 1:
                 raise ValueError("ambiguous legacy consumption timestamp")

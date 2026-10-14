@@ -842,3 +842,77 @@ def test_legacy_timestamp_links_require_unique_receipts(consumable, ambiguous):
         assert outcomes.link_triage_consumption(now=104)["followed"] == []
     with feedback._conn() as conn:
         assert conn.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("invalid_id", [["bad"], {}, True, None, ""])
+def test_malformed_persisted_consumption_ids_are_unknown(consumable, invalid_id):
+    triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+    row = json.loads(triage_shadow.consumed_path().read_text())
+    row["consumption_id"] = invalid_id
+    triage_shadow.consumed_path().write_text(json.dumps(row) + "\n")
+    assert "UNKNOWN" in triage_shadow.summary_line()
+    with pytest.raises(ValueError, match="invalid consumption_id"):
+        outcomes.link_triage_consumption(now=104)
+    # Linked receipts must use the same validation, even with a valid consumption.
+    row["consumption_id"] = "valid-id"
+    triage_shadow.consumed_path().write_text(json.dumps(row) + "\n")
+    triage_shadow._append(
+        triage_shadow.linked_path(),
+        {
+            "consumed_ts": row["ts"],
+            "consumption_id": invalid_id,
+            "status": "followed",
+            "run_id": "fixture-worker",
+        },
+    )
+    assert "UNKNOWN" in triage_shadow.summary_line()
+
+
+def test_duplicate_legacy_receipts_refuse_before_any_credit(consumable):
+    result = triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+    row = json.loads(triage_shadow.consumed_path().read_text())
+    row.pop("consumption_id")
+    triage_shadow.consumed_path().write_text((json.dumps(row) + "\n") * 2)
+    feedback.record_run(
+        "legacy-worker", result["ordered_targets"][0], "implement", "codex", mode="local", ts=102
+    )
+    feedback.record_completion_event("legacy-worker", status="succeeded")
+    with pytest.raises(ValueError, match="duplicate consumption identity"):
+        outcomes.link_triage_consumption(now=104, limit=1)
+    assert "UNKNOWN" in triage_shadow.summary_line()
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 0
+
+
+def test_unlinked_legacy_retry_preserves_brain_attempt_identity(consumable, monkeypatch):
+    result = triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+    row = json.loads(triage_shadow.consumed_path().read_text())
+    row.pop("consumption_id")
+    triage_shadow.consumed_path().write_text(json.dumps(row) + "\n")
+    feedback.record_run(
+        "legacy-worker", result["ordered_targets"][0], "implement", "codex", mode="local", ts=102
+    )
+    feedback.record_completion_event("legacy-worker", status="succeeded")
+    original = feedback.record_capability_consumption
+    attempts = []
+
+    def record(**kwargs):
+        attempts.append(kwargs["attempt_id"])
+        return original(**kwargs)
+
+    monkeypatch.setattr(feedback, "record_capability_consumption", record)
+    with monkeypatch.context() as interrupted:
+
+        def fail_append(path, record):
+            raise OSError("legacy append interrupted")
+
+        interrupted.setattr(triage_shadow, "_append", fail_append)
+        with pytest.raises(OSError, match="legacy append interrupted"):
+            outcomes.link_triage_consumption(now=103)
+    assert len(outcomes.link_triage_consumption(now=104)["followed"]) == 1
+    assert attempts == [str(row["ts"]), str(row["ts"])]
+    assert outcomes.link_triage_consumption(now=105)["followed"] == []
+    with feedback._conn() as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM influence_edges WHERE accepted=1").fetchone()[0] == 1
+        )
