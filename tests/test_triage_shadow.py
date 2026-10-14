@@ -548,9 +548,10 @@ def test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows(consu
     assert len(edge_before_retry) == 1
     assert len(outcomes.link_triage_consumption(now=104)["followed"]) == 1
     with feedback._conn() as conn:
-        assert conn.execute(
-            "SELECT edge_id FROM influence_edges WHERE accepted=1"
-        ).fetchall() == edge_before_retry
+        assert (
+            conn.execute("SELECT edge_id FROM influence_edges WHERE accepted=1").fetchall()
+            == edge_before_retry
+        )
         assert conn.execute(
             "SELECT e.capability_id,e.capability_version_id,e.accepted,e.source_run_id,"
             "e.target_run_id,r.target FROM influence_edges e "
