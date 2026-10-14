@@ -17,6 +17,21 @@ its committed named pytest test, and the event retains PASS and a passing-test a
 and its Git registration are absent afterward. This is a local integration test, not production
 usage or a deployed-mirror claim.
 
+The follow-up fixture uses a separate local remote and clones the canonical repository before
+creating the PR commit. It asserts that the commit is initially absent, checks `FETCH_HEAD`
+after ingest, and requires the canonical HEAD and complete worktree registration list to stay
+unchanged. Its named test reads a file delivered only in the PR commit, and the event audit must
+identify that exact test with PASS, exit zero and `passing_named_test=true`.
+
+Follow-up validation on 2026-10-14: all four touched-module selftests, Python syntax and
+whitespace checks pass. A separate direct exercise of the real provisioner also passes local
+fetch, detached checkout, committed contents and removal of a dirty checkout and its Git
+registration. The strengthened pytest integration has **not** run: pytest, Black, Ruff and mypy
+are absent, and package installation failed in the restricted environment. The mandatory Black
+gate blocks committing the Python edit. The logs and manifest below describe the earlier
+committed fixture; they are not evidence for this follow-up. A full `verify.py` attempt was
+launched with output in `/tmp/runtime-ac-full-verify.log`; no full-suite PASS is claimed.
+
 The other regressions prove the three-attempt bound across repositories, failed-provisioning
 accounting and per-target reasons, disabled/dry-run behavior, panel clean reuse and dirty-tree
 refusal, invalid/missing commits, cleanup after a verifier exception, and no outcome writes.

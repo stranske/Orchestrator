@@ -856,18 +856,31 @@ def test_shared_exact_head_checkout_reuse_and_temporary_cleanup(tmp_path, monkey
 
 
 def test_ingest_runs_real_named_test_and_removes_its_checkout(private_brain, monkeypatch):
+    remote = private_brain / "remote"
+    initial_head = _shadow_git_repo(remote)
     source = private_brain / "source"
-    _shadow_git_repo(source)
-    (source / "tests").mkdir()
-    (source / "tests/test_acceptance.py").write_text(
-        "def test_delivered():\n    assert 2 + 2 == 4\n"
+    subprocess.run(
+        ["git", "clone", "-q", "--no-local", str(remote), str(source)],
+        check=True,
+        capture_output=True,
     )
-    subprocess.run(["git", "-C", str(source), "add", "tests/test_acceptance.py"], check=True)
+    # The PR commit is created after cloning: only an actual fetch can supply it.
+    (remote / "tests").mkdir()
+    (remote / "delivered.txt").write_text("exact PR contents\n")
+    (remote / "tests/test_acceptance.py").write_text(
+        "from pathlib import Path\n\n"
+        "def test_delivered():\n"
+        "    assert Path('delivered.txt').read_text() == 'exact PR contents\\n'\n"
+    )
+    subprocess.run(
+        ["git", "-C", str(remote), "add", "tests/test_acceptance.py", "delivered.txt"],
+        check=True,
+    )
     subprocess.run(
         [
             "git",
             "-C",
-            str(source),
+            str(remote),
             "-c",
             "user.name=Test",
             "-c",
@@ -880,9 +893,16 @@ def test_ingest_runs_real_named_test_and_removes_its_checkout(private_brain, mon
         capture_output=True,
     )
     head = subprocess.check_output(
-        ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
+        ["git", "-C", str(remote), "rev-parse", "HEAD"], text=True
     ).strip()
-    subprocess.run(["git", "-C", str(source), "remote", "add", "origin", str(source)], check=True)
+    assert head != initial_head
+    missing_commit = subprocess.run(
+        ["git", "-C", str(source), "cat-file", "-e", head], capture_output=True
+    )
+    assert missing_commit.returncode != 0
+    initial_trees = subprocess.check_output(
+        ["git", "-C", str(source), "worktree", "list", "--porcelain"], text=True
+    )
     trees = private_brain / "runtime-trees"
     monkeypatch.setattr(provision, "ensure_canonical", lambda _repo: source)
     monkeypatch.setattr(provision, "WORKTREES_DIR", trees)
@@ -900,13 +920,31 @@ def test_ingest_runs_real_named_test_and_removes_its_checkout(private_brain, mon
         row for row in feedback.runtime_ac_gate_events() if row["gate_status"] == "executed"
     ]
     assert len(executed) == 1 and executed[0]["verifier_verdict"] == "PASS", summary
-    assert executed[0]["audit_evidence"][0]["passing_named_test"] is True
+    event = executed[0]
+    assert event["observed_head_sha"] == head
+    assert event["blocking"] is False and event["shadow_only"] is True
+    assert event["false_fail_audit"] is False
+    assert len(event["audit_evidence"]) == 1
+    audit = event["audit_evidence"][0]
+    command = shlex.split(audit["command"])
+    assert command[:3] == ["python3", "-m", "pytest"]
+    assert command[-1] == "tests/test_acceptance.py::test_delivered"
+    assert audit["status"] == "PASS" and audit["returncode"] == 0
+    assert audit["passing_named_test"] is True
     assert summary["runtime_ac_checkout_failures"] == 0
+    assert summary["runtime_ac_shadow_errors"] == []
+    fetched_head = subprocess.check_output(
+        ["git", "-C", str(source), "rev-parse", "FETCH_HEAD"], text=True
+    ).strip()
+    canonical_head = subprocess.check_output(
+        ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
+    ).strip()
+    assert fetched_head == head and canonical_head == initial_head
     assert list(trees.iterdir()) == []
     listed = subprocess.check_output(
         ["git", "-C", str(source), "worktree", "list", "--porcelain"], text=True
     )
-    assert "runtime-ac-" not in listed
+    assert listed == initial_trees
 
 
 def test_ingest_cleans_checkout_when_verifier_raises(private_brain, monkeypatch):
