@@ -360,6 +360,12 @@ def recheck_merged(spec: dict, merged_worktree: str | Path) -> dict:
 
         # A failed assertion is evidence of a broken delivery. A tool error,
         # skipped command, missing break or manual-only spec is not that evidence.
+        def assertion_failed(row):
+            output = "\n".join(str(row.get(key) or "") for key in ("stdout_tail", "stderr_tail"))
+            return row.get("returncode") == 1 and bool(
+                re.search(r"\b[1-9]\d* failed\b|\bFAILED \(failures=[1-9]\d*", output)
+            )
+
         def delivery_failed(row):
             if row.get("status") != "FAIL":
                 return False
@@ -368,13 +374,19 @@ def recheck_merged(spec: dict, merged_worktree: str | Path) -> dict:
                     proof = json.loads(row.get("stdout_tail") or "{}")
                 except ValueError:
                     return False
-                return proof.get("verdict") == "FAIL" and not proof.get("error")
+                # local_verify distinguishes a broken candidate from a hollow
+                # comparison. Confirm the candidate's assertion failure too:
+                # FAIL_BROKEN alone can also describe a failed test launcher.
+                return (
+                    isinstance(proof, dict)
+                    and proof.get("verdict") == "FAIL_BROKEN"
+                    and not proof.get("error")
+                    and assertion_failed(proof.get("green") or {})
+                )
             # pytest exit 1 with a failure count proves assertion failure. Exit 2
             # (collection/import), 4 (bad invocation), 5 (no tests) and launcher
             # failures must not reopen a delivered issue.
-            return row.get("returncode") == 1 and bool(
-                re.search(r"\b[1-9]\d* failed\b", str(row.get("stdout_tail", "")))
-            )
+            return assertion_failed(row)
 
         if any(delivery_failed(r) for r in executable):
             result = "FAIL"
