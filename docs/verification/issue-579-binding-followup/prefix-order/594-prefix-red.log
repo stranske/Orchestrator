@@ -1,0 +1,154 @@
+......FFFFF                                                              [100%]
+=================================== FAILURES ===================================
+____ test_definite_article_mutation_commands_remain_forbidden[open the PR] _____
+
+command = 'open the PR'
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "open the PR",
+            "Please open the PR",
+            "create the branch",
+            "Please create the branch",
+            "Go ahead and merge the PR",
+        ],
+    )
+    def test_definite_article_mutation_commands_remain_forbidden(command):
+        assert roles._recommended_next_step_is_imperative(command)
+        for prefix in ("Please go ahead and ", "Go ahead and please "):
+>           assert roles._recommended_next_step_is_imperative(
+                prefix + command.removeprefix("Please ").removeprefix("Go ahead and ")
+            )
+E           AssertionError: assert False
+E            +  where False = <function _recommended_next_step_is_imperative at 0x10a13e480>(('Please go ahead and ' + 'open the PR'))
+E            +    where <function _recommended_next_step_is_imperative at 0x10a13e480> = roles._recommended_next_step_is_imperative
+E            +    and   'open the PR' = <built-in method removeprefix of str object at 0x109ea6e30>('Go ahead and ')
+E            +      where <built-in method removeprefix of str object at 0x109ea6e30> = 'open the PR'.removeprefix
+E            +        where 'open the PR' = <built-in method removeprefix of str object at 0x109ea6e30>('Please ')
+E            +          where <built-in method removeprefix of str object at 0x109ea6e30> = 'open the PR'.removeprefix
+
+tests/test_adjudicator_packet_binding.py:53: AssertionError
+_ test_definite_article_mutation_commands_remain_forbidden[Please open the PR] _
+
+command = 'Please open the PR'
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "open the PR",
+            "Please open the PR",
+            "create the branch",
+            "Please create the branch",
+            "Go ahead and merge the PR",
+        ],
+    )
+    def test_definite_article_mutation_commands_remain_forbidden(command):
+        assert roles._recommended_next_step_is_imperative(command)
+        for prefix in ("Please go ahead and ", "Go ahead and please "):
+>           assert roles._recommended_next_step_is_imperative(
+                prefix + command.removeprefix("Please ").removeprefix("Go ahead and ")
+            )
+E           AssertionError: assert False
+E            +  where False = <function _recommended_next_step_is_imperative at 0x10a13e480>(('Please go ahead and ' + 'open the PR'))
+E            +    where <function _recommended_next_step_is_imperative at 0x10a13e480> = roles._recommended_next_step_is_imperative
+E            +    and   'open the PR' = <built-in method removeprefix of str object at 0x10a3bfb70>('Go ahead and ')
+E            +      where <built-in method removeprefix of str object at 0x10a3bfb70> = 'open the PR'.removeprefix
+E            +        where 'open the PR' = <built-in method removeprefix of str object at 0x109ea6eb0>('Please ')
+E            +          where <built-in method removeprefix of str object at 0x109ea6eb0> = 'Please open the PR'.removeprefix
+
+tests/test_adjudicator_packet_binding.py:53: AssertionError
+_ test_definite_article_mutation_commands_remain_forbidden[create the branch] __
+
+command = 'create the branch'
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "open the PR",
+            "Please open the PR",
+            "create the branch",
+            "Please create the branch",
+            "Go ahead and merge the PR",
+        ],
+    )
+    def test_definite_article_mutation_commands_remain_forbidden(command):
+        assert roles._recommended_next_step_is_imperative(command)
+        for prefix in ("Please go ahead and ", "Go ahead and please "):
+>           assert roles._recommended_next_step_is_imperative(
+                prefix + command.removeprefix("Please ").removeprefix("Go ahead and ")
+            )
+E           AssertionError: assert False
+E            +  where False = <function _recommended_next_step_is_imperative at 0x10a13e480>(('Please go ahead and ' + 'create the branch'))
+E            +    where <function _recommended_next_step_is_imperative at 0x10a13e480> = roles._recommended_next_step_is_imperative
+E            +    and   'create the branch' = <built-in method removeprefix of str object at 0x109ea6f30>('Go ahead and ')
+E            +      where <built-in method removeprefix of str object at 0x109ea6f30> = 'create the branch'.removeprefix
+E            +        where 'create the branch' = <built-in method removeprefix of str object at 0x109ea6f30>('Please ')
+E            +          where <built-in method removeprefix of str object at 0x109ea6f30> = 'create the branch'.removeprefix
+
+tests/test_adjudicator_packet_binding.py:53: AssertionError
+_ test_definite_article_mutation_commands_remain_forbidden[Please create the branch] _
+
+command = 'Please create the branch'
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "open the PR",
+            "Please open the PR",
+            "create the branch",
+            "Please create the branch",
+            "Go ahead and merge the PR",
+        ],
+    )
+    def test_definite_article_mutation_commands_remain_forbidden(command):
+        assert roles._recommended_next_step_is_imperative(command)
+        for prefix in ("Please go ahead and ", "Go ahead and please "):
+>           assert roles._recommended_next_step_is_imperative(
+                prefix + command.removeprefix("Please ").removeprefix("Go ahead and ")
+            )
+E           AssertionError: assert False
+E            +  where False = <function _recommended_next_step_is_imperative at 0x10a13e480>(('Please go ahead and ' + 'create the branch'))
+E            +    where <function _recommended_next_step_is_imperative at 0x10a13e480> = roles._recommended_next_step_is_imperative
+E            +    and   'create the branch' = <built-in method removeprefix of str object at 0x10a474fb0>('Go ahead and ')
+E            +      where <built-in method removeprefix of str object at 0x10a474fb0> = 'create the branch'.removeprefix
+E            +        where 'create the branch' = <built-in method removeprefix of str object at 0x109e607b0>('Please ')
+E            +          where <built-in method removeprefix of str object at 0x109e607b0> = 'Please create the branch'.removeprefix
+
+tests/test_adjudicator_packet_binding.py:53: AssertionError
+_ test_definite_article_mutation_commands_remain_forbidden[Go ahead and merge the PR] _
+
+command = 'Go ahead and merge the PR'
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "open the PR",
+            "Please open the PR",
+            "create the branch",
+            "Please create the branch",
+            "Go ahead and merge the PR",
+        ],
+    )
+    def test_definite_article_mutation_commands_remain_forbidden(command):
+        assert roles._recommended_next_step_is_imperative(command)
+        for prefix in ("Please go ahead and ", "Go ahead and please "):
+>           assert roles._recommended_next_step_is_imperative(
+                prefix + command.removeprefix("Please ").removeprefix("Go ahead and ")
+            )
+E           AssertionError: assert False
+E            +  where False = <function _recommended_next_step_is_imperative at 0x10a13e480>(('Please go ahead and ' + 'merge the PR'))
+E            +    where <function _recommended_next_step_is_imperative at 0x10a13e480> = roles._recommended_next_step_is_imperative
+E            +    and   'merge the PR' = <built-in method removeprefix of str object at 0x109e721f0>('Go ahead and ')
+E            +      where <built-in method removeprefix of str object at 0x109e721f0> = 'Go ahead and merge the PR'.removeprefix
+E            +        where 'Go ahead and merge the PR' = <built-in method removeprefix of str object at 0x109e721f0>('Please ')
+E            +          where <built-in method removeprefix of str object at 0x109e721f0> = 'Go ahead and merge the PR'.removeprefix
+
+tests/test_adjudicator_packet_binding.py:53: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_adjudicator_packet_binding.py::test_definite_article_mutation_commands_remain_forbidden[open the PR]
+FAILED tests/test_adjudicator_packet_binding.py::test_definite_article_mutation_commands_remain_forbidden[Please open the PR]
+FAILED tests/test_adjudicator_packet_binding.py::test_definite_article_mutation_commands_remain_forbidden[create the branch]
+FAILED tests/test_adjudicator_packet_binding.py::test_definite_article_mutation_commands_remain_forbidden[Please create the branch]
+FAILED tests/test_adjudicator_packet_binding.py::test_definite_article_mutation_commands_remain_forbidden[Go ahead and merge the PR]
+5 failed, 6 passed in 0.25s
