@@ -1035,11 +1035,7 @@ def test_ingest_runs_real_named_test_and_removes_its_checkout(private_brain, mon
     capsys.readouterr()
     assert switch_review.main(["--env", "process"]) == 0
     printed = capsys.readouterr().out
-    shadow_lines = [
-        line
-        for line in printed.splitlines()
-        if line.startswith("runtime-AC shadow:")
-    ]
+    shadow_lines = [line for line in printed.splitlines() if line.startswith("runtime-AC shadow:")]
     assert len(shadow_lines) == 1
     assert "PRs 1, specs authored 1, executed 1, would-FAIL 0" in shadow_lines[0]
     assert "false-FAIL audit 0 of 1 (owner/repo#20)" in shadow_lines[0]
