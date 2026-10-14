@@ -60,7 +60,11 @@ class StrategyCostMeasurementTests(unittest.TestCase):
         path = strategy_experiment.refresh_evaluation_result(self.exp_id)
         return json.loads(path.read_text())
 
-    def test_partial_sources_block_acceptance_until_whole_run_cost_arrives(self):
+    def test_partial_sources_leave_cost_unmeasured_while_the_score_verdict_completes(self):
+        """Cost never becomes a number from a partial row; the score verdict never waits on cost.
+
+        Until 2026-10-13 a partial cost row held the whole receipt at UNKNOWN, which no cursor or
+        vibe arm could ever drain (no complete source exists for those seats)."""
         arm = self.plan["arms"][-1]
         run_id = arm["attempt_run_ids"][-1]
         for source in (None, "", "ledger", "langsmith"):
@@ -68,9 +72,14 @@ class StrategyCostMeasurementTests(unittest.TestCase):
                 with feedback._conn() as conn:
                     conn.execute("UPDATE costs SET source=? WHERE run_id=?", (source, run_id))
                 receipt = self.refresh()
-                self.assertEqual(receipt["status"], "UNKNOWN")
-                self.assertEqual(receipt["acceptance_status"], "UNKNOWN")
-                self.assertIsNone(receipt["comparison"])
+                self.assertEqual(receipt["status"], "completed")
+                self.assertEqual(receipt["acceptance_status"], "completed")
+                self.assertEqual(receipt["cost_status"], "unmeasured")
+                self.assertEqual(receipt["unmeasured_arm_ids"], [arm["arm_id"]])
+                self.assertIn("never imputed", receipt["cost_note"])
+                self.assertIsNone(receipt["comparison"]["pair"]["cost_usd"])
+                self.assertEqual(receipt["comparison"]["pair"]["cost_status"], "unmeasured")
+                self.assertEqual(receipt["comparison"]["single"]["cost_status"], "measured")
                 self.assertTrue(receipt["promotion"]["verified_candidate"])
                 cost = receipt["costs"][arm["arm_id"]]
                 self.assertIsNone(cost["cost_usd"])
@@ -79,10 +88,11 @@ class StrategyCostMeasurementTests(unittest.TestCase):
                 feedback.record_cost(run_id, cost_usd=0.25, source="ccusage")
                 receipt = self.refresh()
                 self.assertEqual(receipt["acceptance_status"], "completed")
+                self.assertEqual(receipt["cost_status"], "measured")
                 self.assertEqual(receipt["comparison"]["pair"]["cost_usd"], 1.5)
                 self.assertEqual(receipt["cost_scale"], feedback.COST_SCALE)
 
-    def test_invalid_cost_measurements_stay_unknown(self):
+    def test_invalid_cost_measurements_stay_unmeasured(self):
         for value in (None, True, -0.25, float("inf"), float("nan"), "0.25"):
             with self.subTest(cost_usd=value):
                 rows = [
@@ -97,8 +107,10 @@ class StrategyCostMeasurementTests(unittest.TestCase):
                     result_path=self.edir / "invalid-cost.json",
                 )
                 receipt = json.loads(path.read_text())
-                self.assertEqual(receipt["status"], "UNKNOWN")
+                self.assertEqual(receipt["status"], "completed")
+                self.assertEqual(receipt["cost_status"], "unmeasured")
                 self.assertIsNone(receipt["costs"][self.plan["arms"][-1]["arm_id"]]["cost_usd"])
+                self.assertIsNone(receipt["comparison"]["pair"]["cost_usd"])
 
     def test_measured_zero_cost_is_preserved(self):
         for run_id in self.run_ids:
@@ -112,7 +124,9 @@ class StrategyCostMeasurementTests(unittest.TestCase):
         with feedback._conn() as conn:
             conn.execute("DELETE FROM costs")
         receipt = self.refresh()
-        self.assertEqual(receipt["acceptance_status"], "UNKNOWN")
+        self.assertEqual(receipt["acceptance_status"], "completed")
+        self.assertEqual(receipt["cost_status"], "unmeasured")
+        self.assertTrue(all(row["cost_usd"] is None for row in receipt["comparison"].values()))
         gaps = []
         for row in receipt["costs"].values():
             self.assertEqual(row["missing_attempt_run_ids"], row["unmeasured_attempt_run_ids"])
