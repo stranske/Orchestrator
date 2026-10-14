@@ -649,7 +649,9 @@ def test_replay_requires_backend_only_when_dispatched(private_brain, monkeypatch
     monkeypatch.setattr(roles.dispatcher, "build_prompt", lambda *a, **kw: baseline)
 
     # Even empty authored text is evidence; absent or malformed text is not a body.
-    for index, scoped_prompt in enumerate(("Bad café prompt — 日本語\r\n  \t", "", None, {})):
+    for index, scoped_prompt in enumerate(
+        ("Bad café prompt — 日本語\r\n  \t", "", " \r\n\t", None, {})
+    ):
         rejected_proposal = {"task_type": "implement", "scoped_prompt": scoped_prompt}
         result = roles.run_prompt_batch(
             [
@@ -683,6 +685,52 @@ def test_replay_requires_backend_only_when_dispatched(private_brain, monkeypatch
         else:
             assert item["failed_body_file"] is None
             assert not (directory / "001.failed.md").exists()
+
+    # A complete authoring proposal can also be rejected solely for leaving the task-type rail.
+    # Preserve the author's scoped text, rather than the fallback or an unrelated issue body.
+    scoped_prompt = "  Café — 日本語\r\nAcceptance and validation; commit, push, open a PR.\r\n\t "
+    rail_mismatch = {
+        "summary": "Author a complete delegation prompt.",
+        "task_type": "review",
+        "scoped_prompt": scoped_prompt,
+        "definition_of_done": ["Retain the rejected author's text."],
+        "acceptance_criteria": ["The retained file has the original UTF-8 bytes."],
+        "validation": ["Read the file as bytes."],
+        "expected_paths": [],
+        "out_of_scope": [],
+        "risk_flags": [],
+        "confidence": "high",
+        "issue_body": "Unrelated issue body must not replace the scoped prompt.",
+    }
+    assert roles._validate_prompt_agent(rail_mismatch) == []
+    result = roles.run_prompt_batch(
+        [
+            {
+                "target": "owner/repo#3",
+                "goal": "Reject a proposal that changed the selected task type",
+                "task_type": "implement",
+                "proposal_json": rail_mismatch,
+            }
+        ],
+        output="dispatch_prompt",
+    )
+    failed = result["items"][0]
+    assert failed["proposal"] is None and failed["rejected_proposal"] == rail_mismatch
+    assert failed["dispatch_prompt"] == baseline
+    assert failed["backend"] == ""
+    assert failed["backend_run_id"] is None and failed["role_run_id"] is None
+    assert failed["raw_output"] is None
+    directory = private_brain / "rejected-dispatch-task-type"
+    roles.write_prompt_batch(result, directory)
+    item = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))["items"][0]
+    assert item["valid"] is False
+    assert item["errors"] == [
+        "task_type must stay on the deterministic rail-selected value 'implement'; got 'review'"
+    ]
+    assert item["body_file"] is None and item["raw_output_file"] is None
+    assert Path(item["failed_body_file"]) == directory / "001.failed.md"
+    assert Path(item["failed_body_file"]).read_bytes() == scoped_prompt.encode("utf-8")
+    assert {path.name for path in directory.iterdir()} == {"manifest.json", "001.failed.md"}
 
     replay = roles.run_prompt_batch(items, output="issue_body", dispatch=True, backend="cursor")
     assert replay["items"][0]["errors"] == []
