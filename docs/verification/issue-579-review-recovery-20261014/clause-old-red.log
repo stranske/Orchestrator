@@ -1,0 +1,30 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_adjudicator_validator_accepts_recommendation_prose ____________
+
+    def test_adjudicator_validator_accepts_recommendation_prose():
+        role = roles.ROLE_REGISTRY["adjudicator"]
+        base = proposal()
+        for text in HISTORICAL_RECOMMENDATION_PROSE:
+            assert role.validate({**base, "recommended_next_step": text}) == []
+        assert role.validate({**base, "recommended_next_step": "merge this PR now"}) != []
+        for text in (
+            "open a PR",
+            "create a branch",
+            "Please open PR",
+            "Please create branch",
+            "commit the changes",
+            "Commit changes to the branch",
+            "Please commit updates",
+            "Inspect the logs; merge this PR now",
+            "Inspect the logs. Push the branch",
+        ):
+>           assert role.validate({**base, "recommended_next_step": text}) != []
+E           assert [] != []
+E            +  where [] = <function _validate_adjudicator at 0x109ea7060>({'decision': 'uphold_blocker', 'confidence': 'high', 'rationale': 'The later regression confirms the missing criterion...: 'Missing test', 'status': 'supported', 'evidence_ref': 'gate-run', 'reason': 'The regression is reproducible'}], ...})
+E            +    where <function _validate_adjudicator at 0x109ea7060> = Role(name='adjudicator', description="Assess a disputed reviewer blocker/veto against supplied ground-truth evidence a...ut_schema=None, authority=None, selector=None, capacity_policy=None, prompt_hash=None, lifecycle=None, generated=False).validate
+
+tests/test_adjudicator_retro.py:591: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_adjudicator_retro.py::test_adjudicator_validator_accepts_recommendation_prose
+1 failed in 0.28s

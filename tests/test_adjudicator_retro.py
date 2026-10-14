@@ -550,6 +550,7 @@ HISTORICAL_RECOMMENDATION_PROSE = [
     "The maintainer may delegate follow-up to the runtime owner after inspection.",
     "Opening a follow-up PR may be warranted after acceptance is documented.",
     "Commit history needs inspection before disposition.",
+    "Inspect the logs; recommend merge after manual review.",
 ]
 
 
@@ -584,6 +585,8 @@ def test_adjudicator_validator_accepts_recommendation_prose():
         "commit the changes",
         "Commit changes to the branch",
         "Please commit updates",
+        "Inspect the logs; merge this PR now",
+        "Inspect the logs. Push the branch",
     ):
         assert role.validate({**base, "recommended_next_step": text}) != []
 

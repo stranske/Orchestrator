@@ -11,3 +11,5 @@ All three strengthened tests failed on that original code (3 failed); the correc
 Commands: `python3 -m pytest tests/test_adjudicator_retro.py tests/test_adjudicator_retro_evidence.py tests/test_adjudicator_retro_cost.py tests/test_adjudicator_retro_collection.py tests/test_adjudicator_qualified_input.py tests/test_adjudicator_collected_input.py -q`; Black/Ruff on the four changed source/test files; focused mypy on `src/adjudicator_retro.py src/roles.py`.
 
 The strengthened assertions extend existing tests without adding collected test nodes or changing ceilings. Hosted checks and a fresh seven-minute review floor are required on the pushed head.
+
+Additional still-valid outdated review: inspect each semicolon/newline/sentence-delimited clause for direct mutation imperatives. The strengthened existing validator test fails on f037724; corrected test suite passes. Recommendation prose remains allowed.
