@@ -1,0 +1,124 @@
+FFFFFF                                                                   [100%]
+=================================== FAILURES ===================================
+______ test_malformed_persisted_consumption_ids_are_unknown[invalid_id0] _______
+
+consumable = ['stranske/Orchestrator#1', 'stranske/Orchestrator#3', 'stranske/Orchestrator#2', 'stranske/Orchestrator#4']
+invalid_id = ['bad']
+
+    @pytest.mark.parametrize("invalid_id", [["bad"], {}, True, None, ""])
+    def test_malformed_persisted_consumption_ids_are_unknown(consumable, invalid_id):
+        triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+        row = json.loads(triage_shadow.consumed_path().read_text())
+        row["consumption_id"] = invalid_id
+        triage_shadow.consumed_path().write_text(json.dumps(row) + "\n")
+>       assert "UNKNOWN" in triage_shadow.summary_line()
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_triage_shadow.py:853: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/triage_shadow.py:447: in summary_line
+    followed = sum(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+.0 = <list_iterator object at 0x105f9d300>
+
+    followed = sum(
+>       linked.get(consumption_key(row), {}).get("status") == "followed" for row in consumed
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+E   TypeError: unhashable type: 'list'
+
+src/triage_shadow.py:448: TypeError
+______ test_malformed_persisted_consumption_ids_are_unknown[invalid_id1] _______
+
+consumable = ['stranske/Orchestrator#1', 'stranske/Orchestrator#3', 'stranske/Orchestrator#2', 'stranske/Orchestrator#4']
+invalid_id = {}
+
+    @pytest.mark.parametrize("invalid_id", [["bad"], {}, True, None, ""])
+    def test_malformed_persisted_consumption_ids_are_unknown(consumable, invalid_id):
+        triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+        row = json.loads(triage_shadow.consumed_path().read_text())
+        row["consumption_id"] = invalid_id
+        triage_shadow.consumed_path().write_text(json.dumps(row) + "\n")
+>       assert "UNKNOWN" in triage_shadow.summary_line()
+E       AssertionError: assert 'UNKNOWN' in 'triage shadow: cycles 20, valid 20, triage top-1 merged+durable n/a (0 judged), rule pick n/a (0 judged), malformed rows 0; consumed 1, followed 0, not followed 0, open 1; unresolved 0; top-1 agrees with the rule pick 0 of 20 valid cycles'
+E        +  where 'triage shadow: cycles 20, valid 20, triage top-1 merged+durable n/a (0 judged), rule pick n/a (0 judged), malformed rows 0; consumed 1, followed 0, not followed 0, open 1; unresolved 0; top-1 agrees with the rule pick 0 of 20 valid cycles' = <function summary_line at 0x106837420>()
+E        +    where <function summary_line at 0x106837420> = triage_shadow.summary_line
+
+tests/test_triage_shadow.py:853: AssertionError
+__________ test_malformed_persisted_consumption_ids_are_unknown[True] __________
+
+consumable = ['stranske/Orchestrator#1', 'stranske/Orchestrator#3', 'stranske/Orchestrator#2', 'stranske/Orchestrator#4']
+invalid_id = True
+
+    @pytest.mark.parametrize("invalid_id", [["bad"], {}, True, None, ""])
+    def test_malformed_persisted_consumption_ids_are_unknown(consumable, invalid_id):
+        triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+        row = json.loads(triage_shadow.consumed_path().read_text())
+        row["consumption_id"] = invalid_id
+        triage_shadow.consumed_path().write_text(json.dumps(row) + "\n")
+>       assert "UNKNOWN" in triage_shadow.summary_line()
+E       AssertionError: assert 'UNKNOWN' in 'triage shadow: cycles 20, valid 20, triage top-1 merged+durable n/a (0 judged), rule pick n/a (0 judged), malformed rows 0; consumed 1, followed 0, not followed 0, open 1; unresolved 0; top-1 agrees with the rule pick 0 of 20 valid cycles'
+E        +  where 'triage shadow: cycles 20, valid 20, triage top-1 merged+durable n/a (0 judged), rule pick n/a (0 judged), malformed rows 0; consumed 1, followed 0, not followed 0, open 1; unresolved 0; top-1 agrees with the rule pick 0 of 20 valid cycles' = <function summary_line at 0x106837420>()
+E        +    where <function summary_line at 0x106837420> = triage_shadow.summary_line
+
+tests/test_triage_shadow.py:853: AssertionError
+__________ test_malformed_persisted_consumption_ids_are_unknown[None] __________
+
+consumable = ['stranske/Orchestrator#1', 'stranske/Orchestrator#3', 'stranske/Orchestrator#2', 'stranske/Orchestrator#4']
+invalid_id = None
+
+    @pytest.mark.parametrize("invalid_id", [["bad"], {}, True, None, ""])
+    def test_malformed_persisted_consumption_ids_are_unknown(consumable, invalid_id):
+        triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+        row = json.loads(triage_shadow.consumed_path().read_text())
+        row["consumption_id"] = invalid_id
+        triage_shadow.consumed_path().write_text(json.dumps(row) + "\n")
+>       assert "UNKNOWN" in triage_shadow.summary_line()
+E       AssertionError: assert 'UNKNOWN' in 'triage shadow: cycles 20, valid 20, triage top-1 merged+durable n/a (0 judged), rule pick n/a (0 judged), malformed rows 0; consumed 1, followed 0, not followed 0, open 1; unresolved 0; top-1 agrees with the rule pick 0 of 20 valid cycles'
+E        +  where 'triage shadow: cycles 20, valid 20, triage top-1 merged+durable n/a (0 judged), rule pick n/a (0 judged), malformed rows 0; consumed 1, followed 0, not followed 0, open 1; unresolved 0; top-1 agrees with the rule pick 0 of 20 valid cycles' = <function summary_line at 0x106837420>()
+E        +    where <function summary_line at 0x106837420> = triage_shadow.summary_line
+
+tests/test_triage_shadow.py:853: AssertionError
+____________ test_malformed_persisted_consumption_ids_are_unknown[] ____________
+
+consumable = ['stranske/Orchestrator#1', 'stranske/Orchestrator#3', 'stranske/Orchestrator#2', 'stranske/Orchestrator#4']
+invalid_id = ''
+
+    @pytest.mark.parametrize("invalid_id", [["bad"], {}, True, None, ""])
+    def test_malformed_persisted_consumption_ids_are_unknown(consumable, invalid_id):
+        triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+        row = json.loads(triage_shadow.consumed_path().read_text())
+        row["consumption_id"] = invalid_id
+        triage_shadow.consumed_path().write_text(json.dumps(row) + "\n")
+>       assert "UNKNOWN" in triage_shadow.summary_line()
+E       AssertionError: assert 'UNKNOWN' in 'triage shadow: cycles 20, valid 20, triage top-1 merged+durable n/a (0 judged), rule pick n/a (0 judged), malformed rows 0; consumed 1, followed 0, not followed 0, open 1; unresolved 0; top-1 agrees with the rule pick 0 of 20 valid cycles'
+E        +  where 'triage shadow: cycles 20, valid 20, triage top-1 merged+durable n/a (0 judged), rule pick n/a (0 judged), malformed rows 0; consumed 1, followed 0, not followed 0, open 1; unresolved 0; top-1 agrees with the rule pick 0 of 20 valid cycles' = <function summary_line at 0x106837420>()
+E        +    where <function summary_line at 0x106837420> = triage_shadow.summary_line
+
+tests/test_triage_shadow.py:853: AssertionError
+___________ test_duplicate_legacy_receipts_refuse_before_any_credit ____________
+
+consumable = ['stranske/Orchestrator#1', 'stranske/Orchestrator#3', 'stranske/Orchestrator#2', 'stranske/Orchestrator#4']
+
+    def test_duplicate_legacy_receipts_refuse_before_any_credit(consumable):
+        result = triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+        row = json.loads(triage_shadow.consumed_path().read_text())
+        row.pop("consumption_id")
+        triage_shadow.consumed_path().write_text((json.dumps(row) + "\n") * 2)
+        feedback.record_run(
+            "legacy-worker", result["ordered_targets"][0], "implement", "codex", mode="local", ts=102
+        )
+        feedback.record_completion_event("legacy-worker", status="succeeded")
+>       with pytest.raises(ValueError, match="duplicate consumption identity"):
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_triage_shadow.py:875: Failed
+=========================== short test summary info ============================
+FAILED tests/test_triage_shadow.py::test_malformed_persisted_consumption_ids_are_unknown[invalid_id0]
+FAILED tests/test_triage_shadow.py::test_malformed_persisted_consumption_ids_are_unknown[invalid_id1]
+FAILED tests/test_triage_shadow.py::test_malformed_persisted_consumption_ids_are_unknown[True]
+FAILED tests/test_triage_shadow.py::test_malformed_persisted_consumption_ids_are_unknown[None]
+FAILED tests/test_triage_shadow.py::test_malformed_persisted_consumption_ids_are_unknown[]
+FAILED tests/test_triage_shadow.py::test_duplicate_legacy_receipts_refuse_before_any_credit
+6 failed, 48 deselected in 0.63s
