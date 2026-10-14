@@ -1,0 +1,26 @@
+{
+  "agent": "claude",
+  "drift": {
+    "changed_path_count": 0,
+    "finding_kinds": [],
+    "severity": "none"
+  },
+  "errors": [],
+  "has_worktree_changes": false,
+  "hint_kinds": [
+    "auth"
+  ],
+  "lane": "experiment",
+  "pid_alive": null,
+  "policy_action": "redirect",
+  "policy_confidence": "high",
+  "policy_decision": {
+    "action": "redirect",
+    "confidence": "high"
+  },
+  "recommended_action": "redirect",
+  "state": "stalled",
+  "sweep_fingerprint": "6162b5a7510093f065315f9ef23f2f7885259ef07d03b00f633a3c8f2938d42f",
+  "target": "example/repo [exp historical-lane-09]",
+  "task_type": "implement"
+}

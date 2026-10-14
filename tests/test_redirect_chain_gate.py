@@ -152,7 +152,9 @@ def test_dry_link_preview_does_not_write_failures_or_join(tmp_path, monkeypatch)
 
 
 def test_an_open_gate_writes_a_plan_and_heartbeats(tmp_path, monkeypatch):
-    report = json.loads((Path(__file__).parent / "fixtures/redirect_stalls/auth.json").read_text())
+    report = json.loads(
+        (Path(__file__).parent / "fixtures/redirect_stalls/synthetic/auth.json").read_text()
+    )
     monkeypatch.setattr(keepalive_supervisor, "live_targets", lambda **kw: [report["target"]])
     monkeypatch.setattr(
         keepalive_supervisor,
@@ -194,7 +196,7 @@ def test_replay_runs_the_fixtures_to_authorize_with_named_agents(capsys, monkeyp
     monkeypatch.setenv("ORCH_CAPABILITY_HEARTBEATS", "1")
     heartbeats = []
     monkeypatch.setattr(capabilities, "heartbeat", lambda *a, **kw: heartbeats.append(a))
-    fixtures = Path(__file__).parent / "fixtures/redirect_stalls"
+    fixtures = Path(__file__).parent / "fixtures/redirect_stalls/synthetic"
     result = redirect_apply.replay_stalls(fixtures)
     assert result["authorized"] == result["total"] == 3
     assert {row["fixture"] for row in result["results"]} == {
@@ -207,3 +209,41 @@ def test_replay_runs_the_fixtures_to_authorize_with_named_agents(capsys, monkeyp
     assert redirect_apply.main(["--replay-stalls", str(fixtures)]) == 0
     assert "authorized 3/3 with named agents" in capsys.readouterr().out
     assert not heartbeats
+
+
+def test_replay_of_the_twelve_historical_stalls_authorizes_all_twelve(tmp_path, monkeypatch):
+    attempts = []
+
+    def forbidden(*a, **kw):
+        attempts.append((a, kw))
+        raise AssertionError("historical dry replay must not dispatch, claim or learn")
+
+    monkeypatch.setattr(roles.dispatcher, "offload", forbidden)
+    monkeypatch.setattr(roles.dispatcher, "delegate", forbidden)
+    monkeypatch.setattr(redirect_apply.claims, "claim", forbidden)
+    monkeypatch.setattr(redirect_apply.claims, "release", forbidden)
+    monkeypatch.setattr(redirect_apply.redirect_plan, "apply_plan", forbidden)
+    monkeypatch.setattr(feedback, "record_role_run", forbidden)
+    monkeypatch.setattr(feedback, "record_run", forbidden)
+    monkeypatch.setattr(feedback, "record_influence_edge", forbidden)
+    monkeypatch.setattr(redirect_shadow, "_append_event", forbidden)
+    monkeypatch.setattr(redirect_shadow, "CORPUS_PATH", tmp_path / "corpus.jsonl")
+    monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
+    monkeypatch.setenv("ORCH_CAPABILITY_HEARTBEATS", "1")
+    monkeypatch.setattr(capabilities, "heartbeat", forbidden)
+    fixtures = Path(__file__).parent / "fixtures/redirect_stalls"
+    result = redirect_apply.replay_stalls(fixtures)
+    assert result["total"] == 12
+    assert result["authorized"] == 12, result["results"]
+    assert {row["fixture"] for row in result["results"]} == {
+        f"historical-{n:02d}.json" for n in range(1, 13)
+    }
+    assert result["dry_run"] is True
+    for row in result["results"]:
+        if row["authorization"]["allowed"]:
+            assert row["agent"]
+        assert row["authorization"]["would_mutate"] is False
+    assert not attempts
+    assert not (tmp_path / "brain.db").exists()
+    assert not (tmp_path / "corpus.jsonl").exists()
+    assert not (tmp_path / "handoff").exists()

@@ -1,0 +1,26 @@
+{
+  "agent": "codex",
+  "drift": {
+    "changed_path_count": 0,
+    "finding_kinds": [],
+    "severity": "none"
+  },
+  "errors": [],
+  "has_worktree_changes": false,
+  "hint_kinds": [
+    "rate_limit"
+  ],
+  "lane": "experiment",
+  "pid_alive": null,
+  "policy_action": "redirect",
+  "policy_confidence": "high",
+  "policy_decision": {
+    "action": "redirect",
+    "confidence": "high"
+  },
+  "recommended_action": "redirect",
+  "state": "stalled",
+  "sweep_fingerprint": "54ff8adb0fd2a9d862b8ef18422273e5d83dc59da1afcc145f7d9fe496a768ac",
+  "target": "example/repo [exp historical-lane-05]",
+  "task_type": "implement"
+}
