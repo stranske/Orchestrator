@@ -1,0 +1,1 @@
+Actual588 NON_PASS temporal finding:2 independent baseline failures; fixed first-invocation intervals reuse monitor classification. Boundary test includes both endpoints, rejected/counterfactual edges, distinct capability windows and unread Brain. No paid trial, database write, model pin, live flag or deployment. Full current-head hosted review required.

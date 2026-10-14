@@ -1,0 +1,34 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+__________ test_consumer_deadline_rejects_first_action_on_day_fifteen __________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x105c2c350>
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-2002/test_consumer_deadline_rejects0')
+
+    def test_consumer_deadline_rejects_first_action_on_day_fifteen(monkeypatch, tmp_path):
+        category, ok, _ = _deadline_evidence(monkeypatch, tmp_path, action_day=15, now_day=16)
+>       assert category == "never_acted" and not ok
+E       AssertionError: assert ('acting' == 'never_acted'
+E         
+E         - never_acted
+E         + acting)
+
+tests/test_capability_admission.py:804: AssertionError
+______ test_consumer_deadline_retains_timely_action_after_monitor_window _______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x105ca2d50>
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-2002/test_consumer_deadline_retains0')
+
+    def test_consumer_deadline_retains_timely_action_after_monitor_window(monkeypatch, tmp_path):
+        category, ok, _ = _deadline_evidence(monkeypatch, tmp_path, action_day=1, now_day=100)
+>       assert category == "acting" and ok
+E       AssertionError: assert ('never_acted' == 'acting'
+E         
+E         - acting
+E         + never_acted)
+
+tests/test_capability_admission.py:809: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_capability_admission.py::test_consumer_deadline_rejects_first_action_on_day_fifteen
+FAILED tests/test_capability_admission.py::test_consumer_deadline_retains_timely_action_after_monitor_window
+2 failed in 0.39s

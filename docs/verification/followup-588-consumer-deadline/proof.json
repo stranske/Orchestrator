@@ -1,0 +1,30 @@
+{
+  "source_pr": "https://github.com/stranske/Orchestrator/pull/588",
+  "actual_verifier_run": "38556060546",
+  "provider_verdicts": [
+    "CONCERNS",
+    "PASS"
+  ],
+  "original_finding": "rolling monitor counts do not enforce first-invocation deadline",
+  "baseline_merge": "64718887287cff9b51f459dd29a4d84ead6a6cbf",
+  "red": "two intended temporal assertions fail on merged production",
+  "green": "111focusedPASS;3boundary controlsPASS;mypy2filesPASS",
+  "argv": [
+    "python3",
+    "-m",
+    "pytest",
+    "tests/test_capability_admission.py",
+    "tests/test_value_chain_monitor.py",
+    "tests/test_adjudicator_packet_binding.py",
+    "tests/test_adjudicator_retro.py",
+    "-q"
+  ],
+  "file_sha256": {
+    "src/capability_admission.py": "d0ba9f4054c991dab382d6b4dc7626e27f0441336578e9f759af0940bcea5643",
+    "src/value_chain_monitor.py": "b5394e1cb4182fb04603d5032979c78f5b796f101ce46bef46941e7f5c884bd2",
+    "tests/test_capability_admission.py": "a5eb7c4872723763a9ba28bb561c5d166906754a8e5c156915bb5075d7d9a5df",
+    "tests/test_value_chain_monitor.py": "1a906fc933b59a52fd0307a2a9ae2427b97795c48803869132e98b85c00b3d38"
+  },
+  "collected": 3357,
+  "limitations": "no deployed mirror/native acceptance or full-suite/providerPASS claim"
+}

@@ -777,3 +777,41 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def _deadline_evidence(monkeypatch, tmp_path, *, action_day, now_day):
+    import feedback
+    import value_chain_monitor as monitor
+
+    first = 1700000000
+    now = first + now_day * 86400
+    edge = {"capability_id": "t-deadline", "accepted": 1, "created_ts": first + action_day * 86400}
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setattr(
+        monitor,
+        "_brain",
+        lambda db, since, until: {
+            "edges": [edge] if since <= edge["created_ts"] <= until else [],
+            "errors": [],
+        },
+    )
+    monkeypatch.setattr(
+        monitor,
+        "outcome_counts",
+        lambda cid, own: {"acted_on": sum(e.get("accepted") == 1 for e in own)},
+    )
+    admission._ACTED_ON_CACHE.clear()
+    cap = _consumer_cap("t-deadline", "x.py:consume", first_invocation=first)
+    ctx = _consumer_ctx(tmp_path, now=now)
+    ctx.update(admission.acted_on_context({"t-deadline": cap}, now=now))
+    return admission.consumer_class(cap, ctx)
+
+
+def test_consumer_deadline_rejects_first_action_on_day_fifteen(monkeypatch, tmp_path):
+    category, ok, _ = _deadline_evidence(monkeypatch, tmp_path, action_day=15, now_day=16)
+    assert category == "never_acted" and not ok
+
+
+def test_consumer_deadline_retains_timely_action_after_monitor_window(monkeypatch, tmp_path):
+    category, ok, _ = _deadline_evidence(monkeypatch, tmp_path, action_day=1, now_day=100)
+    assert category == "acting" and ok
