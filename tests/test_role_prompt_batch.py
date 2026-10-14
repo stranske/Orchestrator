@@ -1,6 +1,8 @@
 """Prompt authoring separates issue readiness from the worker dispatch contract."""
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -383,6 +385,24 @@ def test_failed_body_and_raw_output_are_retained_in_the_manifest(private_brain, 
     assert retained == len(failed) == 3
     assert len(saved["items"]) == 5
     assert sum(item["valid"] for item in saved["items"]) / len(saved["items"]) == 2 / 5
+
+    # Run the required qualification command in a fresh process, with no in-memory results.
+    qualification = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import json,sys; m=json.load(open(sys.argv[1])); "
+            "f=[i for i in m['items'] if not i['valid']]; "
+            "print(sum(bool(i.get('failed_body_file') or i.get('raw_output_file')) "
+            "for i in f), len(f))",
+            str(directory / "manifest.json"),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert qualification.stdout == "3 3\n"
+    assert qualification.stderr == ""
 
     # Empty backend output is evidence too: only None means there was no output.
     roles.reset_role_invocation_counts()

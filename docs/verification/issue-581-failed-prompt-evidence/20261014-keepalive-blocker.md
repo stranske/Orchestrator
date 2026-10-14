@@ -39,3 +39,22 @@ tool installation attempts failed, and both required Black commands exit 127.
 These changes remain uncommitted because the required formatting gate cannot run.
 No fresh pytest pass or production qualification is claimed. PR #589 remains open
 with `draft=false`; its task checkboxes are unchanged because remote writes are denied.
+
+## Follow-up at a405ad3
+
+Reviewed all six PR commits and confirmed the production source still matches the
+corrected mutation-proof SHA256. The named mixed-batch test now executes the exact
+source-issue qualification query in a fresh subprocess against the saved manifest;
+it requires stdout `3 3` and no stderr. No collection nodes were added.
+
+An independent production mixed-batch check with a private Brain passes, including
+exact retained bytes and output filenames; its subprocess query prints `3 3`.
+Roles selftest, Python compilation and whitespace checks pass. These are controlled
+checks, not a pytest pass or the required real role-authored production batch.
+
+Pytest remains absent, package installation fails because DNS is unavailable, and
+both mandatory Black commands exit 127. The test change remains uncommitted because
+the formatting gate cannot run. PR-body reconciliation, blocker comment and
+`needs-human` label were each rejected because connector writes require approval
+while this run's approval policy is `never`. The prepared reconciliation is at
+`/tmp/589-reconciled-pr-body.md`; PR #589 is open with `draft=false`.
