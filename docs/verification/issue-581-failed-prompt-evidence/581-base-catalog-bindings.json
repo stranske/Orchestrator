@@ -1,0 +1,9 @@
+{
+  "base_commit": "34bfcff4816cecd9d18bdc957e22c44ba7ab7740",
+  "identical_current_and_base_sha256": {
+    "tests/test_capacity_profiles.py": "860d39389b828ff65109f49286767909e676f594fa18bde0e396996cd6460de6",
+    "tests/test_model_tier_resolution.py": "d00299c1034257291c918ff0226f71b6ba9479605efd7636507bd7515f0a4505",
+    "src/capacity.py": "1e04624a089453601375bfe19aa5a3077dc279806df7e4e1d86ba06cf15e850e",
+    "src/adapters.py": "784daea3b9b070c0c26111b9d7dc056f8dd9f0e7f462b8e153ab5a97a9f389c0"
+  }
+}
