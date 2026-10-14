@@ -1,0 +1,47 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_ test_temporary_checkout_retains_prune_failure_even_after_path_removal[False] _
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1840/test_temporary_checkout_retain0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11a626330>
+body_fails = False
+
+    @pytest.mark.parametrize("body_fails", [False, True])
+    def test_temporary_checkout_retains_prune_failure_even_after_path_removal(tmp_path, monkeypatch, body_fails):
+        checkout = tmp_path / "private-checkout"
+        checkout.mkdir()
+        monkeypatch.setattr(provision, "exact_head_worktree", lambda *a, **kw: str(checkout))
+        monkeypatch.setattr(provision, "canonical_path", lambda _repo: tmp_path)
+        def failed_cleanup(cmd, **kw):
+            return subprocess.CompletedProcess(cmd, 1, "", "cleanup denied")
+        monkeypatch.setattr(provision, "_run", failed_cleanup)
+>       with pytest.raises(RuntimeError, match="cleanup denied") as caught:
+E       Failed: DID NOT RAISE RuntimeError
+
+tests/test_runtime_ac_shadow.py:1187: Failed
+_ test_temporary_checkout_retains_prune_failure_even_after_path_removal[True] __
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1840/test_temporary_checkout_retain1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11a5c3c20>
+body_fails = True
+
+    @pytest.mark.parametrize("body_fails", [False, True])
+    def test_temporary_checkout_retains_prune_failure_even_after_path_removal(tmp_path, monkeypatch, body_fails):
+        checkout = tmp_path / "private-checkout"
+        checkout.mkdir()
+        monkeypatch.setattr(provision, "exact_head_worktree", lambda *a, **kw: str(checkout))
+        monkeypatch.setattr(provision, "canonical_path", lambda _repo: tmp_path)
+        def failed_cleanup(cmd, **kw):
+            return subprocess.CompletedProcess(cmd, 1, "", "cleanup denied")
+        monkeypatch.setattr(provision, "_run", failed_cleanup)
+        with pytest.raises(RuntimeError, match="cleanup denied") as caught:
+            with provision.temporary_exact_head_worktree("owner/repo#1", "a" * 40):
+                if body_fails:
+>                   raise ValueError("original verifier failure")
+E                   ValueError: original verifier failure
+
+tests/test_runtime_ac_shadow.py:1190: ValueError
+=========================== short test summary info ============================
+FAILED tests/test_runtime_ac_shadow.py::test_temporary_checkout_retains_prune_failure_even_after_path_removal[False]
+FAILED tests/test_runtime_ac_shadow.py::test_temporary_checkout_retains_prune_failure_even_after_path_removal[True]
+2 failed in 0.70s
