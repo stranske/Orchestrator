@@ -314,16 +314,17 @@ def fetch_evidence(row: dict) -> dict:
                 }
             )
             continue
-        criteria_revision = issue_updated or criteria_revision
-        acceptance_criteria = [
-            {
-                "text": text,
-                "revision": criteria_revision,
-                "source": f"issue#{issue.get('number')}@{criteria_revision}",
-            }
-            for text in texts
-        ]
-        break
+        criteria_revision = issue_updated or pr["headRefOid"]
+        acceptance_criteria.extend(
+            [
+                {
+                    "text": text,
+                    "revision": criteria_revision,
+                    "source": f"issue#{issue.get('number')}@{criteria_revision}",
+                }
+                for text in texts
+            ]
+        )
     return {
         "disputed_finding": {"ref": finding["url"], "body": finding["body"], "decision": decision},
         "ground_truth_evidence": {
@@ -1206,6 +1207,15 @@ def run(
                 saved[case_id] = entry
             _persist_report(path, list(saved.values()), len(population), db=db)
             continue
+        if preserved is not None and (
+            not dispatch or not result.get("proposal") or result.get("errors")
+        ):
+            # A preview or failed retry must not make the saved abstention ineligible.
+            # Retain newly paid attempt identities separately for accounting/recovery.
+            if dispatch:
+                attempt = {k: v for k, v in entry.items() if k != "retry_attempts"}
+                preserved["retry_attempts"] = [*preserved.get("retry_attempts", []), attempt]
+            entry = preserved
         saved[case_id] = entry
         # Persist every attempt so an interrupted batch does not repeat successful paid calls.
         _persist_report(path, list(saved.values()), len(population), db=db)

@@ -1,0 +1,196 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+___________ test_adjudicator_validator_accepts_recommendation_prose ____________
+
+    def test_adjudicator_validator_accepts_recommendation_prose():
+        role = roles.ROLE_REGISTRY["adjudicator"]
+        base = proposal()
+        for text in HISTORICAL_RECOMMENDATION_PROSE:
+            assert role.validate({**base, "recommended_next_step": text}) == []
+        assert role.validate({**base, "recommended_next_step": "merge this PR now"}) != []
+        for text in (
+            "open a PR",
+            "create a branch",
+            "Please open PR",
+            "Please create branch",
+            "commit the changes",
+            "Commit changes to the branch",
+            "Please commit updates",
+        ):
+>           assert role.validate({**base, "recommended_next_step": text}) != []
+E           assert [] != []
+E            +  where [] = <function _validate_adjudicator at 0x10a0f8860>({'decision': 'uphold_blocker', 'confidence': 'high', 'rationale': 'The later regression confirms the missing criterion...: 'Missing test', 'status': 'supported', 'evidence_ref': 'gate-run', 'reason': 'The regression is reproducible'}], ...})
+E            +    where <function _validate_adjudicator at 0x10a0f8860> = Role(name='adjudicator', description="Assess a disputed reviewer blocker/veto against supplied ground-truth evidence a...ut_schema=None, authority=None, selector=None, capacity_policy=None, prompt_hash=None, lifecycle=None, generated=False).validate
+
+tests/test_adjudicator_retro.py:588: AssertionError
+__ test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria ___
+
+private_brain = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1831/test_abstained_row_is_reattemp0/brain.db')
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1831/test_abstained_row_is_reattemp0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10900ad50>
+
+    def test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria(
+        private_brain, tmp_path, monkeypatch
+    ):
+        path = tmp_path / "retro.json"
+        population = [
+            {
+                "run_id": "r1",
+                "target": "owner/repo#1",
+                "verifier_verdict": "NON_PASS",
+                "adjudicated_verdict": "PASS",
+                "merged": 1,
+            }
+        ]
+        monkeypatch.setattr(retro, "disputes", lambda **_: population)
+        identity = {
+            "run_id": "r1",
+            "verifier_verdict": "NON_PASS",
+            "adjudicated_verdict": "PASS",
+        }
+        case_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        saved = {
+            **identity,
+            "case_id": case_id,
+            "target": "owner/repo#1",
+            "decision": "needs_more_evidence",
+            "packet": {"metadata_only": True, "target": "owner/repo#1"},
+            "backend_run_id": "paid-attempt-1",
+            "cost_usd": 0.12,
+        }
+        path.write_text(json.dumps({"rows": [saved], "population": 1}))
+        calls = {"n": 0}
+    
+        def reader(_row):
+            calls["n"] += 1
+            return {
+                "disputed_finding": {"ref": "f", "body": "Finding"},
+                "ground_truth_evidence": {
+                    "diff_summary": [{"path": "a.py", "additions": 1, "deletions": 0}],
+                    "gate_runs": [{"name": "Gate", "conclusion": "SUCCESS", "detailsUrl": "g"}],
+                    "diff_patch": {"revision": "sha", "text": "diff"},
+                    "acceptance_criteria": [{"text": "test passes", "revision": "sha"}],
+                },
+            }
+    
+        retro.run(
+            dispatch=False,
+            retry=True,
+            limit=1,
+            path=path,
+            db=private_brain,
+            evidence_reader=reader,
+        )
+        assert calls["n"] == 1
+        refreshed = json.loads(path.read_text())["rows"][0]
+        assert refreshed["case_id"] == case_id
+        assert refreshed["backend_run_id"] == "paid-attempt-1"
+>       assert refreshed["packet"]["metadata_only"] is True
+E       assert False is True
+
+tests/test_adjudicator_retro.py:677: AssertionError
+_ RetrospectiveEvidenceTests.test_fetch_evidence_selects_the_validated_verifier_comment _
+
+self = <test_adjudicator_retro_evidence.RetrospectiveEvidenceTests testMethod=test_fetch_evidence_selects_the_validated_verifier_comment>
+
+    def test_fetch_evidence_selects_the_validated_verifier_comment(self):
+        decision = {
+            "schema": verifier_evidence.MARKER,
+            "repo": "owner/repo",
+            "pr": 1,
+            "head_sha": "a" * 40,
+            "evaluated_sha": "b" * 40,
+            "run_id": "123",
+            "run_attempt": "1",
+            "provider_verdicts": ["FAIL"],
+            "ci_failed": False,
+            "verdict": "NON_PASS",
+        }
+        finding = {
+            "body": "Missing acceptance test\n"
+            f"<!-- {verifier_evidence.MARKER} {json.dumps(decision)} -->",
+            "url": "https://github.com/owner/repo/pull/1#issuecomment-1",
+            "author": {"login": "github-actions[bot]"},
+        }
+        malformed = {
+            **finding,
+            "body": f"<!-- {verifier_evidence.MARKER} {{invalid}} -->",
+            "url": "https://github.com/owner/repo/pull/1#issuecomment-2",
+        }
+        wrong_pr = {**finding, "url": "https://github.com/owner/repo/pull/2#issuecomment-3"}
+        gate = {"name": "Gate", "conclusion": "SUCCESS", "detailsUrl": "gate-run"}
+        diff = {"path": "tests/test_acceptance.py", "additions": 10, "deletions": 0}
+        pr = {
+            "number": 1,
+            "state": "MERGED",
+            "headRefOid": decision["head_sha"],
+            "mergeCommit": {"oid": decision["evaluated_sha"]},
+            "comments": {
+                "pageInfo": {"hasPreviousPage": False},
+                "nodes": [finding, wrong_pr, malformed],
+            },
+            "files": {"pageInfo": {"hasNextPage": False}, "nodes": [diff]},
+            "commits": {
+                "nodes": [
+                    {
+                        "commit": {
+                            "statusCheckRollup": {
+                                "contexts": {
+                                    "pageInfo": {"hasNextPage": False},
+                                    "nodes": [gate],
+                                }
+                            }
+                        }
+                    }
+                ]
+            },
+        }
+        read = patch.object(
+            retro, "_gh_json", return_value={"data": {"repository": {"pullRequest": pr}}}
+        )
+        read.start()
+        self.addCleanup(read.stop)
+        patch_text = "diff --git a/tests/test_acceptance.py b/tests/test_acceptance.py\n"
+        read_patch = patch.object(
+            retro.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess([], 0, patch_text, ""),
+        )
+        read_patch.start()
+        self.addCleanup(read_patch.stop)
+        packet = retro.build_packet(
+            {"target": "owner/repo#1"},
+            retro.fetch_evidence({"target": "owner/repo#1", "verifier_verdict": "NON_PASS"}),
+        )
+        assert packet["disputed_finding"] == {
+            "ref": finding["url"],
+            "body": finding["body"],
+            "decision": decision,
+        }
+        assert packet["ground_truth_evidence"]["head_sha"] == decision["head_sha"]
+        assert packet["ground_truth_evidence"]["merge_sha"] == decision["evaluated_sha"]
+        assert packet["ground_truth_evidence"]["diff_summary"] == [diff]
+        assert packet["ground_truth_evidence"]["diff_patch"] == {
+            "revision": decision["head_sha"],
+            "text": patch_text,
+        }
+        assert packet["ground_truth_evidence"]["gate_runs"] == [gate]
+    
+        # Every linked source retains its own criteria revision, including duplicate text.
+        pr["closingIssuesReferences"] = {"nodes": [
+            {"number": 2, "body": "## Acceptance Criteria\n- [ ] first requirement", "updatedAt": "2026-10-01T01:00:00Z"},
+            {"number": 3, "body": "## Acceptance Criteria\n- [ ] second requirement", "updatedAt": "2026-10-01T02:00:00Z"},
+        ]}
+        ground = retro.fetch_evidence({"target": "owner/repo#1", "verifier_verdict": "NON_PASS"})["ground_truth_evidence"]
+>       assert [c["text"] for c in ground["acceptance_criteria"]] == ["first requirement", "second requirement"]
+E       AssertionError: assert ['first requirement'] == ['first requi... requirement']
+E         
+E         Right contains one more item: 'second requirement'
+E         Use -v to get more diff
+
+tests/test_adjudicator_retro_evidence.py:390: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_adjudicator_retro.py::test_adjudicator_validator_accepts_recommendation_prose
+FAILED tests/test_adjudicator_retro.py::test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria
+FAILED tests/test_adjudicator_retro_evidence.py::RetrospectiveEvidenceTests::test_fetch_evidence_selects_the_validated_verifier_comment
+3 failed in 4.52s

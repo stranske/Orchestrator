@@ -582,6 +582,8 @@ def test_adjudicator_validator_accepts_recommendation_prose():
         "Please open PR",
         "Please create branch",
         "commit the changes",
+        "Commit changes to the branch",
+        "Please commit updates",
     ):
         assert role.validate({**base, "recommended_next_step": text}) != []
 
@@ -672,7 +674,32 @@ def test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria(
     refreshed = json.loads(path.read_text())["rows"][0]
     assert refreshed["case_id"] == case_id
     assert refreshed["backend_run_id"] == "paid-attempt-1"
-    assert refreshed["packet"]["metadata_only"] is False
+    assert refreshed["packet"]["metadata_only"] is True
+
+    failed = retro.run(
+        dispatch=True,
+        retry=True,
+        limit=1,
+        path=path,
+        db=private_brain,
+        evidence_reader=reader,
+        runner=lambda **_: {"errors": ["runner failed"], "backend_run_id": "paid-failed-retry"},
+    )["rows"][0]
+    assert failed["packet"]["metadata_only"] is True
+    assert failed["backend_run_id"] == "paid-attempt-1"
+    assert failed["retry_attempts"][-1]["backend_run_id"] == "paid-failed-retry"
+    succeeded = retro.run(
+        dispatch=True,
+        retry=True,
+        limit=1,
+        path=path,
+        db=private_brain,
+        evidence_reader=reader,
+        runner=lambda **_: {"proposal": proposal(), "backend_run_id": "paid-success"},
+    )["rows"][0]
+    assert succeeded["packet"]["metadata_only"] is False
+    assert succeeded["decision"] == "uphold_blocker"
+    assert succeeded["backend_run_id"] == "paid-success"
     assert len(json.loads(path.read_text())["rows"]) == 1
 
     identity = {

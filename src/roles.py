@@ -855,7 +855,7 @@ def _adjudicator_prompt(ctx: dict) -> str:
 _ADJUDICATOR_IMPERATIVE_NEXT_STEP = re.compile(
     r"^\s*(?:"
     r"(?:please\s+)?(?:merge|push|label|claim|delegate)\b"
-    r"|(?:please\s+)?commit(?:\s+(?:the|these|your|all)\b|\s+and\b)"
+    r"|(?:please\s+)?commit(?:\s+(?:the|these|your|all|changes|updates|files|code)\b|\s+and\b)"
     r"|(?:please\s+)?kill\b(?!\-)"
     r"|(?:please\s+)?open\s+(?:a\s+)?pr\b"
     r"|(?:please\s+)?create\s+(?:a\s+)?branch\b"
