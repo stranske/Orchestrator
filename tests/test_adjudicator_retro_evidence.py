@@ -407,6 +407,14 @@ class RetrospectiveEvidenceTests(unittest.TestCase):
             "issue#2@2026-10-01T01:00:00Z",
             "issue#3@2026-10-01T02:00:00Z",
         ]
+        assert retro._packet_metadata_only(ground) is False
+        with patch.object(retro, "MAX_DIFF_PATCH_BYTES", 5):
+            clipped = retro.fetch_evidence(
+                {"target": "owner/repo#1", "verifier_verdict": "NON_PASS"}
+            )["ground_truth_evidence"]
+        assert clipped["diff_patch"]["truncated"] is True
+        assert len(clipped["diff_patch"]["text"].encode("utf-8")) <= 5
+        assert retro._packet_metadata_only(clipped) is True
 
         # Even without malformed JSON, a matching marker on another PR is not the finding.
         pr["comments"]["nodes"] = [finding, wrong_pr]
