@@ -1378,7 +1378,7 @@ def test_exempt_usage_preserves_invocation_gap_and_renders_no_verdict(tmp_path, 
         for s in capabilities.format_usage_report(usage).splitlines()
         if s.startswith("| capability-activation-audit |")
     )
-    assert line.split("|")[7].strip() == "n/a"
+    assert line.split("|")[6].strip() == "n/a"
     assert usage["capabilities_with_production_run_verdict"] == 0
 
 

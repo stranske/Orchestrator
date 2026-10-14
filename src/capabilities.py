@@ -3560,7 +3560,7 @@ def format_usage_report(usage: dict[str, Any]) -> str:
             f"| {row['capability_id']} | {row['status']} | {row['liveness']} | "
             f"{row['usage']['invocations_per_week']} | "
             f"{row['fleet_edges'] if row['fleet_edges'] is not None else 'unavailable'} | "
-            f"{row.get('production_run_verdicts', 0)} | "
+            f"{'n/a' if exemption else row.get('production_run_verdicts', 0)} | "
             f"{verdict_text} | "
             f"{d['durable_reuses']} | {d['required']} | "
             f"{row['unblock']['action']} |"
