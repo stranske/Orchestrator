@@ -1,0 +1,44 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+______ test_exempt_usage_preserves_invocation_gap_and_renders_no_verdict _______
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-2063/test_exempt_usage_preserves_in0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1114e3a10>
+
+    def test_exempt_usage_preserves_invocation_gap_and_renders_no_verdict(tmp_path, monkeypatch):
+        ledger = _observer_verdict_ledger(tmp_path)
+        monkeypatch.setattr(capabilities, "_fleet_edge_counts", lambda **_: {})
+        monkeypatch.setattr(capabilities, "_consumer_action_counts", lambda **_: {})
+        monkeypatch.setattr(capabilities, "classify_liveness", lambda *_, **__: "matched_not_invoked")
+        usage = capabilities.usage_report(capabilities.summary(ledger, create=False), now=100, path=ledger)
+        row = next(r for r in usage["rows"] if r["capability_id"] == "capability-activation-audit")
+>       assert row["unblock"]["action"] == "lift the gate, or accept it is deliberately off"
+E       AssertionError: assert 'observe cons...; verdict n/a' == 'lift the gat...iberately off'
+E         
+E         - lift the gate, or accept it is deliberately off
+E         + observe consumer actions; verdict n/a
+
+tests/test_capabilities.py:1373: AssertionError
+________________ test_consumer_action_read_failure_is_diagnosed ________________
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-2063/test_consumer_action_read_fail0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1118c3890>
+caplog = <_pytest.logging.LogCaptureFixture object at 0x1118c1fd0>
+
+    def test_consumer_action_read_failure_is_diagnosed(tmp_path, monkeypatch, caplog):
+        import value_chain_monitor
+    
+        def fail(*_, **__):
+            raise OSError("fixture database unavailable")
+    
+        monkeypatch.setattr(value_chain_monitor, "_brain", fail)
+        assert capabilities._consumer_action_counts(now=100, path=tmp_path / "ledger") == {}
+>       assert "consumer-action evidence read failed" in caplog.text
+E       AssertionError: assert 'consumer-action evidence read failed' in ''
+E        +  where '' = <_pytest.logging.LogCaptureFixture object at 0x1118c1fd0>.text
+
+tests/test_capabilities.py:1388: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_capabilities.py::test_exempt_usage_preserves_invocation_gap_and_renders_no_verdict
+FAILED tests/test_capabilities.py::test_consumer_action_read_failure_is_diagnosed
+2 failed in 0.59s

@@ -13,6 +13,7 @@ import argparse
 import fcntl
 import hashlib
 import json
+import logging
 import marshal
 import os
 import re
@@ -3345,6 +3346,7 @@ def _consumer_action_counts(*, now: int, path: Path, conn=None) -> dict[str, int
         report = value_chain_monitor.report(now=now, path=path, inputs=inputs)
         return {r["capability"]: r["acted_on"] for r in report["rows"]}
     except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
+        logging.getLogger(__name__).warning("consumer-action evidence read failed", exc_info=True)
         return {}  # An unread monitor is unmeasured, never zero actions.
 
 
@@ -3399,13 +3401,17 @@ def usage_report(
         row["observer_noise"] = verdict.get("observer_noise", {})
         row["consumer_actions"] = action_counts.get(row["capability_id"])
         if exemption:
-            row["production_run_verdicts"] = 0
-            row["unblock"] = {
-                **row["unblock"],
-                "action": "observe consumer actions; verdict n/a",
-                "feed": False,
-                "blocker": "verdict exempt",
-            }
+            row["production_run_verdicts"] = None
+            # Exemption removes verdict-promotion advice, never invocation or
+            # cadence diagnostics from the independently observed liveness.
+            action = row["unblock"]["action"]
+            if action.startswith("none") or "promote" in action or row["unblock"]["feed"]:
+                row["unblock"] = {
+                    **row["unblock"],
+                    "action": "observe consumer actions; verdict n/a",
+                    "feed": False,
+                    "blocker": "verdict exempt",
+                }
     capabilities_with_verdict = sum(1 for row in verdict_stats["rows"].values() if row["resolved"])
     capabilities_with_outcome_link = (
         None

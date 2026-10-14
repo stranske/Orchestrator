@@ -1361,3 +1361,34 @@ def test_usage_consumer_actions_reuses_value_chain_accepted_edge_classification(
     assert counts["redirect-policy"] == 0
     assert counts["offload"] == 1
     assert not feedback.DB_PATH.exists()
+
+
+def test_exempt_usage_preserves_invocation_gap_and_renders_no_verdict(tmp_path, monkeypatch):
+    ledger = _observer_verdict_ledger(tmp_path)
+    monkeypatch.setattr(capabilities, "_fleet_edge_counts", lambda **_: {})
+    monkeypatch.setattr(capabilities, "_consumer_action_counts", lambda **_: {})
+    monkeypatch.setattr(capabilities, "classify_liveness", lambda *_, **__: "matched_not_invoked")
+    usage = capabilities.usage_report(
+        capabilities.summary(ledger, create=False), now=100, path=ledger
+    )
+    row = next(r for r in usage["rows"] if r["capability_id"] == "capability-activation-audit")
+    assert row["unblock"]["action"] == "lift the gate, or accept it is deliberately off"
+    line = next(
+        s
+        for s in capabilities.format_usage_report(usage).splitlines()
+        if s.startswith("| capability-activation-audit |")
+    )
+    assert line.split("|")[7].strip() == "n/a"
+    assert usage["capabilities_with_production_run_verdict"] == 0
+
+
+def test_consumer_action_read_failure_is_diagnosed(tmp_path, monkeypatch, caplog):
+    import value_chain_monitor
+
+    def fail(*_, **__):
+        raise OSError("fixture database unavailable")
+
+    monkeypatch.setattr(value_chain_monitor, "_brain", fail)
+    assert capabilities._consumer_action_counts(now=100, path=tmp_path / "ledger") == {}
+    assert "consumer-action evidence read failed" in caplog.text
+    assert "fixture database unavailable" in caplog.text
