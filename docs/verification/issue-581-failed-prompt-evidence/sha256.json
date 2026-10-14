@@ -1,13 +1,17 @@
 {
   "base_commit": "34bfcff4816cecd9d18bdc957e22c44ba7ab7740",
+  "implementation_commit": "f29bc4d774cb73fa74ce123a3e0e16c7d7a3d466",
   "sha256": {
     "src/roles.py": "210d62e1a61a15f23a7a7a7cb8b31059cc6c679f417498cd2b49dd4d11fcba54",
     "tests/test_role_prompt_batch.py": "05af13f5a8ba8701a8c9c64351e193e64d0ff22aea621515a1c0bd847d0de230",
     "ARCHITECTURE.md": "d21c8c2a0eee2d3bd5085e0859e921575329f29f795c59bfce038956650ebf9d",
     ".verify-floor.json": "32cda04c0917d5fa243f2cd3a705367b9150de0868b7cf5124d938f105247f38",
+    "docs/verification/issue-581-failed-prompt-evidence/581-base-catalog-bindings.json": "d32140aa898259ca7c70ed42071250c0503c0a06667236922cafecee5d468d51",
+    "docs/verification/issue-581-failed-prompt-evidence/581-base-catalog-red.log": "36866129d262b8d79330d8799a1710990fd9d5e537222beb00ad2b9d21764e34",
     "docs/verification/issue-581-failed-prompt-evidence/581-drop-rejected-proposal-red.log": "7acee0ed31967f14bd7d754816d47e085a3967d6b1f0681da71fad1514623a9e",
     "docs/verification/issue-581-failed-prompt-evidence/581-drop-rejected-proposal-restored-green.log": "71cecd4a03d26fc192e472bf26020cdc2172e564ac64a719b16960d8dffd73a1",
     "docs/verification/issue-581-failed-prompt-evidence/581-focused.log": "effe39ed8b78e63d570ec8064d674d2b615146b2bd4cbb22849fe16aba754207",
+    "docs/verification/issue-581-failed-prompt-evidence/581-full-verify.log": "3bacc817818f0995d3798fa682ecdf68abd544df6a4018804e757b7e74463467",
     "docs/verification/issue-581-failed-prompt-evidence/581-green.log": "0d52839a1155622bfa1d481f16babe76dca85d91875b07bf40c9edf1e6d8e83b",
     "docs/verification/issue-581-failed-prompt-evidence/581-mutations.json": "884731b0a1ee2ef338ba127a152e72d5545beed14495a5bf3ab6bf0404df9abc",
     "docs/verification/issue-581-failed-prompt-evidence/581-mypy.log": "6f72e7f0ce9cc1cc20e034aa1b6addecf71b7a220747b2f4797dda0c464a5bef",
@@ -15,6 +19,6 @@
     "docs/verification/issue-581-failed-prompt-evidence/581-publish-failed-body-red.log": "eba9a41186064cd47a462c1509db8f5d2489502c9cb43e6c0bb50eca1dd7faa4",
     "docs/verification/issue-581-failed-prompt-evidence/581-publish-failed-body-restored-green.log": "0dff5a7b4f7b627aa5d5ba9609862b0c83a9c34efeac8569b0ff66edb0c0e2d9",
     "docs/verification/issue-581-failed-prompt-evidence/581-selftest.log": "b120f5f5567d6076a265186b714b20b9dcda4a0b4e987ede477bc805ab06ea0b",
-    "docs/verification/issue-581-failed-prompt-evidence/README.md": "cd49d1c49819d7ad133d9e9bf532bd987f200632710342fcc0889354aa45f720"
+    "docs/verification/issue-581-failed-prompt-evidence/README.md": "6715c8799cc95f89fc2ad14cf451efb51a04424e21ce1eab8c46a2ea20e38a92"
   }
 }

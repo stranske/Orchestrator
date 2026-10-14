@@ -1,0 +1,37 @@
+# verify.py
+
+  tree:       checkout
+  state:      private copy, deleted after the run — ledger 21.8 MB; Brain 90.2 MB
+  time:       pytest 7m32s, selftests 29s (8 at a time), gates 36s
+  pytest:     3296 passed, 3 failed, 0/31 max skipped (3299 collected; floor 3299)
+  selftests:  104 of 104 modules ran, 0/7 max skipped
+  activation audit   ok  CAN FIRE:   48 of 48 live  (100%)
+  recurrence replay  ok  WOULD FIRE:  48 of 53
+  set coverage       ok  all 10 capability-set coverage checks passed over ALL 49 ledger capabilities (--roster for the per-capability table); 10 of 10 verdicts from this run's pytest
+  admission          ok  all 13 admission checks passed — 12 enforced, 3 legacy debt, commitments clean (13 of 13 verdicts from this run's pytest)
+  ledger validate    ok  "valid": true
+  declared:   all 18 rows this tree declares are registered in the ledger judged
+  mypy ratchet: 0/0 max of 122 module(s) exempt, 122 checked — fully drained
+
+  PROBLEMS:
+    - 3 pytest failure(s)/error(s)
+    - executed-or-skipped count dropped: 3296 passed + 0 skipped < floor 3299 — a test stopped being run without becoming a named skip
+
+  pytest failures (3):
+    FAILED tests/test_capacity_profiles.py::test_gemini_model_is_one_the_seat_advertises
+    FAILED tests/test_model_tier_resolution.py::test_default_pin_is_advertised - ...
+    FAILED tests/test_model_tier_resolution.py::test_every_gemini_tier_pin_is_advertised
+
+  pytest tail:
+    
+    tests/test_synthesis_promotion.py::test_hollow_synthesis_never_becomes_candidate_ready
+    tests/test_synthesis_promotion.py::test_a_passing_break_names_the_tautologies_it_carried
+      /opt/anaconda3/lib/python3.12/tarfile.py:2221: DeprecationWarning: Python 3.14 will, by default, filter extracted tar archives and reject files or modify their metadata. Use the filter argument to control this behavior.
+        warnings.warn(
+    
+    -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+    =========================== short test summary info ============================
+    FAILED tests/test_capacity_profiles.py::test_gemini_model_is_one_the_seat_advertises
+    FAILED tests/test_model_tier_resolution.py::test_default_pin_is_advertised - ...
+    FAILED tests/test_model_tier_resolution.py::test_every_gemini_tier_pin_is_advertised
+    3 failed, 3296 passed, 4 warnings, 294 subtests passed in 450.23s (0:07:30)
