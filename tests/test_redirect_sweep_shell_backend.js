@@ -57,7 +57,7 @@ sys.path.insert(0, str(root / "src" if (root / "src").is_dir() else root))
 import redirect_sweep
 import roles
 
-report = json.loads((root / "tests/fixtures/redirect_stalls/auth.json").read_text())
+report = json.loads((root / "tests/fixtures/redirect_stalls/synthetic/auth.json").read_text())
 with patch.object(roles, "route_role", return_value={"agent": "gemini"}) as pick:
     result = roles.run_redirect_agent(
         report,

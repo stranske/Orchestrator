@@ -12,7 +12,7 @@ import redirect_sweep
 import roles
 import watch
 
-FIXTURES = Path(__file__).parent / "fixtures" / "redirect_stalls"
+FIXTURES = Path(__file__).parent / "fixtures" / "redirect_stalls" / "synthetic"
 
 
 @pytest.fixture(autouse=True)
