@@ -354,6 +354,7 @@ def recheck_merged(spec: dict, merged_worktree: str | Path) -> dict:
             current,
             confirm_run=True,
             allow_command_checks=env_flag(os.environ, "ORCH_RUNTIME_AC_ALLOW_COMMANDS"),
+            timeout=env_int(os.environ, "ORCH_RUNTIME_AC_TIMEOUT", 120),
         )
         checks = run["check_results"]
         executable = [r for r in checks if r.get("type") != "manual"]
@@ -413,13 +414,27 @@ def post_merge_summary() -> dict:
             ).fetchall()
     except Exception as exc:
         return {"error": str(exc)}
-    results = [json.loads(row[0]).get("runtime_ac_post_merge", {}) for row in rows]
-    return {
+    results = []
+    malformed = 0
+    for row in rows:
+        try:
+            payload = json.loads(row[0])
+            result = payload.get("runtime_ac_post_merge", {})
+            if not isinstance(result, dict):
+                raise ValueError("post-merge result is not an object")
+        except (ValueError, TypeError, AttributeError):
+            malformed += 1
+            continue
+        results.append(result)
+    summary = {
         "rechecked": len(results),
         "failed": sum(r.get("result") == "FAIL" for r in results),
         "reopened": sum(r.get("reopened") is True for r in results),
         "unrunnable": sum(r.get("result") == "UNRUNNABLE" for r in results),
     }
+    if malformed:
+        summary["malformed"] = malformed
+    return summary
 
 
 def format_post_merge_summary(section: dict) -> str:

@@ -1406,7 +1406,7 @@ def test_post_merge_recheck_reuses_named_and_deliberate_break_runner(post_merge_
     result = gate.recheck_merged(case["spec"], case["checkout"])
     assert result["result"] == "PASS" and "deliberate_break" in result["transcript"]
     assert calls[0][0]["runtime_context"]["worktree"] == str(case["checkout"])
-    assert calls[0][1] == {"confirm_run": True, "allow_command_checks": True}
+    assert calls[0][1] == {"confirm_run": True, "allow_command_checks": True, "timeout": 120}
     assert json.dumps(case["spec"], sort_keys=True) == original
     case["run"]()
     assert case["comments"] == [] and not any("PATCH" in a for a in case["calls"])
@@ -1476,3 +1476,45 @@ def test_post_merge_recheck_refuses_unbound_issue(post_merge_case):
     assert "closing references" in summary["runtime_ac_post_merge"]["errors"][0]
     assert case["provisions"] == case["comments"] == []
     assert _post_merge_events() == []
+
+
+def test_post_merge_recheck_honors_configured_timeout(post_merge_case, monkeypatch):
+    monkeypatch.setenv("ORCH_RUNTIME_AC_TIMEOUT", "37")
+    calls = []
+
+    def verify(spec, **kwargs):
+        calls.append(kwargs)
+        return {
+            "gate": {"verdict": "PASS"},
+            "check_results": [{"type": "command", "status": "PASS"}],
+        }
+
+    monkeypatch.setattr(runtime_ac, "run_verification", verify)
+    case = post_merge_case
+    assert gate.recheck_merged(case["spec"], case["checkout"])["result"] == "PASS"
+    assert calls == [{"confirm_run": True, "allow_command_checks": True, "timeout": 37}]
+
+
+@pytest.mark.parametrize("payload", ["not JSON", "[]", '{"runtime_ac_post_merge": []}'])
+def test_post_merge_summary_preserves_valid_rows_when_one_is_malformed(
+    post_merge_case, monkeypatch, payload
+):
+    class Connection:
+        def execute(self, *_args):
+            return self
+
+        def fetchall(self):
+            return [
+                (payload,),
+                ('{"runtime_ac_post_merge":{"result":"FAIL","reopened":true}}',),
+                ('{"rejection_codes":["invalid"]}',),
+            ]
+
+    @contextmanager
+    def connection():
+        yield Connection()
+
+    monkeypatch.setattr(feedback, "_conn", connection)
+    summary = gate.post_merge_summary()
+    assert summary == {"rechecked": 2, "failed": 1, "reopened": 1, "unrunnable": 0, "malformed": 1}
+    assert "rechecked 2" in gate.format_post_merge_summary(summary)
