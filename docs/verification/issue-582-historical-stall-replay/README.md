@@ -45,3 +45,27 @@ live stall resolution. No production code, owner flag or Stage-2 threshold
 changes. The existing redirect cadence owns the next real bounded application;
 issue #582 remains open for the 2026-10-20 replay checkpoint and the
 2026-11-03 real-stall outcome checkpoint (or an explicit no-candidate result).
+
+Current runner revalidation (2026-10-14):
+
+- Added `tests/test_redirect_stall_fixtures.js` to require all twelve stalled
+  experiment reports and explicit fixture mappings for both policy action and
+  confidence. Replay's default `redirect` action previously allowed a missing
+  mapping to go undetected by the authorization count.
+- `node --test --test-isolation=none tests/test_redirect_stall_fixtures.js tests/test_redirect_sweep_shell_backend.js`: 8 passed, no failures or skips.
+- In private scratch copies, missing policy mapping, a mismatched mapped action,
+  and a missing fixture each fail the new regression. Byte-identical fixture
+  restoration passes each time; repository fixture bytes are unchanged.
+- `python3 src/redirect_apply.py --replay-stalls tests/fixtures/redirect_stalls`:
+  authorized 12/12 with named agents (dry-run).
+- The required focused pytest command could not run: this runner has no pytest,
+  and network restrictions prevent installation. The named Python tests and
+  daily-cap mutation were not reverified here. No Python files changed; the
+  Python collection floors remain unchanged.
+- The private shadow corpus is unavailable here, so the original source-to-fixture
+  bindings were not independently reverified. GitHub CLI access fails, but the
+  GitHub connector confirms PR #590 is open with `draft=false`. No remote task
+  checkbox was changed.
+
+These checks precede the scheduled replay and live checkpoints; they do not
+establish an accepted live influence edge or a stall-to-resolution outcome.
