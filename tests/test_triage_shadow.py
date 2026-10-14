@@ -486,9 +486,7 @@ def consumable(brain, monkeypatch):
     return [row["target"] for row in items()]
 
 
-def test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows(
-    consumable, monkeypatch
-):
+def test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows(consumable, monkeypatch):
     import capabilities
 
     targets = consumable + ["stranske/Orchestrator#5"]
