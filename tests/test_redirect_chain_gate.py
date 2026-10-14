@@ -211,7 +211,7 @@ def test_replay_runs_the_fixtures_to_authorize_with_named_agents(capsys, monkeyp
     assert not heartbeats
 
 
-def test_replay_of_the_twelve_historical_stalls_authorizes_at_least_nine(tmp_path, monkeypatch):
+def test_replay_of_the_twelve_historical_stalls_authorizes_all_twelve(tmp_path, monkeypatch):
     attempts = []
 
     def forbidden(*a, **kw):
@@ -234,7 +234,7 @@ def test_replay_of_the_twelve_historical_stalls_authorizes_at_least_nine(tmp_pat
     fixtures = Path(__file__).parent / "fixtures/redirect_stalls"
     result = redirect_apply.replay_stalls(fixtures)
     assert result["total"] == 12
-    assert result["authorized"] >= 9, result["results"]
+    assert result["authorized"] == 12, result["results"]
     assert {row["fixture"] for row in result["results"]} == {
         f"historical-{n:02d}.json" for n in range(1, 13)
     }
