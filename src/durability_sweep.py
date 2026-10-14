@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import fcntl
+import hashlib
 import json
 import os
 import re
@@ -1126,6 +1128,217 @@ def classify_durability(
     }
 
 
+def _post_merge_rechecks(*, dry_run: bool, gh, now: int, spec_dir=None) -> dict:
+    """Recheck known merged deliveries, including those already judged durable.
+
+    Serialize this edge across sweeps. Persist execution before GitHub writes so
+    an API failure retries delivery, never reruns the test. Remote markers cover
+    a crash between posting a comment and committing its delivery receipt.
+    """
+    import backlog
+    import runtime_ac_gate
+
+    summary: dict[str, Any] = {"rechecked": 0, "errors": []}
+    root = runtime_ac_gate.spec_path("", spec_dir=spec_dir).parent
+    if dry_run or os.environ.get("ORCH_RUN_RUNTIME_AC") != "1" or not root.is_dir():
+        return summary
+    candidates = _merged_verifier_candidates()
+    for repo, number in sorted(candidates):
+        if repo.lower() not in {r.lower() for r in backlog.SUPPORTED_REPOS}:
+            continue
+        target = f"{repo}#{number}"
+        path = runtime_ac_gate.spec_path(target, spec_dir=root)
+        # Older files retain the registry's repository casing.
+        if not path.exists():
+            full_repo = next(r for r in backlog.SUPPORTED_REPOS if r.lower() == repo.lower())
+            target = f"{full_repo}#{number}"
+            path = runtime_ac_gate.spec_path(target, spec_dir=root)
+        if not path.exists():
+            continue
+        try:
+            with (root / ".post-merge-recheck.lock").open("a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                spec = json.loads(path.read_text(encoding="utf-8"))
+                verification = spec.get("verification", {})
+                if verification.get("target", "").lower() != target.lower():
+                    raise ValueError("spec target does not match merged PR")
+                issue = str(verification.get("source_issue") or "")
+                issue_repo, issue_number = provision.parse_target(issue)
+                if issue_repo.lower() != repo.lower() or issue_number is None:
+                    raise ValueError("missing same-repository source issue binding")
+                pr, error = gh(
+                    [
+                        "gh",
+                        "pr",
+                        "view",
+                        str(number),
+                        "--repo",
+                        repo,
+                        "--json",
+                        "state,mergeCommit,closingIssuesReferences",
+                    ]
+                )
+                if error or not isinstance(pr, dict):
+                    raise RuntimeError(error or "merged PR unavailable")
+                if pr.get("state") != "MERGED":
+                    continue
+                if issue_number not in {
+                    r.get("number") for r in pr.get("closingIssuesReferences", [])
+                }:
+                    raise ValueError("source issue not confirmed by merged PR closing references")
+                sha = (pr.get("mergeCommit") or {}).get("oid", "")
+                if not re.fullmatch(r"[a-fA-F0-9]{40}", sha):
+                    raise ValueError("merge commit unavailable")
+                identity = hashlib.sha256(f"{issue.lower()}@{sha}".encode()).hexdigest()
+                event_id = f"event:post-merge-recheck:{identity}"
+                with feedback._conn() as conn:
+                    row = conn.execute(
+                        "SELECT payload_json FROM completion_events WHERE event_id=?", (event_id,)
+                    ).fetchone()
+                result = json.loads(row[0])["runtime_ac_post_merge"] if row else None
+                if result and result.get("delivery_complete"):
+                    continue
+
+                def persist():
+                    feedback.record_completion_event(
+                        f"runtime-ac-post-merge:{identity}",
+                        event_type="verification",
+                        phase="post_merge_recheck",
+                        producer="runtime_ac_gate",
+                        event_id=event_id,
+                        status="completed",
+                        payload={"runtime_ac_post_merge": result},
+                    )
+
+                if result is None:
+                    if summary["rechecked"] >= 3:
+                        continue  # bound disposable executions per sweep, as ingest does
+                    try:
+                        with provision.temporary_exact_head_worktree(target, sha) as worktree:
+                            actual = subprocess.run(
+                                ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+                                capture_output=True,
+                                text=True,
+                                check=False,
+                            )
+                            if actual.returncode or actual.stdout.strip() != sha:
+                                raise RuntimeError("checkout does not match merge commit")
+                            observation = runtime_ac_gate.recheck_merged(spec, worktree)
+                    except Exception as exc:
+                        observation = {"result": "UNRUNNABLE", "transcript": str(exc)}
+                    result = {
+                        "result": observation["result"],
+                        "issue": issue,
+                        "merge_sha": sha,
+                        "reopened": False,
+                        "commented": False,
+                        "delivery_complete": False,
+                    }
+                    transcript = root / f"post-merge-{identity}.txt"
+                    staged = transcript.with_suffix(".tmp")
+                    with staged.open("w", encoding="utf-8") as stream:
+                        stream.write(observation["transcript"])
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    staged.replace(transcript)
+                    directory = os.open(root, os.O_RDONLY)
+                    try:
+                        os.fsync(directory)
+                    finally:
+                        os.close(directory)
+                    result["transcript_path"] = str(transcript)
+                    result["transcript_hash"] = hashlib.sha256(transcript.read_bytes()).hexdigest()
+                    persist()
+                    summary["rechecked"] += 1
+                if result["result"] in {"FAIL", "UNRUNNABLE"}:
+                    marker = f"runtime-AC post-merge {result['result']} on {sha}"
+                    if not result.get("commented"):
+                        comments, error = gh(
+                            [
+                                "gh",
+                                "api",
+                                f"repos/{repo}/issues/{issue_number}/comments",
+                                "--paginate",
+                                "--slurp",
+                            ]
+                        )
+                        if error or not isinstance(comments, list):
+                            raise RuntimeError(error or "issue comments unavailable")
+                        flat = [
+                            c
+                            for page in comments
+                            for c in (page if isinstance(page, list) else [page])
+                        ]
+                        if not any(str(c.get("body", "")).startswith(marker) for c in flat):
+                            transcript = root / f"post-merge-{identity}.txt"
+                            raw = transcript.read_bytes()
+                            if hashlib.sha256(raw).hexdigest() != result.get("transcript_hash"):
+                                raise RuntimeError("post-merge transcript hash mismatch")
+                            text = raw.decode("utf-8")
+                            body = marker + "\n\n```text\n" + text[:55000] + "\n```"
+                            if len(text) > 55000:
+                                body += "\nFull transcript retained at " + str(transcript)
+                            _, error = gh(
+                                [
+                                    "gh",
+                                    "api",
+                                    "-X",
+                                    "POST",
+                                    f"repos/{repo}/issues/{issue_number}/comments",
+                                    "-f",
+                                    "body=" + body,
+                                ]
+                            )
+                            if error:
+                                raise RuntimeError(error)
+                        result["commented"] = True
+                        persist()
+                    if (
+                        result["result"] == "FAIL"
+                        and os.environ.get("ORCH_RUNTIME_AC_REOPEN") == "1"
+                        and now
+                        < int(
+                            _dt.datetime.fromisoformat(
+                                runtime_ac_gate.capabilities.RUNTIME_AC_REOPEN_EXPIRY
+                            ).timestamp()
+                        )
+                    ):
+                        if not result.get("reopened"):
+                            _, error = gh(
+                                [
+                                    "gh",
+                                    "api",
+                                    "-X",
+                                    "PATCH",
+                                    f"repos/{repo}/issues/{issue_number}",
+                                    "-f",
+                                    "state=open",
+                                ]
+                            )
+                            if error:
+                                raise RuntimeError(error)
+                            result["reopened"] = True
+                            persist()
+                        _, error = gh(
+                            [
+                                "gh",
+                                "api",
+                                "-X",
+                                "POST",
+                                f"repos/{repo}/issues/{issue_number}/labels",
+                                "-f",
+                                "labels[]=runtime-ac:reopened",
+                            ]
+                        )
+                        if error:
+                            raise RuntimeError(error)
+                result["delivery_complete"] = True
+                persist()
+        except Exception as exc:
+            summary["errors"].append(f"{target}: {exc}")
+    return summary
+
+
 def sweep_durability(
     *,
     grace_days: int = GRACE_DAYS,
@@ -1136,6 +1349,7 @@ def sweep_durability(
     _verifier_fetch_fn=None,
     _gh=None,
     _fix_fn=None,
+    _spec_dir=None,
 ) -> dict:
     """Judge every merged+pending outcome, close the ones that can never be judged, and say what
     will judge each one left pending.
@@ -1223,6 +1437,9 @@ def sweep_durability(
     if _state_fn is None or _verifier_fetch_fn is not None:
         summary.update(refresh_verifier_verdicts(dry_run=dry_run, _fetch_fn=_verifier_fetch_fn))
     now = int(_now or time.time())
+    summary["runtime_ac_post_merge"] = _post_merge_rechecks(
+        dry_run=dry_run, gh=_gh or _gh_answer, now=now, spec_dir=_spec_dir
+    )
     revert_cache: dict = {}  # repo -> cached revert search, so a bulk sweep does 1 search/repo
     fix_cache: dict = {}  # repo -> its one fix-PR read this run (read_fix_window)
     clocks = _load_retry_clocks()  # run_id -> the first run that left the row unanswered

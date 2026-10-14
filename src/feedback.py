@@ -458,6 +458,7 @@ COMPLETION_PAYLOAD_FIELDS = {
     "adjudication_id",
     "skill",
     "runtime_ac_gate",
+    "runtime_ac_post_merge",
     "result",
     "redacted_fields",
     "rejection_codes",
@@ -491,6 +492,7 @@ VALID_COMPLETION_EVENT_TYPES = {
     "panel",
 }
 VALID_COMPLETION_PHASES = {
+    "post_merge_recheck",
     "trigger",
     "decision",
     "execution",
@@ -589,6 +591,16 @@ COMPLETION_NESTED_FIELDS = {
         "evidence_readiness_id",
     },
     "skill": {"skill_id", "version_hash", "phase", "result", "accepted"},
+    "runtime_ac_post_merge": {
+        "result",
+        "transcript_path",
+        "transcript_hash",
+        "issue",
+        "merge_sha",
+        "reopened",
+        "commented",
+        "delivery_complete",
+    },
     "runtime_ac_gate": {
         "schema_version",
         "gate_event_id",

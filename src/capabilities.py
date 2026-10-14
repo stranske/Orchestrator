@@ -36,6 +36,7 @@ LEDGER_PATH_ENV = "ORCH_CAPABILITIES_PATH"
 REG = Path(os.environ.get(LEDGER_PATH_ENV, LOCAL_RUNTIME / "capabilities.json"))
 FEATURES_REG = Path(os.environ.get("ORCH_FEATURES_PATH", ORCH / "experiments" / "features.json"))
 SCHEMA_VERSION = 1
+RUNTIME_AC_REOPEN_EXPIRY = "2026-10-28T00:00:00+00:00"  # inclusive Oct 27 review date
 GATED_TTL_DAYS = 90
 # Kinds the COMPILER emits and `capability_targets` can bind/roll back at runtime. This set is a
 # contract with capability_targets.TARGET_KINDS and must stay identical to it.
@@ -424,7 +425,10 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "it is pointed at: 3,702 such rows since 2026-08-21 were read by the flow monitor as live "
         "firing while real fleet executions were 0. Issue576 dedup: existing authoring, gate, "
         "ingest, weekly reader and panel exact-head provisioner are reused; wire the ingest "
-        "to bounded disposable checkouts without a new capability, outcome store or merge gate.",
+        "to bounded disposable checkouts without a new capability, outcome store or merge gate. "
+        "Issue585 dedup: extend durability_sweep and the same runtime runner/completion plane "
+        "with merge-tip rechecks; no existing post-merge reexecution/reopen edge found. "
+        "The dated reopen switch defaults OFF; no activation or provider verdict inferred.",
         "status": "canary",
         "entrypoint": "runtime_ac_gate.py",
         "matcher": {"kind": "env", "name": "ORCH_RUN_RUNTIME_AC", "equals": "1"},
@@ -432,9 +436,14 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "flags_defaults": {
             "orchestrate_default": {"ORCH_RUN_RUNTIME_AC": "1"},
             "command_execution_default": {"ORCH_RUNTIME_AC_ALLOW_COMMANDS": "0"},
+            "post_merge_reopen_default": {"ORCH_RUNTIME_AC_REOPEN": "0"},
         },
         "gate_reason": "advisory canary is limited to explicit runtime-AC items; command execution stays off",
-        "gate_evidence": "required closer must carry a runtime-AC label or spec",
+        "gate_evidence": (
+            "required closer must carry a runtime-AC label or spec; "
+            f"ORCH_RUNTIME_AC_REOPEN defaults OFF, expires {RUNTIME_AC_REOPEN_EXPIRY}; "
+            "rollback: unset ORCH_RUNTIME_AC_REOPEN; comments remain"
+        ),
         "evidence_threshold": "joined gate artifacts and durable outcomes demonstrate useful discrimination",
     },
     "redirect-apply-bootstrap": {

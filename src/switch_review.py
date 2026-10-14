@@ -1680,6 +1680,7 @@ def review(
         "adversarial_shape": adversarial_shape_population(now=now),
         "value_chain": value_chain,
         "runtime_ac_shadow": runtime_ac_shadow,
+        "runtime_ac_post_merge": runtime_ac_gate.post_merge_summary(),
         "review_days": REVIEW_DAYS,
         # The switches this report may name, and the evidence its idle rule counts. Declared so that
         # EDITING either is not graded as a finding: `capability_propensity.tick_evidence`
@@ -2112,6 +2113,10 @@ def format_report(rep: dict) -> str:
         import runtime_ac_gate
 
         lines += [runtime_ac_gate.format_shadow_summary(rep["runtime_ac_shadow"]), ""]
+    if rep.get("runtime_ac_post_merge") is not None:
+        import runtime_ac_gate
+
+        lines += [runtime_ac_gate.format_post_merge_summary(rep["runtime_ac_post_merge"]), ""]
     if expiry is not None:
         lines += format_gate_expiry(expiry)
     shed = rep.get("capacity_shed")

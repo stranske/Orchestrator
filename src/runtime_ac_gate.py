@@ -9,6 +9,7 @@ default so the Dropbox code checkout never holds runtime state.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -55,7 +56,8 @@ def spec_path(
     env: Mapping[str, Any] | None = None,
 ) -> Path:
     source_env: Mapping[str, Any] = os.environ if env is None else env
-    root = Path(spec_dir or source_env.get("ORCH_RUNTIME_AC_SPEC_DIR", DEFAULT_RUNTIME_AC_SPEC_DIR))
+    state_root = Path(source_env.get("ORCH_STATE_DIR") or DEFAULT_RUNTIME_AC_SPEC_DIR.parent)
+    root = Path(spec_dir or source_env.get("ORCH_RUNTIME_AC_SPEC_DIR") or state_root / "runtime-ac")
     return root / f"{target_slug(target)}.json"
 
 
@@ -330,6 +332,92 @@ def observe_shadow_spec(
         terminal_reason=reason,
     )
     return {"status": status, "blocks": False, "gate_event": event}
+
+
+def recheck_merged(spec: dict, merged_worktree: str | Path) -> dict:
+    """Run the existing named-check/break runner; manual or missing evidence is unknown.
+
+    The caller provisions and pins the merge commit. Never mutate the authored spec
+    or consume this observation as merge authority.
+    """
+    try:
+        current = copy.deepcopy(spec)
+        current.setdefault("runtime_context", {})["worktree"] = str(merged_worktree)
+        for criterion in current.get("acceptance_criteria", []):
+            for check in criterion.get("checks", []):
+                if check.get("type") == "deliberate_break":
+                    # The merge parent is the pre-delivery implementation. origin/main
+                    # can already equal the merge tip or advance while this runs.
+                    check["base_ref"] = "HEAD^"
+                    check["worktree"] = str(merged_worktree)
+        run = runtime_ac.run_verification(
+            current,
+            confirm_run=True,
+            allow_command_checks=env_flag(os.environ, "ORCH_RUNTIME_AC_ALLOW_COMMANDS"),
+        )
+        checks = run["check_results"]
+        executable = [r for r in checks if r.get("type") != "manual"]
+
+        # A failed assertion is evidence of a broken delivery. A tool error,
+        # skipped command, missing break or manual-only spec is not that evidence.
+        def delivery_failed(row):
+            if row.get("status") != "FAIL":
+                return False
+            if row.get("type") == "deliberate_break":
+                try:
+                    proof = json.loads(row.get("stdout_tail") or "{}")
+                except ValueError:
+                    return False
+                return proof.get("verdict") == "FAIL" and not proof.get("error")
+            # pytest exit 1 with a failure count proves assertion failure. Exit 2
+            # (collection/import), 4 (bad invocation), 5 (no tests) and launcher
+            # failures must not reopen a delivered issue.
+            return row.get("returncode") == 1 and bool(
+                re.search(r"\b[1-9]\d* failed\b", str(row.get("stdout_tail", "")))
+            )
+
+        if any(delivery_failed(r) for r in executable):
+            result = "FAIL"
+        elif (
+            executable
+            and all(r.get("status") == "PASS" for r in executable)
+            and run["gate"]["verdict"] == "PASS"
+        ):
+            result = "PASS"
+        else:
+            result = "UNRUNNABLE"
+        return {"result": result, "transcript": json.dumps(run, indent=2, default=str)}
+    except Exception as exc:
+        return {"result": "UNRUNNABLE", "transcript": str(exc)}
+
+
+def post_merge_summary() -> dict:
+    """Read the existing event plane, including successful and unknown rechecks."""
+    try:
+        with feedback._conn() as conn:
+            rows = conn.execute(
+                "SELECT payload_json FROM completion_events "
+                "WHERE producer='runtime_ac_gate' AND phase='post_merge_recheck'"
+            ).fetchall()
+    except Exception as exc:
+        return {"error": str(exc)}
+    results = [json.loads(row[0]).get("runtime_ac_post_merge", {}) for row in rows]
+    return {
+        "rechecked": len(results),
+        "failed": sum(r.get("result") == "FAIL" for r in results),
+        "reopened": sum(r.get("reopened") is True for r in results),
+        "unrunnable": sum(r.get("result") == "UNRUNNABLE" for r in results),
+    }
+
+
+def format_post_merge_summary(section: dict) -> str:
+    if section.get("error"):
+        return f"runtime-AC post-merge: unmeasured ({section['error']})"
+    return (
+        f"runtime-AC post-merge: rechecked {section['rechecked']}, "
+        f"failed {section['failed']}, reopened {section['reopened']}, "
+        f"unrunnable {section['unrunnable']}"
+    )
 
 
 def format_shadow_summary(section: dict) -> str:
@@ -1219,6 +1307,10 @@ def _selftest() -> None:
         path.write_text(json.dumps(fixture_spec), encoding="utf-8")
         missing_path = Path(tmp) / "missing.json"
         assert "/" not in target_slug("../owner/repo#5")
+        assert spec_path("o/r#1", env={"ORCH_STATE_DIR": tmp}).parent == Path(tmp) / "runtime-ac"
+        assert format_post_merge_summary({"error": "db unavailable"}) == (
+            "runtime-AC post-merge: unmeasured (db unavailable)"
+        )
         assert required({"labels": ["Type: Runtime-AC"]}, missing_path) is True
         assert required({"labels": ["AC-CHECKS"]}, missing_path) is True
         with tempfile.TemporaryDirectory(prefix="runtime-ac-env-") as env_tmp:
