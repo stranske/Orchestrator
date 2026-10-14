@@ -47,6 +47,7 @@ import json
 import os
 import pathlib
 import re
+import tempfile
 from typing import Any
 
 import capabilities
@@ -1378,20 +1379,27 @@ def _selftest() -> None:
         "rollback": "revert PR",
         "trigger_cadence": "daily",
     }
-    ctx_full = {
-        "audit_rows": {"capability:nothing-declared": {"reachable": True, "defects": []}},
-        "fixtures": {"capability:nothing-declared"},
-        # Findability is satisfied by DATA, so the satisfiable case is a synthetic binding to a
-        # synthetic consulted surface. Driving it from ctx rather than from the real table keeps
-        # this assertion independent of whatever the live binding table happens to say.
-        "bound_surfaces": {"capability:nothing-declared": ["t-consulted"]},
-        "reached_surfaces": {"t-consulted"},
-    }
-    for name, fn in REQUIREMENTS:
-        if name == "heartbeat":
-            continue  # needs real module introspection; covered on live rows
-        ok, detail = fn(full, ctx_full)
-        assert ok, f"requirement {name!r} cannot be satisfied even when declared: {detail}"
+    # The tenth part resolves the declared consumer IN A TREE, so the satisfiable case brings its
+    # own: a scratch module directory holding `x.py:consume`, handed in through ctx exactly as the
+    # findability data is, so this assertion is independent of the live tree's contents.
+    with tempfile.TemporaryDirectory(prefix="admission-selftest-") as scratch:
+        pathlib.Path(scratch, "x.py").write_text("def consume(report):\n    return report\n")
+        ctx_full = {
+            "audit_rows": {"capability:nothing-declared": {"reachable": True, "defects": []}},
+            "fixtures": {"capability:nothing-declared"},
+            # Findability is satisfied by DATA, so the satisfiable case is a synthetic binding to a
+            # synthetic consulted surface. Driving it from ctx rather than from the real table keeps
+            # this assertion independent of whatever the live binding table happens to say.
+            "bound_surfaces": {"capability:nothing-declared": ["t-consulted"]},
+            "reached_surfaces": {"t-consulted"},
+            "module_dir": scratch,
+            "repo_root": scratch,
+        }
+        for name, fn in REQUIREMENTS:
+            if name == "heartbeat":
+                continue  # needs real module introspection; covered on live rows
+            ok, detail = fn(full, ctx_full)
+            assert ok, f"requirement {name!r} cannot be satisfied even when declared: {detail}"
 
     # EVERY CAUSE THE CLASSIFIER CAN RETURN IS EITHER A PASS OR CARRIES ITS OWN FIX. A gate that
     # cannot say what would clear it is already defective, and `FINDABILITY_DRAIN` is where that
@@ -1470,7 +1478,6 @@ def _selftest() -> None:
     # the real tree and attributes what it finds correctly. Read its docstring before changing
     # either block; between them they cover the detector (synthetic input) and the live wiring
     # (real input), and dropping one leaves the other passing over nothing.
-    import tempfile
 
     with tempfile.TemporaryDirectory(prefix="cap-adm-") as td:
         probe = pathlib.Path(td)
@@ -1502,12 +1509,19 @@ def _selftest() -> None:
     spec = {
         "capability_id": "capability:proposed-thing",
         "notes": "dedup: checked X; absent",
-        "downstream_consumer": "a.py:b",
+        # A consumer that EXISTS in this tree: the tenth part resolves it before the build.
+        "downstream_consumer": "capability_admission.py:format_report",
         "learning_sink": "feedback.outcomes",
         "kill_switch": "F=0",
         "rollback": "revert",
         "trigger_cadence": "daily",
     }
+    # THE CONSUMER IS THE OTHER THING THE AUTHOR LEARNS HERE (the tenth part, 2026-10-14): a spec
+    # naming a consumer this tree does not define is told so before any code exists, which is the
+    # point of resolving the declaration rather than reading it as prose.
+    pf_unresolved = preflight({**spec, "downstream_consumer": "a.py:b"})
+    assert "consumer_acts" in pf_unresolved["declarable_missing"], pf_unresolved
+    assert "not found in this tree" in pf_unresolved["checks"]["consumer_acts"]["detail"]
     # FINDABILITY IS THE ONE THE AUTHOR MUST LEARN HERE, before writing code — a proposed
     # capability no surface will offer is the 13.62% case, and discovering that after the build is
     # a second project. So a spec with the first eight parts and no surface is NOT ready to build.
@@ -1548,7 +1562,6 @@ def _selftest() -> None:
     # ONE LEDGER READ PER REPORT: the rows are judged against the read the report made, never a
     # fresh read per row. Counted on a private ledger with a thin context, so `_context` (which
     # reads the ledger for itself) is not what is measured.
-    import tempfile
 
     with tempfile.TemporaryDirectory(prefix="admission-reads-") as td:
         one_read = pathlib.Path(td) / "capabilities.json"
