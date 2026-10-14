@@ -1,0 +1,104 @@
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+____ test_duplicate_link_receipts_refuse_before_any_credit[followed-False] _____
+
+consumable = ['stranske/Orchestrator#1', 'stranske/Orchestrator#3', 'stranske/Orchestrator#2', 'stranske/Orchestrator#4']
+legacy = False, second_status = 'followed'
+
+    @pytest.mark.parametrize("legacy", [False, True])
+    @pytest.mark.parametrize("second_status", ["followed", "not_followed"])
+    def test_duplicate_link_receipts_refuse_before_any_credit(consumable, legacy, second_status):
+        result = triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+        row = json.loads(triage_shadow.consumed_path().read_text())
+        link = {"consumed_ts": row["ts"], "status": "followed", "run_id": "fixture-worker"}
+        if not legacy:
+            link["consumption_id"] = row["consumption_id"]
+        triage_shadow._append(triage_shadow.linked_path(), link)
+        triage_shadow._append(triage_shadow.linked_path(), dict(link, status=second_status))
+        feedback.record_run("fixture-worker", result["ordered_targets"][0], "implement", "codex", mode="local", ts=102)
+        feedback.record_completion_event("fixture-worker", status="succeeded")
+        before = triage_shadow.linked_path().read_bytes()
+>       assert "UNKNOWN" in triage_shadow.summary_line()
+E       AssertionError: assert 'UNKNOWN' in 'triage shadow: cycles 20, valid 20, triage top-1 merged+durable n/a (0 judged), rule pick n/a (0 judged), malformed rows 0; consumed 1, followed 1, not followed 0, open 0; unresolved 0; top-1 agrees with the rule pick 0 of 20 valid cycles'
+E        +  where 'triage shadow: cycles 20, valid 20, triage top-1 merged+durable n/a (0 judged), rule pick n/a (0 judged), malformed rows 0; consumed 1, followed 1, not followed 0, open 0; unresolved 0; top-1 agrees with the rule pick 0 of 20 valid cycles' = <function summary_line at 0x11bd0c400>()
+E        +    where <function summary_line at 0x11bd0c400> = triage_shadow.summary_line
+
+tests/test_triage_shadow.py:934: AssertionError
+_____ test_duplicate_link_receipts_refuse_before_any_credit[followed-True] _____
+
+consumable = ['stranske/Orchestrator#1', 'stranske/Orchestrator#3', 'stranske/Orchestrator#2', 'stranske/Orchestrator#4']
+legacy = True, second_status = 'followed'
+
+    @pytest.mark.parametrize("legacy", [False, True])
+    @pytest.mark.parametrize("second_status", ["followed", "not_followed"])
+    def test_duplicate_link_receipts_refuse_before_any_credit(consumable, legacy, second_status):
+        result = triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+        row = json.loads(triage_shadow.consumed_path().read_text())
+        link = {"consumed_ts": row["ts"], "status": "followed", "run_id": "fixture-worker"}
+        if not legacy:
+            link["consumption_id"] = row["consumption_id"]
+        triage_shadow._append(triage_shadow.linked_path(), link)
+        triage_shadow._append(triage_shadow.linked_path(), dict(link, status=second_status))
+        feedback.record_run("fixture-worker", result["ordered_targets"][0], "implement", "codex", mode="local", ts=102)
+        feedback.record_completion_event("fixture-worker", status="succeeded")
+        before = triage_shadow.linked_path().read_bytes()
+>       assert "UNKNOWN" in triage_shadow.summary_line()
+E       AssertionError: assert 'UNKNOWN' in 'triage shadow: cycles 20, valid 20, triage top-1 merged+durable n/a (0 judged), rule pick n/a (0 judged), malformed rows 0; consumed 1, followed 1, not followed 0, open 0; unresolved 0; top-1 agrees with the rule pick 0 of 20 valid cycles'
+E        +  where 'triage shadow: cycles 20, valid 20, triage top-1 merged+durable n/a (0 judged), rule pick n/a (0 judged), malformed rows 0; consumed 1, followed 1, not followed 0, open 0; unresolved 0; top-1 agrees with the rule pick 0 of 20 valid cycles' = <function summary_line at 0x11bd0c400>()
+E        +    where <function summary_line at 0x11bd0c400> = triage_shadow.summary_line
+
+tests/test_triage_shadow.py:934: AssertionError
+__ test_duplicate_link_receipts_refuse_before_any_credit[not_followed-False] ___
+
+consumable = ['stranske/Orchestrator#1', 'stranske/Orchestrator#3', 'stranske/Orchestrator#2', 'stranske/Orchestrator#4']
+legacy = False, second_status = 'not_followed'
+
+    @pytest.mark.parametrize("legacy", [False, True])
+    @pytest.mark.parametrize("second_status", ["followed", "not_followed"])
+    def test_duplicate_link_receipts_refuse_before_any_credit(consumable, legacy, second_status):
+        result = triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+        row = json.loads(triage_shadow.consumed_path().read_text())
+        link = {"consumed_ts": row["ts"], "status": "followed", "run_id": "fixture-worker"}
+        if not legacy:
+            link["consumption_id"] = row["consumption_id"]
+        triage_shadow._append(triage_shadow.linked_path(), link)
+        triage_shadow._append(triage_shadow.linked_path(), dict(link, status=second_status))
+        feedback.record_run("fixture-worker", result["ordered_targets"][0], "implement", "codex", mode="local", ts=102)
+        feedback.record_completion_event("fixture-worker", status="succeeded")
+        before = triage_shadow.linked_path().read_bytes()
+>       assert "UNKNOWN" in triage_shadow.summary_line()
+E       AssertionError: assert 'UNKNOWN' in 'triage shadow: cycles 20, valid 20, triage top-1 merged+durable n/a (0 judged), rule pick n/a (0 judged), malformed rows 0; consumed 1, followed 0, not followed 1, open 0; unresolved 0; top-1 agrees with the rule pick 0 of 20 valid cycles'
+E        +  where 'triage shadow: cycles 20, valid 20, triage top-1 merged+durable n/a (0 judged), rule pick n/a (0 judged), malformed rows 0; consumed 1, followed 0, not followed 1, open 0; unresolved 0; top-1 agrees with the rule pick 0 of 20 valid cycles' = <function summary_line at 0x11bd0c400>()
+E        +    where <function summary_line at 0x11bd0c400> = triage_shadow.summary_line
+
+tests/test_triage_shadow.py:934: AssertionError
+___ test_duplicate_link_receipts_refuse_before_any_credit[not_followed-True] ___
+
+consumable = ['stranske/Orchestrator#1', 'stranske/Orchestrator#3', 'stranske/Orchestrator#2', 'stranske/Orchestrator#4']
+legacy = True, second_status = 'not_followed'
+
+    @pytest.mark.parametrize("legacy", [False, True])
+    @pytest.mark.parametrize("second_status", ["followed", "not_followed"])
+    def test_duplicate_link_receipts_refuse_before_any_credit(consumable, legacy, second_status):
+        result = triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+        row = json.loads(triage_shadow.consumed_path().read_text())
+        link = {"consumed_ts": row["ts"], "status": "followed", "run_id": "fixture-worker"}
+        if not legacy:
+            link["consumption_id"] = row["consumption_id"]
+        triage_shadow._append(triage_shadow.linked_path(), link)
+        triage_shadow._append(triage_shadow.linked_path(), dict(link, status=second_status))
+        feedback.record_run("fixture-worker", result["ordered_targets"][0], "implement", "codex", mode="local", ts=102)
+        feedback.record_completion_event("fixture-worker", status="succeeded")
+        before = triage_shadow.linked_path().read_bytes()
+>       assert "UNKNOWN" in triage_shadow.summary_line()
+E       AssertionError: assert 'UNKNOWN' in 'triage shadow: cycles 20, valid 20, triage top-1 merged+durable n/a (0 judged), rule pick n/a (0 judged), malformed rows 0; consumed 1, followed 0, not followed 1, open 0; unresolved 0; top-1 agrees with the rule pick 0 of 20 valid cycles'
+E        +  where 'triage shadow: cycles 20, valid 20, triage top-1 merged+durable n/a (0 judged), rule pick n/a (0 judged), malformed rows 0; consumed 1, followed 0, not followed 1, open 0; unresolved 0; top-1 agrees with the rule pick 0 of 20 valid cycles' = <function summary_line at 0x11bd0c400>()
+E        +    where <function summary_line at 0x11bd0c400> = triage_shadow.summary_line
+
+tests/test_triage_shadow.py:934: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_triage_shadow.py::test_duplicate_link_receipts_refuse_before_any_credit[followed-False]
+FAILED tests/test_triage_shadow.py::test_duplicate_link_receipts_refuse_before_any_credit[followed-True]
+FAILED tests/test_triage_shadow.py::test_duplicate_link_receipts_refuse_before_any_credit[not_followed-False]
+FAILED tests/test_triage_shadow.py::test_duplicate_link_receipts_refuse_before_any_credit[not_followed-True]
+4 failed, 55 deselected in 0.71s
