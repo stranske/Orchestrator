@@ -212,7 +212,7 @@ def temporary_exact_head_worktree(target: str, head: str):
     try:
         yield wt
     finally:
-        canon = ensure_canonical(parse_target(target)[0])
+        canon = canonical_path(parse_target(target)[0])
         removed = _run(
             ["git", "-C", str(canon), "worktree", "remove", "--force", wt],
             check=False,

@@ -837,6 +837,7 @@ def test_shared_exact_head_checkout_reuse_and_temporary_cleanup(tmp_path, monkey
     head = _shadow_git_repo(source)
     subprocess.run(["git", "-C", str(source), "remote", "add", "origin", str(source)], check=True)
     monkeypatch.setattr(provision, "ensure_canonical", lambda _repo: source)
+    monkeypatch.setattr(provision, "canonical_path", lambda _repo: source)
     monkeypatch.setattr(provision, "WORKTREES_DIR", tmp_path / "worktrees")
     panel = provision.exact_head_worktree("owner/repo#20", head)
     assert provision.exact_head_worktree("owner/repo#20", head) == panel
@@ -856,6 +857,12 @@ def test_shared_exact_head_checkout_reuse_and_temporary_cleanup(tmp_path, monkey
         with provision.temporary_exact_head_worktree("owner/repo#20", head) as runtime_tree:
             assert Path(runtime_tree) != Path(panel)
             (Path(runtime_tree) / "dirty-cache").write_text("generated")
+
+            # Cleanup must remain local even if a canonical fetch would stall.
+            def unexpected_fetch(_repo):
+                raise AssertionError("cleanup attempted a canonical fetch")
+
+            monkeypatch.setattr(provision, "ensure_canonical", unexpected_fetch)
             raise RuntimeError("verifier failed")
     assert not Path(runtime_tree).exists()
     trees = subprocess.check_output(
@@ -915,6 +922,7 @@ def test_ingest_runs_real_named_test_and_removes_its_checkout(private_brain, mon
     )
     trees = private_brain / "runtime-trees"
     monkeypatch.setattr(provision, "ensure_canonical", lambda _repo: source)
+    monkeypatch.setattr(provision, "canonical_path", lambda _repo: source)
     monkeypatch.setattr(provision, "WORKTREES_DIR", trees)
     monkeypatch.setattr(keepalive_outcomes, "_gh_throttle", lambda _: None)
     monkeypatch.setenv("ORCH_RUN_RUNTIME_AC", "1")
