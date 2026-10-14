@@ -1,0 +1,31 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______________ test_redirect_apply_daily_cap_refuses_second_apply ______________
+
+    def test_redirect_apply_daily_cap_refuses_second_apply():
+        facts = {
+            "plan_obj": _stamped("o/r#daily-cap"),
+            "role_run_id": "role:redirect:codex:1",
+            "decision_source": "redirect_agent",
+            "errors": [],
+            "pid_alive": False,
+            "lane_state": "stalled",
+            "recommended_action": "redirect",
+            "claim_holder": None,
+            "prior_agent": "keepalive",
+            "gate": OPEN_GATE,
+            "applied_targets": set(),
+            "flag_on": True,
+        }
+        # The same eligible lane is allowed below the cap: no unrelated refusal
+        # can make the at-cap assertion pass accidentally.
+        first = ra.authorize(**facts, applies_today=0)
+        assert first["allowed"] is True, first
+        second = ra.authorize(**facts, applies_today=ra.MAX_APPLIES_PER_DAY)
+>       assert second["allowed"] is False
+E       assert True is False
+
+tests/test_redirect_apply_prescreen.py:478: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_redirect_apply_prescreen.py::test_redirect_apply_daily_cap_refuses_second_apply
+1 failed in 0.26s

@@ -453,3 +453,28 @@ def test_a_drained_gate_says_finished_through_the_real_gate_state(stores, monkey
     assert out["drainable"] == 0 and any(
         "drainable: 0 of 0 current candidates" in line for line in lines
     ), lines
+
+
+def test_redirect_apply_daily_cap_refuses_second_apply():
+    facts = {
+        "plan_obj": _stamped("o/r#daily-cap"),
+        "role_run_id": "role:redirect:codex:1",
+        "decision_source": "redirect_agent",
+        "errors": [],
+        "pid_alive": False,
+        "lane_state": "stalled",
+        "recommended_action": "redirect",
+        "claim_holder": None,
+        "prior_agent": "keepalive",
+        "gate": OPEN_GATE,
+        "applied_targets": set(),
+        "flag_on": True,
+    }
+    # The same eligible lane is allowed below the cap: no unrelated refusal
+    # can make the at-cap assertion pass accidentally.
+    first = ra.authorize(**facts, applies_today=0)
+    assert first["allowed"] is True, first
+    second = ra.authorize(**facts, applies_today=ra.MAX_APPLIES_PER_DAY)
+    assert second["allowed"] is False
+    assert second["blocks"] == ["daily bound reached (1/1)"]
+    assert second["would_mutate"] is False
