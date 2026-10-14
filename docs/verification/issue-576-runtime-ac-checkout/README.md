@@ -25,6 +25,8 @@ Command execution keeps its independent opt-in. Budget exhaustion is `planned` w
 Checkout and cleanup failures increment `runtime_ac_checkout_failures` and retain reasons in
 `runtime_ac_checkout_errors`; verifier exceptions stay in `runtime_ac_shadow_errors`.
 
+Checkout paths and trailing log whitespace are normalized; assertions and exit codes are unchanged.
+
 Validation retained here:
 
 - `related-tests.log`: 190 passed plus six subtests across 12 related suites, no skips.

@@ -33,6 +33,7 @@ def main():
     def run(name):
         result = subprocess.run(command, cwd=root, capture_output=True, text=True)
         log = (result.stdout + result.stderr).replace(str(root), "<checkout>")
+        log = "\n".join(line.rstrip() for line in log.splitlines()) + "\n"
         (args.out / f"{name}.log").write_text(log)
         return result.returncode, log
 

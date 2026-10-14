@@ -10,7 +10,7 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1069c6ae0>
         head = _shadow_git_repo(checkout)
         calls = []
         cleaned = []
-    
+
         @contextmanager
         def provider(target, requested_head):
             calls.append((target, requested_head))
@@ -18,12 +18,12 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1069c6ae0>
                 yield str(checkout)
             finally:
                 cleaned.append(target)
-    
+
         def verify(spec, **kwargs):
             assert spec["runtime_context"]["worktree"] == str(checkout)
             assert kwargs["confirm_run"] is True
             return {"gate": {"verdict": "PASS"}, "check_results": []}
-    
+
         monkeypatch.setattr(provision, "temporary_exact_head_worktree", provider, raising=False)
         monkeypatch.setattr(keepalive_outcomes, "_gh_throttle", lambda _: None)
         monkeypatch.setattr(runtime_ac, "run_verification", verify)
