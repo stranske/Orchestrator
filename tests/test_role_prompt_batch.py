@@ -301,6 +301,81 @@ def test_cli_batch_writes_valid_bodies_and_invalid_item_verdicts(
     assert manifest["items"][1]["valid"] is False
     assert manifest["items"][1]["errors"]
     assert not (directory / "002.md").exists()
+    assert Path(manifest["items"][1]["failed_body_file"]).read_text() == "Bad body"
+
+
+def test_failed_body_and_raw_output_are_retained_in_the_manifest(private_brain, monkeypatch):
+    raw = "Unparseable café output\r\nwith trailing whitespace  \r\n"
+    monkeypatch.setattr(
+        roles.dispatcher,
+        "offload",
+        lambda *a, **kw: {"run_id": "fake:unparseable", "output": raw, "exit": 0},
+    )
+    result = roles.run_prompt_batch(
+        [
+            {"target": "owner/repo#1", "goal": "Good", "proposal_json": proposal()},
+            {"target": "owner/repo#2", "goal": "Bad", "proposal_json": proposal("Bad body")},
+            {"target": "owner/repo#3", "goal": "Unparseable"},
+        ],
+        output="issue_body",
+        dispatch=True,
+        backend="cursor",
+    )
+    assert result["items"][1]["proposal"] is None
+    assert result["items"][1]["rejected_proposal"] == proposal("Bad body")
+    directory = private_brain / "mixed-batch"
+    manifest = roles.write_prompt_batch(result, directory)
+    assert manifest == json.loads((directory / "manifest.json").read_text())
+    good, rejected, unparseable = manifest["items"]
+    assert good["valid"] is True
+    assert Path(good["body_file"]).read_text() == BODY
+    assert good["failed_body_file"] is None and good["raw_output_file"] is None
+    assert rejected["valid"] is False and rejected["errors"]
+    assert rejected["body_file"] is None and rejected["raw_output_file"] is None
+    assert Path(rejected["failed_body_file"]).name == "002.failed.md"
+    assert Path(rejected["failed_body_file"]).read_bytes() == b"Bad body"
+    assert unparseable["valid"] is False and unparseable["errors"]
+    assert unparseable["body_file"] is None and unparseable["failed_body_file"] is None
+    assert Path(unparseable["raw_output_file"]).name == "003.raw.txt"
+    assert Path(unparseable["raw_output_file"]).read_bytes() == raw.encode("utf-8")
+    assert not (directory / "002.md").exists()
+    assert not (directory / "003.md").exists()
+
+
+@pytest.mark.parametrize("failure", ["validation", "backend", "recording"])
+def test_backend_failures_retain_authored_body_and_raw_bytes(private_brain, monkeypatch, failure):
+    body = "Bad café body\r\n  " if failure == "validation" else BODY
+    raw = json.dumps(proposal(body), ensure_ascii=False) + "\r\n  "
+    monkeypatch.setattr(
+        roles.dispatcher,
+        "offload",
+        lambda *a, **kw: {
+            "run_id": "fake:failed",
+            "output": raw,
+            "exit": 1 if failure == "backend" else 0,
+        },
+    )
+    if failure == "recording":
+
+        def fail_record(*args, **kwargs):
+            raise RuntimeError("role recording failed")
+
+        monkeypatch.setattr(feedback, "record_role_run", fail_record)
+    result = roles.run_prompt_batch(
+        [{"target": "../../unsafe/target", "goal": "Retain evidence"}],
+        output="issue_body",
+        dispatch=True,
+        backend="cursor",
+    )
+    directory = private_brain / "backend-failed"
+    item = roles.write_prompt_batch(result, directory)["items"][0]
+    assert item["valid"] is False and item["body_file"] is None
+    assert item["errors"] or item["role_record_error"]
+    assert Path(item["failed_body_file"]) == directory / "001.failed.md"
+    assert Path(item["failed_body_file"]).read_bytes() == body.encode("utf-8")
+    assert Path(item["raw_output_file"]) == directory / "001.raw.txt"
+    assert Path(item["raw_output_file"]).read_bytes() == raw.encode("utf-8")
+    assert not (directory / "001.md").exists()
 
 
 def test_batch_rejects_invalid_items_before_any_routing(monkeypatch):
@@ -515,6 +590,8 @@ def test_batch_recording_failure_withholds_body(private_brain, monkeypatch):
     assert manifest["items"][0]["valid"] is False
     assert manifest["items"][0]["body_file"] is None
     assert manifest["items"][0]["role_record_error"] == "role recording failed"
+    assert Path(manifest["items"][0]["failed_body_file"]).read_text() == BODY
+    assert manifest["items"][0]["raw_output_file"] is None
 
 
 def test_batch_cli_without_dispatch_emits_manifest_only(private_brain, monkeypatch, capsys):
