@@ -35,4 +35,4 @@ E             Use -v to get more diff
 tests/test_triage_shadow.py:509: AssertionError
 =========================== short test summary info ============================
 FAILED tests/test_triage_shadow.py::test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows
-1 failed in 0.31s
+1 failed in 0.28s

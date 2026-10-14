@@ -10,7 +10,7 @@
     ],
     "red_exit": 1,
     "green_exit": 0,
-    "restored_sha256": "b751d2c53e0eb0d3e79dd423f5366cbbe7708662059cdea46d78d346a3f5ae02"
+    "restored_sha256": "f4aad29f22a9271df0de38500f014ffd73f9d2f1f64a07cc05bb60728fe81e11"
   },
   {
     "mutation": "accepted-edge",

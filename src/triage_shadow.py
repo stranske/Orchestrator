@@ -500,6 +500,9 @@ def consume(candidates: list[str], *, env=None, now=None) -> dict:
         if not version:
             raise ValueError("capability version unavailable")
         ranked = [t for t in ranking["ordered_targets"] if t in candidates]
+        if not ranked:
+            result["reason"] = "ranking_no_candidates"
+            return result
         ordered = ranked + [t for t in candidates if t not in ranked]
         _append(
             consumed_path(),

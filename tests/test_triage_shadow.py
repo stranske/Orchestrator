@@ -644,3 +644,15 @@ def test_consume_cli_uses_explicit_targets_and_never_dispatches(
     )
     assert triage_shadow.main(["--consume", "--candidates", str(target_file)]) == 0
     assert json.loads(capsys.readouterr().out)["consumed"]
+
+
+def test_disjoint_ranking_cannot_claim_the_new_rule_pick(consumable):
+    current = ["stranske/Orchestrator#90", "stranske/Orchestrator#91"]
+    result = triage_shadow.consume(current, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+    assert result == {
+        "consumed": False,
+        "reason": "ranking_no_candidates",
+        "ordered_targets": current,
+        "role_run_id": None,
+    }
+    assert not triage_shadow.consumed_path().exists()
