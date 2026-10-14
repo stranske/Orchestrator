@@ -66,3 +66,27 @@ command could not run. No commit/push or checklist completion was made. The
 collection floor and all ceilings are unchanged pending actual pytest collection.
 Posting the blocker comment and adding `needs-human` to PR 596 were again denied
 because connector mutations require approval and this run's policy is `never`.
+
+## Delivery retry boundary follow-up
+
+This round adds two regressions to the same test file for the first unchecked
+failure-delivery task: a comment that was posted before its API response was
+lost, and a reopen request that fails once before succeeding. Both preserve one
+execution, one event and one comment; the retry completes reopening and labeling,
+and a later sweep changes neither the event nor the remote writes.
+
+All ten post-merge unittest cases and all eleven durability feedback recovery
+cases pass, as does the runtime gate selftest. Disabling the production remote
+comment marker check makes the new lost-response test fail at `2 != 1` comments;
+the original production file was restored byte for byte and the two new tests
+then pass. `git diff --check` passes.
+
+Black and pytest are still absent. Installation into `/tmp` failed, both Black
+commands return `command not found`, and targeted pytest returns `No module
+named pytest`. No commit, push, collection-floor update or checkbox completion
+was made. The remaining action is to supply these tools and execute the formatting
+and targeted pytest/collection checks described above, then commit these tests;
+adding more retry tests does not remove this environment blocker.
+
+Posting this blocker to PR 596 and adding `needs-human` were both denied with
+`MCP tool call requires approval, but approval policy is never`.

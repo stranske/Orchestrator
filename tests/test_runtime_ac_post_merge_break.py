@@ -108,7 +108,16 @@ class PostMergeBreakTests(unittest.TestCase):
         self.assertEqual(proof["worktree"], str(self.checkout))
         return result, proof
 
-    def sweep_case(self, *, delivered=False, hollow=False, reopen=True, fail_label=False):
+    def sweep_case(
+        self,
+        *,
+        delivered=False,
+        hollow=False,
+        reopen=True,
+        fail_label=False,
+        fail_comment_after_post=False,
+        fail_reopen=False,
+    ):
         spec, head = self.merged_spec(delivered=delivered, hollow=hollow)
         target = "owner/repo#2"
         spec["verification"]["target"] = target
@@ -152,6 +161,11 @@ class PostMergeBreakTests(unittest.TestCase):
                 return [comments], None
             if "POST" in args and args[4].endswith("/comments"):
                 comments.append({"body": args[-1].removeprefix("body=")})
+                if fail_comment_after_post and len(comments) == 1:
+                    return None, "comment response lost after posting"
+            if "PATCH" in args and fail_reopen:
+                if sum("PATCH" in call for call in calls) == 1:
+                    return None, "temporary reopen API failure"
             if "labels[]=runtime-ac:reopened" in args and fail_label:
                 if sum("labels[]=runtime-ac:reopened" in call for call in calls) == 1:
                     return None, "temporary label API failure"
@@ -239,6 +253,68 @@ class PostMergeBreakTests(unittest.TestCase):
         self.assertEqual(len(comments), 1)
         self.assertEqual(sum("PATCH" in call for call in calls), 1)
         self.assertEqual(sum("labels[]=runtime-ac:reopened" in call for call in calls), 2)
+
+    def test_real_break_lost_comment_response_reuses_remote_marker(self):
+        run, calls, comments, provisions, head = self.sweep_case(fail_comment_after_post=True)
+        first = run()
+        self.assertEqual(first["rechecked"], 1)
+        self.assertIn("comment response lost after posting", first["errors"][0])
+        payloads = self.post_merge_payloads()
+        self.assertEqual(len(payloads), 1)
+        initial = payloads[0]
+        self.assertEqual(initial["result"], "FAIL")
+        self.assertFalse(
+            initial["commented"] or initial["reopened"] or initial["delivery_complete"]
+        )
+        self.assertEqual(len(comments), 1)
+        self.assertTrue(comments[0]["body"].startswith(f"runtime-AC post-merge FAIL on {head}"))
+        self.assertIn(Path(initial["transcript_path"]).read_text(), comments[0]["body"])
+        self.assertFalse(any("PATCH" in call for call in calls))
+
+        self.assertEqual(run(), {"rechecked": 0, "errors": []})
+        final = self.post_merge_payloads()
+        self.assertEqual(len(final), 1)
+        self.assertTrue(final[0]["commented"] and final[0]["reopened"])
+        self.assertTrue(final[0]["delivery_complete"])
+        self.assertEqual(final[0]["transcript_hash"], initial["transcript_hash"])
+        self.assertEqual(final[0]["merge_sha"], head)
+        self.assertEqual(provisions, [head])
+        self.assertEqual(len(comments), 1)
+        self.assertEqual(sum("PATCH" in call for call in calls), 1)
+        self.assertEqual(sum("labels[]=runtime-ac:reopened" in call for call in calls), 1)
+        writes = [call for call in calls if "POST" in call or "PATCH" in call]
+        self.assertEqual(run(), {"rechecked": 0, "errors": []})
+        self.assertEqual(self.post_merge_payloads(), final)
+        self.assertEqual([call for call in calls if "POST" in call or "PATCH" in call], writes)
+
+    def test_real_break_reopen_retry_preserves_execution_and_comment(self):
+        run, calls, comments, provisions, head = self.sweep_case(fail_reopen=True)
+        first = run()
+        self.assertEqual(first["rechecked"], 1)
+        self.assertIn("temporary reopen API failure", first["errors"][0])
+        payloads = self.post_merge_payloads()
+        self.assertEqual(len(payloads), 1)
+        initial = payloads[0]
+        self.assertEqual(initial["result"], "FAIL")
+        self.assertTrue(initial["commented"])
+        self.assertFalse(initial["reopened"] or initial["delivery_complete"])
+        self.assertFalse(any("labels[]=runtime-ac:reopened" in call for call in calls))
+
+        self.assertEqual(run(), {"rechecked": 0, "errors": []})
+        final = self.post_merge_payloads()
+        self.assertEqual(len(final), 1)
+        self.assertTrue(final[0]["commented"] and final[0]["reopened"])
+        self.assertTrue(final[0]["delivery_complete"])
+        self.assertEqual(final[0]["transcript_hash"], initial["transcript_hash"])
+        self.assertEqual(final[0]["merge_sha"], head)
+        self.assertEqual(provisions, [head])
+        self.assertEqual(len(comments), 1)
+        self.assertEqual(sum("PATCH" in call for call in calls), 2)
+        self.assertEqual(sum("labels[]=runtime-ac:reopened" in call for call in calls), 1)
+        writes = [call for call in calls if "POST" in call or "PATCH" in call]
+        self.assertEqual(run(), {"rechecked": 0, "errors": []})
+        self.assertEqual(self.post_merge_payloads(), final)
+        self.assertEqual([call for call in calls if "POST" in call or "PATCH" in call], writes)
 
     def test_broken_merge_is_fail_from_real_deliberate_break(self):
         result, proof = self.recheck(delivered=False)
