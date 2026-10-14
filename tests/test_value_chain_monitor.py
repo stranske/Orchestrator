@@ -603,3 +603,30 @@ def test_historical_unknown_advisor_probe_prevents_measured_demand(tmp_path):
     row = monitor.report(path=path, env={}, inputs={"edges": []})["rows"][0]
     assert row["situation_count"] is None
     assert row["first_break"] is None
+
+
+def test_acted_on_index_is_the_report_s_own_count(monkeypatch, tmp_path):
+    """The admission gate's tenth part consumes this index: same edges, same window, same count."""
+    edges = [
+        {"capability_id": "c1", "accepted": 1},
+        {"capability_id": "c1", "accepted": 1},
+        {"capability_id": "c1", "accepted": 1, "counterfactual": 1},
+        {"capability_id": "c2", "accepted": 1},
+    ]
+    seen = {}
+
+    def fake_brain(db, since, now):
+        seen["window"] = now - since
+        return {"edges": edges, "errors": []}
+
+    monkeypatch.setattr(monitor, "_brain", fake_brain)
+    monkeypatch.setattr(monitor, "outcome_counts", lambda cid, own: {"acted_on": len(own)})
+    index, reason = monitor.acted_on_index(tmp_path / "brain.db", NOW, ["c1", "c2", "c3"])
+    assert index == {"c1": 2, "c2": 1, "c3": 0}
+    assert seen["window"] == monitor.WINDOW_DAYS * 86400
+    assert "value-chain monitor" in reason
+    # An unreadable Brain is unmeasured, never zero.
+    monkeypatch.setattr(
+        monitor, "_brain", lambda db, since, now: {"edges": None, "errors": ["Brain unavailable"]}
+    )
+    assert monitor.acted_on_index(tmp_path / "brain.db", NOW, ["c1"]) == (None, "Brain unavailable")
