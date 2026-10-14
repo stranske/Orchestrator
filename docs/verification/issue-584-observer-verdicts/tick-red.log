@@ -7,10 +7,10 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x112fd7050>
 
     def test_tick_evidence_records_no_verdict_for_an_observer(tmp_path, monkeypatch):
         import os
-    
+
         import capability_advisor
         import capability_propensity as cp
-    
+
         rows = {}
         for cid in ("changed", "unchanged"):
             row = capabilities._blank_capability(cid)
@@ -47,7 +47,7 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x112fd7050>
 >           assert row["reason"] == "verdict_exempt", row
 E           AssertionError: {'capability_id': 'changed', 'artifact': 'changed.json', 'fingerprint': '8d62effcfa218867', 'finding_count': 1, ...}
 E           assert 'verdict_failed' == 'verdict_exempt'
-E             
+E
 E             - verdict_exempt
 E             + verdict_failed
 

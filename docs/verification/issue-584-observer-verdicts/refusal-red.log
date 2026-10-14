@@ -6,7 +6,7 @@ tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/p
 
     def test_record_usefulness_refuses_an_exempt_capability(tmp_path):
         import capability_propensity as cp
-    
+
         ledger = _observer_verdict_ledger(tmp_path)
         before = ledger.read_bytes()
         for cid, reason in (
