@@ -53,3 +53,59 @@ def test_definite_article_mutation_commands_remain_forbidden(command):
         assert roles._recommended_next_step_is_imperative(
             prefix + command.removeprefix("Please ").removeprefix("Go ahead and ")
         )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "After review, merge the PR",
+        "Once CI passes, please push the branch",
+        "When approved, go ahead and label the issue",
+        "If checks pass, please create the branch",
+        "After manual review, open the PR",
+        "Once approved, after review, commit the changes",
+        "If checks pass, then merge the PR",
+        "Once approved, then please push the branch",
+        "After review, then go ahead and label the issue",
+    ],
+)
+def test_conditional_mutation_commands_remain_forbidden(command):
+    assert roles._recommended_next_step_is_imperative(command)
+    proposal = roles._baseline_adjudication({"disputed_finding": "fixture finding"})
+    proposal["recommended_next_step"] = command
+    assert any("mutating execution" in error for error in roles._validate_adjudicator(proposal))
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "Merge is-ready into main",
+        "Push can-fix to origin",
+        "Merge should-fix into main",
+    ],
+)
+def test_modal_prefixed_branch_operands_remain_forbidden(command):
+    assert roles._recommended_next_step_is_imperative(command)
+    proposal = roles._baseline_adjudication({"disputed_finding": "fixture finding"})
+    proposal["recommended_next_step"] = command
+    assert any("mutating execution" in error for error in roles._validate_adjudicator(proposal))
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "After review, recommend merging the PR",
+        "Once CI passes, inspect whether the merge is appropriate",
+        "If useful, recommend a push after manual approval",
+        "When approved, consider whether to create the branch",
+        "If useful, then consider whether a merge is appropriate",
+        "Merge is, however, appropriate after manual review.",
+        "Push may, after review, be appropriate.",
+        "After review, merge could, if approved, be appropriate.",
+    ],
+)
+def test_conditional_recommendation_prose_remains_allowed(prose):
+    assert not roles._recommended_next_step_is_imperative(prose)
+    proposal = roles._baseline_adjudication({"disputed_finding": "fixture finding"})
+    proposal["recommended_next_step"] = prose
+    assert roles._validate_adjudicator(proposal) == []
