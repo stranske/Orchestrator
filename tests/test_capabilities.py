@@ -1135,6 +1135,7 @@ def _observer_verdict_ledger(tmp_path):
     rows = {}
     for cid, matcher, cadence in (
         ("capability-activation-audit", "tick_phase", "daily"),
+        ("capability-firing-monitor", "tick_phase", "weekly capability-firing-monitor"),
         ("capability-propensity", "cli_subcommand", "per advisor call"),
         ("redirect-policy", "lane_event", "per stall"),
         ("issue-readiness", "cli_subcommand", "weekly issue-readiness"),
@@ -1155,6 +1156,7 @@ def test_record_usefulness_refuses_an_exempt_capability(tmp_path):
     before = ledger.read_bytes()
     for cid, reason in (
         ("capability-activation-audit", "observer"),
+        ("capability-firing-monitor", "observer"),
         ("capability-propensity", "observer"),
         ("redirect-policy", "observer"),
         ("issue-readiness", "tick_cadence"),
@@ -1232,37 +1234,98 @@ def test_tick_evidence_records_no_verdict_for_an_observer(tmp_path, monkeypatch)
 
 
 def test_usage_report_prints_verdict_na_for_exempt_rows(tmp_path, monkeypatch):
+    import os
+    import sqlite3
+
     import capability_propensity as cp
 
     ledger = _observer_verdict_ledger(tmp_path)
     now = int(time.time())
+    observers = (
+        "capability-activation-audit",
+        "capability-firing-monitor",
+        "capability-propensity",
+    )
     # Historical noise bypasses the new write refusal, exactly as retained old events do.
-    for i, useful in enumerate((True, False)):
-        capabilities.heartbeat(
-            "capability-activation-audit",
-            "outcome",
-            ref=f"advice:oldobserver584{i}",
-            path=ledger,
-            metadata={
-                "useful": useful,
-                "source": "capability_propensity",
-                "verdict_kind": "observer_output_change",
-            },
-        )
-    before = ledger.read_bytes()
-    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "missing.db")
-    stats = cp.usefulness(path=ledger, now=now)["rows"]["capability-activation-audit"]
-    assert stats["observer_noise"]["useful"] == stats["observer_noise"]["not_useful"] == 1
-    assert stats["resolved"] == stats["n_eff"] == stats["effective_useful"] == 0
-    assert stats["usefulness_rate"] is stats["weighted_usefulness_rate"] is None
-    import sqlite3
+    for cid in observers:
+        for i, useful in enumerate((True, False)):
+            capabilities.heartbeat(
+                cid,
+                "outcome",
+                ref=f"advice:oldobserver584{i}",
+                path=ledger,
+                timestamp=now - 86400,
+                metadata={
+                    "useful": useful,
+                    "source": "capability_propensity",
+                    "verdict_kind": "observer_output_change",
+                },
+            )
 
+    def outcomes():
+        return {
+            cid: [e for e in cap["event_history"] if e["type"] == "outcome"]
+            for cid, cap in capabilities.load(ledger, create=False).items()
+        }
+
+    historical = outcomes()
+    state = tmp_path / "state"
+    state.mkdir()
+    monkeypatch.setattr(capabilities, "_now", lambda: now)
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "missing.db")
+    monkeypatch.delenv("ORCH_TICK_EVIDENCE_DISABLED", raising=False)
+    monkeypatch.setenv("ORCH_CAPABILITY_HEARTBEATS", "0")
+    # Rehearse baseline, changed findings and identical regeneration against the real tick
+    # bindings, cadence artifact names and projections. This is not a live mirror-sync witness.
+    for production in range(3):
+        finding = "old" if production == 0 else "new"
+        reports = {
+            "capability-activation-audit": {"by_defect": {"no_heartbeat": [finding]}},
+            "capability-firing-monitor": {
+                "overdue": [{"capability_id": finding}],
+                "regressed": [],
+                "never_fired": [],
+                "no_cadence_declared": [],
+            },
+            "capability-propensity": {"capabilities_with_evidence": production},
+        }
+        for cid, report in reports.items():
+            artifact = cp.tick_artifact(cid, state_dir=state)
+            assert artifact is not None
+            artifact.write_text(json.dumps(report), encoding="utf-8")
+            os.utime(artifact, (now, now))
+        tick = cp.tick_evidence(now=now, state_dir=state, path=ledger)
+        assert tick["verdicts_recorded"] == 0, tick
+        assert tick["triggers_recorded"] == len(observers), tick
+        if production == 0:
+            assert {r["capability_id"] for r in tick["baselined"]} == set(observers)
+        else:
+            evaluated = {r["capability_id"]: r for r in tick["evaluated"]}
+            assert set(evaluated) == set(observers)
+            assert evaluated["capability-propensity"]["reason"] == "no_finding_projection"
+            for cid in observers[:2]:
+                row = evaluated[cid]
+                assert row["reason"] == "verdict_exempt", row
+                assert row["report_changed"] is (production == 1)
+                assert bool(row["changed_keys"]) is (production == 1)
+                assert (row["fingerprint"] != row["previous_fingerprint"]) is (production == 1)
+            assert all(not row["graded"] and "useful" not in row for row in evaluated.values())
+        assert outcomes() == historical
+        now += 7 * 86400
+
+    before = ledger.read_bytes()
+    stats = cp.usefulness(path=ledger, now=now)["rows"]
+    for cid in observers:
+        row = stats[cid]
+        assert row["observer_noise"]["useful"] == row["observer_noise"]["not_useful"] == 1
+        assert row["resolved"] == row["n_eff"] == row["effective_useful"] == 0
+        assert row["usefulness_rate"] is row["weighted_usefulness_rate"] is None
     with sqlite3.connect(":memory:") as conn:
         usage = capabilities.usage_report(
             capabilities.summary(ledger, create=False), now=now, conn=conn
         )
     text = capabilities.format_usage_report(usage)
-    for cid in ("capability-activation-audit", "capability-propensity", "redirect-policy"):
+    for cid in (*observers, "redirect-policy"):
         line = next(line for line in text.splitlines() if line.startswith(f"| {cid} |"))
         assert "verdict n/a (observer); consumer actions unmeasured" in line
         assert "production useful" not in line and "promote it" not in line
