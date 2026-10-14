@@ -99,3 +99,19 @@ Focused pytest exits 1 because pytest is absent. Both mandatory Black commands
 exit 127 because Black is absent; package installation also fails. The Python
 change must remain uncommitted until the required formatting gate passes. No new
 acceptance completion, deployment, or 2026-10-27 qualification is claimed.
+
+## Follow-up at d6638d8
+
+The named regression now reads its saved manifests with explicit UTF-8, including
+the fresh-process qualification query. An isolated five-item production replay
+passes exact retained-byte checks and the UTF-8 query prints `3 3`. Roles selftest,
+test syntax, whitespace checks and the original mutation-proof source binding pass.
+No test nodes or collection/skip ceilings changed.
+
+Focused pytest exits 1 because pytest is absent; both mandatory Black commands
+exit 127 because Black is absent. Installation from PyPI failed. The Python
+change remains uncommitted because the required formatting gate cannot run.
+The reconciled PR body remains saved locally; the connector rejected its update,
+the blocker comment and `needs-human` label because writes require approval while
+the run's policy is `never`. The real post-merge batch and program check remain
+pending. No fresh pytest pass or production qualification is claimed.

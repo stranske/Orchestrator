@@ -334,7 +334,7 @@ def test_failed_body_and_raw_output_are_retained_in_the_manifest(private_brain, 
     assert result["items"][1]["rejected_proposal"] == proposal("Bad body")
     directory = private_brain / "mixed-batch"
     manifest = roles.write_prompt_batch(result, directory)
-    assert manifest == json.loads((directory / "manifest.json").read_text())
+    assert manifest == json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
     # Retained evidence must still identify the item and role run that produced it.
     assert manifest["batch_id"] == result["batch_id"]
     assert manifest["output"] == "issue_body"
@@ -388,7 +388,7 @@ def test_failed_body_and_raw_output_are_retained_in_the_manifest(private_brain, 
 
     # Exercise the source issue's qualification query using only the persisted manifest.
     del result, manifest
-    saved = json.loads((directory / "manifest.json").read_text())
+    saved = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
     failed = [item for item in saved["items"] if not item["valid"]]
     retained = sum(bool(item["failed_body_file"] or item["raw_output_file"]) for item in failed)
     assert retained == len(failed) == 3
@@ -400,7 +400,7 @@ def test_failed_body_and_raw_output_are_retained_in_the_manifest(private_brain, 
         [
             sys.executable,
             "-c",
-            "import json,sys; m=json.load(open(sys.argv[1])); "
+            "import json,sys; m=json.load(open(sys.argv[1], encoding='utf-8')); "
             "f=[i for i in m['items'] if not i['valid']]; "
             "print(sum(bool(i.get('failed_body_file') or i.get('raw_output_file')) "
             "for i in f), len(f))",
@@ -463,7 +463,9 @@ for item, evidence in zip(manifest["items"], expected, strict=True):
     )
     empty_directory = private_brain / "empty-output"
     roles.write_prompt_batch(empty_result, empty_directory)
-    empty_item = json.loads((empty_directory / "manifest.json").read_text())["items"][0]
+    empty_item = json.loads((empty_directory / "manifest.json").read_text(encoding="utf-8"))[
+        "items"
+    ][0]
     assert empty_item["valid"] is False and empty_item["errors"]
     assert empty_item["body_file"] is None and empty_item["failed_body_file"] is None
     assert Path(empty_item["raw_output_file"]) == empty_directory / "001.raw.txt"
