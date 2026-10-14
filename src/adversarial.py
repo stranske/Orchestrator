@@ -881,23 +881,7 @@ def panel_worktree(target: str, head: str) -> str:
     reviewer never runs there. Fetch the exact evaluated commit, including a squash merge commit."""
     import provision
 
-    repo, num = provision.parse_target(target)
-    canon = provision.ensure_canonical(repo)
-    wt = provision.WORKTREES_DIR / f"panel-{provision.repo_slug(repo)}-{num}-{head[:12]}"
-    if wt.exists():
-        state = _worktree_state(str(wt))
-        if state["head"] == head and not state["dirty"]:
-            return str(wt)
-        raise RuntimeError("existing panel worktree is dirty or at another head; refusing reuse")
-    fetched = _git(str(canon), "fetch", "-q", "origin", head)
-    if fetched.returncode != 0:
-        raise RuntimeError("cannot fetch exact panel checkout commit")
-    added = _git(str(canon), "worktree", "add", "-q", "--detach", str(wt), head)
-    if added.returncode != 0:
-        raise RuntimeError(
-            f"cannot check out {head[:12]} for {target}: {added.stderr.strip()[:300]}"
-        )
-    return str(wt)
+    return provision.exact_head_worktree(target, head)
 
 
 def _shortfall(

@@ -6,13 +6,16 @@ import shlex
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
+import adversarial
 import feedback
 import keepalive_outcomes
 import merge_guard
+import provision
 import runtime_ac
 import runtime_ac_gate as gate
 import switch_review
@@ -645,3 +648,291 @@ def test_unterminated_named_node_cannot_disappear_into_pass():
     assert any(c["type"] == "manual" for c in criterion["checks"])
     results = [{"id": commands[0]["id"], "status": "PASS", "exit_code": 0}]
     assert runtime_ac.evaluate_results(spec, {"check_results": results})["verdict"] != "PASS"
+
+
+def _shadow_git_repo(path):
+    path.mkdir()
+    for args in (
+        ["init", "-q"],
+        [
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "initial",
+        ],
+    ):
+        subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True)
+    return subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"], text=True).strip()
+
+
+def _shadow_ingest_pr(number, head):
+    return {
+        "number": number,
+        "state": "OPEN",
+        "title": "Runtime acceptance delivery",
+        "body": "Closes #1",
+        "headRefName": "codex/issue-1-shadow",
+        "headRefOid": head,
+        "labels": [{"name": "agent:codex"}],
+        "author": {"login": "stranske"},
+        "createdAt": "2026-10-05T10:00:00Z",
+        "updatedAt": "2026-10-05T10:00:00Z",
+    }
+
+
+def test_ingest_executes_shadow_spec_on_exact_checkout(private_brain, monkeypatch):
+    checkout = private_brain / "checkout"
+    head = _shadow_git_repo(checkout)
+    calls = []
+    cleaned = []
+
+    @contextmanager
+    def provider(target, requested_head):
+        calls.append((target, requested_head))
+        try:
+            yield str(checkout)
+        finally:
+            cleaned.append(target)
+
+    def verify(spec, **kwargs):
+        assert spec["runtime_context"]["worktree"] == str(checkout)
+        assert kwargs["confirm_run"] is True
+        return {"gate": {"verdict": "PASS"}, "check_results": []}
+
+    monkeypatch.setattr(provision, "temporary_exact_head_worktree", provider, raising=False)
+    monkeypatch.setattr(keepalive_outcomes, "_gh_throttle", lambda _: None)
+    monkeypatch.setattr(runtime_ac, "run_verification", verify)
+    monkeypatch.setenv("ORCH_RUN_RUNTIME_AC", "1")
+    kwargs = {
+        "_pr_fetch_fn": lambda *_: [_shadow_ingest_pr(20, head)],
+        "_issue_fetch_fn": lambda *_: BODY,
+        "_spec_dir": private_brain / "specs",
+    }
+    summary = keepalive_outcomes.ingest_keepalive_outcomes(["owner/repo"], **kwargs)
+    observed = [
+        row for row in feedback.runtime_ac_gate_events() if row["gate_status"] == "executed"
+    ]
+    assert len(observed) == 1, feedback.runtime_ac_gate_events()
+    assert observed[0]["verifier_verdict"] == "PASS"
+    assert observed[0]["observed_head_sha"] == head
+    assert observed[0]["blocking"] is False and observed[0]["shadow_only"] is True
+    assert calls == [("owner/repo#20", head)] and cleaned == ["owner/repo#20"]
+    assert summary["runtime_ac_checkout_failures"] == 0
+    assert summary["runtime_ac_shadow_errors"] == []
+    # Existing runs/specs execute too; authoring stays once-only and outcomes stay untouched.
+    before = gate.spec_path("owner/repo#20", spec_dir=kwargs["_spec_dir"]).read_bytes()
+    repeated = keepalive_outcomes.ingest_keepalive_outcomes(["owner/repo"], **kwargs)
+    assert repeated["runtime_ac_specs_authored"] == 0
+    assert len(calls) == 2
+    assert gate.spec_path("owner/repo#20", spec_dir=kwargs["_spec_dir"]).read_bytes() == before
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM outcomes").fetchone()[0] == 0
+
+
+def test_ingest_bounds_shadow_execution_across_repos(private_brain, monkeypatch):
+    checkout = private_brain / "checkout"
+    head = _shadow_git_repo(checkout)
+    calls = []
+
+    @contextmanager
+    def provider(target, requested_head):
+        assert requested_head == head
+        calls.append(target)
+        yield str(checkout)
+
+    monkeypatch.setattr(provision, "temporary_exact_head_worktree", provider, raising=False)
+    monkeypatch.setattr(keepalive_outcomes, "_gh_throttle", lambda _: None)
+    monkeypatch.setattr(
+        runtime_ac,
+        "run_verification",
+        lambda *_a, **_k: {"gate": {"verdict": "PASS"}, "check_results": []},
+    )
+    monkeypatch.setenv("ORCH_RUN_RUNTIME_AC", "1")
+    keepalive_outcomes.ingest_keepalive_outcomes(
+        ["owner/first", "owner/second"],
+        _pr_fetch_fn=lambda *_: [_shadow_ingest_pr(n, head) for n in (20, 21)],
+        _issue_fetch_fn=lambda *_: BODY,
+        _spec_dir=private_brain / "specs",
+    )
+    assert len(calls) == keepalive_outcomes.MAX_RUNTIME_AC_SHADOW_EXECUTIONS == 3
+    events = feedback.runtime_ac_gate_events()
+    assert sum(row["gate_status"] == "executed" for row in events) == 3
+    budget = [row for row in events if row["terminal_reason"] == "shadow_execution_budget"]
+    assert len(budget) == 1 and budget[0]["gate_status"] == "planned"
+    assert budget[0]["target"] == "owner/second#21"
+    assert all(row["terminal_reason"] != "shadow_exact_checkout_missing" for row in events)
+
+
+def test_ingest_counts_checkout_failures_and_bounds_failed_attempts(private_brain, monkeypatch):
+    calls = []
+
+    @contextmanager
+    def provider(target, head):
+        calls.append(target)
+        raise RuntimeError("cannot fetch exact checkout commit")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(provision, "temporary_exact_head_worktree", provider, raising=False)
+    monkeypatch.setattr(keepalive_outcomes, "_gh_throttle", lambda _: None)
+    monkeypatch.setattr(
+        runtime_ac, "run_verification", lambda *_a, **_k: pytest.fail("no checkout")
+    )
+    monkeypatch.setenv("ORCH_RUN_RUNTIME_AC", "1")
+    summary = keepalive_outcomes.ingest_keepalive_outcomes(
+        ["owner/repo"],
+        _pr_fetch_fn=lambda *_: [_shadow_ingest_pr(n, "a" * 40) for n in range(20, 24)],
+        _issue_fetch_fn=lambda *_: BODY,
+        _spec_dir=private_brain / "specs",
+    )
+    assert len(calls) == 3
+    assert summary["runtime_ac_checkout_failures"] == 3
+    assert len(summary["runtime_ac_checkout_errors"]) == 3
+    assert all(
+        target in reason for target, reason in zip(calls, summary["runtime_ac_checkout_errors"])
+    )
+    events = feedback.runtime_ac_gate_events()
+    assert sum(row["terminal_reason"] == "shadow_checkout_failed" for row in events) == 3
+    assert sum(row["terminal_reason"] == "shadow_execution_budget" for row in events) == 1
+    assert not any(row["terminal_reason"] == "shadow_exact_checkout_missing" for row in events)
+
+
+@pytest.mark.parametrize("disabled,dry_run", [(True, False), (False, True)])
+def test_ingest_never_provisions_when_disabled_or_dry(
+    private_brain, monkeypatch, disabled, dry_run
+):
+    monkeypatch.setenv("ORCH_RUN_RUNTIME_AC", "0" if disabled else "1")
+    monkeypatch.setattr(keepalive_outcomes, "_gh_throttle", lambda _: None)
+    monkeypatch.setattr(
+        provision,
+        "temporary_exact_head_worktree",
+        lambda *_a, **_k: pytest.fail("must not provision"),
+        raising=False,
+    )
+    summary = keepalive_outcomes.ingest_keepalive_outcomes(
+        ["owner/repo"],
+        dry_run=dry_run,
+        _pr_fetch_fn=lambda *_: [_shadow_ingest_pr(20, "a" * 40)],
+        _issue_fetch_fn=lambda *_: BODY,
+        _spec_dir=private_brain / "specs",
+    )
+    assert summary["runtime_ac_checkout_failures"] == 0
+
+
+def test_shared_exact_head_checkout_reuse_and_temporary_cleanup(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    head = _shadow_git_repo(source)
+    subprocess.run(["git", "-C", str(source), "remote", "add", "origin", str(source)], check=True)
+    monkeypatch.setattr(provision, "ensure_canonical", lambda _repo: source)
+    monkeypatch.setattr(provision, "WORKTREES_DIR", tmp_path / "worktrees")
+    panel = provision.exact_head_worktree("owner/repo#20", head)
+    assert provision.exact_head_worktree("owner/repo#20", head) == panel
+    assert adversarial.panel_worktree("owner/repo#20", head) == panel
+    with pytest.raises(RuntimeError, match="full commit SHA"):
+        provision.exact_head_worktree("owner/repo#20", "not-a-commit")
+    with pytest.raises(RuntimeError, match="cannot fetch"):
+        provision.exact_head_worktree("owner/repo#20", "f" * 40)
+    assert (
+        subprocess.check_output(["git", "-C", str(panel), "rev-parse", "HEAD"], text=True).strip()
+        == head
+    )
+    (Path(panel) / "dirty.txt").write_text("dirty")
+    with pytest.raises(RuntimeError, match="dirty"):
+        provision.exact_head_worktree("owner/repo#20", head)
+    with pytest.raises(RuntimeError, match="verifier failed"):
+        with provision.temporary_exact_head_worktree("owner/repo#20", head) as runtime_tree:
+            assert Path(runtime_tree) != Path(panel)
+            (Path(runtime_tree) / "dirty-cache").write_text("generated")
+            raise RuntimeError("verifier failed")
+    assert not Path(runtime_tree).exists()
+    trees = subprocess.check_output(
+        ["git", "-C", str(source), "worktree", "list", "--porcelain"], text=True
+    )
+    assert runtime_tree not in trees
+    assert (Path(panel) / "dirty.txt").read_text() == "dirty"
+
+
+def test_ingest_runs_real_named_test_and_removes_its_checkout(private_brain, monkeypatch):
+    source = private_brain / "source"
+    _shadow_git_repo(source)
+    (source / "tests").mkdir()
+    (source / "tests/test_acceptance.py").write_text(
+        "def test_delivered():\n    assert 2 + 2 == 4\n"
+    )
+    subprocess.run(["git", "-C", str(source), "add", "tests/test_acceptance.py"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(source),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "acceptance",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    head = subprocess.check_output(
+        ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
+    ).strip()
+    subprocess.run(["git", "-C", str(source), "remote", "add", "origin", str(source)], check=True)
+    trees = private_brain / "runtime-trees"
+    monkeypatch.setattr(provision, "ensure_canonical", lambda _repo: source)
+    monkeypatch.setattr(provision, "WORKTREES_DIR", trees)
+    monkeypatch.setattr(keepalive_outcomes, "_gh_throttle", lambda _: None)
+    monkeypatch.setenv("ORCH_RUN_RUNTIME_AC", "1")
+    monkeypatch.setenv("ORCH_RUNTIME_AC_ALLOW_COMMANDS", "1")
+    monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
+    summary = keepalive_outcomes.ingest_keepalive_outcomes(
+        ["owner/repo"],
+        _pr_fetch_fn=lambda *_: [_shadow_ingest_pr(20, head)],
+        _issue_fetch_fn=lambda *_: "## Acceptance Criteria\n- Named test: `tests/test_acceptance.py::test_delivered`.\n",
+        _spec_dir=private_brain / "specs",
+    )
+    executed = [
+        row for row in feedback.runtime_ac_gate_events() if row["gate_status"] == "executed"
+    ]
+    assert len(executed) == 1 and executed[0]["verifier_verdict"] == "PASS", summary
+    assert executed[0]["audit_evidence"][0]["passing_named_test"] is True
+    assert summary["runtime_ac_checkout_failures"] == 0
+    assert list(trees.iterdir()) == []
+    listed = subprocess.check_output(
+        ["git", "-C", str(source), "worktree", "list", "--porcelain"], text=True
+    )
+    assert "runtime-ac-" not in listed
+
+
+def test_ingest_cleans_checkout_when_verifier_raises(private_brain, monkeypatch):
+    cleaned = []
+
+    @contextmanager
+    def provider(target, head):
+        try:
+            yield str(private_brain)
+        finally:
+            cleaned.append(target)
+
+    monkeypatch.setattr(provision, "temporary_exact_head_worktree", provider)
+    monkeypatch.setattr(keepalive_outcomes, "_gh_throttle", lambda _: None)
+    monkeypatch.setenv("ORCH_RUN_RUNTIME_AC", "1")
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("verifier error")
+
+    monkeypatch.setattr(gate, "observe_shadow_spec", fail)
+    summary = keepalive_outcomes.ingest_keepalive_outcomes(
+        ["owner/repo"],
+        _pr_fetch_fn=lambda *_: [_shadow_ingest_pr(20, "a" * 40)],
+        _issue_fetch_fn=lambda *_: BODY,
+        _spec_dir=private_brain / "specs",
+    )
+    assert cleaned == ["owner/repo#20"]
+    assert summary["runtime_ac_checkout_failures"] == 0
+    assert summary["runtime_ac_shadow_errors"] == ["owner/repo#20: verifier error"]

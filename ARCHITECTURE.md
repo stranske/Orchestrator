@@ -95,7 +95,12 @@ The runtime-AC rail also has a non-blocking observation edge: keepalive ingest a
 issue-derived shadow spec per new linked PR, and switch review consumes its existing Brain
 completion events. Authoring extracts named tests, retains uncertain obligations as manual,
 and records per-check confidence. Execution still requires the existing runtime/command
-switches and an exact PR checkout; an absent checkout is unmeasured. Shadow specs never
+switches and an exact PR checkout. Ingest shares the panel's exact-commit provisioning rail,
+uses a private disposable checkout, and attempts at most three executions per ingest across
+all repos (failed checkout attempts also consume this bound). Remaining observations are
+`planned/shadow_execution_budget`; checkout/cleanup failures carry per-target reasons in
+`runtime_ac_checkout_errors` and increment `runtime_ac_checkout_failures`. Every disposable
+checkout is removed after observation, including failed verification. Shadow specs never
 implicitly enable merge enforcement or patch delivery outcomes. Coverage-only pytest options
 are removed for named acceptance checks so test success and coverage policy cannot disagree.
 

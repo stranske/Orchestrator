@@ -1,0 +1,27 @@
+{
+  "command": [
+    "python3",
+    "-m",
+    "pytest",
+    "tests/test_runtime_ac_shadow.py::test_ingest_executes_shadow_spec_on_exact_checkout",
+    "-q",
+    "-o",
+    "addopts="
+  ],
+  "exit_codes": {
+    "original": 1,
+    "corrected": 0,
+    "broken": 1,
+    "restored": 0
+  },
+  "original_source_sha256": "cc4d781e79222dac8dfa65ff9c970294322dffce782e858617897e39181f3ce5",
+  "broken_source_sha256": "90c84cfecae2db6242be3db9988ddea2af286491d33e2baa29b95ed1ff315927",
+  "restoration_byte_identical": true,
+  "inputs": {
+    "src/keepalive_outcomes.py": "391d8ac5f010c5b8dd2d21ceed056ac8c85367b9aea2a10043a6e2aa52efc793",
+    "src/runtime_ac_gate.py": "b92695eb70b050b9f12aa4e0a53e6f3d7dc53b009f018a7c5e9bdd93ee59a6b7",
+    "src/provision.py": "44b04144d9a2112c3bb1df036f868cb469bb6b8d0cb7b3a8f46e8b2282ff6e94",
+    "src/adversarial.py": "5fff660b8028ef7d4b337262eb85b7262fb8e1d7fa3cc5d973ccdd6ee4c725c3",
+    "tests/test_runtime_ac_shadow.py": "7f7d610529e8854152024e2661f2eeeeab68c9a86a18e74775609b0d7f3aa32d"
+  }
+}

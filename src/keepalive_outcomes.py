@@ -341,6 +341,10 @@ HUMAN_COMMIT_IDENTITIES = {"tim stranske"}
 ATTRIBUTION_HUMAN = "human"
 
 
+# One budget spans all repositories and includes failed provisioning attempts.
+MAX_RUNTIME_AC_SHADOW_EXECUTIONS = 3
+
+
 class IngestSummary(TypedDict):
     repos: int
     prs_seen: int
@@ -356,6 +360,8 @@ class IngestSummary(TypedDict):
     verifier_verdicts_seen: int
     runtime_ac_specs_authored: int
     runtime_ac_shadow_errors: list[str]
+    runtime_ac_checkout_failures: int
+    runtime_ac_checkout_errors: list[str]
     replacements: dict[str, Any]
 
 
@@ -1216,12 +1222,17 @@ def ingest_keepalive_outcomes(
         "verifier_verdicts_seen": 0,
         "runtime_ac_specs_authored": 0,
         "runtime_ac_shadow_errors": [],
+        "runtime_ac_checkout_failures": 0,
+        "runtime_ac_checkout_errors": [],
         # What the read before each closed PR's first outcome answered; `waiting` is the blocking
         # number of its one wait, and every one drains on an answer or at the horizon.
         "replacements": outcomes.keepalive_replacement_counts(),
     }
 
+    shadow_execution_attempts = 0
+
     def observe_shadow(repo, pr, run_id):
+        nonlocal shadow_execution_attempts
         target = f"{repo}#{int(pr['number'])}"
 
         if not dry_run:
@@ -1241,13 +1252,46 @@ def ingest_keepalive_outcomes(
                 if authored.get("spec_authored"):
                     summary["runtime_ac_specs_authored"] += 1
                 if authored.get("status") in {"authored", "existing"}:
-                    runtime_ac_gate.observe_shadow_spec(
-                        target,
-                        run_id,
-                        spec_dir=_spec_dir,
-                        worktree=pr.get("_worktree"),
-                        head_sha=pr.get("headRefOid"),
-                    )
+                    observation = {"spec_dir": _spec_dir, "head_sha": pr.get("headRefOid")}
+                    if not runtime_ac_gate.env_flag(os.environ, "ORCH_RUN_RUNTIME_AC"):
+                        runtime_ac_gate.observe_shadow_spec(target, run_id, **observation)
+                    elif shadow_execution_attempts >= MAX_RUNTIME_AC_SHADOW_EXECUTIONS:
+                        runtime_ac_gate.observe_shadow_spec(
+                            target,
+                            run_id,
+                            **observation,
+                            unavailable_reason="shadow_execution_budget",
+                        )
+                    else:
+                        import provision
+
+                        shadow_execution_attempts += 1
+                        observed = False
+                        try:
+                            with provision.temporary_exact_head_worktree(
+                                target, pr.get("headRefOid")
+                            ) as checkout:
+                                # Keep verifier errors distinct from checkout/cleanup failures.
+                                try:
+                                    runtime_ac_gate.observe_shadow_spec(
+                                        target,
+                                        run_id,
+                                        **observation,
+                                        worktree=checkout,
+                                    )
+                                except Exception as exc:
+                                    summary["runtime_ac_shadow_errors"].append(f"{target}: {exc}")
+                                observed = True
+                        except Exception as exc:
+                            summary["runtime_ac_checkout_failures"] += 1
+                            summary["runtime_ac_checkout_errors"].append(f"{target}: {exc}")
+                            if not observed:
+                                runtime_ac_gate.observe_shadow_spec(
+                                    target,
+                                    run_id,
+                                    **observation,
+                                    unavailable_reason="shadow_checkout_failed",
+                                )
                 elif authored.get("error"):
                     summary["runtime_ac_shadow_errors"].append(f"{target}: {authored['error']}")
             except Exception as exc:

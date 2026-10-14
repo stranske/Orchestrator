@@ -233,7 +233,14 @@ def shadow_summary(*, now: int, events=None) -> dict:
 
 
 def observe_shadow_spec(
-    target: str, run_id: str, *, spec_dir=None, env=None, worktree=None, head_sha=None
+    target: str,
+    run_id: str,
+    *,
+    spec_dir=None,
+    env=None,
+    worktree=None,
+    head_sha=None,
+    unavailable_reason: str | None = None,
 ) -> dict:
     """Shadow execution needs the existing opt-in and an exact PR checkout.
 
@@ -250,10 +257,10 @@ def observe_shadow_spec(
     status, reason, verdict, audit = "planned", "shadow_execution_disabled", None, None
     evidence = []
     if env_flag(resolved, "ORCH_RUN_RUNTIME_AC"):
-        reason = "shadow_exact_checkout_missing"
+        reason = unavailable_reason or "shadow_exact_checkout_missing"
         # The authored head is historical context; every observation independently
         # pins the current PR checkout, without rewriting the once-authored spec.
-        if worktree and head_sha:
+        if unavailable_reason is None and worktree and head_sha:
             current = subprocess.run(
                 ["git", "-C", str(worktree), "rev-parse", "HEAD"],
                 capture_output=True,
