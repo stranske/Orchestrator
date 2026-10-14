@@ -183,10 +183,11 @@ after it was written.
 **`ADDING_CAPABILITIES.md` is the procedure, and it is ENFORCED.** Run
 `python3 src/capability_admission.py --preflight '<spec json>'` before writing code: a capability must
 arrive with a dedup finding, a caller, a heartbeat, a recurrence fixture, an outcome path, a kill
-switch, a rollback, an expiry-or-cadence, **and a surface that can offer it**.
+switch, a rollback, an expiry-or-cadence, **a surface that can offer it, and a consumer that
+is shown to act**.
 `test_capability_admission.py` fails the suite otherwise, and also fails on a citation to a dated
 record that does not exist or a deadline that passed with no record. That doc lists the failure modes
-behind those nine requirements; read it before adding or reviving a capability.
+behind those ten requirements; read it before adding or reviving a capability.
 
 The ninth is the newest and the one `--preflight` exists for: findability is **declarable**, so a
 capability no surface will ever offer is a design answer you get before writing code rather than a
@@ -503,7 +504,7 @@ item 8 held every new capability, ledger, measurement surface and instrument unt
 changed a measured fleet outcome. That condition was met on 2026-09-04: the fleet-gates sweep (#203)
 flagged the Maint 68 promote latch, the repair landed in Workflows #3337, and promote ran after 8.5
 days. The bar for anything new is now the admission gate alone — `ADDING_CAPABILITIES.md` and §0's
-dedup-before-develop: a capability arrives with its nine parts and a stated task it will be scored
+dedup-before-develop: a capability arrives with its ten parts and a stated task it will be scored
 on, or it does not arrive. The objective in §−2 still governs: build nothing whose only output is a
 measurement of itself. Flipping a default-OFF flag is still a real change: justify it, prefer the
 system's own evidence gate where one exists (e.g. exploration_review for routing mode), and update

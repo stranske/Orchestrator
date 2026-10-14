@@ -46,7 +46,7 @@ one most worth learning before the code exists — and returns the other three (
 fixture) as explicit **obligations** rather than silently skipping them, because silently skipping is
 how they got skipped.
 
-### The nine parts
+### The ten parts
 
 | # | Requirement | The failure it prevents |
 |---|---|---|
@@ -59,14 +59,38 @@ how they got skipped.
 | 7 | **A rollback path** | — |
 | 8 | **An expiry or a cadence** | Nothing may sit unexamined forever; that is how dormancy survives two audits. |
 | 9 | **A surface that can OFFER it** (`findable`) | FM10 — 22 of 43 capabilities were bound to no surface at all, so nothing could offer them and no amount of running could produce evidence for them. All 43 had passed admission. The rule existed — as prose, in this file. |
+| 10 | **A consumer that is shown to ACT** (`consumer_acts`) | The closing-loop failure of 2026-10-13: every chain broke after "usable". Part 5 accepted a declared consumer as prose; this part requires `file.py:symbol` that resolves in the tree and, for a capability agents select, the value-chain monitor's `acted_on > 0` within 14 days of the first invocation. Binds from 2026-10-14. |
 
 Enforcement binds on capabilities registered from 2026-08-21, and **each requirement carries its own
-date**: findability binds from 2026-08-23 (`capability_admission.REQUIREMENT_ENFORCED_FROM`). The
+date**: findability binds from 2026-08-23 and the acting consumer from 2026-10-14
+(`capability_admission.REQUIREMENT_ENFORCED_FROM`). The
 pre-gate capabilities are reported as **legacy debt on every run** and do not fail the suite — a gate
 that is red on arrival gets switched off, and then it protects nothing. The same reasoning applies to
 a requirement added later, which is why the date is per-requirement rather than one global cutoff.
 Legacy and pre-cutoff rows still print exactly what they are missing; the exemption lives on the row,
 never inside the predicates, so debt can never read as compliance.
+
+### Requirement 10 in detail: the consumer must be shown to act
+
+Part 5 asks for a declared consumer and a learning sink, and for two months a sentence satisfied it.
+Measured on the value-chain monitor of 2026-10-13: role-redirect invoked 743 times, 736 usable, acted
+on by nothing; role-triage 690 / 631 / 12 acted on, 0 outcomes; every program chain broke after
+"usable", at the step the declaration promised. Dedup: the concept existed twice (the part-5 string
+and the ledger's `consumer_probe` evidence) and neither gated a new capability, so this part adds no
+field; it verifies the one part 5 requires.
+
+- **Static.** `downstream_consumer` names the acting rail as `file.py:symbol` (or `file.sh:symbol`),
+  and `capability_admission.consumer_resolution` finds that symbol defined in that file. Prose fails.
+- **Dynamic.** For a capability agents select (anything not `exercise_bound`),
+  `value_chain_monitor.acted_on_index` — the weekly row's own count, consumed, never re-derived —
+  must be above zero within `CONSUMER_GRACE_SECONDS` (14 days) of the first `invocation` event.
+  Before the first invocation, and while the grace runs, the row passes and says so; a Brain the
+  machine cannot read prints `unmeasured`, never `0`. An `exercise_bound` rail leaves no Brain edge
+  and is judged by the rail exercise, so only the static step applies to it.
+- **Printed.** `format_report` prints one CONSUMERS line with every class counted (acting, in
+  grace, not invoked, exercise-bound, unmeasured, never acted, prose, missing, undeclared) and the
+  DRAINABLE set, which is a declaration edit each; when nothing is prose, missing or never-acted it
+  prints that every declared consumer resolves and has acted or is within grace.
 
 ### Requirement 9 in detail: which surface can OFFER it (or why none can)
 
@@ -164,7 +188,7 @@ write it down with the criterion that would change it.
 
 ### Part 3 — Evaluating potential: concept first (owner rule, 2026-10-04)
 
-The nine parts say whether a capability can WORK WITH THIS SYSTEM. They say nothing about whether
+The ten parts say whether a capability can WORK WITH THIS SYSTEM. They say nothing about whether
 its concept is worth having, and the assessments that decide that have failed in the same ways
 repeatedly. Repo `CLAUDE.md` §6 is the procedure: concept and every situation it applies to → demand
 measured from that population → mechanism and first weakness, downstream included → the smallest
