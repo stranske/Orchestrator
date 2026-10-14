@@ -105,7 +105,7 @@ class PostMergeBreakTests(unittest.TestCase):
         self.assertEqual(len(run["check_results"]), 1)
         proof = json.loads(run["check_results"][0]["stdout_tail"])
         self.assertEqual(proof["base_ref"], "HEAD^")
-        self.assertEqual(proof["worktree"], str(self.checkout))
+        self.assertEqual(Path(proof["worktree"]).resolve(), self.checkout.resolve())
         return result, proof
 
     def sweep_case(
@@ -185,6 +185,45 @@ class PostMergeBreakTests(unittest.TestCase):
                 "WHERE producer='runtime_ac_gate' AND phase='post_merge_recheck'"
             ).fetchall()
         return [json.loads(row[0])["runtime_ac_post_merge"] for row in rows]
+
+    def test_invalid_persisted_rows_recover_without_repeating_valid_delivery(self):
+        payloads = [
+            "{",
+            "{}",
+            '{"rejection_codes":["invalid"]}',
+            '{"runtime_ac_post_merge":true}',
+            '{"runtime_ac_post_merge":{}}',
+            '{"runtime_ac_post_merge":{"result":"PASS","delivery_complete":true}}',
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                case = type(self)()
+                case.setUp()
+                try:
+                    with patch.object(
+                        gate,
+                        "recheck_merged",
+                        return_value={
+                            "result": "UNRUNNABLE",
+                            "transcript": "isolated recovery control",
+                        },
+                    ):
+                        run, calls, comments, provisions, head = case.sweep_case()
+                        self.assertEqual(run(), {"rechecked": 1, "errors": []})
+                        with feedback._conn() as conn:
+                            conn.execute(
+                                "UPDATE completion_events SET payload_json=? "
+                                "WHERE producer='runtime_ac_gate' AND phase='post_merge_recheck'",
+                                (payload,),
+                            )
+                        self.assertEqual(run(), {"rechecked": 1, "errors": []})
+                        self.assertEqual(provisions, [head, head])
+                        self.assertTrue(case.post_merge_payloads()[0]["delivery_complete"])
+                        self.assertEqual(run(), {"rechecked": 0, "errors": []})
+                        self.assertEqual(provisions, [head, head])
+                        self.assertEqual(len(comments), 1)
+                finally:
+                    case.doCleanups()
 
     def test_real_broken_merge_comments_reopens_and_delivers_once(self):
         run, calls, comments, provisions, head = self.sweep_case()

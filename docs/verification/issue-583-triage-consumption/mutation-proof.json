@@ -1,0 +1,28 @@
+[
+  {
+    "mutation": "rank-order",
+    "command": [
+      "python3",
+      "-m",
+      "pytest",
+      "tests/test_triage_shadow.py::test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows",
+      "-q"
+    ],
+    "red_exit": 1,
+    "green_exit": 0,
+    "restored_sha256": "f4aad29f22a9271df0de38500f014ffd73f9d2f1f64a07cc05bb60728fe81e11"
+  },
+  {
+    "mutation": "accepted-edge",
+    "command": [
+      "python3",
+      "-m",
+      "pytest",
+      "tests/test_triage_shadow.py::test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows",
+      "-q"
+    ],
+    "red_exit": 1,
+    "green_exit": 0,
+    "restored_sha256": "f127f6142fac3f8daa2791c7a78ccfbaa08d411b54300223fa94e61daf0ea525"
+  }
+]

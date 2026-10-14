@@ -96,7 +96,7 @@ SET_ASIDE = (
 )
 # Explicit dependence, not a guess from a capability name or lack of heartbeats.
 INPUT_FLAGS = {
-    "role-triage": ("ORCH_DISPATCH_LANE",),
+    "role-triage": ("ORCH_DISPATCH_LANE", "ORCH_TRIAGE_CONSUME"),
     "issue-readiness": ("ORCH_DISPATCH_LANE",),
 }
 

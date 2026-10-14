@@ -143,7 +143,13 @@ safety switch, not dead code.
 `triage_shadow.py` extends the existing TriageAgent role. Each active cycle reads
 priority-labelled issues across the sixteen supported repos, excludes current
 scoped holds and open PR linkages, and records the model's top three beside the
-opener's priority/oldest rule. The rule and worker dispatch remain unchanged.
+opener's priority/oldest rule. Fresh ranking data can be consumed through
+`--consume --candidates <targets.json>` behind `ORCH_TRIAGE_CONSUME` (default
+off), after 20 valid live cycles and within 7200 seconds. Every current
+candidate stays visible; router selection and worker dispatch remain unchanged.
+`--backfill` links consumed picks only to completed downstream runs through
+version-exact Brain edges, and reports unmatched picks after 48 hours.
+External opener wiring and activation remain a post-merge program step.
 `ORCH_TRIAGE_SHADOW=0` disables this observation. Search or linkage failures are
 UNKNOWN and spend no role invocation. Proposal replay is labelled and never
 scored as a production comparison. The weekly switch review prints both arms'

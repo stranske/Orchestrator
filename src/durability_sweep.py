@@ -1195,7 +1195,26 @@ def _post_merge_rechecks(*, dry_run: bool, gh, now: int, spec_dir=None) -> dict:
                     row = conn.execute(
                         "SELECT payload_json FROM completion_events WHERE event_id=?", (event_id,)
                     ).fetchone()
-                result = json.loads(row[0])["runtime_ac_post_merge"] if row else None
+                result = None
+                if row:
+                    try:
+                        payload = json.loads(row[0])
+                        stored = payload.get("runtime_ac_post_merge")
+                        if (
+                            isinstance(stored, dict)
+                            and stored.get("result") in {"PASS", "FAIL", "UNRUNNABLE"}
+                            and stored.get("issue") == issue
+                            and stored.get("merge_sha") == sha
+                            and all(
+                                type(stored.get(key)) is bool
+                                for key in ("reopened", "commented", "delivery_complete")
+                            )
+                            and isinstance(stored.get("transcript_path"), str)
+                            and re.fullmatch(r"[a-f0-9]{64}", stored.get("transcript_hash", ""))
+                        ):
+                            result = stored
+                    except (ValueError, TypeError, AttributeError):
+                        pass  # Invalid/rejected rows are not execution or delivery receipts.
                 if result and result.get("delivery_complete"):
                     continue
 

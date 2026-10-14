@@ -424,9 +424,9 @@ accepted downstream outcomes, `route_role()` prefers learned weights for `role:<
 | role | replaces / upgrades | judgment it adds | status |
 |---|---|---|---|
 | **RedirectAgent** | `redirect_policy` heuristics | read log+diff+AC → action + corrected prompt | **built, shadow (2026-06-19)** |
-| **PromptAgent** | dispatcher generic templates | issue → dispatch prompt or issue body; batch routes once, per-item scored runs | **built, shadow (2026-06-20)** |
+| **PromptAgent** | dispatcher generic templates | issue → dispatch prompt or issue body; batch routes once, per-item scored runs | **built, shadow** |
 | **DecomposerAgent** | `epic_lane` planner prompts | vague/large goal → subtask DAG | **built, shadow (2026-06-20)** |
-| **TriageAgent** | `backlog` worth-it filter | which items now, skip underspecified, batch | **built, shadow (2026-06-20)** |
+| **TriageAgent** | `backlog` worth-it filter | which items now, skip underspecified, batch | **built, shadow (2026-06-20); optional fresh ranking consumption behind `ORCH_TRIAGE_CONSUME` (default off)** |
 | **AdjudicatorAgent** | `runtime_ac_panel` / `adversarial` dispute step | verify a lone reviewer veto vs. ground truth | **built, shadow (2026-06-20)** |
 
 PromptAgent is offered at the `research-program` and `repo-audit:phase-4` batch-filing
@@ -1877,6 +1877,21 @@ and Brain tables, records `source=backfill`, and grades rejected edges without
 changing their accepted bit or assigning a counterfactual verdict to the role.
 Merge evidence retains pending durability until the usual sweep judges it.
 No new role, routing algorithm, learning store or deployment path is introduced.
+
+Issue #583 extends this same shadow: valid live cycles atomically publish
+`triage-ranking.json`. `triage_shadow.py --consume --candidates <targets.json>`
+can reorder the caller-filtered targets only with `ORCH_TRIAGE_CONSUME=1`, at
+least 20 valid live cycles, and a ranking no older than 7200 seconds. Unknown,
+expired and disabled input retains rule order; unranked current targets remain
+visible. Selection by the deterministic router is unchanged. The flag defaults
+off; this repository change does not wire or activate the external opener call.
+`triage-consumed.jsonl` records the pick and capability version; `--backfill`
+links the first subsequent non-role run only after its completion event exists,
+using the existing version-exact Brain consumption API. No subsequent run after
+48 hours records `not_followed` without an edge; incomplete runs stay pending.
+Switch review prints consumed/followed/not-followed/open and rule agreement.
+After merge and manual sync, the program's 2026-10-20/2026-11-03 check owns the
+bounded live-consumption experiment; fixture edges are not production outcomes.
 
 ## AdjudicatorAgent — the fifth role (built 2026-06-20)
 

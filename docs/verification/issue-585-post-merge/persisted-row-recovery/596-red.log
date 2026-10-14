@@ -1,0 +1,208 @@
+.                                                                  [100%]
+=================================== FAILURES ===================================
+_ PostMergeBreakTests.test_invalid_persisted_rows_recover_without_repeating_valid_delivery (payload='{') _
+
+self = <test_runtime_ac_post_merge_break.PostMergeBreakTests testMethod=test_invalid_persisted_rows_recover_without_repeating_valid_delivery>
+
+    def test_invalid_persisted_rows_recover_without_repeating_valid_delivery(self):
+        payloads = [
+            "{", "{}", '{"rejection_codes":["invalid"]}',
+            '{"runtime_ac_post_merge":true}', '{"runtime_ac_post_merge":{}}',
+            '{"runtime_ac_post_merge":{"result":"PASS","delivery_complete":true}}',
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                case = type(self)()
+                case.setUp()
+                try:
+                    with patch.object(gate, "recheck_merged", return_value={
+                        "result": "UNRUNNABLE", "transcript": "isolated recovery control"
+                    }):
+                        run, calls, comments, provisions, head = case.sweep_case()
+                        self.assertEqual(run(), {"rechecked": 1, "errors": []})
+                        with feedback._conn() as conn:
+                            conn.execute(
+                                "UPDATE completion_events SET payload_json=? "
+                                "WHERE producer='runtime_ac_gate' AND phase='post_merge_recheck'",
+                                (payload,),
+                            )
+>                       self.assertEqual(run(), {"rechecked": 1, "errors": []})
+E                       AssertionError: {'rechecked': 0, 'errors': ['owner/repo#2: Expecting pr[61 chars]1)']} != {'rechecked': 1, 'errors': []}
+E                       + {'errors': [], 'rechecked': 1}
+E                       - {'errors': ['owner/repo#2: Expecting property name enclosed in double quotes: '
+E                       -             'line 1 column 2 (char 1)'],
+E                       -  'rechecked': 0}
+
+tests/test_runtime_ac_post_merge_break.py:211: AssertionError
+_ PostMergeBreakTests.test_invalid_persisted_rows_recover_without_repeating_valid_delivery (payload='{}') _
+
+self = <test_runtime_ac_post_merge_break.PostMergeBreakTests testMethod=test_invalid_persisted_rows_recover_without_repeating_valid_delivery>
+
+    def test_invalid_persisted_rows_recover_without_repeating_valid_delivery(self):
+        payloads = [
+            "{", "{}", '{"rejection_codes":["invalid"]}',
+            '{"runtime_ac_post_merge":true}', '{"runtime_ac_post_merge":{}}',
+            '{"runtime_ac_post_merge":{"result":"PASS","delivery_complete":true}}',
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                case = type(self)()
+                case.setUp()
+                try:
+                    with patch.object(gate, "recheck_merged", return_value={
+                        "result": "UNRUNNABLE", "transcript": "isolated recovery control"
+                    }):
+                        run, calls, comments, provisions, head = case.sweep_case()
+                        self.assertEqual(run(), {"rechecked": 1, "errors": []})
+                        with feedback._conn() as conn:
+                            conn.execute(
+                                "UPDATE completion_events SET payload_json=? "
+                                "WHERE producer='runtime_ac_gate' AND phase='post_merge_recheck'",
+                                (payload,),
+                            )
+>                       self.assertEqual(run(), {"rechecked": 1, "errors": []})
+E                       AssertionError: {'rechecked': 0, 'errors': ["owner/repo#2: 'runtime_ac_post_merge'"]} != {'rechecked': 1, 'errors': []}
+E                       - {'errors': ["owner/repo#2: 'runtime_ac_post_merge'"], 'rechecked': 0}
+E                       + {'errors': [], 'rechecked': 1}
+
+tests/test_runtime_ac_post_merge_break.py:211: AssertionError
+_ PostMergeBreakTests.test_invalid_persisted_rows_recover_without_repeating_valid_delivery (payload='{"rejection_codes":["invalid"]}') _
+
+self = <test_runtime_ac_post_merge_break.PostMergeBreakTests testMethod=test_invalid_persisted_rows_recover_without_repeating_valid_delivery>
+
+    def test_invalid_persisted_rows_recover_without_repeating_valid_delivery(self):
+        payloads = [
+            "{", "{}", '{"rejection_codes":["invalid"]}',
+            '{"runtime_ac_post_merge":true}', '{"runtime_ac_post_merge":{}}',
+            '{"runtime_ac_post_merge":{"result":"PASS","delivery_complete":true}}',
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                case = type(self)()
+                case.setUp()
+                try:
+                    with patch.object(gate, "recheck_merged", return_value={
+                        "result": "UNRUNNABLE", "transcript": "isolated recovery control"
+                    }):
+                        run, calls, comments, provisions, head = case.sweep_case()
+                        self.assertEqual(run(), {"rechecked": 1, "errors": []})
+                        with feedback._conn() as conn:
+                            conn.execute(
+                                "UPDATE completion_events SET payload_json=? "
+                                "WHERE producer='runtime_ac_gate' AND phase='post_merge_recheck'",
+                                (payload,),
+                            )
+>                       self.assertEqual(run(), {"rechecked": 1, "errors": []})
+E                       AssertionError: {'rechecked': 0, 'errors': ["owner/repo#2: 'runtime_ac_post_merge'"]} != {'rechecked': 1, 'errors': []}
+E                       - {'errors': ["owner/repo#2: 'runtime_ac_post_merge'"], 'rechecked': 0}
+E                       + {'errors': [], 'rechecked': 1}
+
+tests/test_runtime_ac_post_merge_break.py:211: AssertionError
+_ PostMergeBreakTests.test_invalid_persisted_rows_recover_without_repeating_valid_delivery (payload='{"runtime_ac_post_merge":true}') _
+
+self = <test_runtime_ac_post_merge_break.PostMergeBreakTests testMethod=test_invalid_persisted_rows_recover_without_repeating_valid_delivery>
+
+    def test_invalid_persisted_rows_recover_without_repeating_valid_delivery(self):
+        payloads = [
+            "{", "{}", '{"rejection_codes":["invalid"]}',
+            '{"runtime_ac_post_merge":true}', '{"runtime_ac_post_merge":{}}',
+            '{"runtime_ac_post_merge":{"result":"PASS","delivery_complete":true}}',
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                case = type(self)()
+                case.setUp()
+                try:
+                    with patch.object(gate, "recheck_merged", return_value={
+                        "result": "UNRUNNABLE", "transcript": "isolated recovery control"
+                    }):
+                        run, calls, comments, provisions, head = case.sweep_case()
+                        self.assertEqual(run(), {"rechecked": 1, "errors": []})
+                        with feedback._conn() as conn:
+                            conn.execute(
+                                "UPDATE completion_events SET payload_json=? "
+                                "WHERE producer='runtime_ac_gate' AND phase='post_merge_recheck'",
+                                (payload,),
+                            )
+>                       self.assertEqual(run(), {"rechecked": 1, "errors": []})
+E                       AssertionError: {'rechecked': 0, 'errors': ["owner/repo#2: 'bool' objec[22 chars]t'"]} != {'rechecked': 1, 'errors': []}
+E                       + {'errors': [], 'rechecked': 1}
+E                       - {'errors': ["owner/repo#2: 'bool' object has no attribute 'get'"],
+E                       -  'rechecked': 0}
+
+tests/test_runtime_ac_post_merge_break.py:211: AssertionError
+_ PostMergeBreakTests.test_invalid_persisted_rows_recover_without_repeating_valid_delivery (payload='{"runtime_ac_post_merge":{}}') _
+
+self = <test_runtime_ac_post_merge_break.PostMergeBreakTests testMethod=test_invalid_persisted_rows_recover_without_repeating_valid_delivery>
+
+    def test_invalid_persisted_rows_recover_without_repeating_valid_delivery(self):
+        payloads = [
+            "{", "{}", '{"rejection_codes":["invalid"]}',
+            '{"runtime_ac_post_merge":true}', '{"runtime_ac_post_merge":{}}',
+            '{"runtime_ac_post_merge":{"result":"PASS","delivery_complete":true}}',
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                case = type(self)()
+                case.setUp()
+                try:
+                    with patch.object(gate, "recheck_merged", return_value={
+                        "result": "UNRUNNABLE", "transcript": "isolated recovery control"
+                    }):
+                        run, calls, comments, provisions, head = case.sweep_case()
+                        self.assertEqual(run(), {"rechecked": 1, "errors": []})
+                        with feedback._conn() as conn:
+                            conn.execute(
+                                "UPDATE completion_events SET payload_json=? "
+                                "WHERE producer='runtime_ac_gate' AND phase='post_merge_recheck'",
+                                (payload,),
+                            )
+>                       self.assertEqual(run(), {"rechecked": 1, "errors": []})
+E                       AssertionError: {'rechecked': 0, 'errors': ["owner/repo#2: 'result'"]} != {'rechecked': 1, 'errors': []}
+E                       - {'errors': ["owner/repo#2: 'result'"], 'rechecked': 0}
+E                       + {'errors': [], 'rechecked': 1}
+
+tests/test_runtime_ac_post_merge_break.py:211: AssertionError
+_ PostMergeBreakTests.test_invalid_persisted_rows_recover_without_repeating_valid_delivery (payload='{"runtime_ac_post_merge":{"result":"PASS","delivery_complete":true}}') _
+
+self = <test_runtime_ac_post_merge_break.PostMergeBreakTests testMethod=test_invalid_persisted_rows_recover_without_repeating_valid_delivery>
+
+    def test_invalid_persisted_rows_recover_without_repeating_valid_delivery(self):
+        payloads = [
+            "{", "{}", '{"rejection_codes":["invalid"]}',
+            '{"runtime_ac_post_merge":true}', '{"runtime_ac_post_merge":{}}',
+            '{"runtime_ac_post_merge":{"result":"PASS","delivery_complete":true}}',
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                case = type(self)()
+                case.setUp()
+                try:
+                    with patch.object(gate, "recheck_merged", return_value={
+                        "result": "UNRUNNABLE", "transcript": "isolated recovery control"
+                    }):
+                        run, calls, comments, provisions, head = case.sweep_case()
+                        self.assertEqual(run(), {"rechecked": 1, "errors": []})
+                        with feedback._conn() as conn:
+                            conn.execute(
+                                "UPDATE completion_events SET payload_json=? "
+                                "WHERE producer='runtime_ac_gate' AND phase='post_merge_recheck'",
+                                (payload,),
+                            )
+>                       self.assertEqual(run(), {"rechecked": 1, "errors": []})
+E                       AssertionError: {'rechecked': 0, 'errors': []} != {'rechecked': 1, 'errors': []}
+E                       - {'errors': [], 'rechecked': 0}
+E                       ?                             ^
+E                       
+E                       + {'errors': [], 'rechecked': 1}
+E                       ?                             ^
+
+tests/test_runtime_ac_post_merge_break.py:211: AssertionError
+=========================== short test summary info ============================
+SUBFAILED(payload='{') tests/test_runtime_ac_post_merge_break.py::PostMergeBreakTests::test_invalid_persisted_rows_recover_without_repeating_valid_delivery
+SUBFAILED(payload='{}') tests/test_runtime_ac_post_merge_break.py::PostMergeBreakTests::test_invalid_persisted_rows_recover_without_repeating_valid_delivery
+SUBFAILED(payload='{"rejection_codes":["invalid"]}') tests/test_runtime_ac_post_merge_break.py::PostMergeBreakTests::test_invalid_persisted_rows_recover_without_repeating_valid_delivery
+SUBFAILED(payload='{"runtime_ac_post_merge":true}') tests/test_runtime_ac_post_merge_break.py::PostMergeBreakTests::test_invalid_persisted_rows_recover_without_repeating_valid_delivery
+SUBFAILED(payload='{"runtime_ac_post_merge":{}}') tests/test_runtime_ac_post_merge_break.py::PostMergeBreakTests::test_invalid_persisted_rows_recover_without_repeating_valid_delivery
+SUBFAILED(payload='{"runtime_ac_post_merge":{"result":"PASS","delivery_complete":true}}') tests/test_runtime_ac_post_merge_break.py::PostMergeBreakTests::test_invalid_persisted_rows_recover_without_repeating_valid_delivery
+6 failed, 1 passed, 10 deselected in 1.21s

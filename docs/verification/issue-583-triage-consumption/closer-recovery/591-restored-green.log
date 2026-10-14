@@ -1,0 +1,105 @@
+.........................F.............................................. [ 26%]
+........................................................................ [ 53%]
+........................................................................ [ 79%]
+.......................................................                  [100%]
+=================================== FAILURES ===================================
+____ test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows ____
+
+consumable = ['stranske/Orchestrator#1', 'stranske/Orchestrator#3', 'stranske/Orchestrator#2', 'stranske/Orchestrator#4']
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x115ad59d0>
+
+    def test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows(consumable, monkeypatch):
+        import capabilities
+    
+        targets = consumable + ["stranske/Orchestrator#5"]
+        result = triage_shadow.consume(targets, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+        assert result["consumed"] is True
+        assert result["ordered_targets"] == [
+            consumable[1],
+            consumable[2],
+            consumable[3],
+            consumable[0],
+            targets[-1],
+        ]
+        assert len(result["ordered_targets"]) == len(set(targets))
+        consumed = json.loads(triage_shadow.consumed_path().read_text())
+        assert consumed["picked"] == result["ordered_targets"][0]
+        assert consumed["role_run_id"] == result["role_run_id"] == "fixture-triage"
+        assert consumed["capability_version_id"] == "triage-v1"
+        # A ledger revision after consumption cannot change the version receiving credit.
+        monkeypatch.setattr(
+            capabilities, "load", lambda **kw: {"role-triage": {"capability_version_id": "triage-v2"}}
+        )
+        feedback.record_run(
+            "earlier-worker", consumed["picked"], "implement", "codex", mode="local", ts=100
+        )
+        feedback.record_completion_event("earlier-worker", status="succeeded")
+        feedback.record_run(
+            "fixture-worker", result["ordered_targets"][0], "implement", "codex", mode="local", ts=102
+        )
+        feedback.record_run(
+            "later-worker", consumed["picked"], "implement", "codex", mode="local", ts=103
+        )
+        feedback.record_completion_event("later-worker", status="succeeded")
+        # Wait for the first subsequent matching run, even if a later run completes first.
+        assert outcomes.link_triage_consumption(now=103) == {
+            "followed": [],
+            "not_followed": [],
+            "unresolved": [],
+            "pending": [consumed["ts"]],
+        }
+        assert not triage_shadow.linked_path().exists()
+        with feedback._conn() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 0
+        feedback.record_completion_event("fixture-worker", status="succeeded")
+    
+        # The Brain commits before the JSONL link is appended. An interruption in
+        # that gap must leave a retryable row without awarding a second edge.
+        def interrupted_append(path, row):
+            assert path == triage_shadow.linked_path()
+            raise OSError("fixture link append interrupted")
+    
+        with monkeypatch.context() as interrupted:
+            interrupted.setattr(triage_shadow, "_append", interrupted_append)
+            with pytest.raises(OSError, match="fixture link append interrupted"):
+                outcomes.link_triage_consumption(now=104)
+        assert not triage_shadow.linked_path().exists()
+        with feedback._conn() as conn:
+            edge_before_retry = conn.execute(
+                "SELECT edge_id FROM influence_edges WHERE accepted=1"
+            ).fetchall()
+        assert len(edge_before_retry) == 1
+        assert len(outcomes.link_triage_consumption(now=104)["followed"]) == 1
+        with feedback._conn() as conn:
+            assert (
+                conn.execute("SELECT edge_id FROM influence_edges WHERE accepted=1").fetchall()
+                == edge_before_retry
+            )
+            assert conn.execute(
+                "SELECT e.capability_id,e.capability_version_id,e.accepted,e.source_run_id,"
+                "e.target_run_id,r.target FROM influence_edges e "
+                "JOIN runs r ON r.run_id=e.target_run_id WHERE e.influence_type='capability'"
+            ).fetchall() == [
+                ("role-triage", "triage-v1", 1, "fixture-triage", "fixture-worker", consumed["picked"])
+            ]
+        assert json.loads(triage_shadow.linked_path().read_text()) == {
+            "consumed_ts": consumed["ts"],
+            "status": "followed",
+            "run_id": "fixture-worker",
+        }
+>       assert outcomes.link_triage_consumption(now=105) == {
+            "followed": [],
+            "not_followed": [],
+            "pending": [],
+        }
+E       AssertionError: assert {'followed': ...'pending': []} == {'followed': ...'pending': []}
+E         
+E         Omitting 3 identical items, use -vv to show
+E         Left contains 1 more item:
+E         {'unresolved': []}
+E         Use -v to get more diff
+
+tests/test_triage_shadow.py:568: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_triage_shadow.py::test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows
+1 failed, 270 passed in 11.61s
