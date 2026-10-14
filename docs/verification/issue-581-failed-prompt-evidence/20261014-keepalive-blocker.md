@@ -58,3 +58,23 @@ the formatting gate cannot run. PR-body reconciliation, blocker comment and
 `needs-human` label were each rejected because connector writes require approval
 while this run's approval policy is `never`. The prepared reconciliation is at
 `/tmp/589-reconciled-pr-body.md`; PR #589 is open with `draft=false`.
+
+## Follow-up at 5a4132d
+
+The named regression now checks every persisted body and raw-output artifact's
+exact UTF-8 bytes in a fresh subprocess. Counting manifest paths alone would miss
+an artifact that disappeared after authoring. A direct five-item production replay
+passes this same subprocess check; deleting `002.failed.md` makes it fail with
+`FileNotFoundError`. No new test nodes or collection/skip ceilings were introduced.
+The roles selftest and whitespace check pass.
+
+Both focused pytest commands exit 1 because pytest is absent. Both required Black
+commands exit 127 because Black is absent. Local installation attempts cannot find
+available distributions. The mandatory formatting gate prevents committing or
+pushing the prepared Python change. No fresh pytest pass, deliberate-break pytest
+run, completed acceptance checkbox, or real production qualification is claimed.
+
+The connector rejected posting the blocker comment and adding `needs-human` with
+`MCP tool call requires approval, but approval policy is never`. PR #589 was read
+and remains open with `draft=false`. Its checked real-batch task still needs
+reopening until the actual post-merge batch and required program check are verified.

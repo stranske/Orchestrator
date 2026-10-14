@@ -404,6 +404,41 @@ def test_failed_body_and_raw_output_are_retained_in_the_manifest(private_brain, 
     assert qualification.stdout == "3 3\n"
     assert qualification.stderr == ""
 
+    # A path count alone cannot prove diagnosis works after the authoring process exits.
+    diagnosis = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """import json, sys
+from pathlib import Path
+
+manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+expected = json.loads(sys.argv[2])
+for item, evidence in zip(manifest["items"], expected, strict=True):
+    for key, content in evidence.items():
+        assert Path(item[key]).read_bytes() == content.encode("utf-8"), (item["target"], key)
+    if item["valid"]:
+        assert item["failed_body_file"] is None and item["raw_output_file"] is None
+    else:
+        assert item["errors"] and item["body_file"] is None
+""",
+            str(directory / "manifest.json"),
+            json.dumps(
+                [
+                    {"body_file": BODY},
+                    {"failed_body_file": "Bad body"},
+                    {"raw_output_file": raw},
+                    {"failed_body_file": backend_body, "raw_output_file": backend_raw},
+                    {"body_file": BODY},
+                ]
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert diagnosis.stdout == diagnosis.stderr == ""
+
     # Empty backend output is evidence too: only None means there was no output.
     roles.reset_role_invocation_counts()
     monkeypatch.setattr(
