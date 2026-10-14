@@ -69,3 +69,29 @@ Current runner revalidation (2026-10-14):
 
 These checks precede the scheduled replay and live checkpoints; they do not
 establish an accepted live influence edge or a stall-to-resolution outcome.
+
+Further runner verification (2026-10-14):
+
+- Added a Node-driven check of the real Python replay and both public CLI output
+  modes, using standard-library mocks. With live apply armed and heartbeats
+  enabled, all twelve fixtures authorize named workers, every authorization
+  remains dry, and dispatch, apply, claim, feedback and corpus write guards are
+  untouched. The heartbeat setting is restored and the private state directory
+  stays empty. Subprocess failures include the Python traceback.
+- `node --test --test-isolation=none tests/test_redirect_stall_fixtures.js tests/test_redirect_sweep_shell_backend.js`:
+  9 passed, no failures or skips.
+- Scratch-copy controls: a corpus write whose guard exception is swallowed fails
+  with `a swallowed write attempt still violates dry replay`; removing
+  `historical-12.json` fails the replay assertion with `total: 11`. Restoring
+  source and fixture byte-identically passes the new check after each control.
+  Repository production source and fixture bytes remain unchanged.
+- `python3 -m pytest tests/test_redirect_chain_gate.py tests/test_redirect_apply_prescreen.py -q -m "not slow"`
+  still fails before collection with `No module named pytest`. No installed
+  interpreter or local cached wheel supplies pytest; installation attempts
+  cannot obtain it. The named pytest checks, focused pytest command and named
+  daily-cap deliberate failure remain unverified in this runner. No acceptance
+  checkbox or Python collection floor is changed.
+
+This adds executable offline verification; the 2026-10-20 replay checkpoint and
+2026-11-03 live outcome remain open. It provides no production candidate count,
+accepted influence edge or stall-to-resolution comparison against a control.
