@@ -1,0 +1,51 @@
+{
+  "source_pr": "https://github.com/stranske/Orchestrator/pull/588",
+  "actual_verifier_run": "38556060546",
+  "provider_verdicts": [
+    "CONCERNS",
+    "PASS"
+  ],
+  "original_finding": "rolling monitor counts do not enforce first-invocation deadline",
+  "baseline_merge": "64718887287cff9b51f459dd29a4d84ead6a6cbf",
+  "red": "two intended temporal assertions fail on merged production",
+  "green": "111focusedPASS;3boundary controlsPASS;mypy2filesPASS",
+  "argv": [
+    "python3",
+    "-m",
+    "pytest",
+    "tests/test_capability_admission.py",
+    "tests/test_value_chain_monitor.py",
+    "tests/test_adjudicator_packet_binding.py",
+    "tests/test_adjudicator_retro.py",
+    "-q"
+  ],
+  "file_sha256": {
+    "src/capability_admission.py": "d0ba9f4054c991dab382d6b4dc7626e27f0441336578e9f759af0940bcea5643",
+    "src/value_chain_monitor.py": "b5394e1cb4182fb04603d5032979c78f5b796f101ce46bef46941e7f5c884bd2",
+    "tests/test_capability_admission.py": "9e9dad653c47f4a52b2e66f12f5ea9ad661ce80130ed994373322798ca5bb146",
+    "tests/test_value_chain_monitor.py": "1a906fc933b59a52fd0307a2a9ae2427b97795c48803869132e98b85c00b3d38"
+  },
+  "collected": 3377,
+  "limitations": "no deployed mirror/native acceptance or full-suite/providerPASS claim",
+  "integrated_main": "28f12766e84818508b37173a86e0be5817bfb0a2",
+  "integrated_focused_result": "........................................................................ [ 54%]\n...........................................................              [100%]\n131 passed in 54.43s",
+  "ci_recovery": "Moved CLI entry point below new test definitions; exact2replay failures nowPASS;143focusedPASS",
+  "full_verify": {
+    "argv": [
+      "python3",
+      "src/verify.py",
+      "--floor-may-lag"
+    ],
+    "private_empty_state": true,
+    "passed": 3366,
+    "failed": 3,
+    "skipped": 8,
+    "collected": 3377,
+    "failures": [
+      "test_gemini_model_is_one_the_seat_advertises",
+      "test_default_pin_is_advertised",
+      "test_every_gemini_tier_pin_is_advertised"
+    ],
+    "limitation": "Installed pinnedPro catalog guards remain existing578 native qualification; no fullPASS or modelpinchange"
+  }
+}
