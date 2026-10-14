@@ -460,3 +460,328 @@ def test_malformed_corpus_cannot_report_a_complete_zero_judged_population(tmp_pa
     text = triage_shadow.summary_line(path)
     assert "UNKNOWN" in text and "malformed corpus rows 1" in text
     assert "0 judged" not in text
+
+
+@pytest.fixture
+def consumable(brain, monkeypatch):
+    """Real fixture role/worker records, with no provider or production state writes."""
+    import capabilities
+
+    monkeypatch.setattr(
+        capabilities, "load", lambda **kw: {"role-triage": {"capability_version_id": "triage-v1"}}
+    )
+    monkeypatch.setattr(triage_shadow.time, "time_ns", lambda: 100_000_000_000)
+    feedback.record_role_run(
+        "fixture-triage", "triage", "snapshot", "codex", proposal=proposal(), ts=90
+    )
+    for _ in range(20):
+        triage_shadow.record_cycle(
+            items(),
+            runner=lambda **kw: {
+                "proposal": proposal(),
+                "role_run_id": "fixture-triage",
+                "backend_run_id": "fixture-backend",
+            },
+        )
+    return [row["target"] for row in items()]
+
+
+def test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows(consumable, monkeypatch):
+    import capabilities
+
+    targets = consumable + ["stranske/Orchestrator#5"]
+    result = triage_shadow.consume(targets, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+    assert result["consumed"] is True
+    assert result["ordered_targets"] == [
+        consumable[1],
+        consumable[2],
+        consumable[3],
+        consumable[0],
+        targets[-1],
+    ]
+    assert len(result["ordered_targets"]) == len(set(targets))
+    consumed = json.loads(triage_shadow.consumed_path().read_text())
+    assert consumed["picked"] == result["ordered_targets"][0]
+    assert consumed["role_run_id"] == result["role_run_id"] == "fixture-triage"
+    assert consumed["capability_version_id"] == "triage-v1"
+    # A ledger revision after consumption cannot change the version receiving credit.
+    monkeypatch.setattr(
+        capabilities, "load", lambda **kw: {"role-triage": {"capability_version_id": "triage-v2"}}
+    )
+    feedback.record_run(
+        "earlier-worker", consumed["picked"], "implement", "codex", mode="local", ts=100
+    )
+    feedback.record_completion_event("earlier-worker", status="succeeded")
+    feedback.record_run(
+        "fixture-worker", result["ordered_targets"][0], "implement", "codex", mode="local", ts=102
+    )
+    feedback.record_run(
+        "later-worker", consumed["picked"], "implement", "codex", mode="local", ts=103
+    )
+    feedback.record_completion_event("later-worker", status="succeeded")
+    # Wait for the first subsequent matching run, even if a later run completes first.
+    assert outcomes.link_triage_consumption(now=103) == {
+        "followed": [],
+        "not_followed": [],
+        "unresolved": [],
+        "pending": [consumed["ts"]],
+    }
+    assert not triage_shadow.linked_path().exists()
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 0
+    feedback.record_completion_event("fixture-worker", status="succeeded")
+
+    # The Brain commits before the JSONL link is appended. An interruption in
+    # that gap must leave a retryable row without awarding a second edge.
+    def interrupted_append(path, row):
+        assert path == triage_shadow.linked_path()
+        raise OSError("fixture link append interrupted")
+
+    with monkeypatch.context() as interrupted:
+        interrupted.setattr(triage_shadow, "_append", interrupted_append)
+        with pytest.raises(OSError, match="fixture link append interrupted"):
+            outcomes.link_triage_consumption(now=104)
+    assert not triage_shadow.linked_path().exists()
+    with feedback._conn() as conn:
+        edge_before_retry = conn.execute(
+            "SELECT edge_id FROM influence_edges WHERE accepted=1"
+        ).fetchall()
+    assert len(edge_before_retry) == 1
+    assert len(outcomes.link_triage_consumption(now=104)["followed"]) == 1
+    with feedback._conn() as conn:
+        assert (
+            conn.execute("SELECT edge_id FROM influence_edges WHERE accepted=1").fetchall()
+            == edge_before_retry
+        )
+        assert conn.execute(
+            "SELECT e.capability_id,e.capability_version_id,e.accepted,e.source_run_id,"
+            "e.target_run_id,r.target FROM influence_edges e "
+            "JOIN runs r ON r.run_id=e.target_run_id WHERE e.influence_type='capability'"
+        ).fetchall() == [
+            ("role-triage", "triage-v1", 1, "fixture-triage", "fixture-worker", consumed["picked"])
+        ]
+    assert json.loads(triage_shadow.linked_path().read_text()) == {
+        "consumed_ts": consumed["ts"],
+        "status": "followed",
+        "run_id": "fixture-worker",
+    }
+    assert outcomes.link_triage_consumption(now=105) == {
+        "followed": [],
+        "not_followed": [],
+        "unresolved": [],
+        "pending": [],
+    }
+    text = triage_shadow.summary_line()
+    assert "consumed 1, followed 1, not followed 0, open 0" in text
+    assert "top-1 agrees with the rule pick 0 of 20 valid cycles" in text
+
+
+@pytest.mark.parametrize(
+    "case,reason",
+    [
+        ("off", "flag_off"),
+        ("cycles", "cycles_below_minimum:19/20"),
+        ("stale", "ranking_stale:7201/7200"),
+        ("missing", "no_ranking"),
+    ],
+)
+def test_consume_refuses_with_a_named_reason_and_leaves_order_unchanged(consumable, case, reason):
+    now = 101
+    env = {"ORCH_TRIAGE_CONSUME": "1"}
+    if case == "off":
+        env = {}
+    elif case == "cycles":
+        lines = triage_shadow.corpus_path().read_text().splitlines()
+        triage_shadow.corpus_path().write_text("\n".join(lines[:19]) + "\n")
+    elif case == "stale":
+        now = 7301
+    else:
+        triage_shadow.ranking_path().unlink()
+    result = triage_shadow.consume(consumable, env=env, now=now)
+    assert result == {
+        "consumed": False,
+        "reason": reason,
+        "ordered_targets": consumable,
+        "role_run_id": None,
+    }
+    assert not triage_shadow.consumed_path().exists()
+
+
+def test_ranking_publication_is_live_only_and_covers_remaining_rule_order(brain):
+    recs = proposal()
+    for rec in recs["recommendations"]:
+        if rec["target"] != "stranske/Orchestrator#3":
+            rec["action"] = "skip"
+    triage_shadow.record_cycle(items(), runner=lambda **kw: {"proposal": recs}, dispatch=False)
+    assert not triage_shadow.ranking_path().exists()
+    triage_shadow.record_cycle(items(), runner=lambda **kw: {"errors": ["backend failed"]})
+    assert not triage_shadow.ranking_path().exists()
+    row = triage_shadow.record_cycle(
+        items(),
+        runner=lambda **kw: {
+            "proposal": recs,
+            "role_run_id": "fixture-role",
+            "backend_run_id": "fixture-backend",
+        },
+    )
+    rank = json.loads(triage_shadow.ranking_path().read_text())
+    assert rank == {
+        "ts": row["ts"],
+        "role_run_id": row["role_run_id"],
+        "snapshot_sha256": row["snapshot_sha256"],
+        "max_age_s": 7200,
+        "ordered_targets": [
+            "stranske/Orchestrator#3",
+            "stranske/Orchestrator#1",
+            "stranske/Orchestrator#2",
+            "stranske/Orchestrator#4",
+        ],
+    }
+    assert triage_shadow.summary()["valid_cycles"] == 1
+
+
+@pytest.mark.parametrize("stage", ["create", "write", "flush", "fsync", "close", "replace"])
+def test_atomic_ranking_failure_preserves_previous_snapshot_and_cleans_up(
+    brain, monkeypatch, stage
+):
+    row = {"ts": 100_000_000_000, "role_run_id": "fixture-role", "snapshot_sha256": "fixture"}
+    triage_shadow._publish_ranking(row, ["stranske/Orchestrator#1"])
+    path = triage_shadow.ranking_path()
+    previous = path.read_bytes()
+    original_tempfile = triage_shadow.tempfile.NamedTemporaryFile
+
+    def fail(*args, **kwargs):
+        raise OSError(f"{stage} failed")
+
+    class FailingStream:
+        def __init__(self, **kwargs):
+            if stage == "create":
+                fail()
+            self.stream = original_tempfile(**kwargs)
+            self.name = self.stream.name
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.stream.close()
+            if stage == "close":
+                fail()
+
+        def write(self, text):
+            if stage == "write":
+                self.stream.write(text[:1])
+                fail()
+            return self.stream.write(text)
+
+        def flush(self):
+            if stage == "flush":
+                fail()
+            self.stream.flush()
+
+        def fileno(self):
+            return self.stream.fileno()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(triage_shadow.tempfile, "NamedTemporaryFile", FailingStream)
+        if stage in {"fsync", "replace"}:
+            patch.setattr(triage_shadow.os, stage, fail)
+        with pytest.raises(OSError, match=f"{stage} failed"):
+            triage_shadow.record_cycle(
+                items(),
+                runner=lambda **kwargs: {
+                    "proposal": proposal(),
+                    "role_run_id": "next-role",
+                    "backend_run_id": "next-backend",
+                },
+            )
+    assert path.read_bytes() == previous
+    assert not list(path.parent.glob(".triage-ranking-*"))
+    # Publication failure must not erase the completed shadow observation.
+    assert json.loads(triage_shadow.corpus_path().read_text())["role_run_id"] == "next-role"
+    recovered = triage_shadow.record_cycle(
+        items(),
+        runner=lambda **kwargs: {
+            "proposal": proposal(),
+            "role_run_id": "recovered-role",
+            "backend_run_id": "recovered-backend",
+        },
+    )
+    assert json.loads(path.read_text())["ts"] == recovered["ts"]
+    assert json.loads(path.read_text())["role_run_id"] == "recovered-role"
+    assert not list(path.parent.glob(".triage-ranking-*"))
+
+
+def test_consumption_never_injects_removed_targets_and_never_hides_new_ones(consumable):
+    current = ["stranske/Orchestrator#99", consumable[0], consumable[1]]
+    result = triage_shadow.consume(current, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+    assert result["ordered_targets"] == [consumable[1], consumable[0], current[0]]
+    row = json.loads(triage_shadow.consumed_path().read_text())
+    assert (
+        row["candidate_sha256"]
+        == hashlib.sha256(json.dumps(current, sort_keys=True).encode()).hexdigest()
+    )
+
+
+def test_unfollowed_consumption_times_out_without_credit(consumable):
+    triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+    # An earlier run and a later unrelated run cannot earn credit.
+    feedback.record_run("old-worker", consumable[1], "implement", "codex", mode="local", ts=100)
+    feedback.record_completion_event("old-worker", status="succeeded")
+    feedback.record_run(
+        "unrelated", "stranske/Orchestrator#99", "implement", "codex", mode="local", ts=102
+    )
+    feedback.record_completion_event("unrelated", status="succeeded")
+    assert outcomes.link_triage_consumption(now=101 + 48 * 3600 - 1)["not_followed"] == []
+    assert outcomes.link_triage_consumption(now=101 + 48 * 3600)["not_followed"] == [
+        {"consumed_ts": 101_000_000_000, "status": "not_followed", "run_id": None}
+    ]
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("kind", ["future", "malformed", "duplicate", "no_version"])
+def test_unknown_consumption_evidence_refuses_without_writing(consumable, monkeypatch, kind):
+    import capabilities
+
+    if kind == "no_version":
+        monkeypatch.setattr(capabilities, "load", lambda **kw: {})
+    else:
+        rank = json.loads(triage_shadow.ranking_path().read_text())
+        if kind == "future":
+            rank["ts"] = 102_000_000_000
+        elif kind == "duplicate":
+            rank["ordered_targets"] *= 2
+        else:
+            rank["ordered_targets"] = None
+        triage_shadow.ranking_path().write_text(json.dumps(rank))
+    result = triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+    assert not result["consumed"]
+    assert result["ordered_targets"] == consumable
+    assert not triage_shadow.consumed_path().exists()
+
+
+def test_consume_cli_uses_explicit_targets_and_never_dispatches(
+    consumable, monkeypatch, capsys, brain
+):
+    target_file = brain / "targets.json"
+    target_file.write_text(json.dumps(consumable))
+    monkeypatch.setenv("ORCH_TRIAGE_CONSUME", "1")
+    monkeypatch.setattr(triage_shadow.time, "time", lambda: 101)
+    monkeypatch.setattr(
+        triage_shadow, "discover_candidates", lambda: pytest.fail("consumer rediscovered work")
+    )
+    assert triage_shadow.main(["--consume", "--candidates", str(target_file)]) == 0
+    assert json.loads(capsys.readouterr().out)["consumed"]
+
+
+def test_disjoint_ranking_cannot_claim_the_new_rule_pick(consumable):
+    current = ["stranske/Orchestrator#90", "stranske/Orchestrator#91"]
+    result = triage_shadow.consume(current, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
+    assert result == {
+        "consumed": False,
+        "reason": "ranking_no_candidates",
+        "ordered_targets": current,
+        "role_run_id": None,
+    }
+    assert not triage_shadow.consumed_path().exists()
