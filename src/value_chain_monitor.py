@@ -257,6 +257,32 @@ def outcome_counts(cid: str, own_edges: list[dict] | None) -> dict[str, int | No
     }
 
 
+def own_edges_of(edges: list[dict] | None, cid: str) -> list[dict] | None:
+    """One capability's non-counterfactual edges; None when the edges were never read."""
+    if edges is None:
+        return None
+    return [e for e in edges if e.get("capability_id") == cid and not e.get("counterfactual")]
+
+
+def acted_on_index(db: Path, now: int, capability_ids) -> tuple[dict[str, int] | None, str]:
+    """`acted_on` per capability over the window and edges the weekly report prints.
+
+    ONE computation, consumed by `capability_admission.req_consumer_acts` (the tenth part): the
+    gate and the printed row read the same Brain, the same window and the same classifier, so
+    they cannot disagree about whether a declared consumer ever acted. None with the reason when
+    the Brain is unreadable — unmeasured, never zero.
+    """
+    inputs = _brain(db, now - WINDOW_DAYS * 86400, now)
+    edges = inputs.get("edges")
+    if edges is None:
+        return None, (inputs.get("errors") or ["Brain evidence unavailable"])[0]
+    index = {
+        cid: int(outcome_counts(cid, own_edges_of(edges, cid))["acted_on"] or 0)
+        for cid in capability_ids
+    }
+    return index, f"value-chain monitor, {WINDOW_DAYS}d window, {db.name}"
+
+
 def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
     """Accepted completion events and influence edges in the window, read-only.
 
@@ -426,12 +452,7 @@ def report(
             and not e.get("metadata", {}).get("fact_missing")
             for e in events
         )
-        edges = inputs.get("edges")
-        own_edges = (
-            None
-            if edges is None
-            else [e for e in edges if e.get("capability_id") == cid and not e.get("counterfactual")]
-        )
+        own_edges = own_edges_of(inputs.get("edges"), cid)
         row_inputs = dict(inputs)
         if cid not in SITUATION_QUERIES and cid not in inputs.get("precondition_probes", {}):
             probes = [

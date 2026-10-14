@@ -617,9 +617,10 @@ Remote CI: `docs/CI_LINT_BASELINE.md` (what the Gate checks, what is deferred, a
 
 `capability_admission.py` is the admission gate, and unlike the other capability tooling it is
 PROSPECTIVE: everything else checks the capabilities that already exist. A capability must arrive
-with nine parts — a recorded dedup finding, a caller, a heartbeat on the executed path, a
+with ten parts — a recorded dedup finding, a caller, a heartbeat on the executed path, a
 recurrence fixture, an outcome path (declared consumer **and** learning sink), a kill switch, a
-rollback, an expiry-or-cadence, and **a surface that can offer it**. `--preflight '<spec json>'`
+rollback, an expiry-or-cadence, **a surface that can offer it**, and **a consumer shown to act**
+(`file.py:symbol` that resolves, and `acted_on > 0` within 14 days for a selected capability). `--preflight '<spec json>'`
 answers six of them before the code is written, returning caller/heartbeat/fixture as explicit
 obligations rather than skipping them.
 
