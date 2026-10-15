@@ -452,6 +452,54 @@ def _attempt_snapshot(row: dict) -> dict:
     return {key: value for key, value in row.items() if key != "retry_attempts"}
 
 
+def _case_identity(row: dict) -> dict:
+    return {k: row[k] for k in ("run_id", "verifier_verdict", "adjudicated_verdict")}
+
+
+def _case_id(row: dict) -> str:
+    return hashlib.sha256(json.dumps(_case_identity(row), sort_keys=True).encode()).hexdigest()
+
+
+def _is_metadata_only_abstention(old: dict | None) -> bool:
+    if not old:
+        return False
+    return old.get("decision") == "needs_more_evidence" and _row_metadata_only(old)
+
+
+def _retry_pending(old: dict | None, *, retry: bool) -> bool:
+    """The one definition of "this saved row is attempted again".
+
+    Under ``retry`` a saved row is attempted again when it holds no decision, or when it is a
+    ``needs_more_evidence`` abstention whose packet was metadata-only. Without ``retry`` no saved
+    row is attempted again. ``run()``'s skip test, ``attempt_order`` and the summary's
+    ``retry_pending`` count all read this, so they cannot drift apart.
+    """
+    if not retry or not old:
+        return False
+    return not old.get("decision") or _is_metadata_only_abstention(old)
+
+
+def attempt_order(population: list[dict], saved: dict[str, dict], *, retry: bool) -> list[dict]:
+    """Every feed row, in the order ``run()`` should spend its budget on them.
+
+    Under ``retry``: saved rows that will be attempted again come first, then rows with no saved
+    entry, then the rest, which ``run()`` only refreshes. Each group keeps feed order, newest
+    first. Without ``retry`` the feed order is unchanged. The saved report lives in the file
+    ``run()`` loads and ``disputes()`` reads only the Brain, so the order is applied here and
+    ``disputes()`` stays a plain read.
+    """
+    if not retry:
+        return list(population)
+
+    def rank(row: dict) -> int:
+        old = saved.get(_case_id(row))
+        if old is None:
+            return 1
+        return 0 if _retry_pending(old, retry=True) else 2
+
+    return sorted(population, key=rank)
+
+
 def summarize(rows: list[dict]) -> dict:
     # Classify independently of stored flags, including pre-floor legacy rows.
     classified = [dict(row) for row in rows]
@@ -541,6 +589,8 @@ def summarize(rows: list[dict]) -> dict:
         "estimated_cost_usd": sum(estimated_costs) if estimated_costs else None,
         "cost_measured_cases": len(measured_costs),
         "cost_per_case": sum(measured_costs) / len(measured_costs) if measured_costs else None,
+        # Saved rows a --retry run would attempt again: 0 when drained, never absent.
+        "retry_pending": sum(_retry_pending(row, retry=True) for row in rows),
     }
 
 
@@ -1147,7 +1197,9 @@ def run(
     """Bounded, resumable shadow run; invalid packets are recorded and never dispatched.
 
     ``timeout`` is the per-dispatch budget in seconds. It is saved on every attempted row as
-    ``dispatch_timeout_s`` so a row's history says which budget it ran under.
+    ``dispatch_timeout_s`` so a row's history says which budget it ran under. Under ``retry`` the
+    ``limit`` is spent on saved rows awaiting a retry before any newer unsaved dispute
+    (``attempt_order``).
     """
     path = path or report_path()
     reader = evidence_reader or fetch_evidence
@@ -1178,17 +1230,12 @@ def run(
             except Exception as exc:
                 entry["role_record_error"] = str(exc)
             _persist_report(path, list(saved.values()), len(population), db=db)
-    for row in population:
-        identity = {k: row[k] for k in ("run_id", "verifier_verdict", "adjudicated_verdict")}
-        case_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+    for row in attempt_order(population, saved, retry=retry):
+        identity = _case_identity(row)
+        case_id = _case_id(row)
         old = saved.get(case_id)
-        reattempt_abstention = (
-            retry
-            and old
-            and old.get("decision") == "needs_more_evidence"
-            and _row_metadata_only(old)
-        )
-        if old and not reattempt_abstention and (old.get("decision") or not retry):
+        reattempt_abstention = bool(retry and _is_metadata_only_abstention(old))
+        if old and not _retry_pending(old, retry=retry):
             if old.get("decision"):
                 old["later_truth"] = later_truth(row)
             continue
@@ -1368,6 +1415,7 @@ def weekly_line(path: Path | None = None) -> str:
     try:
         summary = json.loads((path or report_path()).read_text())["summary"]
         cost = summary["cost_usd"]
+        pending = summary.get("retry_pending")
         return (
             f"adjudicator shadow: cases {summary['cases']}, agree {summary['agree']}, "
             f"disagree {summary['disagree']}, cost {cost if cost is not None else 'UNKNOWN'} "
@@ -1376,7 +1424,8 @@ def weekly_line(path: Path | None = None) -> str:
             f"imputed {summary.get('cost_imputed_cases', 0)}, "
             f"unmeasured {summary.get('cost_unmeasured_cases', 0)}; "
             f"estimated accounted USD {summary.get('estimated_cost_usd') if summary.get('estimated_cost_usd') is not None else 'UNMEASURED'}; "
-            f"scale {feedback.COST_SCALE})"
+            f"scale {feedback.COST_SCALE}; "
+            f"retry pending {'UNKNOWN' if pending is None else pending})"
         )
     except (OSError, ValueError, KeyError, TypeError):
         return "adjudicator shadow: cases UNKNOWN, agree UNKNOWN, disagree UNKNOWN, cost UNKNOWN"
@@ -1433,7 +1482,14 @@ def _selftest() -> None:
 
     role_default = inspect.signature(roles.run_adjudicator_agent).parameters["timeout"].default
     assert DISPATCH_TIMEOUT_S == role_default, "retro dispatch budget drifted from the role default"
-    print("adjudicator_retro selftest: 11 checks passed")
+    fresh = {"run_id": "new", "verifier_verdict": "NON_PASS", "adjudicated_verdict": "PASS"}
+    aged = {"run_id": "old", "verifier_verdict": "NON_PASS", "adjudicated_verdict": "PASS"}
+    queue = {_case_id(aged): {"decision": None}}
+    assert [r["run_id"] for r in attempt_order([fresh, aged], queue, retry=True)] == ["old", "new"]
+    assert [r["run_id"] for r in attempt_order([fresh, aged], queue, retry=False)] == ["new", "old"]
+    assert summarize([{"decision": None}])["retry_pending"] == 1
+    assert summarize([{"decision": "reject_blocker"}])["retry_pending"] == 0
+    print("adjudicator_retro selftest: 12 checks passed")
 
 
 def main() -> int:

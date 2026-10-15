@@ -872,3 +872,120 @@ def test_judge_collected_case_dispatches_with_the_configured_timeout(tmp_path, m
     assert invoke(tmp_path / "custom.json", "--timeout", "77") == 0
     assert seen[-1]["timeout"] == 77
     assert (tmp_path / "custom.json").exists()
+
+
+def test_retry_spends_the_limit_on_saved_pending_rows_before_new_disputes(
+    private_brain, tmp_path, monkeypatch
+):
+    """Under --retry the budget goes to saved rows awaiting a retry before newer unsaved disputes."""
+    identities = {
+        "newer": {"run_id": "newer", "verifier_verdict": "NON_PASS", "adjudicated_verdict": "PASS"},
+        "older": {"run_id": "older", "verifier_verdict": "NON_PASS", "adjudicated_verdict": "PASS"},
+    }
+    newer = {**identities["newer"], "target": "owner/repo#2", "merged": 1}
+    older = {**identities["older"], "target": "owner/repo#1", "merged": 1}
+    monkeypatch.setattr(retro, "disputes", lambda **_: [newer, older])  # newest first, as the feed
+    saved = {
+        **identities["older"],
+        "case_id": hashlib.sha256(
+            json.dumps(identities["older"], sort_keys=True).encode()
+        ).hexdigest(),
+        "target": "owner/repo#1",
+        "decision": "needs_more_evidence",
+        "packet": {"metadata_only": True, "target": "owner/repo#1"},
+    }
+    asked = []
+
+    def reader(row):
+        asked.append(row["target"])
+        return evidence(row)
+
+    def attempt(name, **options):
+        path = tmp_path / f"{name}.json"
+        path.write_text(json.dumps({"rows": [saved], "population": 2}))
+        asked.clear()
+        retro.run(dispatch=False, path=path, db=private_brain, evidence_reader=reader, **options)
+        return list(asked)
+
+    assert attempt("one", retry=True, limit=1) == ["owner/repo#1"]
+    assert attempt("two", retry=True, limit=2) == ["owner/repo#1", "owner/repo#2"]
+    assert attempt("plain", retry=False, limit=1) == ["owner/repo#2"]
+    by_id = {saved["case_id"]: saved}
+    assert [r["run_id"] for r in retro.attempt_order([newer, older], by_id, retry=True)] == [
+        "older",
+        "newer",
+    ]
+    assert [r["run_id"] for r in retro.attempt_order([newer, older], by_id, retry=False)] == [
+        "newer",
+        "older",
+    ]
+
+
+def test_retry_pending_counts_saved_rows_and_prints_zero_when_drained(
+    private_brain, tmp_path, monkeypatch
+):
+    identity = {"run_id": "r1", "verifier_verdict": "NON_PASS", "adjudicated_verdict": "PASS"}
+    monkeypatch.setattr(
+        retro, "disputes", lambda **_: [{**identity, "target": "owner/repo#1", "merged": 1}]
+    )
+    pending = {
+        **identity,
+        "case_id": hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest(),
+        "target": "owner/repo#1",
+        "decision": "needs_more_evidence",
+        "packet": {"metadata_only": True, "target": "owner/repo#1"},
+    }
+
+    def publish(saved_row, name):
+        path = tmp_path / f"{name}.json"
+        path.write_text(json.dumps({"rows": [saved_row], "population": 1}))
+        return path, retro.run(dispatch=False, limit=0, path=path, db=private_brain)["summary"]
+
+    path, summary = publish(pending, "pending")
+    assert summary["retry_pending"] == 1
+    assert "retry pending 1" in retro.weekly_line(path)
+
+    path, summary = publish({**pending, "decision": "reject_blocker"}, "drained")
+    assert summary["retry_pending"] == 0 and summary["retry_pending"] is not None
+    assert "retry pending 0" in retro.weekly_line(path)
+
+    legacy = json.loads(path.read_text())
+    del legacy["summary"]["retry_pending"]
+    path.write_text(json.dumps(legacy))
+    assert "retry pending UNKNOWN" in retro.weekly_line(path)
+
+
+def test_retry_pending_reproduces_the_original_skip_rule():
+    """Moving the skip test into one helper must not change which saved rows are attempted."""
+    complete = {
+        "ground_truth_evidence": {
+            "diff_patch": {"revision": "a", "text": "patch"},
+            "acceptance_criteria": [{"text": "named test passes", "revision": "a"}],
+        }
+    }
+    packets = {
+        "metadata_only": {"metadata_only": True, "target": "owner/repo#1"},
+        "complete": {"metadata_only": False, **complete},
+    }
+
+    def original_attempts(old, retry):
+        # The skip test as it stood before the helper existed, restated literally.
+        reattempt = (
+            retry
+            and old
+            and old.get("decision") == "needs_more_evidence"
+            and retro._row_metadata_only(old)
+        )
+        skipped = old and not reattempt and (old.get("decision") or not retry)
+        return not skipped
+
+    for retry in (False, True):
+        for decision in (None, "needs_more_evidence", "reject_blocker", "uphold_blocker"):
+            for shape, packet in packets.items():
+                old = {"decision": decision, "packet": packet}
+                assert retro._retry_pending(old, retry=retry) == original_attempts(old, retry), (
+                    retry,
+                    decision,
+                    shape,
+                )
+        assert retro._retry_pending(None, retry=retry) is False

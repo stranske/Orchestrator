@@ -1926,7 +1926,10 @@ The report at `$ORCH_STATE_DIR/capability-program/adjudicator-retro.json` grades
 against post-detection durability evidence, compares it with the merged-PASS baseline, and names
 unmeasured costs. The closer-lane advisor offers this role only when the caller's recorded
 `verifier_verdict` and `merge_disposition` disagree; missing facts withhold the offer. Weekly switch
-review consumes the saved report and prints its case, agreement, disagreement and cost counts.
+review consumes the saved report and prints its case, agreement, disagreement and cost counts, and
+the number of saved rows still awaiting a retry (`retry pending`, 0 when drained, UNKNOWN for a report
+that predates the field). Under `--retry` the dispatch limit is spent on those rows before any newer
+unsaved dispute (`attempt_order`).
 This extends the existing role and reporting rails; it does not re-enable tick adjudication. Native CLI terminal token usage is retained
 through the existing role record as ledger effort, never complete-source dollars.
 Shadow reports label measured, imputed and unmeasured attempts separately on
