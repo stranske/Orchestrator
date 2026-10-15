@@ -1,0 +1,24 @@
+{
+  "base_sha": "f25335587cacb1164a808dc03740f3b608b9f993",
+  "base_test_overlay": "tests/test_adjudicator_retry_history.py copied unchanged onto private git archive of exact base",
+  "red_exit": 1,
+  "red_assertion_failures": 9,
+  "green_exit": 0,
+  "focused_passes": 105,
+  "subtests": 23,
+  "collection": 3442,
+  "measured_billing_or_provider_calls": false,
+  "sha256": {
+    "src/adjudicator_retro.py": "c60ba7ff55a3340a47e522dd250e396912099c656f36947c0cb46c01d4eff208",
+    "tests/test_adjudicator_retry_history.py": "340caf70b10144cd230d87a7d805e965af1f7aee3f60f40e454d7397b9450c9d"
+  },
+  "raw_transcript_sha256": {
+    "red.log": "7a8feefbd95219bd5d920356360f0790ed2f8333dbccad70ab0e9821d42bb566",
+    "green.log": "014174f0642fb8adee79d0a611189a0cf3c47b87636ecf3d7471155488380a39"
+  },
+  "committed_transcript_sha256": {
+    "red.log": "6fbc9dfedc252015862837677ed7f1facac6fe0a39c6ea3854bf6a73755892cd",
+    "green.log": "014174f0642fb8adee79d0a611189a0cf3c47b87636ecf3d7471155488380a39"
+  },
+  "transcript_normalization": "Committed logs remove trailing whitespace only; original raw logs and JUnit remain in the closer run packet."
+}

@@ -1,0 +1,198 @@
+FFFFFFFFF                                                                [100%]
+=================================== FAILURES ===================================
+_____________ test_exception_after_paid_retry_retains_new_attempt ______________
+
+retry_case = (PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-2321/test_exception_afte...usd': 1.25}, 'paid-retry': {'status': 'imputed', 'cost_usd': 0.75}}, <function retry_case.<locals>.run at 0x109f42e80>)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109be0560>
+
+    def test_exception_after_paid_retry_retains_new_attempt(retry_case, monkeypatch):
+        path, saved, _reports, run = retry_case
+
+        def broken_cost_read(backend_id, _db):
+            assert backend_id == "paid-retry"
+            raise sqlite3.OperationalError("cost read unavailable after dispatch")
+
+        monkeypatch.setattr(retro, "measured_cost", broken_cost_read)
+        result = run({"backend_run_id": "paid-retry", "backend": "gemini", "errors": ["timeout"]})
+        row = result["rows"][0]
+        assert row["backend_run_id"] == saved["backend_run_id"]
+        assert row["decision"] == "needs_more_evidence"
+>       assert row["retry_attempts"][-1]["backend_run_id"] == "paid-retry"
+               ^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'retry_attempts'
+
+tests/test_adjudicator_retry_history.py:77: KeyError
+___________ test_retry_accounts_for_old_and_new_paid_attempts[False] ___________
+
+retry_case = (PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-2321/test_retry_accounts...usd': 1.25}, 'paid-retry': {'status': 'imputed', 'cost_usd': 0.75}}, <function retry_case.<locals>.run at 0x109f43240>)
+successful = False
+
+    @pytest.mark.parametrize("successful", [False, True])
+    def test_retry_accounts_for_old_and_new_paid_attempts(retry_case, successful):
+        _path, saved, _reports, run = retry_case
+        result = {"backend_run_id": "paid-retry", "backend": "gemini", "errors": []}
+        if successful:
+            result["proposal"] = {"decision": "uphold_blocker"}
+            result["advisory_plan"] = {"decision": "uphold_blocker"}
+        else:
+            result["errors"] = ["validator refused output"]
+        report = run(result)
+        row = report["rows"][0]
+        ids = {row.get("backend_run_id"), *(r.get("backend_run_id") for r in row["retry_attempts"])}
+        assert ids == {saved["backend_run_id"], "paid-retry"}
+        assert report["summary"]["cases"] == 1
+>       assert report["summary"]["cost_attempted_cases"] == 2
+E       assert 1 == 2
+
+tests/test_adjudicator_retry_history.py:98: AssertionError
+___________ test_retry_accounts_for_old_and_new_paid_attempts[True] ____________
+
+retry_case = (PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-2321/test_retry_accounts...usd': 1.25}, 'paid-retry': {'status': 'imputed', 'cost_usd': 0.75}}, <function retry_case.<locals>.run at 0x10a21c220>)
+successful = True
+
+    @pytest.mark.parametrize("successful", [False, True])
+    def test_retry_accounts_for_old_and_new_paid_attempts(retry_case, successful):
+        _path, saved, _reports, run = retry_case
+        result = {"backend_run_id": "paid-retry", "backend": "gemini", "errors": []}
+        if successful:
+            result["proposal"] = {"decision": "uphold_blocker"}
+            result["advisory_plan"] = {"decision": "uphold_blocker"}
+        else:
+            result["errors"] = ["validator refused output"]
+        report = run(result)
+        row = report["rows"][0]
+>       ids = {row.get("backend_run_id"), *(r.get("backend_run_id") for r in row["retry_attempts"])}
+                                                                             ^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'retry_attempts'
+
+tests/test_adjudicator_retry_history.py:95: KeyError
+_ test_cost_summary_flattens_history_without_double_counting_backend_identity __
+
+    def test_cost_summary_flattens_history_without_double_counting_backend_identity():
+        report = retro.summarize(
+            [
+                {
+                    "backend_run_id": "paid-one",
+                    "cost_report": {"status": "imputed", "cost_usd": 9},
+                    "retry_attempts": [
+                        {
+                            "backend_run_id": "paid-two",
+                            "cost_report": {"status": "imputed", "cost_usd": 3},
+                            "retry_attempts": [
+                                {
+                                    "backend_run_id": "paid-one",
+                                    "cost_report": {"status": "measured", "cost_usd": 2},
+                                }
+                            ],
+                        },
+                        {"backend_run_id": "paid-three", "cost_usd": None},
+                    ],
+                }
+            ]
+        )
+        assert report["cases"] == 1
+>       assert report["cost_attempted_cases"] == 3
+E       assert 1 == 3
+
+tests/test_adjudicator_retry_history.py:128: AssertionError
+______________ test_saved_retry_costs_refresh_without_redispatch _______________
+
+retry_case = (PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-2321/test_saved_retry_co...t_usd': 1.25}, 'paid-retry': {'status': 'measured', 'cost_usd': 4}}, <function retry_case.<locals>.run at 0x10a21c680>)
+
+    def test_saved_retry_costs_refresh_without_redispatch(retry_case):
+        path, _saved, reports, run = retry_case
+        run({"backend_run_id": "paid-retry", "backend": "gemini", "errors": ["timeout"]})
+        reports["paid-retry"] = {"status": "measured", "cost_usd": 4}
+        result = retro.run(path=path, limit=0)
+>       assert result["rows"][0]["retry_attempts"][-1]["cost_report"] == reports["paid-retry"]
+E       AssertionError: assert {'status': 'i...st_usd': 1.25} == {'status': 'm...'cost_usd': 4}
+E
+E         Differing items:
+E         {'cost_usd': 1.25} != {'cost_usd': 4}
+E         {'status': 'imputed'} != {'status': 'measured'}
+E         Use -v to get more diff
+
+tests/test_adjudicator_retry_history.py:142: AssertionError
+_______ test_success_after_failed_retry_keeps_the_complete_paid_lineage ________
+
+retry_case = (PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-2321/test_success_after_..._usd': 0.75}, 'paid-third': {'status': 'imputed', 'cost_usd': 0.5}}, <function retry_case.<locals>.run at 0x10a21c7c0>)
+
+    def test_success_after_failed_retry_keeps_the_complete_paid_lineage(retry_case):
+        _path, _saved, reports, run = retry_case
+        run({"backend_run_id": "paid-retry", "backend": "gemini", "errors": ["timeout"]})
+        reports["paid-third"] = {"status": "imputed", "cost_usd": 0.5}
+        result = run(
+            {
+                "backend_run_id": "paid-third",
+                "backend": "gemini",
+                "proposal": {"decision": "uphold_blocker"},
+                "advisory_plan": {"decision": "uphold_blocker"},
+            }
+        )
+        row = result["rows"][0]
+>       assert {row["backend_run_id"], *(r["backend_run_id"] for r in row["retry_attempts"])} == {
+            "paid-original",
+            "paid-retry",
+            "paid-third",
+        }
+E       AssertionError: assert {'paid-retry', 'paid-third'} == {'paid-origin... 'paid-third'}
+E
+E         Extra items in the right set:
+E         'paid-original'
+E         Use -v to get more diff
+
+tests/test_adjudicator_retry_history.py:161: AssertionError
+____________ test_cost_refresh_failure_still_persists_paid_identity ____________
+
+retry_case = (PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-2321/test_cost_refresh_f...usd': 1.25}, 'paid-retry': {'status': 'imputed', 'cost_usd': 0.75}}, <function retry_case.<locals>.run at 0x10a21d440>)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a2229f0>
+
+    def test_cost_refresh_failure_still_persists_paid_identity(retry_case, monkeypatch):
+        path, _saved, reports, run = retry_case
+
+        def unavailable(backend_id, *_args, **_kwargs):
+            if backend_id == "paid-retry":
+                raise sqlite3.OperationalError("billing read unavailable")
+            return reports[backend_id]
+
+        monkeypatch.setattr(feedback, "role_cost_report", unavailable)
+        result = run({"backend_run_id": "paid-retry", "backend": "gemini", "errors": ["timeout"]})
+        row = result["rows"][0]["retry_attempts"][-1]
+        assert row["backend_run_id"] == "paid-retry"
+>       assert row["cost_refresh_error"] == "billing read unavailable"
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'cost_refresh_error'
+
+tests/test_adjudicator_retry_history.py:184: KeyError
+_ test_malformed_retry_history_is_unknown_not_silent_underaccounting[history0] _
+
+history = {}
+
+    @pytest.mark.parametrize("history", [{}, [None]])
+    def test_malformed_retry_history_is_unknown_not_silent_underaccounting(history):
+>       with pytest.raises(ValueError, match="retry attempt"):
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_adjudicator_retry_history.py:193: Failed
+_ test_malformed_retry_history_is_unknown_not_silent_underaccounting[history1] _
+
+history = [None]
+
+    @pytest.mark.parametrize("history", [{}, [None]])
+    def test_malformed_retry_history_is_unknown_not_silent_underaccounting(history):
+>       with pytest.raises(ValueError, match="retry attempt"):
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_adjudicator_retry_history.py:193: Failed
+tracked test inputs: NOT CHECKED -- /Users/teacher/Library/CloudStorage/Dropbox/My Mac (TRS MacBook)/Documents/Codex/2026-10-14/owner-drain-only-hold-direct-owner-15/work/20261015T0300Z/current-main is not a git checkout. In the exec mirror that loses nothing: its tests/ IS `git archive HEAD tests`, so every file in it was tracked
+=========================== short test summary info ============================
+FAILED tests/test_adjudicator_retry_history.py::test_exception_after_paid_retry_retains_new_attempt
+FAILED tests/test_adjudicator_retry_history.py::test_retry_accounts_for_old_and_new_paid_attempts[False]
+FAILED tests/test_adjudicator_retry_history.py::test_retry_accounts_for_old_and_new_paid_attempts[True]
+FAILED tests/test_adjudicator_retry_history.py::test_cost_summary_flattens_history_without_double_counting_backend_identity
+FAILED tests/test_adjudicator_retry_history.py::test_saved_retry_costs_refresh_without_redispatch
+FAILED tests/test_adjudicator_retry_history.py::test_success_after_failed_retry_keeps_the_complete_paid_lineage
+FAILED tests/test_adjudicator_retry_history.py::test_cost_refresh_failure_still_persists_paid_identity
+FAILED tests/test_adjudicator_retry_history.py::test_malformed_retry_history_is_unknown_not_silent_underaccounting[history0]
+FAILED tests/test_adjudicator_retry_history.py::test_malformed_retry_history_is_unknown_not_silent_underaccounting[history1]
+9 failed in 0.33s
