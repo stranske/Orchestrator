@@ -1966,7 +1966,7 @@ the existing role backend and records its native role receipt. This creates no r
 python3 src/roles.py route --role adjudicator
 python3 src/roles.py adjudicate --case-json case.json [--proposal-json adjudication.json]
 python3 src/roles.py adjudicate --case-json case.json --dispatch
-python3 src/adjudicator_retro.py --dispatch --limit 5  # resume shadow evidence; --retry retries failed cases
+python3 src/adjudicator_retro.py --dispatch --limit 5 [--timeout SECONDS]  # resume shadow evidence; --retry retries failed cases; --timeout is the per-dispatch budget (default: the role's own)
 ```
 
 ### Prompt authoring output contracts

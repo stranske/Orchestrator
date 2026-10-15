@@ -47,6 +47,11 @@ import verifier_evidence
 # transport dependency.  It is a local, immutable-commit evidence boundary.
 MAX_COLLECTION_SOURCE_BYTES = 1_048_576
 MAX_DIFF_PATCH_BYTES = 256_000
+# The one dispatch budget for every adjudicator call this module makes: the retrospective loop,
+# the judge-collected-case seam and the --timeout default all read it. It equals the role's own
+# default (`roles.run_adjudicator_agent`, parameter `timeout`); a test pins the two together so
+# they cannot drift apart again.
+DISPATCH_TIMEOUT_S = 600
 
 
 def report_path() -> Path:
@@ -1137,8 +1142,13 @@ def run(
     evidence_reader=None,
     runner=None,
     retry: bool = False,
+    timeout: int = DISPATCH_TIMEOUT_S,
 ) -> dict:
-    """Bounded, resumable shadow run; invalid packets are recorded and never dispatched."""
+    """Bounded, resumable shadow run; invalid packets are recorded and never dispatched.
+
+    ``timeout`` is the per-dispatch budget in seconds. It is saved on every attempted row as
+    ``dispatch_timeout_s`` so a row's history says which budget it ran under.
+    """
     path = path or report_path()
     reader = evidence_reader or fetch_evidence
     runner = runner or roles.run_adjudicator_agent
@@ -1205,12 +1215,15 @@ def run(
             entry["packet"] = packet
             if dispatch:
                 path.parent.mkdir(parents=True, exist_ok=True)
+                # Recorded before the call, so an attempt that times out or raises still names
+                # the budget it ran under; retry history copies it with the rest of the row.
+                entry["dispatch_timeout_s"] = timeout
                 result = runner(
                     case=packet,
                     dispatch=True,
                     source="retrospective",
                     cwd=str(path.parent),
-                    timeout=180,
+                    timeout=timeout,
                 )
                 entry.update(
                     {
@@ -1416,7 +1429,11 @@ def _selftest() -> None:
         else:
             raise AssertionError("malformed history reached dispatch preparation")
         assert path.read_bytes() == original
-    print("adjudicator_retro selftest: 10 checks passed")
+    import inspect
+
+    role_default = inspect.signature(roles.run_adjudicator_agent).parameters["timeout"].default
+    assert DISPATCH_TIMEOUT_S == role_default, "retro dispatch budget drifted from the role default"
+    print("adjudicator_retro selftest: 11 checks passed")
 
 
 def main() -> int:
@@ -1458,11 +1475,20 @@ def main() -> int:
     )
     parser.add_argument("--limit", type=int, default=5)
     parser.add_argument(
+        "--timeout",
+        type=int,
+        default=DISPATCH_TIMEOUT_S,
+        metavar="SECONDS",
+        help="per-dispatch budget for each adjudicator call (default: the role's own default)",
+    )
+    parser.add_argument(
         "--retry",
         action="store_true",
         help="Repair pending Brain records without redispatch; retry failed evidence attempts",
     )
     args = parser.parse_args()
+    if args.timeout < 1:
+        parser.error("--timeout must be at least 1 second")
     if args.selftest:
         _selftest()
         return 0
@@ -1498,7 +1524,7 @@ def main() -> int:
                 dispatch=args.dispatch,
                 source="retrospective",
                 cwd=str(args.repository),
-                timeout=180,
+                timeout=args.timeout,
             )
             args.output.parent.mkdir(parents=True, exist_ok=True)
             with args.output.open("x") as stream:
@@ -1582,7 +1608,7 @@ def main() -> int:
             )
         )
         return 0
-    result = run(dispatch=args.dispatch, limit=args.limit, retry=args.retry)
+    result = run(dispatch=args.dispatch, limit=args.limit, retry=args.retry, timeout=args.timeout)
     print(json.dumps(result["summary"], indent=2))
     return 0
 

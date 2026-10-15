@@ -728,3 +728,147 @@ def test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria(
         evidence_reader=lambda _row: pytest.fail("must not re-read decided row"),
     )
     assert calls["n"] == 0
+
+
+def test_run_passes_the_dispatch_timeout_and_records_it(private_brain, tmp_path, monkeypatch):
+    """The retrospective loop spends one named budget and saves it on the attempted row."""
+    monkeypatch.setattr(
+        retro,
+        "disputes",
+        lambda **_: [
+            {
+                "run_id": "r1",
+                "target": "owner/repo#1",
+                "verifier_verdict": "NON_PASS",
+                "adjudicated_verdict": "PASS",
+                "merged": 1,
+            }
+        ],
+    )
+    seen = []
+
+    def runner(**kwargs):
+        seen.append(kwargs)
+        return {"errors": ["fake runner"], "backend_run_id": "fake-backend"}
+
+    def attempt(path, **options):
+        return retro.run(
+            dispatch=True,
+            limit=1,
+            path=path,
+            db=private_brain,
+            evidence_reader=evidence,
+            runner=runner,
+            **options,
+        )["rows"][0]
+
+    row = attempt(tmp_path / "default.json")
+    assert seen[-1]["timeout"] == retro.DISPATCH_TIMEOUT_S
+    assert row["dispatch_timeout_s"] == retro.DISPATCH_TIMEOUT_S
+
+    row = attempt(tmp_path / "custom.json", timeout=77)
+    assert seen[-1]["timeout"] == 77
+    assert row["dispatch_timeout_s"] == 77
+
+    # A saved metadata-only abstention that is retried and fails keeps the budget on its history.
+    identity = {"run_id": "r1", "verifier_verdict": "NON_PASS", "adjudicated_verdict": "PASS"}
+    saved = {
+        **identity,
+        "case_id": hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest(),
+        "target": "owner/repo#1",
+        "decision": "needs_more_evidence",
+        "packet": {"metadata_only": True, "target": "owner/repo#1"},
+        "backend_run_id": "paid-attempt-1",
+        "cost_usd": 0.12,
+    }
+    retry_path = tmp_path / "retry.json"
+    retry_path.write_text(json.dumps({"rows": [saved], "population": 1}))
+    row = attempt(retry_path, retry=True, timeout=77)
+    assert seen[-1]["timeout"] == 77
+    assert row["retry_attempts"][-1]["dispatch_timeout_s"] == 77
+
+
+def test_dispatch_timeout_default_equals_the_role_default():
+    """One budget, defined once: the retro default cannot drift from the role's own default."""
+    import inspect
+
+    role_default = inspect.signature(roles.run_adjudicator_agent).parameters["timeout"].default
+    assert retro.DISPATCH_TIMEOUT_S == role_default
+
+
+def test_main_passes_the_timeout_option_and_rejects_a_budget_below_one(monkeypatch, capsys):
+    import sys
+
+    seen = []
+
+    def fake_run(**kwargs):
+        seen.append(kwargs)
+        return {"summary": {"cases": 0}}
+
+    monkeypatch.setattr(retro, "run", fake_run)
+
+    def invoke(*argv):
+        monkeypatch.setattr(sys, "argv", ["adjudicator_retro.py", *argv])
+        return retro.main()
+
+    assert invoke("--dispatch", "--limit", "1") == 0
+    assert seen[-1]["timeout"] == retro.DISPATCH_TIMEOUT_S
+    assert invoke("--dispatch", "--limit", "1", "--timeout", "77") == 0
+    assert seen[-1]["timeout"] == 77
+    for bad in ("0", "-5"):
+        before = len(seen)
+        with pytest.raises(SystemExit) as exit_info:
+            invoke("--dispatch", "--timeout", bad)
+        assert exit_info.value.code == 2
+        assert len(seen) == before, "a rejected budget must not reach run()"
+    assert "--timeout must be at least 1 second" in capsys.readouterr().err
+
+
+def test_judge_collected_case_dispatches_with_the_configured_timeout(tmp_path, monkeypatch):
+    import sys
+
+    report = tmp_path / "report.json"
+    report.write_text(json.dumps({"rows": [{"case_id": "case-1"}]}))
+    qualification = tmp_path / "qualification.json"
+    qualification.write_text("{}")
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    seen = []
+
+    def fake_agent(**kwargs):
+        seen.append(kwargs)
+        return {
+            "shadow": True,
+            "decision_source": "fake",
+            "backend_run_id": "fake-backend",
+            "evidence_qualification": {},
+            "errors": [],
+        }
+
+    monkeypatch.setattr(retro, "qualify_collected_case", lambda *a, **kw: {"qualified": True})
+    monkeypatch.setattr(roles, "run_adjudicator_agent", fake_agent)
+
+    def invoke(output, *extra):
+        argv = [
+            "adjudicator_retro.py",
+            "--judge-collected-case",
+            "case-1",
+            "--report",
+            str(report),
+            "--repository",
+            str(repository),
+            "--qualification",
+            str(qualification),
+            "--output",
+            str(output),
+            "--dispatch",
+            *extra,
+        ]
+        monkeypatch.setattr(sys, "argv", argv)
+        return retro.main()
+
+    assert invoke(tmp_path / "default.json") == 0
+    assert seen[-1]["timeout"] == retro.DISPATCH_TIMEOUT_S
+    assert invoke(tmp_path / "custom.json", "--timeout", "77") == 0
+    assert seen[-1]["timeout"] == 77
+    assert (tmp_path / "custom.json").exists()
