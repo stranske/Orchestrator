@@ -1,0 +1,9 @@
+{
+  "prior_head": "f37ba384751c7222a68dd12e1d60aff4e6b330a4",
+  "base": "fc2b259eeadf7fe01f754232d3a7496c43101f70",
+  "collection": 3318,
+  "production_src_diff": "empty",
+  "conflicts": "floor only",
+  "ceilings": "preserved",
+  "verification": "previous focused tests unchanged; fresh hosted required"
+}

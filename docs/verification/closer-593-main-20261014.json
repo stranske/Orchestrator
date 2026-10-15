@@ -1,0 +1,11 @@
+{
+  "base": "25f0fc42b7b64ea57ae50021e4550f5bc6f54518",
+  "collected": 3316,
+  "focused_test_receipt": ".................................................................        [100%]\n65 passed in 4.82s\n",
+  "ceiling_policy": "all current-main ceilings preserved",
+  "conflicts": "only .verify-floor.json",
+  "hosted_verification": "pending",
+  "evidence_revision": "84c23784935b43a6c291e48affccfeb8b6673f21",
+  "historical_snapshot": true,
+  "collection_scope": "3316 is the historical integration snapshot, not current PR593 collection; later3380 floor belongs to a later tested tree"
+}

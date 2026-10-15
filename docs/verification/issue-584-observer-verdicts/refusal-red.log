@@ -1,0 +1,24 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_record_usefulness_refuses_an_exempt_capability ______________
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-1860/test_record_usefulness_refuses0')
+
+    def test_record_usefulness_refuses_an_exempt_capability(tmp_path):
+        import capability_propensity as cp
+
+        ledger = _observer_verdict_ledger(tmp_path)
+        before = ledger.read_bytes()
+        for cid, reason in (
+            ("capability-activation-audit", "observer"),
+            ("capability-propensity", "observer"),
+            ("redirect-policy", "observer"),
+            ("issue-readiness", "tick_cadence"),
+        ):
+>           with pytest.raises(ValueError, match=f"{cid}.*{reason}"):
+E           Failed: DID NOT RAISE ValueError
+
+tests/test_capabilities.py:1162: Failed
+=========================== short test summary info ============================
+FAILED tests/test_capabilities.py::test_record_usefulness_refuses_an_exempt_capability
+1 failed in 0.24s

@@ -14,8 +14,8 @@ These tests pin:
 3. that a firing row is not called held off, and `no_cadence_declared` is untouched by a hold;
 4. the drained rendering, by construction, and a registry that cannot be read failing toward
    motion: it holds nothing and says so;
-5. the grading side effect: the edit re-baselines the tick's grader instead of minting a "useful"
-   verdict, while a hold lifted LATER is graded like any other change.
+5. the grading side effect: the edit re-baselines the tick's grader instead of minting a usefulness
+   verdict (observers are verdict-exempt), while a hold lifted LATER still reports a real delta.
 """
 
 from __future__ import annotations
@@ -323,13 +323,19 @@ def test_the_change_rebaselines_and_a_later_lift_is_graded(tmp_path, monkeypatch
         os.utime(artifact, (NOW + day, NOW + day))
         return cp.tick_evidence(now=NOW + day * DAY, state_dir=state, path=ledger, steps=steps)
 
+    def _exempt_observer_eval(rep, *, report_changed):
+        ev = rep["evaluated"][0]
+        assert ev["graded"] is False and ev["reason"] == "verdict_exempt", ev
+        assert ev["report_changed"] is report_changed, ev
+        assert rep["verdicts_recorded"] == 0, rep
+
     tick(before, 0)  # first sight: baseline
-    assert tick(before, 1)["evaluated"][0]["useful"] is False  # grading works on this projection
+    _exempt_observer_eval(tick(before, 1), report_changed=False)
     changed = tick(after, 2)
     assert changed["verdicts_recorded"] == 0 and changed["evaluated"] == [], changed
     assert changed["baselined"][0]["rebaselined"] is True
     assert "population" in changed["baselined"][0]["reason"], changed["baselined"][0]
-    assert tick(after, 3)["evaluated"][0]["useful"] is False  # comparable again, and unchanged
-    # A hold LIFTED later is a lifecycle action, graded like a retirement: the row returns to
-    # `overdue` under the same declared population, and that is a real change.
-    assert tick(lifted, 4)["evaluated"][0]["useful"] is True
+    _exempt_observer_eval(tick(after, 3), report_changed=False)
+    # A hold LIFTED later is a lifecycle action: the row returns to `overdue` and the delta shows up
+    # in the observer projection without recording a usefulness verdict.
+    _exempt_observer_eval(tick(lifted, 4), report_changed=True)

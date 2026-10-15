@@ -1129,3 +1129,266 @@ def test_usage_and_propensity_headlines_carry_both_accountings(tmp_path, monkeyp
         prop_text = capability_propensity._fmt(prop_report)
         assert "verdicts: 2 of 2 capabilities carry a usefulness verdict (ledger)" in prop_text
         assert "outcome links: 1 of 2 carry a Brain outcome edge (lifecycle)" in prop_text
+
+
+def _observer_verdict_ledger(tmp_path):
+    rows = {}
+    for cid, matcher, cadence in (
+        ("capability-activation-audit", "tick_phase", "daily"),
+        ("capability-firing-monitor", "tick_phase", "weekly capability-firing-monitor"),
+        ("capability-propensity", "cli_subcommand", "per advisor call"),
+        ("redirect-policy", "lane_event", "per stall"),
+        ("issue-readiness", "cli_subcommand", "weekly issue-readiness"),
+        ("offload", "task_type", "per task"),
+    ):
+        cap = capabilities._blank_capability(cid)
+        cap.update(status="wired", matcher={"kind": matcher}, trigger_cadence=cadence)
+        rows[cid] = cap
+    ledger = tmp_path / "capabilities.json"
+    capabilities.save(rows, ledger)
+    return ledger
+
+
+def test_record_usefulness_refuses_an_exempt_capability(tmp_path):
+    import capability_propensity as cp
+
+    ledger = _observer_verdict_ledger(tmp_path)
+    before = ledger.read_bytes()
+    for cid, reason in (
+        ("capability-activation-audit", "observer"),
+        ("capability-firing-monitor", "observer"),
+        ("capability-propensity", "observer"),
+        ("redirect-policy", "observer"),
+        ("issue-readiness", "tick_cadence"),
+    ):
+        with pytest.raises(ValueError, match=f"{cid}.*{reason}"):
+            cp.record_usefulness(
+                cid,
+                "advice:observer5840001",
+                useful=True,
+                evidence="a finding changed",
+                provenance="machine_observed",
+                path=ledger,
+            )
+        assert ledger.read_bytes() == before
+    assert cp.record_usefulness(
+        "offload",
+        "advice:observer5840001",
+        useful=True,
+        evidence="review isolated the demonstrated defect",
+        provenance="machine_observed",
+        path=ledger,
+    )
+    assert cp.usefulness(path=ledger)["rows"]["offload"]["resolved"] == 1
+
+
+def test_tick_evidence_records_no_verdict_for_an_observer(tmp_path, monkeypatch):
+    import os
+
+    import capability_advisor
+    import capability_propensity as cp
+
+    rows = {}
+    for cid in ("changed", "unchanged"):
+        row = capabilities._blank_capability(cid)
+        row.update(status="wired", matcher={"kind": "tick_phase"})
+        rows[cid] = row
+    ledger = tmp_path / "caps.json"
+    capabilities.save(rows, ledger)
+    state = tmp_path / "state"
+    state.mkdir()
+    steps = {cid: {"key": cid, "artifact": f"{cid}.json", "cadence_days": 0} for cid in rows}
+    monkeypatch.setattr(cp, "TICK_FINDING_FIELDS", {cid: {"findings": ("id",)} for cid in rows})
+    monkeypatch.setitem(
+        capability_advisor.SURFACE_BINDINGS,
+        cp.TICK_SURFACE,
+        {cid: "fixture observer" for cid in rows},
+    )
+    now = 1_800_000_000
+    for cid in rows:
+        artifact = state / f"{cid}.json"
+        artifact.write_text(json.dumps({"findings": [{"id": "old"}]}))
+        os.utime(artifact, (now, now))
+    cp.tick_evidence(now=now, state_dir=state, path=ledger, steps=steps)
+    for cid in rows:
+        artifact = state / f"{cid}.json"
+        artifact.write_text(
+            json.dumps({"findings": [{"id": "new" if cid == "changed" else "old"}]})
+        )
+        os.utime(artifact, (now + 1, now + 1))
+    out = cp.tick_evidence(now=now + 86400, state_dir=state, path=ledger, steps=steps)
+    assert out["verdicts_recorded"] == 0
+    evaluated = {r["capability_id"]: r for r in out["evaluated"]}
+    assert set(evaluated) == set(rows)
+    for cid, row in evaluated.items():
+        assert row["reason"] == "verdict_exempt", row
+        assert row["graded"] is False
+        assert row["report_changed"] is (cid == "changed")
+        assert "useful" not in row
+        assert row["fingerprint"] and "changed_keys" in row
+    assert not any(
+        e["type"] == "outcome"
+        for cap in capabilities.load_declared(ledger).values()
+        for e in cap["event_history"]
+    )
+
+
+def test_usage_report_prints_verdict_na_for_exempt_rows(tmp_path, monkeypatch):
+    import os
+    import sqlite3
+
+    import capability_propensity as cp
+
+    ledger = _observer_verdict_ledger(tmp_path)
+    now = int(time.time())
+    observers = (
+        "capability-activation-audit",
+        "capability-firing-monitor",
+        "capability-propensity",
+    )
+    # Historical noise bypasses the new write refusal, exactly as retained old events do.
+    for cid in observers:
+        for i, useful in enumerate((True, False)):
+            capabilities.heartbeat(
+                cid,
+                "outcome",
+                ref=f"advice:oldobserver584{i}",
+                path=ledger,
+                timestamp=now - 86400,
+                metadata={
+                    "useful": useful,
+                    "source": "capability_propensity",
+                    "verdict_kind": "observer_output_change",
+                },
+            )
+
+    def outcomes():
+        return {
+            cid: [e for e in cap["event_history"] if e["type"] == "outcome"]
+            for cid, cap in capabilities.load(ledger, create=False).items()
+        }
+
+    historical = outcomes()
+    state = tmp_path / "state"
+    state.mkdir()
+    monkeypatch.setattr(capabilities, "_now", lambda: now)
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "missing.db")
+    monkeypatch.delenv("ORCH_TICK_EVIDENCE_DISABLED", raising=False)
+    monkeypatch.setenv("ORCH_CAPABILITY_HEARTBEATS", "0")
+    # Rehearse baseline, changed findings and identical regeneration against the real tick
+    # bindings, cadence artifact names and projections. This is not a live mirror-sync witness.
+    for production in range(3):
+        finding = "old" if production == 0 else "new"
+        reports = {
+            "capability-activation-audit": {"by_defect": {"no_heartbeat": [finding]}},
+            "capability-firing-monitor": {
+                "overdue": [{"capability_id": finding}],
+                "regressed": [],
+                "never_fired": [],
+                "no_cadence_declared": [],
+            },
+            "capability-propensity": {"capabilities_with_evidence": production},
+        }
+        for cid, report in reports.items():
+            artifact = cp.tick_artifact(cid, state_dir=state)
+            assert artifact is not None
+            artifact.write_text(json.dumps(report), encoding="utf-8")
+            os.utime(artifact, (now, now))
+        tick = cp.tick_evidence(now=now, state_dir=state, path=ledger)
+        assert tick["verdicts_recorded"] == 0, tick
+        assert tick["triggers_recorded"] == len(observers), tick
+        if production == 0:
+            assert {r["capability_id"] for r in tick["baselined"]} == set(observers)
+        else:
+            evaluated = {r["capability_id"]: r for r in tick["evaluated"]}
+            assert set(evaluated) == set(observers)
+            assert evaluated["capability-propensity"]["reason"] == "no_finding_projection"
+            for cid in observers[:2]:
+                row = evaluated[cid]
+                assert row["reason"] == "verdict_exempt", row
+                assert row["report_changed"] is (production == 1)
+                assert bool(row["changed_keys"]) is (production == 1)
+                assert (row["fingerprint"] != row["previous_fingerprint"]) is (production == 1)
+            assert all(not row["graded"] and "useful" not in row for row in evaluated.values())
+        assert outcomes() == historical
+        now += 7 * 86400
+
+    before = ledger.read_bytes()
+    stats = cp.usefulness(path=ledger, now=now)["rows"]
+    for cid in observers:
+        row = stats[cid]
+        assert row["observer_noise"]["useful"] == row["observer_noise"]["not_useful"] == 1
+        assert row["resolved"] == row["n_eff"] == row["effective_useful"] == 0
+        assert row["usefulness_rate"] is row["weighted_usefulness_rate"] is None
+    with sqlite3.connect(":memory:") as conn:
+        usage = capabilities.usage_report(
+            capabilities.summary(ledger, create=False), now=now, conn=conn
+        )
+    text = capabilities.format_usage_report(usage)
+    for cid in (*observers, "redirect-policy"):
+        line = next(line for line in text.splitlines() if line.startswith(f"| {cid} |"))
+        assert "verdict n/a (observer); consumer actions unmeasured" in line
+        assert "production useful" not in line and "promote it" not in line
+    assert "production useful" in next(
+        line for line in text.splitlines() if line.startswith("| offload |")
+    )
+    assert ledger.read_bytes() == before
+    assert not (tmp_path / "missing.db").exists()
+
+
+def test_usage_consumer_actions_reuses_value_chain_accepted_edge_classification(
+    tmp_path, monkeypatch
+):
+    import value_chain_monitor
+
+    ledger = _observer_verdict_ledger(tmp_path)
+    now = int(time.time())
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    edges = [
+        {"capability_id": "capability-activation-audit", "accepted": 1, "target_mode": "local"},
+        {"capability_id": "capability-activation-audit", "accepted": 0, "target_mode": "local"},
+        {"capability_id": "offload", "accepted": 1, "target_mode": "local"},
+    ]
+
+    def read_brain(db, since, until):
+        assert db == feedback.DB_PATH
+        assert since == now - value_chain_monitor.WINDOW_DAYS * 86400 and until == now
+        return {"edges": edges}
+
+    monkeypatch.setattr(value_chain_monitor, "_brain", read_brain)
+    counts = capabilities._consumer_action_counts(now=now, path=ledger)
+    assert counts["capability-activation-audit"] == 1
+    assert counts["redirect-policy"] == 0
+    assert counts["offload"] == 1
+    assert not feedback.DB_PATH.exists()
+
+
+def test_exempt_usage_preserves_invocation_gap_and_renders_no_verdict(tmp_path, monkeypatch):
+    ledger = _observer_verdict_ledger(tmp_path)
+    monkeypatch.setattr(capabilities, "_fleet_edge_counts", lambda **_: {})
+    monkeypatch.setattr(capabilities, "_consumer_action_counts", lambda **_: {})
+    monkeypatch.setattr(capabilities, "classify_liveness", lambda *_, **__: "matched_not_invoked")
+    usage = capabilities.usage_report(
+        capabilities.summary(ledger, create=False), now=100, path=ledger
+    )
+    row = next(r for r in usage["rows"] if r["capability_id"] == "capability-activation-audit")
+    assert row["unblock"]["action"] == "lift the gate, or accept it is deliberately off"
+    line = next(
+        s
+        for s in capabilities.format_usage_report(usage).splitlines()
+        if s.startswith("| capability-activation-audit |")
+    )
+    assert line.split("|")[6].strip() == "n/a"
+    assert usage["capabilities_with_production_run_verdict"] == 0
+
+
+def test_consumer_action_read_failure_is_diagnosed(tmp_path, monkeypatch, caplog):
+    import value_chain_monitor
+
+    def fail(*_, **__):
+        raise OSError("fixture database unavailable")
+
+    monkeypatch.setattr(value_chain_monitor, "_brain", fail)
+    assert capabilities._consumer_action_counts(now=100, path=tmp_path / "ledger") == {}
+    assert "consumer-action evidence read failed" in caplog.text
+    assert "fixture database unavailable" in caplog.text

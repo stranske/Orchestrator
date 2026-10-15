@@ -87,6 +87,14 @@ The single left arc is the loop closing. What it carries back is the point: `fee
 
 ## Rails — deterministic, keep as code
 
+Observer reports and tick-cadence rails retain invocation, fingerprint and finding-delta evidence,
+but cannot earn delivery-usefulness verdicts. The existing selection exemption supplies the
+classification, with explicit declarations for the event-driven propensity and redirect rails.
+Historical observer verdicts remain in the append-only ledger as report-time `observer_noise`,
+excluded from raw and weighted delivery rates. Usage prints `verdict n/a` and the value-chain
+monitor's accepted consumer actions in its existing window, or `unmeasured` when unreadable.
+
+
 `router` (selection) · `claims` · `capacity` · `provision` · `dispatcher` (transport) · `adapters` ·
 `feedback` (the learner/store) · gates (`testgen_gate`, `local_verify`, `merge_guard`,
 `runtime_ac_gate`, `frontend_verify` (Gate 1), `ux_review.gate_decision` (Gate 2 pass-requirement)).

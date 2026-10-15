@@ -1,0 +1,5 @@
+{
+  "prior_head": "e2a6f78bd128784a138e631aa7f75cc55c311f20",
+  "correction": "Initial new assertion targeted adjacent table column; corrected test then exposed missing formatter substitution; both corrected. Earlier PR136PASS statement was erroneous; current exact suite67PASS.",
+  "validation": "...................................................................      [100%]\n67 passed in 4.35s\n"
+}
