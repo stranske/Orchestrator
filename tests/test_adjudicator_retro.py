@@ -788,12 +788,31 @@ def test_run_passes_the_dispatch_timeout_and_records_it(private_brain, tmp_path,
     assert row["retry_attempts"][-1]["dispatch_timeout_s"] == 77
 
 
-def test_dispatch_timeout_default_equals_the_role_default():
-    """One budget, defined once: the retro default cannot drift from the role's own default."""
+def test_dispatch_timeout_default_equals_the_role_default(monkeypatch, capsys):
+    """Pin the shared default and the named CLI override/rejection contract."""
     import inspect
+    import sys
 
     role_default = inspect.signature(roles.run_adjudicator_agent).parameters["timeout"].default
     assert retro.DISPATCH_TIMEOUT_S == role_default
+
+    seen = []
+
+    def fake_run(**kwargs):
+        seen.append(kwargs)
+        return {"summary": {"cases": 0}}
+
+    monkeypatch.setattr(retro, "run", fake_run)
+    monkeypatch.setattr(sys, "argv", ["adjudicator_retro.py", "--dispatch", "--timeout", "77"])
+    assert retro.main() == 0
+    assert seen[-1]["timeout"] == 77
+    before = len(seen)
+    monkeypatch.setattr(sys, "argv", ["adjudicator_retro.py", "--dispatch", "--timeout", "0"])
+    with pytest.raises(SystemExit) as exit_info:
+        retro.main()
+    assert exit_info.value.code == 2
+    assert len(seen) == before, "a rejected budget must not reach run()"
+    assert "--timeout must be at least 1 second" in capsys.readouterr().err
 
 
 def test_main_passes_the_timeout_option_and_rejects_a_budget_below_one(monkeypatch, capsys):
