@@ -1144,6 +1144,10 @@ def run(
     runner = runner or roles.run_adjudicator_agent
     previous = json.loads(path.read_text()) if path.exists() else {}
     saved = {r["case_id"]: r for r in previous.get("rows", [])}
+    # Exhaust the lazy traversal before recovery or paid dispatch can mutate state.
+    # A malformed later history must not strand an earlier paid attempt on save.
+    for _ in _attempt_rows(list(saved.values())):
+        pass
     _refresh_saved_verdicts(list(saved.values()), db)
     population = disputes(db=db)
     attempted = 0
@@ -1397,7 +1401,22 @@ def _selftest() -> None:
         pass
     else:
         raise AssertionError("nonpositive preparation budget was accepted")
-    print("adjudicator_retro selftest: 9 checks passed")
+    with tempfile.TemporaryDirectory() as root:
+        path = Path(root) / "malformed.json"
+        path.write_text(
+            json.dumps(
+                {"rows": [{"case_id": "bad", "retry_attempts": [{"retry_attempts": [None]}]}]}
+            )
+        )
+        original = path.read_bytes()
+        try:
+            run(path=path, db=Path(root) / "absent.db", dispatch=True, retry=True)
+        except ValueError as exc:
+            assert str(exc) == "invalid retry attempt history"
+        else:
+            raise AssertionError("malformed history reached dispatch preparation")
+        assert path.read_bytes() == original
+    print("adjudicator_retro selftest: 10 checks passed")
 
 
 def main() -> int:

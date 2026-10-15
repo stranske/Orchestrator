@@ -296,3 +296,47 @@ def test_historical_role_record_recovers_without_another_paid_call(
     assert second["summary"]["cases"] == 1
     assert second["summary"]["cost_attempted_cases"] == 2
     assert json.loads(path.read_text()) == second
+
+
+@pytest.mark.parametrize("retry", [False, True])
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("history", [{}, [None]])
+def test_malformed_history_fails_before_any_side_effect(
+    retry_case, monkeypatch, retry, nested, history
+):
+    path, saved, _reports, _run = retry_case
+    saved["decision"] = "uphold_blocker"
+    # A pending record before a malformed later history exercises lazy traversal.
+    saved["role_record_error"] = "pending write"
+    saved["role_record"] = {"run_id": "retained-role"}
+    saved["retry_attempts"] = [{"retry_attempts": history}] if nested else history
+    path.write_text(json.dumps({"rows": [saved], "population": 1}))
+    original = path.read_bytes()
+    calls = []
+    unseen = {**saved, "run_id": "unseen-dispute"}
+    monkeypatch.setattr(retro, "disputes", lambda **_: [unseen])
+    monkeypatch.setattr(feedback, "record_role_run", lambda **_: calls.append("record"))
+    monkeypatch.setattr(retro, "_refresh_saved_verdicts", lambda *_: calls.append("refresh"))
+
+    def paid_runner(**_):
+        calls.append("paid")
+        return {"backend_run_id": "paid-retry", "backend": "gemini", "errors": []}
+
+    for _ in range(2):
+        with pytest.raises(ValueError, match="invalid retry attempt history"):
+            retro.run(
+                dispatch=True,
+                retry=retry,
+                limit=1,
+                path=path,
+                evidence_reader=lambda _: {
+                    "disputed_finding": {"ref": "finding", "body": "retained finding"},
+                    "ground_truth_evidence": {
+                        "diff_summary": "complete change",
+                        "gate_runs": ["gate"],
+                    },
+                },
+                runner=paid_runner,
+            )
+        assert calls == []
+        assert path.read_bytes() == original
