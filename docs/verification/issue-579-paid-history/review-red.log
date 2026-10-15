@@ -1,0 +1,124 @@
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+______ test_successful_retry_survives_cost_error_without_repeat_dispatch _______
+
+retry_case = (PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-2328/test_successful_ret...usd': 1.25}, 'paid-retry': {'status': 'imputed', 'cost_usd': 0.75}}, <function retry_case.<locals>.run at 0x107470f40>)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x106d061e0>
+
+    def test_successful_retry_survives_cost_error_without_repeat_dispatch(retry_case, monkeypatch):
+        path, _saved, _reports, run = retry_case
+
+        def unavailable(*_args):
+            raise sqlite3.OperationalError("accounting temporarily unavailable")
+
+        monkeypatch.setattr(retro, "measured_cost", unavailable)
+        result = run(
+            {
+                "backend_run_id": "paid-retry",
+                "backend": "gemini",
+                "proposal": {"decision": "uphold_blocker"},
+                "advisory_plan": {"decision": "uphold_blocker"},
+            }
+        )
+        row = result["rows"][0]
+>       assert row["backend_run_id"] == "paid-retry"
+E       AssertionError: assert 'paid-original' == 'paid-retry'
+E
+E         - paid-retry
+E         + paid-original
+
+tests/test_adjudicator_retry_history.py:188: AssertionError
+________ test_withdrawn_historical_cost_never_remains_measured[imputed] ________
+
+retry_case = (PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-2328/test_withdrawn_hist...usd': 1.25}, 'paid-retry': {'status': 'imputed', 'cost_usd': 0.75}}, <function retry_case.<locals>.run at 0x1074713a0>)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x106d061b0>
+receipt = 'imputed'
+
+    @pytest.mark.parametrize("receipt", ["imputed", "unmeasured", "error"])
+    def test_withdrawn_historical_cost_never_remains_measured(retry_case, monkeypatch, receipt):
+        path, _saved, reports, run = retry_case
+        report = run({"backend_run_id": "paid-retry", "backend": "gemini", "errors": ["timeout"]})
+        attempt = report["rows"][0]["retry_attempts"][-1]
+        attempt["cost_usd"] = 7
+        attempt["cost_report"] = {"status": "measured", "cost_usd": 7}
+        path.write_text(json.dumps(report))
+        reports["paid-retry"] = {"status": receipt, "cost_usd": 0.75 if receipt == "imputed" else None}
+
+        def refreshed(backend_id, *_args, **_kwargs):
+            if backend_id == "paid-retry" and receipt == "error":
+                raise sqlite3.OperationalError("receipt unavailable")
+            return reports[backend_id]
+
+        monkeypatch.setattr(feedback, "role_cost_report", refreshed)
+        result = retro.run(path=path, limit=0)
+        attempt = result["rows"][0]["retry_attempts"][-1]
+        assert attempt["backend_run_id"] == "paid-retry"
+>       assert attempt["cost_usd"] is None
+E       assert 7 is None
+
+tests/test_adjudicator_retry_history.py:220: AssertionError
+______ test_withdrawn_historical_cost_never_remains_measured[unmeasured] _______
+
+retry_case = (PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-2328/test_withdrawn_hist...': 1.25}, 'paid-retry': {'status': 'unmeasured', 'cost_usd': None}}, <function retry_case.<locals>.run at 0x107472480>)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x106db3a70>
+receipt = 'unmeasured'
+
+    @pytest.mark.parametrize("receipt", ["imputed", "unmeasured", "error"])
+    def test_withdrawn_historical_cost_never_remains_measured(retry_case, monkeypatch, receipt):
+        path, _saved, reports, run = retry_case
+        report = run({"backend_run_id": "paid-retry", "backend": "gemini", "errors": ["timeout"]})
+        attempt = report["rows"][0]["retry_attempts"][-1]
+        attempt["cost_usd"] = 7
+        attempt["cost_report"] = {"status": "measured", "cost_usd": 7}
+        path.write_text(json.dumps(report))
+        reports["paid-retry"] = {"status": receipt, "cost_usd": 0.75 if receipt == "imputed" else None}
+
+        def refreshed(backend_id, *_args, **_kwargs):
+            if backend_id == "paid-retry" and receipt == "error":
+                raise sqlite3.OperationalError("receipt unavailable")
+            return reports[backend_id]
+
+        monkeypatch.setattr(feedback, "role_cost_report", refreshed)
+        result = retro.run(path=path, limit=0)
+        attempt = result["rows"][0]["retry_attempts"][-1]
+        assert attempt["backend_run_id"] == "paid-retry"
+>       assert attempt["cost_usd"] is None
+E       assert 7 is None
+
+tests/test_adjudicator_retry_history.py:220: AssertionError
+_________ test_withdrawn_historical_cost_never_remains_measured[error] _________
+
+retry_case = (PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-2328/test_withdrawn_hist...t_usd': 1.25}, 'paid-retry': {'status': 'error', 'cost_usd': None}}, <function retry_case.<locals>.run at 0x107472200>)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x106db21e0>
+receipt = 'error'
+
+    @pytest.mark.parametrize("receipt", ["imputed", "unmeasured", "error"])
+    def test_withdrawn_historical_cost_never_remains_measured(retry_case, monkeypatch, receipt):
+        path, _saved, reports, run = retry_case
+        report = run({"backend_run_id": "paid-retry", "backend": "gemini", "errors": ["timeout"]})
+        attempt = report["rows"][0]["retry_attempts"][-1]
+        attempt["cost_usd"] = 7
+        attempt["cost_report"] = {"status": "measured", "cost_usd": 7}
+        path.write_text(json.dumps(report))
+        reports["paid-retry"] = {"status": receipt, "cost_usd": 0.75 if receipt == "imputed" else None}
+
+        def refreshed(backend_id, *_args, **_kwargs):
+            if backend_id == "paid-retry" and receipt == "error":
+                raise sqlite3.OperationalError("receipt unavailable")
+            return reports[backend_id]
+
+        monkeypatch.setattr(feedback, "role_cost_report", refreshed)
+        result = retro.run(path=path, limit=0)
+        attempt = result["rows"][0]["retry_attempts"][-1]
+        assert attempt["backend_run_id"] == "paid-retry"
+>       assert attempt["cost_usd"] is None
+E       assert 7 is None
+
+tests/test_adjudicator_retry_history.py:220: AssertionError
+tracked test inputs: NOT CHECKED -- /Users/teacher/Library/CloudStorage/Dropbox/My Mac (TRS MacBook)/Documents/Codex/2026-10-14/owner-drain-only-hold-direct-owner-15/work/20261015T0300Z/review-base608 is not a git checkout. In the exec mirror that loses nothing: its tests/ IS `git archive HEAD tests`, so every file in it was tracked
+=========================== short test summary info ============================
+FAILED tests/test_adjudicator_retry_history.py::test_successful_retry_survives_cost_error_without_repeat_dispatch
+FAILED tests/test_adjudicator_retry_history.py::test_withdrawn_historical_cost_never_remains_measured[imputed]
+FAILED tests/test_adjudicator_retry_history.py::test_withdrawn_historical_cost_never_remains_measured[unmeasured]
+FAILED tests/test_adjudicator_retry_history.py::test_withdrawn_historical_cost_never_remains_measured[error]
+4 failed, 9 deselected in 0.48s

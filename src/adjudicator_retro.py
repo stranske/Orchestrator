@@ -36,7 +36,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import feedback
 import fleet_shapes
@@ -387,18 +387,13 @@ def measured_cost(run_id: str | None, db: Path | None = None) -> float | None:
 
 
 def _refresh_saved_verdicts(rows: list[dict], db: Path | None = None) -> None:
-    """Refresh every paid attempt; grade only saved decisions outside the replay window."""
-    refreshable = [row for row in rows if row.get("decision") or row.get("backend_run_id")]
+    """Refresh primary decisions; publication independently refreshes all cost receipts."""
+    refreshable = [row for row in rows if row.get("decision")]
     if not refreshable:
         return
     with sqlite3.connect(f"file:{(db or feedback.DB_PATH).resolve()}?mode=ro", uri=True) as conn:
         conn.row_factory = sqlite3.Row
         for row in refreshable:
-            # Invalid responses still incur costs. Their late receipts and cost
-            # withdrawals must refresh without admitting a decision or a grade.
-            row["cost_usd"] = measured_cost(row.get("backend_run_id"), db)
-            if not row.get("decision"):
-                continue
             outcome = conn.execute(
                 "SELECT merged,durability,durability_checked_ts FROM outcomes WHERE run_id=?",
                 (row["run_id"],),
@@ -438,6 +433,20 @@ def _shadow_verdict_for_row(row: dict) -> str | None:
     return verdicts.get(decision) if isinstance(decision, str) else None
 
 
+def _attempt_rows(rows: list[dict]) -> Iterator[dict]:
+    """Visit primary and retained attempts without promoting retries to cases."""
+    for row in rows:
+        yield row
+        history = row.get("retry_attempts", [])
+        if not isinstance(history, list) or any(not isinstance(r, dict) for r in history):
+            raise ValueError("invalid retry attempt history")
+        yield from _attempt_rows(history)
+
+
+def _attempt_snapshot(row: dict) -> dict:
+    return {key: value for key, value in row.items() if key != "retry_attempts"}
+
+
 def summarize(rows: list[dict]) -> dict:
     # Classify independently of stored flags, including pre-floor legacy rows.
     classified = [dict(row) for row in rows]
@@ -468,13 +477,30 @@ def summarize(rows: list[dict]) -> dict:
         value = row.get("cost_usd")
         return value if valid_amount(value) else None
 
-    attempted_rows = [
-        row
-        for row in rows
-        if row.get("backend_run_id")
-        or measured_amount(row) is not None
-        or (row.get("cost_report") or {}).get("status") in {"measured", "imputed"}
-    ]
+    attempted_rows: list[dict] = []
+    by_backend: dict[str, int] = {}
+
+    def receipt_rank(row):
+        if measured_amount(row) is not None:
+            return 2
+        return int((row.get("cost_report") or {}).get("status") == "imputed")
+
+    for row in _attempt_rows(rows):
+        backend_id = row.get("backend_run_id")
+        if not (
+            backend_id
+            or measured_amount(row) is not None
+            or (row.get("cost_report") or {}).get("status") in {"measured", "imputed"}
+        ):
+            continue
+        if backend_id in by_backend:
+            index = by_backend[backend_id]
+            if receipt_rank(row) > receipt_rank(attempted_rows[index]):
+                attempted_rows[index] = row
+            continue
+        if backend_id:
+            by_backend[backend_id] = len(attempted_rows)
+        attempted_rows.append(row)
     measured_costs = [
         measured_amount(row) for row in attempted_rows if measured_amount(row) is not None
     ]
@@ -1118,13 +1144,17 @@ def run(
     runner = runner or roles.run_adjudicator_agent
     previous = json.loads(path.read_text()) if path.exists() else {}
     saved = {r["case_id"]: r for r in previous.get("rows", [])}
+    # Exhaust the lazy traversal before recovery or paid dispatch can mutate state.
+    # A malformed later history must not strand an earlier paid attempt on save.
+    for _ in _attempt_rows(list(saved.values())):
+        pass
     _refresh_saved_verdicts(list(saved.values()), db)
     population = disputes(db=db)
     attempted = 0
     # A paid verdict can outlive the replay window while its Brain write is
     # pending. Repair only the original role record, never redispatch that case.
     if dispatch and retry:
-        for entry in saved.values():
+        for entry in _attempt_rows(list(saved.values())):
             record = entry.get("role_record")
             if not entry.get("role_record_error") or not record:
                 continue
@@ -1151,7 +1181,6 @@ def run(
         if old and not reattempt_abstention and (old.get("decision") or not retry):
             if old.get("decision"):
                 old["later_truth"] = later_truth(row)
-                old["cost_usd"] = measured_cost(old.get("backend_run_id"), db)
             continue
         if attempted >= max(0, limit):
             continue
@@ -1170,12 +1199,7 @@ def run(
             ),
             "cost_usd": None,
         }
-        if reattempt_abstention and preserved is not None:
-            entry = {
-                **preserved,
-                "later_truth": entry["later_truth"],
-                "merge_rule_verdict": entry["merge_rule_verdict"],
-            }
+        result = None
         try:
             packet = build_packet(row, reader(row))
             entry["packet"] = packet
@@ -1212,7 +1236,19 @@ def run(
                     )
                     if packet.get("metadata_only"):
                         _apply_evidence_floor(entry)
-                entry["cost_usd"] = measured_cost(result.get("backend_run_id"), db)
+                try:
+                    entry["cost_usd"] = measured_cost(result.get("backend_run_id"), db)
+                except (
+                    OSError,
+                    ValueError,
+                    KeyError,
+                    TypeError,
+                    RuntimeError,
+                    sqlite3.Error,
+                ) as exc:
+                    # A valid paid proposal survives an unavailable accounting read.
+                    entry["cost_usd"] = None
+                    entry["cost_read_error"] = str(exc)
         except (
             ValueError,
             KeyError,
@@ -1224,21 +1260,33 @@ def run(
         ) as exc:
             if preserved is not None:
                 preserved["retry_error"] = str(exc)
+                if dispatch and result is not None:
+                    entry["error"] = str(exc)
+                    preserved["retry_attempts"] = [
+                        *preserved.get("retry_attempts", []),
+                        _attempt_snapshot(entry),
+                    ]
                 saved[case_id] = preserved
             else:
                 entry["error"] = str(exc)
                 saved[case_id] = entry
             _persist_report(path, list(saved.values()), len(population), db=db)
             continue
-        if preserved is not None and (
-            not dispatch or not result.get("proposal") or result.get("errors")
-        ):
-            # A preview or failed retry must not make the saved abstention ineligible.
-            # Retain newly paid attempt identities separately for accounting/recovery.
-            if dispatch:
-                attempt = {k: v for k, v in entry.items() if k != "retry_attempts"}
-                preserved["retry_attempts"] = [*preserved.get("retry_attempts", []), attempt]
-            entry = preserved
+        if preserved is not None:
+            if not dispatch or not result or not result.get("proposal") or result.get("errors"):
+                # Preserve retry eligibility while accounting for the new attempt.
+                if dispatch:
+                    preserved["retry_attempts"] = [
+                        *preserved.get("retry_attempts", []),
+                        _attempt_snapshot(entry),
+                    ]
+                entry = preserved
+            else:
+                # A successful replacement must not erase the original paid attempt.
+                entry["retry_attempts"] = [
+                    *preserved.get("retry_attempts", []),
+                    _attempt_snapshot(preserved),
+                ]
         saved[case_id] = entry
         # Persist every attempt so an interrupted batch does not repeat successful paid calls.
         _persist_report(path, list(saved.values()), len(population), db=db)
@@ -1252,11 +1300,23 @@ def _persist_report(path: Path, rows: list[dict], population: int, db: Path | No
     for row in rows:
         if _row_metadata_only(row):
             _apply_evidence_floor(row)
-    for row in rows:
+    for row in _attempt_rows(rows):
         if row.get("backend_run_id"):
-            row["cost_report"] = feedback.role_cost_report(
-                row["backend_run_id"], row.get("backend"), db=db
-            )
+            try:
+                row["cost_report"] = feedback.role_cost_report(
+                    row["backend_run_id"], row.get("backend"), db=db
+                )
+                row["cost_usd"] = (
+                    row["cost_report"].get("cost_usd")
+                    if row["cost_report"].get("status") == "measured"
+                    else None
+                )
+                row.pop("cost_refresh_error", None)
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError, sqlite3.Error) as exc:
+                # Accounting availability cannot erase an already paid identity.
+                row["cost_usd"] = None
+                row["cost_report"] = {"status": "unmeasured", "cost_usd": None}
+                row["cost_refresh_error"] = str(exc)
     comparison = compare_proposals(rows)
     summary = summarize(rows)
     comparison.update(
@@ -1341,7 +1401,22 @@ def _selftest() -> None:
         pass
     else:
         raise AssertionError("nonpositive preparation budget was accepted")
-    print("adjudicator_retro selftest: 9 checks passed")
+    with tempfile.TemporaryDirectory() as root:
+        path = Path(root) / "malformed.json"
+        path.write_text(
+            json.dumps(
+                {"rows": [{"case_id": "bad", "retry_attempts": [{"retry_attempts": [None]}]}]}
+            )
+        )
+        original = path.read_bytes()
+        try:
+            run(path=path, db=Path(root) / "absent.db", dispatch=True, retry=True)
+        except ValueError as exc:
+            assert str(exc) == "invalid retry attempt history"
+        else:
+            raise AssertionError("malformed history reached dispatch preparation")
+        assert path.read_bytes() == original
+    print("adjudicator_retro selftest: 10 checks passed")
 
 
 def main() -> int:
