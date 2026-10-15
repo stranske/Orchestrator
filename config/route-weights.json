@@ -2,18 +2,18 @@
   "exploration": {
     "challengers": {
       "codemod": "gemini",
-      "cross_repo": "codex",
-      "implement": "gemini",
+      "cross_repo": "gemini",
+      "implement": "codex",
       "mechanical": "codex",
-      "review": "gemini",
-      "testgen": "gemini"
+      "review": "codex",
+      "testgen": "cursor"
     },
-    "mode": "epsilon-greedy",
-    "policy_version": "route-exploration/v1:89a81ae029085a9ec13e1ab84d0d8589dc5464216dc83aaf31d6d802ca2c8063",
+    "mode": "thompson-hybrid",
+    "policy_version": "route-exploration/v1:8d72a6f96911aaff17efdf7e802cc1edf8b181a226af394206f92da200c1464e",
     "rate": 0.05,
-    "week_start": 1791417600
+    "week_start": 1792022400
   },
-  "generated_at": "2026-10-10T14:59:39Z",
+  "generated_at": "2026-10-15T19:04:50Z",
   "min_observations": 20,
   "reserve": {
     "implement": [
