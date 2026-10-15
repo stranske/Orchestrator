@@ -1,0 +1,113 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_ test_historical_role_record_recovers_without_another_paid_call[needs_more_evidence] _
+
+retry_case = (PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-2331/test_historical_rol...usd': 1.25}, 'paid-retry': {'status': 'imputed', 'cost_usd': 0.75}}, <function retry_case.<locals>.run at 0x111411080>)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11140aae0>
+decision = 'needs_more_evidence'
+
+    @pytest.mark.parametrize("decision", ["needs_more_evidence", "uphold_blocker"])
+    def test_historical_role_record_recovers_without_another_paid_call(
+        retry_case, monkeypatch, decision
+    ):
+        path, saved, _reports, _run = retry_case
+        saved["decision"] = decision
+        saved["retry_attempts"] = [
+            {
+                "backend_run_id": "paid-retry",
+                "backend": "gemini",
+                "role_record_error": "original transient write failure",
+                "role_record": {"run_id": "retained-role"},
+            }
+        ]
+        path.write_text(json.dumps({"rows": [saved], "population": 1}))
+        calls = []
+
+        def record(**row):
+            calls.append(row)
+            if len(calls) == 1:
+                raise sqlite3.OperationalError("write still unavailable")
+
+        monkeypatch.setattr(feedback, "record_role_run", record)
+
+        def recover():
+            return retro.run(
+                dispatch=True,
+                retry=True,
+                limit=1,
+                path=path,
+                evidence_reader=lambda _: pytest.fail("recover the saved role before reading new evidence"),
+                runner=lambda **_: pytest.fail("repair an existing paid record, never redispatch"),
+            )
+
+>       first = recover()
+                ^^^^^^^^^
+
+tests/test_adjudicator_retry_history.py:286:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests/test_adjudicator_retry_history.py:277: in recover
+    return retro.run(
+src/adjudicator_retro.py:1200: in run
+    packet = build_packet(row, reader(row))
+                               ^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+_ = {'run_id': 'original-dispute', 'verifier_verdict': 'NON_PASS', 'adjudicated_verdict': 'PASS', 'target': 'owner/repo#1', ...}
+
+>       evidence_reader=lambda _: pytest.fail("recover the saved role before reading new evidence"),
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        runner=lambda **_: pytest.fail("repair an existing paid record, never redispatch"),
+    )
+E   Failed: recover the saved role before reading new evidence
+
+tests/test_adjudicator_retry_history.py:282: Failed
+_ test_historical_role_record_recovers_without_another_paid_call[uphold_blocker] _
+
+retry_case = (PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-2331/test_historical_rol...usd': 1.25}, 'paid-retry': {'status': 'imputed', 'cost_usd': 0.75}}, <function retry_case.<locals>.run at 0x111412660>)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111455b50>
+decision = 'uphold_blocker'
+
+    @pytest.mark.parametrize("decision", ["needs_more_evidence", "uphold_blocker"])
+    def test_historical_role_record_recovers_without_another_paid_call(
+        retry_case, monkeypatch, decision
+    ):
+        path, saved, _reports, _run = retry_case
+        saved["decision"] = decision
+        saved["retry_attempts"] = [
+            {
+                "backend_run_id": "paid-retry",
+                "backend": "gemini",
+                "role_record_error": "original transient write failure",
+                "role_record": {"run_id": "retained-role"},
+            }
+        ]
+        path.write_text(json.dumps({"rows": [saved], "population": 1}))
+        calls = []
+
+        def record(**row):
+            calls.append(row)
+            if len(calls) == 1:
+                raise sqlite3.OperationalError("write still unavailable")
+
+        monkeypatch.setattr(feedback, "record_role_run", record)
+
+        def recover():
+            return retro.run(
+                dispatch=True,
+                retry=True,
+                limit=1,
+                path=path,
+                evidence_reader=lambda _: pytest.fail("recover the saved role before reading new evidence"),
+                runner=lambda **_: pytest.fail("repair an existing paid record, never redispatch"),
+            )
+
+        first = recover()
+>       assert len(calls) == 1
+E       assert 0 == 1
+E        +  where 0 = len([])
+
+tests/test_adjudicator_retry_history.py:287: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_adjudicator_retry_history.py::test_historical_role_record_recovers_without_another_paid_call[needs_more_evidence]
+FAILED tests/test_adjudicator_retry_history.py::test_historical_role_record_recovers_without_another_paid_call[uphold_blocker]
+2 failed, 13 deselected in 0.28s

@@ -1150,7 +1150,7 @@ def run(
     # A paid verdict can outlive the replay window while its Brain write is
     # pending. Repair only the original role record, never redispatch that case.
     if dispatch and retry:
-        for entry in saved.values():
+        for entry in _attempt_rows(list(saved.values())):
             record = entry.get("role_record")
             if not entry.get("role_record_error") or not record:
                 continue

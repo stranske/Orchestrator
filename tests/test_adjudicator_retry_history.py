@@ -247,3 +247,52 @@ def test_cost_refresh_failure_still_persists_paid_identity(retry_case, monkeypat
 def test_malformed_retry_history_is_unknown_not_silent_underaccounting(history):
     with pytest.raises(ValueError, match="retry attempt"):
         retro.summarize([{"backend_run_id": "paid-one", "retry_attempts": history}])
+
+
+@pytest.mark.parametrize("decision", ["needs_more_evidence", "uphold_blocker"])
+def test_historical_role_record_recovers_without_another_paid_call(
+    retry_case, monkeypatch, decision
+):
+    path, saved, _reports, _run = retry_case
+    saved["decision"] = decision
+    saved["retry_attempts"] = [
+        {
+            "backend_run_id": "paid-retry",
+            "backend": "gemini",
+            "role_record_error": "original transient write failure",
+            "role_record": {"run_id": "retained-role"},
+        }
+    ]
+    path.write_text(json.dumps({"rows": [saved], "population": 1}))
+    calls = []
+
+    def record(**row):
+        calls.append(row)
+        if len(calls) == 1:
+            raise sqlite3.OperationalError("write still unavailable")
+
+    monkeypatch.setattr(feedback, "record_role_run", record)
+
+    def recover():
+        return retro.run(
+            dispatch=True,
+            retry=True,
+            limit=1,
+            path=path,
+            evidence_reader=lambda _: pytest.fail(
+                "recover the saved role before reading new evidence"
+            ),
+            runner=lambda **_: pytest.fail("repair an existing paid record, never redispatch"),
+        )
+
+    first = recover()
+    assert len(calls) == 1
+    assert first["rows"][0]["retry_attempts"][0]["role_record_error"] == "write still unavailable"
+    second = recover()
+    assert len(calls) == 2
+    historical = second["rows"][0]["retry_attempts"][0]
+    assert historical["role_record_error"] is None
+    assert historical["role_run_id"] == "retained-role"
+    assert second["summary"]["cases"] == 1
+    assert second["summary"]["cost_attempted_cases"] == 2
+    assert json.loads(path.read_text()) == second
