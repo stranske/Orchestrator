@@ -1,24 +1,27 @@
 {
   "base_sha": "f25335587cacb1164a808dc03740f3b608b9f993",
-  "base_test_overlay": "tests/test_adjudicator_retry_history.py copied unchanged onto private git archive of exact base",
   "red_exit": 1,
-  "red_assertion_failures": 9,
+  "red_assertion_failures": 13,
   "green_exit": 0,
-  "focused_passes": 105,
+  "focused_passes": 109,
   "subtests": 23,
-  "collection": 3442,
-  "measured_billing_or_provider_calls": false,
+  "collection": 3446,
+  "review_base_sha": "d6619d352ab56444d3f9e80bad56612a5be55d0a",
+  "review_red_assertion_failures": 4,
+  "provider_calls": 0,
+  "transcript_normalization": "Committed logs remove trailing whitespace only; original raw logs/JUnit remain in run packet.",
   "sha256": {
-    "src/adjudicator_retro.py": "c60ba7ff55a3340a47e522dd250e396912099c656f36947c0cb46c01d4eff208",
-    "tests/test_adjudicator_retry_history.py": "340caf70b10144cd230d87a7d805e965af1f7aee3f60f40e454d7397b9450c9d"
+    "src/adjudicator_retro.py": "f4ae54823d376d7417fbe44521e1e78737a5ad16d1bfa241a66a2525c86434a3",
+    "tests/test_adjudicator_retry_history.py": "55dede5886dd1cb1a8a035a2bea2fd21d002e55be2cab35f7148aa0f3d6c0ac8"
   },
   "raw_transcript_sha256": {
-    "red.log": "7a8feefbd95219bd5d920356360f0790ed2f8333dbccad70ab0e9821d42bb566",
-    "green.log": "014174f0642fb8adee79d0a611189a0cf3c47b87636ecf3d7471155488380a39"
+    "red.log": "8be886101408d9d6fb91a2881ec68940881b8d34ea1503f0157b41fc17e853a1",
+    "green.log": "5342e3e6c30732ffa47bcd25b3fb9cc3da2e3d7ae88591fb553e3a359ee86076",
+    "review-red.log": "42a4bcd31d04f6ab057465b47b781bd04e93a7f7f4bfd619f07f9ff588153659"
   },
   "committed_transcript_sha256": {
-    "red.log": "6fbc9dfedc252015862837677ed7f1facac6fe0a39c6ea3854bf6a73755892cd",
-    "green.log": "014174f0642fb8adee79d0a611189a0cf3c47b87636ecf3d7471155488380a39"
-  },
-  "transcript_normalization": "Committed logs remove trailing whitespace only; original raw logs and JUnit remain in the closer run packet."
+    "red.log": "1e5324817c22e8e013838b6444e31b1a6273ef8f53b8772e29d9eda2c051d35f",
+    "green.log": "5342e3e6c30732ffa47bcd25b3fb9cc3da2e3d7ae88591fb553e3a359ee86076",
+    "review-red.log": "968495aa3471b00a5ba8c62315a7eaf7438de2542ed97680abb8af7e6216d647"
+  }
 }

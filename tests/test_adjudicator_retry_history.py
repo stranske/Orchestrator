@@ -75,7 +75,7 @@ def test_exception_after_paid_retry_retains_new_attempt(retry_case, monkeypatch)
     assert row["backend_run_id"] == saved["backend_run_id"]
     assert row["decision"] == "needs_more_evidence"
     assert row["retry_attempts"][-1]["backend_run_id"] == "paid-retry"
-    assert "cost read unavailable" in row["retry_error"]
+    assert "cost read unavailable" in row["retry_attempts"][-1]["cost_read_error"]
     assert result["summary"]["cost_attempted_cases"] == 2
     assert result["summary"]["estimated_cost_usd"] == 2
     assert json.loads(path.read_text()) == result
@@ -167,6 +167,61 @@ def test_success_after_failed_retry_keeps_the_complete_paid_lineage(retry_case):
     assert result["summary"]["cost_attempted_cases"] == 3
     assert result["summary"]["estimated_cost_usd"] == 2.5
     assert result["summary"]["cost_usd"] is None
+
+
+def test_successful_retry_survives_cost_error_without_repeat_dispatch(retry_case, monkeypatch):
+    path, _saved, _reports, run = retry_case
+
+    def unavailable(*_args):
+        raise sqlite3.OperationalError("accounting temporarily unavailable")
+
+    monkeypatch.setattr(retro, "measured_cost", unavailable)
+    result = run(
+        {
+            "backend_run_id": "paid-retry",
+            "backend": "gemini",
+            "proposal": {"decision": "uphold_blocker"},
+            "advisory_plan": {"decision": "uphold_blocker"},
+        }
+    )
+    row = result["rows"][0]
+    assert row["backend_run_id"] == "paid-retry"
+    assert row["decision"] == "uphold_blocker"
+    assert row["retry_attempts"][-1]["backend_run_id"] == "paid-original"
+    repeated = retro.run(
+        dispatch=True,
+        retry=True,
+        path=path,
+        runner=lambda **_: pytest.fail("must not pay again for an already valid proposal"),
+    )
+    assert repeated["rows"][0]["decision"] == "uphold_blocker"
+    assert repeated["summary"]["cost_attempted_cases"] == 2
+
+
+@pytest.mark.parametrize("receipt", ["imputed", "unmeasured", "error"])
+def test_withdrawn_historical_cost_never_remains_measured(retry_case, monkeypatch, receipt):
+    path, _saved, reports, run = retry_case
+    report = run({"backend_run_id": "paid-retry", "backend": "gemini", "errors": ["timeout"]})
+    attempt = report["rows"][0]["retry_attempts"][-1]
+    attempt["cost_usd"] = 7
+    attempt["cost_report"] = {"status": "measured", "cost_usd": 7}
+    path.write_text(json.dumps(report))
+    reports["paid-retry"] = {"status": receipt, "cost_usd": 0.75 if receipt == "imputed" else None}
+
+    def refreshed(backend_id, *_args, **_kwargs):
+        if backend_id == "paid-retry" and receipt == "error":
+            raise sqlite3.OperationalError("receipt unavailable")
+        return reports[backend_id]
+
+    monkeypatch.setattr(feedback, "role_cost_report", refreshed)
+    result = retro.run(path=path, limit=0)
+    attempt = result["rows"][0]["retry_attempts"][-1]
+    assert attempt["backend_run_id"] == "paid-retry"
+    assert attempt["cost_usd"] is None
+    assert result["summary"]["cost_measured_cases"] == 0
+    assert result["summary"]["cost_usd"] is None
+    assert result["summary"]["cost_attempted_cases"] == 2
+    assert result["summary"]["estimated_cost_usd"] == (2 if receipt == "imputed" else 1.25)
 
 
 def test_cost_refresh_failure_still_persists_paid_identity(retry_case, monkeypatch):

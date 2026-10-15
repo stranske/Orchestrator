@@ -4,7 +4,7 @@ Related to #579, following merged #594/#597. A retry that obtained a backend ID 
 
 The repair retains old and new paid identities on failure, success and post-dispatch exceptions. Cost refresh traverses retained histories and persists identities even when accounting is unavailable. Summaries count each known backend identity once, prefer measured receipts over estimates, include nested historical attempts, and keep one dispute/grade denominator per primary case. Legacy `cost_*_cases` keys continue to describe the cost-attempt population; retries never become adjudicated cases. Imputed dollars remain estimates; unknown billed dollars remain unknown. Malformed history refuses to produce an understated summary.
 
-Exact original main `f25335587cacb1164a808dc03740f3b608b9f993` with the unchanged nine new tests overlaid: 9 assertion failures, exit1. Candidate:105 focused PASS and23 subtests, exit0. RED/GREEN logs (trailing whitespace normalized; original hashes in proof.json) and hash/command binding are retained beside this file. The tests use fake dispatch results, a private report and stub cost receipts; no provider or live Brain write occurs.
+Exact original main `f25335587cacb1164a808dc03740f3b608b9f993` with the unchanged thirteen new tests overlaid: 13 assertion failures, exit1. Candidate:109 focused PASS and23 subtests, exit0. RED/GREEN logs (trailing whitespace normalized; original hashes in proof.json) and hash/command binding are retained beside this file. The tests use fake dispatch results, a private report and stub cost receipts; no provider or live Brain write occurs.
 
 Commands:
 
@@ -18,4 +18,6 @@ python -m mypy src/adjudicator_retro.py
 python src/adjudicator_retro.py --selftest
 ```
 
-Collection3442 equals main3433 plus9 independently exercised controls. All skip/selftest/gate/mypy ceilings are unchanged; hosted full CI is still required. Source579 remains open for authentic original native qualification, regrading and October18/November3 observations. This does not dispatch a replacement trial, modify model policy, publish a deployed mirror or establish billed spending.
+Collection3446 equals main3433 plus13 independently exercised controls. All skip/selftest/gate/mypy ceilings are unchanged; hosted full CI is still required. Source579 remains open for authentic original native qualification, regrading and October18/November3 observations. This does not dispatch a replacement trial, modify model policy, publish a deployed mirror or establish billed spending.
+
+Native review on initial published d6619d3 found two further boundaries: accounting failure after a valid proposal must not cause redispatch, and withdrawn historical receipts must clear both direct and reported measured amounts. Four new controls assertion-fail on that initial published head and pass after repair. Every attempt refreshes independently; primary decisions alone are regraded.

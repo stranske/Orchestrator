@@ -387,18 +387,13 @@ def measured_cost(run_id: str | None, db: Path | None = None) -> float | None:
 
 
 def _refresh_saved_verdicts(rows: list[dict], db: Path | None = None) -> None:
-    """Refresh every paid attempt; grade only saved decisions outside the replay window."""
-    refreshable = [row for row in rows if row.get("decision") or row.get("backend_run_id")]
+    """Refresh primary decisions; publication independently refreshes all cost receipts."""
+    refreshable = [row for row in rows if row.get("decision")]
     if not refreshable:
         return
     with sqlite3.connect(f"file:{(db or feedback.DB_PATH).resolve()}?mode=ro", uri=True) as conn:
         conn.row_factory = sqlite3.Row
         for row in refreshable:
-            # Invalid responses still incur costs. Their late receipts and cost
-            # withdrawals must refresh without admitting a decision or a grade.
-            row["cost_usd"] = measured_cost(row.get("backend_run_id"), db)
-            if not row.get("decision"):
-                continue
             outcome = conn.execute(
                 "SELECT merged,durability,durability_checked_ts FROM outcomes WHERE run_id=?",
                 (row["run_id"],),
@@ -1182,7 +1177,6 @@ def run(
         if old and not reattempt_abstention and (old.get("decision") or not retry):
             if old.get("decision"):
                 old["later_truth"] = later_truth(row)
-                old["cost_usd"] = measured_cost(old.get("backend_run_id"), db)
             continue
         if attempted >= max(0, limit):
             continue
@@ -1238,7 +1232,19 @@ def run(
                     )
                     if packet.get("metadata_only"):
                         _apply_evidence_floor(entry)
-                entry["cost_usd"] = measured_cost(result.get("backend_run_id"), db)
+                try:
+                    entry["cost_usd"] = measured_cost(result.get("backend_run_id"), db)
+                except (
+                    OSError,
+                    ValueError,
+                    KeyError,
+                    TypeError,
+                    RuntimeError,
+                    sqlite3.Error,
+                ) as exc:
+                    # A valid paid proposal survives an unavailable accounting read.
+                    entry["cost_usd"] = None
+                    entry["cost_read_error"] = str(exc)
         except (
             ValueError,
             KeyError,
@@ -1296,9 +1302,16 @@ def _persist_report(path: Path, rows: list[dict], population: int, db: Path | No
                 row["cost_report"] = feedback.role_cost_report(
                     row["backend_run_id"], row.get("backend"), db=db
                 )
+                row["cost_usd"] = (
+                    row["cost_report"].get("cost_usd")
+                    if row["cost_report"].get("status") == "measured"
+                    else None
+                )
                 row.pop("cost_refresh_error", None)
             except (OSError, ValueError, KeyError, TypeError, RuntimeError, sqlite3.Error) as exc:
                 # Accounting availability cannot erase an already paid identity.
+                row["cost_usd"] = None
+                row["cost_report"] = {"status": "unmeasured", "cost_usd": None}
                 row["cost_refresh_error"] = str(exc)
     comparison = compare_proposals(rows)
     summary = summarize(rows)
