@@ -227,11 +227,14 @@ def test_export_carries_a_policy_version_and_one_sampled_challenger_per_task_typ
         database_before = database.read_bytes()
         output = Path(tmp) / "export.json"
         policies = []
+        snap = route_weights_export._fixture_capacity_snapshot()
         with patch.object(router, "_capability_heartbeat") as heartbeat:
             for week, mode in ((2, "epsilon-greedy"), (3, "thompson-hybrid")):
                 now = week * route_weights_export.WEEK_SECONDS + 100
-                document = route_weights_export.build_document(database, now=now)
-                assert document["schema"] == "orchestrator.route-weights/v1"
+                document = route_weights_export.build_document(
+                    database, now=now, capacity_snapshot=snap
+                )
+                assert document["schema"] == "orchestrator.route-weights/v2"
                 exploration = document["exploration"]
                 assert exploration["mode"] == mode
                 assert exploration["rate"] == router.EXPLORATION_RATE_DEFAULT
@@ -252,7 +255,9 @@ def test_export_carries_a_policy_version_and_one_sampled_challenger_per_task_typ
                     )
                     assert challenger == expected
                 assert route_weights_export.write_document(output, document) is True
-                refreshed = route_weights_export.build_document(database, now=now + 86400)
+                refreshed = route_weights_export.build_document(
+                    database, now=now + 86400, capacity_snapshot=snap
+                )
                 assert refreshed["exploration"] == exploration
                 assert route_weights_export.write_document(output, refreshed) is False
             heartbeat.assert_not_called()

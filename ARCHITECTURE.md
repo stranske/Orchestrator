@@ -890,6 +890,14 @@ the hashed sample that once labelled an auto arm was retired on 2026-09-22, when
 labelling every PR it creates `agent:auto`. The policy still picks the replacement; this surface only
 makes the pair observable. (It is not drawn in the loop diagram, which is unchanged.)
 
+**Route-weights export (schema v2).** `route_weights_export.py` publishes the daily fail-open
+snapshot at `exports/route-weights/config/route-weights.json` (`orchestrator.route-weights/v2`).
+Besides the v1 rankings / reserve / exploration block, the document carries a `capacity` map — one
+entry per `capacity.AGENTS` seat with `state`, `window`, and `observed_at` taken from the current
+`capacity.py` snapshot (in-process; never shelled out). Hosted keepalive and intake consumers can
+therefore skip a shed or exhausted seat without a second capacity probe. See
+`docs/ROUTE_WEIGHTS_EXPORT.md` for the contract.
+
 ## The capability layer — what the tool can do, and how a surface finds it
 
 This doc described rails and roles and never once said "capability", which let a whole session treat
@@ -1513,7 +1521,8 @@ reads `step last ran`. An artifact alone does not prove successful execution, an
 for redirect linking does not prove an authorised apply. Missing or unreadable evidence stays
 UNKNOWN. The snapshot date remains visible; a newer heartbeat marks an old finding as history.
 No alarm is cleared, no regression rule changes, and no owner question or automated action is added.
-Route export records invocation on every daily run and success only after an actual publication;
+Route export (`route-weights-export`, schema v2 with the per-agent `capacity` block) records
+invocation on every daily run and success only after an actual publication;
 rail exercise records invocation without `--record`, which governs exercise verdicts only.
 Dedup: firing history and its ledger-only silence annotation already existed; the weekly reader
 and independent cadence evidence were missing. Existing heartbeat repairs from main are retained.

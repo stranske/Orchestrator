@@ -22,12 +22,29 @@ from pathlib import Path
 from typing import Any
 
 import capabilities
+import capacity
 import exploration_collection
 import feedback
 import provision
 import router
 
-SCHEMA = "orchestrator.route-weights/v1"
+SCHEMA_V1 = "orchestrator.route-weights/v1"
+SCHEMA = "orchestrator.route-weights/v2"
+# Historical commits on exports/route-weights remain v1 until republished; consumers
+# and joiners that read the branch must accept both until the cadence has caught up.
+KNOWN_SCHEMAS = frozenset({SCHEMA_V1, SCHEMA})
+# v1 top-level keys retained so a reader that only checks key presence still validates.
+V1_DOCUMENT_KEYS = frozenset(
+    {
+        "schema",
+        "generated_at",
+        "source_version",
+        "min_observations",
+        "task_types",
+        "reserve",
+        "exploration",
+    }
+)
 DEFAULT_MIN_OBSERVATIONS = 20
 EXPORT_BRANCH = "exports/route-weights"
 EXPORT_PATH = Path("config/route-weights.json")
@@ -49,6 +66,60 @@ def _now() -> str:
     return (
         dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     )
+
+
+def _load_capacity_snapshot() -> dict[str, Any]:
+    """Return the current capacity.py snapshot in-process (never shell out).
+
+    Prefer the tick-written artifact at ``capacity.OUT`` when present and well-formed;
+    otherwise compute a fresh snapshot via ``capacity.build``.
+    """
+    try:
+        data = json.loads(capacity.OUT.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        data = None
+    if isinstance(data, dict) and isinstance(data.get("agents"), dict):
+        return data
+    return capacity.build()
+
+
+def _capacity_block(snapshot: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+    """Project per-agent state/window/observed_at for the public export.
+
+    One entry per configured ``capacity.AGENTS`` seat. Token counts, costs and
+    account identifiers are deliberately omitted.
+    """
+    snap = _load_capacity_snapshot() if snapshot is None else snapshot
+    agents = snap.get("agents") if isinstance(snap.get("agents"), dict) else {}
+    observed_raw = snap.get("generated_at")
+    try:
+        observed_at = int(observed_raw)
+    except (TypeError, ValueError):
+        observed_at = 0
+    block: dict[str, dict[str, Any]] = {}
+    for agent, cfg in capacity.AGENTS.items():
+        row = agents.get(agent) if isinstance(agents.get(agent), dict) else {}
+        state = row.get("state")
+        if not isinstance(state, str) or not state:
+            state = capacity.UNKNOWN
+        window = row.get("window")
+        if not isinstance(window, str) or not window:
+            window = str(cfg.get("window") or "")
+        block[agent] = {
+            "state": state,
+            "window": window,
+            "observed_at": observed_at,
+        }
+    return block
+
+
+def _semantic_payload(document: dict[str, Any]) -> dict[str, Any]:
+    """Document fields that decide whether a republish is warranted.
+
+    Everything except ``generated_at`` — including the ``capacity`` block — so a
+    change in any agent ``state``, ``window``, or ``observed_at`` triggers publication.
+    """
+    return {key: value for key, value in document.items() if key != "generated_at"}
 
 
 def _read_rows(db_path: Path) -> tuple[int, list[sqlite3.Row]]:
@@ -152,7 +223,11 @@ def _exploration_block(
 
 
 def build_document(
-    db_path: Path, minimum: int = DEFAULT_MIN_OBSERVATIONS, *, now: int | None = None
+    db_path: Path,
+    minimum: int = DEFAULT_MIN_OBSERVATIONS,
+    *,
+    now: int | None = None,
+    capacity_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a snapshot with repeatable samples for this week and weight version."""
     if minimum < 1:
@@ -203,10 +278,13 @@ def build_document(
         "exploration": _exploration_block(version, by_task, task_types, timestamp),
     }
     # Bind the tag to the exported policy, including rankings and the sampled
-    # challengers. A timestamp-only refresh retains the same join identity.
-    semantic = {key: value for key, value in document.items() if key != "generated_at"}
+    # challengers. Capacity is operational state, not policy identity — attach it
+    # after the digest so a seat flip does not rewrite exploration.policy_version.
+    # A timestamp-only refresh retains the same join identity.
+    semantic = _semantic_payload(document)
     digest = hashlib.sha256(_canonical_bytes(semantic)).hexdigest()
     document["exploration"]["policy_version"] = f"route-exploration/v1:{digest}"
+    document["capacity"] = _capacity_block(capacity_snapshot)
     return document
 
 
@@ -215,16 +293,18 @@ def _canonical_bytes(document: dict[str, Any]) -> bytes:
 
 
 def write_document(path: Path, document: dict[str, Any]) -> bool:
-    """Write only semantic changes, retaining the earlier timestamp on an unchanged export."""
+    """Write only semantic changes, retaining the earlier timestamp on an unchanged export.
+
+    The change detector compares the full semantic payload, including ``capacity``,
+    so any agent ``state``, ``window``, or ``observed_at`` change republishes.
+    """
     if path.exists():
         try:
             existing = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             existing = None
         if isinstance(existing, dict):
-            old_semantic = {key: value for key, value in existing.items() if key != "generated_at"}
-            new_semantic = {key: value for key, value in document.items() if key != "generated_at"}
-            if old_semantic == new_semantic:
+            if _semantic_payload(existing) == _semantic_payload(document):
                 return False
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
@@ -312,14 +392,35 @@ def _fixture_db(path: Path) -> None:
         connection.close()
 
 
+def _fixture_capacity_snapshot(
+    *,
+    generated_at: int = 1_700_000_000,
+    states: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Stable capacity snapshot for selftests and unit tests."""
+    overrides = states or {}
+    agents = {
+        agent: {
+            "state": overrides.get(agent, capacity.OK),
+            "window": cfg["window"],
+        }
+        for agent, cfg in capacity.AGENTS.items()
+    }
+    return {"generated_at": generated_at, "agents": agents}
+
+
 def _selftest() -> None:
     with tempfile.TemporaryDirectory(prefix="route-weights-export-") as directory:
         root = Path(directory)
         db_path = root / "fixture.db"
         _fixture_db(db_path)
-        document = build_document(db_path, minimum=20)
+        snap = _fixture_capacity_snapshot()
+        document = build_document(db_path, minimum=20, capacity_snapshot=snap)
         assert document["schema"] == SCHEMA, document
         assert document["source_version"] == 2, document
+        assert V1_DOCUMENT_KEYS.issubset(document), sorted(document)
+        assert "capacity" in document, document
+        assert set(document["capacity"]) == set(capacity.AGENTS), document["capacity"]
         ranking = document["task_types"]["implement"]["ranking"]
         assert [row["agent"] for row in ranking] == ["codex"], ranking
         assert all(row["n_obs"] >= 20 for row in ranking), ranking
@@ -329,7 +430,12 @@ def _selftest() -> None:
         assert "unknown" not in document["task_types"], document
         output = root / "route-weights-export.json"
         assert write_document(output, document) is True
-        assert write_document(output, build_document(db_path, minimum=20)) is False
+        assert (
+            write_document(output, build_document(db_path, minimum=20, capacity_snapshot=snap))
+            is False
+        )
+        shed = _fixture_capacity_snapshot(states={"codex": capacity.SHED})
+        assert write_document(output, build_document(db_path, minimum=20, capacity_snapshot=shed))
     print("route_weights_export.py selftest: OK")
 
 

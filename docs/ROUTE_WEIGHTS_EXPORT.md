@@ -11,7 +11,7 @@ The document is versioned and has this contract:
 
 ```json
 {
-  "schema": "orchestrator.route-weights/v1",
+  "schema": "orchestrator.route-weights/v2",
   "generated_at": "2026-09-03T00:00:00Z",
   "source_version": 61,
   "min_observations": 20,
@@ -21,7 +21,11 @@ The document is versioned and has this contract:
       "evidence_ok": true
     }
   },
-  "reserve": {"implement": [{"agent": "claude", "posterior": 0.58, "n_obs": 31, "success_rate": 0.55}]}
+  "reserve": {"implement": [{"agent": "claude", "posterior": 0.58, "n_obs": 31, "success_rate": 0.55}]},
+  "capacity": {
+    "codex": {"state": "ok", "window": "5h", "observed_at": 1700000000},
+    "claude": {"state": "ok", "window": "5h+weekly", "observed_at": 1700000000}
+  }
 }
 ```
 
@@ -31,9 +35,18 @@ checked against `router.ROUTE_TABLE`. Rankings contain only rows with `n_obs >= 
 `evidence_ok` is false when no non-reserve row meets that threshold. `claude` is never in a public
 ranking: it is a reserve seat and appears only under `reserve`, which a consumer must ignore.
 
+Schema `orchestrator.route-weights/v2` keeps every v1 top-level key and adds `capacity`: one entry
+per configured `capacity.AGENTS` seat with that seat's `state` (`ok` / `warn` / `shed` / `unknown`),
+`window`, and `observed_at` (epoch seconds from the capacity snapshot). Token counts, costs and
+account identifiers are never published. The exporter reads the current snapshot in-process from
+`capacity.py` (the tick-written `capacity.OUT` when present, else `capacity.build`); it does not
+shell out. A change in any agent `state`, `window`, or `observed_at` is a semantic change and
+triggers republication; a timestamp-only refresh of `generated_at` does not.
+
 The consumer must fail open: on an unavailable, malformed, schema-incompatible, stale, or
 `evidence_ok: false` task entry, retain its own current static delegation policy. An empty ranking
-is not a zero score or an instruction to choose a fallback agent.
+is not a zero score or an instruction to choose a fallback agent. A v1-only reader that rejects
+schema `v2` fails open until it is updated to accept the additive `capacity` block.
 
 Publishing is deliberately double-gated. `--publish` has no remote effect unless
 `ORCH_ROUTE_WEIGHTS_PUBLISH=1`; then the exporter uses `provision.ensure_canonical` for

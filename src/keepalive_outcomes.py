@@ -684,7 +684,10 @@ def _export_policy_at(dispatch_ts: int) -> dict | None:
             f"?ref={sha}",
         ]
     )
-    if not isinstance(document, dict) or document.get("schema") != route_weights_export.SCHEMA:
+    if (
+        not isinstance(document, dict)
+        or document.get("schema") not in route_weights_export.KNOWN_SCHEMAS
+    ):
         return None
     exploration = document.get("exploration")
     if not isinstance(exploration, dict):

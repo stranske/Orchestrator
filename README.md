@@ -416,10 +416,12 @@ Live execution is observable only after the normal manual mirror sync.
   `fleet_rows=`, `pre_detection_skipped=` and `telemetry=`. `ORCH_RELEARN_FLEET_ROWS=0` restores
   the experimental-only population.
 - **route_weights_export.py** (daily) writes a thresholded latest-version routing snapshot for
-  Workflows to fetch fail-open; reserve seats are isolated. The cadence passes `--publish` (owner
-  decision 2026-09-21) and the script publishes to `exports/route-weights` only when
-  `ORCH_ROUTE_WEIGHTS_PUBLISH=1` is set and the remote artifact would change; unset, it stays a
-  shadow local artifact.
+  Workflows to fetch fail-open; reserve seats are isolated. Schema `orchestrator.route-weights/v2`
+  adds a per-agent `capacity` block (`state` / `window` / `observed_at` from `capacity.py`) so
+  hosted consumers can avoid shed seats. The cadence passes `--publish` (owner decision 2026-09-21)
+  and the script publishes to `exports/route-weights` only when `ORCH_ROUTE_WEIGHTS_PUBLISH=1` is
+  set and the remote artifact would change (including a capacity state/window/observed_at flip);
+  unset, it stays a shadow local artifact.
 - **judge_reliability.py** — leave-one-out consensus weights per judge (de-saturated so real error
   spread maps to real weight spread); **human_calibration.py** + **objective_anchor.py** supply
   machine ground-truth anchors (no owner code-review required — see CLAUDE.md).
