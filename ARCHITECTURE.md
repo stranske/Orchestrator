@@ -296,6 +296,34 @@ boundary every argv is unchanged. The research program's driver is its first cal
 program's own code directory writable. No stage, component or surface moved, so the diagram is
 unchanged.
 
+**Muse Code is a backup-only, subscription-login backend (2026-10-15, issue #612).** Meta's `muse`
+CLI joins the delegated sub-agent band as a seat that routine selection NEVER picks: it is in
+`router.BACKUP_AGENTS` with aider, and unlike aider it has NO route-table entry, so `select_agent` can
+never return it, even with `only={"muse"}`. The paths that reach it are an explicit
+`dispatcher.py offload --agent muse` (run live 2026-10-15) or `delegate --agent muse`, until measured
+outcomes earn it a prior and a route-table entry. Its capacity seat is `flat` (`capacity.AGENTS["muse"]`, the owner's
+Power Usage plan: a 5-hour and a weekly allowance) with no usage API, so 429-shed is authoritative, as for
+vibe. **The credential is the CLI LOGIN, never an API key.** `META_API_KEY` always overrides that login, and a
+Default-Project key metered pay-as-you-go: measured on the live console, two capped execs under it put 8
+requests and 81.5k input tokens in the pay-as-you-go ledger (the key the login itself mints, in the
+`Muse Code` project, is untested), while a 30-request keychain-login run moved only the
+subscription meter (under 1% to 1%) and added nothing there. So `_agent_runtime_prelude("muse")` unsets the
+variable by name, and `adapters.auth_health("muse")` reads that record so `capacity._classify` sheds the seat when the login is
+missing or has no active subscription (an unreadable record is not a failure). Meta documents the credential
+order as the env key, then a stored key, then the stored browser session; whether a stored key can coexist
+with the login is unverified, so the gate admits only an OAuth login record and refuses any other mechanism.
+`agent_auth_check` counts the seat usable only when the login records an active
+subscription (`subs_active`), reading the file's shape and never its contents. The argv is headless with
+the sandbox ON (`--disable-approval`, never `--yolo`), without the owner's personal Claude/Codex rules
+(`--no-foreign-personal-context`) and without a session log. A write boundary is REFUSED for muse
+(`adapters.write_boundary_unenforceable`): it already runs in its own sandbox and a seatbelt profile around
+it is an unproven nested seatbelt. Muse emits no token or usage field (37 `--json` events inspected) and the
+console lags up to an hour, so consumption is counted as one TSV row per exec
+(`dispatcher._record_muse_usage`, read by `~/.codex/bin/muse-usage.sh`) against the plan's rolling 5-hour
+window. Remote (CI) Muse is NOT part of this: a runner can only authenticate with the key, which bills
+pay-as-you-go, so Workflows#3918 and #3919 stay parked. The sub-agent band lists one more backend; no
+stage, rail or feedback surface moved.
+
 **No agent run is given a workspace that is or holds `/`, the home dir or the control plane
 (2026-10-05).** A run's workspace is where it may write. codex makes `--cd` a write entry of the
 run's own permission profile, so `writable_roots` cannot narrow it. agy's `--add-dir` is its write

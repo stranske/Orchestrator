@@ -69,7 +69,7 @@ RESERVE_AGENTS = {"claude"}
 # reachable only on EXPLICIT demand — a manual `dispatcher.py offload/delegate --agent aider`, or
 # `select_agent(..., only={"aider"})`. Owner directive 2026-06-21: aider is paygo (burns the pay-go
 # Codestral credit) and was the weakest seat on the recent build-off — hold it as backup, not a seat.
-BACKUP_AGENTS = {"aider"}
+BACKUP_AGENTS = {"aider", "muse"}
 GEMINI_GOOD_FIT_TASKS = {"implement", "testgen", "epic", "cross_repo", "runtime_ac", "review"}
 
 
@@ -1649,6 +1649,22 @@ def _selftest() -> None:
             assert load_backlog() == [], "unparseable payload still degrades to empty"
         finally:
             globals()["BACKLOG_JSON"] = old_backlog
+
+        # muse (#612): backup-only, no route-table entry, so selection can never return it.
+        all_ok_muse = cap(
+            {
+                **{a: "ok" for a in ("cursor", "vibe", "codex", "claude", "gemini", "aider")},
+                "muse": "ok",
+            }
+        )
+        for _tt in ("implement", "mechanical", "review", "epic", "testgen", "codemod"):
+            _pick = select_agent(_tt, all_ok_muse)
+            assert _pick is None or _pick["agent"] != "muse", (_tt, _pick)
+        _only = select_agent("implement", all_ok_muse, only={"muse"})
+        assert (
+            _only is None or _only["agent"] != "muse"
+        ), "only={muse} cannot reach a seat with no entry"
+        assert "muse" in BACKUP_AGENTS
 
         print(
             "router.py selftest: OK (route-table prior, capacity sequencing, code>review "

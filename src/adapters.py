@@ -72,6 +72,9 @@ AGENT_RUNTIME = Path(os.environ.get("ORCH_AGENT_RUNTIME_DIR", LOCAL_RUNTIME / "a
 # constant so `test_vibe_model_matches_local_config` can check it against the CLI's own config and
 # fail if either drifts. Empty MODEL_TIERS below means "no tiers to pin", never "model unknown".
 VIBE_MODEL = "mistral-medium-3.5"
+# muse: the model the CLI STARTED on for the owner's Power plan (`run_model_configured`, source=startup,
+# 2026-10-15). Named, request-side identity only; never provenance (see `model_identity`).
+MUSE_MODEL = "muse-wonder-1.0"
 
 MODEL_TIERS: dict[str, dict[str, str]] = {
     "codex": {"cheap": "gpt-6-luna", "mid": "gpt-5.6-terra", "full": "gpt-6.1-sol"},
@@ -84,6 +87,10 @@ MODEL_TIERS: dict[str, dict[str, str]] = {
     "cursor": {},
     "vibe": {},
     "aider": {},
+    # muse: no tier ladder to pin. The CLI STARTED on muse-wonder-1.0 for the owner's Power plan
+    # (observed 2026-10-15; Meta's docs say muse-spark-1.2, so the account differs from the docs).
+    # The offload profile carries that model and build_command passes it. Empty means "no tiers".
+    "muse": {},
 }
 MODEL_TIER_NAMES = ("cheap", "mid", "full")  # ordered cheap -> expensive; the ceiling relies on it
 
@@ -686,6 +693,38 @@ def auth_health(agent: str, *, refresh: bool = False, timeout_s: int = 30) -> di
     is not evidence of a bad credential and must never shed a working seat. Only an explicit
     auth-failure signal in a failed probe's output flips `authenticated` to False.
     """
+    if agent == "muse":
+        # No CLI probe exists (`muse login` is interactive and any real call spends the
+        # subscription), so the free signal is the login RECORD: an OAuth login that records an
+        # active subscription. Imported here because agent_auth_check imports this module. An
+        # explicit failure sheds the seat (`capacity._classify`); an unreadable record is NOT a
+        # failure, same rule as every other seat.
+        import agent_auth_check
+
+        state = agent_auth_check._credential_file_state("muse")
+        if state.get("key_present") is None:
+            return {
+                "agent": agent,
+                "authenticated": True,
+                "checked": False,
+                "strength": None,
+                "reason": "muse login record unreadable (not treated as a failure)",
+            }
+        if not state.get("key_present"):
+            return {
+                "agent": agent,
+                "authenticated": False,
+                "checked": True,
+                "strength": "presence",
+                "reason": "muse login missing or without an active subscription (run `muse login`)",
+            }
+        return {
+            "agent": agent,
+            "authenticated": True,
+            "checked": True,
+            "strength": "presence",
+            "reason": "oauth login with an active subscription is recorded (presence-only check)",
+        }
     spec = AUTH_PROBES.get(agent)
     if not spec or not _model_probe_enabled():
         return {
@@ -982,6 +1021,8 @@ def model_identity(agent: str, mode: str | None = None, profile=None) -> str | N
         return VIBE_MODEL
     if agent == "aider":
         return "mistral/codestral-latest"
+    if agent == "muse":
+        return MUSE_MODEL
     if agent == "gemini":
         # The `agy:` prefix STAYS, same reasoning as cursor. agy is a multi-provider ROUTER -- its
         # advertised-models probe lists gemini, claude AND gpt-oss ids -- so recording the router
@@ -1678,6 +1719,14 @@ def write_boundary_unenforceable(agent: str) -> str | None:
                 "bypassed (ORCH_CODEX_BYPASS_INNER_SANDBOX / CODEX_SANDBOX)"
             )
         return None
+    if agent == "muse":
+        # muse runs inside its OWN sandbox (--disable-approval keeps it on), so a seatbelt profile
+        # around it is a nested seatbelt, which macOS has refused elsewhere here (the codex case just
+        # below). Not yet shown to hold for muse, so fail closed with a named reason (2026-10-15).
+        return (
+            "refusing muse: a write boundary was requested, and muse runs in its own sandbox; "
+            "a nested seatbelt profile around it has not been shown to hold"
+        )
     if not Path(SANDBOX_EXEC).exists():
         return f"refusing {agent}: a write boundary was requested and {SANDBOX_EXEC} is absent"
     if os.environ.get("CODEX_SANDBOX"):
@@ -1865,6 +1914,25 @@ def build_command(
         # "<dir> is not trusted; project configuration will be ignored") — losing convention context.
         # --trust trusts the cwd for this invocation only (the spawner sets cwd to the target worktree).
         return ["vibe", "--prompt", prompt, "--auto-approve", "--output", "text", "--trust"]
+    if agent == "muse":
+        # Muse Code (Meta) on the owner's SUBSCRIPTION LOGIN (keychain OAuth, device-code), never an
+        # API key: `META_API_KEY` always overrides the login, and a Default-Project key metered pay-as-you-go
+        # (measured on the live console 2026-10-15; the `Muse Code`-project key is untested), so the dispatcher wrapper scrubs it (`_agent_runtime_prelude`).
+        # --disable-approval skips prompts but KEEPS the sandbox (Meta: `--yolo` drops both, so it is
+        # forbidden here). --no-foreign-personal-context stops the owner's personal Claude Code/Codex
+        # rules and 30 skills from steering a fleet worker; --no-session-log keeps the prompt off disk.
+        # Text output (not --json): the deliverable is stdout, and the --json stream carries no
+        # token/usage field anyway (37 events inspected), so it would add parsing for no signal.
+        cmd = [
+            "muse",
+            "exec",
+            "--no-foreign-personal-context",
+            "--no-session-log",
+            "--disable-approval",
+        ]
+        if requested_model:
+            cmd += ["--model", requested_model]
+        return cmd + [prompt]
     if agent == "aider":
         return [
             str(AIDER_BIN),
@@ -2047,6 +2115,22 @@ def done_marker_cmd(
     )
 
 
+def agent_subprocess_env(agent: str, env: dict | None) -> dict | None:
+    """The environment a direct `dispatch` should hand to the agent process.
+
+    muse runs on the owner's SUBSCRIPTION LOGIN, and `META_API_KEY` always overrides that login, so
+    it never reaches a muse process: a COPY of the effective environment (the process env when none
+    was supplied) without the key. The caller's mapping is never mutated. Every other agent's
+    environment is returned exactly as given, including None (inherit). The detached wrapper in
+    `dispatcher._agent_runtime_prelude` does the same for the offload and delegate paths.
+    """
+    if agent != "muse":
+        return env
+    scrubbed = dict(os.environ if env is None else env)
+    scrubbed.pop("META_API_KEY", None)
+    return scrubbed
+
+
 def dispatch(
     agent: str,
     prompt: str,
@@ -2079,7 +2163,14 @@ def dispatch(
         reasoning_effort=reasoning_effort,
         requested_model=requested_model,
     )
-    proc = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
+    proc = subprocess.run(
+        cmd,
+        cwd=cwd,
+        env=agent_subprocess_env(agent, env),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
     # The run could write its worktree git dir (#452), so this read pins the repository locations.
     status = worktree_git.run(cwd, ["status", "--porcelain"]).stdout.strip()
     selected = execution_profiles.get_profile(profile) if profile is not None else None
@@ -2725,10 +2816,46 @@ def _selftest_inner(*, gaps: list[str] | None = None):
         raise AssertionError("expected ValueError")
     except ValueError:
         pass
+    # muse (#612): explicit-only subscription-login seat. Break demos: drop a flag from the argv,
+    # the scrub, or the boundary refusal and the matching assert below fails.
+    _m = build_command("muse", "do x")
+    assert _m[:2] == ["muse", "exec"] and "do x" in _m, _m
+    for _flag in ("--no-foreign-personal-context", "--no-session-log", "--disable-approval"):
+        assert _flag in _m, (_flag, _m)
+    for _bad in ("--yolo", "--disable-sandbox", "--api-key-stdin"):
+        assert _bad not in _m, (_bad, _m)
+    _mm = build_command("muse", "x", requested_model="muse-wonder-1.0")
+    assert _mm[_mm.index("--model") + 1] == "muse-wonder-1.0", _mm
+    assert "nested" in (write_boundary_unenforceable("muse") or ""), "muse refuses a write boundary"
+    _env = agent_subprocess_env("muse", {"META_API_KEY": "k", "PATH": "/p"})
+    assert _env is not None and "META_API_KEY" not in _env and _env["PATH"] == "/p", _env
+    assert agent_subprocess_env("vibe", None) is None, "other agents keep inheriting"
+    import json as _mj
+    import tempfile as _mt
+
+    import agent_auth_check as _aac
+
+    with _mt.TemporaryDirectory(prefix="muse-login-") as _md:
+        _mp = Path(_md) / "auth.json"
+        _saved = _aac.CREDENTIAL_FILES.get("muse")
+        try:
+            _aac.CREDENTIAL_FILES["muse"] = (_mp, "subs_active")
+            assert auth_health("muse")["authenticated"] is False, "an absent login sheds the seat"
+            _rec = {"providers": {"meta": {"mechanism": "oauth", "subs_active": True}}}
+            _mp.write_text(_mj.dumps(_rec))
+            assert auth_health("muse")["authenticated"] is True, "an active login is usable"
+            _rec["providers"]["meta"]["subs_active"] = False
+            _mp.write_text(_mj.dumps(_rec))
+            assert auth_health("muse")["authenticated"] is False, "an inactive subscription sheds"
+        finally:
+            if _saved is not None:
+                _aac.CREDENTIAL_FILES["muse"] = _saved
+            else:
+                _aac.CREDENTIAL_FILES.pop("muse", None)
     print(
         "adapters.py selftest: OK (cursor composer/explicit-frontier/safe-bare-frontier, "
         "vibe subscription, codex/claude cheap-model map, aider venv, gemini lane-ready, "
-        "codex linked-worktree git grant, no broad agent workspace)"
+        "codex linked-worktree git grant, no broad agent workspace, muse seat)"
     )
 
 

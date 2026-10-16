@@ -182,6 +182,13 @@ AGENTS = {
     # "all-day coding" flat allowance + PAYG overflow. No usage API, so 429-shed is
     # authoritative (modeled like cursor's flat, but a SEPARATE account).
     "vibe": {"account": "mistral-vibe-sub", "model": "flat", "window": "subscription"},
+    # muse (Meta Muse Code) — the owner's SUBSCRIPTION login (Power Usage plan, 5h + weekly allowance
+    # per Meta's console), never an API key. No usage API (no token/usage/quota field in `--json`;
+    # the console lags up to an hour), so 429-shed is authoritative, like vibe. BACKUP-ONLY via
+    # router.BACKUP_AGENTS until measured outcomes earn it a prior. A call authenticated with a
+    # Default-Project API key metered PAY-AS-YOU-GO (tested 2026-10-15; the key the login itself mints in
+    # the `Muse Code` project is untested), which is why this seat is the login and the wrapper scrubs META_API_KEY.
+    "muse": {"account": "meta-muse-code-sub", "model": "flat", "window": "5h+weekly"},
     # aider — BACKUP-ONLY as of 2026-06-21 (owner directive): router.BACKUP_AGENTS holds it OUT of
     # routine auto-selection; reachable only on explicit demand (`--agent aider` / `only={"aider"}`).
     # Capacity is still tracked so backup use respects the credit. Optional API fallback (Codestral API
@@ -209,6 +216,7 @@ def agent_tiers() -> dict[str, str]:
         "claude": "metered",
         "gemini": "metered",
         "vibe": "flat",
+        "muse": "flat",
         "aider": "paygo",
     }
     for pool in execution_profiles.CAPACITY_POOLS.values():
@@ -1216,8 +1224,31 @@ def _selftest_body(blk):
         assert not _shed("codex") and not flag.exists()
     finally:
         pass
+    # muse (#612): a flat subscription seat that sheds only on an EXPLICIT failed login check.
+    assert AGENTS["muse"]["model"] == "flat" and agent_tiers()["muse"] == "flat"
+    _orig_auth, _orig_shed = globals()["_auth_health"], globals()["_shed"]
+    try:
+        globals()["_shed"] = lambda agent: False
+        globals()["_auth_health"] = lambda agent: {
+            "agent": agent,
+            "checked": True,
+            "authenticated": False,
+            "reason": "subs_active false",
+        }
+        assert _classify("muse", AGENTS["muse"], None)[0] == SHED, "inactive subscription must shed"
+        globals()["_auth_health"] = lambda agent: {
+            "agent": agent,
+            "checked": True,
+            "authenticated": True,
+            "reason": "active",
+        }
+        assert _classify("muse", AGENTS["muse"], None)[0] == OK, "an active login keeps the seat"
+        globals()["_auth_health"] = lambda agent: None
+        assert _classify("muse", AGENTS["muse"], None)[0] == OK, "unmeasurable must not shed"
+    finally:
+        globals()["_auth_health"], globals()["_shed"] = _orig_auth, _orig_shed
     print(
-        "capacity.py selftest: OK (4-state enum, shed override naming its drain, METERED cursor pool, count/dollar/windowed-prepaid capacity)"
+        "capacity.py selftest: OK (4-state enum, shed override naming its drain, METERED cursor pool, count/dollar/windowed-prepaid capacity, muse login gate)"
     )
 
 

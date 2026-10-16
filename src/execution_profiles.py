@@ -66,6 +66,13 @@ CAPACITY_POOLS = {
         "tier": "flat",
         "agent": "vibe",
     },
+    "muse-subscription": {
+        "provider": "meta",
+        "account": "meta-muse-code-sub",
+        "window": "5h+weekly",
+        "tier": "flat",
+        "agent": "muse",
+    },
     "aider-paygo": {
         "provider": "mistral",
         "account": "mistral-codestral",
@@ -277,6 +284,20 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
             pool="vibe-subscription",
             adapter_version="vibe-cli-profile-v1",
         ),
+        # muse-wonder-1.0 is the model the CLI actually STARTED on for the owner's Power plan
+        # (`run_model_configured`, source=startup, in the `muse exec --json` stream, 2026-10-15). Meta's
+        # docs name muse-spark-1.2 as the default, so the docs and the account disagree: the profile
+        # follows the observation, and `adapters.build_command` passes it with --model so the
+        # requested model is enforced, not floating.
+        _profile(
+            "muse-wonder-1.0",
+            "muse-wonder-1.0",
+            "high",
+            agent="muse",
+            provider="meta",
+            pool="muse-subscription",
+            adapter_version="muse-cli-profile-v1",
+        ),
     )
 }
 
@@ -461,6 +482,12 @@ def _selftest() -> None:
         ), "historical Flash must resolve to Flash"
         routable = {p["profile_id"] for p in profiles_for_agent("gemini")}
         assert current in routable and old not in routable, "current Flash must remain routable"
+    # muse (#612): one offload profile, in its own flat subscription pool.
+    _mp = profiles_for_agent("muse", transport="offload")
+    assert [p["profile_id"] for p in _mp] == ["muse-wonder-1.0"], _mp
+    assert CAPACITY_POOLS["muse-subscription"]["tier"] == "flat", CAPACITY_POOLS[
+        "muse-subscription"
+    ]
 
 
 def get_profile(profile: str | dict[str, Any]) -> dict[str, Any]:

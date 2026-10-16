@@ -1061,7 +1061,7 @@ def test_aider_is_backup_only_and_vibe_is_a_real_lane():
     import capacity
     import router
 
-    assert router.BACKUP_AGENTS == {"aider"}, router.BACKUP_AGENTS
+    assert router.BACKUP_AGENTS == {"aider", "muse"}, router.BACKUP_AGENTS  # muse: #612, 2026-10-15
 
     cap = capacity.build()
     # NOT A LANE: aider must never be the routine choice for any task type.
