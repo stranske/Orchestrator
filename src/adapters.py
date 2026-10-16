@@ -189,7 +189,7 @@ _AUTH_FAIL_RE = re.compile(
 DEFAULT_GEMINI_MODEL = MODEL_TIERS["gemini"]["full"]
 GEMINI_MODEL_CACHE = AGENT_RUNTIME / "gemini" / "advertised-models.json"
 GEMINI_MODEL_CACHE_TTL_S = int(os.environ.get("ORCH_GEMINI_MODEL_CACHE_TTL_S") or 21600)  # 6h
-_GEMINI_VERSION_RE = re.compile(r"(\d+)\.(\d+)")
+_GEMINI_VERSION_RE = re.compile(r"gemini-(\d+)(?:\.(\d+))?(?=-)")
 _ADVERTISED_MEMO: dict = {}  # per-agent in-process memo; one CLI probe per agent per run
 
 # Offloads are advisory READS ("summarize 200 pages"), not flagship reasoning — but offload() has
@@ -761,7 +761,7 @@ def _rank_gemini_model(model_id: str) -> tuple:
     highest effort tier. Only used when the pinned default has been renamed out from under us.
     """
     match = _GEMINI_VERSION_RE.search(model_id)
-    major, minor = (int(match.group(1)), int(match.group(2))) if match else (0, 0)
+    major, minor = (int(match.group(1)), int(match.group(2) or 0)) if match else (0, 0)
     family = 0 if "pro" in model_id else 1
     tier = next(
         (i for i, t in enumerate(("high", "medium", "low")) if model_id.endswith("-" + t)), 3
@@ -2656,6 +2656,18 @@ def _selftest_inner(*, gaps: list[str] | None = None):
             assert flash["model"] == "gemini-4.0-flash-high", flash
         finally:
             MODEL_TIERS["gemini"]["cheap"] = old_cheap
+        # Integer Argon generations sort numerically, while retaining the effort rung.
+        _ADVERTISED_MEMO["gemini"]["models"] = [
+            f"gemini-{generation}-argon-{effort}"
+            for generation in (4, 5, 10)
+            for effort in ("low", "medium", "high")
+        ]
+        old_argon_cheap = MODEL_TIERS["gemini"]["cheap"]
+        try:
+            MODEL_TIERS["gemini"]["cheap"] = "gemini-3-argon-low"
+            assert model_health("gemini", "cheap")["model"] == "gemini-10-argon-low"
+        finally:
+            MODEL_TIERS["gemini"]["cheap"] = old_argon_cheap
         # A pinned model that IS advertised is used verbatim, with no auto-pick.
         MODEL_TIERS["gemini"]["full"] = old_full
         _ADVERTISED_MEMO["gemini"]["models"] = [DEFAULT_GEMINI_MODEL, "gemini-3.8-flash-low"]

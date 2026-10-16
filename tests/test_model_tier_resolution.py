@@ -1134,6 +1134,14 @@ def test_argon_rename_preserves_family_and_effort(monkeypatch):
         absent = adapters.model_health("gemini", tier)
         assert absent["resolvable"] is False
         assert absent["model"] == f"gemini-4-argon-{effort}"
-        _fake_catalog(monkeypatch, [f"gemini-5-argon-{e}" for e in ("low", "medium", "high")])
-        renamed = adapters.model_health("gemini", tier)
-        assert renamed["model"] == f"gemini-5-argon-{effort}"
+        for generations, newest in (((5, 6), 6), ((9, 10), 10)):
+            _fake_catalog(
+                monkeypatch,
+                [
+                    f"gemini-{generation}-argon-{e}"
+                    for generation in generations
+                    for e in ("low", "medium", "high")
+                ],
+            )
+            renamed = adapters.model_health("gemini", tier)
+            assert renamed["model"] == f"gemini-{newest}-argon-{effort}"

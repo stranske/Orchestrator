@@ -2,7 +2,7 @@ F                                                                        [100%]
 =================================== FAILURES ===================================
 ________________ test_argon_rename_preserves_family_and_effort _________________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10591abd0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1079cd040>
 
     def test_argon_rename_preserves_family_and_effort(monkeypatch):
         for tier, effort in (("cheap", "low"), ("mid", "medium"), ("full", "high")):
@@ -13,7 +13,7 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10591abd0>
 >           assert absent["resolvable"] is False
 E           assert True is False
 
-tests/test_model_tier_resolution.py:1131: AssertionError
+tests/test_model_tier_resolution.py:1135: AssertionError
 =========================== short test summary info ============================
 FAILED tests/test_model_tier_resolution.py::test_argon_rename_preserves_family_and_effort
-1 failed in 0.25s
+1 failed in 0.22s

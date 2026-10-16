@@ -18,9 +18,18 @@
     "restored_bytes_identical": true
   },
   {
+    "case": "integer-generation",
+    "source": "src/adapters.py",
+    "source_sha256": "41515f17747dffeedfbf89b889fd0bc9b6900bddc8f2fa3a4a6e711befdd540a",
+    "test": "tests/test_model_tier_resolution.py::test_argon_rename_preserves_family_and_effort",
+    "red_exit": 1,
+    "green_exit": 0,
+    "restored_bytes_identical": true
+  },
+  {
     "case": "argon-family",
     "source": "src/adapters.py",
-    "source_sha256": "fe58255628b6a804d555bb59cf4f2b52d948bdc8b046dc9ec28050b0209999a3",
+    "source_sha256": "41515f17747dffeedfbf89b889fd0bc9b6900bddc8f2fa3a4a6e711befdd540a",
     "test": "tests/test_model_tier_resolution.py::test_argon_rename_preserves_family_and_effort",
     "red_exit": 1,
     "green_exit": 0,
