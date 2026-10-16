@@ -1420,6 +1420,22 @@ def test_post_merge_recheck_passes_when_every_named_test_passes_despite_manual_c
     monkeypatch.setattr(runtime_ac, "run_verification", mixed)
     result = gate.recheck_merged(case["spec"], case["checkout"])
     assert result["result"] == "PASS" and result["reason"] is None
+    # A non-PASS executable result under the same manual NEEDS_REVIEW gate is not a pass.
+    for status in ("SKIP", "ERROR"):
+        monkeypatch.setattr(
+            runtime_ac,
+            "run_verification",
+            lambda *_a, _status=status, **_kw: {
+                "gate": {"verdict": "NEEDS_REVIEW"},
+                "check_results": [
+                    {"type": "command", "status": "PASS", "returncode": 0},
+                    {"type": "command", "status": _status},
+                    {"type": "manual", "status": "NEEDS_REVIEW"},
+                ],
+            },
+        )
+        result = gate.recheck_merged(case["spec"], case["checkout"])
+        assert result["result"] == "UNRUNNABLE" and result["reason"] == "incomplete", status
     monkeypatch.setattr(
         runtime_ac,
         "run_verification",
