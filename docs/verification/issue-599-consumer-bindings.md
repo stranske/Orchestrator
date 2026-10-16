@@ -99,3 +99,39 @@ pending PR-body addition.
 ## Current-head closer review repair
 
 Fresh guarded Sol review at51ac7dbf found that the original source599 offload row was omitted from both declaration tables, so the original table-only test could pass while its live prose remained. A read-only live-ledger audit confirmed that row still exists. The added overlay names existing role consumers and the existing backend-run binding; it grants no lifecycle status or measured credit. The new regression starts from the original prose row and requires successful, idempotent reconciliation with unchanged status, event history and outcome links. It assertion-fails before the overlay and passes after it. All original post-sync/October27 acceptance remains open.
+
+## 2026-10-16 keepalive admission-debt regression
+
+Extended the existing missing-consumer reconciliation test to run full admission
+on the reconciled `docs-drift-fix-agent` row on both sides of the tenth-part
+cutoff. Its diagnostic must remain pre-cutoff debt, block post-cutoff admission,
+remain in DRAINABLE, and receive no acting or lifecycle credit. Reusing the
+existing test leaves the collection count unchanged. Temporarily replacing the
+consumer requirement with an accepting predicate makes these new assertions fail;
+restoring the predicate passes.
+
+The named declaration test was also run against a real source edit: replacing
+the route-weights-export binding with prose exits 1 and identifies
+`KNOWN_GATES:route-weights-export`; restoring byte-identical source exits 0.
+The missing-consumer inventory remains exactly `docs-drift-fix-agent`.
+
+The live ledger is unavailable. Running
+`ORCH_LOCAL_RUNTIME=/tmp/orchestrator-consumer-633-runtime python3 src/capability_admission.py`
+exits 0 and prints the same empty-catalogue CONSUMERS lines shown above. Those
+zeros do not establish live acceptance. Running the admission selftest against
+that empty runtime fails its `ledger must load` prerequisite assertion.
+
+Pytest and both required Black commands cannot run because their executables are
+absent. Installation from PyPI fails on DNS resolution. The extended Python test
+therefore remains uncommitted under the mandatory Black gate; direct function
+execution and the deliberate-break checks are not substitutes for that gate.
+Eight focused checks passed by direct function execution, including this extended
+test, the named resolution test, reconciliation and consumer cutoff/acting cases,
+and feature-scan output consumption. These results are not a pytest suite result.
+
+The proposed PR body is saved at `/tmp/pr-633-keepalive-body.md`, including the
+missing-consumer finding, the empty-run output, and verified task checkboxes;
+live post-sync acceptance stays open. Publishing the body, adding a blocker
+comment, and adding `needs-human` were each rejected by the connector because
+approval is required while this run's approval policy is `never`. The hosted PR
+body and task checkboxes remain unchanged.

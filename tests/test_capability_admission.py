@@ -893,6 +893,30 @@ def test_missing_consumer_declaration_survives_reconciliation_without_acceptance
     assert row["event_history"][0] == {"type": "invocation", "timestamp": 1}
     assert not capabilities._reconcile_known_declarations(ledger, 3)
 
+    # Missing consumers are findings, not waivers. Even an exercise-bound declaration must
+    # remain visible as debt before the cutoff and block admission after it.
+    ctx = {"audit_rows": {}, "fixtures": set()}
+    for created, enforced in (
+        (admission.CONSUMER_ACTS_ENFORCED_FROM - 86400, False),
+        (admission.CONSUMER_ACTS_ENFORCED_FROM + 3600, True),
+    ):
+        dated = {
+            **row,
+            "event_history": [{"timestamp": created, "type": "registered"}],
+        }
+        dated_ledger = {cid: dated}
+        verdict = admission.admit(cid, ctx=ctx, ledger=dated_ledger)
+        assert not verdict["checks"]["consumer_acts"]["ok"], verdict
+        assert ("consumer_acts" in verdict["blocking"]) is enforced, verdict
+        assert ("consumer_acts" in verdict["deferred"]) is not enforced, verdict
+        consumers = admission.consumer_report(dated_ledger, ctx, [verdict])
+        assert consumers["by_class"]["prose"] == [cid], consumers
+        assert consumers["drainable"] == [cid] and not consumers["drained"], consumers
+        assert consumers["blocking"] == ([cid] if enforced else []), consumers
+        assert consumers["deferred"] == ([] if enforced else [cid]), consumers
+        assert consumers["by_class"]["acting"] == [], consumers
+        assert dated["status"] == "active" and dated["outcome_links"] == []
+
 
 def test_original_offload_prose_is_reconciled_without_lifecycle_or_credit_changes():
     """The source599 offload row must not vanish outside both declaration tables."""
