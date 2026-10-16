@@ -1284,14 +1284,17 @@ def _post_merge_rechecks(*, dry_run: bool, gh, now: int, spec_dir=None) -> dict:
                     persist()
                     summary["rechecked"] += 1
                 # FAIL is evidence about the delivery and is always commented. UNRUNNABLE is
-                # commented only when its cause is in the SPEC (`manual_only`: no executable check
-                # at all), which the fleet can act on. A runner that skipped commands by
-                # configuration or threw says nothing about the delivery, so it records the event
-                # and writes no comment: the first three rechecks (2026-10-16) posted 4 KB JSON
-                # transcripts to fleet issues naming the sweep's own switch as the issue's state.
-                comment_due = result["result"] == "FAIL" or (
-                    result["result"] == "UNRUNNABLE" and result.get("reason") == "manual_only"
+                # commented when its cause is in the SPEC or the delivery (`manual_only`,
+                # `hollow_break`, or no recorded reason), which the fleet can act on. A runner
+                # that skipped commands by configuration, threw, or could not launch the test says
+                # nothing about the delivery, so it records the event and writes no comment: the
+                # first three rechecks (2026-10-16) posted 4 KB JSON transcripts to fleet issues
+                # naming the sweep's own switch as the issue's state.
+                runner_side = (
+                    result["result"] == "UNRUNNABLE"
+                    and result.get("reason") in runtime_ac_gate.RUNNER_SIDE_UNRUNNABLE
                 )
+                comment_due = result["result"] in {"FAIL", "UNRUNNABLE"} and not runner_side
                 if comment_due:
                     marker = f"runtime-AC post-merge {result['result']} on {sha}"
                     if not result.get("commented"):
@@ -1317,7 +1320,7 @@ def _post_merge_rechecks(*, dry_run: bool, gh, now: int, spec_dir=None) -> dict:
                             if hashlib.sha256(raw).hexdigest() != result.get("transcript_hash"):
                                 raise RuntimeError("post-merge transcript hash mismatch")
                             text = raw.decode("utf-8")
-                            if result["result"] == "UNRUNNABLE":
+                            if result.get("reason") == "manual_only":
                                 body = (
                                     marker + " — the issue's acceptance criteria name no "
                                     "executable test, so no rail can re-run this delivery; a "

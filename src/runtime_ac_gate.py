@@ -410,6 +410,16 @@ def recheck_merged(
             result = "UNRUNNABLE"
         reason = None
         if result == "UNRUNNABLE":
+
+            def hollow(row):
+                if row.get("type") != "deliberate_break":
+                    return False
+                try:
+                    proof = json.loads(row.get("stdout_tail") or "{}")
+                except ValueError:
+                    return False
+                return isinstance(proof, dict) and proof.get("verdict") == "FAIL_HOLLOW"
+
             if not executable:
                 reason = "manual_only"
             elif any(
@@ -417,6 +427,8 @@ def recheck_merged(
                 for r in executable
             ):
                 reason = "commands_disabled"
+            elif any(hollow(r) for r in executable):
+                reason = "hollow_break"
             else:
                 reason = "incomplete"
         return {
@@ -586,7 +598,20 @@ def env_int(env: Mapping[str, Any], name: str, default: int) -> int:
 
 
 POST_MERGE_COMMANDS_FLAG = "ORCH_RUNTIME_AC_POST_MERGE_COMMANDS"
-UNRUNNABLE_REASONS = ("commands_disabled", "manual_only", "tool_error", "incomplete")
+# Two of these are about the SPEC or the delivery and are said on the issue: `manual_only` (no
+# executable check at all) and `hollow_break` (the deliberate break ran and the named test did not
+# fail on the broken base, so the test proves nothing). The other three are about the runner —
+# `commands_disabled`, `tool_error`, `incomplete` (launcher, collection or invocation failures the
+# verdict already refuses to count) — and are recorded without a comment. An UNRUNNABLE with no
+# reason (rows written before this field) is unknown and is commented as before.
+UNRUNNABLE_REASONS = (
+    "commands_disabled",
+    "manual_only",
+    "hollow_break",
+    "tool_error",
+    "incomplete",
+)
+RUNNER_SIDE_UNRUNNABLE = frozenset({"commands_disabled", "tool_error", "incomplete"})
 
 
 def post_merge_commands_allowed(env: Mapping[str, Any]) -> bool:
