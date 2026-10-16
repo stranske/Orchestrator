@@ -52,14 +52,9 @@ AGENT_RUNTIME = Path(os.environ.get("ORCH_AGENT_RUNTIME_DIR", LOCAL_RUNTIME / "a
 #   claude — Claude 5 family: Opus 5.5 flagship (moved from Opus 5 on 2026-09-22), Sonnet 5.5 mid
 #            (moved from Sonnet 5 on 2026-09-30),
 #            Haiku 4.5 cheap.
-#   gemini — agy offers Pro only at 3.1; the 3.5/3.6/3.7 generations are Flash-only. Flash is BOTH
-#            newer and far cheaper on this compute-metered seat, so cheap/mid ride Flash and only
-#            `full` pays for 3.1 Pro. MOVED 3.6 -> 3.7 Flash on 2026-09-01: the owner received a 3.6
-#            retirement notice and `agy models` now advertises the full 3.7 rung set
-#            (high/medium/low). Pro STAYS at 3.1 — `3.7 > 3.1` is a newer FLASH, not a better PRO
-#            (see the ladder-trap note in execution_profiles.py).
-#   2026-10-12: the installed catalog renamed Flash to 3.8; cheap/mid and their profiles
-#   move together. Pro3.1 remains the explicit full pin, whose live absence stays a red guard.
+#   gemini — owner-approved Argon successor (2026-10-15), authenticated by `agy models`:
+#            cheap/mid/full map to Argon low/medium/high. These are requested CLI identities;
+#            advertisement alone does not attest the provider-resolved model or quality.
 #   vibe   — Mistral merged its coding line into ONE model (mistral-medium-3.5, 256k, replaced
 #            Devstral 2 as the Vibe default). No tiers to pin; the CLI default is correct.
 #   aider  — 'mistral/codestral-latest' is a floating alias that self-upgrades; pinning would be
@@ -77,9 +72,9 @@ MODEL_TIERS: dict[str, dict[str, str]] = {
     "codex": {"cheap": "gpt-6-luna", "mid": "gpt-5.6-terra", "full": "gpt-6.1-sol"},
     "claude": {"cheap": "claude-haiku-4-5", "mid": "claude-sonnet-5-5", "full": "claude-opus-5-5"},
     "gemini": {
-        "cheap": "gemini-3.8-flash-low",
-        "mid": "gemini-3.8-flash-high",
-        "full": "gemini-3.1-pro-high",
+        "cheap": "gemini-4-argon-low",
+        "mid": "gemini-4-argon-medium",
+        "full": "gemini-4-argon-high",
     },
     "cursor": {},
     "vibe": {},
@@ -871,11 +866,13 @@ def _auto_resolve(agent: str, tier: str, pinned: str, advertised: list[str]) -> 
     """
     if agent != "gemini":
         return None
-    family = "pro" if "pro" in pinned else "flash" if "flash" in pinned else None
+    family = next((name for name in ("argon", "pro", "flash") if name in pinned), None)
     candidates = [m for m in advertised if m.startswith("gemini-")]
     if not candidates:
         return None
     same_family = [m for m in candidates if family and family in m]
+    if family == "argon" and not same_family:
+        return None  # The approved successor must not silently revert to Pro or Flash.
     # A version rename must preserve the effort rung when the new family offers it.
     # Ranking every replacement by "high first" silently upgraded cheap/low requests.
     effort = next((e for e in ("low", "medium", "high") if pinned.endswith("-" + e)), None)
@@ -2450,12 +2447,11 @@ def _selftest_inner(*, gaps: list[str] | None = None):
         assert agy_advertised_models() == [], "kill-switch must suppress the CLI probe entirely"
         unprobed = gemini_model_health()
         assert unprobed["resolvable"] and unprobed["source"] == "pinned_default", unprobed
-        # THE ask: cheap/mid ride Flash, only full pays for Pro. Flash is both newer (3.7 vs 3.1)
-        # and far cheaper in compute units on this metered seat.
+        # The owner-approved successor has one distinct Argon effort rung per tier.
         for tier, expected in (
-            ("cheap", "gemini-3.8-flash-low"),
-            ("mid", "gemini-3.8-flash-high"),
-            ("full", "gemini-3.1-pro-high"),
+            ("cheap", "gemini-4-argon-low"),
+            ("mid", "gemini-4-argon-medium"),
+            ("full", "gemini-4-argon-high"),
         ):
             gt = build_command("gemini", "x", mode=tier, cwd=gemini_cwd)
             assert gt[gt.index("--model") + 1] == expected, (tier, gt)
@@ -2636,7 +2632,9 @@ def _selftest_inner(*, gaps: list[str] | None = None):
         _probe_shutil.rmtree(_cache_dir, ignore_errors=True)
     # Rename survival: pinned model gone => auto-pick the newest Pro/high seat, never die.
     old_memo = dict(_ADVERTISED_MEMO)
+    old_full = MODEL_TIERS["gemini"]["full"]
     try:
+        MODEL_TIERS["gemini"]["full"] = "gemini-3.1-pro-high"
         _ADVERTISED_MEMO["gemini"] = {
             "ts": time.time(),
             "models": [
@@ -2651,9 +2649,15 @@ def _selftest_inner(*, gaps: list[str] | None = None):
         assert renamed["resolvable"] and renamed["source"] == "auto_from_catalog", renamed
         # Auto-resolution stays inside the tier's own family: a renamed Flash tier must not
         # silently promote itself to the pricier Pro seat.
-        flash = model_health("gemini", "cheap")
-        assert flash["model"] == "gemini-4.0-flash-high", flash
+        old_cheap = MODEL_TIERS["gemini"]["cheap"]
+        try:
+            MODEL_TIERS["gemini"]["cheap"] = "gemini-3.8-flash-low"
+            flash = model_health("gemini", "cheap")
+            assert flash["model"] == "gemini-4.0-flash-high", flash
+        finally:
+            MODEL_TIERS["gemini"]["cheap"] = old_cheap
         # A pinned model that IS advertised is used verbatim, with no auto-pick.
+        MODEL_TIERS["gemini"]["full"] = old_full
         _ADVERTISED_MEMO["gemini"]["models"] = [DEFAULT_GEMINI_MODEL, "gemini-3.8-flash-low"]
         assert gemini_model_health()["source"] == "pinned_default", gemini_model_health()
         assert gemini_model() == DEFAULT_GEMINI_MODEL
@@ -2671,6 +2675,7 @@ def _selftest_inner(*, gaps: list[str] | None = None):
     finally:
         _ADVERTISED_MEMO.clear()
         _ADVERTISED_MEMO.update(old_memo)
+        MODEL_TIERS["gemini"]["full"] = old_full
     assert (
         "--gemini_dir" in g and "agent-runtime/gemini/.gemini" in g[g.index("--gemini_dir") + 1]
     ), g

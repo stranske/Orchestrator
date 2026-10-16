@@ -282,7 +282,7 @@ def test_build_command_honours_every_tier(tmp_path, monkeypatch):
     expected = {
         "codex": ("gpt-6-luna", "gpt-5.6-terra", "gpt-6.1-sol"),
         "claude": ("claude-haiku-4-5", "claude-sonnet-5-5", "claude-sonnet-5-5"),
-        "gemini": ("gemini-3.8-flash-low", "gemini-3.8-flash-high", "gemini-3.1-pro-high"),
+        "gemini": ("gemini-4-argon-low", "gemini-4-argon-medium", "gemini-4-argon-high"),
     }
     for agent, models in expected.items():
         for tier, model in zip(adapters.MODEL_TIER_NAMES, models):
@@ -292,11 +292,10 @@ def test_build_command_honours_every_tier(tmp_path, monkeypatch):
             assert model == adapters.MODEL_TIERS[agent][expected_tier], (agent, tier)
 
 
-def test_gemini_cheap_and_mid_are_flash_not_pro():
-    """The point of the tier map: stop paying Pro rates for cheap large-read work."""
-    for tier in ("cheap", "mid"):
-        assert "flash" in adapters.MODEL_TIERS["gemini"][tier], tier
-    assert "pro" in adapters.MODEL_TIERS["gemini"]["full"]
+def test_gemini_tiers_use_the_owner_approved_argon_effort_ladder():
+    """Owner-approved successor keeps all three effort rungs distinct."""
+    for tier, effort in (("cheap", "low"), ("mid", "medium"), ("full", "high")):
+        assert adapters.MODEL_TIERS["gemini"][tier] == f"gemini-4-argon-{effort}"
 
 
 def test_offload_defaults_to_the_mid_tier():
@@ -328,6 +327,7 @@ def _fake_catalog(monkeypatch, models):
 def test_rename_auto_resolves_to_a_live_sibling(monkeypatch):
     """A rename must degrade the seat to a live model, never kill it."""
     monkeypatch.delenv("ORCH_GEMINI_MODEL", raising=False)
+    monkeypatch.setitem(adapters.MODEL_TIERS["gemini"], "full", "gemini-3.1-pro-high")
     _fake_catalog(
         monkeypatch, ["gemini-4.2-flash-high", "gemini-4.1-pro-low", "gemini-4.1-pro-high"]
     )
@@ -339,6 +339,7 @@ def test_rename_auto_resolves_to_a_live_sibling(monkeypatch):
 def test_rename_keeps_a_flash_tier_on_flash(monkeypatch):
     """Auto-resolution must not silently promote a cheap tier onto the pricier Pro seat."""
     monkeypatch.delenv("ORCH_GEMINI_MODEL_CHEAP", raising=False)
+    monkeypatch.setitem(adapters.MODEL_TIERS["gemini"], "cheap", "gemini-3.8-flash-low")
     _fake_catalog(monkeypatch, ["gemini-4.2-flash-low", "gemini-4.1-pro-high"])
     health = adapters.model_health("gemini", "cheap")
     assert health["model"] == "gemini-4.2-flash-low", health
@@ -1068,3 +1069,71 @@ def test_gemini_rename_preserves_advertised_effort(monkeypatch, effort):
     health = adapters.model_health("gemini", "cheap")
     assert health["source"] == "auto_from_catalog"
     assert health["model"] == f"gemini-3.8-flash-{effort}"
+
+
+def test_argon_successor_tiers_reach_matching_offload_profiles(monkeypatch, tmp_path):
+    import dispatcher
+    import execution_profiles
+
+    monkeypatch.setenv("ORCH_MODEL_PROBE", "0")
+    for name in (
+        "ORCH_GEMINI_MODEL",
+        "ORCH_GEMINI_MODEL_CHEAP",
+        "ORCH_GEMINI_MODEL_MID",
+        "ORCH_GEMINI_MODEL_FULL",
+        "ORCH_GEMINI_MAX_TIER",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    expected = {
+        "cheap": "gemini-4-argon-low",
+        "mid": "gemini-4-argon-medium",
+        "full": "gemini-4-argon-high",
+    }
+    assert adapters.MODEL_TIERS["gemini"] == expected
+    assert adapters.DEFAULT_GEMINI_MODEL == expected["full"]
+    for mode, tier in (
+        ("cheap", "cheap"),
+        ("mid", "mid"),
+        ("full", "full"),
+        ("offload", "mid"),
+        (None, "mid"),
+    ):
+        chosen = dispatcher._select_offload_profile("gemini", mode)
+        assert chosen is not None
+        assert chosen["requested_model"] == expected[tier]
+        assert chosen["reasoning_effort"] == {"cheap": "low", "mid": "medium", "full": "high"}[tier]
+        assert chosen["profile_id"] not in execution_profiles.PROFILE_RETIREMENTS
+        argv = adapters.build_command(
+            "gemini", "read only", mode=mode, cwd=tmp_path, profile=chosen
+        )
+        assert argv[argv.index("--model") + 1] == chosen["requested_model"]
+
+
+def test_argon_retirement_preserves_historical_profile_identity():
+    import execution_profiles
+
+    expected = {
+        "gemini-3.7-flash-low": "gemini-4-argon-low",
+        "gemini-3.7-flash-high": "gemini-4-argon-medium",
+        "gemini-3.8-flash-low": "gemini-4-argon-low",
+        "gemini-3.8-flash-high": "gemini-4-argon-medium",
+        "gemini-3.1-pro-high": "gemini-4-argon-high",
+    }
+    for old, successor in expected.items():
+        assert execution_profiles.get_profile(old)["requested_model"] == old
+        assert execution_profiles.resolve_production_profile_id(old) == successor
+    active = execution_profiles.profiles_for_agent("gemini", transport="offload")
+    assert {p["requested_model"] for p in active} == set(expected.values())
+
+
+def test_argon_rename_preserves_family_and_effort(monkeypatch):
+    for tier, effort in (("cheap", "low"), ("mid", "medium"), ("full", "high")):
+        monkeypatch.delenv(f"ORCH_GEMINI_MODEL_{tier.upper()}", raising=False)
+        monkeypatch.delenv("ORCH_GEMINI_MODEL", raising=False)
+        _fake_catalog(monkeypatch, ["gemini-3.8-flash-high", "gemini-3.1-pro-high"])
+        absent = adapters.model_health("gemini", tier)
+        assert absent["resolvable"] is False
+        assert absent["model"] == f"gemini-4-argon-{effort}"
+        _fake_catalog(monkeypatch, [f"gemini-5-argon-{e}" for e in ("low", "medium", "high")])
+        renamed = adapters.model_health("gemini", tier)
+        assert renamed["model"] == f"gemini-5-argon-{effort}"

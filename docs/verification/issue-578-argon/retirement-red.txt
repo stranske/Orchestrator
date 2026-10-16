@@ -1,0 +1,26 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_argon_retirement_preserves_historical_profile_identity __________
+
+    def test_argon_retirement_preserves_historical_profile_identity():
+        import execution_profiles
+    
+        expected = {
+            "gemini-3.7-flash-low": "gemini-4-argon-low",
+            "gemini-3.7-flash-high": "gemini-4-argon-medium",
+            "gemini-3.8-flash-low": "gemini-4-argon-low",
+            "gemini-3.8-flash-high": "gemini-4-argon-medium",
+            "gemini-3.1-pro-high": "gemini-4-argon-high",
+        }
+        for old, successor in expected.items():
+            assert execution_profiles.get_profile(old)["requested_model"] == old
+>           assert execution_profiles.resolve_production_profile_id(old) == successor
+E           AssertionError: assert 'gemini-3.8-flash-low' == 'gemini-4-argon-low'
+E             
+E             - gemini-4-argon-low
+E             + gemini-3.8-flash-low
+
+tests/test_model_tier_resolution.py:1120: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_model_tier_resolution.py::test_argon_retirement_preserves_historical_profile_identity
+1 failed in 0.24s
