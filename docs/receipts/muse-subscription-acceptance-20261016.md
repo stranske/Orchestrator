@@ -29,8 +29,10 @@ or a claim that the whole task fits inside a fixed allowance bucket. Subscriptio
 an accounting imputation, never measured API spend or evidence of free/unlimited capacity.
 
 A prior HOME-isolated attempt failed before model output because the existing subscription
-keychain login was unavailable. Keeping HOME real while redirecting XDG configuration recovered
-the login. A local non-provider configuration probe under the same real HOME returned exit 1
+keychain login was unavailable. PR #625 temporarily retained real HOME while redirecting XDG
+configuration. The follow-up native trial `offload:muse:1792148691487979000` proved private HOME
+authenticates when only `Library/Keychains` is linked to the existing OS store; no credential contents
+were copied or API key supplied. The follow-up therefore uses private HOME for both launch paths. A local non-provider configuration probe under the same real HOME returned exit 1
 for deliberately invalid isolated user settings and exit 0 for clean isolated settings. The
 child pins `MUSE_AUTH_PATH`, scrubs `META_API_KEY`, redirects mutable XDG directories, keeps the
 sandbox, and disables foreign personal context and session logging. This proves configuration
@@ -68,3 +70,25 @@ original seven fields (SHA256 `5d2afe1e867c38920228943bf7ef1bfa37d24be988052f6ea
 and preserved two authentic trial measurements in the keyed additive extension. It also kept
 a complete wide-table recovery backup. The production mirror remains the guarded published
 version until this follow-up is merged and passes the guarded snapshot publisher.
+
+
+Native tool-bearing follow-up (2026-10-16): the genuine boundary task
+`offload:muse:1792148211073946000` produced a useful completed run after a denied
+read, a successful workspace read, and a failed nested sandbox startup. The
+original parser rejected its child task output/failure/rejection and tool-result
+events, incorrectly hiding that terminal text. The follow-up recognizes those
+four observed types only when bound to the accepted command/run; they never
+substitute for the durable run terminal. A sanitized native fixture and original
+parser RED/corrected GREEN control preserve that distinction. The original
+attempt remains normalized exit 70 in history; replay is not a new successful
+native invocation.
+
+The boundary experiment is not published behavior. It proves an outer read deny
+blocks the owned private sentinel and permits workspace reads, but Muse's inner
+shell sandbox refuses nesting with exit 71. Two private-HOME probes, with the
+runtime auth alias and with the canonical login-record path respectively, both
+failed to authenticate with the existing OAuth login. A third genuine trial with only the macOS Keychains directory aliased succeeded; that narrowly
+scoped alias is now the private-HOME credential flow. Normal HOME/XDG config discovery is private,
+while arbitrary absolute-path reads remain outside that guarantee, as with the other agent runtime
+homes. Source #612 remains open until current-head review/CI, guarded publication, native acceptance
+and actual verifier disposition; no provider PASS is claimed by these local receipts.

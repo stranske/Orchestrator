@@ -1,6 +1,6 @@
 {
-  "collected": 3658,
-  "passed": 3658,
+  "collected": 3666,
+  "passed": 3666,
   "skipped_max": 31,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 52,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": " 2026-10-16 closer622 integrates accepted main df204233 (#625): union floor preserved; fresh exact-head hosted full verification required. 2026-10-16 opener622 adds22nativeCLI regression cases; all skip/selftest/gate/mypy ceilings unchanged. 2026-10-16 closer622 adds24 nestedCLI cases and journal contract reuse control; actual3658 collection,169focusedPASS+23subtests, every ceiling unchanged; hosted full qualification remains required."
+  "note": " 2026-10-16 closer622 integrates accepted main df204233 (#625): union floor preserved; fresh exact-head hosted full verification required. 2026-10-16 opener622 adds22nativeCLI regression cases; all skip/selftest/gate/mypy ceilings unchanged. 2026-10-16 closer622 adds24 nestedCLI cases and journal contract reuse control; actual3658 collection,169focusedPASS+23subtests, every ceiling unchanged; hosted full qualification remains required. Integrated accepted main a898f3b7 (#631), union collection measured below; unchanged ceilings. Actual integrated collection3666,169focusedPASS+23subtests; source/flat full hosted checks required."
 }

@@ -315,9 +315,14 @@ missing or has no active subscription (an unreadable record is not a failure). M
 order as the env key, then a stored key, then the stored browser session; whether a stored key can coexist
 with the login is unverified, so the gate admits only an OAuth login record and refuses any other mechanism.
 `agent_auth_check` counts the seat usable only when the login records an active
-subscription (`subs_active`), reading the file's shape and never its contents. The child keeps the real
-`HOME` so the subscription keychain login remains usable, but isolates `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
-`XDG_CACHE_HOME`, `XDG_STATE_HOME`, and temporary runtime state and uses the pinned `MUSE_AUTH_PATH` link for the auth record.
+subscription (`subs_active`), reading the file's shape without logging credential values. The child uses
+an isolated `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`, and temporary
+runtime state. The pinned `MUSE_AUTH_PATH` aliases only the existing login record; on macOS, the private
+HOME's `Library/Keychains` aliases only the existing OS credential-store directory. A genuine native
+trial authenticated with this one directory alias after private HOME alone failed. Personal Muse
+settings are not linked. This isolates normal HOME/XDG config discovery; it is not an OS denial of
+arbitrary absolute-path reads. An outer read-deny experiment blocked private files but broke Muse's
+inner shell sandbox, so that unsupported nested arrangement is not used.
 The argv is headless with
 the sandbox ON (`--disable-approval`, never `--yolo`), without the owner's personal Claude/Codex rules
 (`--no-foreign-personal-context`) and without a session log. Synchronous offloads and direct adapter calls pass prompts through a private

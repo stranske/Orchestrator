@@ -62,6 +62,7 @@ def sandbox(monkeypatch, tmp_path):
     monkeypatch.setattr(dispatcher, "REAL_HOME", tmp_path / "home")
     login = tmp_path / "home/.config/muse/auth.json"
     login.parent.mkdir(parents=True)
+    (login.parents[2] / "Library/Keychains").mkdir(parents=True)
     login.write_text("{}")  # Runtime-only fixture; no provider process is launched.
     for var in (
         "GH_CONFIG_DIR",

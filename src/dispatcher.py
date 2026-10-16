@@ -586,11 +586,12 @@ def _ensure_agent_runtime(agent: str) -> Path:
         # The wrapper moves XDG_CONFIG_HOME here, and Muse reads its LOGIN RECORD from
         # `$XDG_CONFIG_HOME/muse/auth.json` (found by a live offload 2026-10-15: "missing meta
         # credentials"). Link the owner's record in; the token itself stays in the macOS keychain,
-        # reachable with the real HOME retained. Linked, never copied, so a re-login is picked up
-        # without importing personal Muse settings into the isolated XDG configuration root.
+        # reachable through the one Keychains directory alias in the private HOME. Linked,
+        # never copied, so re-login is picked up without importing personal Muse settings.
         adapters.ensure_muse_auth_link(
             REAL_HOME / ".config" / "muse" / "auth.json", base / ".config" / "muse" / "auth.json"
         )
+        adapters.ensure_muse_keychain_link(REAL_HOME, base)
     elif agent == "gemini":
         (base / "logs").mkdir(parents=True, exist_ok=True)
         gemini_dir = base / ".gemini"
@@ -837,8 +838,9 @@ def _agent_runtime_prelude(agent: str) -> str:
         # console 2026-10-15; the `Muse Code`-project key is untested), so a
         # key inherited from a session, lane or launchd environment would silently turn subscription
         # use into API spend. Unset it by NAME only: the value is never read or written here.
-        # HOME must stay real for this CLI's keychain-backed login. User configuration and
-        # mutable state are isolated through XDG; only the auth record is linked there.
+        # A real native trial proved private HOME works when only Library/Keychains is
+        # aliased to the existing credential store. Personal Muse configuration stays private.
+        exports.append(f"export HOME={shlex.quote(str(base))}")
         exports.append(f"export XDG_STATE_HOME={shlex.quote(str(base / '.local/state'))}")
         exports.append("unset META_API_KEY")
         exports.append(
@@ -4417,6 +4419,7 @@ def _selftest() -> None:
                 _login = REAL_HOME / ".config/muse/auth.json"
                 _login.parent.mkdir(parents=True)
                 _login.write_text("{}")
+                (REAL_HOME / "Library/Keychains").mkdir(parents=True)
                 assert "unset META_API_KEY" in _agent_runtime_prelude("muse")
         finally:
             globals()["REAL_HOME"] = _saved_muse_home
