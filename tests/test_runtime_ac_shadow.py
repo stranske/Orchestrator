@@ -1226,6 +1226,9 @@ def post_merge_case(private_brain, monkeypatch):
     monkeypatch.setenv("ORCH_STATE_DIR", str(private_brain))
     monkeypatch.setenv("ORCH_RUN_RUNTIME_AC", "1")
     monkeypatch.setenv("ORCH_RUNTIME_AC_ALLOW_COMMANDS", "1")
+    # The recheck's own switch defaults ON; an inherited `=0` would turn the default-on tests
+    # into UNRUNNABLE, so the fixture starts from the default.
+    monkeypatch.delenv(gate.POST_MERGE_COMMANDS_FLAG, raising=False)
     monkeypatch.setenv("ORCH_RUNTIME_AC_REOPEN", "1")
     monkeypatch.setattr(backlog, "SUPPORTED_REPOS", ["owner/repo"])
     monkeypatch.setattr(
@@ -1358,6 +1361,30 @@ def test_post_merge_recheck_commands_disabled_is_unrunnable_and_silent(
     assert summary["unrunnable"] == 1 and summary["passed"] == 0
     assert summary["unrunnable_reasons"] == {"commands_disabled": 1}
     assert "unrunnable 1 (commands_disabled 1)" in gate.format_post_merge_summary(summary)
+
+
+@pytest.mark.parametrize(
+    "value,allowed",
+    [
+        (None, True),
+        ("1", True),
+        ("yes", True),
+        ("", True),
+        ("0", False),
+        ("false", False),
+        ("no", False),
+        ("off", False),
+        (" OFF ", False),
+    ],
+)
+def test_post_merge_commands_allowed_reads_every_documented_value(value, allowed):
+    """The post-merge policy is its own switch: every documented disabled word, and absence."""
+    env = {} if value is None else {gate.POST_MERGE_COMMANDS_FLAG: value}
+    assert gate.post_merge_commands_allowed(env) is allowed
+    # The ingest opt-in never reaches this policy in either direction.
+    assert (
+        gate.post_merge_commands_allowed({"ORCH_RUNTIME_AC_ALLOW_COMMANDS": "0", **env}) is allowed
+    )
 
 
 def test_post_merge_recheck_runs_the_named_test_without_the_ingest_opt_in(
