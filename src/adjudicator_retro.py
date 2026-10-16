@@ -933,6 +933,11 @@ def publish_native_cohort(
                         stream.flush()
                         os.fsync(stream.fileno())
                         temporary.replace(canonical_path)
+                        directory = os.open(canonical_path.parent, os.O_RDONLY)
+                        try:
+                            os.fsync(directory)
+                        finally:
+                            os.close(directory)
                     finally:
                         temporary.unlink(missing_ok=True)
             return result
@@ -947,10 +952,12 @@ def report_path() -> Path:
 
 
 def _publication_lock_path(path: Path) -> Path:
-    """Share the live canonical lock while isolating private report fixtures."""
-    if path.resolve() == report_path().resolve():
+    """Derive lock identity from the destination, independent of process settings."""
+    destination = path.resolve()
+    live_canonical = Path.home() / ".codex/orchestrator/capability-program/adjudicator-retro.json"
+    if destination == live_canonical.resolve():
         return Path.home() / ".codex/.orchestrator-mirror.publish.lock"
-    return path.parent / ".orchestrator-mirror.publish.lock"
+    return destination.parent / ".orchestrator-mirror.publish.lock"
 
 
 def disputes(*, db: Path | None = None, now: int | None = None, days: int = 90) -> list[dict]:
@@ -2575,6 +2582,104 @@ def weekly_line(path: Path | None = None) -> str:
         return "adjudicator shadow: cases UNKNOWN, agree UNKNOWN, disagree UNKNOWN, cost UNKNOWN"
 
 
+def _replay_qualification_selftest() -> None:
+    """Exercise collector replay binding using only an isolated toy repository."""
+    import adjudicator_replay as replay
+
+    with tempfile.TemporaryDirectory() as root:
+        repository = Path(root)
+        _local_git(repository, "init", "-q")
+        (repository / "proof.txt").write_text("original\n")
+        _local_git(repository, "add", ".")
+
+        def commit(message: str) -> str:
+            _local_git(
+                repository,
+                "-c",
+                "user.name=Selftest",
+                "-c",
+                "user.email=selftest@example.com",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-qm",
+                message,
+            )
+            return _local_git(repository, "rev-parse", "HEAD").decode().strip()
+
+        base = commit("base")
+        (repository / "proof.txt").write_text("evaluated proof\n")
+        _local_git(repository, "add", ".")
+        sha = commit("evaluated")
+        body = "## Acceptance Criteria\n- Inspect proof.\n- Replay controls.\n"
+        row = {
+            "case_id": "selftest",
+            "target": "owner/repo#1",
+            "packet": {
+                "target": "owner/repo#1",
+                "disputed_finding": {"body": "Missing proof", "decision": {"evaluated_sha": sha}},
+                "ground_truth_evidence": {
+                    "head_sha": sha,
+                    "merge_sha": sha,
+                    "diff_summary": [{"path": "proof.txt"}],
+                    "gate_runs": ["selftest"],
+                },
+            },
+            "collection_requirements": {
+                "source_paths": ["proof.txt"],
+                "acceptance": [{"criterion": "proof", "location": "git-path:proof.txt"}],
+            },
+            "inventory_provenance": {
+                "source_criterion_tasks": body,
+                "pr_body_sha256": hashlib.sha256(body.encode()).hexdigest(),
+            },
+        }
+        qualification = {
+            "comparison_base": base,
+            "snapshot": {"number": 1, "headRefOid": sha, "body": body},
+            "criterion_mapping": [
+                {"criterion": text, "evidence_locations": ["git-path:proof.txt"], "unknowns": []}
+                for text in ("Inspect proof.", "Replay controls.")
+            ],
+        }
+        material = {
+            "original_case_id": "selftest",
+            "evaluated_sha": sha,
+            "runner": {"path": "selftest", "sha256": "a" * 64},
+            "tests": ["control"],
+        }
+        payload = {**material, "material_evidence": material}
+        token = replay.ReplayEvidence(
+            replay._ISSUER,
+            payload,
+            replay._digest(material),
+            hashlib.sha256(replay._canonical(payload)).hexdigest(),
+        )
+        case = qualify_collected_case(row, repository, qualification, replay_receipt=token)
+        stored = roles._collected_snapshot(case)["ground_truth_evidence"]["collected_evidence"]
+        assert stored["execution_replays"][0]["material_digest"] == replay._digest(material)
+        try:
+            qualify_collected_case(row, repository, qualification, replay_receipt={})
+        except ValueError as exc:
+            assert "issued by the replay producer" in str(exc)
+        else:
+            raise AssertionError("serialized replay receipt accepted")
+        foreign = {**material, "original_case_id": "foreign"}
+        payload = {**foreign, "material_evidence": foreign}
+        token = replay.ReplayEvidence(
+            replay._ISSUER,
+            payload,
+            replay._digest(foreign),
+            hashlib.sha256(replay._canonical(payload)).hexdigest(),
+        )
+        try:
+            qualify_collected_case(row, repository, qualification, replay_receipt=token)
+        except ValueError as exc:
+            assert "bind the original evaluated case" in str(exc)
+        else:
+            raise AssertionError("foreign original replay accepted")
+
+
 def _selftest() -> None:
     with tempfile.TemporaryDirectory() as native_root:
         journal_path = Path(native_root) / "native.sqlite"
@@ -2704,6 +2809,33 @@ def _selftest() -> None:
         else:
             raise AssertionError("malformed history reached dispatch preparation")
         assert path.read_bytes() == original
+        canonical = Path(root) / "canonical.json"
+        canonical.write_bytes(original)
+        journal = NativeAttemptJournal(Path(root) / "publication.sqlite")
+        try:
+            publish_native_cohort(
+                original_report=path,
+                canonical_path=canonical,
+                cases={},
+                journal=journal,
+                expected_source_hash=hashlib.sha256(original).hexdigest(),
+                expected_canonical_hash="0" * 64,
+            )
+        except ValueError as exc:
+            assert "canonical report changed" in str(exc)
+        else:
+            raise AssertionError("stale canonical compare-and-swap accepted")
+        assert canonical.read_bytes() == original
+        canonical.write_text(json.dumps({"native_publication": {}}))
+        marked = canonical.read_bytes()
+        try:
+            _persist_report(canonical, [], 0)
+        except ValueError as exc:
+            assert "native canonical publication" in str(exc)
+        else:
+            raise AssertionError("generic writer clobbered native publication")
+        assert canonical.read_bytes() == marked
+    _replay_qualification_selftest()
     import inspect
 
     role_default = inspect.signature(roles.run_adjudicator_agent).parameters["timeout"].default
@@ -2715,7 +2847,7 @@ def _selftest() -> None:
     assert [r["run_id"] for r in attempt_order([fresh, aged], queue, retry=False)] == ["new", "old"]
     assert summarize([{"decision": None}])["retry_pending"] == 1
     assert summarize([{"decision": "reject_blocker"}])["retry_pending"] == 0
-    print("adjudicator_retro selftest: 18 checks passed")
+    print("adjudicator_retro selftest: 23 checks passed")
 
 
 def main() -> int:

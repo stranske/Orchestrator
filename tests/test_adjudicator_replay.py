@@ -313,3 +313,121 @@ def test_native_publish_cli_dispatches_manifest_replay_to_opaque_qualification(
     assert retro.main() == 0
     assert observed["collect"] == (repo, "one", sha, runner_path, runner.sha256, runner.tests)
     assert observed["receipt"] is token
+
+
+def test_real_replay_receipt_survives_journal_to_cli_publication(
+    replay_qualified_input, tmp_path, monkeypatch
+):
+    """Run real collector, replay child, journal validation and CLI publisher."""
+    from test_adjudicator_native_publication import _validated_native
+
+    repo, row, qualification, git = replay_qualified_input
+    base = git("rev-parse", "HEAD")
+    runner_path = "scripts/private-replay.py"
+    text = """import json
+print(json.dumps([{"test": "control", "runs": [
+    {"phase": "baseline", "exit": 0, "output": "pass"},
+    {"phase": "broken", "exit": 1, "output": "AssertionError"},
+    {"phase": "restored", "exit": 0, "output": "pass"}]}]))
+"""
+    (repo / "scripts").mkdir()
+    (repo / runner_path).write_text(text)
+    (repo / "proof.txt").write_text("complete private proof")
+    git("add", ".")
+    git("commit", "-qm", "private replay evaluated commit")
+    sha = git("rev-parse", "HEAD")
+    row = copy.deepcopy(row)
+    row.update(
+        run_id="original-private-run",
+        decision="needs_more_evidence",
+        retry_attempts=[{"backend_run_id": "original-paid"}],
+    )
+    row["packet"]["disputed_finding"]["decision"]["evaluated_sha"] = sha
+    row["packet"]["ground_truth_evidence"].update(
+        head_sha=sha,
+        merge_sha=sha,
+        diff_summary=[{"path": runner_path}, {"path": "proof.txt"}],
+    )
+    row["collection_requirements"]["source_paths"] = [runner_path, "proof.txt"]
+    body = "## Acceptance Criteria\n- Entire proof is inspected.\n- Control proof is replayed.\n"
+    row["inventory_provenance"] = {
+        "source_criterion_tasks": body,
+        "pr_body_sha256": hashlib.sha256(body.encode()).hexdigest(),
+    }
+    qualification = copy.deepcopy(qualification)
+    qualification.update(
+        comparison_base=base, snapshot={"number": 1, "headRefOid": sha, "body": body}
+    )
+    qualification["criterion_mapping"].append(
+        {
+            "criterion": "Control proof is replayed.",
+            "evidence_locations": ["git-path:proof.txt"],
+            "unknowns": [],
+        }
+    )
+    runner = replay.ReviewedRunner(
+        runner_path, hashlib.sha256(text.encode()).hexdigest(), ("control",), "one", sha, ()
+    )
+    monkeypatch.setattr(replay, "REVIEWED_RUNNERS", {runner_path: runner})
+    token = replay.collect_replay(repo, "one", sha, runner_path, runner.sha256, runner.tests)
+    case = retro.qualify_collected_case(row, repo, qualification, replay_receipt=token)
+    original, canonical = tmp_path / "original.json", tmp_path / "canonical.json"
+    original.write_text(json.dumps({"rows": [row], "summary": {"graded": 0}, "population": 299}))
+    canonical.write_bytes(original.read_bytes())
+    journal = retro.NativeAttemptJournal(tmp_path / "journal.sqlite")
+    _validated_native(journal, original, case, "private-native-paid")
+    # Only external later-truth/accounting reads are private fixture boundaries.
+    # No provider, production Brain or live report is touched.
+    monkeypatch.setattr(retro, "native_later_truth", lambda *_args: "PASS")
+    monkeypatch.setattr(
+        retro.feedback,
+        "role_cost_report",
+        lambda *_args, **_kwargs: {"status": "unmeasured", "cost_usd": None},
+    )
+    qualification_path = tmp_path / "qualification.json"
+    qualification_path.write_text(json.dumps(qualification))
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            [
+                {
+                    "case_id": "one",
+                    "input_report": original.name,
+                    "repository": str(repo),
+                    "qualification": qualification_path.name,
+                    "replay_runner": runner_path,
+                }
+            ]
+        )
+    )
+    source_bytes = original.read_bytes()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "adjudicator_retro",
+            "--native-publish",
+            str(canonical),
+            "--report",
+            str(original),
+            "--output",
+            str(tmp_path / "unused-projection.json"),
+            "--native-journal",
+            str(journal.path),
+            "--cohort-manifest",
+            str(manifest),
+            "--expected-source-hash",
+            hashlib.sha256(source_bytes).hexdigest(),
+            "--expected-canonical-hash",
+            hashlib.sha256(canonical.read_bytes()).hexdigest(),
+        ],
+    )
+    assert retro.main() == 0
+    published = json.loads(canonical.read_text())
+    assert published["summary"]["graded"] == 1
+    assert published["rows"][0]["native_projection"]["trusted"] is True
+    assert published["native_publication"]["paid_backend_ids"] == [
+        "original-paid",
+        "private-native-paid",
+    ]
+    assert original.read_bytes() == source_bytes

@@ -350,3 +350,100 @@ def test_native_publication_holds_journal_writer_lock_through_replace(tmp_path, 
         lock_path=tmp_path / ".orchestrator-mirror.publish.lock",
     )
     assert locked == [True]
+
+
+def test_destination_lock_contends_across_state_environments(tmp_path, monkeypatch):
+    import fcntl
+    import os
+    import subprocess
+    import sys
+
+    canonical = tmp_path / "capability-program" / "adjudicator-retro.json"
+    canonical.parent.mkdir()
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    shared = retro._publication_lock_path(canonical)
+    with shared.open("a+") as held:
+        fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        child = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                """import fcntl, sys
+from pathlib import Path
+import adjudicator_retro as retro
+with retro._publication_lock_path(Path(sys.argv[1])).open('a+') as lock:
+    try:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print('contended')
+    else:
+        print('incorrectly acquired')
+""",
+                str(canonical),
+            ],
+            env={
+                **os.environ,
+                "ORCH_STATE_DIR": str(tmp_path / "other"),
+                "PYTHONPATH": str(Path(retro.__file__).parent),
+            },
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=20,
+        )
+    assert child.stdout.strip() == "contended"
+    live = Path.home() / ".codex/orchestrator/capability-program/adjudicator-retro.json"
+    assert (
+        retro._publication_lock_path(live)
+        == Path.home() / ".codex/.orchestrator-mirror.publish.lock"
+    )
+
+
+@pytest.mark.parametrize("fail_directory", [False, True])
+def test_native_publication_syncs_directory_after_replace_and_reports_failure(
+    tmp_path, monkeypatch, fail_directory
+):
+    import os
+    import stat
+
+    original, canonical, _ = _source(tmp_path)
+    journal = retro.NativeAttemptJournal(tmp_path / "native.sqlite")
+    _record(journal, original, "native-paid-a")
+    monkeypatch.setattr(retro, "refresh_native_cohort", _candidate)
+    real_fsync = os.fsync
+    seen = []
+    directory_fd = []
+
+    def fsync(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            # The new canonical generation must already be visible here.
+            assert json.loads(canonical.read_text())["summary"]["graded"] == 1
+            seen.append("directory")
+            directory_fd.append(fd)
+            if fail_directory:
+                raise OSError("directory durability unknown")
+        else:
+            seen.append("file")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    kwargs = dict(
+        original_report=original,
+        canonical_path=canonical,
+        cases={},
+        journal=journal,
+        expected_source_hash=hashlib.sha256(original.read_bytes()).hexdigest(),
+        expected_canonical_hash=hashlib.sha256(canonical.read_bytes()).hexdigest(),
+    )
+    if fail_directory:
+        with pytest.raises(OSError, match="directory durability unknown"):
+            retro.publish_native_cohort(**kwargs)
+    else:
+        retro.publish_native_cohort(**kwargs)
+    assert seen[-2:] == ["file", "directory"]
+    # A post-rename fsync error is surfaced, never misreported as a rollback.
+    assert json.loads(canonical.read_text())["summary"]["graded"] == 1
+    with pytest.raises(OSError):
+        os.fstat(directory_fd[0])
+    with sqlite3.connect(journal.path, timeout=0) as conn:
+        conn.execute("BEGIN IMMEDIATE")
