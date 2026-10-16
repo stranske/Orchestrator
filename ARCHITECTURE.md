@@ -2016,6 +2016,16 @@ cannot authenticate it. The spend revision excludes administrative owner/action/
 while retaining collected bytes, coverage and UNKNOWN references. Native admission still does not
 grade a case without independently established later truth.
 
+The native caller supplies the receipt callback to `dispatcher.offload` itself. It runs after
+the isolated provider invocation returns, before dispatcher completion, cost and Brain effects;
+callback failure aborts completion and leaves the unresolved reservation UNKNOWN. Native calls
+explicitly disable the dispatcher's automatic network retry, so one reservation covers one
+invocation. Other offload callers retain their existing retry policy. A returned malformed
+proposal is recorded as a consumed validation outcome, not an unresolved provider invocation:
+the same evidence revision cannot spend again, while a genuinely new revision remains eligible.
+The native projection is separate from canonical cohort publication; native summary values do
+not satisfy the original canonical graded-count acceptance by themselves.
+
 ### CLI
 
 ```bash

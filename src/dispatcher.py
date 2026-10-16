@@ -441,9 +441,7 @@ def _offload_incomplete_reason(
 
 def _path_prefix() -> str:
     """PATH for child agent CLIs, independent of any per-agent HOME override."""
-    return (
-        f'export PATH="/opt/homebrew/bin:{REAL_HOME}/.local/bin:' f'{REAL_HOME}/.cursor/bin:$PATH"'
-    )
+    return f'export PATH="/opt/homebrew/bin:{REAL_HOME}/.local/bin:{REAL_HOME}/.cursor/bin:$PATH"'
 
 
 # Proxy env hygiene for the agent subshell. ROOT CAUSE (diagnosed 2026-06-20): an in-session
@@ -1338,7 +1336,7 @@ def _spawn(d: dict) -> int:
     # `release_rc` 137 is what counts a step killed again from here on.
     release = shlex.join([step_python, str(CLAIMS_PY), "release", d["target"], d["agent"]])
     wrapped = (
-        f'{d["wrapped"]}; orch_dispatch_rc=$?; {release}; orch_release_rc=$?; {marker_cmd}; '
+        f"{d['wrapped']}; orch_dispatch_rc=$?; {release}; orch_release_rc=$?; {marker_cmd}; "
         f'{complete_cmd} --exit-code "$orch_dispatch_rc"; exit $orch_dispatch_rc'
     )
     with logf.open("a") as fh:
@@ -1785,6 +1783,8 @@ def offload(
     task_type: str | None = None,
     write_boundary: dict | None = None,
     subject_id: str | None = None,
+    attempt_receipt_callback=None,
+    max_network_retries: int | None = None,
 ) -> dict:
     """SYNCHRONOUS offload for token conservation.
 
@@ -2160,7 +2160,11 @@ def offload(
                 f"[orchestrator] WORKSPACE RELOCATED: {relocated['reason']}; this run writes only "
                 f"in its own scratch workspace {relocated['workspace']}\n"
             )
-    max_network_retries = max(0, _env_int("ORCH_OFFLOAD_NETWORK_RETRIES", 1))
+    max_network_retries = (
+        max(0, _env_int("ORCH_OFFLOAD_NETWORK_RETRIES", 1))
+        if max_network_retries is None
+        else max(0, max_network_retries)
+    )
     retry_backoff_s = max(0.0, _env_float("ORCH_OFFLOAD_RETRY_BACKOFF_S", 3.0))
     complete_written = False
     # Credentials masked in this run's output, by kind, across attempts (credential_redaction).
@@ -2224,8 +2228,7 @@ def offload(
                     run_id,
                     selected_profile_id=profile["profile_id"],
                     fallback_reason=(
-                        f"resolved_model_not_reported_by_offload:"
-                        f"{probe.get('reason') or 'unknown'}"
+                        f"resolved_model_not_reported_by_offload:{probe.get('reason') or 'unknown'}"
                     )[:200],
                     completed_ts=int(time.time()),
                 )
@@ -2395,7 +2398,9 @@ def offload(
         terminal_types = (
             {"turn.completed"}
             if agent == "codex" and "--json" in argv
-            else {"result"} if agent in {"cursor", "gemini"} and stream_json else set()
+            else {"result"}
+            if agent in {"cursor", "gemini"} and stream_json
+            else set()
         )
         for line in (proc.stdout or "").splitlines():
             try:
@@ -2520,6 +2525,12 @@ def offload(
         attempts = attempt
         attempt_started = time.time()
         out = _run_offload_attempt()
+        # Receipt consumers that reserve an external spend boundary must see
+        # every actual invocation before retry, ledger completion, Brain or
+        # cost effects.  Callback failure intentionally aborts this run.
+        if attempt_receipt_callback is not None:
+            attempt_receipt_callback(out)
+            out["attempt_receipt_callback_called"] = True
         if agent == "muse":
             _record_muse_usage(
                 attempt_started, "offload", out.get("exit"), time.time() - attempt_started
@@ -2851,12 +2862,12 @@ def _selftest_gemini_refusal() -> None:
     def forbidden(*_args, **_kwargs):
         raise AssertionError("unavailable automatic Gemini profile reached execution")
 
-    with patch.dict(os.environ, {"ORCH_OFFLOAD_DISABLED": "0"}), patch.object(
-        execution_profiles, "profiles_for_agent", return_value=[]
-    ), patch.object(adapters, "agent_workspace", side_effect=forbidden), patch.object(
-        sys.modules[__name__], "_capability_heartbeat", side_effect=forbidden
-    ), patch.object(
-        subprocess, "run", side_effect=forbidden
+    with (
+        patch.dict(os.environ, {"ORCH_OFFLOAD_DISABLED": "0"}),
+        patch.object(execution_profiles, "profiles_for_agent", return_value=[]),
+        patch.object(adapters, "agent_workspace", side_effect=forbidden),
+        patch.object(sys.modules[__name__], "_capability_heartbeat", side_effect=forbidden),
+        patch.object(subprocess, "run", side_effect=forbidden),
     ):
         result = offload("gemini", "selftest refusal", mode="mid")
         assert result["exit"] == 2 and result["run_id"] is None, result
@@ -3015,9 +3026,9 @@ def _selftest() -> None:
             dry_run=True,
         )
         assert cross_repo is not None, "known cross_repo agent is dispatchable"
-        assert any(
-            "cross-repo coordinated-change plan" in tok for tok in cross_repo["argv"]
-        ), cross_repo["argv"]
+        assert any("cross-repo coordinated-change plan" in tok for tok in cross_repo["argv"]), (
+            cross_repo["argv"]
+        )
         assert any("cross_repo_lane.py" in tok for tok in cross_repo["argv"]), cross_repo["argv"]
         runtime_ac = plan_dispatch(
             {
@@ -3082,17 +3093,17 @@ def _selftest() -> None:
             _net_hygiene_prelude().startswith("unset ") and "HTTPS_PROXY" in _net_hygiene_prelude()
         ), _net_hygiene_prelude()
         os.environ["ORCH_KEEP_PROXY"] = "1"
-        assert (
-            _net_hygiene_prelude() == ""
-        ), "ORCH_KEEP_PROXY=1 must preserve the inherited proxy env"
+        assert _net_hygiene_prelude() == "", (
+            "ORCH_KEEP_PROXY=1 must preserve the inherited proxy env"
+        )
         os.environ.pop("ORCH_KEEP_PROXY", None)
         # claude sources its oauth token; vibe needs no explicit auth source (~/.vibe auto-loads)
         assert ".claude-oauth-token" in by_t["stranske/Repo#2"]["wrapped"], by_t["stranske/Repo#2"][
             "wrapped"
         ]
-        assert (
-            "cursor-agent.env" not in by_t["stranske/Repo#3"]["wrapped"]
-        ), "vibe needs no sourced auth file"
+        assert "cursor-agent.env" not in by_t["stranske/Repo#3"]["wrapped"], (
+            "vibe needs no sourced auth file"
+        )
         assert "VIBE_HOME=" in by_t["stranske/Repo#3"]["wrapped"], by_t["stranske/Repo#3"][
             "wrapped"
         ]
@@ -3102,9 +3113,9 @@ def _selftest() -> None:
                 f'save_dir = "{AGENT_RUNTIME_DIR / "vibe" / ".vibe" / "logs" / "session"}"'
                 in vibe_cfg.read_text()
             ), vibe_cfg.read_text()
-            assert (
-                str(REAL_HOME / ".vibe" / "logs" / "session") not in vibe_cfg.read_text()
-            ), vibe_cfg.read_text()
+            assert str(REAL_HOME / ".vibe" / "logs" / "session") not in vibe_cfg.read_text(), (
+                vibe_cfg.read_text()
+            )
         gemini_dispatch = plan_dispatch(
             {
                 "agent": "gemini",
@@ -3129,9 +3140,9 @@ def _selftest() -> None:
             == gemini_dispatch["cwd"]
         ), gemini_dispatch["argv"]
         gemini_prompt = gemini_dispatch["argv"][gemini_dispatch["argv"].index("--print") + 1]
-        assert (
-            "GEMINI WORKSPACE:" in gemini_prompt and gemini_dispatch["cwd"] in gemini_prompt
-        ), gemini_prompt
+        assert "GEMINI WORKSPACE:" in gemini_prompt and gemini_dispatch["cwd"] in gemini_prompt, (
+            gemini_prompt
+        )
         # worktree falls back to HOME when absent (seam flagged)
         assert by_t["stranske/Repo#1"]["worktree_missing"] is True
 
@@ -3283,15 +3294,15 @@ def _selftest() -> None:
         nongit.mkdir()
         (nongit / "module.py").write_text("VALUE = 1\n")
         prepared = _offload_prompt("Implement a small proposal.", nongit, "cursor")
-        assert (
-            AGENT_PERSONAS["cursor"] in prepared and CRITICAL_EVALUATOR_DIRECTIVE in prepared
-        ), prepared
+        assert AGENT_PERSONAS["cursor"] in prepared and CRITICAL_EVALUATOR_DIRECTIVE in prepared, (
+            prepared
+        )
         assert "Non-git workspace" in prepared and "Do not run git commit" in prepared, prepared
         assert "OFFLOAD_INCOMPLETE" in prepared and "I will inspect later" in prepared, prepared
         isolated = _isolate_offload_cwd(nongit)
-        assert (
-            isolated != nongit and (isolated / "module.py").read_text() == "VALUE = 1\n"
-        ), isolated
+        assert isolated != nongit and (isolated / "module.py").read_text() == "VALUE = 1\n", (
+            isolated
+        )
         assert _default_offload_timeout("cursor", None) == DEFAULT_OFFLOAD_TIMEOUT
         assert _default_offload_timeout("gemini", None) == DEFAULT_GEMINI_OFFLOAD_TIMEOUT
         assert _default_offload_timeout("gemini", 123) == 123
@@ -3520,9 +3531,9 @@ def _selftest() -> None:
             ),
             None,
         )
-        assert (
-            mute_seat
-        ), "no seat lacks a reader any more -- delete this case rather than faking one"
+        assert mute_seat, (
+            "no seat lacks a reader any more -- delete this case rather than faking one"
+        )
         try:
             adapter_module.build_command = fake_build_command
             subprocess_module.run = fake_run
@@ -3541,9 +3552,9 @@ def _selftest() -> None:
             mute_seat,
             gem_rows,
         )
-        assert (
-            feedback.resolved_worker_identity_for_run(gem_off["run_id"]) is None
-        ), "no attempt means no worker identity, which is the honest answer here"
+        assert feedback.resolved_worker_identity_for_run(gem_off["run_id"]) is None, (
+            "no attempt means no worker identity, which is the honest answer here"
+        )
         # The profile is still in force and still recorded, so withholding the claim has not cost
         # the audit trail: the run still says which profile ran.
         with feedback._conn() as c:
@@ -3605,9 +3616,9 @@ def _selftest() -> None:
         # where the row could never be used for anything.
         assert _attempts_for(mute, round_id=None) == [], ("the junk case must stay silent", mute)
         # reportable + no evidence -> RECORDED, because it resolves and feeds drift detection.
-        assert _attempts_for(
-            "codex", round_id=None
-        ), "a resolvable seat's attempt is real provenance even unbound"
+        assert _attempts_for("codex", round_id=None), (
+            "a resolvable seat's attempt is real provenance even unbound"
+        )
 
         # THE RUN'S OWN stream-json REPORT RESOLVES THE MODEL, with no store to search. This is the
         # standard answer (`gen_ai.response.model`): the tool prints the model it actually used, so
@@ -3660,9 +3671,9 @@ def _selftest() -> None:
         offload_argv = adapters.build_command(
             "cursor", "p", "composer", cwd=str(nongit), transport="offload"
         )
-        assert (
-            offload_argv[offload_argv.index("--output-format") + 1] == "stream-json"
-        ), offload_argv
+        assert offload_argv[offload_argv.index("--output-format") + 1] == "stream-json", (
+            offload_argv
+        )
         # And the long-running dispatch path is deliberately UNCHANGED: its output is parsed
         # elsewhere, so reshaping it is a separate and riskier change.
         local_argv = adapters.build_command(
@@ -3739,9 +3750,9 @@ def _selftest() -> None:
             AGENT_PERSONAS["gemini"] in captured["prompt"]
             and CRITICAL_EVALUATOR_DIRECTIVE in captured["prompt"]
         ), captured
-        assert f"--add-dir {shlex.quote(gem['isolated_cwd'])}" in " ".join(
+        assert f"--add-dir {shlex.quote(gem['isolated_cwd'])}" in " ".join(captured["cmd"]), (
             captured["cmd"]
-        ), captured["cmd"]
+        )
         assert "--print-timeout 1m" in " ".join(captured["cmd"]), captured["cmd"]
 
         captured.clear()
@@ -3823,6 +3834,20 @@ def _selftest() -> None:
                 isolate=True,
                 timeout=1,
             )
+            legacy_calls = retry_calls["count"]
+            retry_calls["count"] = 0
+            native_receipts = []
+            native_gem = offload(
+                "gemini",
+                "One reserved native invocation.",
+                cwd=str(nongit),
+                isolate=True,
+                timeout=1,
+                max_network_retries=0,
+                attempt_receipt_callback=lambda receipt: native_receipts.append(dict(receipt)),
+            )
+            assert native_gem["attempts"] == retry_calls["count"] == len(native_receipts) == 1
+            assert native_gem["exit"] != 0 and native_gem["attempt_receipt_callback_called"]
         finally:
             adapter_module.build_command = old_build_command
             subprocess_module.run = old_subprocess_run
@@ -3837,7 +3862,7 @@ def _selftest() -> None:
         assert (
             retry_gem["exit"] == 0 and retry_gem["attempts"] == 2 and retry_gem["retried"] is True
         ), retry_gem
-        assert retry_calls["count"] == 2, retry_calls
+        assert legacy_calls == 2, legacy_calls
 
         captured.clear()
 
@@ -3857,9 +3882,9 @@ def _selftest() -> None:
             adapter_module.build_command = old_build_command
             subprocess_module.run = old_subprocess_run
         assert timed_out["exit"] == 124 and "timed out after 1s" in timed_out["error"], timed_out
-        assert (
-            "offload marked failed: timed out after 1s" in Path(timed_out["log"]).read_text()
-        ), timed_out
+        assert "offload marked failed: timed out after 1s" in Path(timed_out["log"]).read_text(), (
+            timed_out
+        )
 
         def fake_interrupt_run(cmd, cwd=None, **_kwargs):
             captured["cmd"] = cmd
@@ -3903,12 +3928,12 @@ def _selftest() -> None:
         assert (
             dr["label"] == "agent:cursor" and dr["dry_run"] and "labels[]=agent:cursor" in dr["cmd"]
         ), dr
-        assert "error" in delegate_remote(
-            "bogus", "o/r#1", dry_run=True
-        ), "unknown remote agent rejected"
-        assert "error" in delegate_remote(
-            "cursor", "o/r", dry_run=True
-        ), "remote delegation needs a PR number"
+        assert "error" in delegate_remote("bogus", "o/r#1", dry_run=True), (
+            "unknown remote agent rejected"
+        )
+        assert "error" in delegate_remote("cursor", "o/r", dry_run=True), (
+            "remote delegation needs a PR number"
+        )
         # gate #4 rails: skip a paused PR, or one ALREADY in the agent pipeline (any agent:* label)
         paused_reason = _remote_skip_reason({"agents:paused"}, "cursor")
         assert paused_reason is not None, "agents:paused must be skipped"

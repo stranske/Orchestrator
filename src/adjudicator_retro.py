@@ -61,7 +61,12 @@ def _valid_native_receipt(result: object, record: dict | None = None) -> bool:
     if not isinstance(result, dict) or result.get("errors"):
         return False
     proposal = result.get("proposal")
-    if not isinstance(proposal, dict) or roles.ROLE_REGISTRY["adjudicator"].validate(proposal):
+    if not isinstance(proposal, dict):
+        return False
+    try:
+        if roles.ROLE_REGISTRY["adjudicator"].validate(proposal):
+            return False
+    except (TypeError, ValueError, KeyError):
         return False
     if proposal.get("decision") not in {"uphold_blocker", "reject_blocker"}:
         return False
@@ -110,8 +115,8 @@ class NativeAttemptJournal:
             conn.execute("BEGIN IMMEDIATE")
             current = conn.execute(
                 "SELECT attempt_id,state,case_digest FROM native_attempts "
-                "WHERE case_id=? AND (material_revision=? OR state!='validated') "
-                "ORDER BY CASE WHEN state!='validated' THEN 0 ELSE 1 END",
+                "WHERE case_id=? AND (material_revision=? OR state IN ('in_flight','raw_persisted')) "
+                "ORDER BY CASE WHEN state IN ('in_flight','raw_persisted') THEN 0 ELSE 1 END",
                 (case_id, revision),
             ).fetchone()
             if current is not None:
@@ -171,9 +176,9 @@ class NativeAttemptJournal:
         """Record post-parse validation without ever reopening spend eligibility."""
         with sqlite3.connect(self.path, timeout=30) as conn:
             conn.execute(
-                "UPDATE native_attempts SET state='validated',validated_json=?,updated_at=? "
+                "UPDATE native_attempts SET state=?,validated_json=?,updated_at=? "
                 "WHERE attempt_id=? AND state='raw_persisted'",
-                (json.dumps(result, sort_keys=True), int(time.time()), attempt_id),
+                ("validated", json.dumps(result, sort_keys=True), int(time.time()), attempt_id),
             )
 
     def verified(self, case_id: str, revision: str, digest: str) -> dict | None:
@@ -229,7 +234,7 @@ def _native_substantive_revision(case: roles.CollectedAdjudicationCase) -> str:
                     "criterion": mapping.get("criterion"),
                     "evidence_refs": sorted(mapping.get("evidence_locations", [])),
                     "unknown_refs": sorted(
-                        item.get("evidence_ref")
+                        item["evidence_ref"]
                         for item in mapping.get("unknowns", [])
                         if isinstance(item, dict) and isinstance(item.get("evidence_ref"), str)
                     ),
@@ -444,7 +449,11 @@ def refresh_native_projection(
     later_truth = (
         (truth_reader or native_later_truth)(run_id, db) if isinstance(run_id, str) else None
     )
-    native_verdict = {"uphold_blocker": "FAIL", "reject_blocker": "PASS"}.get(decision)
+    native_verdict = (
+        {"uphold_blocker": "FAIL", "reject_blocker": "PASS"}.get(decision)
+        if isinstance(decision, str)
+        else None
+    )
     grade = int(native_verdict in {"PASS", "FAIL"} and later_truth in {"PASS", "FAIL"})
     agree = bool(grade and native_verdict == later_truth)
     rows = json.loads(json.dumps(saved["rows"]))
@@ -1968,6 +1977,19 @@ def weekly_line(path: Path | None = None) -> str:
 
 
 def _selftest() -> None:
+    with tempfile.TemporaryDirectory() as native_root:
+        journal_path = Path(native_root) / "native.sqlite"
+        journal = NativeAttemptJournal(journal_path)
+        reservation = journal.reserve("original", "A", "digest", "report")
+        journal.persist_raw(reservation["attempt_id"], {"run_id": "paid", "output": "{}"})
+        assert not journal.reserve("original", "B", "digest", "report")["reserved"]
+        journal.validate(
+            reservation["attempt_id"], {"errors": ["malformed proposal"], "proposal": None}
+        )
+        restarted = NativeAttemptJournal(journal_path)
+        assert not restarted.reserve("original", "A", "digest", "report")["reserved"]
+        assert restarted.reserve("original", "B", "digest", "report")["reserved"]
+        assert not restarted.has_binary_decision("original")
     with tempfile.TemporaryDirectory() as supporting_root:
         repository = Path(supporting_root)
         _local_git(repository, "init", "-q")

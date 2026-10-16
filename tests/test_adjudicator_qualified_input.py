@@ -153,7 +153,9 @@ def test_native_admission_reserves_once_persists_raw_before_brain_and_preserves_
 
     def offload(*_args, **_kwargs):
         order.append("offload")
-        return {"exit": 0, "run_id": "native-once", "output": json.dumps(proposal())}
+        receipt = {"exit": 0, "run_id": "native-once", "output": json.dumps(proposal())}
+        _kwargs["attempt_receipt_callback"](receipt)
+        return {**receipt, "attempt_receipt_callback_called": True}
 
     monkeypatch.setattr(roles.dispatcher, "offload", offload)
 
@@ -223,6 +225,60 @@ def test_native_admission_reserves_once_persists_raw_before_brain_and_preserves_
             journal=retro.NativeAttemptJournal(tmp_path / "forged.sqlite"),
             truth_reader=lambda *_args: "PASS",
         )
+
+
+@pytest.mark.parametrize("field", ["decision", "confidence", "status"])
+@pytest.mark.parametrize("malformed", [[], {}])
+def test_malformed_native_proposal_is_consumed_and_recoverable(
+    qualified_input, tmp_path, monkeypatch, field, malformed
+):
+    repo, row, qualification, _ = qualified_input
+    row["run_id"] = "original-run"
+    case = retro.qualify_collected_case(row, repo, qualification)
+    original = tmp_path / "original.json"
+    original.write_text(json.dumps({"rows": [row]}))
+    invalid = proposal()
+    if field == "status":
+        invalid["evidence_assessment"][0][field] = malformed
+    else:
+        invalid[field] = malformed
+    assert roles.ROLE_REGISTRY["adjudicator"].validate(invalid)
+    calls = []
+
+    def offload(*args, **kwargs):
+        assert kwargs["max_network_retries"] == 0
+        calls.append(True)
+        response = {"exit": 0, "run_id": "paid-invalid", "output": json.dumps(invalid)}
+        kwargs["attempt_receipt_callback"](response)
+        return {**response, "attempt_receipt_callback_called": True}
+
+    monkeypatch.setattr(roles.dispatcher, "offload", offload)
+    monkeypatch.setattr(roles.feedback, "record_role_run", lambda **kwargs: None)
+    journal = retro.NativeAttemptJournal(tmp_path / "native.sqlite")
+    result = retro.admit_collected_retry(
+        original_report=original,
+        output=tmp_path / "attempt.json",
+        case_id="one",
+        case=case,
+        journal=journal,
+        backend="gemini",
+        dispatch=True,
+        cwd=str(repo),
+    )
+    assert result["result"]["errors"] and calls == [True]
+    restarted = retro.NativeAttemptJournal(journal.path)
+    refreshed = retro.refresh_native_projection(
+        original_report=original,
+        output=tmp_path / "refreshed.json",
+        case_id="one",
+        case=case,
+        journal=restarted,
+        truth_reader=lambda *args: "PASS",
+    )
+    assert refreshed["native_summary"]["graded"] == 0 and calls == [True]
+    revision = retro._native_substantive_revision(case)
+    assert not restarted.reserve("one", revision, case._digest, "source")["reserved"]
+    assert restarted.reserve("one", "new-substantive-revision", case._digest, "source")["reserved"]
 
 
 def test_native_spend_revision_ignores_administrative_unknown_assignment(qualified_input):
@@ -695,9 +751,9 @@ def test_material_revision_binds_supporting_coverage_and_owned_unknowns(qualifie
     full = revision()
     qualification["supporting_sources"][0]["line_ranges"] = [[1, 1]]
     excerpt = revision()
-    qualification["criterion_mapping"][0]["unknowns"][0][
-        "next_action"
-    ] = "Recover authentic receipt."
+    qualification["criterion_mapping"][0]["unknowns"][0]["next_action"] = (
+        "Recover authentic receipt."
+    )
     assert len({original, full, excerpt, revision()}) == 4
 
 

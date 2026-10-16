@@ -176,6 +176,65 @@ def _shed(agent: str) -> bool:
     return (rate_incidents.SHED_DIR / agent).exists()
 
 
+def test_attempt_receipt_precedes_completion_and_can_abort(stores, monkeypatch):
+    """Native receipt hooks observe the real subprocess attempt before completion effects."""
+    order = []
+    monkeypatch.setattr(
+        dispatcher.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(["agent"], 0, "{}", ""),
+    )
+    monkeypatch.setattr(
+        dispatcher.adapters,
+        "record_ledger",
+        lambda *args, **kwargs: order.append(kwargs.get("event", "other")),
+    )
+    result = dispatcher.offload(
+        "gemini",
+        "test",
+        cwd=str(stores),
+        attempt_receipt_callback=lambda _: order.append("receipt"),
+    )
+    assert result["attempt_receipt_callback_called"] is True
+    assert "receipt" in order
+    assert order.index("receipt") < order.index("complete")
+    order.clear()
+    with pytest.raises(RuntimeError, match="receipt failed"):
+        dispatcher.offload(
+            "gemini",
+            "test",
+            cwd=str(stores),
+            attempt_receipt_callback=lambda _: (_ for _ in ()).throw(
+                RuntimeError("receipt failed")
+            ),
+        )
+    assert "complete" not in order
+
+
+@pytest.mark.parametrize("retry_limit,expected", [(0, 1), (None, 2)])
+def test_native_retry_limit_preserves_legacy_retry(stores, monkeypatch, retry_limit, expected):
+    calls = []
+    receipts = []
+    monkeypatch.setenv("ORCH_OFFLOAD_NETWORK_RETRIES", "1")
+    monkeypatch.setenv("ORCH_OFFLOAD_RETRY_BACKOFF_S", "0")
+    monkeypatch.setattr(dispatcher, "_is_transient_network_failure", lambda *a: True)
+
+    def run(*args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(["agent"], 1 if len(calls) == 1 else 0, "{}", "reset")
+
+    monkeypatch.setattr(dispatcher.subprocess, "run", run)
+    result = dispatcher.offload(
+        "gemini",
+        "test",
+        cwd=str(stores),
+        max_network_retries=retry_limit,
+        attempt_receipt_callback=lambda response: receipts.append(dict(response)),
+    )
+    assert len(calls) == len(receipts) == result["attempts"] == expected
+    assert receipts[0]["exit"] == 1
+
+
 @pytest.mark.parametrize(
     "returncode,exit_code",
     # The measured runs were recorded as exit 70 from the marker their reads quoted; since
@@ -187,9 +246,9 @@ def test_a_failed_codex_offload_whose_work_quotes_a_limit_is_no_incident(
     monkeypatch, stores, returncode, exit_code
 ):
     stdout = "\n".join(MEASURED)
-    assert (
-        rate_incidents.classify_provider_failure(stdout)[2] == "high"
-    ), "the fixture must hold the phrase the whole-stdout read took for a refusal"
+    assert rate_incidents.classify_provider_failure(stdout)[2] == "high", (
+        "the fixture must hold the phrase the whole-stdout read took for a refusal"
+    )
     result = _offload(monkeypatch, stores, "codex", returncode, stdout, MEASURED_STDERR)
     assert result["exit"] == exit_code, result
     assert result["rate_incident_evidence"]["confidence"] == "none", result
