@@ -37,6 +37,7 @@ import time
 from pathlib import Path
 from typing import Any, Tuple, TypedDict, Union
 
+import adapters
 import capabilities
 import claims
 import execution_profiles
@@ -228,6 +229,20 @@ ROUTE_TABLE: dict = {
 # The public route table remains a generic mapping for compatibility with its existing consumers;
 # this private view records the invariant enforced by the static table above.
 _ROUTE_TABLE_TYPED: dict[str, RouteSpec] = ROUTE_TABLE
+
+
+def _automatic_profiles(entry: RouteEntry, *, transport: str) -> list[dict]:
+    """Profiles eligible for a new routing decision for one route-table entry.
+
+    Gemini's tier is a spend policy, so its automatic candidates must carry the
+    exact model pinned for the entry's mode.  Historical/replay callers use
+    ``execution_profiles`` directly and remain able to name every profile.
+    """
+    profiles = execution_profiles.profiles_for_agent(entry["agent"], transport=transport)
+    if entry["agent"] != "gemini":
+        return profiles
+    expected_model = adapters.MODEL_TIERS["gemini"].get(entry["mode"])
+    return [profile for profile in profiles if profile["requested_model"] == expected_model]
 
 
 def _state(cap: dict, agent: str) -> str:
@@ -487,9 +502,11 @@ def select_agent(
             continue
         if st == "warn" and not allow_warn:
             continue
-        agent_profiles = execution_profiles.profiles_for_agent(
-            entry["agent"], transport=profile_transport
-        )
+        agent_profiles = _automatic_profiles(entry, transport=profile_transport)
+        if entry["agent"] == "gemini" and not agent_profiles:
+            # A missing tier profile is a configuration fault. Do not turn it into
+            # a profile-less Gemini dispatch that bypasses the model policy.
+            continue
         if entry["agent"] == "codex" and execution_profiles.codex_operator_tier_override(
             entry.get("mode")
         ):
@@ -554,7 +571,7 @@ def select_agent(
         "exploration": explored,
         "exploration_mode": _exploration_mode(exploration_mode) if explored else "",
     }
-    profiles = execution_profiles.profiles_for_agent(entry["agent"], transport=profile_transport)
+    profiles = _automatic_profiles(entry, transport=profile_transport)
     if entry["agent"] == "codex" and execution_profiles.codex_operator_tier_override(
         entry.get("mode")
     ):

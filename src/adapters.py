@@ -876,8 +876,8 @@ def _auto_resolve(agent: str, tier: str, pinned: str, advertised: list[str]) -> 
     if not candidates:
         return None
     same_family = [m for m in candidates if family and family in m]
-    if family == "argon" and not same_family:
-        return None  # The approved successor must not silently revert to Pro or Flash.
+    if family and not same_family:
+        return None  # A tier pin must never silently cross a Gemini model family.
     # A version rename must preserve the effort rung when the new family offers it.
     # Ranking every replacement by "high first" silently upgraded cheap/low requests.
     effort = next((e for e in ("low", "medium", "high") if pinned.endswith("-" + e)), None)

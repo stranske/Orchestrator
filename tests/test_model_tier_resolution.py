@@ -25,6 +25,8 @@ import pytest
 import adapters
 import capacity
 import env_prereq
+import execution_profiles
+import router
 
 # Captured at import, BEFORE the autouse fixture below replaces it, so a future test that genuinely
 # wants the host predicate has something to restore:
@@ -344,6 +346,32 @@ def test_rename_keeps_a_flash_tier_on_flash(monkeypatch):
     _fake_catalog(monkeypatch, ["gemini-4.2-flash-low", "gemini-4.1-pro-high"])
     health = adapters.model_health("gemini", "cheap")
     assert health["model"] == "gemini-4.2-flash-low", health
+
+
+@pytest.mark.parametrize("tier", ("cheap", "mid"))
+def test_missing_flash_family_fails_closed_instead_of_promoting_to_argon(monkeypatch, tier):
+    """A missing low-cost family is unavailable, not permission to spend Argon."""
+    monkeypatch.delenv(f"ORCH_GEMINI_MODEL_{tier.upper()}", raising=False)
+    _fake_catalog(
+        monkeypatch,
+        ["gemini-4-argon-low", "gemini-4-argon-medium", "gemini-4-argon-high"],
+    )
+    health = adapters.model_health("gemini", tier)
+    assert not health["resolvable"], health
+    assert health["model"] == adapters.MODEL_TIERS["gemini"][tier], health
+
+
+def test_unknown_gemini_family_keeps_legacy_catalog_fallback():
+    """Only recognised tier families fail closed; unknown legacy pins keep their old fallback."""
+    assert (
+        adapters._auto_resolve(
+            "gemini",
+            "cheap",
+            "gemini-9-unknown-low",
+            ["gemini-4-argon-high", "gemini-3.8-flash-low"],
+        )
+        == "gemini-4-argon-high"
+    )
 
 
 def test_non_gemini_rename_is_reported_not_guessed(monkeypatch):
@@ -1108,6 +1136,68 @@ def test_argon_successor_tiers_reach_matching_offload_profiles(monkeypatch, tmp_
             "gemini", "read only", mode=mode, cwd=tmp_path, profile=chosen
         )
         assert argv[argv.index("--model") + 1] == chosen["requested_model"]
+
+
+@pytest.mark.parametrize(
+    ("task_type", "mode"),
+    (
+        ("codemod", "cheap"),
+        ("testgen", "mid"),
+        ("review", "mid"),
+        ("implement", "full"),
+        ("epic", "full"),
+        ("cross_repo", "full"),
+        ("runtime_ac", "full"),
+    ),
+)
+def test_router_automatic_gemini_profile_matches_route_tier(task_type, mode):
+    """Profile priors must not override the route's Gemini spend tier."""
+    profiles = execution_profiles.profiles_for_agent("gemini")
+    cap = {
+        "agents": {"gemini": {"state": "ok"}},
+        "profiles": {profile["profile_id"]: {"state": "ok"} for profile in profiles},
+    }
+    expected_model = adapters.MODEL_TIERS["gemini"][mode]
+    selected = router.select_agent(
+        task_type,
+        cap,
+        only={"gemini"},
+        exploration_rate=0.0,
+        profile_seed=7,
+        profile_scores={
+            profile["profile_id"]: 100.0
+            for profile in profiles
+            if profile["requested_model"] != expected_model
+        },
+        causal_context={"target": "owner/repo#gemini-tier"},
+    )
+    assert selected is not None
+    assert selected["mode"] == mode
+    assert selected["requested_model"] == expected_model
+    assert {
+        execution_profiles.get_profile(profile_id)["requested_model"]
+        for profile_id in selected["candidate_profile_ids"]
+    } == {expected_model}
+
+
+def test_router_fails_closed_when_gemini_route_tier_has_no_profile(monkeypatch):
+    """An incomplete tier map must not dispatch Gemini without a profile envelope."""
+    profiles = execution_profiles.profiles_for_agent("gemini")
+    cap = {
+        "agents": {"gemini": {"state": "ok"}},
+        "profiles": {profile["profile_id"]: {"state": "ok"} for profile in profiles},
+    }
+    monkeypatch.delitem(adapters.MODEL_TIERS["gemini"], "full")
+    assert (
+        router.select_agent(
+            "implement",
+            cap,
+            only={"gemini"},
+            exploration_rate=0.0,
+            causal_context={"target": "owner/repo#missing-gemini-tier"},
+        )
+        is None
+    )
 
 
 def test_argon_retirement_preserves_historical_profile_identity():
