@@ -352,15 +352,18 @@ def test_native_publication_holds_journal_writer_lock_through_replace(tmp_path, 
     assert locked == [True]
 
 
-def test_destination_lock_contends_across_state_environments(tmp_path, monkeypatch):
+@pytest.mark.parametrize("layout", ["custom", "live"])
+def test_destination_lock_contends_across_state_environments(tmp_path, monkeypatch, layout):
     import fcntl
     import os
     import subprocess
     import sys
 
-    canonical = tmp_path / "capability-program" / "adjudicator-retro.json"
-    canonical.parent.mkdir()
-    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    state = tmp_path if layout == "custom" else tmp_path / ".codex" / "orchestrator"
+    canonical = state / "capability-program" / "adjudicator-retro.json"
+    canonical.parent.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state))
     shared = retro._publication_lock_path(canonical)
     with shared.open("a+") as held:
         fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -384,6 +387,7 @@ with retro._publication_lock_path(Path(sys.argv[1])).open('a+') as lock:
             env={
                 **os.environ,
                 "ORCH_STATE_DIR": str(tmp_path / "other"),
+                "HOME": str(tmp_path / "other-home"),
                 "PYTHONPATH": str(Path(retro.__file__).parent),
             },
             capture_output=True,

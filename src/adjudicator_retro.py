@@ -954,9 +954,16 @@ def report_path() -> Path:
 def _publication_lock_path(path: Path) -> Path:
     """Derive lock identity from the destination, independent of process settings."""
     destination = path.resolve()
-    live_canonical = Path.home() / ".codex/orchestrator/capability-program/adjudicator-retro.json"
-    if destination == live_canonical.resolve():
-        return Path.home() / ".codex/.orchestrator-mirror.publish.lock"
+    # The mirror publisher locks beside its explicit mirror destination. Match
+    # that layout from this destination too; HOME and ORCH_STATE_DIR may differ
+    # between the publisher, native admission and generic persistence processes.
+    if destination.parts[-4:] == (
+        ".codex",
+        "orchestrator",
+        "capability-program",
+        "adjudicator-retro.json",
+    ):
+        return destination.parents[2] / ".orchestrator-mirror.publish.lock"
     return destination.parent / ".orchestrator-mirror.publish.lock"
 
 
