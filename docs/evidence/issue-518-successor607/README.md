@@ -1,36 +1,33 @@
 # Root #518 successor #607 measurement
 
-This is a repository-local preparation for the existing generated dev-tool PR
-#607, not a replacement pin bundle or an unrelated intake item. The prior
-accepted #519 history and evidence remain intact.
+This repository-local preparation serves existing root #518 and generated
+successor #607. Historical #519 evidence and all generated branches are intact.
+Repository pins are never replaced by the retained proposed pins.
 
-`report.json` records the actual strict collect operation against source
-3da6bb956cecbb4ff1eca70a4e40c88f8573a341. `commands.json.gz` (losslessly compressed; hashes/byte counts in
-`commands-integrity.json`) retains captured
-argv, cwd, exit codes, stdout and stderr, including pytest collection startup.
-`provenance.json` binds all nine installed versions, Python, source and
-measurement script/pin hashes. `proposed-pins.env` is authenticated #607 input.
-The run used a task venv and the unchanged measurement script, overriding only
-its PIN_FILE to this retained input. It did not relax strict version checks.
+The proposed-bundle `report.json` and `provenance.json` describe the actual
+corrected strict-nine collector at source `65fb9b0bb846bec44160a0ba1dca0e22e6eeffbc`.
+They record nine matching installed versions, zero measured blockers and 3464
+collected tests on that historical source. The initial measurement was against
+3da6bb95; it is retained in this PR's commit history, not the final report.
+The `current-pins/` receipt is an earlier actual current-bundle observation at
+b0aa0da4, before strict-nine preflight was added; it does not claim execution
+of the repaired collector on that old bundle.
 
-`original-baseline-red.log` proves the old document rejects the proposed pins.
-`successor-baseline-green.log` records the same check after this measured
-record is added. Unknown/incomplete/hybrid controls remain active. Normal
-repository pins are restored after each overlay in a finally block.
+`commands.json.gz` retains complete text argv/cwd/exit/stdout/stderr. Binary
+`git archive` stdout is represented by exact count/SHA-256 and retained full-byte
+run receipt plus immutable source tree, avoiding recursive archive embedding.
+`commands-integrity.json` independently binds compressed/uncompressed records
+and the original complete capture. No tool diagnostic is omitted.
 
-The zero coverage startup count is not a full-suite or provider verdict.
-Hosted exact-head CI, review, guarded merge, native verification and source-owned
-Maint52/71 regeneration remain required.
+Native findings led to complete-nine marker matching and actual nine-package
+preflight before measurements, preserving existing real CLI checks. Original
+baseline and strict-nine RED logs, marker unknown/incomplete/hybrid controls,
+and final 21 focused GREEN checks are retained. One executed regression node
+raised the historical3463 floor to3464 without changing any ceiling.
 
-Native review4289533170 exposed the prior four-pin matching gap. The final
-checker requires all nine tools; each tool is independently exercised by the
-unknown/incomplete/hybrid controls without adding collected nodes. The actual
-current bundle was freshly measured too (current-pins/), rather than padding
-historical markers with unobserved versions. Native4289533177 also corrected
-the current collection floor to3,463. The floor file itself is unchanged.
-
-Native4289572205 corrected strict collection itself: all nine distribution versions are checked against exact pins before any measurement, in addition to existing actual CLI version checks. A one-node regression loops all nine mismatches and passes only when every mismatch refuses measurement. Original RED and21focusedGREEN retained. Floor advances only one executed regression node,3463 to3464, with every ceiling unchanged; hosted full verification remains mandatory.
-
-Final proposed-pin report/provenance and lossless commands were rerun using the corrected strict-nine collector at source65fb9b0b. All nine actual installed versions match and every measured blocker remains zero. Final collector produced3464 test collection, preserving the exact current raised floor. Current-pins/ retains the earlier actual current-bundle observation.
-
-Binary git-archive stdout is represented in commands by exact byte count/SHA-256 and a retained full-byte run receipt, rather than embedding a recursively nested repository archive in the semantic tool log. All text tool stdout/stderr remains complete in compressed commands. The original complete capture is independently hash-bound in commands-integrity.json; repository source tree and measurement script remain immutable provenance. No measurement or diagnostic output is omitted by this representation.
+The integration receipt under `integration-20261016/` preserves new main's3466
+floor plus that executed node. Actual collection is3467; the21focused checks
+pass. This replaces the old floor during rebase, without weakening main.
+Full current-head hosted tests, execution mirror, combined coverage, review,
+canonical guarded merge, actual native verification and Maint52/71 regenerated
+acceptance remain mandatory. Zero coverage-startup blockers prove startup only.

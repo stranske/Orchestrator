@@ -19,7 +19,9 @@ are rejected across all nine tools, including coverage startup dependencies.
 Generated PR #607 at `c3f7ac876c23511f81ed2f728a11e982cf6e002a`
 proposes a newer toolchain than the October 11 measurement. All nine exact
 proposed packages were installed in an isolated Python 3.12.2 environment and
-strictly measured against source `3da6bb956cecbb4ff1eca70a4e40c88f8573a341`.
+initially measured against source `3da6bb956cecbb4ff1eca70a4e40c88f8573a341`.
+The corrected strict-nine collector was rerun at `65fb9b0bb846bec44160a0ba1dca0e22e6eeffbc`;
+that exact source and script/pin hashes are bound by the final report/provenance.
 The original baseline test fails against those authenticated proposed pins;
 this actual measurement supplies the missing complete recorded toolchain.
 
@@ -34,7 +36,7 @@ this actual measurement supplies the missing complete recorded toolchain.
 command and captured output, strict report, installed versions, source head,
 and script/pin digests. Existing historical measurements remain below.
 Coverage startup does not establish full-suite, execution-mirror or combined
-coverage acceptance. The current 3,464 collection floor (prior3,463 plus one executed strict-version regression), capability/skip controls,
+coverage acceptance. The integrated 3,467 collection floor (current main3,466 plus one executed strict-version regression), capability/skip controls,
 complete-toolchain matching and enforcement policy remain unchanged. No
 repository pins or generated branch were changed for this preparation.
 
