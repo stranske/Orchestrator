@@ -66,6 +66,13 @@ CAPACITY_POOLS = {
         "tier": "flat",
         "agent": "vibe",
     },
+    "muse-subscription": {
+        "provider": "meta",
+        "account": "meta-muse-code-sub",
+        "window": "5h+weekly",
+        "tier": "flat",
+        "agent": "muse",
+    },
     "aider-paygo": {
         "provider": "mistral",
         "account": "mistral-codestral",
@@ -247,6 +254,20 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
             provider="mistral",
             pool="vibe-subscription",
             adapter_version="vibe-cli-profile-v1",
+        ),
+        # muse-wonder-1.0 is the model the CLI actually STARTED on for the owner's Power plan
+        # (`run_model_configured`, source=startup, in the `muse exec --json` stream, 2026-10-15). Meta's
+        # docs name muse-spark-1.2 as the default, so the docs and the account disagree: the profile
+        # follows the observation, and `adapters.build_command` passes it with --model so the
+        # requested model is enforced, not floating.
+        _profile(
+            "muse-wonder-1.0",
+            "muse-wonder-1.0",
+            "high",
+            agent="muse",
+            provider="meta",
+            pool="muse-subscription",
+            adapter_version="muse-cli-profile-v1",
         ),
     )
 }

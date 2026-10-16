@@ -68,7 +68,7 @@ RESERVE_AGENTS = {"claude"}
 # reachable only on EXPLICIT demand — a manual `dispatcher.py offload/delegate --agent aider`, or
 # `select_agent(..., only={"aider"})`. Owner directive 2026-06-21: aider is paygo (burns the pay-go
 # Codestral credit) and was the weakest seat on the recent build-off — hold it as backup, not a seat.
-BACKUP_AGENTS = {"aider"}
+BACKUP_AGENTS = {"aider", "muse"}
 GEMINI_GOOD_FIT_TASKS = {"implement", "testgen", "epic", "cross_repo", "runtime_ac", "review"}
 
 

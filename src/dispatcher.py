@@ -94,6 +94,7 @@ AGENT_PERSONAS = {
     "gemini": "You are Gemini via Antigravity (agy): large-context reasoning and big reads. CRITICAL: return the full deliverable in STDOUT — do NOT write it only to an artifact file the orchestrator cannot read. Don't spend this metered seat on trivial mechanical work.",
     "codex": "You are Codex, a reasoning + implementation seat. Verify before claiming done; surface risks and unknowns rather than papering over them.",
     "aider": "You are Aider, running from an isolated venv. Make focused, test-backed edits; report exactly what changed.",
+    "muse": "You are Muse Code (Meta), running headless in a sandbox on a subscription seat with a limited rolling allowance. Make focused, test-backed edits, spend few steps, and report exactly what changed and what you did NOT do.",
 }
 
 TESTGEN_READ_ONLY_GATE_GUARD = (
@@ -582,6 +583,14 @@ def _ensure_agent_runtime(agent: str) -> Path:
         _runtime_link(
             REAL_HOME / ".vibe" / "trusted_folders.toml", vibe_home / "trusted_folders.toml"
         )
+    elif agent == "muse":
+        # The wrapper moves XDG_CONFIG_HOME here, and Muse reads its LOGIN RECORD from
+        # `$XDG_CONFIG_HOME/muse/auth.json` (found by a live offload 2026-10-15: "missing meta
+        # credentials"). Link the owner's record in; the token itself stays in the macOS keychain,
+        # reachable because HOME is unchanged. Linked, never copied, so a re-login is picked up.
+        _runtime_link(
+            REAL_HOME / ".config" / "muse" / "auth.json", base / ".config" / "muse" / "auth.json"
+        )
     elif agent == "gemini":
         (base / "logs").mkdir(parents=True, exist_ok=True)
         gemini_dir = base / ".gemini"
@@ -822,7 +831,33 @@ def _agent_runtime_prelude(agent: str) -> str:
         )
     elif agent == "vibe":
         exports.append(f"export VIBE_HOME={shlex.quote(str(base / '.vibe'))}")
+    elif agent == "muse":
+        # The seat is the owner's SUBSCRIPTION LOGIN. `META_API_KEY` always overrides that login
+        # (`muse login --help`) and meters PAY-AS-YOU-GO (measured on the live console 2026-10-15), so a
+        # key inherited from a session, lane or launchd environment would silently turn subscription
+        # use into API spend. Unset it by NAME only: the value is never read or written here. HOME
+        # stays real because the login lives in the macOS keychain (the gemini/agy precedent).
+        exports.append("unset META_API_KEY")
     return "; ".join(exports) + "; "
+
+
+def _record_muse_usage(started: float, lane: str, rc: object, seconds: float) -> None:
+    """Append one TSV row per `muse exec`: epoch_start, lane, exit_code, whole seconds.
+
+    Muse exposes no usage readout (no token/usage/quota field in `--json`, and the console lags up
+    to an hour), so the only machine-readable consumption signal is our own exec count against the
+    plan's rolling 5-hour allowance. `muse-usage.sh` reads this file. The measurement must never
+    fail the run it measures, so every error is swallowed.
+    """
+    try:
+        log = Path(
+            os.environ.get("ORCH_MUSE_USAGE_LOG")
+            or (REAL_HOME / ".codex" / "handoff" / "muse-usage.log")
+        )
+        with log.open("a") as fh:
+            fh.write(f"{int(started)}\t{lane}\t{rc}\t{int(seconds)}\n")
+    except OSError:
+        return
 
 
 def _auth_prelude(agent: str) -> str:
@@ -2453,7 +2488,12 @@ def offload(
     has_reported_usage = False
     for attempt in range(1, max_network_retries + 2):
         attempts = attempt
+        attempt_started = time.time()
         out = _run_offload_attempt()
+        if agent == "muse":
+            _record_muse_usage(
+                attempt_started, "offload", out.get("exit"), time.time() - attempt_started
+            )
         usage = out.get("usage") or {}
         has_reported_usage |= bool(usage)
         total_in += usage.get("input_tokens", 0)

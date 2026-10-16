@@ -1,7 +1,7 @@
 # Orchestrator
 
 A personal-scale multi-agent fleet controller. It coordinates subscription CLI coding agents
-(Claude Code, OpenAI codex, Cursor, Gemini via Antigravity `agy`, Mistral `vibe`, aider) across
+(Claude Code, OpenAI codex, Cursor, Gemini via Antigravity `agy`, Mistral `vibe`, aider, and — explicit demand only — Meta `muse`) across
 ~11 GitHub repos, routes work by **learned** per-agent×task-type weights under **expiring
 subscription-quota windows**, runs continuous A/B/C experiments on real tasks, and feeds every
 outcome back into a local SQLite "Brain." The 2026-07 field survey (six independent research

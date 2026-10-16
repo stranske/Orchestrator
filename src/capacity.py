@@ -182,6 +182,12 @@ AGENTS = {
     # "all-day coding" flat allowance + PAYG overflow. No usage API, so 429-shed is
     # authoritative (modeled like cursor's flat, but a SEPARATE account).
     "vibe": {"account": "mistral-vibe-sub", "model": "flat", "window": "subscription"},
+    # muse (Meta Muse Code) — the owner's SUBSCRIPTION login (Power Usage plan, 5h + weekly allowance
+    # per Meta's console), never an API key. No usage API (no token/usage/quota field in `--json`;
+    # the console lags up to an hour), so 429-shed is authoritative, like vibe. BACKUP-ONLY via
+    # router.BACKUP_AGENTS until measured outcomes earn it a prior. A key-authenticated call meters
+    # PAY-AS-YOU-GO, which is why this seat is the login and the wrapper scrubs META_API_KEY.
+    "muse": {"account": "meta-muse-code-sub", "model": "flat", "window": "5h+weekly"},
     # aider — BACKUP-ONLY as of 2026-06-21 (owner directive): router.BACKUP_AGENTS holds it OUT of
     # routine auto-selection; reachable only on explicit demand (`--agent aider` / `only={"aider"}`).
     # Capacity is still tracked so backup use respects the credit. Optional API fallback (Codestral API
@@ -209,6 +215,7 @@ def agent_tiers() -> dict[str, str]:
         "claude": "metered",
         "gemini": "metered",
         "vibe": "flat",
+        "muse": "flat",
         "aider": "paygo",
     }
     for pool in execution_profiles.CAPACITY_POOLS.values():

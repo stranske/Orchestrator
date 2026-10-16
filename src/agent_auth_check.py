@@ -41,6 +41,11 @@ CREDENTIAL_FILES = {
     # every other entry point is the TUI. Its credential is a plain env file, so the file itself
     # is the only free signal available — weaker than a probe, but strictly better than silence.
     "vibe": (HOME / ".vibe" / ".env", "MISTRAL_API_KEY"),
+    # muse: NOT an API key. `muse login` stores an OAuth device-code credential in the keychain and
+    # records its shape in this JSON (mechanism, storage, subs_active); the expected key is the
+    # subscription flag. A `META_API_KEY` would override it and bill pay-as-you-go, so the seat is
+    # only usable when the LOGIN says subs_active.
+    "muse": (HOME / ".config" / "muse" / "auth.json", "subs_active"),
 }
 REFRESH_HINT = {
     "cursor": (
@@ -53,13 +58,29 @@ REFRESH_HINT = {
     ),
     "aider": "console.mistral.ai → API keys, then set MISTRAL_API_KEY in ~/.codex/handoff/aider.env",
     "vibe": "console.mistral.ai → API keys, then set MISTRAL_API_KEY in ~/.vibe/.env (chmod 600)",
+    "muse": "run `muse login` (device-code, browser approval); never set META_API_KEY, which bills pay-as-you-go",
 }
-AGENTS = ("cursor", "codex", "claude", "gemini", "vibe", "aider")
+AGENTS = ("cursor", "codex", "claude", "gemini", "vibe", "aider", "muse")
 
 
 # Bounded, like TICK_ENV_ATTEMPTS: enough to clear a blip, few enough that a real problem still
 # surfaces promptly rather than being retried into silence.
 CRED_READ_ATTEMPTS = int(os.environ.get("ORCH_CRED_READ_ATTEMPTS", "3"))
+
+
+def _login_present(agent: str, key: str, text: str) -> bool:
+    """Whether the credential file holds `key`. Shape only; never returns or logs a value.
+
+    Env-style files are `KEY=value` lines. muse's login record is JSON, and what makes it a usable
+    SUBSCRIPTION seat is `providers.meta.subs_active` being true under an oauth mechanism.
+    """
+    if agent == "muse":
+        try:
+            meta = json.loads(text).get("providers", {}).get("meta", {})
+        except (ValueError, AttributeError):
+            return False
+        return meta.get("mechanism") == "oauth" and meta.get(key) is True
+    return any(line.strip().lstrip("export ").startswith(key + "=") for line in text.splitlines())
 
 
 def _credential_file_state(agent: str) -> dict:
@@ -103,9 +124,7 @@ def _credential_file_state(agent: str) -> dict:
         "path": str(path),
         "present": True,
         "expected_key": key,
-        "key_present": any(
-            line.strip().lstrip("export ").startswith(key + "=") for line in text.splitlines()
-        ),
+        "key_present": _login_present(agent, key, text),
     }
 
 

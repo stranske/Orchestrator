@@ -92,7 +92,7 @@
 <!-- sub-agent band -->
 <rect class="sub" x="56" y="398" width="584" height="54" rx="8"/>
 <text class="subhead" x="68" y="417">delegated sub-agents · isolated worktrees</text>
-<text class="ctsub" x="68" y="439">cursor · vibe · gemini · codex · aider · claude</text>
+<text class="ctsub" x="68" y="439">cursor · vibe · gemini · codex · aider · claude · muse</text>
 
 <!-- outcome -->
 <line class="arrow" x1="348" y1="453" x2="348" y2="468" marker-end="url(#ah)"/>

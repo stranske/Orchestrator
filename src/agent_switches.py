@@ -100,6 +100,7 @@ AGENT_LABELS = (
     "agent:gemini",
     "agent:vibe",
     "agent:aider",
+    "agent:muse",
     "agent:copilot",
 )
 AUTO_LABEL = "agent:auto"
