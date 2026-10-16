@@ -78,12 +78,9 @@ def test_policy_version_unchanged_when_only_capacity_is_added(tmp_path: Path) ->
     database = tmp_path / "weights.db"
     export._fixture_db(database)
     without = export.build_document(database, now=100, include_capacity=False)
-    with_capacity = export.build_document(
-        database, now=100, capacity_snapshot=_capacity_fixture()
-    )
+    with_capacity = export.build_document(database, now=100, capacity_snapshot=_capacity_fixture())
     assert (
-        without["exploration"]["policy_version"]
-        == with_capacity["exploration"]["policy_version"]
+        without["exploration"]["policy_version"] == with_capacity["exploration"]["policy_version"]
     )
 
 
@@ -150,9 +147,7 @@ def test_capacity_states_use_capacity_agent_state_vocabulary(tmp_path: Path) -> 
     document = export.build_document(database, capacity_snapshot=_capacity_fixture())
     observed = {entry["state"] for entry in document["capacity"].values()}
     assert observed <= capacity.AGENT_STATES
-    assert capacity.AGENT_STATES == frozenset(
-        {"ok", "warn", "shed", "unknown"}
-    )
+    assert capacity.AGENT_STATES == frozenset({"ok", "warn", "shed", "unknown"})
 
 
 def test_v1_key_values_byte_identical_with_and_without_capacity_block(tmp_path: Path) -> None:
@@ -171,12 +166,18 @@ def test_capacity_state_change_triggers_write_document(tmp_path: Path) -> None:
     ok_snapshot = _capacity_fixture(codex_state=capacity.OK)
     shed_snapshot = _capacity_fixture(codex_state=capacity.SHED)
 
-    assert export.write_document(
-        target, export.build_document(database, capacity_snapshot=ok_snapshot)
-    ) is True
-    assert export.write_document(
-        target, export.build_document(database, capacity_snapshot=shed_snapshot)
-    ) is True
+    assert (
+        export.write_document(
+            target, export.build_document(database, capacity_snapshot=ok_snapshot)
+        )
+        is True
+    )
+    assert (
+        export.write_document(
+            target, export.build_document(database, capacity_snapshot=shed_snapshot)
+        )
+        is True
+    )
 
 
 def test_capacity_observed_at_only_change_does_not_trigger_write_document(tmp_path: Path) -> None:
@@ -186,12 +187,18 @@ def test_capacity_observed_at_only_change_does_not_trigger_write_document(tmp_pa
     first = _capacity_fixture(codex_state=capacity.OK, generated_at=1_700_000_000)
     second = _capacity_fixture(codex_state=capacity.OK, generated_at=1_800_000_000)
 
-    assert export.write_document(
-        target, export.build_document(database, now=100, capacity_snapshot=first)
-    ) is True
-    assert export.write_document(
-        target, export.build_document(database, now=100, capacity_snapshot=second)
-    ) is False
+    assert (
+        export.write_document(
+            target, export.build_document(database, now=100, capacity_snapshot=first)
+        )
+        is True
+    )
+    assert (
+        export.write_document(
+            target, export.build_document(database, now=100, capacity_snapshot=second)
+        )
+        is False
+    )
 
 
 def test_export_includes_capacity_block(tmp_path: Path) -> None:
