@@ -2146,7 +2146,9 @@ def ensure_muse_auth_link(auth_src: Path, auth_dst: Path) -> None:
             raise ValueError(
                 "unexpected non-link Muse runtime auth record; refusing another credential source"
             )
-        if auth_src.exists() and not auth_dst.is_symlink():
+        if not auth_src.exists():
+            raise ValueError("Muse login record is missing; run `muse login`")
+        if not auth_dst.is_symlink():
             try:
                 auth_dst.symlink_to(auth_src)
             except FileExistsError:
@@ -3019,8 +3021,18 @@ def _selftest_inner(*, gaps: list[str] | None = None):
     _mm = build_command("muse", "x", requested_model="muse-wonder-1.0")
     assert _mm[_mm.index("--model") + 1] == "muse-wonder-1.0", _mm
     assert "nested" in (write_boundary_unenforceable("muse") or ""), "muse refuses a write boundary"
-    _env = agent_subprocess_env("muse", {"META_API_KEY": "k", "PATH": "/p"})
-    assert _env is not None and "META_API_KEY" not in _env and _env["PATH"] == "/p", _env
+    _saved_muse_home, _saved_muse_runtime = HOME, AGENT_RUNTIME
+    try:
+        with tempfile.TemporaryDirectory(prefix="muse-env-selftest-") as _fixture:
+            globals()["HOME"] = Path(_fixture) / "home"
+            globals()["AGENT_RUNTIME"] = Path(_fixture) / "runtime"
+            _login = HOME / ".config/muse/auth.json"
+            _login.parent.mkdir(parents=True)
+            _login.write_text("{}")
+            _env = agent_subprocess_env("muse", {"META_API_KEY": "k", "PATH": "/p"})
+            assert _env is not None and "META_API_KEY" not in _env and _env["PATH"] == "/p", _env
+    finally:
+        globals()["HOME"], globals()["AGENT_RUNTIME"] = _saved_muse_home, _saved_muse_runtime
     assert agent_subprocess_env("vibe", None) is None, "other agents keep inheriting"
     import json as _mj
     import tempfile as _mt

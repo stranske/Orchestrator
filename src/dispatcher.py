@@ -1994,6 +1994,8 @@ def offload(
         and len(prepared_prompt.encode("utf-8")) > GEMINI_STREAM_PROMPT_THRESHOLD_BYTES
     )
     command_prompt = "" if prompt_via_stdin else prepared_prompt
+    # Refuse missing login before allocating a private prompt or recording a started invocation.
+    muse_prelude = _agent_runtime_prelude(agent) if agent == "muse" else None
     muse_prompt = adapters.muse_prompt_file(command_prompt) if agent == "muse" else None
     argv = (
         adapters.build_command(
@@ -2054,7 +2056,7 @@ def offload(
         except Exception as exc:
             return {"agent": agent, "exit": 2, "output": "", "error": str(exc), "run_id": None}
     auth_prelude = _auth_prelude(agent)
-    agent_prelude = _agent_runtime_prelude(agent)
+    agent_prelude = muse_prelude if muse_prelude is not None else _agent_runtime_prelude(agent)
     wrapped = (
         f"{_path_prefix()}; {_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)}"
     )
@@ -2968,6 +2970,13 @@ def _selftest() -> None:
     adapters.HANDOFF = HANDOFF  # so record_ledger writes into tmp
     adapters.LEDGER = HANDOFF / "capacity-ledger.ndjson"
     feedback.DB_PATH = HANDOFF / "feedback" / "orchestrator.db"
+    _saved_muse_link = adapters.ensure_muse_auth_link
+    _selftest_muse_login = HANDOFF / "muse-auth-fixture.json"
+    _selftest_muse_login.write_text("{}")
+    # All selftest launches are offline doubles; never depend on a personal login record.
+    adapters.ensure_muse_auth_link = lambda auth_src, auth_dst: _saved_muse_link(
+        _selftest_muse_login, auth_dst
+    )
     try:
         for agent, persona in AGENT_PERSONAS.items():
             preamble = _agent_preamble(agent)
@@ -4338,7 +4347,16 @@ def _selftest() -> None:
             len(_mre2.findall(r'if d\["agent"\] == "muse":' + _mgap + _mre2.escape(_mn), _msrc))
             == 1
         )
-        assert "unset META_API_KEY" in _agent_runtime_prelude("muse")
+        _saved_muse_home = REAL_HOME
+        try:
+            with _mtf.TemporaryDirectory(prefix="muse-wrapper-selftest-") as _fixture:
+                globals()["REAL_HOME"] = Path(_fixture)
+                _login = REAL_HOME / ".config/muse/auth.json"
+                _login.parent.mkdir(parents=True)
+                _login.write_text("{}")
+                assert "unset META_API_KEY" in _agent_runtime_prelude("muse")
+        finally:
+            globals()["REAL_HOME"] = _saved_muse_home
 
         print(
             "dispatcher.py selftest: OK (plan→argv via adapters, task-type prompts, "
@@ -4353,6 +4371,7 @@ def _selftest() -> None:
 
         shutil.rmtree(tmp, ignore_errors=True)
         os.environ.pop("HANDOFF_DIR", None)
+        adapters.ensure_muse_auth_link = _saved_muse_link
         AGENT_RUNTIME_DIR = old_agent_runtime_dir
         feedback.DB_PATH = old_feedback_db
         adapters.HANDOFF = old_adapters_handoff

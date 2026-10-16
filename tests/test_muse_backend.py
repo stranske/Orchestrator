@@ -29,6 +29,19 @@ import roles
 import router
 
 
+def _runtime_login_fixture(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    login = home / ".config/muse/auth.json"
+    login.parent.mkdir(parents=True)
+    login.write_text(
+        json.dumps({"providers": {"meta": {"mechanism": "oauth", "subs_active": True}}})
+    )
+    monkeypatch.setattr(adapters, "HOME", home)
+    monkeypatch.setattr(adapters, "AGENT_RUNTIME", tmp_path / "runtime")
+    monkeypatch.setattr(dispatcher, "REAL_HOME", home)
+    monkeypatch.setattr(dispatcher, "AGENT_RUNTIME_DIR", tmp_path / "runtime")
+
+
 def test_muse_command_is_headless_sandboxed_and_isolated():
     argv = adapters.build_command("muse", "do the thing")
     assert argv[:2] == ["muse", "exec"], argv
@@ -116,7 +129,8 @@ def test_muse_seat_is_reported_and_never_reads_as_free(tmp_path, monkeypatch, ca
     assert capacity.shed_marker("muse")["reset_at"] is None
 
 
-def test_muse_offload_wrapper_scrubs_the_api_key(monkeypatch):
+def test_muse_offload_wrapper_scrubs_the_api_key(tmp_path, monkeypatch):
+    _runtime_login_fixture(tmp_path, monkeypatch)
     secret = "not-a-real-key-" + "x" * 8
     monkeypatch.setenv("META_API_KEY", secret)
     prelude = dispatcher._agent_runtime_prelude("muse")
@@ -430,10 +444,11 @@ def test_muse_runtime_home_carries_the_login_record(tmp_path, monkeypatch):
     assert linked.is_symlink() and linked.resolve() == login.resolve(), linked
 
 
-def test_muse_direct_dispatch_scrubs_the_key_from_a_copied_environment(monkeypatch):
+def test_muse_direct_dispatch_scrubs_the_key_from_a_copied_environment(tmp_path, monkeypatch):
     """`adapters.dispatch` hands `env` straight to subprocess.run, bypassing the dispatcher prelude.
     muse gets a COPY without META_API_KEY in both cases (inherited env and supplied mapping); the
     caller's mapping is never mutated and every other agent's environment is untouched."""
+    _runtime_login_fixture(tmp_path, monkeypatch)
     fake = "not-a-real-key-" + "y" * 8
     monkeypatch.setenv("META_API_KEY", fake)
     inherited = adapters.agent_subprocess_env("muse", None)
@@ -591,6 +606,24 @@ def test_muse_credential_missing_is_reported_without_a_billing_call(tmp_path, mo
     health = adapters.auth_health("muse")
     assert health["checked"] is True and health["authenticated"] is False
     assert "muse login" in health["reason"]
+
+    monkeypatch.setattr(adapters, "HOME", tmp_path / "missing-home")
+    monkeypatch.setattr(adapters, "AGENT_RUNTIME", tmp_path / "runtime")
+    monkeypatch.setattr(dispatcher, "REAL_HOME", tmp_path / "missing-home")
+    monkeypatch.setattr(dispatcher, "AGENT_RUNTIME_DIR", tmp_path / "runtime")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    with pytest.raises(ValueError, match="login record is missing"):
+        adapters.dispatch("muse", "never call a provider", cwd=str(workspace))
+    with pytest.raises(ValueError, match="login record is missing"):
+        dispatcher._agent_runtime_prelude("muse")
+
+    monkeypatch.setattr(dispatcher, "_select_offload_profile", lambda *args: None)
+    monkeypatch.setattr(dispatcher, "_capability_heartbeat", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dispatcher, "_offload_prompt", lambda prompt, *args, **kwargs: prompt)
+    monkeypatch.setattr(adapters, "muse_prompt_file", forbidden_call)
+    with pytest.raises(ValueError, match="login record is missing"):
+        dispatcher.offload("muse", "never allocate a prompt or call a provider", cwd=str(workspace))
 
 
 def test_muse_capacity_sheds_on_an_inactive_subscription_and_keeps_an_active_one(

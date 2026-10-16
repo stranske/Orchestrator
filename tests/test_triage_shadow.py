@@ -577,6 +577,157 @@ def test_consumed_ranking_records_an_accepted_edge_when_the_opener_follows(consu
     assert "top-1 agrees with the rule pick 0 of 20 valid cycles" in text
 
 
+OLD_PR = "1970-01-01T00:00:01Z"  # opened long before any `now` below, so its answer is final
+
+
+def pr_reader(bodies, calls=None, opened=OLD_PR):
+    """A fake pull-request reader: ``bodies`` maps a number to its body; a missing number fails."""
+
+    def read(repo, number):
+        if calls is not None:
+            calls.append((repo, number))
+        if number not in bodies:
+            return None
+        return {"body": bodies[number], "headRefName": "", "createdAt": opened}
+
+    return read
+
+
+def consume_pick(consumable, now=101):
+    result = triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=now)
+    picked = result["ordered_targets"][0]
+    return picked, int(picked.rpartition("#")[2])
+
+
+def record_pr_run(run_id, number, ts=102, completed=True):
+    """The shape the opener's work really has: a keepalive run on the pull request's number."""
+    feedback.record_run(
+        run_id,
+        f"stranske/Orchestrator#{number}",
+        "implement",
+        "codex",
+        mode="remote",
+        source="keepalive",
+        pr_number=number,
+        ts=ts,
+    )
+    if completed:
+        feedback.record_completion_event(run_id, status="succeeded")
+
+
+def consumed_ts():
+    return triage_shadow._read_rows(triage_shadow.consumed_path())[0]["ts"]
+
+
+def after_48h():
+    """The first instant at which the first consumption is 48 hours old."""
+    return consumed_ts() / 1_000_000_000 + 48 * 3600
+
+
+def test_a_pick_is_followed_through_the_pull_request_that_covers_it(consumable):
+    picked, issue = consume_pick(consumable)
+    record_pr_run("pr-worker", 77)
+    calls = []
+    read = pr_reader({77: f"Closes #{issue}"}, calls)
+    result = outcomes.link_triage_consumption(now=10_000, pr_reader=read)
+    assert [f["run_id"] for f in result["followed"]] == ["pr-worker"]
+    assert result["not_followed"] == [] and result["pending"] == []
+    assert result["pr_reads"] == 1 and result["unread_candidates"] == 0
+    with feedback._conn() as conn:
+        assert conn.execute(
+            "SELECT e.capability_id,e.capability_version_id,e.accepted,e.source_run_id,"
+            "e.target_run_id,r.target FROM influence_edges e "
+            "JOIN runs r ON r.run_id=e.target_run_id WHERE e.influence_type='capability'"
+        ).fetchall() == [
+            (
+                "role-triage",
+                "triage-v1",
+                1,
+                "fixture-triage",
+                "pr-worker",
+                "stranske/Orchestrator#77",
+            )
+        ]
+    # The link is recorded and the answer remembered: a second call reads and credits nothing.
+    again = outcomes.link_triage_consumption(now=10_001, pr_reader=read)
+    assert again == {"followed": [], "not_followed": [], "unresolved": [], "pending": []}
+    assert calls == [("stranske/Orchestrator", 77)]
+    assert picked == f"stranske/Orchestrator#{issue}"
+
+
+def test_a_pull_request_that_does_not_cover_the_pick_is_not_a_follow(consumable):
+    picked, issue = consume_pick(consumable)
+    record_pr_run("other-worker", 77)
+    calls = []
+    read = pr_reader({77: f"Closes #{issue + 100}"}, calls)
+    early = outcomes.link_triage_consumption(now=10_000, pr_reader=read)
+    assert early["pending"] == [consumed_ts()] and early["not_followed"] == []
+    assert early["followed"] == [] and early["unread_candidates"] == 0
+    late = outcomes.link_triage_consumption(now=after_48h(), pr_reader=read)
+    assert [r["status"] for r in late["not_followed"]] == ["not_followed"]
+    assert late["not_followed"][0]["run_id"] is None and late["followed"] == []
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 0
+    assert calls == [("stranske/Orchestrator", 77)]  # read once, then remembered
+
+
+def test_a_failed_pull_request_read_is_never_not_followed(consumable, monkeypatch):
+    picked, issue = consume_pick(consumable)
+    record_pr_run("pr-worker", 77)
+    failing = pr_reader({})
+    early = outcomes.link_triage_consumption(now=10_000, pr_reader=failing)
+    assert early["pending"] == [consumed_ts()]
+    assert early["pr_reads"] == 1 and early["unread_candidates"] == 1
+    assert not triage_shadow.linked_path().exists()
+    late = outcomes.link_triage_consumption(now=after_48h(), pr_reader=failing)
+    assert late["not_followed"] == []
+    assert [(r["status"], r["reason"], r["run_id"]) for r in late["unresolved"]] == [
+        ("unresolved", "pr_read_failed", None)
+    ]
+    # A later consumption whose candidates are all read drains the counter to a measured zero.
+    monkeypatch.setattr(triage_shadow.time, "time_ns", lambda: 200_000_000_000)
+    second, second_issue = consume_pick([t for t in consumable if t != picked], now=201)
+    record_pr_run("later-worker", 78, ts=250)
+    drained = outcomes.link_triage_consumption(
+        now=10_000, pr_reader=pr_reader({78: f"Closes #{second_issue + 100}"})
+    )
+    assert drained["unread_candidates"] == 0
+    assert drained["pr_reads"] == 1 and drained["not_followed"] == []
+
+
+def test_a_cover_read_before_the_pull_request_settled_is_read_again(consumable):
+    picked, issue = consume_pick(consumable)
+    record_pr_run("pr-worker", 77)
+    calls = []
+    # Opened one second before the first call: the closing line may not be written yet.
+    young = pr_reader({77: "No closing line yet"}, calls, opened="1970-01-01T02:45:59Z")
+    first = outcomes.link_triage_consumption(now=10_000, pr_reader=young)
+    assert first["pending"] == [consumed_ts()] and first["followed"] == []
+    edited = pr_reader({77: f"Closes #{issue}"}, calls, opened="1970-01-01T02:45:59Z")
+    second = outcomes.link_triage_consumption(now=10_100, pr_reader=edited)
+    assert [f["run_id"] for f in second["followed"]] == ["pr-worker"]
+    assert len(calls) == 2  # the early "does not cover" was not final, so it was read again
+
+
+def test_the_pull_request_search_reads_a_bounded_number_and_drains_across_calls(consumable):
+    picked, issue = consume_pick(consumable)
+    numbers = list(range(100, 100 + outcomes.PR_READS_PER_CALL + 1))
+    for number in numbers:
+        record_pr_run(f"worker-{number}", number, ts=102 + number)
+    calls = []
+    read = pr_reader({n: f"Closes #{issue + 100}" for n in numbers}, calls)
+    first = outcomes.link_triage_consumption(now=10_000, pr_reader=read)
+    assert first["pending"] == [consumed_ts()]
+    assert first["pr_reads"] == outcomes.PR_READS_PER_CALL == len(calls)
+    assert first["unread_candidates"] == 1
+    second = outcomes.link_triage_consumption(now=10_000, pr_reader=read)
+    assert second["pr_reads"] == 1 and second["unread_candidates"] == 0
+    assert second["pending"] == [consumed_ts()] and len(calls) == len(numbers)
+    third = outcomes.link_triage_consumption(now=after_48h(), pr_reader=read)
+    assert [r["status"] for r in third["not_followed"]] == ["not_followed"]
+    assert len(calls) == len(numbers)  # every answer came from memory
+
+
 def test_same_timestamp_consumptions_link_and_report_independently(consumable):
     first = triage_shadow.consume(consumable, env={"ORCH_TRIAGE_CONSUME": "1"}, now=101)
     remaining = [t for t in consumable if t != first["ordered_targets"][0]]

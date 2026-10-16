@@ -1935,8 +1935,15 @@ visible. Selection by the deterministic router is unchanged. The flag defaults
 off; this repository change does not wire or activate the external opener call.
 `triage-consumed.jsonl` records the pick and capability version; `--backfill`
 links the first subsequent non-role run only after its completion event exists,
-using the existing version-exact Brain consumption API. No subsequent run after
-48 hours records `not_followed` without an edge; incomplete runs stay pending.
+using the existing version-exact Brain consumption API. That run is on the pick
+itself or, because the opener's work is recorded on the pull request it opens, on
+the first pull request that covers the pick (`outcomes.first_run_for_pick`, deciding
+"covers" with `backlog._pr_issue_refs`; one REST read per pull request, at most 20
+per call, answers remembered in `triage-pr-covers.jsonl`). No subsequent run after
+48 hours records `not_followed` without an edge, but only when every candidate
+pull request was read; one that could not be read, or that the bound left unread,
+stays pending and then records `unresolved` (`pr_read_failed`, `reads_pending`).
+Incomplete runs stay pending.
 Switch review prints consumed/followed/not-followed/open and rule agreement.
 After merge and manual sync, the program's 2026-10-20/2026-11-03 check owns the
 bounded live-consumption experiment; fixture edges are not production outcomes.
