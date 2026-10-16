@@ -2,7 +2,20 @@ import sqlite3
 from pathlib import Path
 from unittest.mock import patch
 
+import capacity
 import route_weights_export as export
+
+
+def _capacity_fixture(*, codex_state: str = capacity.OK) -> dict:
+    observed_at = 1_700_000_000
+    agents = {
+        agent: {
+            "state": codex_state if agent == "codex" else capacity.OK,
+            "window": cfg["window"],
+        }
+        for agent, cfg in capacity.AGENTS.items()
+    }
+    return {"generated_at": observed_at, "agents": agents}
 
 
 def test_export_filters_threshold_reserve_and_unknown_task_types(tmp_path: Path) -> None:
@@ -25,8 +38,15 @@ def test_write_document_detects_an_unchanged_semantic_export(tmp_path: Path) -> 
     export._fixture_db(database)
     target = tmp_path / "route-weights.json"
 
-    assert export.write_document(target, export.build_document(database)) is True
-    assert export.write_document(target, export.build_document(database)) is False
+    snapshot = _capacity_fixture()
+    assert (
+        export.write_document(target, export.build_document(database, capacity_snapshot=snapshot))
+        is True
+    )
+    assert (
+        export.write_document(target, export.build_document(database, capacity_snapshot=snapshot))
+        is False
+    )
 
 
 def test_policy_version_changes_when_the_weight_version_changes(tmp_path: Path) -> None:
@@ -72,6 +92,62 @@ def test_challenger_excludes_the_thresholded_consumer_winner(tmp_path: Path) -> 
     document = export.build_document(database, now=2 * export.WEEK_SECONDS)
     assert document["task_types"]["implement"]["ranking"][0]["agent"] == "codex"
     assert document["exploration"]["challengers"]["implement"] == "gemini"
+
+
+def test_capacity_block_has_one_entry_per_configured_agent(tmp_path: Path) -> None:
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    snapshot = _capacity_fixture()
+    document = export.build_document(database, now=100, capacity_snapshot=snapshot)
+
+    assert document["schema"] == export.SCHEMA
+    assert set(document["capacity"]) == set(capacity.AGENTS)
+    for agent, entry in document["capacity"].items():
+        assert set(entry) == {"state", "window", "observed_at"}
+        assert entry["window"] == capacity.AGENTS[agent]["window"]
+    assert all(entry["observed_at"] == 100 for entry in document["capacity"].values())
+
+
+def test_capacity_states_are_copied_verbatim_from_the_snapshot(tmp_path: Path) -> None:
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    snapshot = _capacity_fixture(codex_state=capacity.SHED)
+    document = export.build_document(database, capacity_snapshot=snapshot)
+    assert document["capacity"]["codex"]["state"] == capacity.SHED
+
+
+def test_v1_keys_unchanged_except_schema_and_capacity(tmp_path: Path) -> None:
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    snapshot = _capacity_fixture()
+    document = export.build_document(database, now=100, capacity_snapshot=snapshot)
+    v1_keys = ("task_types", "reserve", "min_observations", "source_version")
+    for key in v1_keys:
+        assert key in document
+    exploration = document["exploration"]
+    assert set(exploration) >= {"mode", "rate", "week_start", "challengers", "policy_version"}
+
+
+def test_capacity_state_change_triggers_write_document(tmp_path: Path) -> None:
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    target = tmp_path / "route-weights.json"
+    ok_snapshot = _capacity_fixture(codex_state=capacity.OK)
+    shed_snapshot = _capacity_fixture(codex_state=capacity.SHED)
+
+    assert export.write_document(
+        target, export.build_document(database, capacity_snapshot=ok_snapshot)
+    ) is True
+    assert export.write_document(
+        target, export.build_document(database, capacity_snapshot=shed_snapshot)
+    ) is True
+
+
+def test_export_includes_capacity_block(tmp_path: Path) -> None:
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    document = export.build_document(database, capacity_snapshot=_capacity_fixture())
+    assert "capacity" in document
 
 
 def test_completed_publication_survives_success_heartbeat_failure(tmp_path, monkeypatch, capsys):
