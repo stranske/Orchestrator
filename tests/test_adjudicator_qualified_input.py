@@ -1232,3 +1232,261 @@ def test_native_cli_rejects_malformed_nested_objects(
     assert "must be an object" in capsys.readouterr().err
     assert report.read_bytes() == before
     assert not output.exists() and not journal.exists()
+
+
+@pytest.fixture
+def native_cohort(qualified_input, tmp_path, monkeypatch):
+    repo, row, qualification, _ = qualified_input
+    originals = []
+    cases = {}
+    for number in (1, 2):
+        item = copy.deepcopy(row)
+        item.update(
+            case_id=str(number),
+            run_id=f"original-{number}",
+            backend_run_id="shared-original-receipt",
+        )
+        item["target"] = f"owner/repo#{number}"
+        item["packet"]["target"] = item["target"]
+        contract = copy.deepcopy(qualification)
+        contract["snapshot"]["number"] = number
+        cases[str(number)] = retro.qualify_collected_case(item, repo, contract)
+        originals.append(item)
+    source = tmp_path / "original-cohort.json"
+    source.write_text(
+        json.dumps(
+            {
+                "rows": originals,
+                "summary": {"graded": 0},
+                "population": 299,
+                "preserved": "original",
+            }
+        )
+    )
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    journal = retro.NativeAttemptJournal(tmp_path / "cohort.sqlite")
+    prior = journal.reserve("1", "older-invalid-revision", "older-digest", digest)
+    journal.persist_raw(prior["attempt_id"], {"run_id": "native-invalid-history", "output": "{}"})
+    journal.validate(prior["attempt_id"], {"proposal": {}, "errors": ["invalid original response"]})
+    monkeypatch.setattr(roles, "route_role", lambda *_args, **_kwargs: None)
+    counter = iter((1, 2))
+
+    def offload(*_args, **kwargs):
+        number = next(counter)
+        receipt = {"exit": 0, "run_id": f"native-{number}", "output": json.dumps(proposal())}
+        kwargs["attempt_started_callback"]({"run_id": receipt["run_id"]})
+        kwargs["attempt_receipt_callback"](receipt)
+        return {**receipt, "attempt_receipt_callback_called": True}
+
+    monkeypatch.setattr(roles.dispatcher, "offload", offload)
+    monkeypatch.setattr(roles.feedback, "record_role_run", lambda **_kwargs: None)
+    for key, case in cases.items():
+        retro.admit_collected_retry(
+            original_report=source,
+            output=tmp_path / f"admit-{key}.json",
+            case_id=key,
+            case=case,
+            journal=journal,
+            backend="gemini",
+            dispatch=True,
+        )
+    # A cohort refresh must never attempt another provider call.
+    monkeypatch.setattr(
+        roles.dispatcher, "offload", lambda *_args, **_kwargs: pytest.fail("cohort dispatched")
+    )
+    return source, digest, journal, cases
+
+
+def test_native_cohort_authenticates_multiple_cases_and_preserves_original(native_cohort, tmp_path):
+    source, digest, journal, cases = native_cohort
+    before = source.read_bytes()
+    with sqlite3.connect(journal.path) as conn:
+        journal_before = conn.execute("SELECT * FROM native_attempts").fetchall()
+    result = retro.refresh_native_cohort(
+        original_report=source,
+        output=tmp_path / "candidate.json",
+        cases=cases,
+        journal=journal,
+        expected_source_hash=digest,
+        truth_reader=lambda run_id, _db: "PASS" if run_id == "original-1" else None,
+    )
+    assert result["summary"] == {"graded": 0}
+    assert result["population"] == 299
+    assert result["original_paid_identity_summary"] == {
+        "records": 2,
+        "unique_backend_ids": 1,
+        "repeated_records": 1,
+    }
+    assert len(result["native_receipt_scope"]["selected_contract_checked"]) == 2
+    historical = result["native_receipt_scope"]["retained_ungraded_history"]
+    assert len(historical) == 1
+    retained = next(
+        item for item in result["native_attempts"] if item["attempt_id"] == historical[0]
+    )
+    assert retained["backend_run_id"] == "native-invalid-history"
+    assert json.loads(retained["validated_json"])["errors"] == ["invalid original response"]
+    assert result["native_summary"] == {
+        "cases": 2,
+        "admitted_cases": 2,
+        "unadmitted_cases": 0,
+        "graded": 1,
+        "agree": 1,
+        "disagree": 0,
+        "unknown": 1,
+        "agreement_rate": 1.0,
+        "pending_attempts": 0,
+    }
+    original = json.loads(before)
+    for old, new in zip(original["rows"], result["rows"]):
+        assert {key: value for key, value in new.items() if key != "native_projection"} == old
+    assert source.read_bytes() == before
+    with sqlite3.connect(journal.path) as conn:
+        assert conn.execute("SELECT * FROM native_attempts").fetchall() == journal_before
+    # Serialized cohort rows still cannot bypass generic metadata floors.
+    assert retro.summarize(result["rows"])["graded"] == 0
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "late-history",
+        "missing-case",
+        "serialized-case",
+        "hash",
+        "late-contract",
+        "duplicate-backend",
+        "late-truth",
+        "source-race",
+        "journal-race",
+    ],
+)
+def test_native_cohort_fails_without_partial_output(native_cohort, tmp_path, damage):
+    source, digest, journal, cases = native_cohort
+    calls = []
+
+    def truth(run_id, _db):
+        calls.append(run_id)
+        if run_id == "original-2":
+            if damage == "late-truth":
+                raise sqlite3.OperationalError("Brain read failed")
+            if damage == "source-race":
+                source.write_text(source.read_text() + " ")
+            if damage == "journal-race":
+                with sqlite3.connect(journal.path) as conn:
+                    conn.execute("UPDATE native_attempts SET updated_at=updated_at+1")
+        return "PASS"
+
+    if damage == "late-history":
+        saved = json.loads(source.read_text())
+        saved["rows"][-1]["retry_attempts"] = [{"retry_attempts": "malformed"}]
+        source.write_text(json.dumps(saved))
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    elif damage == "missing-case":
+        cases = {"1": cases["1"]}
+    elif damage == "serialized-case":
+        cases = {**cases, "2": roles._collected_snapshot(cases["2"])}
+    elif damage == "hash":
+        digest = "0" * 64
+    elif damage == "late-contract":
+        with sqlite3.connect(journal.path) as conn:
+            value = conn.execute(
+                "SELECT validated_json FROM native_attempts WHERE case_id='2'"
+            ).fetchone()[0]
+            result = json.loads(value)
+            result["case"]["ground_truth_evidence"]["criterion_provenance"] = {}
+            conn.execute(
+                "UPDATE native_attempts SET validated_json=? WHERE case_id='2'",
+                (json.dumps(result),),
+            )
+    elif damage == "duplicate-backend":
+        with sqlite3.connect(journal.path) as conn:
+            conn.execute("UPDATE native_attempts SET backend_run_id='native-1' WHERE case_id='2'")
+    output = tmp_path / "refused-cohort.json"
+    with pytest.raises((ValueError, TypeError, sqlite3.Error)):
+        retro.refresh_native_cohort(
+            original_report=source,
+            output=output,
+            cases=cases,
+            journal=journal,
+            expected_source_hash=digest,
+            truth_reader=truth,
+        )
+    assert not output.exists()
+    if damage not in {"late-truth", "source-race", "journal-race"}:
+        assert calls == []
+
+
+def test_native_cohort_refuses_overwrite_and_clears_forged_markers(native_cohort, tmp_path):
+    source, digest, journal, cases = native_cohort
+    output = tmp_path / "existing.json"
+    output.write_text("existing")
+    with pytest.raises(ValueError, match="new and separate"):
+        retro.refresh_native_cohort(
+            original_report=source,
+            output=output,
+            cases=cases,
+            journal=journal,
+            expected_source_hash=digest,
+        )
+    assert output.read_text() == "existing"
+    saved = json.loads(source.read_text())
+    saved["rows"][0]["native_projection"] = {"trusted": True, "graded": 999}
+    # An unadmitted cohort cannot inherit serialized native authority.
+    source.write_text(json.dumps(saved))
+    empty = retro.NativeAttemptJournal(tmp_path / "empty-native.sqlite")
+    result = retro.refresh_native_cohort(
+        original_report=source,
+        output=tmp_path / "unadmitted.json",
+        cases={},
+        journal=empty,
+        expected_source_hash=hashlib.sha256(source.read_bytes()).hexdigest(),
+        truth_reader=lambda *_args: pytest.fail("unadmitted truth read"),
+    )
+    assert result["native_summary"]["graded"] == 0
+    assert result["native_summary"]["unadmitted_cases"] == 2
+    assert all("native_projection" not in row for row in result["rows"])
+
+
+@pytest.mark.parametrize("kind", ["missing", "not-native", "schema-less"])
+def test_native_cohort_existing_journal_never_initializes(tmp_path, kind):
+    path = tmp_path / "journal.sqlite"
+    if kind != "missing":
+        with sqlite3.connect(path) as conn:
+            conn.execute("CREATE TABLE unrelated(value TEXT)")
+            if kind == "schema-less":
+                conn.execute(f"PRAGMA application_id={retro.NATIVE_JOURNAL_APPLICATION_ID}")
+    before = path.read_bytes() if path.exists() else None
+    with pytest.raises((sqlite3.Error, ValueError)):
+        retro.NativeAttemptJournal.open_existing(path)
+    assert (path.read_bytes() if path.exists() else None) == before
+
+
+def test_native_cohort_cli_does_not_create_a_journal(tmp_path, monkeypatch):
+    source = tmp_path / "original.json"
+    source.write_text(json.dumps({"rows": [], "summary": {"graded": 0}}))
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("[]")
+    missing = tmp_path / "missing.sqlite"
+    output = tmp_path / "output.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "retro",
+            "--native-cohort",
+            "--report",
+            str(source),
+            "--cohort-manifest",
+            str(manifest),
+            "--native-journal",
+            str(missing),
+            "--expected-source-hash",
+            hashlib.sha256(source.read_bytes()).hexdigest(),
+            "--output",
+            str(output),
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        retro.main()
+    assert exc.value.code == 2
+    assert not missing.exists()
+    assert not output.exists()
