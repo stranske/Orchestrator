@@ -672,3 +672,63 @@ def test_muse_is_not_implicitly_offered_to_the_adversarial_reviewer():
     result = adversarial.choose_reviewer(cap={}, learned={}, select_fn=select)
     assert all("muse" not in pool for pool in offered)
     assert result.get("agent") != "muse"
+
+
+def test_muse_stale_auth_alias_repairs_are_serialized(tmp_path, monkeypatch):
+    import fcntl
+    import threading
+
+    source = tmp_path / "login.json"
+    source.write_text("unchanged OAuth record")
+    alias = tmp_path / "runtime" / "auth.json"
+    alias.parent.mkdir()
+    alias.symlink_to(tmp_path / "stale-login.json")
+    first_inside = threading.Event()
+    second_observed = threading.Event()
+    second_unlinked = threading.Event()
+    release_first = threading.Event()
+    errors = []
+    unlink = Path.unlink
+    flock = fcntl.flock
+
+    def observed_unlink(path, *args, **kwargs):
+        if path == alias:
+            if threading.current_thread().name == "first-launcher":
+                first_inside.set()
+                assert release_first.wait(5)
+            else:
+                second_unlinked.set()
+                second_observed.set()
+        return unlink(path, *args, **kwargs)
+
+    def observed_flock(fd, operation):
+        if threading.current_thread().name == "second-launcher":
+            second_observed.set()
+        return flock(fd, operation)
+
+    def launch():
+        try:
+            adapters.ensure_muse_auth_link(source, alias)
+        except BaseException as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(Path, "unlink", observed_unlink)
+    monkeypatch.setattr(fcntl, "flock", observed_flock)
+    first = threading.Thread(target=launch, name="first-launcher")
+    second = threading.Thread(target=launch, name="second-launcher")
+    first.start()
+    try:
+        assert first_inside.wait(5)
+        second.start()
+        assert second_observed.wait(5)
+        # The second caller has reached either the lock or unlink. It must be at the lock.
+        assert not second_unlinked.is_set()
+    finally:
+        release_first.set()
+        first.join(5)
+        if second.ident is not None:
+            second.join(5)
+    assert not first.is_alive() and not second.is_alive()
+    assert not errors
+    assert alias.resolve() == source.resolve()
+    assert source.read_text() == "unchanged OAuth record"

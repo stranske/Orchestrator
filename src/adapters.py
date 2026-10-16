@@ -2133,20 +2133,26 @@ def done_marker_cmd(
 def ensure_muse_auth_link(auth_src: Path, auth_dst: Path) -> None:
     """Pin the owned runtime alias to the intended login without copying or editing credentials."""
     auth_dst.parent.mkdir(parents=True, exist_ok=True)
-    if auth_dst.is_symlink():
-        if auth_dst.resolve() != auth_src.resolve():
-            auth_dst.unlink()  # Remove only the stale runtime alias, never its target.
-    elif auth_dst.exists():
-        raise ValueError(
-            "unexpected non-link Muse runtime auth record; refusing another credential source"
-        )
-    if auth_src.exists() and not auth_dst.is_symlink():
-        try:
-            auth_dst.symlink_to(auth_src)
-        except FileExistsError:
-            # Another invocation may have installed this same alias. Accept only that safe race.
-            if not auth_dst.is_symlink() or auth_dst.resolve() != auth_src.resolve():
-                raise ValueError("Muse runtime auth alias changed during setup") from None
+    # Direct and detached launchers share this alias. Serialize check/remove/create so one
+    # launcher cannot remove a link another has just validated or installed.
+    import fcntl
+
+    with auth_dst.with_name(".auth-link.lock").open("a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        if auth_dst.is_symlink():
+            if auth_dst.resolve() != auth_src.resolve():
+                auth_dst.unlink()  # Remove only the stale runtime alias, never its target.
+        elif auth_dst.exists():
+            raise ValueError(
+                "unexpected non-link Muse runtime auth record; refusing another credential source"
+            )
+        if auth_src.exists() and not auth_dst.is_symlink():
+            try:
+                auth_dst.symlink_to(auth_src)
+            except FileExistsError:
+                # Another invocation may have installed this same alias. Accept only that safe race.
+                if not auth_dst.is_symlink() or auth_dst.resolve() != auth_src.resolve():
+                    raise ValueError("Muse runtime auth alias changed during setup") from None
 
 
 def agent_subprocess_env(agent: str, env: dict | None) -> dict | None:
