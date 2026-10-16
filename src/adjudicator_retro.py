@@ -1202,6 +1202,31 @@ def attempt_order(population: list[dict], saved: dict[str, dict], *, retry: bool
     return sorted(population, key=rank)
 
 
+def _advice_counts(rows: list[dict]) -> dict[str, int]:
+    """The adjudicator's committed advice on COMPLETE packets that have later truth.
+
+    `graded` counts the role's plan, which `roles.adjudication_metadata_only` replaces with
+    needs_more_evidence for every retrospective-source case, so it cannot move. This counts the
+    decision itself, from the decision alone and never a stored verdict, and only where the
+    packet was whole: a decision on counts and statuses says nothing about judgment.
+    """
+    verdicts = {"uphold_blocker": "FAIL", "reject_blocker": "PASS"}
+    qualified = [
+        row
+        for row in rows
+        if not _row_metadata_only(row)
+        and isinstance(row.get("decision"), str)
+        and row["decision"] in verdicts
+        and row.get("later_truth")
+    ]
+    agree = sum(verdicts[row["decision"]] == row["later_truth"] for row in qualified)
+    return {
+        "advice_graded": len(qualified),
+        "advice_agree": agree,
+        "advice_disagree": len(qualified) - agree,
+    }
+
+
 def summarize(rows: list[dict]) -> dict:
     # Classify independently of stored flags, including pre-floor legacy rows.
     classified = [dict(row) for row in rows]
@@ -1293,6 +1318,7 @@ def summarize(rows: list[dict]) -> dict:
         "cost_per_case": sum(measured_costs) / len(measured_costs) if measured_costs else None,
         # Saved rows a --retry run would attempt again: 0 when drained, never absent.
         "retry_pending": sum(_retry_pending(row, retry=True) for row in rows),
+        **_advice_counts(rows),
     }
 
 
@@ -2205,9 +2231,21 @@ def _persist_report(path: Path, rows: list[dict], population: int, db: Path | No
 
 def weekly_line(path: Path | None = None) -> str:
     try:
-        summary = json.loads((path or report_path()).read_text())["summary"]
+        report = json.loads((path or report_path()).read_text())
+        summary = report["summary"]
         cost = summary["cost_usd"]
         pending = summary.get("retry_pending")
+        # A summary that predates the advice count is recounted from the saved rows; with neither,
+        # the count is UNKNOWN, never 0.
+        advice = summary if "advice_graded" in summary else None
+        if advice is None and isinstance(report.get("rows"), list):
+            advice = _advice_counts(report["rows"])
+        advice_text = (
+            "UNKNOWN"
+            if advice is None
+            else f"{advice['advice_graded']} (agree {advice['advice_agree']}, "
+            f"disagree {advice['advice_disagree']})"
+        )
         return (
             f"adjudicator shadow: cases {summary['cases']}, agree {summary['agree']}, "
             f"disagree {summary['disagree']}, cost {cost if cost is not None else 'UNKNOWN'} "
@@ -2217,7 +2255,8 @@ def weekly_line(path: Path | None = None) -> str:
             f"unmeasured {summary.get('cost_unmeasured_cases', 0)}; "
             f"estimated accounted USD {summary.get('estimated_cost_usd') if summary.get('estimated_cost_usd') is not None else 'UNMEASURED'}; "
             f"scale {feedback.COST_SCALE}; "
-            f"retry pending {'UNKNOWN' if pending is None else pending})"
+            f"retry pending {'UNKNOWN' if pending is None else pending}; "
+            f"advice graded {advice_text})"
         )
     except (OSError, ValueError, KeyError, TypeError):
         return "adjudicator shadow: cases UNKNOWN, agree UNKNOWN, disagree UNKNOWN, cost UNKNOWN"
