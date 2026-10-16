@@ -1693,13 +1693,14 @@ def _selftest_dispatch_policy(now: int) -> None:
         with mock.patch(__name__ + "._run_json", return_value=response):
             assert _export_policy_at(earlier) is None, response
             assert _fetch_dispatch_times("policy/fixture", 101, "codex") in (None, [])
-    for bad_document in (
+    bad_documents: tuple[dict[str, Any], ...] = (
         {},
         {"schema": route_weights_export.SCHEMA},
         {"schema": []},  # wrong-shaped: must fail open, never TypeError
         document(1, "unknown"),
         document(1, []),
-    ):
+    )
+    for bad_document in bad_documents:
         with mock.patch(__name__ + "._run_json", side_effect=[[{"sha": old_sha}], bad_document]):
             assert _export_policy_at(earlier) is None, bad_document
 

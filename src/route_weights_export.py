@@ -110,10 +110,11 @@ def _capacity_block(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     """Per-agent capacity state for remote consumers (state and window only)."""
     if snapshot is None:
         snapshot = _current_capacity_snapshot()
-    agents = snapshot.get("agents") if isinstance(snapshot.get("agents"), dict) else {}
+    agents_raw = snapshot.get("agents")
+    agents = agents_raw if isinstance(agents_raw, dict) else {}
     observed_raw = snapshot.get("generated_at")
     try:
-        observed_at = int(observed_raw)
+        observed_at = int(observed_raw) if observed_raw is not None else 0
     except (TypeError, ValueError):
         observed_at = 0
     block: dict[str, Any] = {}
