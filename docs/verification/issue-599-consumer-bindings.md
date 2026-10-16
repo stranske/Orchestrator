@@ -43,3 +43,54 @@ Restored GREEN (exit 0):
 ```
 
 Full initial private-state run executed 3,668 pytest cases: 3,665 passed and three failed; all 104 selftests, five gates and the mypy ratchet passed. Follow-through moved the new tests before the standalone gate entry point and distinguished administrative declaration reconciliation from weekly measurement credit. Exact affected-file checks and a complete final verify run follow in the PR validation record; the initial failures remain part of the evidence.
+
+## 2026-10-16 declaration follow-up
+
+Four bindings now name the code that consumes the output more precisely:
+
+| Capability | Consumer | Evidence in the tree |
+| --- | --- | --- |
+| strategy-experiments | `exp_abcd.py:prepare_arms` | `prepare_strategy_experiment` passes its planned arms to this launcher, rather than `prepare`. |
+| capability-activation-audit | `verify.py:run_gates` | The activation-audit subprocess exit status becomes a gate verdict used by verification. |
+| feature-scan | `feature_scan.py:apply_scan` | Reads the scan's `unlogged` proposals and persists them through `features.record_use` when `--apply` is requested. |
+| frontend-verifier | `runtime_ac.py:_completed_result; runtime_ac.py:evaluate_results` | Reads the frontend process's JSON result and carries failed assertions into the runtime gate. |
+
+The named resolution test checks each table independently, including declarations
+that an overlapping row in the other table could otherwise hide. Two additional
+regression cases check that masking failure and demonstrate a scan proposal being
+written into a temporary feature registry. The expected collection floor increases
+by two; no skip ceiling changes.
+
+Validation on this runner:
+
+- The named test, both new cases, and the existing missing-consumer reconciliation
+  case passed when called directly with Python.
+- Deliberately replacing the strategy binding with a sentence failed the named
+  test with `KNOWN_GATES:strategy-experiments` (exit 1). Restoring byte-identical
+  source passed (exit 0).
+- `feature_scan.py`, `runtime_ac.py`, and `strategy_experiment.py` selftests passed.
+- `git diff --check` passed.
+
+`docs-drift-fix-agent` remains the only declaration marked `consumer_missing: true`;
+its external repair output has no local acting handover. This remains a finding,
+not an exemption from the acting requirement.
+
+The live ledger is absent on this runner. Running the CLI with
+`ORCH_LOCAL_RUNTIME=/tmp/orchestrator-consumer-runtime` reports an empty catalogue:
+
+```text
+CONSUMERS (10th): 0 of 0 declare a consumer this tree can find — acting (capability-level) 0, in grace 0, not invoked 0, exercise-bound 0, unmeasured 0
+never acted 0 (blocking 0, pre-cutoff debt 0); prose 0, missing 0, undeclared 0 — DRAINABLE 0 (a declaration edit each)
+```
+
+This is not evidence of the live-ledger acceptance target. The owner must rerun
+after syncing. The existing report still classifies the explicitly missing
+docs-drift consumer as prose, so its production prose-zero criterion also remains
+unresolved.
+
+Pytest and Black are unavailable, and installing them from PyPI failed because
+DNS is blocked. Consequently neither the pytest run nor the mandatory Black gate
+could complete, and these follow-up changes must remain uncommitted until that
+gate passes. GitHub API access also failed, so no PR body or readiness state could
+be updated or verified; the missing-consumer finding and CLI output above are the
+pending PR-body addition.

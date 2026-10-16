@@ -364,7 +364,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "evidence_threshold": "exploration review recommends thompson-hybrid",
     },
     "strategy-experiments": {
-        "downstream_consumer": "exp_abcd.py:prepare launches planned arms",
+        "downstream_consumer": "exp_abcd.py:prepare_arms launches the strategy's planned arms",
         "status": "wired",
         "entrypoint": "strategy_experiment.py",
         "matcher": {"kind": "env", "name": "ORCH_STRATEGY_EXPERIMENT", "equals": "1"},
@@ -1927,7 +1927,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         "downstream_consumer": "adversarial.py:file_followup consumes the panel verdict after merge",
     },
     "capability-activation-audit": {
-        "downstream_consumer": "capability_activation_audit.py:format_scorecard renders the audit findings",
+        "downstream_consumer": "verify.py:run_gates fails verification when the activation audit exits nonzero",
     },
     "capability-firing-monitor": {
         "downstream_consumer": "switch_review.py:firing_regressions consumes persisted findings",
@@ -1948,10 +1948,10 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         "downstream_consumer": "epic_lane.py:build_dispatch_prompts hands validated DAG tasks to workers",
     },
     "feature-scan": {
-        "downstream_consumer": "features.py:record_use; features.py:promotion_candidates",
+        "downstream_consumer": "feature_scan.py:apply_scan writes the scan's unlogged structures to the registry on --apply",
     },
     "frontend-verifier": {
-        "downstream_consumer": "runtime_ac.py:_frontend_command uses the verifier endpoint and assertions",
+        "downstream_consumer": "runtime_ac.py:_completed_result consumes frontend verifier exit status and JSON; runtime_ac.py:evaluate_results fails the runtime gate on failed checks",
     },
     "offload": {
         "downstream_consumer": "roles.py:_parse_json consumes backend output before role validation",

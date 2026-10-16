@@ -17,6 +17,7 @@ from __future__ import annotations
 import pathlib
 import sys
 import tempfile
+from unittest.mock import patch
 
 import capabilities
 import capability_activation_audit as audit
@@ -818,18 +819,63 @@ def test_consumer_deadline_retains_timely_action_after_monitor_window(monkeypatc
 
 def test_declared_consumers_resolve_in_the_tree():
     """A reviewed binding names defined rails; an absent consumer stays explicit debt."""
-    declarations = {**capabilities.KNOWN_GATES, **capabilities.KNOWN_DECLARATIONS}
     failures = {}
-    for cid, declaration in declarations.items():
-        if "downstream_consumer" not in declaration:
-            continue
-        if declaration.get("consumer_missing") is True:
-            assert declaration.get("notes"), f"{cid}: explain the absent consumer"
-            continue
-        resolution = admission.consumer_resolution(declaration)
-        if not resolution["tokens"] or resolution["unresolved"]:
-            failures[cid] = resolution
+    # Inspect both sources: merging tables first could hide a broken gate behind an overlay.
+    for source, declarations in (
+        ("KNOWN_GATES", capabilities.KNOWN_GATES),
+        ("KNOWN_DECLARATIONS", capabilities.KNOWN_DECLARATIONS),
+    ):
+        for cid, declaration in declarations.items():
+            if "downstream_consumer" not in declaration:
+                continue
+            resolution = admission.consumer_resolution(declaration)
+            if declaration.get("consumer_missing") is True:
+                assert str(declaration.get("notes") or "").strip(), (
+                    f"{source}:{cid}: explain the absent consumer"
+                )
+                continue
+            if not resolution["tokens"] or resolution["unresolved"]:
+                failures[f"{source}:{cid}"] = resolution
     assert not failures, failures
+
+
+def test_declared_consumer_check_cannot_hide_a_broken_gate_behind_an_overlay():
+    """A valid overlay must not mask prose or an unresolved symbol in the gate table."""
+    cid = "route-weights-export"
+    valid = {"downstream_consumer": "route_weights_export.py:publish_document"}
+    for broken in ("the export publisher", "route_weights_export.py:no_such_consumer"):
+        with (
+            patch.dict(capabilities.KNOWN_GATES, {cid: {"downstream_consumer": broken}}),
+            patch.dict(capabilities.KNOWN_DECLARATIONS, {cid: valid}),
+        ):
+            try:
+                test_declared_consumers_resolve_in_the_tree()
+            except AssertionError as exc:
+                assert f"KNOWN_GATES:{cid}" in str(exc), str(exc)
+            else:
+                raise AssertionError(f"the consumer check accepted a broken gate: {broken}")
+
+
+def test_feature_scan_declared_consumer_applies_the_scan_output():
+    """The binding must read the scan result and persist its proposed registry entries."""
+    import feature_scan
+    import features
+
+    declaration = capabilities.KNOWN_DECLARATIONS["feature-scan"]
+    resolution = admission.consumer_resolution(declaration)
+    assert resolution["resolved"] == ["feature_scan.py:apply_scan"], resolution
+    with tempfile.TemporaryDirectory() as td:
+        root = pathlib.Path(td)
+        registry = root / "features.json"
+        registry.write_text("{}\n")
+        (root / "sample.py").write_text('"""Reusable sample."""\ndef _selftest():\n    pass\n')
+        with patch.object(feature_scan, "_capability_heartbeat"):
+            report = feature_scan.scan(path=registry, root=root)
+        result = feature_scan.apply_scan(report, dry_run=False, path=registry)
+        assert result == {"recorded": ["sample"], "dry_run": False}, result
+        recorded = features.load(registry)["sample"]
+        assert recorded["module"] == "sample.py", recorded
+        assert recorded["maturity"] == "ad-hoc", recorded
 
 
 def test_missing_consumer_declaration_survives_reconciliation_without_acceptance():
