@@ -11,7 +11,7 @@ The document is versioned and has this contract:
 
 ```json
 {
-  "schema": "orchestrator.route-weights/v1",
+  "schema": "orchestrator.route-weights/v2",
   "generated_at": "2026-09-03T00:00:00Z",
   "source_version": 61,
   "min_observations": 20,
@@ -21,9 +21,19 @@ The document is versioned and has this contract:
       "evidence_ok": true
     }
   },
-  "reserve": {"implement": [{"agent": "claude", "posterior": 0.58, "n_obs": 31, "success_rate": 0.55}]}
+  "reserve": {"implement": [{"agent": "claude", "posterior": 0.58, "n_obs": 31, "success_rate": 0.55}]},
+  "capacity": {
+    "codex": {"state": "ok", "window": "5h", "observed_at": 1725321600}
+  }
 }
 ```
+
+`capacity` is an additive v2 block: one entry per configured agent in `capacity.AGENTS`, with
+`state` copied verbatim from that tick's `capacity.build()` snapshot (`ok`, `warn`, `shed`, or
+`unknown`), the agent's configured `window`, and `observed_at` set to the export document's epoch
+(the same instant as `generated_at`, which is omitted from publish change detection). Token counts, costs, and account identifiers are intentionally omitted.
+v1 keys (`task_types`, `reserve`, `min_observations`, `source_version`, `exploration`, and the
+rest) are unchanged; consumers that only read those keys remain valid on a v2 document.
 
 Only the latest `route_weights` version is read. The public `task_types` keys are the consumer
 contract: `implement`, `review`, `testgen`, `mechanical`, `codemod`, and `cross_repo`; each is also

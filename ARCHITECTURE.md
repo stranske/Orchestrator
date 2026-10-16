@@ -1513,8 +1513,13 @@ reads `step last ran`. An artifact alone does not prove successful execution, an
 for redirect linking does not prove an authorised apply. Missing or unreadable evidence stays
 UNKNOWN. The snapshot date remains visible; a newer heartbeat marks an old finding as history.
 No alarm is cleared, no regression rule changes, and no owner question or automated action is added.
-Route export records invocation on every daily run and success only after an actual publication;
-rail exercise records invocation without `--record`, which governs exercise verdicts only.
+Route export (`route_weights_export.py`, schema `orchestrator.route-weights/v2` on branch
+`exports/route-weights`) records invocation on every daily run and success only after an actual
+publication; the published JSON still carries the v1 routing keys unchanged and adds a `capacity`
+block with per-agent `state`, `window`, and `observed_at` from the current `capacity.build()`
+snapshot (no token or account fields). Semantic change detection includes that block, so a shed or
+recovered seat republishes without touching posteriors. Rail exercise records invocation without
+`--record`, which governs exercise verdicts only.
 Dedup: firing history and its ledger-only silence annotation already existed; the weekly reader
 and independent cadence evidence were missing. Existing heartbeat repairs from main are retained.
 
