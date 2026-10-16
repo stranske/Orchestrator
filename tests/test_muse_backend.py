@@ -33,6 +33,7 @@ def _runtime_login_fixture(tmp_path, monkeypatch):
     home = tmp_path / "home"
     login = home / ".config/muse/auth.json"
     login.parent.mkdir(parents=True)
+    (login.parents[2] / "Library/Keychains").mkdir(parents=True)
     login.write_text(
         json.dumps({"providers": {"meta": {"mechanism": "oauth", "subs_active": True}}})
     )
@@ -71,6 +72,7 @@ def test_muse_offload_argv_and_isolated_runtime_home(tmp_path, monkeypatch):
     real_home = tmp_path / "home"
     login = real_home / ".config" / "muse" / "auth.json"
     login.parent.mkdir(parents=True)
+    (login.parents[2] / "Library/Keychains").mkdir(parents=True)
     login.write_text("{}")
     monkeypatch.setattr(dispatcher, "REAL_HOME", real_home)
     monkeypatch.setattr(dispatcher, "AGENT_RUNTIME_DIR", tmp_path / "runtime")
@@ -78,7 +80,7 @@ def test_muse_offload_argv_and_isolated_runtime_home(tmp_path, monkeypatch):
     prelude = dispatcher._agent_runtime_prelude("muse")
     assert f"XDG_CONFIG_HOME={runtime / '.config'}" in prelude
     assert f"XDG_STATE_HOME={runtime / '.local/state'}" in prelude
-    assert "export HOME=" not in prelude, prelude
+    assert f"export HOME={runtime}" in prelude, prelude
     assert runtime / ".config" / "muse" != real_home / ".config" / "muse"
     assert f"MUSE_AUTH_PATH={runtime / '.config' / 'muse' / 'auth.json'}" in prelude
     linked = runtime / ".config" / "muse" / "auth.json"
@@ -276,6 +278,26 @@ def test_muse_usage_extension_keeps_legacy_cost_writers_and_measured_rows(tmp_pa
             ("muse-measured",),
         ).fetchone()
     assert cost == (10, 20, 4.25, 9.0, "ccusage")
+    # Richer provider writers can supersede an imputation after it is recorded;
+    # the ledger reconciler itself only writes source=ledger, never provider receipts.
+    feedback.record_run("muse-later", "owner/repo#3", "review", "muse", mode="offload")
+    feedback.record_muse_subscription_cost(
+        "muse-later",
+        invocation_count=1,
+        window_start_ts=0,
+        window_end_ts=18000,
+        observed_start_ts=18000,
+        observed_end_ts=18005,
+        wall_seconds=5.0,
+        raw_exit_codes=[0],
+    )
+    feedback.record_cost(
+        "muse-later", tokens_in=10, tokens_out=20, cost_usd=4.25, source="langsmith"
+    )
+    with feedback._conn() as conn:
+        assert conn.execute(
+            "SELECT tokens_in,tokens_out,cost_usd,source FROM costs WHERE run_id='muse-later'"
+        ).fetchone() == (10, 20, 4.25, "langsmith")
     assert usage == ("imputed_subscription", 1, "[0]")
 
 
@@ -385,6 +407,71 @@ def test_muse_jsonl_rejects_failed_or_unbound_terminal(field, value):
     assert adapters.muse_terminal_text("\n".join(json.dumps(e) for e in events)) == ""
 
 
+def test_muse_native_tool_results_preserve_the_bound_run_terminal():
+    """Captured native tool errors are task outcomes, not a missing run response.
+
+    The enclosing run completed usefully after reporting a denied read and a shell
+    sandbox startup failure. Neither task success nor failure is a run terminal.
+    """
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures/muse-native-tool-events.json").read_text()
+    )
+    events = _native_muse_events("The read boundary held; shell nesting failed.")
+    tool_events = fixture["events"]
+
+    def encode(rows):
+        return "\n".join(json.dumps(e) for e in rows)
+
+    assert (
+        adapters.muse_terminal_text(encode(events[:-1] + tool_events + events[-1:]))
+        == events[-1]["payload"]["text"]
+    )
+    assert adapters.muse_terminal_text(encode(events[:-1] + tool_events)) == ""
+    assert adapters.muse_terminal_text(encode(events + tool_events)) == ""
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("command_id", "other"),
+        ("run_stream", {"kind": "run", "id": "other"}),
+        ("kind", "run_terminal"),
+    ],
+)
+def test_muse_native_tool_results_reject_unbound_payloads(field, value):
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures/muse-native-tool-events.json").read_text()
+    )
+    for auxiliary in fixture["events"]:
+        auxiliary["payload"][field] = value
+        events = _native_muse_events()
+        assert (
+            adapters.muse_terminal_text(
+                "\n".join(json.dumps(e) for e in events[:-1] + [auxiliary] + events[-1:])
+            )
+            == ""
+        )
+
+
+def test_muse_native_tool_results_reject_malformed_child_identity():
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures/muse-native-tool-events.json").read_text()
+    )
+    for auxiliary in fixture["events"]:
+        payload = auxiliary["payload"]
+        if auxiliary["payload_type"] == "tool.result":
+            payload["call_id"] = None
+        else:
+            payload["event"]["task_id"] = "another-task"
+        events = _native_muse_events()
+        assert (
+            adapters.muse_terminal_text(
+                "\n".join(json.dumps(e) for e in events[:-1] + [auxiliary] + events[-1:])
+            )
+            == ""
+        )
+
+
 def test_muse_usage_is_recorded_for_offload_and_delegate():
     """Wiring pin: BOTH launch paths record usage, each under an `agent == muse` guard.
 
@@ -436,6 +523,7 @@ def test_muse_runtime_home_carries_the_login_record(tmp_path, monkeypatch):
     real_home = tmp_path / "home"
     login = real_home / ".config" / "muse" / "auth.json"
     login.parent.mkdir(parents=True)
+    (login.parents[2] / "Library/Keychains").mkdir(parents=True)
     login.write_text("{}")
     monkeypatch.setattr(dispatcher, "REAL_HOME", real_home)
     monkeypatch.setattr(dispatcher, "AGENT_RUNTIME_DIR", tmp_path / "runtime")
@@ -471,6 +559,7 @@ def test_muse_direct_dispatch_environment_is_xdg_isolated(tmp_path, monkeypatch)
     real_home = tmp_path / "home"
     login = real_home / ".config" / "muse" / "auth.json"
     login.parent.mkdir(parents=True)
+    (login.parents[2] / "Library/Keychains").mkdir(parents=True)
     login.write_text("{}")
     monkeypatch.setattr(adapters, "HOME", real_home)
     monkeypatch.setattr(adapters, "AGENT_RUNTIME", tmp_path / "runtime")
@@ -480,7 +569,7 @@ def test_muse_direct_dispatch_environment_is_xdg_isolated(tmp_path, monkeypatch)
     runtime = tmp_path / "runtime" / "muse"
     assert env["XDG_CONFIG_HOME"] == str(runtime / ".config")
     assert env["XDG_STATE_HOME"] == str(runtime / ".local/state")
-    assert env["HOME"] == str(real_home)
+    assert env["HOME"] == str(runtime)
     assert Path(env["XDG_CONFIG_HOME"]) / "muse" != real_home / ".config" / "muse"
     assert env["MUSE_AUTH_PATH"] == str(runtime / ".config" / "muse" / "auth.json")
     assert env["TMPDIR"] == str(runtime / "tmp") and "META_API_KEY" not in env
@@ -766,3 +855,41 @@ def test_muse_stale_auth_alias_repairs_are_serialized(tmp_path, monkeypatch):
     assert not errors
     assert alias.resolve() == source.resolve()
     assert source.read_text() == "unchanged OAuth record"
+
+
+def test_muse_private_home_exposes_only_existing_keychains(tmp_path, monkeypatch):
+    monkeypatch.setattr(adapters.sys, "platform", "darwin")
+    home, runtime = tmp_path / "home", tmp_path / "runtime"
+    keychains = home / "Library/Keychains"
+    keychains.mkdir(parents=True)
+    adapters.ensure_muse_keychain_link(home, runtime)
+    adapters.ensure_muse_keychain_link(home, runtime)
+    alias = runtime / "Library/Keychains"
+    assert alias.is_symlink() and alias.resolve() == keychains.resolve()
+    assert not (runtime / ".config/muse/settings.json").exists()
+    alias.unlink()
+    alias.mkdir()
+    with pytest.raises(ValueError, match="non-symlink"):
+        adapters.ensure_muse_keychain_link(home, runtime)
+    assert alias.is_dir() and not alias.is_symlink()
+
+
+def test_muse_missing_keychain_refuses_before_provider_or_prompt(tmp_path, monkeypatch):
+    _runtime_login_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(adapters.sys, "platform", "darwin")
+    (adapters.HOME / "Library/Keychains").rmdir()
+    monkeypatch.setattr(dispatcher, "_offload_prompt", lambda prompt, *a: prompt)
+    monkeypatch.setattr(dispatcher, "_select_offload_profile", lambda *a, **k: None)
+    monkeypatch.setattr(adapters, "muse_prompt_file", lambda *a: pytest.fail("prompt allocated"))
+    monkeypatch.setattr(adapters.subprocess, "run", lambda *a, **k: pytest.fail("provider called"))
+    with pytest.raises(ValueError, match="existing macOS Keychains"):
+        adapters.dispatch("muse", "review")
+    with pytest.raises(ValueError, match="existing macOS Keychains"):
+        dispatcher.offload("muse", "review", cwd=str(tmp_path))
+
+
+def test_muse_keychain_alias_is_macos_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(adapters.sys, "platform", "linux")
+    runtime = tmp_path / "runtime"
+    adapters.ensure_muse_keychain_link(tmp_path / "home", runtime)
+    assert not runtime.exists()
