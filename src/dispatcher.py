@@ -2271,6 +2271,14 @@ def offload(
         error: str | None
         attempt_stderr = ""
         stream_path: Path | None = None
+
+        def _cleanup_stream() -> None:
+            if stream_path is not None:
+                try:
+                    stream_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
         try:
             attempt_wrapped = wrapped
             if stream_prompt is not None:
@@ -2284,6 +2292,12 @@ def offload(
                     prompt_file.write(stream_prompt)
             if attempt_started_callback is not None:
                 _notify_attempt(attempt_started_callback, {"run_id": run_id, "agent": agent})
+        except BaseException:
+            # Start notification is not a provider result. Its failure must not
+            # enter the subprocess OSError/interrupt completion handlers below.
+            _cleanup_stream()
+            raise
+        try:
             proc = subprocess.run(
                 [
                     "bash",
@@ -2378,11 +2392,7 @@ def offload(
                 fh.write(f"[orchestrator] offload marked failed: {error}\n")
             raise
         finally:
-            if stream_path is not None:
-                try:
-                    stream_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
+            _cleanup_stream()
         # MASKED BEFORE ANYTHING READS IT. Everything below -- the stream parse, the log, the
         # incident classifier and the dict handed back to the caller -- sees only this text. A vibe
         # offload of 2026-09-06 printed the live GitHub token, and this function wrote it to a

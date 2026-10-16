@@ -305,6 +305,39 @@ def test_callback_failure_always_scrubs_agy_log(stores, monkeypatch, interrupted
     assert "complete" not in order
 
 
+@pytest.mark.parametrize("failure", [OSError, KeyboardInterrupt])
+def test_start_callback_failure_is_not_a_provider_result(stores, monkeypatch, failure):
+    order = []
+    log = stores / "synthetic-agy.log"
+    secret = "ghp_" + "B" * 36
+    monkeypatch.setattr(
+        dispatcher.adapters, "build_command", lambda *a, **kw: ["agent", "--log-file", str(log)]
+    )
+    monkeypatch.setattr(dispatcher.adapters, "agy_log_for", lambda *a: log)
+    monkeypatch.setattr(
+        dispatcher.adapters, "record_ledger", lambda *a, **kw: order.append(kw.get("event"))
+    )
+    monkeypatch.setattr(dispatcher.subprocess, "run", lambda *a, **kw: order.append("provider"))
+
+    def failed_start(response):
+        log.write_text(secret)
+        raise failure("start receipt failed")
+
+    with pytest.raises(failure, match="start receipt failed"):
+        dispatcher.offload(
+            "gemini",
+            "test",
+            cwd=str(stores),
+            max_network_retries=0,
+            attempt_started_callback=failed_start,
+            attempt_receipt_callback=lambda response: order.append("receipt"),
+        )
+    assert "provider" not in order
+    assert "receipt" not in order
+    assert "complete" not in order
+    assert secret not in log.read_text()
+
+
 @pytest.mark.parametrize(
     "returncode,exit_code",
     # The measured runs were recorded as exit 70 from the marker their reads quoted; since
