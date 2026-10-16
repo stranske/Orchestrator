@@ -1003,7 +1003,7 @@ ROLE_REGISTRY: dict[str, Role] = {
             "backend choice over time."
         ),
         route_as="review",
-        eligible_backends=frozenset({"gemini", "codex", "cursor", "claude"}),
+        eligible_backends=frozenset({"gemini", "codex", "cursor", "claude", "muse"}),
         mode="full",
         input_keys=("report", "acceptance_criteria"),
         output_keys=(
@@ -1024,7 +1024,7 @@ ROLE_REGISTRY: dict[str, Role] = {
             "is only a PRIOR - learned weights refine backend choice over time."
         ),
         route_as="implement",
-        eligible_backends=frozenset({"gemini", "codex", "cursor", "claude", "vibe"}),
+        eligible_backends=frozenset({"gemini", "codex", "cursor", "claude", "vibe", "muse"}),
         mode="full",
         input_keys=("target", "goal", "task_type"),
         output_keys=(
@@ -1065,7 +1065,7 @@ ROLE_REGISTRY: dict[str, Role] = {
             "backend choice over time. Triage never selects worker agents or mutates backlog state."
         ),
         route_as="review",
-        eligible_backends=frozenset({"cursor", "vibe", "gemini", "codex", "claude"}),
+        eligible_backends=frozenset({"cursor", "vibe", "gemini", "codex", "claude", "muse"}),
         mode="full",
         input_keys=("backlog_items",),
         output_keys=(
@@ -1087,7 +1087,7 @@ ROLE_REGISTRY: dict[str, Role] = {
             "minority-veto aggregation math."
         ),
         route_as="review",
-        eligible_backends=frozenset({"gemini", "codex", "claude"}),
+        eligible_backends=frozenset({"gemini", "codex", "claude", "muse"}),
         mode="full",
         input_keys=("case",),
         output_keys=(
@@ -1492,6 +1492,7 @@ def route_role(
     learned: dict | None = None,
     high_leverage: bool = False,
     exploration_rate: float | None = None,
+    only: set[str] | None = None,
 ) -> dict | None:
     """Pick the LLM backend for a role via router.select_agent, restricted to eligible_backends.
 
@@ -1521,15 +1522,29 @@ def route_role(
             }
     if not lw and isinstance(learned_all, dict):
         lw = learned_all.get(role.route_as)
-    pool = set(role.eligible_backends) if high_leverage else (set(role.eligible_backends) - RESERVE)
+    eligible = set(role.eligible_backends)
+    if only is not None:
+        # Explicit exploration is a restriction, never a way to inject a backend absent from this
+        # role's declared contract.  This reaches backup-only Muse through the unchanged router
+        # guard while ordinary role calls preserve their prior candidate set exactly.
+        eligible &= set(only)
+        if not eligible:
+            return None
+    else:
+        eligible -= router.BACKUP_AGENTS
+    pool = eligible if high_leverage else (eligible - RESERVE)
     pick = router.select_agent(
-        role.route_as, cap, only=pool, learned=lw, exploration_rate=exploration_rate
+        role.route_as,
+        cap,
+        only=pool,
+        learned=lw,
+        exploration_rate=exploration_rate,
     )
     if pick is None and not high_leverage:  # last resort: allow reserve seats
         pick = router.select_agent(
             role.route_as,
             cap,
-            only=set(role.eligible_backends),
+            only=eligible,
             learned=lw,
             exploration_rate=exploration_rate,
         )

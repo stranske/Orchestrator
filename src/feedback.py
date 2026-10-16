@@ -88,6 +88,20 @@ CREATE TABLE IF NOT EXISTS costs (
   run_id TEXT PRIMARY KEY, tokens_in INTEGER, tokens_out INTEGER,
   cost_usd REAL, latency_s REAL, source TEXT, pulled_ts INTEGER
 );
+CREATE TABLE IF NOT EXISTS muse_subscription_usage (
+  run_id TEXT PRIMARY KEY,
+  measurement_kind TEXT NOT NULL,
+  muse_invocation_count INTEGER NOT NULL,
+  muse_window_id TEXT NOT NULL,
+  muse_window_start_ts INTEGER NOT NULL,
+  muse_window_end_ts INTEGER NOT NULL,
+  muse_observed_start_ts INTEGER NOT NULL,
+  muse_observed_end_ts INTEGER NOT NULL,
+  muse_wall_seconds REAL NOT NULL,
+  muse_raw_exit_codes TEXT NOT NULL,
+  recorded_ts INTEGER NOT NULL,
+  FOREIGN KEY(run_id) REFERENCES runs(run_id)
+);
 CREATE TABLE IF NOT EXISTS execution_traces (
   trace_key TEXT PRIMARY KEY, run_id TEXT, trace_id TEXT, trace_url TEXT,
   provider TEXT, model TEXT, operation TEXT, status TEXT,
@@ -4223,7 +4237,8 @@ def record_role_run(
         # must not overwrite a richer session receipt that arrived meanwhile.
         with _conn() as c:
             c.execute(
-                "INSERT INTO costs VALUES (?,?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET "
+                "INSERT INTO costs (run_id,tokens_in,tokens_out,cost_usd,latency_s,source,pulled_ts) "
+                "VALUES (?,?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET "
                 "tokens_in=excluded.tokens_in,tokens_out=excluded.tokens_out,pulled_ts=excluded.pulled_ts "
                 "WHERE costs.source='ledger'",
                 (
@@ -5049,7 +5064,8 @@ def completion_event_episodes(
 def record_cost(run_id, tokens_in=0, tokens_out=0, cost_usd=0.0, latency_s=0.0, source="ledger"):
     with _conn() as c:
         c.execute(
-            "INSERT OR REPLACE INTO costs VALUES (?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO costs "
+            "(run_id,tokens_in,tokens_out,cost_usd,latency_s,source,pulled_ts) VALUES (?,?,?,?,?,?,?)",
             (
                 run_id,
                 tokens_in,
@@ -5057,6 +5073,83 @@ def record_cost(run_id, tokens_in=0, tokens_out=0, cost_usd=0.0, latency_s=0.0, 
                 cost_usd,
                 latency_s,
                 source,
+                int(time.time()),
+            ),
+        )
+
+
+def record_muse_subscription_cost(
+    run_id: str,
+    *,
+    invocation_count: int,
+    window_start_ts: int,
+    window_end_ts: int,
+    observed_start_ts: int,
+    observed_end_ts: int,
+    wall_seconds: float,
+    raw_exit_codes: list[int],
+) -> None:
+    """Record Muse's observable subscription consumption without inventing provider billing.
+
+    ``window_*`` is an accounting observation bucket based on local wall time, not a claim about
+    Meta's undocumented allowance reset.  ``cost_usd=0`` is a non-null subscription-flat imputation;
+    callers and learners must use ``measurement_kind``/``source`` to distinguish it from free or
+    measured dollar usage.
+    """
+    if invocation_count < 1:
+        raise ValueError("a Muse cost row requires at least one attempted invocation")
+    if window_end_ts <= window_start_ts:
+        raise ValueError("Muse observation window must have positive duration")
+    if observed_end_ts < observed_start_ts:
+        raise ValueError("Muse observed bounds must be ordered")
+    if len(raw_exit_codes) != invocation_count:
+        raise ValueError("Muse raw exits must correspond one-for-one with invocations")
+    window_id = (
+        f"observation:rolling-5h:{window_start_ts}-{window_end_ts};"
+        f"observed:{observed_start_ts}-{observed_end_ts};provider-reset:unknown"
+    )
+    with _conn() as c:
+        run = c.execute("SELECT agent,mode FROM runs WHERE run_id=?", (run_id,)).fetchone()
+        if run != ("muse", "offload"):
+            raise ValueError("Muse subscription usage requires a corresponding muse offload run")
+        existing = c.execute("SELECT source FROM costs WHERE run_id=?", (run_id,)).fetchone()
+        # A later native/provider receipt wins over our subscription accounting estimate.  Do not
+        # overwrite a measured historical cost row merely to add the execution facts below.
+        if existing is None or existing[0] in {"ledger", "imputed:subscription"}:
+            c.execute(
+                "INSERT OR REPLACE INTO costs VALUES (?,?,?,?,?,?,?)",
+                (
+                    run_id,
+                    None,
+                    None,
+                    0.0,
+                    float(max(0.0, wall_seconds)),
+                    "imputed:subscription",
+                    int(time.time()),
+                ),
+            )
+        c.execute(
+            "INSERT INTO muse_subscription_usage "
+            "(run_id,measurement_kind,muse_invocation_count,muse_window_id,muse_window_start_ts,"
+            "muse_window_end_ts,muse_observed_start_ts,muse_observed_end_ts,muse_wall_seconds,"
+            "muse_raw_exit_codes,recorded_ts) VALUES (?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(run_id) DO UPDATE SET measurement_kind=excluded.measurement_kind,"
+            "muse_invocation_count=excluded.muse_invocation_count,muse_window_id=excluded.muse_window_id,"
+            "muse_window_start_ts=excluded.muse_window_start_ts,muse_window_end_ts=excluded.muse_window_end_ts,"
+            "muse_observed_start_ts=excluded.muse_observed_start_ts,muse_observed_end_ts=excluded.muse_observed_end_ts,"
+            "muse_wall_seconds=excluded.muse_wall_seconds,muse_raw_exit_codes=excluded.muse_raw_exit_codes,"
+            "recorded_ts=excluded.recorded_ts",
+            (
+                run_id,
+                "imputed_subscription",
+                invocation_count,
+                window_id,
+                window_start_ts,
+                window_end_ts,
+                observed_start_ts,
+                observed_end_ts,
+                float(max(0.0, wall_seconds)),
+                json.dumps(raw_exit_codes, separators=(",", ":")),
                 int(time.time()),
             ),
         )

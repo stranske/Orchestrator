@@ -298,12 +298,14 @@ unchanged.
 
 **Muse Code is a backup-only, subscription-login backend (2026-10-15, issue #612).** Meta's `muse`
 CLI joins the delegated sub-agent band as a seat that routine selection NEVER picks: it is in
-`router.BACKUP_AGENTS` with aider, and unlike aider it has NO route-table entry, so `select_agent` can
-never return it, even with `only={"muse"}`. The paths that reach it are an explicit
-`dispatcher.py offload --agent muse` (run live 2026-10-15) or `delegate --agent muse`, until measured
-outcomes earn it a prior and a route-table entry. Its capacity seat is `flat` (`capacity.AGENTS["muse"]`, the owner's
-Power Usage plan: a 5-hour and a weekly allowance) with no usage API, so 429-shed is authoritative, as for
-vibe. **The credential is the CLI LOGIN, never an API key.** `META_API_KEY` always overrides that login, and a
+`router.BACKUP_AGENTS` with aider. It has explicit-only entries in the `implement` and `review` route
+tables and in the corresponding role eligibility sets, but the backup guard filters those entries from
+ordinary selection; only `select_agent(..., only={"muse"})` or an explicit dispatcher call can reach it.
+This preserves deterministic selection and priors while making the declared exploration surfaces honest.
+Its capacity seat is `metered` (`capacity.AGENTS["muse"]`) because the subscription is a constrained
+allowance, while its immutable execution-profile pool remains `flat`; the latter is a pool classification,
+not a price claim. There is no usage API, so observed local accounting never claims Meta's reset epoch and
+429-shed is authoritative. **The credential is the CLI LOGIN, never an API key.** `META_API_KEY` always overrides that login, and a
 Default-Project key metered pay-as-you-go: measured on the live console, two capped execs under it put 8
 requests and 81.5k input tokens in the pay-as-you-go ledger (the key the login itself mints, in the
 `Muse Code` project, is untested), while a 30-request keychain-login run moved only the
@@ -313,16 +315,24 @@ missing or has no active subscription (an unreadable record is not a failure). M
 order as the env key, then a stored key, then the stored browser session; whether a stored key can coexist
 with the login is unverified, so the gate admits only an OAuth login record and refuses any other mechanism.
 `agent_auth_check` counts the seat usable only when the login records an active
-subscription (`subs_active`), reading the file's shape and never its contents. The argv is headless with
+subscription (`subs_active`), reading the file's shape and never its contents. The child keeps the real
+`HOME` so the subscription keychain login remains usable, but isolates `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
+`XDG_CACHE_HOME`, `XDG_STATE_HOME`, and temporary runtime state and uses the pinned `MUSE_AUTH_PATH` link for the auth record.
+The argv is headless with
 the sandbox ON (`--disable-approval`, never `--yolo`), without the owner's personal Claude/Codex rules
-(`--no-foreign-personal-context`) and without a session log. A write boundary is REFUSED for muse
+(`--no-foreign-personal-context`) and without a session log. Synchronous offloads and direct adapter calls pass prompts through a private
+`--prompt-file`, native Muse JSONL durable-bound terminal parsing is the only accepted result format (not
+the MSP protocol schema), and `--max-model-steps` bounds one invocation. A write boundary is REFUSED for muse
 (`adapters.write_boundary_unenforceable`): it already runs in its own sandbox and a seatbelt profile around
 it is an unproven nested seatbelt. Muse emits no token or usage field (37 `--json` events inspected) and the
-console lags up to an hour, so consumption is counted as one TSV row per exec
-(`dispatcher._record_muse_usage`, read by `~/.codex/bin/muse-usage.sh`) against the plan's rolling 5-hour
-window. Remote (CI) Muse is NOT part of this: a runner can only authenticate with the key, which bills
+console lags up to an hour. The seven-column `costs` table therefore stays unchanged: its Muse row uses
+non-null `0.0` only with `source=imputed:subscription`, while the keyed
+`muse_subscription_usage` extension records the actual invocation count, raw exits, wall seconds, and a
+locally observed rolling five-hour window whose provider reset remains unknown. This is neither measured
+dollars nor a free seat. A TSV per-exec audit row remains available through `dispatcher._record_muse_usage`
+(`~/.codex/bin/muse-usage.sh`). Remote (CI) Muse is NOT part of this: a runner can only authenticate with the key, which bills
 pay-as-you-go, so Workflows#3918 and #3919 stay parked. The sub-agent band lists one more backend; no
-stage, rail or feedback surface moved.
+stage, rail or feedback surface moved. Native execution evidence and the post-merge provider verdict remain separate acceptance gates.
 
 **No agent run is given a workspace that is or holds `/`, the home dir or the control plane
 (2026-10-05).** A run's workspace is where it may write. codex makes `--cd` a write entry of the
@@ -1759,7 +1769,7 @@ unattended agent isn't caught until a bad outcome hours later), and the scaffold
 
 - **Contract.** Input `{report (a watch.py report), acceptance_criteria[, attempt_history]}` →
   `{action ∈ wait|collect|inspect|redirect|decompose, reason, confidence, corrected_prompt, switch_agent}`.
-- **Routing.** `route_as="review"` (prior only), `eligible_backends={gemini, codex, cursor, claude}`,
+- **Routing.** `route_as="review"` (prior only), `eligible_backends={gemini, codex, cursor, claude, muse}`,
   claude reserved.
 - **Shadow only — never mutates.** It proposes into `redirect_plan.plan()` by injecting its decision as
   `report["policy_decision"]` and passing its authored prompt via the new `prompt_override` param. The
@@ -1831,7 +1841,7 @@ PromptAgent upgrades generic delegation templates without changing deterministic
 `scoped_prompt`, `definition_of_done`, acceptance criteria, validation, expected paths, out-of-scope
 boundaries, risks, and confidence.
 
-- **Routing.** `route_as="implement"` (prior only), `eligible_backends={gemini, codex, cursor, claude, vibe}`,
+- **Routing.** `route_as="implement"` (prior only), `eligible_backends={gemini, codex, cursor, claude, vibe, muse}`,
   claude reserved by default through `route_role()`.
 - **Shadow only — never delegates.** It returns a dispatch-ready prompt string for the orchestrator to
   inspect. It does not call `dispatcher.delegate`, write claims, label PRs, create branches, or open PRs.
@@ -1877,7 +1887,7 @@ python3 src/roles.py decompose --goal "..." --repo owner/repo --dispatch
 TriageAgent upgrades the backlog worth-it pass into a callable role. It turns a discovered backlog snapshot
 into advisory recommendations: work now, defer, needs scope, skip, monitor, and optional logical batches.
 
-- **Routing.** `route_as="review"` (prior only), `eligible_backends={cursor, vibe, gemini, codex, claude}`,
+- **Routing.** `route_as="review"` (prior only), `eligible_backends={cursor, vibe, gemini, codex, claude, muse}`,
   with claude reserved by default through `route_role()`.
 - **Shadow only — never selects workers or mutates backlog state.** It does not call `router.select_agent`,
   `dispatcher.delegate`, claims, label mutation, branch creation, or PR actions. Router capacity, claims,
@@ -1937,7 +1947,7 @@ AdjudicatorAgent upgrades disputed-reviewer handling into a callable role. It re
 against supplied ground-truth evidence and advises whether to uphold it, reject it, or gather more
 evidence.
 
-- **Routing.** `route_as="review"` (prior only), `eligible_backends={gemini, codex, claude}`. Claude is
+- **Routing.** `route_as="review"` (prior only), `eligible_backends={gemini, codex, claude, muse}`. Claude is
   reserved by default through `route_role()`, so routine shadow adjudication starts with Gemini/Codex.
 - **Shadow only — never emits terminal verifier verdicts or mutates.** It does not produce `PASS`, `FAIL`,
   `BLOCKED`, or `verifier_verdict`, and it does not call merge/label/claim/delegate paths.

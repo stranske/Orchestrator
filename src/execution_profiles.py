@@ -482,7 +482,7 @@ def _selftest() -> None:
         ), "historical Flash must resolve to Flash"
         routable = {p["profile_id"] for p in profiles_for_agent("gemini")}
         assert current in routable and old not in routable, "current Flash must remain routable"
-    # muse (#612): one offload profile, in its own flat subscription pool.
+    # muse (#612): one offload profile, in its own subscription allowance pool.
     _mp = profiles_for_agent("muse", transport="offload")
     assert [p["profile_id"] for p in _mp] == ["muse-wonder-1.0"], _mp
     assert CAPACITY_POOLS["muse-subscription"]["tier"] == "flat", CAPACITY_POOLS[

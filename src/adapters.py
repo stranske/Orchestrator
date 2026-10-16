@@ -40,6 +40,14 @@ AIDER_BIN = HOME / ".codex" / "orchestrator" / "aider-venv" / "bin" / "aider"  #
 LOCAL_RUNTIME = Path(os.environ.get("ORCH_LOCAL_RUNTIME", HOME / ".codex" / "orchestrator"))
 AGENT_RUNTIME = Path(os.environ.get("ORCH_AGENT_RUNTIME_DIR", LOCAL_RUNTIME / "agent-runtime"))
 
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
 # Router emits a `mode` token per assignment: cursor -> 'composer'|'frontier'[:model];
 # others -> 'cheap'|'mid'|'full'. A tier with no pinned id passes NO --model and lets the agent
 # default (safe, never wrong). Every pinned id is validated against the CLI's own catalog where a
@@ -1773,6 +1781,7 @@ def build_command(
     requested_model: str | None = None,
     commits_in_worktree: bool = False,
     prompt_via_stdin: bool = False,
+    prompt_file: str | Path | None = None,
     write_roots: list[str] | None = None,
 ):
     """Construct the CLI argv for one agent. `mode` is agent-specific.
@@ -1921,17 +1930,23 @@ def build_command(
         # --disable-approval skips prompts but KEEPS the sandbox (Meta: `--yolo` drops both, so it is
         # forbidden here). --no-foreign-personal-context stops the owner's personal Claude Code/Codex
         # rules and 30 skills from steering a fleet worker; --no-session-log keeps the prompt off disk.
-        # Text output (not --json): the deliverable is stdout, and the --json stream carries no
-        # token/usage field anyway (37 events inspected), so it would add parsing for no signal.
+        # JSONL makes lifecycle evidence machine-readable, but it contains no token/usage receipt
+        # (37 events inspected).  The prompt travels by file so it neither becomes shell syntax nor
+        # leaks into process listings; callers own the short-lived file and remove it after the run.
         cmd = [
             "muse",
             "exec",
+            "--json",
             "--no-foreign-personal-context",
             "--no-session-log",
             "--disable-approval",
+            "--max-model-steps",
+            str(max(1, _env_int("ORCH_MUSE_MAX_MODEL_STEPS", 25))),
         ]
         if requested_model:
             cmd += ["--model", requested_model]
+        if prompt_file is not None:
+            return cmd + ["--prompt-file", str(prompt_file)]
         return cmd + [prompt]
     if agent == "aider":
         return [
@@ -2128,7 +2143,148 @@ def agent_subprocess_env(agent: str, env: dict | None) -> dict | None:
         return env
     scrubbed = dict(os.environ if env is None else env)
     scrubbed.pop("META_API_KEY", None)
+    runtime = AGENT_RUNTIME / "muse"
+    for subdir in (".cache", ".config", ".local/share", "tmp"):
+        (runtime / subdir).mkdir(parents=True, exist_ok=True)
+    auth_src = HOME / ".config" / "muse" / "auth.json"
+    auth_dst = runtime / ".config" / "muse" / "auth.json"
+    auth_dst.parent.mkdir(parents=True, exist_ok=True)
+    if auth_src.exists() and not auth_dst.exists():
+        auth_dst.symlink_to(auth_src)
+    (runtime / ".local/state").mkdir(parents=True, exist_ok=True)
+    # The installed CLI reads user settings through XDG_CONFIG_HOME. Keep HOME for its
+    # keychain-backed subscription credential, and link only the login record into XDG state.
+    scrubbed.update(
+        {
+            "MUSE_AUTH_PATH": str(auth_dst),
+            "ORCH_AGENT_RUNTIME": str(runtime),
+            "XDG_CACHE_HOME": str(runtime / ".cache"),
+            "XDG_CONFIG_HOME": str(runtime / ".config"),
+            "XDG_STATE_HOME": str(runtime / ".local/state"),
+            "XDG_DATA_HOME": str(runtime / ".local/share"),
+            "TMPDIR": str(runtime / "tmp"),
+        }
+    )
     return scrubbed
+
+
+def muse_prompt_file(prompt: str) -> Path:
+    """Write one private prompt file for a Muse invocation; the caller removes it."""
+    fd, path = tempfile.mkstemp(prefix="muse-prompt-", suffix=".txt")
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+        handle.write(prompt)
+    return Path(path)
+
+
+def muse_terminal_text(jsonl: str) -> str:
+    """Read the observed ``muse exec --json`` durable run-terminal protocol.
+
+    A completed task or progress message is not a completed run. Bind the terminal to the
+    command/session whose acceptance, run linkage and start were observed. Unknown, malformed,
+    truncated or conflicting streams fail closed. Native timestamps are not accounting clocks.
+    """
+    command = session = None
+    linked = started = False
+    terminals: list[str] = []
+    # Observed native exec event vocabulary. A new lifecycle kind needs explicit review;
+    # silently accepting it could hide a failure or a second run after completion.
+    auxiliary = {
+        "run.model.configured",
+        "run.output.delta",
+        "turn.input.user",
+        "task.stream.linked",
+        "task.lifecycle.accepted",
+        "task.lifecycle.completed",
+        "task.lifecycle.proposed",
+        "task.lifecycle.scheduled",
+        "task.lifecycle.side_effect_intent",
+        "task.lifecycle.started",
+        "task.lifecycle.status",
+    }
+    for line in str(jsonl or "").splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except (TypeError, ValueError):
+            return ""
+        if not isinstance(event, dict):
+            return ""
+        if any(
+            type(event.get(key)) is not int or event[key] != 1
+            for key in ("schema_version", "payload_schema_version")
+        ):
+            return ""
+        payload = event.get("payload")
+        stream = event.get("stream")
+        if not isinstance(payload, dict) or not isinstance(stream, dict):
+            return ""
+        kind = event.get("payload_type", "")
+        if not isinstance(kind, str) or terminals:
+            return ""
+        if kind not in auxiliary | {
+            "runtime.command.accepted",
+            "session.run.linked",
+            "run.lifecycle.started",
+            "run.terminal.completed",
+        }:
+            return ""
+        if kind == "runtime.command.accepted":
+            if (
+                command is not None
+                or payload.get("kind") != "command_accepted"
+                or event.get("durability") != "durable"
+            ):
+                return ""
+            command, session = payload.get("command_id"), stream.get("id")
+            if (
+                not isinstance(command, str)
+                or not command
+                or not isinstance(session, str)
+                or not session
+                or payload.get("command_kind") != "turn.submit"
+            ):
+                return ""
+        if command is None:
+            return ""
+        if (
+            stream != {"kind": "session", "id": session}
+            or event.get("causation_id") != command
+            or event.get("durability") not in {"durable", "ephemeral"}
+        ):
+            return ""
+        if kind in {"session.run.linked", "run.lifecycle.started"} or kind.startswith(
+            "run.terminal."
+        ):
+            if (
+                event.get("durability") != "durable"
+                or payload.get("command_id") != command
+                or payload.get("run_stream") != {"kind": "run", "id": command}
+            ):
+                return ""
+        if kind == "session.run.linked":
+            if linked or payload.get("kind") != "session_run_linked":
+                return ""
+            linked = True
+        elif kind == "run.lifecycle.started":
+            if not linked or started or payload.get("kind") != "run_started":
+                return ""
+            started = True
+        elif kind.startswith("run.terminal."):
+            if (
+                not started
+                or event.get("record_type") != "event"
+                or kind != "run.terminal.completed"
+                or payload.get("kind") != "run_terminal"
+                or payload.get("terminal") != "completed"
+                or payload.get("reason") is not None
+            ):
+                return ""
+            text = payload.get("text")
+            if not isinstance(text, str) or not text.strip():
+                return ""
+            terminals.append(text.strip())
+    return terminals[0] if len(terminals) == 1 else ""
 
 
 def dispatch(
@@ -2152,25 +2308,38 @@ def dispatch(
     that is or holds `/`, the home dir or the control plane is refused for every agent.
     """
     refuse_broad_workspace(agent, cwd)
-    cmd = build_command(
-        agent,
-        prompt,
-        mode,
-        cwd=cwd,
-        profile=profile,
-        transport=transport,
-        permission_mode=permission_mode,
-        reasoning_effort=reasoning_effort,
-        requested_model=requested_model,
-    )
-    proc = subprocess.run(
-        cmd,
-        cwd=cwd,
-        env=agent_subprocess_env(agent, env),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
+    muse_prompt = muse_prompt_file(prompt) if agent == "muse" else None
+    try:
+        cmd = build_command(
+            agent,
+            prompt,
+            mode,
+            cwd=cwd,
+            profile=profile,
+            transport=transport,
+            permission_mode=permission_mode,
+            reasoning_effort=reasoning_effort,
+            requested_model=requested_model,
+            prompt_file=muse_prompt,
+        )
+        proc = subprocess.run(
+            cmd,
+            cwd=cwd,
+            env=agent_subprocess_env(agent, env),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if agent == "muse":
+            proc = subprocess.CompletedProcess(
+                proc.args,
+                proc.returncode,
+                muse_terminal_text(proc.stdout or ""),
+                proc.stderr,
+            )
+    finally:
+        if muse_prompt is not None:
+            muse_prompt.unlink(missing_ok=True)
     # The run could write its worktree git dir (#452), so this read pins the repository locations.
     status = worktree_git.run(cwd, ["status", "--porcelain"]).stdout.strip()
     selected = execution_profiles.get_profile(profile) if profile is not None else None

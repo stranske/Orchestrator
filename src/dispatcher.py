@@ -584,10 +584,12 @@ def _ensure_agent_runtime(agent: str) -> Path:
             REAL_HOME / ".vibe" / "trusted_folders.toml", vibe_home / "trusted_folders.toml"
         )
     elif agent == "muse":
+        (base / ".local/state").mkdir(parents=True, exist_ok=True)
         # The wrapper moves XDG_CONFIG_HOME here, and Muse reads its LOGIN RECORD from
         # `$XDG_CONFIG_HOME/muse/auth.json` (found by a live offload 2026-10-15: "missing meta
         # credentials"). Link the owner's record in; the token itself stays in the macOS keychain,
-        # reachable because HOME is unchanged. Linked, never copied, so a re-login is picked up.
+        # reachable with the real HOME retained. Linked, never copied, so a re-login is picked up
+        # without importing personal Muse settings into the isolated XDG configuration root.
         _runtime_link(
             REAL_HOME / ".config" / "muse" / "auth.json", base / ".config" / "muse" / "auth.json"
         )
@@ -836,9 +838,14 @@ def _agent_runtime_prelude(agent: str) -> str:
         # (`muse login --help`), and a Default-Project key metered PAY-AS-YOU-GO (measured on the live
         # console 2026-10-15; the `Muse Code`-project key is untested), so a
         # key inherited from a session, lane or launchd environment would silently turn subscription
-        # use into API spend. Unset it by NAME only: the value is never read or written here. HOME
-        # stays real because the login lives in the macOS keychain (the gemini/agy precedent).
+        # use into API spend. Unset it by NAME only: the value is never read or written here.
+        # HOME must stay real for this CLI's keychain-backed login. User configuration and
+        # mutable state are isolated through XDG; only the auth record is linked there.
+        exports.append(f"export XDG_STATE_HOME={shlex.quote(str(base / '.local/state'))}")
         exports.append("unset META_API_KEY")
+        exports.append(
+            f"export MUSE_AUTH_PATH={shlex.quote(str(base / '.config' / 'muse' / 'auth.json'))}"
+        )
     return "; ".join(exports) + "; "
 
 
@@ -863,6 +870,18 @@ def _record_muse_usage(started: float, lane: str, rc: object, seconds: float) ->
             f"[orchestrator] muse usage not recorded ({type(exc).__name__}: {exc})", file=sys.stderr
         )
         return
+
+
+def _muse_observation_window(observed_start_ts: int) -> tuple[int, int]:
+    """Return the rolling five-hour interval observed at invocation start.
+
+    The subscription advertises a rolling five-hour allowance but no machine-readable reset epoch.
+    These bounds end at the actual local observation and do not invent a fixed provider reset.
+    The feedback row separately retains the invocation's execution bounds.
+    """
+    duration_s = 5 * 60 * 60
+    end = int(observed_start_ts)
+    return end - duration_s, end
 
 
 def _auth_prelude(agent: str) -> str:
@@ -1975,6 +1994,7 @@ def offload(
         and len(prepared_prompt.encode("utf-8")) > GEMINI_STREAM_PROMPT_THRESHOLD_BYTES
     )
     command_prompt = "" if prompt_via_stdin else prepared_prompt
+    muse_prompt = adapters.muse_prompt_file(command_prompt) if agent == "muse" else None
     argv = (
         adapters.build_command(
             agent,
@@ -1984,6 +2004,7 @@ def offload(
             profile=profile,
             transport="offload",
             prompt_via_stdin=prompt_via_stdin,
+            prompt_file=muse_prompt,
             write_roots=boundary[1][1:] if boundary and agent == "codex" else None,
         )
         if profile
@@ -2001,6 +2022,7 @@ def offload(
                 else None
             ),
             prompt_via_stdin=prompt_via_stdin,
+            prompt_file=muse_prompt,
             write_roots=boundary[1][1:] if boundary and agent == "codex" else None,
         )
     )  # raises ValueError on unknown agent
@@ -2143,7 +2165,12 @@ def offload(
             )
 
     if profile:
-        _record_offload_run()  # fail closed before subprocess execution
+        try:
+            _record_offload_run()  # fail closed before subprocess execution
+        except BaseException:
+            if muse_prompt is not None:
+                muse_prompt.unlink(missing_ok=True)
+            raise
     else:
         try:
             _record_offload_run()
@@ -2163,6 +2190,9 @@ def offload(
     max_network_retries = max(0, _env_int("ORCH_OFFLOAD_NETWORK_RETRIES", 1))
     retry_backoff_s = max(0.0, _env_float("ORCH_OFFLOAD_RETRY_BACKOFF_S", 3.0))
     complete_written = False
+    # One record for every actual `muse exec` attempt, including a refusal/crash that causes a
+    # retry.  This is intentionally distinct from the final logical offload result.
+    muse_attempts: list[dict[str, float | int]] = []
     # Credentials masked in this run's output, by kind, across attempts (credential_redaction).
     redaction_counts: dict[str, int] = {}
 
@@ -2230,17 +2260,38 @@ def offload(
                     completed_ts=int(time.time()),
                 )
         # Instant meter (2026-07-03 audit F2): don't wait a day for ledger_reconcile to pair the
-        # ndjson events — the offload runs synchronously, so latency is known RIGHT NOW. Write the
-        # costs row immediately; the daily reconcile recomputes the same values (INSERT OR REPLACE,
-        # idempotent) and richer sources (ccusage/langsmith) still take precedence at their passes.
+        # ndjson events — the offload runs synchronously, so latency is known RIGHT NOW. Muse is an
+        # exception only in what can be measured: it has a subscription login and no token/dollar
+        # receipt, so write its execution facts and clearly-labelled flat subscription imputation.
         try:
-            feedback.record_cost(
-                run_id,
-                latency_s=float(max(0, int(time.time()) - started_ts)),
-                source="ledger",
-            )
-        except Exception:
-            pass  # metering must never fail the offload itself
+            if agent == "muse" and muse_attempts:
+                observed_start = int(min(row["started_ts"] for row in muse_attempts))
+                observed_end = int(max(row["ended_ts"] for row in muse_attempts))
+                window_start, window_end = _muse_observation_window(observed_start)
+                feedback.record_muse_subscription_cost(
+                    run_id,
+                    invocation_count=len(muse_attempts),
+                    window_start_ts=window_start,
+                    window_end_ts=window_end,
+                    observed_start_ts=observed_start,
+                    observed_end_ts=observed_end,
+                    wall_seconds=sum(float(row["wall_seconds"]) for row in muse_attempts),
+                    raw_exit_codes=[int(row["raw_exit"]) for row in muse_attempts],
+                )
+            else:
+                feedback.record_cost(
+                    run_id,
+                    latency_s=float(max(0, int(time.time()) - started_ts)),
+                    source="ledger",
+                )
+        except Exception as exc:
+            # Preserve the deliverable, but make a missing subscription receipt observable.
+            if agent == "muse":
+                print(
+                    f"warning: Muse subscription accounting failed for {run_id}: {exc}",
+                    file=sys.stderr,
+                )
+            # Metering must never fail the offload itself.
         complete_written = True
 
     attempt_stderr = ""
@@ -2339,6 +2390,8 @@ def offload(
                 "log": str(logf),
             }
         except KeyboardInterrupt:
+            if muse_prompt is not None:
+                muse_prompt.unlink(missing_ok=True)
             error = "interrupted by orchestrator"
             _record_complete(exit_code=130, error=error)
             with logf.open("a") as fh:
@@ -2421,6 +2474,23 @@ def offload(
             if has_reported_usage
             else {}
         )
+        if agent == "muse":
+            # Retain the redacted native protocol before reducing it to the deliverable. This
+            # distinguishes an unsupported event shape from an empty model response and keeps
+            # each actual retry inspectable in the existing per-run log.
+            with logf.open("a") as fh:
+                fh.write("[muse native JSONL]\n")
+                fh.write(proc.stdout or "")
+                fh.write("\n[end muse native JSONL]\n")
+            # JSONL lifecycle records never satisfy an offload deliverable.  Preserve only an
+            # explicit terminal response; an unfamiliar event schema fails the existing nonempty
+            # completion gate rather than being mistaken for agent work.
+            proc = subprocess.CompletedProcess(
+                getattr(proc, "args", argv),
+                proc.returncode,
+                adapters.muse_terminal_text(proc.stdout or ""),
+                proc.stderr,
+            )
         # The large-prompt transport uses agy's matching NDJSON output. Preserve the existing
         # offload return contract by handing callers its final text response, as print mode does.
         if prompt_via_stdin:
@@ -2520,9 +2590,23 @@ def offload(
         attempts = attempt
         attempt_started = time.time()
         out = _run_offload_attempt()
+        attempt_ended = time.time()
         if agent == "muse":
+            raw_exit = out.get("raw_exit", out.get("exit", 126))
+            try:
+                raw_exit = int(raw_exit)
+            except (TypeError, ValueError):
+                raw_exit = 126
+            muse_attempts.append(
+                {
+                    "started_ts": int(attempt_started),
+                    "ended_ts": int(attempt_ended),
+                    "wall_seconds": max(0.0, attempt_ended - attempt_started),
+                    "raw_exit": raw_exit,
+                }
+            )
             _record_muse_usage(
-                attempt_started, "offload", out.get("exit"), time.time() - attempt_started
+                attempt_started, "offload", raw_exit, attempt_ended - attempt_started
             )
         usage = out.get("usage") or {}
         has_reported_usage |= bool(usage)
@@ -2574,6 +2658,8 @@ def offload(
     if redaction_note:
         with logf.open("a") as fh:
             fh.write(f"[orchestrator] {redaction_note}\n")
+    if muse_prompt is not None:
+        muse_prompt.unlink(missing_ok=True)
     _record_complete(exit_code=out.get("exit"), error=out.get("error"))
     # Telemetry is fail-open. Classify the actual result, stderr, and per-run agent log.
     evidence_result = None

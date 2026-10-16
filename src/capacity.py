@@ -188,7 +188,7 @@ AGENTS = {
     # router.BACKUP_AGENTS until measured outcomes earn it a prior. A call authenticated with a
     # Default-Project API key metered PAY-AS-YOU-GO (tested 2026-10-15; the key the login itself mints in
     # the `Muse Code` project is untested), which is why this seat is the login and the wrapper scrubs META_API_KEY.
-    "muse": {"account": "meta-muse-code-sub", "model": "flat", "window": "5h+weekly"},
+    "muse": {"account": "meta-muse-code-sub", "model": "metered", "window": "5h+weekly"},
     # aider — BACKUP-ONLY as of 2026-06-21 (owner directive): router.BACKUP_AGENTS holds it OUT of
     # routine auto-selection; reachable only on explicit demand (`--agent aider` / `only={"aider"}`).
     # Capacity is still tracked so backup use respects the credit. Optional API fallback (Codestral API
@@ -719,6 +719,12 @@ def _classify(agent: str, cfg: dict, ccusage_block):
         )
     model = cfg["model"]
     if model == "metered":
+        if agent == "muse":
+            return (
+                OK,
+                "METERED subscription allowance (observed rolling 5h accounting; provider reset unknown); "
+                "subscription-only login, no API/PAYG fallback; 429-shed authoritative",
+            )
         # cursor draws a metered monthly pool, but the Auto bucket has headroom even when the API
         # sub-bucket is spent (verified: headless `--model auto` runs with API at 100%). So it's a
         # normal usable cheap lane; no reliable quota API, so 429-shed stays authoritative.
@@ -1224,8 +1230,8 @@ def _selftest_body(blk):
         assert not _shed("codex") and not flag.exists()
     finally:
         pass
-    # muse (#612): a flat subscription seat that sheds only on an EXPLICIT failed login check.
-    assert AGENTS["muse"]["model"] == "flat" and agent_tiers()["muse"] == "flat"
+    # muse (#612): bounded metered subscription capacity, never a free/unlimited flat seat.
+    assert AGENTS["muse"]["model"] == "metered" and agent_tiers()["muse"] == "flat"
     _orig_auth, _orig_shed = globals()["_auth_health"], globals()["_shed"]
     try:
         globals()["_shed"] = lambda agent: False
