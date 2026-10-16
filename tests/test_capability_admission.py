@@ -893,5 +893,21 @@ def test_missing_consumer_declaration_survives_reconciliation_without_acceptance
     assert not capabilities._reconcile_known_declarations(ledger, 3)
 
 
+def test_original_offload_prose_is_reconciled_without_lifecycle_or_credit_changes():
+    """The source599 offload row must not vanish outside both declaration tables."""
+    before = capabilities._blank_capability("offload")
+    before.update(status="generated", downstream_consumer="the run consuming offload output")
+    before["event_history"] = [{"type": "invocation", "timestamp": 1}]
+    ledger = {"offload": before}
+    assert capabilities._reconcile_known_declarations(ledger, 2)
+    row = ledger["offload"]
+    resolution = admission.consumer_resolution(row)
+    assert resolution["tokens"] and not resolution["unresolved"], resolution
+    assert row["status"] == "generated"
+    assert row["outcome_links"] == []
+    assert row["event_history"][0] == {"type": "invocation", "timestamp": 1}
+    assert not capabilities._reconcile_known_declarations(ledger, 3)
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -1961,6 +1961,17 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
             "runtime_ac.py:evaluate_results fails the runtime gate on failed checks"
         ),
     },
+    "offload": {
+        "downstream_consumer": (
+            "roles.py:run_prompt_agent; roles.py:run_adjudicator_agent consume backend output; "
+            "feedback.py:record_role_run binds the consuming role to its backend run"
+        ),
+        "notes": (
+            "source599 declaration drain: offload already exists in the live ledger; "
+            "its role consumers and run binding already exist. Reconcile only the consumer "
+            "declaration; do not register a capability, promote lifecycle or grant acting credit."
+        ),
+    },
     "partitioned-review": {
         "downstream_consumer": "partitioned_review.py:synthesize_results validates and combines partition outputs",
     },
