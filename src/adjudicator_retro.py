@@ -107,16 +107,25 @@ class NativeAttemptJournal:
                 "updated_at INTEGER NOT NULL, report_sha256 TEXT NOT NULL, UNIQUE(case_id, material_revision))"
             )
 
-    def reserve(self, case_id: str, revision: str, digest: str, report_sha256: str) -> dict:
+    def reserve(
+        self,
+        case_id: str,
+        revision: str,
+        digest: str,
+        report_sha256: str,
+        *,
+        await_start: bool = False,
+    ) -> dict:
         """Reserve once across processes; any existing reservation blocks spending."""
         now = int(time.time())
         attempt_id = uuid.uuid4().hex
+        state = "reserved" if await_start else "in_flight"
         with sqlite3.connect(self.path, timeout=30) as conn:
             conn.execute("BEGIN IMMEDIATE")
             current = conn.execute(
                 "SELECT attempt_id,state,case_digest FROM native_attempts "
-                "WHERE case_id=? AND (material_revision=? OR state IN ('in_flight','raw_persisted')) "
-                "ORDER BY CASE WHEN state IN ('in_flight','raw_persisted') THEN 0 ELSE 1 END",
+                "WHERE case_id=? AND (material_revision=? OR state IN ('reserved','in_flight','raw_persisted')) "
+                "ORDER BY CASE WHEN state IN ('reserved','in_flight','raw_persisted') THEN 0 ELSE 1 END",
                 (case_id, revision),
             ).fetchone()
             if current is not None:
@@ -143,9 +152,31 @@ class NativeAttemptJournal:
             conn.execute(
                 "INSERT INTO native_attempts(attempt_id,case_id,material_revision,case_digest,state,created_at,updated_at,report_sha256) "
                 "VALUES(?,?,?,?,?,?,?,?)",
-                (attempt_id, case_id, revision, digest, "in_flight", now, now, report_sha256),
+                (attempt_id, case_id, revision, digest, state, now, now, report_sha256),
             )
-        return {"reserved": True, "attempt_id": attempt_id, "state": "in_flight"}
+        return {"reserved": True, "attempt_id": attempt_id, "state": state}
+
+    def begin_invocation(self, attempt_id: str, response: dict) -> None:
+        """Commit the UNKNOWN spend boundary before the dispatcher may start a process."""
+        backend_id = response.get("run_id")
+        if not isinstance(backend_id, str) or not backend_id:
+            raise ValueError("native invocation requires its backend identity")
+        with sqlite3.connect(self.path, timeout=30) as conn:
+            changed = conn.execute(
+                "UPDATE native_attempts SET state='in_flight',backend_run_id=?,updated_at=? "
+                "WHERE attempt_id=? AND state='reserved'",
+                (backend_id, int(time.time()), attempt_id),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("native attempt is not a pre-invocation reservation")
+
+    def release_unstarted(self, attempt_id: str) -> bool:
+        """Release only a producer-proven reservation that never crossed the start boundary."""
+        with sqlite3.connect(self.path, timeout=30) as conn:
+            changed = conn.execute(
+                "DELETE FROM native_attempts WHERE attempt_id=? AND state='reserved'", (attempt_id,)
+            ).rowcount
+        return changed == 1
 
     def persist_raw(self, attempt_id: str, response: dict) -> None:
         """Commit the unparsed backend receipt before callers may inspect it."""
@@ -175,11 +206,13 @@ class NativeAttemptJournal:
     def validate(self, attempt_id: str, result: dict) -> None:
         """Record post-parse validation without ever reopening spend eligibility."""
         with sqlite3.connect(self.path, timeout=30) as conn:
-            conn.execute(
+            changed = conn.execute(
                 "UPDATE native_attempts SET state=?,validated_json=?,updated_at=? "
                 "WHERE attempt_id=? AND state='raw_persisted'",
                 ("validated", json.dumps(result, sort_keys=True), int(time.time()), attempt_id),
-            )
+            ).rowcount
+            if changed != 1:
+                raise ValueError("native validation requires exactly one raw persisted receipt")
 
     def verified(self, case_id: str, revision: str, digest: str) -> dict | None:
         with sqlite3.connect(self.path) as conn:
@@ -305,8 +338,6 @@ def admit_collected_retry(
         raise ValueError("native projection output must be new and separate")
     if journal.path.resolve() in {original_report.resolve(), output.resolve()}:
         raise ValueError("native journal must be separate from report and projection")
-    if journal.path.resolve() in {original_report.resolve(), output.resolve()}:
-        raise ValueError("native journal must be separate from report and projection")
     report_bytes = original_report.read_bytes()
     report_hash = hashlib.sha256(report_bytes).hexdigest()
     if expected_report_sha256 is not None and expected_report_sha256 != report_hash:
@@ -346,20 +377,32 @@ def admit_collected_retry(
             "material_evidence_revision": revision,
             "native_admission": "prepared_no_dispatch",
         }
-    reservation = journal.reserve(case_id, revision, case._digest, report_hash)
+    reservation = journal.reserve(case_id, revision, case._digest, report_hash, await_start=True)
     if not reservation["reserved"]:
         # An in-flight/malformed/validated prior attempt is UNKNOWN/consumed, never
         # a reason to pay again.  The caller may inspect the journal manually.
         raise ValueError("native revision already reserved: " + reservation["state"])
     attempt_id = reservation["attempt_id"]
-    result = roles.run_adjudicator_agent(
-        case=case,
-        backend=backend,
-        dispatch=True,
-        cwd=cwd,
-        timeout=timeout,
-        lifecycle_hook=lambda response: journal.persist_raw(attempt_id, response),
-    )
+    try:
+        result = roles.run_adjudicator_agent(
+            case=case,
+            backend=backend,
+            dispatch=True,
+            cwd=cwd,
+            timeout=timeout,
+            lifecycle_start_hook=lambda response: journal.begin_invocation(attempt_id, response),
+            lifecycle_hook=lambda response: journal.persist_raw(attempt_id, response),
+        )
+    except BaseException:
+        # A crash after the trusted start callback cannot match this DELETE,
+        # even if no raw receipt reached the journal. Never infer no spend from
+        # a missing response or from an arbitrary exception after invocation.
+        journal.release_unstarted(attempt_id)
+        raise
+    if journal.release_unstarted(attempt_id):
+        raise ValueError(
+            "native dispatch made no provider invocation: " + "; ".join(result.get("errors") or [])
+        )
     journal.validate(attempt_id, result)
     # Keep original evidence byte-for-byte untouched.  This is a projection only;
     # it remains ungraded unless a later trusted evaluator establishes truth.
@@ -1980,6 +2023,18 @@ def _selftest() -> None:
     with tempfile.TemporaryDirectory() as native_root:
         journal_path = Path(native_root) / "native.sqlite"
         journal = NativeAttemptJournal(journal_path)
+        unstarted = journal.reserve("unstarted", "A", "digest", "report", await_start=True)
+        assert journal.release_unstarted(unstarted["attempt_id"])
+        unstarted = journal.reserve("unstarted", "A", "digest", "report", await_start=True)
+        journal.begin_invocation(unstarted["attempt_id"], {"run_id": "started"})
+        assert not journal.release_unstarted(unstarted["attempt_id"])
+        assert not journal.reserve("unstarted", "B", "digest", "report")["reserved"]
+        try:
+            journal.validate(unstarted["attempt_id"], {"errors": []})
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("validation accepted a missing raw receipt")
         reservation = journal.reserve("original", "A", "digest", "report")
         journal.persist_raw(reservation["attempt_id"], {"run_id": "paid", "output": "{}"})
         assert not journal.reserve("original", "B", "digest", "report")["reserved"]

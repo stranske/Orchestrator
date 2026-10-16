@@ -2881,6 +2881,7 @@ def run_adjudicator_agent(
     timeout: int = 600,
     exploration_rate: float | None = None,
     lifecycle_hook=None,
+    lifecycle_start_hook=None,
 ) -> dict:
     """SHADOW ONLY. Assess a disputed blocker/veto; never mutates or emits final panel verdicts."""
     role = ROLE_REGISTRY["adjudicator"]
@@ -2950,6 +2951,7 @@ def run_adjudicator_agent(
                 subject_id=feedback.work_item_subject(compact_case.get("target")),
                 attempt_receipt_callback=lifecycle_hook,
                 max_network_retries=0 if lifecycle_hook is not None else None,
+                attempt_started_callback=lifecycle_start_hook,
             )
             # A caller that has made a durable paid-attempt reservation gets the
             # untouched provider response before this function parses it, writes

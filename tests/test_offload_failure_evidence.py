@@ -179,11 +179,12 @@ def _shed(agent: str) -> bool:
 def test_attempt_receipt_precedes_completion_and_can_abort(stores, monkeypatch):
     """Native receipt hooks observe the real subprocess attempt before completion effects."""
     order = []
-    monkeypatch.setattr(
-        dispatcher.subprocess,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(["agent"], 0, "{}", ""),
-    )
+
+    def provider(*args, **kwargs):
+        order.append("provider")
+        return subprocess.CompletedProcess(["agent"], 0, "{}", "")
+
+    monkeypatch.setattr(dispatcher.subprocess, "run", provider)
     monkeypatch.setattr(
         dispatcher.adapters,
         "record_ledger",
@@ -194,9 +195,11 @@ def test_attempt_receipt_precedes_completion_and_can_abort(stores, monkeypatch):
         "test",
         cwd=str(stores),
         attempt_receipt_callback=lambda _: order.append("receipt"),
+        attempt_started_callback=lambda _: order.append("invoking"),
     )
     assert result["attempt_receipt_callback_called"] is True
     assert "receipt" in order
+    assert order.index("invoking") < order.index("provider") < order.index("receipt")
     assert order.index("receipt") < order.index("complete")
     order.clear()
     with pytest.raises(RuntimeError, match="receipt failed"):
@@ -265,6 +268,41 @@ def test_interrupted_invocation_journals_before_completion(stores, monkeypatch, 
         assert "complete" not in order
     else:
         assert order.index("receipt") < order.index("complete")
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_callback_failure_always_scrubs_agy_log(stores, monkeypatch, interrupted):
+    log = stores / "synthetic-agy.log"
+    synthetic_secret = "ghp_" + "A" * 36
+    order = []
+    monkeypatch.setattr(
+        dispatcher.adapters, "build_command", lambda *a, **kw: ["agent", "--log-file", str(log)]
+    )
+    monkeypatch.setattr(dispatcher.adapters, "agy_log_for", lambda *a: log)
+    monkeypatch.setattr(
+        dispatcher.adapters, "record_ledger", lambda *a, **kw: order.append(kw.get("event"))
+    )
+
+    def provider(*args, **kwargs):
+        log.write_text(synthetic_secret)
+        if interrupted:
+            raise KeyboardInterrupt
+        return subprocess.CompletedProcess(["agent"], 0, "{}", "")
+
+    def failed_receipt(response):
+        raise RuntimeError("synthetic journal failure")
+
+    monkeypatch.setattr(dispatcher.subprocess, "run", provider)
+    with pytest.raises(RuntimeError, match="synthetic journal"):
+        dispatcher.offload(
+            "gemini",
+            "test",
+            cwd=str(stores),
+            max_network_retries=0,
+            attempt_receipt_callback=failed_receipt,
+        )
+    assert synthetic_secret not in log.read_text()
+    assert "complete" not in order
 
 
 @pytest.mark.parametrize(

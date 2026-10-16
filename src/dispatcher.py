@@ -1785,6 +1785,7 @@ def offload(
     subject_id: str | None = None,
     attempt_receipt_callback=None,
     max_network_retries: int | None = None,
+    attempt_started_callback=None,
 ) -> dict:
     """SYNCHRONOUS offload for token conservation.
 
@@ -2170,6 +2171,18 @@ def offload(
     # Credentials masked in this run's output, by kind, across attempts (credential_redaction).
     redaction_counts: dict[str, int] = {}
 
+    def _notify_attempt(callback, response: dict) -> None:
+        try:
+            callback(response)
+        finally:
+            # agy writes its own log, independently of the scrubbed stdout.
+            # Cleanup must survive callback errors, including interruption;
+            # completion effects remain unreachable if the callback raises.
+            if agy_log is not None:
+                scrub = credential_redaction.scrub_file(agy_log)
+                for kind, count in (scrub.get("kinds") or {}).items():
+                    redaction_counts[kind] = redaction_counts.get(kind, 0) + count
+
     def _record_complete(exit_code: int | None = None, error: str | None = None) -> None:
         nonlocal complete_written
         if complete_written:
@@ -2269,6 +2282,8 @@ def offload(
                 stream_path = Path(raw_path)
                 with os.fdopen(fd, "w", encoding="utf-8", newline="") as prompt_file:
                     prompt_file.write(stream_prompt)
+            if attempt_started_callback is not None:
+                _notify_attempt(attempt_started_callback, {"run_id": run_id, "agent": agent})
             proc = subprocess.run(
                 [
                     "bash",
@@ -2344,7 +2359,8 @@ def offload(
         except KeyboardInterrupt:
             error = "interrupted by orchestrator"
             if attempt_receipt_callback is not None:
-                attempt_receipt_callback(
+                _notify_attempt(
+                    attempt_receipt_callback,
                     {
                         "agent": agent,
                         "exit": 130,
@@ -2355,7 +2371,7 @@ def offload(
                         "log": str(logf),
                         "cwd": str(run_cwd),
                         "process_cwd": str(proc_cwd),
-                    }
+                    },
                 )
             _record_complete(exit_code=130, error=error)
             with logf.open("a") as fh:
@@ -2541,7 +2557,7 @@ def offload(
         # every actual invocation before retry, ledger completion, Brain or
         # cost effects.  Callback failure intentionally aborts this run.
         if attempt_receipt_callback is not None:
-            attempt_receipt_callback(out)
+            _notify_attempt(attempt_receipt_callback, out)
             out["attempt_receipt_callback_called"] = True
         if agent == "muse":
             _record_muse_usage(
