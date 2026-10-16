@@ -1967,17 +1967,6 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
             "runtime_ac.py:evaluate_results fails the runtime gate on failed checks"
         ),
     },
-    "offload": {
-        "downstream_consumer": (
-            "roles.py:run_prompt_agent; roles.py:run_adjudicator_agent consume backend output; "
-            "feedback.py:record_role_run binds the consuming role to its backend run"
-        ),
-        "notes": (
-            "source599 declaration drain: offload already exists in the live ledger; "
-            "its role consumers and run binding already exist. Reconcile only the consumer "
-            "declaration; do not register a capability, promote lifecycle or grant acting credit."
-        ),
-    },
     "partitioned-review": {
         "downstream_consumer": "partitioned_review.py:synthesize_results validates and combines partition outputs",
     },
@@ -1992,6 +1981,23 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
     },
     "switch-review": {
         "downstream_consumer": "switch_review.py:raise_questions; switch_review.py:format_report",
+    },
+}
+
+# Existing-ledger overlays reconcile only rows that are already present.  Unlike
+# KNOWN_GATES and status-bearing KNOWN_DECLARATIONS entries, they never seed a
+# capability or supply lifecycle credit on a fresh runtime.
+KNOWN_EXISTING_DECLARATIONS: dict[str, dict[str, Any]] = {
+    "offload": {
+        "downstream_consumer": (
+            "roles.py:run_prompt_agent; roles.py:run_adjudicator_agent consume backend output; "
+            "feedback.py:record_role_run binds the consuming role to its backend run"
+        ),
+        "notes": (
+            "source599 declaration drain: offload already exists in the live ledger; "
+            "its role consumers and run binding already exist. Reconcile only the consumer "
+            "declaration; do not register a capability, promote lifecycle or grant acting credit."
+        ),
     },
 }
 
@@ -2042,9 +2048,13 @@ def _reconcile_known_declarations(capabilities: dict[str, dict[str, Any]], now: 
     # retired row as live, an expired row was re-retired in the same call (two events and a full
     # rewrite per load), and the guard below was dead code.
     declaration_fields = tuple(field for field in DECLARATION_FIELDS if field != "status")
-    # BOTH SOURCES, one loop. KNOWN_GATES carries gate machinery; KNOWN_DECLARATIONS carries only
-    # declaration-owned fields for capabilities that are not gates.
-    for name, gate in {**KNOWN_GATES, **KNOWN_DECLARATIONS}.items():
+    # Gates, seedable declarations, and existing-row overlays share reconciliation.  The overlay
+    # table deliberately stays out of fresh-ledger seeding below.
+    for name, gate in {
+        **KNOWN_GATES,
+        **KNOWN_DECLARATIONS,
+        **KNOWN_EXISTING_DECLARATIONS,
+    }.items():
         cap = capabilities.get(name)
         if cap is None:
             continue
