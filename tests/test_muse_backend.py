@@ -9,7 +9,7 @@ into API spend. These tests pin the three properties that keep it on the login:
 
 1. the argv is headless, sandboxed and does not import the owner's personal Claude/Codex rules;
 2. the offload wrapper scrubs `META_API_KEY` from the agent subshell;
-3. the seat is a flat subscription seat that the router never picks without explicit demand.
+3. the seat is a bounded, metered subscription seat that the router never picks without explicit demand.
 """
 
 import json
@@ -24,7 +24,22 @@ import agent_auth_check
 import agent_switches
 import capacity
 import dispatcher
+import feedback
+import roles
 import router
+
+
+def _runtime_login_fixture(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    login = home / ".config/muse/auth.json"
+    login.parent.mkdir(parents=True)
+    login.write_text(
+        json.dumps({"providers": {"meta": {"mechanism": "oauth", "subs_active": True}}})
+    )
+    monkeypatch.setattr(adapters, "HOME", home)
+    monkeypatch.setattr(adapters, "AGENT_RUNTIME", tmp_path / "runtime")
+    monkeypatch.setattr(dispatcher, "REAL_HOME", home)
+    monkeypatch.setattr(dispatcher, "AGENT_RUNTIME_DIR", tmp_path / "runtime")
 
 
 def test_muse_command_is_headless_sandboxed_and_isolated():
@@ -41,16 +56,81 @@ def test_muse_command_is_headless_sandboxed_and_isolated():
     assert "--no-session-log" in argv, argv
 
 
-def test_muse_is_a_flat_subscription_seat_and_never_auto_selected():
+def test_muse_offload_argv_and_isolated_runtime_home(tmp_path, monkeypatch):
+    """The execution argv uses the supported file/JSON/step-bound contract and the dispatcher
+    redirects mutable XDG state into the agent runtime while linking only the login record."""
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("do the thing")
+    argv = adapters.build_command("muse", "ignored", prompt_file=prompt)
+    assert argv[:2] == ["muse", "exec"]
+    assert argv[argv.index("--prompt-file") + 1] == str(prompt)
+    assert "--json" in argv and "--max-model-steps" in argv
+    assert int(argv[argv.index("--max-model-steps") + 1]) > 0
+    assert "--no-foreign-personal-context" in argv and "--no-session-log" in argv
+
+    real_home = tmp_path / "home"
+    login = real_home / ".config" / "muse" / "auth.json"
+    login.parent.mkdir(parents=True)
+    login.write_text("{}")
+    monkeypatch.setattr(dispatcher, "REAL_HOME", real_home)
+    monkeypatch.setattr(dispatcher, "AGENT_RUNTIME_DIR", tmp_path / "runtime")
+    runtime = dispatcher._ensure_agent_runtime("muse")
+    prelude = dispatcher._agent_runtime_prelude("muse")
+    assert f"XDG_CONFIG_HOME={runtime / '.config'}" in prelude
+    assert f"XDG_STATE_HOME={runtime / '.local/state'}" in prelude
+    assert "export HOME=" not in prelude, prelude
+    assert runtime / ".config" / "muse" != real_home / ".config" / "muse"
+    assert f"MUSE_AUTH_PATH={runtime / '.config' / 'muse' / 'auth.json'}" in prelude
+    linked = runtime / ".config" / "muse" / "auth.json"
+    assert linked.is_symlink() and linked.resolve() == login.resolve()
+
+
+def test_muse_seat_is_reported_and_never_reads_as_free(tmp_path, monkeypatch, capsys):
     seat = capacity.AGENTS["muse"]
-    assert seat["model"] == "flat" and "muse" in seat["account"], seat
+    assert seat["model"] == "metered" and seat["account"] == "meta-muse-code-sub", seat
+    # The immutable execution pool retains its paid subscription pricing tier. The capacity
+    # model describes allowance metering; neither field claims an unlimited/free seat.
     assert capacity.agent_tiers()["muse"] == "flat"
     # Backup-only: reachable on explicit demand (`--agent muse`) and never by routine selection,
     # until measured outcomes earn it a prior. The same mechanism aider uses.
     assert "muse" in router.BACKUP_AGENTS, router.BACKUP_AGENTS
 
+    # Exercise the JSON entry point offline, with an authenticated seat and private state.
+    # Checking AGENTS alone misses a model omitted from the snapshot consumed by callers.
+    monkeypatch.setattr(capacity, "HANDOFF", tmp_path)
+    monkeypatch.setattr(capacity, "OUT", tmp_path / "capacity.json")
+    monkeypatch.setattr(capacity, "LEDGER", tmp_path / "capacity-ledger.ndjson")
+    monkeypatch.setattr(capacity, "SHED_DIR", tmp_path / "capacity-shed")
+    monkeypatch.setattr(capacity, "_ccusage_active_block", lambda: None)
+    monkeypatch.setattr(capacity, "_capability_heartbeat", lambda *args, **kwargs: None)
+    monkeypatch.setattr(capacity, "_model_health", lambda *args: None)
+    monkeypatch.setattr(
+        capacity, "_auth_health", lambda agent: {"checked": True, "authenticated": True}
+    )
+    assert capacity.main(["--json"]) == 0
+    snapshot = json.loads(capsys.readouterr().out)
+    assert snapshot == json.loads(capacity.OUT.read_text())
+    reported = snapshot["agents"]["muse"]
+    assert reported["model"] == "metered"
+    assert reported["account"] == "meta-muse-code-sub"
+    assert reported["state"] == capacity.OK
+    assert snapshot["pools"]["muse-subscription"]["limit"] is None
 
-def test_muse_offload_wrapper_scrubs_the_api_key(monkeypatch):
+    # An observed rate limit overrides subscription availability without inventing a reset.
+    capacity.SHED_DIR.mkdir()
+    (capacity.SHED_DIR / "muse").write_text(
+        json.dumps({"category": "rate_limit", "incident_id": "muse-observed-429"})
+    )
+    assert capacity.main(["--json"]) == 0
+    limited = json.loads(capsys.readouterr().out)
+    assert limited["agents"]["muse"]["model"] == "metered"
+    assert limited["agents"]["muse"]["state"] == capacity.SHED
+    assert limited["pools"]["muse-subscription"]["state"] == capacity.SHED
+    assert capacity.shed_marker("muse")["reset_at"] is None
+
+
+def test_muse_offload_wrapper_scrubs_the_api_key(tmp_path, monkeypatch):
+    _runtime_login_fixture(tmp_path, monkeypatch)
     secret = "not-a-real-key-" + "x" * 8
     monkeypatch.setenv("META_API_KEY", secret)
     prelude = dispatcher._agent_runtime_prelude("muse")
@@ -123,6 +203,188 @@ def test_muse_usage_row_is_appended_per_exec(tmp_path, monkeypatch):
     dispatcher._record_muse_usage(started, "offload", 0, 1.0)
 
 
+def test_muse_feedback_row_records_measured_attempts_and_imputed_subscription_cost(
+    tmp_path, monkeypatch
+):
+    """A joined feedback row carries observed facts rather than fabricated tokens/dollars or a
+    provider reset. The zero is meaningful only with its imputation labels."""
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "feedback.db")
+    feedback.record_run("muse-run", "owner/repo#1", "implement", "muse", mode="offload")
+    feedback.record_muse_subscription_cost(
+        "muse-run",
+        invocation_count=2,
+        window_start_ts=18_000,
+        window_end_ts=36_000,
+        observed_start_ts=18_123,
+        observed_end_ts=18_140,
+        wall_seconds=12.5,
+        raw_exit_codes=[75, 0],
+    )
+    with feedback._conn() as conn:
+        row = conn.execute(
+            "SELECT r.agent,c.tokens_in,c.tokens_out,c.cost_usd,c.source,u.measurement_kind,"
+            "u.muse_invocation_count,u.muse_window_id,u.muse_observed_start_ts,u.muse_observed_end_ts,"
+            "u.muse_wall_seconds,u.muse_raw_exit_codes FROM runs r JOIN costs c ON r.run_id=c.run_id "
+            "JOIN muse_subscription_usage u ON u.run_id=r.run_id "
+            "WHERE r.run_id='muse-run'"
+        ).fetchone()
+    assert row == (
+        "muse",
+        None,
+        None,
+        0.0,
+        "imputed:subscription",
+        "imputed_subscription",
+        2,
+        "observation:rolling-5h:18000-36000;observed:18123-18140;provider-reset:unknown",
+        18_123,
+        18_140,
+        12.5,
+        "[75,0]",
+    )
+    assert "record_muse_subscription_cost(" in Path(dispatcher.__file__).read_text()
+
+
+def test_muse_usage_extension_keeps_legacy_cost_writers_and_measured_rows(tmp_path, monkeypatch):
+    """The additive usage table cannot widen or replace the historical seven-column cost contract."""
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "feedback.db")
+    feedback.record_run("muse-measured", "owner/repo#2", "review", "muse", mode="offload")
+    with feedback._conn() as conn:
+        # This is the exact old writer shape that must remain valid after the Muse extension lands.
+        conn.execute(
+            "INSERT OR REPLACE INTO costs VALUES (?,?,?,?,?,?,?)",
+            ("muse-measured", 10, 20, 4.25, 9.0, "ccusage", 1),
+        )
+    feedback.record_muse_subscription_cost(
+        "muse-measured",
+        invocation_count=1,
+        window_start_ts=36_000,
+        window_end_ts=54_000,
+        observed_start_ts=36_100,
+        observed_end_ts=36_105,
+        wall_seconds=5.0,
+        raw_exit_codes=[0],
+    )
+    with feedback._conn() as conn:
+        cost = conn.execute(
+            "SELECT tokens_in,tokens_out,cost_usd,latency_s,source FROM costs WHERE run_id=?",
+            ("muse-measured",),
+        ).fetchone()
+        usage = conn.execute(
+            "SELECT measurement_kind,muse_invocation_count,muse_raw_exit_codes "
+            "FROM muse_subscription_usage WHERE run_id=?",
+            ("muse-measured",),
+        ).fetchone()
+    assert cost == (10, 20, 4.25, 9.0, "ccusage")
+    assert usage == ("imputed_subscription", 1, "[0]")
+
+
+def _native_muse_events(text="completed the bounded task"):
+    """Sanitized framing from native exec receipt offload:muse:1792137802883875000.
+
+    Preserve the actual protocol shapes; omit private prompt/session identifiers and timestamps.
+    """
+    events = []
+    for kind, payload in [
+        (
+            "runtime.command.accepted",
+            {"kind": "command_accepted", "command_id": "c1", "command_kind": "turn.submit"},
+        ),
+        (
+            "session.run.linked",
+            {
+                "kind": "session_run_linked",
+                "command_id": "c1",
+                "run_stream": {"kind": "run", "id": "c1"},
+            },
+        ),
+        (
+            "run.lifecycle.started",
+            {"kind": "run_started", "command_id": "c1", "run_stream": {"kind": "run", "id": "c1"}},
+        ),
+        (
+            "run.terminal.completed",
+            {
+                "kind": "run_terminal",
+                "command_id": "c1",
+                "run_stream": {"kind": "run", "id": "c1"},
+                "terminal": "completed",
+                "text": text,
+                "reason": None,
+            },
+        ),
+    ]:
+        events.append(
+            {
+                "schema_version": 1,
+                "payload_schema_version": 1,
+                "stream": {"kind": "session", "id": "s1"},
+                "record_type": "reconciliation" if not events else "event",
+                "durability": "durable",
+                "causation_id": "c1",
+                "payload_type": kind,
+                "payload": payload,
+            }
+        )
+    return events
+
+
+def test_muse_jsonl_requires_a_terminal_textual_result():
+    def encode(events):
+        return "\n".join(json.dumps(e) for e in events)
+
+    events = _native_muse_events()
+    assert adapters.muse_terminal_text(encode(events)) == "completed the bounded task"
+    assert adapters.muse_terminal_text(encode(events[:-1])) == ""
+    # Authentic native review found this progress-only MSP counterexample in the old parser.
+    progress = {
+        "method": "item/completed",
+        "params": {
+            "item": {"kind": "agentMessage", "text": "Now applying a fix and rerunning tests."}
+        },
+    }
+    assert adapters.muse_terminal_text(json.dumps(progress)) == ""
+    assert adapters.muse_terminal_text(json.dumps({"type": "result", "result": "unbound"})) == ""
+    assert adapters.muse_terminal_text(encode(events + [events[-1]])) == ""
+    assert adapters.muse_terminal_text(encode(events) + "\n{truncated") == ""
+
+
+@pytest.mark.parametrize("kind", ["run.lifecycle.failed", "unknown.durable.event"])
+def test_muse_jsonl_rejects_unknown_conflicts_and_post_terminal_records(kind):
+    events = _native_muse_events()
+    conflict = dict(events[-1], payload_type=kind)
+    assert (
+        adapters.muse_terminal_text(
+            "\n".join(json.dumps(e) for e in events[:-1] + [conflict, events[-1]])
+        )
+        == ""
+    )
+    assert adapters.muse_terminal_text("\n".join(json.dumps(e) for e in events + [conflict])) == ""
+
+
+@pytest.mark.parametrize("version", [True, 1.0, "1"])
+def test_muse_jsonl_rejects_malformed_schema_version(version):
+    events = _native_muse_events()
+    events[-1]["schema_version"] = version
+    assert adapters.muse_terminal_text("\n".join(json.dumps(e) for e in events)) == ""
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("terminal", "failed"),
+        ("command_id", "another-run"),
+        ("run_stream", {"kind": "run", "id": "another-run"}),
+        ("reason", "limit"),
+        ("text", ""),
+    ],
+)
+def test_muse_jsonl_rejects_failed_or_unbound_terminal(field, value):
+    events = _native_muse_events()
+    events[-1]["payload"][field] = value
+    assert adapters.muse_terminal_text("\n".join(json.dumps(e) for e in events)) == ""
+
+
 def test_muse_usage_is_recorded_for_offload_and_delegate():
     """Wiring pin: BOTH launch paths record usage, each under an `agent == muse` guard.
 
@@ -134,7 +396,8 @@ def test_muse_usage_is_recorded_for_offload_and_delegate():
     src = Path(dispatcher.__file__).read_text()
     name = "_record_muse" + "_usage("
     assert src.count("def " + name) == 1, "exactly one definition"
-    offload = re.findall(r'if agent == "muse":\s*\n(?:\s*#[^\n]*\n)*\s*' + re.escape(name), src)
+    attempt_loop = src[src.index("for attempt in range(1, max_network_retries + 2):") :]
+    offload = re.findall(r'if agent == "muse":' + r"[\s\S]{0,900}?" + re.escape(name), attempt_loop)
     spawn = re.findall(
         r'if d\["agent"\] == "muse":\s*\n(?:\s*#[^\n]*\n)*\s*' + re.escape(name), src
     )
@@ -151,7 +414,7 @@ def test_muse_is_refused_under_a_write_boundary():
     assert adapters.write_boundary_unenforceable("codex") != reason
 
 
-def test_muse_has_an_offload_profile_in_its_own_flat_pool():
+def test_muse_has_an_offload_profile_in_its_existing_subscription_pool():
     """A worker attempt needs a profile and a pool (`test_every_agent_can_record_a_worker_attempt`).
     The model is the one the CLI actually started on for this account, passed explicitly."""
     import execution_profiles
@@ -181,10 +444,11 @@ def test_muse_runtime_home_carries_the_login_record(tmp_path, monkeypatch):
     assert linked.is_symlink() and linked.resolve() == login.resolve(), linked
 
 
-def test_muse_direct_dispatch_scrubs_the_key_from_a_copied_environment(monkeypatch):
+def test_muse_direct_dispatch_scrubs_the_key_from_a_copied_environment(tmp_path, monkeypatch):
     """`adapters.dispatch` hands `env` straight to subprocess.run, bypassing the dispatcher prelude.
     muse gets a COPY without META_API_KEY in both cases (inherited env and supplied mapping); the
     caller's mapping is never mutated and every other agent's environment is untouched."""
+    _runtime_login_fixture(tmp_path, monkeypatch)
     fake = "not-a-real-key-" + "y" * 8
     monkeypatch.setenv("META_API_KEY", fake)
     inherited = adapters.agent_subprocess_env("muse", None)
@@ -199,7 +463,47 @@ def test_muse_direct_dispatch_scrubs_the_key_from_a_copied_environment(monkeypat
     assert adapters.agent_subprocess_env("vibe", supplied) is supplied, "other agents are untouched"
     # Wiring pin: dispatch passes the effective env, once.
     src = Path(adapters.__file__).read_text()
-    assert src.count("env=agent_subprocess" + "_env(agent, env)") == 1
+    assert src.count("process_env = agent_subprocess" + "_env(agent, env)") == 1
+    assert src.count("env=process_env,") == 1
+
+
+def test_muse_direct_dispatch_environment_is_xdg_isolated(tmp_path, monkeypatch):
+    real_home = tmp_path / "home"
+    login = real_home / ".config" / "muse" / "auth.json"
+    login.parent.mkdir(parents=True)
+    login.write_text("{}")
+    monkeypatch.setattr(adapters, "HOME", real_home)
+    monkeypatch.setattr(adapters, "AGENT_RUNTIME", tmp_path / "runtime")
+    env = adapters.agent_subprocess_env(
+        "muse", {"HOME": str(real_home), "META_API_KEY": "nope", "MUSE_AUTH_PATH": "other-login"}
+    )
+    runtime = tmp_path / "runtime" / "muse"
+    assert env["XDG_CONFIG_HOME"] == str(runtime / ".config")
+    assert env["XDG_STATE_HOME"] == str(runtime / ".local/state")
+    assert env["HOME"] == str(real_home)
+    assert Path(env["XDG_CONFIG_HOME"]) / "muse" != real_home / ".config" / "muse"
+    assert env["MUSE_AUTH_PATH"] == str(runtime / ".config" / "muse" / "auth.json")
+    assert env["TMPDIR"] == str(runtime / "tmp") and "META_API_KEY" not in env
+    linked = runtime / ".config" / "muse" / "auth.json"
+    assert linked.is_symlink() and linked.resolve() == login.resolve()
+    # A dangling alias from an older runtime must point to today's intended OAuth record,
+    # rather than merely suppressing FileExistsError and leaving authentication broken.
+    linked.unlink()
+    linked.symlink_to(tmp_path / "missing-old-login.json")
+    adapters.agent_subprocess_env("muse", {"HOME": str(real_home)})
+    assert linked.resolve() == login.resolve() and login.read_text() == "{}"
+    linked.unlink()
+    linked.write_text("unexpected private credential record")
+    with pytest.raises(ValueError, match="unexpected non-link"):
+        adapters.agent_subprocess_env("muse", {"HOME": str(real_home)})
+    assert linked.read_text() == "unexpected private credential record"
+    # The offload/delegate path uses the same repaired alias contract.
+    linked.unlink()
+    linked.symlink_to(tmp_path / "another-missing-login.json")
+    monkeypatch.setattr(dispatcher, "REAL_HOME", real_home)
+    monkeypatch.setattr(dispatcher, "AGENT_RUNTIME_DIR", tmp_path / "runtime")
+    dispatcher._ensure_agent_runtime("muse")
+    assert linked.resolve() == login.resolve()
 
 
 @pytest.mark.parametrize(
@@ -228,13 +532,28 @@ def test_muse_usage_log_failure_is_reported_not_swallowed(tmp_path, monkeypatch,
     assert "muse usage" in err and "not recorded" in err, err
 
 
-def test_muse_has_no_route_table_entry_so_only_explicit_dispatch_reaches_it():
-    """Explicit demand means `dispatcher.py offload/delegate --agent muse`. `select_agent` filters
-    route-table entries and muse has none, so it can never be returned by selection, even with
-    `only={"muse"}`; BACKUP_AGENTS then also holds if an entry is ever added."""
+def test_muse_is_eligible_for_declared_roles_but_never_auto_selected(monkeypatch):
+    """Muse is declared for implement/review role exploration, while BACKUP_AGENTS keeps it out of
+    ordinary deterministic selection. Explicit `only={"muse"}` is the deliberate entry point."""
+    monkeypatch.setattr(router, "learned_ranks", lambda: {})
+    monkeypatch.setattr(feedback, "current_weights", lambda *args, **kwargs: [])
     in_table = {e["agent"] for entries in router.ROUTE_TABLE.values() for e in _entries(entries)}
-    assert "muse" not in in_table, "a route-table entry would make selection able to return muse"
+    assert "muse" in in_table
     assert "muse" in router.BACKUP_AGENTS
+    assert "muse" in roles.ROLE_REGISTRY["prompt"].eligible_backends
+    for role_name in ("redirect", "triage", "adjudicator"):
+        assert "muse" in roles.ROLE_REGISTRY[role_name].eligible_backends
+    cap = {"agents": {agent: {"state": "ok"} for agent in in_table}}
+    assert router.select_agent("implement", cap)["agent"] != "muse"
+    assert router.select_agent("review", cap)["agent"] != "muse"
+    assert router.select_agent("implement", cap, only={"muse"})["agent"] == "muse"
+    assert roles.route_role("prompt", cap, only={"muse"})["agent"] == "muse"
+    assert roles.route_role("redirect", cap, only={"muse"})["agent"] == "muse"
+    muse_only_capacity = {"agents": {agent: {"state": "shed"} for agent in in_table}}
+    muse_only_capacity["agents"]["muse"] = {"state": "ok"}
+    learned_muse_first = {"implement": {"muse": {"rank": 0}}}
+    assert roles.route_role("prompt", muse_only_capacity, learned=learned_muse_first) is None
+    assert roles.route_role("prompt", muse_only_capacity, only={"muse"})["agent"] == "muse"
 
 
 def _entries(value):
@@ -277,6 +596,37 @@ def test_muse_auth_health_reads_the_login_record(tmp_path, monkeypatch):
     assert gone["authenticated"] is False, gone
 
 
+def test_muse_credential_missing_is_reported_without_a_billing_call(tmp_path, monkeypatch):
+    missing = tmp_path / "no-login.json"
+    monkeypatch.setitem(agent_auth_check.CREDENTIAL_FILES, "muse", (missing, "subs_active"))
+
+    def forbidden_call(*args, **kwargs):
+        raise AssertionError("missing-credential health must not execute a provider CLI")
+
+    monkeypatch.setattr(adapters.subprocess, "run", forbidden_call)
+    health = adapters.auth_health("muse")
+    assert health["checked"] is True and health["authenticated"] is False
+    assert "muse login" in health["reason"]
+
+    monkeypatch.setattr(adapters, "HOME", tmp_path / "missing-home")
+    monkeypatch.setattr(adapters, "AGENT_RUNTIME", tmp_path / "runtime")
+    monkeypatch.setattr(dispatcher, "REAL_HOME", tmp_path / "missing-home")
+    monkeypatch.setattr(dispatcher, "AGENT_RUNTIME_DIR", tmp_path / "runtime")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(adapters, "muse_prompt_file", forbidden_call)
+    with pytest.raises(ValueError, match="login record is missing"):
+        adapters.dispatch("muse", "never call a provider", cwd=str(workspace))
+    with pytest.raises(ValueError, match="login record is missing"):
+        dispatcher._agent_runtime_prelude("muse")
+
+    monkeypatch.setattr(dispatcher, "_select_offload_profile", lambda *args: None)
+    monkeypatch.setattr(dispatcher, "_capability_heartbeat", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dispatcher, "_offload_prompt", lambda prompt, *args, **kwargs: prompt)
+    with pytest.raises(ValueError, match="login record is missing"):
+        dispatcher.offload("muse", "never allocate a prompt or call a provider", cwd=str(workspace))
+
+
 def test_muse_capacity_sheds_on_an_inactive_subscription_and_keeps_an_active_one(
     tmp_path, monkeypatch
 ):
@@ -302,3 +652,117 @@ def test_muse_record_that_is_not_an_oauth_login_is_not_admitted(tmp_path, monkey
     monkeypatch.setattr(capacity, "_shed", lambda agent: False)
     assert capacity._classify("muse", capacity.AGENTS["muse"], None)[0] == capacity.SHED
     assert path.exists()
+
+
+def test_muse_subscription_receipt_survives_actual_ledger_reconciliation(tmp_path, monkeypatch):
+    import ledger_reconcile
+
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "feedback.db")
+    feedback.record_run("muse-reconcile", "owner/repo#1", "review", "muse", mode="offload")
+    feedback.record_muse_subscription_cost(
+        "muse-reconcile",
+        invocation_count=1,
+        window_start_ts=18000,
+        window_end_ts=36000,
+        observed_start_ts=36000,
+        observed_end_ts=36012,
+        wall_seconds=12.5,
+        raw_exit_codes=[0],
+    )
+    ledger = tmp_path / "capacity.ndjson"
+    ledger.write_text(
+        "\n".join(
+            json.dumps(
+                {"run_id": "muse-reconcile", "agent": "muse", "event": event, "ts": ts, "exit": 0}
+            )
+            for event, ts in [("start", 36000), ("complete", 36012)]
+        )
+    )
+    ledger_reconcile.reconcile(ledger)
+    with feedback._conn() as conn:
+        row = conn.execute(
+            "SELECT c.tokens_in,c.tokens_out,c.cost_usd,c.source,u.muse_invocation_count,u.muse_raw_exit_codes FROM costs c JOIN muse_subscription_usage u USING(run_id) WHERE run_id='muse-reconcile'"
+        ).fetchone()
+    assert row == (None, None, 0.0, "imputed:subscription", 1, "[0]")
+    feedback.record_cost(
+        "muse-reconcile", tokens_in=20, tokens_out=5, cost_usd=1.25, source="ccusage"
+    )
+    ledger_reconcile.reconcile(ledger)
+    with feedback._conn() as conn:
+        assert conn.execute(
+            "SELECT tokens_in,tokens_out,cost_usd,source FROM costs WHERE run_id='muse-reconcile'"
+        ).fetchone() == (20, 5, 1.25, "ccusage")
+
+
+def test_muse_is_not_implicitly_offered_to_the_adversarial_reviewer():
+    import adversarial
+
+    offered = []
+
+    def select(task, cap, *, only, learned):
+        offered.append(only)
+        return {"agent": "muse"} if "muse" in only else None
+
+    result = adversarial.choose_reviewer(cap={}, learned={}, select_fn=select)
+    assert all("muse" not in pool for pool in offered)
+    assert result.get("agent") != "muse"
+
+
+def test_muse_stale_auth_alias_repairs_are_serialized(tmp_path, monkeypatch):
+    import fcntl
+    import threading
+
+    source = tmp_path / "login.json"
+    source.write_text("unchanged OAuth record")
+    alias = tmp_path / "runtime" / "auth.json"
+    alias.parent.mkdir()
+    alias.symlink_to(tmp_path / "stale-login.json")
+    first_inside = threading.Event()
+    second_observed = threading.Event()
+    second_unlinked = threading.Event()
+    release_first = threading.Event()
+    errors = []
+    unlink = Path.unlink
+    flock = fcntl.flock
+
+    def observed_unlink(path, *args, **kwargs):
+        if path == alias:
+            if threading.current_thread().name == "first-launcher":
+                first_inside.set()
+                assert release_first.wait(5)
+            else:
+                second_unlinked.set()
+                second_observed.set()
+        return unlink(path, *args, **kwargs)
+
+    def observed_flock(fd, operation):
+        if threading.current_thread().name == "second-launcher":
+            second_observed.set()
+        return flock(fd, operation)
+
+    def launch():
+        try:
+            adapters.ensure_muse_auth_link(source, alias)
+        except BaseException as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(Path, "unlink", observed_unlink)
+    monkeypatch.setattr(fcntl, "flock", observed_flock)
+    first = threading.Thread(target=launch, name="first-launcher")
+    second = threading.Thread(target=launch, name="second-launcher")
+    first.start()
+    try:
+        assert first_inside.wait(5)
+        second.start()
+        assert second_observed.wait(5)
+        # The second caller has reached either the lock or unlink. It must be at the lock.
+        assert not second_unlinked.is_set()
+    finally:
+        release_first.set()
+        first.join(5)
+        if second.ident is not None:
+            second.join(5)
+    assert not first.is_alive() and not second.is_alive()
+    assert not errors
+    assert alias.resolve() == source.resolve()
+    assert source.read_text() == "unchanged OAuth record"

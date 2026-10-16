@@ -135,6 +135,7 @@ ROUTE_TABLE: dict = {
             },  # reasoning seat; shines when codex/claude 5h-shed
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "full", "late": False},
+            {"agent": "muse", "mode": "full", "late": True},  # explicit-only backup exploration
             # REMOVED 2026-08-08 (owner policy): the late cursor/frontier lane. Cursor runs Composer
             # ONLY — see adapters.CURSOR_COMPOSER_MODEL. Cursor already appears above on composer, so
             # this entry only ever offered a second, pricier way to reach the same seat.
@@ -213,6 +214,7 @@ ROUTE_TABLE: dict = {
     "review": {
         "role": "review",
         "agents": [
+            {"agent": "muse", "mode": "mid", "late": True},  # explicit-only backup exploration
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "mid", "late": False},
             {
@@ -1650,7 +1652,8 @@ def _selftest() -> None:
         finally:
             globals()["BACKLOG_JSON"] = old_backlog
 
-        # muse (#612): backup-only, no route-table entry, so selection can never return it.
+        # muse (#612): listed for declared implement/review exploration, but BACKUP_AGENTS keeps
+        # it out of automatic selection. It is reachable only with an explicit only={"muse"}.
         all_ok_muse = cap(
             {
                 **{a: "ok" for a in ("cursor", "vibe", "codex", "claude", "gemini", "aider")},
@@ -1661,9 +1664,7 @@ def _selftest() -> None:
             _pick = select_agent(_tt, all_ok_muse)
             assert _pick is None or _pick["agent"] != "muse", (_tt, _pick)
         _only = select_agent("implement", all_ok_muse, only={"muse"})
-        assert (
-            _only is None or _only["agent"] != "muse"
-        ), "only={muse} cannot reach a seat with no entry"
+        assert _only and _only["agent"] == "muse", _only
         assert "muse" in BACKUP_AGENTS
 
         print(
