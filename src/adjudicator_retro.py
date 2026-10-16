@@ -111,6 +111,17 @@ class NativeAttemptJournal:
                 "updated_at INTEGER NOT NULL, report_sha256 TEXT NOT NULL, UNIQUE(case_id, material_revision))"
             )
 
+    @classmethod
+    def open_existing(cls, path: Path) -> NativeAttemptJournal:
+        """Open an existing native journal without schema creation or repair."""
+        with sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True) as conn:
+            if conn.execute("PRAGMA application_id").fetchone()[0] != NATIVE_JOURNAL_APPLICATION_ID:
+                raise ValueError("native cohort requires a native journal")
+            conn.execute("SELECT attempt_id FROM native_attempts LIMIT 1")
+        instance = cls.__new__(cls)
+        instance.path = path
+        return instance
+
     def reserve(
         self,
         case_id: str,
@@ -546,6 +557,146 @@ def refresh_native_projection(
     with output.open("x", encoding="utf-8") as stream:
         stream.write(json.dumps(projection, indent=2) + "\n")
     return projection
+
+
+def refresh_native_cohort(
+    *,
+    original_report: Path,
+    output: Path,
+    cases: dict[str, roles.CollectedAdjudicationCase],
+    journal: NativeAttemptJournal,
+    expected_source_hash: str,
+    db: Path | None = None,
+    truth_reader=None,
+) -> dict:
+    """Build one complete, nonpublishing cohort candidate from native receipts.
+
+    Every validated receipt for this original report requires a freshly issued
+    capability. JSON projections are never inputs. All original rows/history and
+    the original summary remain verbatim; only native_summary counts native
+    grades. This function cannot dispatch, reserve, replace the primary report,
+    or turn an unadmitted original into a measured case.
+    """
+    if output.exists() or output.is_symlink() or output.resolve() == original_report.resolve():
+        raise ValueError("native cohort output must be new and separate")
+    if journal.path.resolve() in {original_report.resolve(), output.resolve()}:
+        raise ValueError("native journal must be separate from report and cohort")
+    before = original_report.read_bytes()
+    digest = hashlib.sha256(before).hexdigest()
+    if digest != expected_source_hash:
+        raise ValueError("original report changed before native cohort")
+    saved = json.loads(before)
+    if not isinstance(saved, dict) or not isinstance(saved.get("rows"), list):
+        raise ValueError("saved report must contain a rows list")
+    _validate_original_report(saved["rows"])
+    if not isinstance(cases, dict) or any(
+        not isinstance(key, str) or not isinstance(case, roles.CollectedAdjudicationCase)
+        for key, case in cases.items()
+    ):
+        raise TypeError("native cohort requires freshly issued collected cases")
+    originals = {row["case_id"]: row for row in saved["rows"]}
+
+    def records():
+        with sqlite3.connect(f"file:{journal.path.resolve()}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
+            if conn.execute("PRAGMA application_id").fetchone()[0] != NATIVE_JOURNAL_APPLICATION_ID:
+                raise ValueError("native cohort requires a native journal")
+            return [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM native_attempts WHERE report_sha256=? ORDER BY attempt_id",
+                    (digest,),
+                )
+            ]
+
+    journal_before = records()
+    if any(record["case_id"] not in originals for record in journal_before):
+        raise ValueError("native journal case is outside the original cohort")
+    required = {record["case_id"] for record in journal_before if record["state"] == "validated"}
+    if set(cases) != required:
+        raise ValueError("native cohort requires every validated case and no extra cases")
+    if any(originals[key].get("decision") not in {None, "needs_more_evidence"} for key in cases):
+        raise ValueError("native cohort only resumes original abstentions")
+    # Validate the complete recursive paid history before truth reads or output.
+    original_paid = [
+        row.get("backend_run_id")
+        for row in _attempt_rows(saved["rows"])
+        if row.get("backend_run_id")
+    ]
+    native_paid = [
+        record["backend_run_id"] for record in journal_before if record["backend_run_id"]
+    ]
+    if len(set(native_paid)) != len(native_paid) or set(original_paid) & set(native_paid):
+        raise ValueError("native cohort has duplicate paid backend identities")
+    projections = {}
+    with tempfile.TemporaryDirectory() as scratch:
+        # First authenticate EVERY receipt/contract without touching the Brain.
+        for index, (key, case) in enumerate(cases.items()):
+            refresh_native_projection(
+                original_report=original_report,
+                output=Path(scratch) / f"check-{index}.json",
+                case_id=key,
+                case=case,
+                journal=journal,
+                truth_reader=lambda *_args: None,
+            )
+        for index, (key, case) in enumerate(cases.items()):
+            projection = refresh_native_projection(
+                original_report=original_report,
+                output=Path(scratch) / f"truth-{index}.json",
+                case_id=key,
+                case=case,
+                journal=journal,
+                db=db,
+                truth_reader=truth_reader,
+            )
+            projections[key] = next(
+                row["native_projection"] for row in projection["rows"] if row["case_id"] == key
+            )
+    # No partial cohort escapes if a later capability/Brain read failed or a
+    # concurrent writer changed either frozen input while truth was collected.
+    if original_report.read_bytes() != before or records() != journal_before:
+        raise ValueError("native cohort input changed during refresh")
+    result = json.loads(before)
+    for row in result["rows"]:
+        # Never preserve a serialized projection as native authority.
+        row.pop("native_projection", None)
+        if row["case_id"] in projections:
+            row["native_projection"] = projections[row["case_id"]]
+    graded = sum(item["graded"] for item in projections.values())
+    agree = sum(int(item["agree"]) for item in projections.values())
+    result.update(
+        source_report_sha256=digest,
+        native_admission="trusted_journal_cohort_candidate",
+        native_summary={
+            "cases": len(originals),
+            "admitted_cases": len(projections),
+            "unadmitted_cases": len(originals) - len(projections),
+            "graded": graded,
+            "agree": agree,
+            "disagree": graded - agree,
+            "unknown": len(projections) - graded,
+            "agreement_rate": agree / graded if graded else None,
+            "pending_attempts": sum(record["state"] != "validated" for record in journal_before),
+        },
+        native_attempts=journal_before,
+        publication="candidate_only; original summary and primary remain unchanged",
+    )
+    encoded = json.dumps(result, indent=2) + "\n"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # Atomic publication without replacement, including a concurrent new file.
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=output.parent, delete=False
+    ) as stream:
+        temporary = Path(stream.name)
+        try:
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+            os.link(temporary, output)
+        finally:
+            temporary.unlink(missing_ok=True)
+    return result
 
 
 def report_path() -> Path:
@@ -2203,6 +2354,8 @@ def _selftest() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--selftest", action="store_true")
+    parser.add_argument("--native-cohort", action="store_true")
+    parser.add_argument("--cohort-manifest", type=Path)
     parser.add_argument("--native-admit", metavar="CASE_ID")
     parser.add_argument("--native-refresh", metavar="CASE_ID")
     parser.add_argument(
@@ -2262,10 +2415,93 @@ def main() -> int:
     args = parser.parse_args()
     if args.timeout < 1:
         parser.error("--timeout must be at least 1 second")
-    if args.selftest and any((args.native_admit, args.native_refresh)):
+    if args.selftest and any((args.native_admit, args.native_refresh, args.native_cohort)):
         parser.error("--selftest cannot be combined with a native mode")
     if args.selftest:
         _selftest()
+        return 0
+    if args.native_cohort:
+        if any(
+            (
+                args.native_admit,
+                args.native_refresh,
+                args.dispatch,
+                args.retry,
+                args.collect_case,
+                args.prepare_collected_case,
+                args.judge_collected_case,
+                args.case_input,
+                args.qualification,
+                args.repository,
+            )
+        ):
+            parser.error("--native-cohort cannot dispatch or combine with another mode")
+        if not all(
+            (
+                args.report,
+                args.output,
+                args.native_journal,
+                args.expected_source_hash,
+                args.cohort_manifest,
+            )
+        ):
+            parser.error(
+                "--native-cohort requires --report --output --native-journal "
+                "--expected-source-hash --cohort-manifest"
+            )
+        try:
+            manifest = json.loads(args.cohort_manifest.read_text())
+            if not isinstance(manifest, list) or len(manifest) > 1000:
+                raise ValueError("cohort manifest must be a bounded list")
+            cases = {}
+            for entry in manifest:
+                if (
+                    not isinstance(entry, dict)
+                    or set(entry) != {"case_id", "input_report", "repository", "qualification"}
+                    or any(not isinstance(value, str) or not value for value in entry.values())
+                ):
+                    raise ValueError("cohort manifest requires case_id and three explicit paths")
+                key = entry["case_id"]
+                if key in cases:
+                    raise ValueError("cohort manifest has duplicate case IDs")
+
+                def location(name):
+                    return args.cohort_manifest.parent / entry[name]
+
+                enriched = json.loads(location("input_report").read_text())
+                if not isinstance(enriched, dict) or not isinstance(enriched.get("rows"), list):
+                    raise ValueError("enriched cohort input requires rows")
+                matches = [
+                    row
+                    for row in enriched["rows"]
+                    if isinstance(row, dict) and row.get("case_id") == key
+                ]
+                if len(matches) != 1:
+                    raise ValueError("cohort input must contain exactly one matching case")
+                cases[key] = qualify_collected_case(
+                    matches[0],
+                    location("repository"),
+                    json.loads(location("qualification").read_text()),
+                    byte_limit=args.byte_limit,
+                    prompt_byte_limit=args.packet_byte_limit,
+                )
+            result = refresh_native_cohort(
+                original_report=args.report,
+                output=args.output,
+                cases=cases,
+                journal=NativeAttemptJournal.open_existing(args.native_journal),
+                expected_source_hash=args.expected_source_hash,
+            )
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+            sqlite3.Error,
+            subprocess.SubprocessError,
+        ) as exc:
+            parser.error(str(exc))
+        print(json.dumps(result["native_summary"], indent=2))
         return 0
     if args.native_admit or args.native_refresh:
         if args.native_admit and args.native_refresh:
