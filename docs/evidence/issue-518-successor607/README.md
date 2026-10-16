@@ -28,3 +28,5 @@ unknown/incomplete/hybrid controls without adding collected nodes. The actual
 current bundle was freshly measured too (current-pins/), rather than padding
 historical markers with unobserved versions. Native4289533177 also corrected
 the current collection floor to3,463. The floor file itself is unchanged.
+
+Native4289572205 corrected strict collection itself: all nine distribution versions are checked against exact pins before any measurement, in addition to existing actual CLI version checks. A one-node regression loops all nine mismatches and passes only when every mismatch refuses measurement. Original RED and21focusedGREEN retained. Floor advances only one executed regression node,3463 to3464, with every ceiling unchanged; hosted full verification remains mandatory.

@@ -112,3 +112,35 @@ def test_mypy_success_notes_are_not_blocking_findings(monkeypatch):
     result = baseline.measure_mypy()
     assert result["blocking"] == 0
     assert result["by_code"] == {}
+
+
+def test_strict_collection_rejects_every_unmeasured_package(monkeypatch):
+    import importlib.metadata
+
+    import pytest
+
+    names = {
+        "black",
+        "ruff",
+        "isort",
+        "docformatter",
+        "mypy",
+        "pytest",
+        "pytest-cov",
+        "pytest-xdist",
+        "coverage",
+    }
+    pins = {name.upper().replace("-", "_") + "_VERSION": "1.2.3" for name in names}
+    monkeypatch.setattr(baseline, "read_pins", lambda: pins)
+    monkeypatch.setattr(baseline, "installed_version", lambda tool: "1.2.3")
+    monkeypatch.setattr(baseline, "MEASURERS", {})
+    for changed in names:
+        monkeypatch.setattr(
+            importlib.metadata,
+            "version",
+            lambda name, changed=changed: "9.9.9" if name == changed else "1.2.3",
+        )
+        with pytest.raises(SystemExit):
+            baseline.collect(strict=True)
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: "1.2.3")
+    assert baseline.collect(strict=True)["problems"] == []

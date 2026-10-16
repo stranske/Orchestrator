@@ -1,0 +1,24 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_strict_collection_rejects_every_unmeasured_package ____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107e531d0>
+
+    def test_strict_collection_rejects_every_unmeasured_package(monkeypatch):
+        import importlib.metadata
+        import pytest
+    
+        names = {"black", "ruff", "isort", "docformatter", "mypy", "pytest", "pytest-cov", "pytest-xdist", "coverage"}
+        pins = {name.upper().replace("-", "_") + "_VERSION": "1.2.3" for name in names}
+        monkeypatch.setattr(baseline, "read_pins", lambda: pins)
+        monkeypatch.setattr(baseline, "installed_version", lambda tool: "1.2.3")
+        monkeypatch.setattr(baseline, "MEASURERS", {})
+        for changed in names:
+            monkeypatch.setattr(importlib.metadata, "version", lambda name, changed=changed: "9.9.9" if name == changed else "1.2.3")
+>           with pytest.raises(SystemExit):
+E           Failed: DID NOT RAISE SystemExit
+
+tests/test_ci_lint_baseline.py:128: Failed
+=========================== short test summary info ============================
+FAILED tests/test_ci_lint_baseline.py::test_strict_collection_rejects_every_unmeasured_package
+1 failed, 5 deselected in 0.24s
