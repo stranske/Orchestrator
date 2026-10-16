@@ -965,6 +965,7 @@ def build(ccusage_block=None) -> dict:
             "state": state,
             "reason": reason,
             "account": cfg["account"],
+            "model": cfg["model"],  # Capacity accounting model; CLI models live in tier_models.
             "window": cfg["window"],
             # What a dispatch would actually send, per tier — so a rotted pin is visible in the
             # snapshot itself rather than only at dispatch time. None => CLI default applies.

@@ -72,15 +72,48 @@ def test_muse_offload_argv_and_isolated_runtime_home(tmp_path, monkeypatch):
     assert linked.is_symlink() and linked.resolve() == login.resolve()
 
 
-def test_muse_seat_is_reported_and_never_reads_as_free():
+def test_muse_seat_is_reported_and_never_reads_as_free(tmp_path, monkeypatch, capsys):
     seat = capacity.AGENTS["muse"]
-    assert seat["model"] == "metered" and "muse" in seat["account"], seat
+    assert seat["model"] == "metered" and seat["account"] == "meta-muse-code-sub", seat
     # The immutable execution pool retains its paid subscription pricing tier. The capacity
     # model describes allowance metering; neither field claims an unlimited/free seat.
     assert capacity.agent_tiers()["muse"] == "flat"
     # Backup-only: reachable on explicit demand (`--agent muse`) and never by routine selection,
     # until measured outcomes earn it a prior. The same mechanism aider uses.
     assert "muse" in router.BACKUP_AGENTS, router.BACKUP_AGENTS
+
+    # Exercise the JSON entry point offline, with an authenticated seat and private state.
+    # Checking AGENTS alone misses a model omitted from the snapshot consumed by callers.
+    monkeypatch.setattr(capacity, "HANDOFF", tmp_path)
+    monkeypatch.setattr(capacity, "OUT", tmp_path / "capacity.json")
+    monkeypatch.setattr(capacity, "LEDGER", tmp_path / "capacity-ledger.ndjson")
+    monkeypatch.setattr(capacity, "SHED_DIR", tmp_path / "capacity-shed")
+    monkeypatch.setattr(capacity, "_ccusage_active_block", lambda: None)
+    monkeypatch.setattr(capacity, "_capability_heartbeat", lambda *args, **kwargs: None)
+    monkeypatch.setattr(capacity, "_model_health", lambda *args: None)
+    monkeypatch.setattr(
+        capacity, "_auth_health", lambda agent: {"checked": True, "authenticated": True}
+    )
+    assert capacity.main(["--json"]) == 0
+    snapshot = json.loads(capsys.readouterr().out)
+    assert snapshot == json.loads(capacity.OUT.read_text())
+    reported = snapshot["agents"]["muse"]
+    assert reported["model"] == "metered"
+    assert reported["account"] == "meta-muse-code-sub"
+    assert reported["state"] == capacity.OK
+    assert snapshot["pools"]["muse-subscription"]["limit"] is None
+
+    # An observed rate limit overrides subscription availability without inventing a reset.
+    capacity.SHED_DIR.mkdir()
+    (capacity.SHED_DIR / "muse").write_text(
+        json.dumps({"category": "rate_limit", "incident_id": "muse-observed-429"})
+    )
+    assert capacity.main(["--json"]) == 0
+    limited = json.loads(capsys.readouterr().out)
+    assert limited["agents"]["muse"]["model"] == "metered"
+    assert limited["agents"]["muse"]["state"] == capacity.SHED
+    assert limited["pools"]["muse-subscription"]["state"] == capacity.SHED
+    assert capacity.shed_marker("muse")["reset_at"] is None
 
 
 def test_muse_offload_wrapper_scrubs_the_api_key(monkeypatch):
