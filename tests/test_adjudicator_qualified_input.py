@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 
 import pytest
@@ -24,7 +25,9 @@ def qualified_input(tmp_path):
     git("init", "-q")
     git("config", "user.email", "test@example.com")
     git("config", "user.name", "Test")
-    git("commit", "--allow-empty", "-qm", "base")
+    (repo / "inherited.py").write_text("first = 'λ'\nsecond = 2\nthird = 3\n")
+    git("add", ".")
+    git("commit", "-qm", "base")
     base = git("rev-parse", "HEAD")
     (repo / "subject.py").write_text("value = 'évaluated'\n")
     (repo / "proof.txt").write_text("Entire proof " + "λ" * 2400)
@@ -361,3 +364,184 @@ def test_cli_rejects_malformed_report_shapes_without_traceback(
     assert caught.value.code == 2
     assert "error:" in capsys.readouterr().err
     assert not output.exists()
+
+
+def supporting_descriptor(repo, row, git, *, ranges=None):
+    sha = row["packet"]["ground_truth_evidence"]["merge_sha"]
+    data = (repo / "inherited.py").read_bytes()
+    return {
+        "path": "inherited.py",
+        "evaluated_sha": sha,
+        "blob_sha": git("rev-parse", sha + ":inherited.py"),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "line_ranges": ranges or [],
+    }
+
+
+@pytest.mark.parametrize("ranges", [[], [[1, 1], [3, 3]]])
+def test_supporting_sources_are_recollected_separately_and_reach_role_prompt(
+    qualified_input, monkeypatch, ranges
+):
+    repo, row, qualification, git = qualified_input
+    descriptor = supporting_descriptor(repo, row, git, ranges=ranges)
+    qualification["supporting_sources"] = [descriptor]
+    before = copy.deepcopy(row)
+    (repo / "inherited.py").write_text("working tree decoy")
+    case = retro.qualify_collected_case(row, repo, qualification)
+    packet = roles._collected_snapshot(case)
+    ground = packet["ground_truth_evidence"]
+    collection = ground["collected_evidence"]
+    assert {x["path"] for x in collection["sources"]} == {"subject.py", "proof.txt"}
+    support = collection["supporting_sources"][0]
+    assert support["sha256"] == descriptor["sha256"]
+    assert support["exhaustive"] is (not ranges)
+    if ranges:
+        assert "bytes_utf8" not in support
+        assert [x["bytes_utf8"] for x in support["excerpts"]] == ["first = 'λ'\n", "third = 3\n"]
+        for excerpt in support["excerpts"]:
+            assert excerpt["sha256"] == hashlib.sha256(excerpt["bytes_utf8"].encode()).hexdigest()
+    else:
+        assert support["bytes_utf8"] == "first = 'λ'\nsecond = 2\nthird = 3\n"
+    assert ground["qualification"]["persisted_admission"] is False
+    assert ground["qualification"]["external_exhaustiveness"] == "unverified"
+    revision = ground["qualification"]["material_evidence_revision"]
+    assert len(revision) == 64
+    assert (
+        roles._collected_snapshot(retro.qualify_collected_case(row, repo, qualification)) == packet
+    )
+    seen = {}
+
+    def offload(backend, prompt, **kwargs):
+        seen["prompt"] = prompt
+        return {
+            "exit": 0,
+            "run_id": "synthetic-supporting",
+            "output": json.dumps(proposal("supporting-git-path:inherited.py")),
+        }
+
+    monkeypatch.setattr(roles.dispatcher, "offload", offload)
+    monkeypatch.setattr(roles.feedback, "record_role_run", lambda **kwargs: None)
+    result = roles.run_adjudicator_agent(case=case, backend="gemini", dispatch=True)
+    assert result["decision_source"] == "adjudicator_agent"
+    assert "first = '\\u03bb'" in seen["prompt"]
+    assert "working tree decoy" not in seen["prompt"]
+    assert row == before
+    assert (
+        retro.summarize([{"packet": packet, "decision": "reject_blocker", "later_truth": "PASS"}])[
+            "adjudicated"
+        ]
+        == 0
+    )
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "not-list",
+        "not-object",
+        "forged-hash",
+        "forged-blob",
+        "stale-revision",
+        "diff-collision",
+        "duplicate",
+        "unsafe-path",
+        "injected-text",
+        "injected-complete",
+        "ranges-not-list",
+        "range-zero",
+        "range-overlap",
+        "range-reversed",
+        "range-beyond-file",
+        "range-bool",
+        "range-float",
+        "range-string",
+        "range-shape",
+    ],
+)
+def test_supporting_manifest_refuses_forgery_and_invalid_excerpts(qualified_input, defect):
+    repo, row, qualification, git = qualified_input
+    item = supporting_descriptor(repo, row, git)
+    qualification["supporting_sources"] = [item]
+    if defect == "not-list":
+        qualification["supporting_sources"] = {}
+    elif defect == "not-object":
+        qualification["supporting_sources"] = ["invalid"]
+    elif defect == "forged-hash":
+        item["sha256"] = "0" * 64
+    elif defect == "forged-blob":
+        item["blob_sha"] = "0" * 40
+    elif defect == "stale-revision":
+        item["evaluated_sha"] = qualification["comparison_base"]
+    elif defect == "diff-collision":
+        item["path"] = "subject.py"
+        item["blob_sha"] = git("rev-parse", item["evaluated_sha"] + ":subject.py")
+        item["sha256"] = hashlib.sha256((repo / "subject.py").read_bytes()).hexdigest()
+    elif defect == "duplicate":
+        qualification["supporting_sources"].append(copy.deepcopy(item))
+    elif defect == "unsafe-path":
+        item["path"] = "../inherited.py"
+    elif defect == "injected-text":
+        item["bytes_utf8"] = "forged"
+    elif defect == "injected-complete":
+        item["complete"] = True
+    else:
+        item["line_ranges"] = {
+            "ranges-not-list": None,
+            "range-zero": [[0, 1]],
+            "range-overlap": [[1, 2], [2, 3]],
+            "range-reversed": [[2, 1]],
+            "range-beyond-file": [[1, 4]],
+            "range-bool": [[True, 1]],
+            "range-float": [[1.0, 1]],
+            "range-string": [["1", 1]],
+            "range-shape": [[1]],
+        }[defect]
+    with pytest.raises(ValueError):
+        retro.qualify_collected_case(row, repo, qualification)
+
+
+def test_material_revision_binds_supporting_coverage_and_owned_unknowns(qualified_input):
+    repo, row, qualification, git = qualified_input
+
+    def revision():
+        return roles._collected_snapshot(retro.qualify_collected_case(row, repo, qualification))[
+            "ground_truth_evidence"
+        ]["qualification"]["material_evidence_revision"]
+
+    original = revision()
+    qualification["supporting_sources"] = [supporting_descriptor(repo, row, git)]
+    full = revision()
+    qualification["supporting_sources"][0]["line_ranges"] = [[1, 1]]
+    excerpt = revision()
+    qualification["criterion_mapping"][0]["unknowns"][0][
+        "next_action"
+    ] = "Recover authentic receipt."
+    assert len({original, full, excerpt, revision()}) == 4
+
+
+def test_supporting_sources_cannot_bypass_complete_prompt_byte_ceiling(qualified_input):
+    repo, row, qualification, git = qualified_input
+    qualification["supporting_sources"] = [supporting_descriptor(repo, row, git)]
+    case = retro.qualify_collected_case(row, repo, qualification)
+    packet = roles._collected_snapshot(case)
+    prompt = roles.ROLE_REGISTRY["adjudicator"].build_prompt(
+        {"case": packet, "complete_collected_case": True}
+    )
+    with pytest.raises(ValueError, match="prompt exceeds"):
+        retro.qualify_collected_case(
+            row, repo, qualification, prompt_byte_limit=len(prompt.encode()) - 1
+        )
+
+
+def test_material_revision_is_independent_of_checkout_location(qualified_input, tmp_path):
+    repo, row, qualification, git = qualified_input
+    qualification["supporting_sources"] = [supporting_descriptor(repo, row, git)]
+    other = tmp_path / "other-checkout"
+    shutil.copytree(repo, other)
+    revisions = [
+        roles._collected_snapshot(retro.qualify_collected_case(row, location, qualification))[
+            "ground_truth_evidence"
+        ]["qualification"]["material_evidence_revision"]
+        for location in [repo, other]
+    ]
+    assert revisions[0] == revisions[1]

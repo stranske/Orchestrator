@@ -1039,6 +1039,72 @@ def _criterion_texts(body: str) -> list[str]:
     return criteria
 
 
+def _collect_supporting_sources(
+    manifest: Any, repository: Path, sha: str, changed_paths: list[str], byte_limit: int
+) -> list[dict]:
+    """Recollect inherited Git bytes; supporting paths never expand the PR diff.
+
+    Descriptors bind the full blob, even when explicit inclusive line ranges
+    select a smaller, non-exhaustive prompt excerpt. Caller-supplied contents
+    and completeness flags are never evidence.
+    """
+    if not isinstance(manifest, list):
+        raise ValueError("supporting_sources must be a list")
+    records = []
+    seen = set(changed_paths)
+    for item in manifest:
+        if not isinstance(item, dict) or set(item) != {
+            "path",
+            "evaluated_sha",
+            "blob_sha",
+            "sha256",
+            "line_ranges",
+        }:
+            raise ValueError("supporting source descriptor has invalid fields")
+        path = item["path"]
+        if not isinstance(path, str) or not _safe_source_path(path) or path in seen:
+            raise ValueError("supporting paths must be unique, safe and outside the diff")
+        seen.add(path)
+        if item["evaluated_sha"] != sha:
+            raise ValueError("supporting source must bind the evaluated revision")
+        record, gaps = _collect_git_blob(repository, sha, path, byte_limit)
+        if gaps or not record["complete"]:
+            raise ValueError("supporting source collection failed: " + json.dumps(gaps))
+        if item["blob_sha"] != record["blob_sha"] or item["sha256"] != record["sha256"]:
+            raise ValueError("supporting source blob/hash mismatch")
+        ranges = item["line_ranges"]
+        if not isinstance(ranges, list):
+            raise ValueError("supporting line_ranges must be a list")
+        lines = record["bytes_utf8"].splitlines(keepends=True)
+        previous_end = 0
+        excerpts = []
+        for span in ranges:
+            if (
+                not isinstance(span, list)
+                or len(span) != 2
+                or any(type(n) is not int for n in span)
+                or not (previous_end < span[0] <= span[1] <= len(lines))
+            ):
+                raise ValueError("supporting line ranges must be ordered, disjoint and in bounds")
+            text = "".join(lines[span[0] - 1 : span[1]])
+            excerpts.append(
+                {
+                    "start_line": span[0],
+                    "end_line": span[1],
+                    "bytes_utf8": text,
+                    "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                }
+            )
+            previous_end = span[1]
+        record["line_ranges"] = ranges
+        record["exhaustive"] = not ranges
+        if ranges:
+            record.pop("bytes_utf8")
+            record["excerpts"] = excerpts
+        records.append(record)
+    return records
+
+
 def qualify_collected_case(
     row: dict,
     repository: Path,
@@ -1130,6 +1196,10 @@ def qualify_collected_case(
                 raise ValueError("incomplete before-source evidence: " + json.dumps(before_gaps))
             before_sources.append(before)
     collection["before_sources"] = before_sources
+    supporting = _collect_supporting_sources(
+        qualification.get("supporting_sources", []), repository, sha, actual_paths, byte_limit
+    )
+    collection["supporting_sources"] = supporting
     locations = {item["location"] for item in collection["acceptance_artifacts"]}
     for criterion, mapping in zip(criteria, mappings):
         if not isinstance(mapping, dict) or mapping.get("criterion") != criterion:
@@ -1153,6 +1223,7 @@ def qualify_collected_case(
         ):
             raise ValueError("criterion mapping needs collected artifacts or named owned UNKNOWNs")
     refs = set(actual_paths) | locations
+    refs.update("supporting-git-path:" + item["path"] for item in supporting)
     for mapping in mappings:
         refs.update(item["evidence_ref"] for item in mapping.get("unknowns", []))
     packet["ground_truth_evidence"] = {
@@ -1177,6 +1248,14 @@ def qualify_collected_case(
         },
     }
     packet["metadata_only"] = False
+    # A deterministic content revision is an identity, never persisted retry or
+    # grading authority. Bind all recollected bytes, mappings and explicit UNKNOWNs.
+    revision_input = json.loads(json.dumps(packet))
+    # A checkout location is transport metadata, not a new evidence revision.
+    revision_input["ground_truth_evidence"]["collected_evidence"].pop("repository")
+    packet["ground_truth_evidence"]["qualification"]["material_evidence_revision"] = hashlib.sha256(
+        json.dumps(revision_input, sort_keys=True, ensure_ascii=True).encode()
+    ).hexdigest()
     result = roles._issue_collected_case(packet, prompt_byte_limit)
     prompt = roles.ROLE_REGISTRY["adjudicator"].build_prompt(
         {"case": roles._collected_snapshot(result), "complete_collected_case": True}
@@ -1435,6 +1514,13 @@ def weekly_line(path: Path | None = None) -> str:
 
 
 def _selftest() -> None:
+    assert _collect_supporting_sources([], Path("."), "a" * 40, [], 1) == []
+    try:
+        _collect_supporting_sources({}, Path("."), "a" * 40, [], 1)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("malformed supporting manifest accepted")
     try:
         build_packet({"target": "owner/repo#1"}, {})
     except ValueError:
@@ -1492,7 +1578,7 @@ def _selftest() -> None:
     assert [r["run_id"] for r in attempt_order([fresh, aged], queue, retry=False)] == ["new", "old"]
     assert summarize([{"decision": None}])["retry_pending"] == 1
     assert summarize([{"decision": "reject_blocker"}])["retry_pending"] == 0
-    print("adjudicator_retro selftest: 12 checks passed")
+    print("adjudicator_retro selftest: 14 checks passed")
 
 
 def main() -> int:
