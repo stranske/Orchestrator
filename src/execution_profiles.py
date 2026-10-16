@@ -191,8 +191,8 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
         # cheap rung but profile selection and feedback bucketing could not reach it. That is the
         # SAME defect as the Pro-only regression described above, one rung further down -- a ladder
         # is only a choice if every rung it names is registered.
-        # Historical Flash/Pro identities stay immutable and addressable. Production selection
-        # follows PROFILE_RETIREMENTS to the owner-approved Argon effort ladder.
+        # Historical identities stay immutable and addressable. 3.8 Flash is current for cheap/mid;
+        # the retired 3.1 Pro identity follows PROFILE_RETIREMENTS to Argon High (the full tier).
         _profile(
             "gemini-3.7-flash-high",
             "gemini-3.7-flash-high",
@@ -361,8 +361,6 @@ CREATE TABLE IF NOT EXISTS route_weights_v2 (
 PROFILE_RETIREMENTS: dict[str, str] = {
     "gemini-3.7-flash-high": "gemini-3.8-flash-high",
     "gemini-3.7-flash-low": "gemini-3.8-flash-low",
-    "gemini-3.8-flash-low": "gemini-4-argon-low",
-    "gemini-3.8-flash-high": "gemini-4-argon-medium",
     "gemini-3.1-pro-high": "gemini-4-argon-high",
     "codex-5.6-sol-high": "codex-6.1-sol-high",
     "codex-5.6-sol-medium": "codex-6.1-sol-medium",
@@ -472,6 +470,18 @@ def validate_profile(profile: dict[str, Any]) -> dict[str, Any]:
     if unknown:
         raise ValueError(f"unknown capacity pools: {unknown}")
     return dict(profile)
+
+
+def _selftest() -> None:
+    for effort in ("low", "high"):
+        old = f"gemini-3.7-flash-{effort}"
+        current = f"gemini-3.8-flash-{effort}"
+        assert get_profile(old)["requested_model"] == old, "historical profiles stay immutable"
+        assert (
+            resolve_production_profile_id(old) == current
+        ), "historical Flash must resolve to Flash"
+        routable = {p["profile_id"] for p in profiles_for_agent("gemini")}
+        assert current in routable and old not in routable, "current Flash must remain routable"
 
 
 def get_profile(profile: str | dict[str, Any]) -> dict[str, Any]:

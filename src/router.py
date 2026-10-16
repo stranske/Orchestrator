@@ -37,6 +37,7 @@ import time
 from pathlib import Path
 from typing import Any, Tuple, TypedDict, Union
 
+import adapters
 import capabilities
 import claims
 import execution_profiles
@@ -228,6 +229,24 @@ ROUTE_TABLE: dict = {
 # The public route table remains a generic mapping for compatibility with its existing consumers;
 # this private view records the invariant enforced by the static table above.
 _ROUTE_TABLE_TYPED: dict[str, RouteSpec] = ROUTE_TABLE
+
+
+def _automatic_profiles(entry: RouteEntry, *, transport: str) -> list[dict]:
+    """Profiles eligible for a new routing decision for one route-table entry.
+
+    Gemini's tier is a spend policy, so its automatic candidates must carry the
+    exact model pinned for the entry's mode.  Historical/replay callers use
+    ``execution_profiles`` directly and remain able to name every profile.
+    """
+    profiles = execution_profiles.profiles_for_agent(entry["agent"], transport=transport)
+    if entry["agent"] != "gemini":
+        return profiles
+    tier = adapters.effective_tier("gemini", entry["mode"])
+    health = adapters.model_health("gemini", tier)
+    if not health["resolvable"] or not health["model"]:
+        return []
+    expected_model = health["model"]
+    return [profile for profile in profiles if profile["requested_model"] == expected_model]
 
 
 def _state(cap: dict, agent: str) -> str:
@@ -487,9 +506,18 @@ def select_agent(
             continue
         if st == "warn" and not allow_warn:
             continue
-        agent_profiles = execution_profiles.profiles_for_agent(
+        raw_agent_profiles = execution_profiles.profiles_for_agent(
             entry["agent"], transport=profile_transport
         )
+        agent_profiles = _automatic_profiles(entry, transport=profile_transport)
+        if (
+            entry["agent"] == "gemini"
+            and not agent_profiles
+            and (raw_agent_profiles or profile_transport != "remote")
+        ):
+            # A missing tier profile is a configuration fault. Do not turn it into
+            # a profile-less Gemini dispatch that bypasses the model policy.
+            continue
         if entry["agent"] == "codex" and execution_profiles.codex_operator_tier_override(
             entry.get("mode")
         ):
@@ -554,7 +582,18 @@ def select_agent(
         "exploration": explored,
         "exploration_mode": _exploration_mode(exploration_mode) if explored else "",
     }
-    profiles = execution_profiles.profiles_for_agent(entry["agent"], transport=profile_transport)
+    profiles = _automatic_profiles(entry, transport=profile_transport)
+    if (
+        entry["agent"] == "gemini"
+        and not profiles
+        and (
+            profile_transport != "remote"
+            or execution_profiles.profiles_for_agent("gemini", transport=profile_transport)
+        )
+    ):
+        # Model health may change since admission (for example a catalog refresh).
+        # Never turn that disappearance into an unprofiled local dispatch.
+        return None
     if entry["agent"] == "codex" and execution_profiles.codex_operator_tier_override(
         entry.get("mode")
     ):
@@ -1122,8 +1161,25 @@ def backlog_generated_at() -> int | None:
 
 
 # ---------------------------------------------------------------------------
+def _selftest_gemini_policy() -> None:
+    from unittest.mock import patch
+
+    entry: RouteEntry = {"agent": "gemini", "mode": "full", "late": False}
+    with patch.dict(os.environ, {"ORCH_GEMINI_MAX_TIER": "mid"}), patch.object(
+        adapters, "advertised_models", return_value=list(adapters.MODEL_TIERS["gemini"].values())
+    ):
+        assert {p["requested_model"] for p in _automatic_profiles(entry, transport="local")} == {
+            "gemini-3.8-flash-high"
+        }, "automatic profiles must obey the effective ceiling"
+    with patch.object(adapters, "model_health", return_value={"resolvable": False, "model": None}):
+        assert not _automatic_profiles(entry, transport="local"), "unresolved models must refuse"
+
+
 def _selftest() -> None:
     import tempfile
+
+    _selftest_gemini_policy()
+    execution_profiles._selftest()
 
     tmp = tempfile.mkdtemp(prefix="router-selftest-")
     os.environ["HANDOFF_DIR"] = tmp
