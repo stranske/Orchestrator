@@ -241,7 +241,11 @@ def _automatic_profiles(entry: RouteEntry, *, transport: str) -> list[dict]:
     profiles = execution_profiles.profiles_for_agent(entry["agent"], transport=transport)
     if entry["agent"] != "gemini":
         return profiles
-    expected_model = adapters.MODEL_TIERS["gemini"].get(entry["mode"])
+    tier = adapters.effective_tier("gemini", entry["mode"])
+    health = adapters.model_health("gemini", tier)
+    if not health["resolvable"] or not health["model"]:
+        return []
+    expected_model = health["model"]
     return [profile for profile in profiles if profile["requested_model"] == expected_model]
 
 
@@ -1146,8 +1150,25 @@ def backlog_generated_at() -> int | None:
 
 
 # ---------------------------------------------------------------------------
+def _selftest_gemini_policy() -> None:
+    from unittest.mock import patch
+
+    entry: RouteEntry = {"agent": "gemini", "mode": "full", "late": False}
+    with patch.dict(os.environ, {"ORCH_GEMINI_MAX_TIER": "mid"}), patch.object(
+        adapters, "advertised_models", return_value=list(adapters.MODEL_TIERS["gemini"].values())
+    ):
+        assert {p["requested_model"] for p in _automatic_profiles(entry, transport="local")} == {
+            "gemini-3.8-flash-high"
+        }, "automatic profiles must obey the effective ceiling"
+    with patch.object(adapters, "model_health", return_value={"resolvable": False, "model": None}):
+        assert not _automatic_profiles(entry, transport="local"), "unresolved models must refuse"
+
+
 def _selftest() -> None:
     import tempfile
+
+    _selftest_gemini_policy()
+    execution_profiles._selftest()
 
     tmp = tempfile.mkdtemp(prefix="router-selftest-")
     os.environ["HANDOFF_DIR"] = tmp

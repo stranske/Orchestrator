@@ -1329,3 +1329,31 @@ def test_argon_rename_preserves_family_and_effort(monkeypatch):
             )
             renamed = adapters.model_health("gemini", tier)
             assert renamed["model"] == f"gemini-{newest}-argon-{effort}"
+
+
+@pytest.mark.parametrize("scenario", ["ceiling", "override", "unresolvable"])
+@pytest.mark.parametrize("surface", ["router", "offload"])
+def test_automatic_gemini_respects_effective_model_policy(monkeypatch, scenario, surface):
+    """An immutable profile must not bypass the live operator policy or catalog health."""
+    monkeypatch.delenv("ORCH_GEMINI_MAX_TIER", raising=False)
+    monkeypatch.delenv("ORCH_GEMINI_MODEL", raising=False)
+    monkeypatch.delenv("ORCH_GEMINI_MODEL_FULL", raising=False)
+    if scenario == "ceiling":
+        monkeypatch.setenv("ORCH_GEMINI_MAX_TIER", "mid")
+        _fake_catalog(monkeypatch, list(adapters.MODEL_TIERS["gemini"].values()))
+        expected = "gemini-3.8-flash-high"
+    elif scenario == "override":
+        monkeypatch.setenv("ORCH_GEMINI_MODEL_FULL", "gemini-4-argon-medium")
+        _fake_catalog(monkeypatch, ["gemini-4-argon-medium", "gemini-4-argon-high"])
+        expected = "gemini-4-argon-medium"
+    else:
+        _fake_catalog(monkeypatch, ["gemini-3.8-flash-high"])
+        expected = None
+    if surface == "router":
+        selected = router._automatic_profiles(
+            {"agent": "gemini", "mode": "full", "late": False}, transport="local"
+        )
+        assert {p["requested_model"] for p in selected} == ({expected} if expected else set())
+    else:
+        selected = dispatcher._select_offload_profile("gemini", "full")
+        assert (selected["requested_model"] if selected else None) == expected

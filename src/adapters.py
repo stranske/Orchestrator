@@ -2258,6 +2258,8 @@ def _selftest():
 
 
 def _selftest_inner(*, gaps: list[str] | None = None):
+    assert _auto_resolve("gemini", "mid", "gemini-3.8-flash-high", ["gemini-4-argon-high"]) is None
+    assert _auto_resolve("gemini", "full", "gemini-4-argon-high", ["gemini-3.8-flash-high"]) is None
     import env_prereq  # imported here: env_prereq reads this module
 
     gaps = gaps if gaps is not None else []

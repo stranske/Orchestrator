@@ -1630,6 +1630,7 @@ def _select_offload_profile(agent: str, mode: str | None) -> dict | None:
         # paths.
         tier = mode if mode in adapters.MODEL_TIER_NAMES else adapters.DEFAULT_OFFLOAD_TIER
         if agent == "gemini":
+            tier = adapters.effective_tier(agent, tier)
             health = adapters.model_health(agent, tier)
             if not health["resolvable"]:
                 return None
@@ -2795,8 +2796,27 @@ def _selftest_spawn_reads_the_agents_status(plan: dict, root: Path) -> None:
     assert "--exit-code 7" in steps[1], ("complete is told the agent's status", steps)
 
 
+def _selftest_gemini_refusal() -> None:
+    from unittest.mock import patch
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("unavailable automatic Gemini profile reached execution")
+
+    with patch.dict(os.environ, {"ORCH_OFFLOAD_DISABLED": "0"}), patch.object(
+        execution_profiles, "profiles_for_agent", return_value=[]
+    ), patch.object(adapters, "agent_workspace", side_effect=forbidden), patch.object(
+        sys.modules[__name__], "_capability_heartbeat", side_effect=forbidden
+    ), patch.object(
+        subprocess, "run", side_effect=forbidden
+    ):
+        result = offload("gemini", "selftest refusal", mode="mid")
+        assert result["exit"] == 2 and result["run_id"] is None, result
+
+
 def _selftest() -> None:
     import tempfile
+
+    _selftest_gemini_refusal()
 
     tmp = tempfile.mkdtemp(prefix="dispatcher-selftest-")
     os.environ["HANDOFF_DIR"] = tmp

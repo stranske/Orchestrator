@@ -451,6 +451,18 @@ def validate_profile(profile: dict[str, Any]) -> dict[str, Any]:
     return dict(profile)
 
 
+def _selftest() -> None:
+    for effort in ("low", "high"):
+        old = f"gemini-3.7-flash-{effort}"
+        current = f"gemini-3.8-flash-{effort}"
+        assert get_profile(old)["requested_model"] == old, "historical profiles stay immutable"
+        assert (
+            resolve_production_profile_id(old) == current
+        ), "historical Flash must resolve to Flash"
+        routable = {p["profile_id"] for p in profiles_for_agent("gemini")}
+        assert current in routable and old not in routable, "current Flash must remain routable"
+
+
 def get_profile(profile: str | dict[str, Any]) -> dict[str, Any]:
     if isinstance(profile, dict):
         return validate_profile(profile)
