@@ -751,9 +751,9 @@ def test_material_revision_binds_supporting_coverage_and_owned_unknowns(qualifie
     full = revision()
     qualification["supporting_sources"][0]["line_ranges"] = [[1, 1]]
     excerpt = revision()
-    qualification["criterion_mapping"][0]["unknowns"][0]["next_action"] = (
-        "Recover authentic receipt."
-    )
+    qualification["criterion_mapping"][0]["unknowns"][0][
+        "next_action"
+    ] = "Recover authentic receipt."
     assert len({original, full, excerpt, revision()}) == 4
 
 

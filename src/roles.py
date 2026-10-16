@@ -3302,9 +3302,9 @@ def _selftest() -> None:
         reset_role_invocation_counts()
         # route_role: excludes RESERVE (claude) by default, and only routes within eligible backends.
         pick = route_role("redirect", cap=fake_cap, learned={}, exploration_rate=0.0)
-        assert pick is not None and pick["agent"] in ROLE_REGISTRY["redirect"].eligible_backends, (
-            pick
-        )
+        assert (
+            pick is not None and pick["agent"] in ROLE_REGISTRY["redirect"].eligible_backends
+        ), pick
         assert pick["agent"] != "claude", pick
         prompt_pick = route_role("prompt", cap=fake_cap, learned={}, exploration_rate=0.0)
         assert (
@@ -3368,9 +3368,9 @@ def _selftest() -> None:
                 "corrected_prompt": "",
             }
         ), "empty corrected_prompt must fail"
-        assert _validate_redirect({"action": "frobnicate", "reason": "x", "confidence": "high"}), (
-            "bad action must fail"
-        )
+        assert _validate_redirect(
+            {"action": "frobnicate", "reason": "x", "confidence": "high"}
+        ), "bad action must fail"
 
         good_prompt = {
             "task_type": "implement",
@@ -3452,9 +3452,9 @@ def _selftest() -> None:
         prompt = _redirect_prompt(
             {"report": report, "acceptance_criteria": "All endpoints return 200."}
         )
-        assert "All endpoints return 200." in prompt and "STRICT JSON" in prompt, (
-            "prompt must carry AC + JSON contract"
-        )
+        assert (
+            "All endpoints return 200." in prompt and "STRICT JSON" in prompt
+        ), "prompt must carry AC + JSON contract"
 
         # A remote-shaped report's evidence/condition/note must reach the model verbatim —
         # the first live trial failed because these fields were dropped here.
@@ -3473,14 +3473,14 @@ def _selftest() -> None:
         assert "gate green on head" in remote_prompt, "every evidence line must render"
         assert "stall_kind=remote_pr_no_driver" in remote_prompt, "condition bits must render"
         assert "no local delegate exists" in remote_prompt, "reporter note must render"
-        assert "do not answer 'inspect' to re-gather" in remote_prompt, (
-            "pre-diagnosed guidance present"
-        )
+        assert (
+            "do not answer 'inspect' to re-gather" in remote_prompt
+        ), "pre-diagnosed guidance present"
         # and a report WITHOUT those fields renders the explicit absence marker, not garbage
         bare_prompt = _redirect_prompt({"report": report, "acceptance_criteria": "x"})
-        assert "Observed evidence supplied with this report:\n  (none)" in bare_prompt, (
-            "absence must be named"
-        )
+        assert (
+            "Observed evidence supplied with this report:\n  (none)" in bare_prompt
+        ), "absence must be named"
 
         # replayed proposal -> the agent's corrected prompt flows into the plan; still dry-run + confirm-gated.
         proposed = {
@@ -3580,9 +3580,9 @@ def _selftest() -> None:
         assert "pytest tests/test_progress.py" in prompt_res["dispatch_prompt"], prompt_res[
             "dispatch_prompt"
         ]
-        assert prompt_res["role_run_id"] is None and prompt_res["backend_run_id"] is None, (
-            prompt_res
-        )
+        assert (
+            prompt_res["role_run_id"] is None and prompt_res["backend_run_id"] is None
+        ), prompt_res
 
         mismatched = dict(good_prompt)
         mismatched["task_type"] = "review"
@@ -3609,9 +3609,9 @@ def _selftest() -> None:
             exploration_rate=0.0,
         )
         assert baseline_prompt_res["decision_source"] == "baseline_dispatcher", baseline_prompt_res
-        assert "Work stranske/LMS#12 to completion" in baseline_prompt_res["dispatch_prompt"], (
-            baseline_prompt_res
-        )
+        assert (
+            "Work stranske/LMS#12 to completion" in baseline_prompt_res["dispatch_prompt"]
+        ), baseline_prompt_res
 
         decomposer_prompt = _decomposer_prompt(
             {
@@ -3621,9 +3621,9 @@ def _selftest() -> None:
                 "subtask_count": 3,
             }
         )
-        assert "DecomposerAgent" in decomposer_prompt and "Plan-and-Solve" in decomposer_prompt, (
-            decomposer_prompt
-        )
+        assert (
+            "DecomposerAgent" in decomposer_prompt and "Plan-and-Solve" in decomposer_prompt
+        ), decomposer_prompt
         good_plan = epic_lane._valid_plan()
         assert _validate_decomposer(good_plan) == [], _validate_decomposer(good_plan)
         decomposed = run_decomposer_agent(
@@ -3641,9 +3641,9 @@ def _selftest() -> None:
             and decomposed["decision_source"] == "decomposer_agent"
         ), decomposed
         assert len(decomposed["dispatch_prompts"]) == 3, decomposed["dispatch_prompts"]
-        assert decomposed["role_run_id"] is None and decomposed["backend_run_id"] is None, (
-            decomposed
-        )
+        assert (
+            decomposed["role_run_id"] is None and decomposed["backend_run_id"] is None
+        ), decomposed
 
         bad_plan = json.loads(json.dumps(good_plan))
         bad_plan["integration"]["order"] = ["E1"]
@@ -3736,9 +3736,9 @@ def _selftest() -> None:
             learned={},
             exploration_rate=0.0,
         )
-        assert triaged["mutates_state"] is False and triaged["decision_source"] == "triage_agent", (
-            triaged
-        )
+        assert (
+            triaged["mutates_state"] is False and triaged["decision_source"] == "triage_agent"
+        ), triaged
         assert len(triaged["advisory_plan"]["recommendations"]) == 3, triaged
         assert triaged["role_run_id"] is None and triaged["backend_run_id"] is None, triaged
 
@@ -3754,9 +3754,9 @@ def _selftest() -> None:
         assert (
             bad_triaged["decision_source"] == "baseline_backlog_order" and bad_triaged["errors"]
         ), bad_triaged
-        assert bad_triaged["advisory_plan"]["recommendations"][0]["action"] == "work_now", (
-            bad_triaged
-        )
+        assert (
+            bad_triaged["advisory_plan"]["recommendations"][0]["action"] == "work_now"
+        ), bad_triaged
 
         adjudication_case = {
             "case_type": "runtime_ac",
@@ -3814,9 +3814,9 @@ def _selftest() -> None:
             and adjudicated["decision_source"] == "adjudicator_agent"
         ), adjudicated
         assert adjudicated["advisory_plan"]["decision"] == "reject_blocker", adjudicated
-        assert adjudicated["role_run_id"] is None and adjudicated["backend_run_id"] is None, (
-            adjudicated
-        )
+        assert (
+            adjudicated["role_run_id"] is None and adjudicated["backend_run_id"] is None
+        ), adjudicated
 
         retrospective_packet = {
             **adjudication_case,
@@ -3851,9 +3851,9 @@ def _selftest() -> None:
             bad_adjudicated["decision_source"] == "baseline_needs_more_evidence"
             and bad_adjudicated["errors"]
         ), bad_adjudicated
-        assert bad_adjudicated["advisory_plan"]["decision"] == "needs_more_evidence", (
-            bad_adjudicated
-        )
+        assert (
+            bad_adjudicated["advisory_plan"]["decision"] == "needs_more_evidence"
+        ), bad_adjudicated
 
         incomplete_case = dict(adjudication_case)
         incomplete_case.pop("ground_truth_evidence")

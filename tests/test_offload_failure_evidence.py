@@ -235,6 +235,38 @@ def test_native_retry_limit_preserves_legacy_retry(stores, monkeypatch, retry_li
     assert receipts[0]["exit"] == 1
 
 
+@pytest.mark.parametrize("receipt_failure", [False, True])
+def test_interrupted_invocation_journals_before_completion(stores, monkeypatch, receipt_failure):
+    order = []
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    def receipt(response):
+        assert response["exit"] == 130 and response["run_id"]
+        order.append("receipt")
+        if receipt_failure:
+            raise RuntimeError("journal unavailable")
+
+    monkeypatch.setattr(dispatcher.subprocess, "run", interrupted)
+    monkeypatch.setattr(
+        dispatcher.adapters, "record_ledger", lambda *a, **kw: order.append(kw.get("event"))
+    )
+    with pytest.raises(RuntimeError if receipt_failure else KeyboardInterrupt):
+        dispatcher.offload(
+            "gemini",
+            "test",
+            cwd=str(stores),
+            max_network_retries=0,
+            attempt_receipt_callback=receipt,
+        )
+    assert "receipt" in order
+    if receipt_failure:
+        assert "complete" not in order
+    else:
+        assert order.index("receipt") < order.index("complete")
+
+
 @pytest.mark.parametrize(
     "returncode,exit_code",
     # The measured runs were recorded as exit 70 from the marker their reads quoted; since
@@ -246,9 +278,9 @@ def test_a_failed_codex_offload_whose_work_quotes_a_limit_is_no_incident(
     monkeypatch, stores, returncode, exit_code
 ):
     stdout = "\n".join(MEASURED)
-    assert rate_incidents.classify_provider_failure(stdout)[2] == "high", (
-        "the fixture must hold the phrase the whole-stdout read took for a refusal"
-    )
+    assert (
+        rate_incidents.classify_provider_failure(stdout)[2] == "high"
+    ), "the fixture must hold the phrase the whole-stdout read took for a refusal"
     result = _offload(monkeypatch, stores, "codex", returncode, stdout, MEASURED_STDERR)
     assert result["exit"] == exit_code, result
     assert result["rate_incident_evidence"]["confidence"] == "none", result
