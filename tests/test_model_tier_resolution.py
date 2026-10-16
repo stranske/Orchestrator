@@ -282,7 +282,7 @@ def test_build_command_honours_every_tier(tmp_path, monkeypatch):
     expected = {
         "codex": ("gpt-6-luna", "gpt-5.6-terra", "gpt-6.1-sol"),
         "claude": ("claude-haiku-4-5", "claude-sonnet-5-5", "claude-sonnet-5-5"),
-        "gemini": ("gemini-4-argon-low", "gemini-4-argon-medium", "gemini-4-argon-high"),
+        "gemini": ("gemini-3.8-flash-low", "gemini-3.8-flash-high", "gemini-4-argon-high"),
     }
     for agent, models in expected.items():
         for tier, model in zip(adapters.MODEL_TIER_NAMES, models):
@@ -292,10 +292,11 @@ def test_build_command_honours_every_tier(tmp_path, monkeypatch):
             assert model == adapters.MODEL_TIERS[agent][expected_tier], (agent, tier)
 
 
-def test_gemini_tiers_use_the_owner_approved_argon_effort_ladder():
-    """Owner-approved successor keeps all three effort rungs distinct."""
-    for tier, effort in (("cheap", "low"), ("mid", "medium"), ("full", "high")):
-        assert adapters.MODEL_TIERS["gemini"][tier] == f"gemini-4-argon-{effort}"
+def test_gemini_cheap_and_mid_are_flash_and_only_full_is_argon():
+    """Same shape as codex/claude: routine tiers run the cheaper model, only full the frontier one."""
+    for tier in ("cheap", "mid"):
+        assert "flash" in adapters.MODEL_TIERS["gemini"][tier], tier
+    assert adapters.MODEL_TIERS["gemini"]["full"] == "gemini-4-argon-high"
 
 
 def test_offload_defaults_to_the_mid_tier():
@@ -1085,8 +1086,8 @@ def test_argon_successor_tiers_reach_matching_offload_profiles(monkeypatch, tmp_
     ):
         monkeypatch.delenv(name, raising=False)
     expected = {
-        "cheap": "gemini-4-argon-low",
-        "mid": "gemini-4-argon-medium",
+        "cheap": "gemini-3.8-flash-low",
+        "mid": "gemini-3.8-flash-high",
         "full": "gemini-4-argon-high",
     }
     assert adapters.MODEL_TIERS["gemini"] == expected
@@ -1101,7 +1102,7 @@ def test_argon_successor_tiers_reach_matching_offload_profiles(monkeypatch, tmp_
         chosen = dispatcher._select_offload_profile("gemini", mode)
         assert chosen is not None
         assert chosen["requested_model"] == expected[tier]
-        assert chosen["reasoning_effort"] == {"cheap": "low", "mid": "medium", "full": "high"}[tier]
+        assert chosen["reasoning_effort"] == {"cheap": "low", "mid": "high", "full": "high"}[tier]
         assert chosen["profile_id"] not in execution_profiles.PROFILE_RETIREMENTS
         argv = adapters.build_command(
             "gemini", "read only", mode=mode, cwd=tmp_path, profile=chosen
@@ -1113,21 +1114,26 @@ def test_argon_retirement_preserves_historical_profile_identity():
     import execution_profiles
 
     expected = {
-        "gemini-3.7-flash-low": "gemini-4-argon-low",
-        "gemini-3.7-flash-high": "gemini-4-argon-medium",
-        "gemini-3.8-flash-low": "gemini-4-argon-low",
-        "gemini-3.8-flash-high": "gemini-4-argon-medium",
+        "gemini-3.7-flash-low": "gemini-3.8-flash-low",
+        "gemini-3.7-flash-high": "gemini-3.8-flash-high",
         "gemini-3.1-pro-high": "gemini-4-argon-high",
     }
     for old, successor in expected.items():
         assert execution_profiles.get_profile(old)["requested_model"] == old
         assert execution_profiles.resolve_production_profile_id(old) == successor
-    active = execution_profiles.profiles_for_agent("gemini", transport="offload")
-    assert {p["requested_model"] for p in active} == set(expected.values())
+    # Current Flash is NOT retired: its identity resolves to itself.
+    for flash in ("gemini-3.8-flash-low", "gemini-3.8-flash-high"):
+        assert execution_profiles.resolve_production_profile_id(flash) == flash
+    active = {
+        p["requested_model"]
+        for p in execution_profiles.profiles_for_agent("gemini", transport="offload")
+    }
+    assert {"gemini-3.8-flash-low", "gemini-3.8-flash-high", "gemini-4-argon-high"} <= active
 
 
 def test_argon_rename_preserves_family_and_effort(monkeypatch):
-    for tier, effort in (("cheap", "low"), ("mid", "medium"), ("full", "high")):
+    """Only the full tier is Argon; a missing Argon family must not fall back to Pro or Flash."""
+    for tier, effort in (("full", "high"),):
         monkeypatch.delenv(f"ORCH_GEMINI_MODEL_{tier.upper()}", raising=False)
         monkeypatch.delenv("ORCH_GEMINI_MODEL", raising=False)
         _fake_catalog(monkeypatch, ["gemini-3.8-flash-high", "gemini-3.1-pro-high"])

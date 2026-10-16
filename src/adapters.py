@@ -52,9 +52,14 @@ AGENT_RUNTIME = Path(os.environ.get("ORCH_AGENT_RUNTIME_DIR", LOCAL_RUNTIME / "a
 #   claude — Claude 5 family: Opus 5.5 flagship (moved from Opus 5 on 2026-09-22), Sonnet 5.5 mid
 #            (moved from Sonnet 5 on 2026-09-30),
 #            Haiku 4.5 cheap.
-#   gemini — owner-approved Argon successor (2026-10-15), authenticated by `agy models`:
-#            cheap/mid/full map to Argon low/medium/high. These are requested CLI identities;
-#            advertisement alone does not attest the provider-resolved model or quality.
+#   gemini — Gemini 4 Argon is the FULL tier only (2026-10-15; it replaces the Pro slot, which agy no
+#            longer serves). cheap/mid stay on 3.8 Flash (low/high), matching the other families: the
+#            routine tiers run the smaller, cheaper model and only `full` runs the frontier model
+#            (codex Luna/Terra/Sol, claude Haiku/Sonnet/Opus). Argon bills ~2.7x Flash per token
+#            (~5.3x after 2026-11-30) and carries its own weekly-only quota, so routine reads and
+#            edits must not draw it down. Argon low/medium remain registered and explicitly
+#            requestable. These are requested CLI identities; advertisement alone does not attest
+#            the provider-resolved model or quality.
 #   vibe   — Mistral merged its coding line into ONE model (mistral-medium-3.5, 256k, replaced
 #            Devstral 2 as the Vibe default). No tiers to pin; the CLI default is correct.
 #   aider  — 'mistral/codestral-latest' is a floating alias that self-upgrades; pinning would be
@@ -72,8 +77,8 @@ MODEL_TIERS: dict[str, dict[str, str]] = {
     "codex": {"cheap": "gpt-6-luna", "mid": "gpt-5.6-terra", "full": "gpt-6.1-sol"},
     "claude": {"cheap": "claude-haiku-4-5", "mid": "claude-sonnet-5-5", "full": "claude-opus-5-5"},
     "gemini": {
-        "cheap": "gemini-4-argon-low",
-        "mid": "gemini-4-argon-medium",
+        "cheap": "gemini-3.8-flash-low",
+        "mid": "gemini-3.8-flash-high",
         "full": "gemini-4-argon-high",
     },
     "cursor": {},
@@ -2447,10 +2452,10 @@ def _selftest_inner(*, gaps: list[str] | None = None):
         assert agy_advertised_models() == [], "kill-switch must suppress the CLI probe entirely"
         unprobed = gemini_model_health()
         assert unprobed["resolvable"] and unprobed["source"] == "pinned_default", unprobed
-        # The owner-approved successor has one distinct Argon effort rung per tier.
+        # cheap/mid ride Flash; only full pays for the frontier Argon model.
         for tier, expected in (
-            ("cheap", "gemini-4-argon-low"),
-            ("mid", "gemini-4-argon-medium"),
+            ("cheap", "gemini-3.8-flash-low"),
+            ("mid", "gemini-3.8-flash-high"),
             ("full", "gemini-4-argon-high"),
         ):
             gt = build_command("gemini", "x", mode=tier, cwd=gemini_cwd)
