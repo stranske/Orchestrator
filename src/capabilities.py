@@ -228,7 +228,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "trigger_cadence": "daily",
         "flags_defaults": {"ORCH_ROUTE_WEIGHTS_PUBLISH": "0"},
         "output_artifact": "$ORCH_STATE_DIR/route-weights-export.json",
-        "downstream_consumer": "stranske/Workflows agent_delegation_policy (fail-open fetch)",
+        "downstream_consumer": "route_weights_export.py:publish_document hands the document to the Workflows config repository",
         "learning_sink": "none — export-only capability; no learner outcome is claimed",
         "gate_reason": "write-only shadow export; remote publication requires --publish and ORCH_ROUTE_WEIGHTS_PUBLISH=1",
         "gate_evidence": "latest-version, thresholded fixture export preserves reserve-seat separation",
@@ -257,7 +257,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
             "ORCH_RESEARCH_USAGE_BYPASS": "0",
         },
         "output_artifact": "research-usage-report.json and research_usage_opportunities rows",
-        "downstream_consumer": "orchestrate.sh cadence health and operator capacity review",
+        "downstream_consumer": "exp_abcd.py:followup consumes the opportunity decision before a follow-up",
         "learning_sink": "feedback research-usage opportunity ledger and observed review runs",
         "gate_reason": "optional research is fail-closed on missing provenance, anomaly, and budget",
         "gate_evidence": "pre-dispatch decision and terminal outcome share one opportunity id",
@@ -286,7 +286,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
             "promotion_allowed": False,
         },
         "output_artifact": "model-profile-trial state with source-integrity proof",
-        "downstream_consumer": "periodic_report.py and observability_dashboard.py",
+        "downstream_consumer": "periodic_report.py:build_report; observability_dashboard.py:build_dashboard",
         "learning_sink": "none; instrumentation attempts are excluded from profile learning",
         "gate_reason": "identity plumbing trial remains shadow-only and non-promoting",
         "gate_evidence": "one frozen packet, one shared-pool snapshot, and source manifests",
@@ -315,6 +315,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "evidence_threshold": "distinct durable subjects retain complete non-orphan lineage without redaction regressions",
     },
     "live-keepalive-supervisor": {
+        "downstream_consumer": "redirect_shadow.py:record_redirect; periodic_report.py:format_human",
         # Findability, declared ON THE GATE ENTRY. A twin entry in the declarations
         # table is forbidden: reconciliation merges the two dicts and the twin CLOBBERS
         # the gate's own fields (measured: the canary status vanished from the summary
@@ -347,6 +348,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "evidence_threshold": "linked live role outcomes and disagreements satisfy the Stage 2 gate",
     },
     "thompson-hybrid-routing": {
+        "downstream_consumer": "router.py:select_agent dispatches the sampled challenger",
         "status": "shadow",
         "entrypoint": "router.py",
         "matcher": {"kind": "env", "name": "ORCH_EXPLORATION_MODE", "equals": "thompson-hybrid"},
@@ -362,6 +364,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "evidence_threshold": "exploration review recommends thompson-hybrid",
     },
     "strategy-experiments": {
+        "downstream_consumer": "exp_abcd.py:prepare launches planned arms",
         "status": "wired",
         "entrypoint": "strategy_experiment.py",
         "matcher": {"kind": "env", "name": "ORCH_STRATEGY_EXPERIMENT", "equals": "1"},
@@ -391,13 +394,14 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
             "auto_merge_allowed": False,
         },
         "output_artifact": "experiment synthesis-promotion.json plus one verified delivery candidate",
-        "downstream_consumer": "Workflows auto-pilot/Keepalive after explicit external delivery link",
+        "downstream_consumer": "synthesis_promotion.py:default_delivery_discovery links an external delivery; synthesis_promotion.py:default_mirror_outcome mirrors its measured outcome",
         "learning_sink": "feedback synthesis outcome, influence edges, and source-arm completion lineage",
         "gate_reason": "candidate publication and merge remain outside the experiment harness",
         "gate_evidence": "candidate_ready requires synth_verified and direct publication is structurally false",
         "evidence_threshold": "one externally delivered candidate reaches a joined durable outcome without duplicate transitions",
     },
     "range-lane-rollout": {
+        "downstream_consumer": "range_lane_rollout.py:main delegates only on the triple-guarded apply branch",
         "status": "canary",
         "entrypoint": "range_lane_rollout.py",
         "matcher": {"kind": "env", "name": "ORCH_RANGE_LANE_ROLLOUT", "equals": "1"},
@@ -417,6 +421,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "evidence_threshold": "joined dispatch and durable outcome evidence supports extending the trial",
     },
     "runtime-ac-checks": {
+        "downstream_consumer": "merge_guard.py:evaluate_merge_gate consumes the runtime gate verdict",
         "notes": "dedup: runtime_ac authoring prompt, gate, ingest and weekly report already exist; "
         "extend those edges with unattended issue-derived shadow specs and coverage-free named "
         "checks. Shadow events never update outcomes or implicitly require a merge gate. "
@@ -514,7 +519,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "trigger_cadence": "underspecified or high-risk local dispatch; max once per cycle",
         "flags_defaults": {"dispatch": False, "ORCH_ROLE_SHADOW": "1"},
         "output_artifact": "validated dispatch prompt",
-        "downstream_consumer": "dispatcher.py:plan_dispatch accepted-role lineage",
+        "downstream_consumer": "dispatcher.py:plan_dispatch consumes validated role-authored prompts",
         "learning_sink": "feedback role runs and linked outcomes",
         "gate_reason": "bounded shadow authoring only; router/task type/gates remain deterministic",
         "gate_evidence": "selector diagnostics distinguish no match from capacity/gate withholding",
@@ -527,7 +532,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "trigger_cadence": "task_type=epic or epic_lane dispatch; max once per cycle",
         "flags_defaults": {"dispatch": False, "ORCH_ROLE_SHADOW": "1"},
         "output_artifact": "validated subtask DAG and dispatch prompts",
-        "downstream_consumer": "dispatcher prompt after epic_lane.py deterministic DAG validation",
+        "downstream_consumer": "epic_lane.py:build_dispatch_prompts validates the role DAG before worker prompts",
         "learning_sink": "feedback role runs and linked outcomes",
         "gate_reason": "role produces plans only; subtasks remain behind deterministic rails",
         "gate_evidence": "roles.py does not dispatch generated subtasks",
@@ -546,7 +551,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         },
         "notes": "dedup: extends roles.run_triage_agent and activate_tick_triage; existing improvement log and dormancy inventory checked. triage_shadow adds the production read-only candidate caller, no new role or registry. Issue583 dedup: extend that same shadow with atomic ranking publication and completed-run consumption edges; existing improvement log and dormancy inventory checked; no second role or store.",
         "output_artifact": "validated ranked backlog proposal",
-        "downstream_consumer": "triage_shadow corpus and switch_review summary; opener ordering only behind ORCH_TRIAGE_CONSUME; deterministic router unchanged",
+        "downstream_consumer": "triage_shadow.py:consume orders candidates only behind ORCH_TRIAGE_CONSUME; switch_review.py:format_report reports consumption",
         "learning_sink": "feedback role runs and linked outcomes",
         "gate_reason": "ranking is consumed only behind ORCH_TRIAGE_CONSUME; cannot claim, label or dispatch work",
         "gate_evidence": "tick records agreement/disagreement without changing deterministic routing",
@@ -559,7 +564,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "trigger_cadence": "bounded retrospective replay and closer recorded-verdict disagreement only",
         "flags_defaults": {"dispatch": False, "ORCH_ROLE_SHADOW": "1"},
         "output_artifact": "validated blocker adjudication; capability-program/adjudicator-retro.json",
-        "downstream_consumer": "switch_review weekly agreement/cost; closer dispute-only advice; tick remains shadow",
+        "downstream_consumer": "switch_review.py:format_report consumes agreement and cost summaries",
         "notes": "dedup 2026-10-05: existing roles.run_adjudicator_agent and feedback.record_role_run reused; extend retrospective evidence and closer eligibility, no new capability or outcome store; 2026-10-07: collector and role case JSON already exist; extend immutable collected-byte input preparation with whole-packet budget, retain semantic admission floor",
         "learning_sink": "feedback role runs and linked outcomes",
         "gate_reason": "adjudication remains advisory",
@@ -1675,6 +1680,7 @@ DECLARATION_FIELDS: tuple[str, ...] = (
     "flags_defaults",
     "output_artifact",
     "downstream_consumer",
+    "consumer_missing",
     "learning_sink",
     "gate_reason",
     "gate_evidence",
@@ -1721,6 +1727,7 @@ DECLARATION_FIELDS: tuple[str, ...] = (
 # at all, so a fresh machine never got its row.
 KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
     "testgen-lane": {
+        "downstream_consumer": "testgen_gate.py:main consumes candidate tests for the acceptance gate",
         "notes": (
             "Audit/dedup 2026-10-04 (issue #432): the existing coverage-autopilot already "
             "dispatches testgen work through dispatcher.delegate; no new lane is needed. "
@@ -1753,7 +1760,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         "matcher": {"kind": "tick_phase", "name": "rail-exercise"},
         "trigger_cadence": "weekly shadow cadence",
         "output_artifact": "rail-exercise-report.json",
-        "downstream_consumer": "periodic_report.py rail-exercise section",
+        "downstream_consumer": "periodic_report.py:_rail_exercise_summary reads the cadence artifact",
         "learning_sink": "capability ledger via capability_propensity",
         "kill_switch": "ORCH_DISABLE_STEPS=rail-exercise",
         "rollback": "disable rail-exercise cadence step and remove its report artifact",
@@ -1763,6 +1770,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         "Fixture provenance extends the existing propensity/event/usage paths; historical contract verdicts receive append-only corrections, not a parallel store.",
     },
     "agy-runtime-isolation": {
+        "downstream_consumer": "dispatcher.py:_exercised_capability_ids; adapters.py:build_command",
         "findability_category": "exercise_bound",
         "findability_rationale": (
             "adapters.build_command adds --add-dir on every gemini dispatch and the dispatcher tags it; this capability IS the confinement, and selection pressure must never reach a confinement property."
@@ -1776,6 +1784,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         ),
     },
     "windowed-capacity-policy": {
+        "downstream_consumer": "router.py:select_agent; range_lane_rollout.py:build_rollout",
         "kill_switch_category": "compute_only",
         "control_point": "ORCH_DISABLE_STEPS",
         "kill_switch_rationale": (
@@ -1786,10 +1795,12 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         ),
     },
     "capability-propensity": {
+        "downstream_consumer": "capability_advisor.py:advise ranks the offered candidates",
         "verdict_exempt": "observer",
         "notes": "Dedup #584: existing propensity report and selection exemption; report comparison is not a delivery verdict.",
     },
     "redirect-policy": {
+        "downstream_consumer": "redirect_plan.py:plan consumes the policy decision",
         "verdict_exempt": "observer",
         "kill_switch_category": "compute_only",
         "control_point": "ORCH_DISABLE_STEPS",
@@ -1817,8 +1828,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         # format_report, which prints it. Declared here, as `file.py:symbol`, so the gate can
         # resolve its own consumer in the tree; the live row's prose had named a suite file.
         "downstream_consumer": (
-            "verify.py:run_gates fails the verify run on a blocking row; "
-            "capability_admission.py:format_report prints it"
+            "verify.py:run_gates fails the verify run on a blocking row; capability_admission.py:format_report prints it"
         ),
         "findability_category": "exercise_bound",
         "findability_rationale": (
@@ -1828,6 +1838,9 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         ),
     },
     "docs-drift-fix-agent": {
+        "consumer_missing": True,
+        "downstream_consumer": "External Workflows repair issues have no local acting consumer or handover rail.",
+        "notes": "Dedup #599: external docs-drift implementation is not in this tree; invocation ingestion does not consume or deliver its repair output.",
         "findability_category": "exercise_bound",
         "findability_rationale": (
             "its entrypoint is a Workflows GitHub Actions workflow that fires per PR in another "
@@ -1842,6 +1855,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
     # was typed, absent on a fresh checkout, and invisible in a diff — the drift guard in
     # test_capability_admission exists to force exactly this placement.
     "evidence-acquisition": {
+        "downstream_consumer": "evidence_acquisition.py:render_tick_line reads the emitted acquisition plan",
         "findability_category": "exercise_bound",
         "findability_rationale": (
             "evidence_acquisition.py only OBEYS capabilities.unblock() — re-deriving the decision at "
@@ -1850,6 +1864,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         ),
     },
     "feature-reflection-cli": {
+        "downstream_consumer": "periodic_report.py:format_human consumes the feature registry summary",
         "findability_category": "exercise_bound",
         "findability_rationale": (
             "its agent-facing half is already offered as feature-scan (same entrypoint module); this "
@@ -1858,6 +1873,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         ),
     },
     "issue-readiness": {
+        "downstream_consumer": "backlog.py:_is_ready consumes the status label behind the existing dispatch flag",
         "findability_category": "exercise_bound",
         "findability_rationale": (
             "orchestrate.sh invokes issue_readiness.py on cadence, feeding backlog._is_ready via the "
@@ -1873,6 +1889,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         "gate_reason": cadence_registry.declared_gate_reason("issue-readiness"),
     },
     "capability:reference-sync-hygiene-test-gate": {
+        "downstream_consumer": "capability_compiler.py:consume_workflow_output",
         "findability_category": "exercise_bound",
         "findability_rationale": (
             "capability_compiler.run_reference_workflow is invoked only by "
@@ -1881,6 +1898,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         ),
     },
     "research-scheduler": {
+        "downstream_consumer": "tick.py:research_tick launches the planned experiments",
         "findability_category": "exercise_bound",
         "findability_rationale": (
             "tick.research_tick consumes its planning functions behind ORCH_RESEARCH_ARM; an agent "
@@ -1888,6 +1906,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         ),
     },
     "feedback-store": {
+        "downstream_consumer": "router.py:learned_ranks; periodic_report.py:build_report",
         "findability_category": "exercise_bound",
         "findability_rationale": (
             "the learning store's spine: every dispatch, outcome and learning-cadence step writes it. Substrate cannot be task-selected."
@@ -1900,6 +1919,57 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
             "telemetry for work that happens anyway, which is strictly worse than the failure it "
             "would be reached for. Controls belong at the producers."
         ),
+    },
+    "abcd-experiment": {
+        "downstream_consumer": "synthesis_promotion.py:ensure_evaluated_state; objective_anchor.py:anchor_experiment",
+    },
+    "adversarial-review": {
+        "downstream_consumer": "adversarial.py:file_followup consumes the panel verdict after merge",
+    },
+    "capability-activation-audit": {
+        "downstream_consumer": "capability_activation_audit.py:format_scorecard renders the audit findings",
+    },
+    "capability-firing-monitor": {
+        "downstream_consumer": "switch_review.py:firing_regressions consumes persisted findings",
+    },
+    "codemod-campaign": {
+        "downstream_consumer": "codemod_lane.py:build_delegation_prompt hands the validated campaign to the worker",
+    },
+    "coverage-testgen-trigger": {
+        "downstream_consumer": "testgen_lane.py:ranked_sources; testgen_gate.py:main",
+    },
+    "cross-repo-coordination": {
+        "downstream_consumer": "cross_repo_lane.py:build_dry_run_plan hands the validated plan to source and consumer workers",
+    },
+    "deliberate-break-verifier": {
+        "downstream_consumer": "runtime_ac.py:evaluate_results consumes deliberate-break JSON; local_verify.py:record_verdict records the run verdict",
+    },
+    "epic-decomposition": {
+        "downstream_consumer": "epic_lane.py:build_dispatch_prompts hands validated DAG tasks to workers",
+    },
+    "feature-scan": {
+        "downstream_consumer": "features.py:record_use; features.py:promotion_candidates",
+    },
+    "frontend-verifier": {
+        "downstream_consumer": "runtime_ac.py:_frontend_command uses the verifier endpoint and assertions",
+    },
+    "offload": {
+        "downstream_consumer": "roles.py:_parse_json consumes backend output before role validation",
+    },
+    "partitioned-review": {
+        "downstream_consumer": "partitioned_review.py:synthesize_results validates and combines partition outputs",
+    },
+    "redirect-plan": {
+        "downstream_consumer": "redirect_apply.py:apply_candidates consumes the recovery plan",
+    },
+    "repo-playbook": {
+        "downstream_consumer": "dispatcher.py:build_prompt; capability_advisor.py:advise",
+    },
+    "stall-watcher": {
+        "downstream_consumer": "redirect_policy.py:decide consumes the classified stall",
+    },
+    "switch-review": {
+        "downstream_consumer": "switch_review.py:raise_questions; switch_review.py:format_report",
     },
 }
 

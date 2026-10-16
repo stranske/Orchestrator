@@ -149,7 +149,10 @@ def test_safety_guard_exemption_is_declared_and_narrow():
     # NARROWNESS, control case: `offload` had the identical complaint on the same day and got a REAL
     # switch instead of an exemption. It must stay out of the table, and its switch must still exist
     # in the tree -- `known_controls()` reads the source, so this fails if the guard is deleted.
-    assert "offload" not in capabilities.KNOWN_DECLARATIONS
+    assert (
+        capabilities.KNOWN_DECLARATIONS.get("offload", {}).get("kill_switch_category")
+        != "safety_guard"
+    )
     assert "ORCH_OFFLOAD_DISABLED" in admission.known_controls()
     # DRIFT GUARD: nothing may carry the exemption that the code table does not declare. This is what
     # catches a category typed into a live ledger instead of into the diff.
@@ -811,6 +814,40 @@ def test_consumer_deadline_rejects_first_action_on_day_fifteen(monkeypatch, tmp_
 def test_consumer_deadline_retains_timely_action_after_monitor_window(monkeypatch, tmp_path):
     category, ok, _ = _deadline_evidence(monkeypatch, tmp_path, action_day=1, now_day=100)
     assert category == "acting" and ok
+
+
+def test_declared_consumers_resolve_in_the_tree():
+    """A reviewed binding names defined rails; an absent consumer stays explicit debt."""
+    declarations = {**capabilities.KNOWN_GATES, **capabilities.KNOWN_DECLARATIONS}
+    failures = {}
+    for cid, declaration in declarations.items():
+        if "downstream_consumer" not in declaration:
+            continue
+        if declaration.get("consumer_missing") is True:
+            assert declaration.get("notes"), f"{cid}: explain the absent consumer"
+            continue
+        resolution = admission.consumer_resolution(declaration)
+        if not resolution["tokens"] or resolution["unresolved"]:
+            failures[cid] = resolution
+    assert not failures, failures
+
+
+def test_missing_consumer_declaration_survives_reconciliation_without_acceptance():
+    """The diagnostic field must reach the ledger without granting acting or lifecycle credit."""
+    cid = "docs-drift-fix-agent"
+    before = capabilities._blank_capability(cid)
+    before.update(status="active", downstream_consumer="old prose")
+    before["event_history"] = [{"type": "invocation", "timestamp": 1}]
+    ledger = {cid: before}
+    assert capabilities._reconcile_known_declarations(ledger, 2)
+    row = ledger[cid]
+    assert row["consumer_missing"] is True
+    assert row["status"] == "active"
+    assert row["outcome_links"] == []
+    cls, ok, detail = admission.consumer_class(row, {})
+    assert cls == "prose" and not ok, detail
+    assert row["event_history"][0] == {"type": "invocation", "timestamp": 1}
+    assert not capabilities._reconcile_known_declarations(ledger, 3)
 
 
 if __name__ == "__main__":
