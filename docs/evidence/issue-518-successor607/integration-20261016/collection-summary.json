@@ -1,0 +1,17 @@
+{
+  "argv": [
+    ".venv/bin/python",
+    "-m",
+    "pytest",
+    "--collect-only",
+    "-q",
+    "-o",
+    "addopts="
+  ],
+  "exit_code": 0,
+  "source_head": "904b8ee962f5f2ab298efaa86ff3e9fb32552284",
+  "collected": 3467,
+  "stdout_bytes": 356255,
+  "stdout_sha256": "836f287b24eeeef63899b9a489861bbbc86fc2dc5f9a42f64cbc82fd10d1f31b",
+  "lossless_stdout": "collection.log.gz"
+}

@@ -1,0 +1,33 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.7.0 -- /Users/teacher/.codex/automations/sync-dependency-pr-closer/worktrees/orchestrator-518-successor607/.venv/bin/python
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/automations/sync-dependency-pr-closer/worktrees/orchestrator-518-successor607
+configfile: pyproject.toml
+plugins: cov-7.1.0, xdist-3.8.0, platformdirs-4.13.1, langsmith-0.10.9, rerunfailures-16.3, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, pytest_httpserver-1.1.3, hypothesis-6.155.7, regressions-2.11.0, Faker-40.39.0, anyio-4.13.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 21 items
+
+tests/test_ci_lint_baseline.py::test_scratch_copy_preserves_binary_head_and_leaves_checkout_untouched[\x00\x8b\xff\xfe\r\ntracked binary\x00] PASSED [  4%]
+tests/test_ci_lint_baseline.py::test_scratch_copy_preserves_binary_head_and_leaves_checkout_untouched[line 1\r\nline 2\r\n] PASSED [  9%]
+tests/test_ci_lint_baseline.py::test_scratch_copy_reports_archive_failure_and_cleans_up PASSED [ 14%]
+tests/test_ci_lint_baseline.py::test_scratch_copy_preserves_extraction_error_and_cleans_up PASSED [ 19%]
+tests/test_ci_lint_baseline.py::test_mypy_success_notes_are_not_blocking_findings PASSED [ 23%]
+tests/test_ci_lint_baseline.py::test_strict_collection_rejects_every_unmeasured_package PASSED [ 28%]
+tests/test_ci_gate_config.py::test_pin_file_exists_and_pins_exactly PASSED [ 33%]
+tests/test_ci_gate_config.py::test_one_line_length_constant PASSED       [ 38%]
+tests/test_ci_gate_config.py::test_ruff_config_declares_an_explicit_selection PASSED [ 42%]
+tests/test_ci_gate_config.py::test_every_bounded_or_disabled_toggle_states_blocking_and_drainable PASSED [ 47%]
+tests/test_ci_gate_config.py::test_the_with_block_holds_no_second_toggle_literal PASSED [ 52%]
+tests/test_ci_gate_config.py::test_baseline_doc_records_every_disabled_check_with_both_quantities PASSED [ 57%]
+tests/test_ci_gate_config.py::test_baseline_was_measured_with_the_pinned_versions PASSED [ 61%]
+tests/test_ci_gate_config.py::test_baseline_requires_one_complete_matching_toolchain[unknown-version] PASSED [ 66%]
+tests/test_ci_gate_config.py::test_baseline_requires_one_complete_matching_toolchain[hybrid] PASSED [ 71%]
+tests/test_ci_gate_config.py::test_baseline_requires_one_complete_matching_toolchain[incomplete] PASSED [ 76%]
+tests/test_ci_gate_config.py::test_mypy_config_silences_nothing_by_error_code PASSED [ 80%]
+tests/test_ci_gate_config.py::test_no_filename_triggered_packaging_file_appears[setup.cfg] PASSED [ 85%]
+tests/test_ci_gate_config.py::test_no_filename_triggered_packaging_file_appears[setup.py] PASSED [ 90%]
+tests/test_ci_gate_config.py::test_pyproject_carries_tool_config_only_and_not_a_distribution PASSED [ 95%]
+tests/test_ci_gate_config.py::test_every_cited_repo_path_resolves PASSED [100%]
+
+============================== 21 passed in 0.45s ==============================

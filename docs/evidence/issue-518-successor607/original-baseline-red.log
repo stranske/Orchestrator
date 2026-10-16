@@ -1,0 +1,21 @@
+.F...                                                                    [100%]
+=================================== FAILURES ===================================
+_____________ test_baseline_was_measured_with_the_pinned_versions ______________
+
+    def test_baseline_was_measured_with_the_pinned_versions():
+        """The counts are version-specific, so a pin bump without a re-measure must go red."""
+        require_checkout()
+        doc = BASELINE_DOC.read_text(encoding="utf-8")
+        pins = read_pins()
+>       assert _has_measured_baseline(doc, pins), (
+            f"{BASELINE_DOC.name} has no complete measured toolchain matching {PINS.name}: {pins}. "
+            "Re-run scripts/ci_lint_baseline.py with these exact pins and retain its measurements."
+        )
+E       AssertionError: CI_LINT_BASELINE.md has no complete measured toolchain matching autofix-versions.env: {'BLACK_VERSION': '26.10.1', 'RUFF_VERSION': '0.17.0', 'ISORT_VERSION': '9.0.2', 'DOCFORMATTER_VERSION': '1.7.8', 'MYPY_VERSION': '2.4.0', 'PYTEST_VERSION': '9.1.1', 'PYTEST_COV_VERSION': '7.1.0', 'PYTEST_XDIST_VERSION': '3.8.0', 'COVERAGE_VERSION': '7.16.2'}. Re-run scripts/ci_lint_baseline.py with these exact pins and retain its measurements.
+E       assert False
+E        +  where False = _has_measured_baseline('# Gate python-ci baseline — what is checked, what is deferred, and what would clear it\n\n## Measured pending Maint 5...xactly the kind of silent event that would otherwise change what the Gate\nmeasures behind a baseline nobody re-ran.\n', {'BLACK_VERSION': '26.10.1', 'RUFF_VERSION': '0.17.0', 'ISORT_VERSION': '9.0.2', 'DOCFORMATTER_VERSION': '1.7.8', ...})
+
+tests/test_ci_gate_config.py:313: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_ci_gate_config.py::test_baseline_was_measured_with_the_pinned_versions
+1 failed, 4 passed, 10 deselected in 0.25s
