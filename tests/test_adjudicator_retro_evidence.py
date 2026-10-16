@@ -428,6 +428,136 @@ class RetrospectiveEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "merge commit unavailable"):
             retro.fetch_evidence({"target": "owner/repo#1", "verifier_verdict": "NON_PASS"})
 
+    def _criteria_evidence(self, issues, merged_at="2026-10-01T00:00:00Z"):
+        """Read a merged PR linked to ``issues``; return its ground truth and the gh calls made."""
+        decision = {
+            "schema": verifier_evidence.MARKER,
+            "repo": "owner/repo",
+            "pr": 1,
+            "head_sha": "a" * 40,
+            "evaluated_sha": "b" * 40,
+            "run_id": "123",
+            "run_attempt": "1",
+            "provider_verdicts": ["FAIL"],
+            "ci_failed": False,
+            "verdict": "NON_PASS",
+        }
+        finding = {
+            "body": "Missing acceptance test\n"
+            f"<!-- {verifier_evidence.MARKER} {json.dumps(decision)} -->",
+            "url": "https://github.com/owner/repo/pull/1#issuecomment-1",
+            "author": {"login": "github-actions[bot]"},
+        }
+        gate = {"name": "Gate", "conclusion": "SUCCESS", "detailsUrl": "gate-run"}
+        diff = {"path": "tests/test_acceptance.py", "additions": 10, "deletions": 0}
+        contexts = {"pageInfo": {"hasNextPage": False}, "nodes": [gate]}
+        pr = {
+            "number": 1,
+            "state": "MERGED",
+            "headRefOid": decision["head_sha"],
+            "mergedAt": merged_at,
+            "mergeCommit": {"oid": decision["evaluated_sha"]},
+            "comments": {"pageInfo": {"hasPreviousPage": False}, "nodes": [finding]},
+            "files": {"pageInfo": {"hasNextPage": False}, "nodes": [diff]},
+            "closingIssuesReferences": {"nodes": issues},
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": contexts}}}]},
+        }
+        patch_text = "diff --git a/tests/test_acceptance.py b/tests/test_acceptance.py\n"
+        # No parenthesized ``with ... as``: black reads it as a Python 3.9+ marker for the whole
+        # file and rewrites every older multi-item ``with`` above, which is not this change's diff.
+        gh = patch.object(
+            retro, "_gh_json", return_value={"data": {"repository": {"pullRequest": pr}}}
+        )
+        diff_read = patch.object(
+            retro.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess([], 0, patch_text, ""),
+        )
+        with gh as read, diff_read:
+            evidence = retro.fetch_evidence(
+                {"target": "owner/repo#1", "verifier_verdict": "NON_PASS"}
+            )
+        return evidence["ground_truth_evidence"], read.call_args_list
+
+    def test_post_merge_activity_alone_does_not_refuse_the_criteria(self):
+        merged = "2026-10-01T00:00:00Z"
+        after = "2026-10-02T00:00:00Z"
+        body = "## Acceptance Criteria\n- [ ] {}"
+        ground, _ = self._criteria_evidence(
+            [
+                # A comment, label or reopen moved updatedAt; the body was never edited.
+                {
+                    "number": 2,
+                    "body": body.format("never edited"),
+                    "updatedAt": after,
+                    "lastEditedAt": None,
+                },
+                # Last edited before the merge, then touched again after it.
+                {
+                    "number": 3,
+                    "body": body.format("edited before merge"),
+                    "updatedAt": after,
+                    "lastEditedAt": "2026-09-30T00:00:00Z",
+                },
+                # An edit in the very second of the merge is not after it.
+                {
+                    "number": 4,
+                    "body": body.format("edited at merge"),
+                    "updatedAt": after,
+                    "lastEditedAt": merged,
+                },
+            ],
+            merged_at=merged,
+        )
+        assert ground["acceptance_criteria_errors"] == []
+        assert [c["text"] for c in ground["acceptance_criteria"]] == [
+            "never edited",
+            "edited before merge",
+            "edited at merge",
+        ]
+        assert retro._packet_metadata_only(ground) is False
+
+    def test_a_body_edit_after_merge_still_refuses_the_criteria(self):
+        merged = "2026-10-01T00:00:00Z"
+        edited = "2026-10-01T00:00:01Z"
+        refusal = (
+            "linked issue body was edited after merge; "
+            "merge-time acceptance criteria are unavailable"
+        )
+        rewritten = {
+            "number": 2,
+            "body": "## Acceptance Criteria\n- [ ] rewritten after merge",
+            "updatedAt": edited,
+            "lastEditedAt": edited,
+        }
+        ground, _ = self._criteria_evidence([rewritten], merged_at=merged)
+        assert ground["acceptance_criteria"] == []
+        assert ground["acceptance_criteria_errors"] == [{"issue": 2, "error": refusal}]
+        # With no criteria left the packet stays metadata-only, so the evidence floor still
+        # withholds a grade.
+        assert retro._packet_metadata_only(ground) is True
+
+        # The refusal is per issue: a sibling whose body never changed keeps its criteria.
+        sibling = {
+            "number": 3,
+            "body": "## Acceptance Criteria\n- [ ] the merge-time text",
+            "updatedAt": edited,
+            "lastEditedAt": None,
+        }
+        ground, _ = self._criteria_evidence([rewritten, sibling], merged_at=merged)
+        assert [c["text"] for c in ground["acceptance_criteria"]] == ["the merge-time text"]
+        assert ground["acceptance_criteria_errors"] == [{"issue": 2, "error": refusal}]
+
+    def test_the_pr_query_requests_the_linked_issues_last_edit_time(self):
+        # Fixtures hand fetch_evidence ``lastEditedAt`` whether or not the query asks for it, so
+        # the comparison above could pass while production never receives the field. Pin the
+        # request itself: one mention, inside the closing-issues selection.
+        _, calls = self._criteria_evidence([])
+        query = next(arg for arg in calls[0].args[0] if arg.startswith("query="))
+        selection = query.split("closingIssuesReferences", 1)[1].split("}", 1)[0]
+        assert selection.split().count("lastEditedAt") == 1
+        assert query.count("lastEditedAt") == 1
+
     def test_evidence_timeout_is_saved_and_the_batch_continues(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
