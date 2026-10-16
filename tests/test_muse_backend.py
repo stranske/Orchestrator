@@ -567,3 +567,57 @@ def test_muse_record_that_is_not_an_oauth_login_is_not_admitted(tmp_path, monkey
     monkeypatch.setattr(capacity, "_shed", lambda agent: False)
     assert capacity._classify("muse", capacity.AGENTS["muse"], None)[0] == capacity.SHED
     assert path.exists()
+
+
+def test_muse_subscription_receipt_survives_actual_ledger_reconciliation(tmp_path, monkeypatch):
+    import ledger_reconcile
+
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "feedback.db")
+    feedback.record_run("muse-reconcile", "owner/repo#1", "review", "muse", mode="offload")
+    feedback.record_muse_subscription_cost(
+        "muse-reconcile",
+        invocation_count=1,
+        window_start_ts=18000,
+        window_end_ts=36000,
+        observed_start_ts=36000,
+        observed_end_ts=36012,
+        wall_seconds=12.5,
+        raw_exit_codes=[0],
+    )
+    ledger = tmp_path / "capacity.ndjson"
+    ledger.write_text(
+        "\n".join(
+            json.dumps(
+                {"run_id": "muse-reconcile", "agent": "muse", "event": event, "ts": ts, "exit": 0}
+            )
+            for event, ts in [("start", 36000), ("complete", 36012)]
+        )
+    )
+    ledger_reconcile.reconcile(ledger)
+    with feedback._conn() as conn:
+        row = conn.execute(
+            "SELECT c.tokens_in,c.tokens_out,c.cost_usd,c.source,u.muse_invocation_count,u.muse_raw_exit_codes FROM costs c JOIN muse_subscription_usage u USING(run_id) WHERE run_id='muse-reconcile'"
+        ).fetchone()
+    assert row == (None, None, 0.0, "imputed:subscription", 1, "[0]")
+    feedback.record_cost(
+        "muse-reconcile", tokens_in=20, tokens_out=5, cost_usd=1.25, source="ccusage"
+    )
+    ledger_reconcile.reconcile(ledger)
+    with feedback._conn() as conn:
+        assert conn.execute(
+            "SELECT tokens_in,tokens_out,cost_usd,source FROM costs WHERE run_id='muse-reconcile'"
+        ).fetchone() == (20, 5, 1.25, "ccusage")
+
+
+def test_muse_is_not_implicitly_offered_to_the_adversarial_reviewer():
+    import adversarial
+
+    offered = []
+
+    def select(task, cap, *, only, learned):
+        offered.append(only)
+        return {"agent": "muse"} if "muse" in only else None
+
+    result = adversarial.choose_reviewer(cap={}, learned={}, select_fn=select)
+    assert all("muse" not in pool for pool in offered)
+    assert result.get("agent") != "muse"

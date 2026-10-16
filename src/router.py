@@ -214,7 +214,7 @@ ROUTE_TABLE: dict = {
     "review": {
         "role": "review",
         "agents": [
-            {"agent": "muse", "mode": "full", "late": True},  # explicit-only backup exploration
+            {"agent": "muse", "mode": "mid", "late": True},  # explicit-only backup exploration
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "mid", "late": False},
             {

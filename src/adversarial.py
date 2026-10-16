@@ -830,7 +830,7 @@ def choose_reviewer(
     import router
 
     route = [e["agent"] for e in router.ROUTE_TABLE[REVIEW_TASK_TYPE]["agents"]]
-    pool = [a for a in route if a not in exclude]
+    pool = [a for a in route if a not in exclude and a not in router.BACKUP_AGENTS]
     cap = router.load_capacity() if cap is None else cap
     if learned is None:
         learned = (router.learned_ranks() or {}).get(REVIEW_TASK_TYPE)

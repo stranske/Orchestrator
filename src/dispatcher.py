@@ -4325,7 +4325,15 @@ def _selftest() -> None:
         _mn = "_record_muse" + "_usage("
         assert _msrc.count("def " + _mn) == 1, "one definition"
         _mgap = r"\s*\n(?:\s*#[^\n]*\n)*\s*"
-        assert len(_mre2.findall(r'if agent == "muse":' + _mgap + _mre2.escape(_mn), _msrc)) == 1
+        _attempt_src = _msrc[_msrc.index("for attempt in range(1, max_network_retries + 2):") :]
+        assert (
+            len(
+                _mre2.findall(
+                    r'if agent == "muse":' + r"[\s\S]{0,900}?" + _mre2.escape(_mn), _attempt_src
+                )
+            )
+            == 1
+        )
         assert (
             len(_mre2.findall(r'if d\["agent"\] == "muse":' + _mgap + _mre2.escape(_mn), _msrc))
             == 1

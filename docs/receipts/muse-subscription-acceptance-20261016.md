@@ -49,13 +49,14 @@ Use the selected Python interpreter:
 python3 -m pytest -q tests/test_muse_backend.py
 python3 src/capacity.py --selftest
 python3 src/router.py --selftest
+PYTHON=python3 node --test tests/test_muse_offload_witness.js
 ```
 
 The named argv/config, metered-seat and credential-missing tests satisfy the source issue's
 required test entry points. Deliberately removing the Muse foreign-context flag caused the argv
 test to fail; restoring the exact bytes passed. Removing the Muse capacity seat caused the seat
 test to fail; exact restoration passed. Accounting coverage executes a legacy seven-column
-`costs` insert and proves measured provider costs survive addition of subscription usage facts.
+`costs` insert and proves measured provider costs survive addition of subscription usage facts. A real dispatcher-to-SQL witness in both source and flat layouts runs the actual reconciler after completed, progress-only and retried responses; imputation labels and NULL tokens survive. Independent exact-head review found the initial reconciliation overwrite; the new regression assertion-failed before the repair and passed afterward. Automatic adversarial reviewer pools also exclude backup-only Muse, preserving their existing default choices.
 Parser controls reject progress-only, failed/unbound, conflicting, malformed and post-terminal
 streams. Role controls preserve default backend choices and admit Muse only explicitly through
 the existing backup guard; no selection algorithm or prior weight changes.

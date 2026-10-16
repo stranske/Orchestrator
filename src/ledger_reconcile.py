@@ -913,7 +913,7 @@ def reconcile(
                 bucket = _settle_provider_limit_death(run_id, refusal, dry_run=dry_run)
                 provider_limit_deaths[bucket] += 1
         existing_source = sources.get(run_id)
-        if existing_source in {"langsmith", "ccusage"}:
+        if existing_source in {"langsmith", "ccusage", "imputed:subscription"}:
             skipped[f"{existing_source}_cost_exists"] += 1
             continue
         # 16f/16h harvest from the run's log segment (same segment _log_usage scans).

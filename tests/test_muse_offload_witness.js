@@ -51,6 +51,7 @@ sys.path.insert(0, sys.argv[1])
 import adapters
 import dispatcher
 import feedback
+import ledger_reconcile
 import paths
 import rate_incidents
 
@@ -93,7 +94,14 @@ with ExitStack() as stack:
     for name, leaf in [('HANDOFF', '.'), ('INCIDENT_FILE', 'incidents.ndjson'),
                        ('LOCK_FILE', 'incidents.lock'), ('SHED_DIR', 'shed')]:
         replace(rate_incidents, name, root / leaf)
-    out = dispatcher.offload('muse', 'Review the bounded task.', cwd=str(root))
+    workspace = root / 'workspace'
+    workspace.mkdir()
+    out = dispatcher.offload('muse', 'Review the bounded task.', cwd=str(workspace))
+    ledger_path = root / 'capacity.ndjson'
+    ledger_path.write_text('\n'.join(json.dumps(dict(row, agent='muse',
+        ts=36000 if row['event'] == 'start' else int(clock[0]))) for row in ledger))
+    reconciliation = ledger_reconcile.reconcile(ledger_path)
+    assert reconciliation['skipped'].get('imputed:subscription_cost_exists') == 1
     with feedback._conn() as conn:
         rows = conn.execute(
             'SELECT r.agent,c.cost_usd,c.source,c.tokens_in,c.tokens_out,'
