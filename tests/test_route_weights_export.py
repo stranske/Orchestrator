@@ -135,12 +135,18 @@ def test_capacity_state_change_triggers_write_document(tmp_path: Path) -> None:
     ok_snapshot = _capacity_fixture(codex_state=capacity.OK)
     shed_snapshot = _capacity_fixture(codex_state=capacity.SHED)
 
-    assert export.write_document(
-        target, export.build_document(database, capacity_snapshot=ok_snapshot)
-    ) is True
-    assert export.write_document(
-        target, export.build_document(database, capacity_snapshot=shed_snapshot)
-    ) is True
+    assert (
+        export.write_document(
+            target, export.build_document(database, capacity_snapshot=ok_snapshot)
+        )
+        is True
+    )
+    assert (
+        export.write_document(
+            target, export.build_document(database, capacity_snapshot=shed_snapshot)
+        )
+        is True
+    )
 
 
 def test_export_includes_capacity_block(tmp_path: Path) -> None:
