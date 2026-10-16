@@ -40,6 +40,7 @@ from 79 findings here to 915 is exactly the event this guard is for.
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 import pathlib
 import re
@@ -309,6 +310,32 @@ MEASURERS = {
 def collect(*, strict: bool = True) -> dict:
     pins = read_pins()
     results, problems = [], []
+    installed = {}
+    for package in (
+        "black",
+        "ruff",
+        "isort",
+        "docformatter",
+        "mypy",
+        "pytest",
+        "pytest-cov",
+        "pytest-xdist",
+        "coverage",
+    ):
+        key = package.upper().replace("-", "_") + "_VERSION"
+        try:
+            have = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            have = None
+        installed[package] = have
+        if not pins.get(key) or have != pins[key]:
+            problems.append(
+                f"{package} {have or 'missing'} installed but {pins.get(key, 'missing')} pinned"
+            )
+    if strict and problems:
+        for problem in problems:
+            print(f"BLOCKED: {problem}", file=sys.stderr)
+        raise SystemExit(2)
     for name, (tool, pin_key, fn) in MEASURERS.items():
         if tool is not None:
             want = pins.get(pin_key or "")
@@ -329,7 +356,7 @@ def collect(*, strict: bool = True) -> dict:
         for problem in problems:
             print(f"BLOCKED: {problem}", file=sys.stderr)
         raise SystemExit(2)
-    return {"pins": pins, "checks": results, "problems": problems}
+    return {"pins": pins, "installed_versions": installed, "checks": results, "problems": problems}
 
 
 def render(report: dict) -> str:

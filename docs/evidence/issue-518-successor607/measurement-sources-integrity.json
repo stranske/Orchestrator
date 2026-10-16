@@ -1,0 +1,12 @@
+{
+  "bytes": 73640875,
+  "sha256": "3997992edc5665cfdee720eef586c0161ddb543e4aa8ada13f7a341a72ec3a60",
+  "refs": [
+    "133fec07cc2c7fe7b27969b4fc8562a0ec54539d refs/evidence/issue-518/133fec07cc2c7fe7b27969b4fc8562a0ec54539d",
+    "63a80a3c13f5d73b68773a2191986eb3f46d5b86 refs/evidence/issue-518/63a80a3c13f5d73b68773a2191986eb3f46d5b86",
+    "65fb9b0bb846bec44160a0ba1dca0e22e6eeffbc refs/evidence/issue-518/65fb9b0bb846bec44160a0ba1dca0e22e6eeffbc",
+    "904b8ee962f5f2ab298efaa86ff3e9fb32552284 refs/evidence/issue-518/904b8ee962f5f2ab298efaa86ff3e9fb32552284",
+    "b0aa0da43c128b763099e42b70d4c3cfb99a2f30 refs/evidence/issue-518/b0aa0da43c128b763099e42b70d4c3cfb99a2f30"
+  ],
+  "recovery": "git fetch docs/evidence/issue-518-successor607/measurement-sources.bundle refs/evidence/issue-518/*:refs/evidence/issue-518/*"
+}

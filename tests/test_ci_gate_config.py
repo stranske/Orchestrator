@@ -294,7 +294,17 @@ def test_baseline_doc_records_every_disabled_check_with_both_quantities():
 
 def _has_measured_baseline(doc, pins):
     """Match one complete toolchain, never a mixture of measurements."""
-    required = {"ruff", "black", "mypy", "pytest"}
+    required = {
+        "ruff",
+        "black",
+        "mypy",
+        "pytest",
+        "isort",
+        "docformatter",
+        "pytest-cov",
+        "pytest-xdist",
+        "coverage",
+    }
     for marker in re.findall(r"<!--\s*measured-with:\s*(.*?)\s*-->", doc):
         measured = dict(pair.split("=", 1) for pair in marker.split())
         if required <= measured.keys() and all(
@@ -318,16 +328,28 @@ def test_baseline_was_measured_with_the_pinned_versions():
 
 @pytest.mark.parametrize("defect", ["unknown-version", "hybrid", "incomplete"])
 def test_baseline_requires_one_complete_matching_toolchain(defect):
-    pins = {f"{tool.upper()}_VERSION": "2.0.0" for tool in ("ruff", "black", "mypy", "pytest")}
-    markers = {
-        "unknown-version": "ruff=1.0.0 black=2.0.0 mypy=2.0.0 pytest=2.0.0",
-        "hybrid": "ruff=1.0.0 black=2.0.0 mypy=2.0.0 pytest=2.0.0 -->\n<!-- measured-with: ruff=2.0.0 black=1.0.0 mypy=2.0.0 pytest=2.0.0",
-        "incomplete": "ruff=2.0.0",
-    }
-    assert not _has_measured_baseline(f"<!-- measured-with: {markers[defect]} -->", pins)
-    assert _has_measured_baseline(
-        "<!-- measured-with: ruff=2.0.0 black=2.0.0 mypy=2.0.0 pytest=2.0.0 -->", pins
+    tools = (
+        "ruff",
+        "black",
+        "mypy",
+        "pytest",
+        "isort",
+        "docformatter",
+        "pytest-cov",
+        "pytest-xdist",
+        "coverage",
     )
+    pins = {f"{tool.upper().replace('-', '_')}_VERSION": "2.0.0" for tool in tools}
+    complete = " ".join(f"{tool}=2.0.0" for tool in tools)
+    for tool in tools:
+        wrong = complete.replace(f"{tool}=2.0.0", f"{tool}=1.0.0")
+        markers = {
+            "unknown-version": wrong,
+            "hybrid": wrong + " -->\n<!-- measured-with: " + f"{tool}=2.0.0",
+            "incomplete": complete.replace(f"{tool}=2.0.0", ""),
+        }
+        assert not _has_measured_baseline(f"<!-- measured-with: {markers[defect]} -->", pins)
+    assert _has_measured_baseline(f"<!-- measured-with: {complete} -->", pins)
 
 
 def test_mypy_config_silences_nothing_by_error_code():

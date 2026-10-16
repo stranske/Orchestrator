@@ -1,0 +1,17 @@
+{
+  "source_head": "b0aa0da43c128b763099e42b70d4c3cfb99a2f30",
+  "python": "3.12.2 | packaged by conda-forge | (main, Feb 16 2024, 20:54:21) [Clang 16.0.6 ]",
+  "versions": {
+    "black": "26.10.0",
+    "ruff": "0.16.10",
+    "isort": "9.0.2",
+    "docformatter": "1.7.8",
+    "mypy": "2.4.0",
+    "pytest": "9.1.1",
+    "pytest-cov": "7.1.0",
+    "pytest-xdist": "3.8.0",
+    "coverage": "7.16.2"
+  },
+  "measurement_script_sha256": "4d9c5bca4696e40a8a800715a51e529954399f2c935b73cf34b2affb136e62e6",
+  "pins_sha256": "9149696e52a58f8e7c4b7d35c3077474e75d6263accbab22759cbdedb30e9be2"
+}
