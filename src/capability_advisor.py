@@ -2525,7 +2525,7 @@ PR_FACT_PROBES = {
     "multi_repo_change": _probe_multi_repo_change,
     "repeated_pattern": _probe_repeated_pattern,
 }
-PR_REF_RE = re.compile(r"\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#(\d{1,6})\b")
+PR_REF_RE = re.compile(r"(?<![A-Za-z0-9_.-])(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#(\d{1,6})\b")
 
 
 def _pr_number_from(text: str, repository: str, context: dict | None) -> int | None:
