@@ -441,9 +441,7 @@ def _offload_incomplete_reason(
 
 def _path_prefix() -> str:
     """PATH for child agent CLIs, independent of any per-agent HOME override."""
-    return (
-        f'export PATH="/opt/homebrew/bin:{REAL_HOME}/.local/bin:' f'{REAL_HOME}/.cursor/bin:$PATH"'
-    )
+    return f'export PATH="/opt/homebrew/bin:{REAL_HOME}/.local/bin:{REAL_HOME}/.cursor/bin:$PATH"'
 
 
 # Proxy env hygiene for the agent subshell. ROOT CAUSE (diagnosed 2026-06-20): an in-session
@@ -1359,7 +1357,7 @@ def _spawn(d: dict) -> int:
     # `release_rc` 137 is what counts a step killed again from here on.
     release = shlex.join([step_python, str(CLAIMS_PY), "release", d["target"], d["agent"]])
     wrapped = (
-        f'{d["wrapped"]}; orch_dispatch_rc=$?; {release}; orch_release_rc=$?; {marker_cmd}; '
+        f"{d['wrapped']}; orch_dispatch_rc=$?; {release}; orch_release_rc=$?; {marker_cmd}; "
         f'{complete_cmd} --exit-code "$orch_dispatch_rc"; exit $orch_dispatch_rc'
     )
     with logf.open("a") as fh:
@@ -1806,6 +1804,9 @@ def offload(
     task_type: str | None = None,
     write_boundary: dict | None = None,
     subject_id: str | None = None,
+    attempt_receipt_callback=None,
+    max_network_retries: int | None = None,
+    attempt_started_callback=None,
 ) -> dict:
     """SYNCHRONOUS offload for token conservation.
 
@@ -2191,7 +2192,11 @@ def offload(
                 f"[orchestrator] WORKSPACE RELOCATED: {relocated['reason']}; this run writes only "
                 f"in its own scratch workspace {relocated['workspace']}\n"
             )
-    max_network_retries = max(0, _env_int("ORCH_OFFLOAD_NETWORK_RETRIES", 1))
+    max_network_retries = (
+        max(0, _env_int("ORCH_OFFLOAD_NETWORK_RETRIES", 1))
+        if max_network_retries is None
+        else max(0, max_network_retries)
+    )
     retry_backoff_s = max(0.0, _env_float("ORCH_OFFLOAD_RETRY_BACKOFF_S", 3.0))
     complete_written = False
     # One record for every actual `muse exec` attempt, including a refusal/crash that causes a
@@ -2199,6 +2204,18 @@ def offload(
     muse_attempts: list[dict[str, float | int]] = []
     # Credentials masked in this run's output, by kind, across attempts (credential_redaction).
     redaction_counts: dict[str, int] = {}
+
+    def _notify_attempt(callback, response: dict) -> None:
+        try:
+            callback(response)
+        finally:
+            # agy writes its own log, independently of the scrubbed stdout.
+            # Cleanup must survive callback errors, including interruption;
+            # completion effects remain unreachable if the callback raises.
+            if agy_log is not None:
+                scrub = credential_redaction.scrub_file(agy_log)
+                for kind, count in (scrub.get("kinds") or {}).items():
+                    redaction_counts[kind] = redaction_counts.get(kind, 0) + count
 
     def _record_complete(exit_code: int | None = None, error: str | None = None) -> None:
         nonlocal complete_written
@@ -2258,8 +2275,7 @@ def offload(
                     run_id,
                     selected_profile_id=profile["profile_id"],
                     fallback_reason=(
-                        f"resolved_model_not_reported_by_offload:"
-                        f"{probe.get('reason') or 'unknown'}"
+                        f"resolved_model_not_reported_by_offload:{probe.get('reason') or 'unknown'}"
                     )[:200],
                     completed_ts=int(time.time()),
                 )
@@ -2310,6 +2326,14 @@ def offload(
         error: str | None
         attempt_stderr = ""
         stream_path: Path | None = None
+
+        def _cleanup_stream() -> None:
+            if stream_path is not None:
+                try:
+                    stream_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
         try:
             attempt_wrapped = wrapped
             if stream_prompt is not None:
@@ -2321,6 +2345,14 @@ def offload(
                 stream_path = Path(raw_path)
                 with os.fdopen(fd, "w", encoding="utf-8", newline="") as prompt_file:
                     prompt_file.write(stream_prompt)
+            if attempt_started_callback is not None:
+                _notify_attempt(attempt_started_callback, {"run_id": run_id, "agent": agent})
+        except BaseException:
+            # Start notification is not a provider result. Its failure must not
+            # enter the subprocess OSError/interrupt completion handlers below.
+            _cleanup_stream()
+            raise
+        try:
             proc = subprocess.run(
                 [
                     "bash",
@@ -2397,16 +2429,27 @@ def offload(
             if muse_prompt is not None:
                 muse_prompt.unlink(missing_ok=True)
             error = "interrupted by orchestrator"
+            if attempt_receipt_callback is not None:
+                _notify_attempt(
+                    attempt_receipt_callback,
+                    {
+                        "agent": agent,
+                        "exit": 130,
+                        "output": "",
+                        "error": error,
+                        "run_id": run_id,
+                        "model": model,
+                        "log": str(logf),
+                        "cwd": str(run_cwd),
+                        "process_cwd": str(proc_cwd),
+                    },
+                )
             _record_complete(exit_code=130, error=error)
             with logf.open("a") as fh:
                 fh.write(f"[orchestrator] offload marked failed: {error}\n")
             raise
         finally:
-            if stream_path is not None:
-                try:
-                    stream_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
+            _cleanup_stream()
         # MASKED BEFORE ANYTHING READS IT. Everything below -- the stream parse, the log, the
         # incident classifier and the dict handed back to the caller -- sees only this text. A vibe
         # offload of 2026-09-06 printed the live GitHub token, and this function wrote it to a
@@ -2595,6 +2638,12 @@ def offload(
         attempt_started = time.time()
         out = _run_offload_attempt()
         attempt_ended = time.time()
+        # Receipt consumers that reserve an external spend boundary must see
+        # every actual invocation before retry, ledger completion, Brain or
+        # cost effects.  Callback failure intentionally aborts this run.
+        if attempt_receipt_callback is not None:
+            _notify_attempt(attempt_receipt_callback, out)
+            out["attempt_receipt_callback_called"] = True
         if agent == "muse":
             raw_exit = out.get("raw_exit", out.get("exit", 126))
             try:
@@ -2941,12 +2990,12 @@ def _selftest_gemini_refusal() -> None:
     def forbidden(*_args, **_kwargs):
         raise AssertionError("unavailable automatic Gemini profile reached execution")
 
-    with patch.dict(os.environ, {"ORCH_OFFLOAD_DISABLED": "0"}), patch.object(
-        execution_profiles, "profiles_for_agent", return_value=[]
-    ), patch.object(adapters, "agent_workspace", side_effect=forbidden), patch.object(
-        sys.modules[__name__], "_capability_heartbeat", side_effect=forbidden
-    ), patch.object(
-        subprocess, "run", side_effect=forbidden
+    with (
+        patch.dict(os.environ, {"ORCH_OFFLOAD_DISABLED": "0"}),
+        patch.object(execution_profiles, "profiles_for_agent", return_value=[]),
+        patch.object(adapters, "agent_workspace", side_effect=forbidden),
+        patch.object(sys.modules[__name__], "_capability_heartbeat", side_effect=forbidden),
+        patch.object(subprocess, "run", side_effect=forbidden),
     ):
         result = offload("gemini", "selftest refusal", mode="mid")
         assert result["exit"] == 2 and result["run_id"] is None, result
@@ -3920,6 +3969,20 @@ def _selftest() -> None:
                 isolate=True,
                 timeout=1,
             )
+            legacy_calls = retry_calls["count"]
+            retry_calls["count"] = 0
+            native_receipts = []
+            native_gem = offload(
+                "gemini",
+                "One reserved native invocation.",
+                cwd=str(nongit),
+                isolate=True,
+                timeout=1,
+                max_network_retries=0,
+                attempt_receipt_callback=lambda receipt: native_receipts.append(dict(receipt)),
+            )
+            assert native_gem["attempts"] == retry_calls["count"] == len(native_receipts) == 1
+            assert native_gem["exit"] != 0 and native_gem["attempt_receipt_callback_called"]
         finally:
             adapter_module.build_command = old_build_command
             subprocess_module.run = old_subprocess_run
@@ -3934,7 +3997,7 @@ def _selftest() -> None:
         assert (
             retry_gem["exit"] == 0 and retry_gem["attempts"] == 2 and retry_gem["retried"] is True
         ), retry_gem
-        assert retry_calls["count"] == 2, retry_calls
+        assert legacy_calls == 2, legacy_calls
 
         captured.clear()
 

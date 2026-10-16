@@ -2021,6 +2021,34 @@ neither this input nor its serialized result authenticates a historical native e
 changes historical NON_PASS. Default invocation is a dry run; only explicit `--dispatch` calls
 the existing role backend and records its native role receipt. This creates no role or ledger.
 
+Native original-case retry uses a separate private SQLite receipt journal, never the persisted
+report JSON, as its trust boundary. The journal reserves one `(original case, substantive evidence
+revision)` before provider dispatch and commits the raw response, backend ID, usage and error
+before JSON parsing, Brain telemetry, cost refresh or a success event. A trusted dispatcher
+start callback changes the pre-invocation `reserved` state to `in_flight` with its backend ID
+immediately before process invocation. Only an unstarted `reserved` row can be released after
+a routing/preflight refusal; missing raw evidence after the start boundary remains
+`in_flight UNKNOWN` and blocks automatic redispatch. Validation requires exactly one persisted
+raw receipt. This is deliberately not an exactly-once
+claim across the provider boundary. The original report is immutable input and any native result
+is a separately created projection bound to its source hash, original case ID and full retained
+paid-attempt lineage. Restart admission requires both the journal's trusted record and a freshly
+issued in-process collected case; copied JSON fields, packet hashes and `persisted_admission`
+cannot authenticate it. The spend revision excludes administrative owner/action/order wording
+while retaining collected bytes, coverage and UNKNOWN references. Native admission still does not
+grade a case without independently established later truth.
+
+The native caller supplies the receipt callback to `dispatcher.offload` itself. It runs after
+the isolated provider invocation returns, before dispatcher completion, cost and Brain effects;
+callback failure aborts completion and leaves the unresolved reservation UNKNOWN. Provider-owned
+agy logs are scrubbed in callback cleanup even when persistence or interruption raises. Native calls
+explicitly disable the dispatcher's automatic network retry, so one reservation covers one
+invocation. Other offload callers retain their existing retry policy. A returned malformed
+proposal is recorded as a consumed validation outcome, not an unresolved provider invocation:
+the same evidence revision cannot spend again, while a genuinely new revision remains eligible.
+The native projection is separate from canonical cohort publication; native summary values do
+not satisfy the original canonical graded-count acceptance by themselves.
+
 ### CLI
 
 ```bash

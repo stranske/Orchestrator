@@ -176,6 +176,168 @@ def _shed(agent: str) -> bool:
     return (rate_incidents.SHED_DIR / agent).exists()
 
 
+def test_attempt_receipt_precedes_completion_and_can_abort(stores, monkeypatch):
+    """Native receipt hooks observe the real subprocess attempt before completion effects."""
+    order = []
+
+    def provider(*args, **kwargs):
+        order.append("provider")
+        return subprocess.CompletedProcess(["agent"], 0, "{}", "")
+
+    monkeypatch.setattr(dispatcher.subprocess, "run", provider)
+    monkeypatch.setattr(
+        dispatcher.adapters,
+        "record_ledger",
+        lambda *args, **kwargs: order.append(kwargs.get("event", "other")),
+    )
+    result = dispatcher.offload(
+        "gemini",
+        "test",
+        cwd=str(stores),
+        attempt_receipt_callback=lambda _: order.append("receipt"),
+        attempt_started_callback=lambda _: order.append("invoking"),
+    )
+    assert result["attempt_receipt_callback_called"] is True
+    assert "receipt" in order
+    assert order.index("invoking") < order.index("provider") < order.index("receipt")
+    assert order.index("receipt") < order.index("complete")
+    order.clear()
+    with pytest.raises(RuntimeError, match="receipt failed"):
+        dispatcher.offload(
+            "gemini",
+            "test",
+            cwd=str(stores),
+            attempt_receipt_callback=lambda _: (_ for _ in ()).throw(
+                RuntimeError("receipt failed")
+            ),
+        )
+    assert "complete" not in order
+
+
+@pytest.mark.parametrize("retry_limit,expected", [(0, 1), (None, 2)])
+def test_native_retry_limit_preserves_legacy_retry(stores, monkeypatch, retry_limit, expected):
+    calls = []
+    receipts = []
+    monkeypatch.setenv("ORCH_OFFLOAD_NETWORK_RETRIES", "1")
+    monkeypatch.setenv("ORCH_OFFLOAD_RETRY_BACKOFF_S", "0")
+    monkeypatch.setattr(dispatcher, "_is_transient_network_failure", lambda *a: True)
+
+    def run(*args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(["agent"], 1 if len(calls) == 1 else 0, "{}", "reset")
+
+    monkeypatch.setattr(dispatcher.subprocess, "run", run)
+    result = dispatcher.offload(
+        "gemini",
+        "test",
+        cwd=str(stores),
+        max_network_retries=retry_limit,
+        attempt_receipt_callback=lambda response: receipts.append(dict(response)),
+    )
+    assert len(calls) == len(receipts) == result["attempts"] == expected
+    assert receipts[0]["exit"] == 1
+
+
+@pytest.mark.parametrize("receipt_failure", [False, True])
+def test_interrupted_invocation_journals_before_completion(stores, monkeypatch, receipt_failure):
+    order = []
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    def receipt(response):
+        assert response["exit"] == 130 and response["run_id"]
+        order.append("receipt")
+        if receipt_failure:
+            raise RuntimeError("journal unavailable")
+
+    monkeypatch.setattr(dispatcher.subprocess, "run", interrupted)
+    monkeypatch.setattr(
+        dispatcher.adapters, "record_ledger", lambda *a, **kw: order.append(kw.get("event"))
+    )
+    with pytest.raises(RuntimeError if receipt_failure else KeyboardInterrupt):
+        dispatcher.offload(
+            "gemini",
+            "test",
+            cwd=str(stores),
+            max_network_retries=0,
+            attempt_receipt_callback=receipt,
+        )
+    assert "receipt" in order
+    if receipt_failure:
+        assert "complete" not in order
+    else:
+        assert order.index("receipt") < order.index("complete")
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_callback_failure_always_scrubs_agy_log(stores, monkeypatch, interrupted):
+    log = stores / "synthetic-agy.log"
+    synthetic_secret = "ghp_" + "A" * 36
+    order = []
+    monkeypatch.setattr(
+        dispatcher.adapters, "build_command", lambda *a, **kw: ["agent", "--log-file", str(log)]
+    )
+    monkeypatch.setattr(dispatcher.adapters, "agy_log_for", lambda *a: log)
+    monkeypatch.setattr(
+        dispatcher.adapters, "record_ledger", lambda *a, **kw: order.append(kw.get("event"))
+    )
+
+    def provider(*args, **kwargs):
+        log.write_text(synthetic_secret)
+        if interrupted:
+            raise KeyboardInterrupt
+        return subprocess.CompletedProcess(["agent"], 0, "{}", "")
+
+    def failed_receipt(response):
+        raise RuntimeError("synthetic journal failure")
+
+    monkeypatch.setattr(dispatcher.subprocess, "run", provider)
+    with pytest.raises(RuntimeError, match="synthetic journal"):
+        dispatcher.offload(
+            "gemini",
+            "test",
+            cwd=str(stores),
+            max_network_retries=0,
+            attempt_receipt_callback=failed_receipt,
+        )
+    assert synthetic_secret not in log.read_text()
+    assert "complete" not in order
+
+
+@pytest.mark.parametrize("failure", [OSError, KeyboardInterrupt])
+def test_start_callback_failure_is_not_a_provider_result(stores, monkeypatch, failure):
+    order = []
+    log = stores / "synthetic-agy.log"
+    secret = "ghp_" + "B" * 36
+    monkeypatch.setattr(
+        dispatcher.adapters, "build_command", lambda *a, **kw: ["agent", "--log-file", str(log)]
+    )
+    monkeypatch.setattr(dispatcher.adapters, "agy_log_for", lambda *a: log)
+    monkeypatch.setattr(
+        dispatcher.adapters, "record_ledger", lambda *a, **kw: order.append(kw.get("event"))
+    )
+    monkeypatch.setattr(dispatcher.subprocess, "run", lambda *a, **kw: order.append("provider"))
+
+    def failed_start(response):
+        log.write_text(secret)
+        raise failure("start receipt failed")
+
+    with pytest.raises(failure, match="start receipt failed"):
+        dispatcher.offload(
+            "gemini",
+            "test",
+            cwd=str(stores),
+            max_network_retries=0,
+            attempt_started_callback=failed_start,
+            attempt_receipt_callback=lambda response: order.append("receipt"),
+        )
+    assert "provider" not in order
+    assert "receipt" not in order
+    assert "complete" not in order
+    assert secret not in log.read_text()
+
+
 @pytest.mark.parametrize(
     "returncode,exit_code",
     # The measured runs were recorded as exit 70 from the marker their reads quoted; since

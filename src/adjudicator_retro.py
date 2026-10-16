@@ -35,6 +35,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -56,6 +57,495 @@ DIFF_LINE_KEEP_BYTES = 1024
 # default (`roles.run_adjudicator_agent`, parameter `timeout`); a test pins the two together so
 # they cannot drift apart again.
 DISPATCH_TIMEOUT_S = 600
+NATIVE_JOURNAL_APPLICATION_ID = 1313097550
+
+
+def _valid_native_receipt(result: object, record: dict | None = None) -> bool:
+    """A journal-owned binary receipt; malformed receipts never consume later revisions."""
+    if not isinstance(result, dict) or result.get("errors"):
+        return False
+    proposal = result.get("proposal")
+    if not isinstance(proposal, dict):
+        return False
+    try:
+        if roles.ROLE_REGISTRY["adjudicator"].validate(proposal):
+            return False
+    except (TypeError, ValueError, KeyError):
+        return False
+    if proposal.get("decision") not in {"uphold_blocker", "reject_blocker"}:
+        return False
+    if not result.get("backend_run_id"):
+        return False
+    if record is not None and (
+        result.get("backend_run_id") != record.get("backend_run_id")
+        or result.get("raw_output") != record.get("raw_response")
+    ):
+        return False
+    return True
+
+
+class NativeAttemptJournal:
+    """Private, append-only receipt rail for one native collected-case retry.
+
+    Report JSON is deliberately not a source of authority.  This SQLite file is
+    owned by the native rail and stores the reservation before dispatch and the
+    raw provider response before any parsing or secondary side effect.  It does
+    not solve the provider crash boundary: a reserved attempt without a raw
+    receipt remains UNKNOWN and is never automatically redispatched.
+    """
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(self.path) as conn:
+            app_id = conn.execute("PRAGMA application_id").fetchone()[0]
+            tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+            if tables and app_id != NATIVE_JOURNAL_APPLICATION_ID:
+                raise ValueError("native journal refuses a non-native SQLite database")
+            conn.execute(f"PRAGMA application_id={NATIVE_JOURNAL_APPLICATION_ID}")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS native_attempts ("
+                "attempt_id TEXT PRIMARY KEY, case_id TEXT NOT NULL, material_revision TEXT NOT NULL, "
+                "case_digest TEXT NOT NULL, state TEXT NOT NULL, raw_response TEXT, backend_run_id TEXT, "
+                "backend_usage TEXT, backend_error TEXT, validated_json TEXT, created_at INTEGER NOT NULL, "
+                "updated_at INTEGER NOT NULL, report_sha256 TEXT NOT NULL, UNIQUE(case_id, material_revision))"
+            )
+
+    def reserve(
+        self,
+        case_id: str,
+        revision: str,
+        digest: str,
+        report_sha256: str,
+        *,
+        await_start: bool = False,
+    ) -> dict:
+        """Reserve once across processes; any existing reservation blocks spending."""
+        now = int(time.time())
+        attempt_id = uuid.uuid4().hex
+        state = "reserved" if await_start else "in_flight"
+        with sqlite3.connect(self.path, timeout=30) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute(
+                "SELECT attempt_id,state,case_digest FROM native_attempts "
+                "WHERE case_id=? AND (material_revision=? OR state IN ('reserved','in_flight','raw_persisted')) "
+                "ORDER BY CASE WHEN state IN ('reserved','in_flight','raw_persisted') THEN 0 ELSE 1 END",
+                (case_id, revision),
+            ).fetchone()
+            if current is not None:
+                return {
+                    "reserved": False,
+                    "attempt_id": current[0],
+                    "state": current[1],
+                    "case_digest": current[2],
+                }
+            prior = conn.execute(
+                "SELECT validated_json,backend_run_id,raw_response FROM native_attempts "
+                "WHERE case_id=? AND state='validated'",
+                (case_id,),
+            ).fetchall()
+            for validated_json, backend_run_id, raw_response in prior:
+                try:
+                    result = json.loads(validated_json)
+                except (TypeError, ValueError):
+                    continue
+                if _valid_native_receipt(
+                    result, {"backend_run_id": backend_run_id, "raw_response": raw_response}
+                ):
+                    return {"reserved": False, "attempt_id": None, "state": "validated_binary"}
+            conn.execute(
+                "INSERT INTO native_attempts(attempt_id,case_id,material_revision,case_digest,state,created_at,updated_at,report_sha256) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (attempt_id, case_id, revision, digest, state, now, now, report_sha256),
+            )
+        return {"reserved": True, "attempt_id": attempt_id, "state": state}
+
+    def begin_invocation(self, attempt_id: str, response: dict) -> None:
+        """Commit the UNKNOWN spend boundary before the dispatcher may start a process."""
+        backend_id = response.get("run_id")
+        if not isinstance(backend_id, str) or not backend_id:
+            raise ValueError("native invocation requires its backend identity")
+        with sqlite3.connect(self.path, timeout=30) as conn:
+            changed = conn.execute(
+                "UPDATE native_attempts SET state='in_flight',backend_run_id=?,updated_at=? "
+                "WHERE attempt_id=? AND state='reserved'",
+                (backend_id, int(time.time()), attempt_id),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("native attempt is not a pre-invocation reservation")
+
+    def release_unstarted(self, attempt_id: str) -> bool:
+        """Release only a producer-proven reservation that never crossed the start boundary."""
+        with sqlite3.connect(self.path, timeout=30) as conn:
+            changed = conn.execute(
+                "DELETE FROM native_attempts WHERE attempt_id=? AND state='reserved'", (attempt_id,)
+            ).rowcount
+        return changed == 1
+
+    def persist_raw(self, attempt_id: str, response: dict) -> None:
+        """Commit the unparsed backend receipt before callers may inspect it."""
+        if not isinstance(response, dict):
+            raise ValueError("native backend receipt must be an object")
+        raw = response.get("output", "")
+        if not isinstance(raw, str):
+            raw = json.dumps(raw, sort_keys=True)
+        now = int(time.time())
+        with sqlite3.connect(self.path, timeout=30) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            changed = conn.execute(
+                "UPDATE native_attempts SET state='raw_persisted',raw_response=?,backend_run_id=?,"
+                "backend_usage=?,backend_error=?,updated_at=? WHERE attempt_id=? AND state='in_flight'",
+                (
+                    raw,
+                    response.get("run_id"),
+                    json.dumps(response.get("usage") or {}, sort_keys=True),
+                    str(response.get("error") or ""),
+                    now,
+                    attempt_id,
+                ),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("native attempt is not an in-flight reservation")
+
+    def validate(self, attempt_id: str, result: dict) -> None:
+        """Record post-parse validation without ever reopening spend eligibility."""
+        with sqlite3.connect(self.path, timeout=30) as conn:
+            changed = conn.execute(
+                "UPDATE native_attempts SET state=?,validated_json=?,updated_at=? "
+                "WHERE attempt_id=? AND state='raw_persisted'",
+                ("validated", json.dumps(result, sort_keys=True), int(time.time()), attempt_id),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("native validation requires exactly one raw persisted receipt")
+
+    def verified(self, case_id: str, revision: str) -> dict | None:
+        with sqlite3.connect(self.path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM native_attempts WHERE case_id=? AND material_revision=? "
+                "AND state='validated'",
+                (case_id, revision),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def has_binary_decision(self, case_id: str) -> bool:
+        with sqlite3.connect(self.path) as conn:
+            rows = conn.execute(
+                "SELECT validated_json FROM native_attempts WHERE case_id=? AND state='validated'",
+                (case_id,),
+            ).fetchall()
+        for (value,) in rows:
+            try:
+                result = json.loads(value)
+            except (TypeError, ValueError):
+                continue
+            if _valid_native_receipt(result):
+                return True
+        return False
+
+
+def _native_substantive_revision(case: roles.CollectedAdjudicationCase) -> str:
+    """A spending key excluding administrative ownership and transport prose."""
+    packet = roles._collected_snapshot(case)
+    ground = packet.get("ground_truth_evidence", {})
+    if not isinstance(ground, dict):
+        raise ValueError("collected case lacks a material evidence revision")
+    collection = ground.get("collected_evidence")
+    mappings = ground.get("criterion_mapping")
+    if not isinstance(collection, dict) or not isinstance(mappings, list):
+        raise ValueError("collected case lacks a material evidence revision")
+    # The collector's broader identity intentionally binds owned UNKNOWN wording.
+    # Spending must not: an owner, next-action, location, or presentation-order
+    # correction cannot purchase another provider attempt.  Keep the UNKNOWN ref
+    # itself because adding/removing a required fact changes the evidence scope.
+    material = {
+        "target": packet.get("target"),
+        "finding": packet.get("disputed_finding"),
+        "collection": json.loads(json.dumps(collection)),
+        "diff": sorted(
+            ground.get("diff_summary", []), key=lambda item: json.dumps(item, sort_keys=True)
+        ),
+        "criteria": sorted(
+            [
+                {
+                    "criterion": mapping.get("criterion"),
+                    "evidence_refs": sorted(mapping.get("evidence_locations", [])),
+                    "unknown_refs": sorted(
+                        item["evidence_ref"]
+                        for item in mapping.get("unknowns", [])
+                        if isinstance(item, dict) and isinstance(item.get("evidence_ref"), str)
+                    ),
+                }
+                for mapping in mappings
+                if isinstance(mapping, dict)
+            ],
+            key=lambda item: json.dumps(item, sort_keys=True),
+        ),
+    }
+    material["collection"].pop("repository", None)
+    requirements = material["collection"].get("requirements")
+    if isinstance(requirements, dict) and isinstance(requirements.get("source_paths"), list):
+        requirements["source_paths"].sort()
+    for key in ("sources", "before_sources", "supporting_sources", "acceptance_artifacts"):
+        if isinstance(material["collection"].get(key), list):
+            material["collection"][key].sort(key=lambda item: json.dumps(item, sort_keys=True))
+    return hashlib.sha256(
+        json.dumps(material, sort_keys=True, ensure_ascii=True).encode()
+    ).hexdigest()
+
+
+def _validate_complete_history(row: dict) -> None:
+    """Reject malformed or duplicate retained attempt identities before effects."""
+    attempts = list(_attempt_rows([row]))
+    identities = [item.get("backend_run_id") for item in attempts if item.get("backend_run_id")]
+    if len(identities) != len(set(identities)):
+        raise ValueError("saved attempt history has duplicate backend identities")
+
+
+def _validate_original_report(rows: list[dict]) -> None:
+    """Eagerly validate all originals before a reservation or backend touch."""
+    ids = set()
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("case_id"), str):
+            raise ValueError("saved report rows require stable case IDs")
+        if row["case_id"] in ids:
+            raise ValueError("saved report has duplicate case IDs")
+        ids.add(row["case_id"])
+        _validate_complete_history(row)
+        keys = ("run_id", "verifier_verdict", "adjudicated_verdict")
+        if all(key in row for key in keys) and _case_id(row) != row["case_id"]:
+            raise ValueError("saved report case ID does not match immutable identity")
+
+
+def admit_collected_retry(
+    *,
+    original_report: Path,
+    output: Path,
+    case_id: str,
+    case: roles.CollectedAdjudicationCase,
+    journal: NativeAttemptJournal,
+    dispatch: bool = False,
+    backend: str | None = None,
+    cwd: str = ".",
+    timeout: int = DISPATCH_TIMEOUT_S,
+    expected_report_sha256: str | None = None,
+) -> dict:
+    """Run one existing original case through the native receipt rail.
+
+    ``original_report`` is read-only and ``output`` must be a fresh derived
+    projection.  A current opaque collected capability is required; serialized
+    packets and persisted-admission flags cannot enter this function.
+    """
+    if not isinstance(case, roles.CollectedAdjudicationCase):
+        raise TypeError("native admission requires a freshly issued collected case")
+    if output.exists() or output.is_symlink() or output.resolve() == original_report.resolve():
+        raise ValueError("native projection output must be new and separate")
+    if journal.path.resolve() in {original_report.resolve(), output.resolve()}:
+        raise ValueError("native journal must be separate from report and projection")
+    report_bytes = original_report.read_bytes()
+    report_hash = hashlib.sha256(report_bytes).hexdigest()
+    if expected_report_sha256 is not None and expected_report_sha256 != report_hash:
+        raise ValueError("original report changed before native projection")
+    saved = json.loads(report_bytes)
+    if not isinstance(saved, dict) or not isinstance(saved.get("rows"), list):
+        raise ValueError("saved report must contain a rows list")
+    matches = [
+        row for row in saved["rows"] if isinstance(row, dict) and row.get("case_id") == case_id
+    ]
+    if len(matches) != 1:
+        raise ValueError("saved report must contain exactly one original case")
+    _validate_original_report(saved["rows"])
+    original = matches[0]
+    if original.get("decision") not in {None, "needs_more_evidence"}:
+        raise ValueError("native admission only resumes an original abstention")
+    snapshot = roles._collected_snapshot(case)  # rechecks opaque issuance/digest
+    qualification = snapshot.get("ground_truth_evidence", {}).get("qualification", {})
+    original_packet = original.get("packet") or {}
+    fresh_ground = snapshot.get("ground_truth_evidence") or {}
+    original_ground = original_packet.get("ground_truth_evidence") or {}
+    anchors = ("head_sha", "merge_sha", "diff_summary", "gate_runs")
+    if (
+        qualification.get("case_id") != case_id
+        or snapshot.get("target") != original.get("target")
+        or snapshot.get("disputed_finding") != original_packet.get("disputed_finding")
+        or any(fresh_ground.get(key) != original_ground.get(key) for key in anchors)
+    ):
+        raise ValueError("collected capability does not bind the original case")
+    revision = _native_substantive_revision(case)
+    if journal.has_binary_decision(case_id):
+        raise ValueError("native case already has a validated binary decision")
+    if not dispatch:
+        return {
+            "source_report_sha256": report_hash,
+            "original_case_id": case_id,
+            "material_evidence_revision": revision,
+            "native_admission": "prepared_no_dispatch",
+        }
+    reservation = journal.reserve(case_id, revision, case._digest, report_hash, await_start=True)
+    if not reservation["reserved"]:
+        # An in-flight/malformed/validated prior attempt is UNKNOWN/consumed, never
+        # a reason to pay again.  The caller may inspect the journal manually.
+        raise ValueError("native revision already reserved: " + reservation["state"])
+    attempt_id = reservation["attempt_id"]
+    try:
+        result = roles.run_adjudicator_agent(
+            case=case,
+            backend=backend,
+            dispatch=True,
+            cwd=cwd,
+            timeout=timeout,
+            lifecycle_start_hook=lambda response: journal.begin_invocation(attempt_id, response),
+            lifecycle_hook=lambda response: journal.persist_raw(attempt_id, response),
+        )
+    except BaseException:
+        # A crash after the trusted start callback cannot match this DELETE,
+        # even if no raw receipt reached the journal. Never infer no spend from
+        # a missing response or from an arbitrary exception after invocation.
+        journal.release_unstarted(attempt_id)
+        raise
+    if journal.release_unstarted(attempt_id):
+        raise ValueError(
+            "native dispatch made no provider invocation: " + "; ".join(result.get("errors") or [])
+        )
+    journal.validate(attempt_id, result)
+    # Keep original evidence byte-for-byte untouched.  This is a projection only;
+    # it remains ungraded unless a later trusted evaluator establishes truth.
+    projected_rows = json.loads(json.dumps(saved["rows"]))
+    selected = next(row for row in projected_rows if row["case_id"] == case_id)
+    selected["native_projection"] = {
+        "attempt_id": attempt_id,
+        "material_evidence_revision": revision,
+        "admission": "trusted_journal_pending_later_truth",
+        "result": result,
+    }
+    projection = {
+        "source_report_sha256": report_hash,
+        "original_case_id": case_id,
+        "material_evidence_revision": revision,
+        "native_attempt_id": attempt_id,
+        "native_admission": "trusted_journal_pending_later_truth",
+        "original_paid_attempts": [
+            _attempt_snapshot(item)
+            for item in _attempt_rows([original])
+            if item.get("backend_run_id")
+        ],
+        "result": result,
+        "rows": projected_rows,
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("x", encoding="utf-8") as stream:
+        stream.write(json.dumps(projection, indent=2) + "\n")
+    return projection
+
+
+def refresh_native_projection(
+    *,
+    original_report: Path,
+    output: Path,
+    case_id: str,
+    case: roles.CollectedAdjudicationCase,
+    journal: NativeAttemptJournal,
+    db: Path | None = None,
+    truth_reader=None,
+) -> dict:
+    """Rebuild a native projection after restart from trusted receipts only.
+
+    This is intentionally separate from ``summarize``: generic report JSON
+    continues to floor qualified packets.  A native grade needs a fresh opaque
+    collector capability, a matching trusted journal record, a validated binary
+    proposal, and independently refreshed later truth.
+    """
+    if not isinstance(case, roles.CollectedAdjudicationCase):
+        raise TypeError("native refresh requires a freshly issued collected case")
+    if output.exists() or output.is_symlink() or output.resolve() == original_report.resolve():
+        raise ValueError("native projection output must be new and separate")
+    if journal.path.resolve() in {original_report.resolve(), output.resolve()}:
+        raise ValueError("native journal must be separate from report and projection")
+    report_bytes = original_report.read_bytes()
+    report_hash = hashlib.sha256(report_bytes).hexdigest()
+    saved = json.loads(report_bytes)
+    if not isinstance(saved, dict) or not isinstance(saved.get("rows"), list):
+        raise ValueError("saved report must contain a rows list")
+    _validate_original_report(saved["rows"])
+    originals = [row for row in saved["rows"] if row.get("case_id") == case_id]
+    if len(originals) != 1:
+        raise ValueError("saved report must contain exactly one original case")
+    snapshot = roles._collected_snapshot(case)
+    qualification = snapshot.get("ground_truth_evidence", {}).get("qualification", {})
+    original_packet = originals[0].get("packet") or {}
+    fresh_ground = snapshot.get("ground_truth_evidence") or {}
+    original_ground = original_packet.get("ground_truth_evidence") or {}
+    anchors = ("head_sha", "merge_sha", "diff_summary", "gate_runs")
+    if (
+        qualification.get("case_id") != case_id
+        or snapshot.get("target") != originals[0].get("target")
+        or snapshot.get("disputed_finding") != original_packet.get("disputed_finding")
+        or any(fresh_ground.get(key) != original_ground.get(key) for key in anchors)
+    ):
+        raise ValueError("fresh collected capability does not bind the original case")
+    revision = _native_substantive_revision(case)
+    # Match the spend identity: checkout paths and UNKNOWN owner wording are
+    # administrative metadata, while the original report and receipt remain bound.
+    record = journal.verified(case_id, revision)
+    if record is None or record.get("report_sha256") != report_hash:
+        raise ValueError("no trusted native admission for this original report and fresh case")
+    result = json.loads(record["validated_json"])
+    # The spending key intentionally ignores administrative changes. Receipt
+    # reuse also binds the complete contract actually supplied to the provider.
+    # Read it from the journal-owned result, never a saved projection marker.
+    receipt_case = result.get("case") if isinstance(result, dict) else None
+    receipt_ground = (
+        receipt_case.get("ground_truth_evidence") if isinstance(receipt_case, dict) else None
+    )
+    provenance = fresh_ground.get("criterion_provenance")
+    if (
+        not isinstance(provenance, dict)
+        or not isinstance(receipt_ground, dict)
+        or receipt_ground.get("criterion_provenance") != provenance
+    ):
+        raise ValueError("native receipt does not bind the complete task contract")
+    proposal = result.get("proposal") if isinstance(result, dict) else None
+    if not _valid_native_receipt(result, record):
+        proposal = None
+    decision = proposal.get("decision") if isinstance(proposal, dict) else None
+    run_id = originals[0].get("run_id")
+    later_truth = (
+        (truth_reader or native_later_truth)(run_id, db) if isinstance(run_id, str) else None
+    )
+    native_verdict = (
+        {"uphold_blocker": "FAIL", "reject_blocker": "PASS"}.get(decision)
+        if isinstance(decision, str)
+        else None
+    )
+    grade = int(native_verdict in {"PASS", "FAIL"} and later_truth in {"PASS", "FAIL"})
+    agree = bool(grade and native_verdict == later_truth)
+    rows = json.loads(json.dumps(saved["rows"]))
+    selected = next(row for row in rows if row["case_id"] == case_id)
+    selected["native_projection"] = {
+        "attempt_id": record["attempt_id"],
+        "material_evidence_revision": revision,
+        "trusted": True,
+        "decision": decision,
+        "later_truth": later_truth,
+        "graded": grade,
+        "agree": agree,
+    }
+    projection = {
+        "source_report_sha256": report_hash,
+        "original_case_id": case_id,
+        "native_admission": "trusted_journal_refreshed",
+        "native_summary": {"graded": grade, "agree": int(agree), "unknown": int(not grade)},
+        "rows": rows,
+    }
+    # This is one independently authenticated case projection, not a cohort
+    # regrade.  Retain the source summary verbatim; consumers must read the
+    # explicit native_summary instead of mistaking it for 58-case acceptance.
+    source_summary = saved.get("summary") if isinstance(saved.get("summary"), dict) else {}
+    projection["summary"] = source_summary
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("x", encoding="utf-8") as stream:
+        stream.write(json.dumps(projection, indent=2) + "\n")
+    return projection
 
 
 def report_path() -> Path:
@@ -416,6 +906,17 @@ def later_truth(row: dict) -> str | None:
     if durability in fleet_shapes.BAD_DURABILITY:
         return "FAIL"
     return None
+
+
+def native_later_truth(run_id: str, db: Path | None = None) -> str | None:
+    """Read the original run's durable outcome without creating schema or writes."""
+    with sqlite3.connect(f"file:{(db or feedback.DB_PATH).resolve()}?mode=ro", uri=True) as conn:
+        row = conn.execute(
+            "SELECT durability,durability_checked_ts FROM outcomes WHERE run_id=?", (run_id,)
+        ).fetchone()
+    if row is None:
+        return None
+    return later_truth({"durability": row[0], "durability_checked_ts": row[1]})
 
 
 def measured_cost(run_id: str | None, db: Path | None = None) -> float | None:
@@ -1557,6 +2058,31 @@ def weekly_line(path: Path | None = None) -> str:
 
 
 def _selftest() -> None:
+    with tempfile.TemporaryDirectory() as native_root:
+        journal_path = Path(native_root) / "native.sqlite"
+        journal = NativeAttemptJournal(journal_path)
+        unstarted = journal.reserve("unstarted", "A", "digest", "report", await_start=True)
+        assert journal.release_unstarted(unstarted["attempt_id"])
+        unstarted = journal.reserve("unstarted", "A", "digest", "report", await_start=True)
+        journal.begin_invocation(unstarted["attempt_id"], {"run_id": "started"})
+        assert not journal.release_unstarted(unstarted["attempt_id"])
+        assert not journal.reserve("unstarted", "B", "digest", "report")["reserved"]
+        try:
+            journal.validate(unstarted["attempt_id"], {"errors": []})
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("validation accepted a missing raw receipt")
+        reservation = journal.reserve("original", "A", "digest", "report")
+        journal.persist_raw(reservation["attempt_id"], {"run_id": "paid", "output": "{}"})
+        assert not journal.reserve("original", "B", "digest", "report")["reserved"]
+        journal.validate(
+            reservation["attempt_id"], {"errors": ["malformed proposal"], "proposal": None}
+        )
+        restarted = NativeAttemptJournal(journal_path)
+        assert not restarted.reserve("original", "A", "digest", "report")["reserved"]
+        assert restarted.reserve("original", "B", "digest", "report")["reserved"]
+        assert not restarted.has_binary_decision("original")
     with tempfile.TemporaryDirectory() as supporting_root:
         repository = Path(supporting_root)
         _local_git(repository, "init", "-q")
@@ -1677,6 +2203,15 @@ def _selftest() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--selftest", action="store_true")
+    parser.add_argument("--native-admit", metavar="CASE_ID")
+    parser.add_argument("--native-refresh", metavar="CASE_ID")
+    parser.add_argument(
+        "--case-input",
+        type=Path,
+        help="enriched report with original case anchors; used by --native-admit and --native-refresh",
+    )
+    parser.add_argument("--native-journal", type=Path)
+    parser.add_argument("--expected-source-hash")
     parser.add_argument(
         "--collect-case",
         metavar="CASE_ID",
@@ -1727,8 +2262,119 @@ def main() -> int:
     args = parser.parse_args()
     if args.timeout < 1:
         parser.error("--timeout must be at least 1 second")
+    if args.selftest and any((args.native_admit, args.native_refresh)):
+        parser.error("--selftest cannot be combined with a native mode")
     if args.selftest:
         _selftest()
+        return 0
+    if args.native_admit or args.native_refresh:
+        if args.native_admit and args.native_refresh:
+            parser.error("choose exactly one of --native-admit and --native-refresh")
+        native_case_id = args.native_admit or args.native_refresh
+        mode_flag = "--native-admit" if args.native_admit else "--native-refresh"
+        if args.native_refresh and args.dispatch:
+            parser.error("--native-refresh never dispatches")
+        if any(
+            (args.collect_case, args.prepare_collected_case, args.judge_collected_case, args.retry)
+        ):
+            parser.error(f"{mode_flag} cannot be combined with another adjudicator mode")
+        if not all(
+            (
+                args.report,
+                args.case_input,
+                args.repository,
+                args.qualification,
+                args.output,
+                args.native_journal,
+                args.expected_source_hash,
+            )
+        ):
+            parser.error(
+                f"{mode_flag} requires --report --case-input --repository --qualification --output "
+                "--native-journal and --expected-source-hash"
+            )
+        try:
+            if hashlib.sha256(args.report.read_bytes()).hexdigest() != args.expected_source_hash:
+                raise ValueError("original report changed before native operation")
+            original = json.loads(args.report.read_text(encoding="utf-8"))
+            enriched = json.loads(args.case_input.read_text(encoding="utf-8"))
+            for label, saved_report in (("original", original), ("enriched", enriched)):
+                if not isinstance(saved_report, dict) or not isinstance(
+                    saved_report.get("rows"), list
+                ):
+                    raise ValueError(f"{label} report must contain a rows list")
+                if any(not isinstance(row, dict) for row in saved_report["rows"]):
+                    raise ValueError(f"{label} report rows must be objects")
+                for row in saved_report["rows"]:
+                    packet = row.get("packet")
+                    if not isinstance(packet, dict):
+                        raise ValueError(f"{label} report row packet must be an object")
+                    if not isinstance(packet.get("ground_truth_evidence"), dict):
+                        raise ValueError(
+                            f"{label} report row ground_truth_evidence must be an object"
+                        )
+            original_rows = [
+                row for row in original.get("rows", []) if row.get("case_id") == native_case_id
+            ]
+            enriched_rows = [
+                row for row in enriched.get("rows", []) if row.get("case_id") == native_case_id
+            ]
+            if len(original_rows) != 1 or len(enriched_rows) != 1:
+                raise ValueError("both reports must contain exactly one original case")
+            for key in ("case_id", "run_id", "target", "verifier_verdict", "adjudicated_verdict"):
+                if original_rows[0].get(key) != enriched_rows[0].get(key):
+                    raise ValueError("enriched input must preserve original identity anchors")
+            for key in ("disputed_finding",):
+                if (original_rows[0].get("packet") or {}).get(key) != (
+                    enriched_rows[0].get("packet") or {}
+                ).get(key):
+                    raise ValueError("enriched input must preserve original finding anchors")
+            original_ground = (original_rows[0].get("packet") or {}).get(
+                "ground_truth_evidence"
+            ) or {}
+            enriched_ground = (enriched_rows[0].get("packet") or {}).get(
+                "ground_truth_evidence"
+            ) or {}
+            for key in ("head_sha", "merge_sha", "diff_summary", "gate_runs"):
+                if original_ground.get(key) != enriched_ground.get(key):
+                    raise ValueError("enriched input must preserve original evidence anchors")
+            case = qualify_collected_case(
+                enriched_rows[0],
+                args.repository,
+                json.loads(args.qualification.read_text()),
+                byte_limit=args.byte_limit,
+                prompt_byte_limit=args.packet_byte_limit,
+            )
+            if args.native_refresh:
+                result = refresh_native_projection(
+                    original_report=args.report,
+                    output=args.output,
+                    case_id=native_case_id,
+                    case=case,
+                    journal=NativeAttemptJournal(args.native_journal),
+                )
+            else:
+                result = admit_collected_retry(
+                    original_report=args.report,
+                    output=args.output,
+                    case_id=native_case_id,
+                    case=case,
+                    journal=NativeAttemptJournal(args.native_journal),
+                    dispatch=args.dispatch,
+                    cwd=str(args.repository),
+                    timeout=args.timeout,
+                    expected_report_sha256=args.expected_source_hash,
+                )
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            sqlite3.Error,
+            subprocess.SubprocessError,
+        ) as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, indent=2))
         return 0
     if args.judge_collected_case:
         if (

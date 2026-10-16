@@ -935,9 +935,12 @@ def _validate_adjudicator(proposal: Any) -> list[str]:
         errs.append(f"forbidden terminal/mutating keys present: {forbidden_present}")
 
     decision = proposal.get("decision")
-    if decision not in ADJUDICATOR_DECISIONS:
+    if not isinstance(decision, str) or decision not in ADJUDICATOR_DECISIONS:
         errs.append(f"decision must be one of {sorted(ADJUDICATOR_DECISIONS)}; got {decision!r}")
-    if proposal.get("confidence") not in CONFIDENCE:
+    if (
+        not isinstance(proposal.get("confidence"), str)
+        or proposal.get("confidence") not in CONFIDENCE
+    ):
         errs.append(
             f"confidence must be one of {sorted(CONFIDENCE)}; got {proposal.get('confidence')!r}"
         )
@@ -958,7 +961,12 @@ def _validate_adjudicator(proposal: Any) -> list[str]:
     gaps = proposal.get("evidence_gaps")
     if not isinstance(gaps, list) or not all(isinstance(gap, str) and gap.strip() for gap in gaps):
         errs.append("evidence_gaps must be a list of non-empty strings")
-    if decision in {"uphold_blocker", "reject_blocker"} and isinstance(refs, list) and not refs:
+    if (
+        isinstance(decision, str)
+        and decision in {"uphold_blocker", "reject_blocker"}
+        and isinstance(refs, list)
+        and not refs
+    ):
         errs.append(f"{decision} requires at least one ground_truth_ref")
     if decision == "needs_more_evidence" and isinstance(gaps, list) and not gaps:
         errs.append("needs_more_evidence requires at least one evidence_gap")
@@ -976,7 +984,11 @@ def _validate_adjudicator(proposal: Any) -> list[str]:
             errs.append(f"evidence_assessment[{idx}] has unexpected keys: {sorted(extra_item)}")
         if not (isinstance(item.get("claim"), str) and item["claim"].strip()):
             errs.append(f"evidence_assessment[{idx}].claim must be a non-empty string")
-        if item.get("status") not in {"supported", "contradicted", "insufficient"}:
+        if not isinstance(item.get("status"), str) or item.get("status") not in {
+            "supported",
+            "contradicted",
+            "insufficient",
+        }:
             errs.append(
                 f"evidence_assessment[{idx}].status must be supported|contradicted|insufficient"
             )
@@ -2883,6 +2895,8 @@ def run_adjudicator_agent(
     cwd: str = ".",
     timeout: int = 600,
     exploration_rate: float | None = None,
+    lifecycle_hook=None,
+    lifecycle_start_hook=None,
 ) -> dict:
     """SHADOW ONLY. Assess a disputed blocker/veto; never mutates or emits final panel verdicts."""
     role = ROLE_REGISTRY["adjudicator"]
@@ -2950,7 +2964,19 @@ def run_adjudicator_agent(
                 timeout=timeout,
                 isolate=retrospective_origin,
                 subject_id=feedback.work_item_subject(compact_case.get("target")),
+                attempt_receipt_callback=lifecycle_hook,
+                max_network_retries=0 if lifecycle_hook is not None else None,
+                attempt_started_callback=lifecycle_start_hook,
             )
+            # A caller that has made a durable paid-attempt reservation gets the
+            # untouched provider response before this function parses it, writes
+            # Brain telemetry, or reports a capability success.  The hook is
+            # deliberately narrow: it is an execution receipt, not authority to
+            # manufacture a collected-case capability or a report admission.
+            if lifecycle_hook is not None and not res.get("attempt_receipt_callback_called"):
+                raise RuntimeError(
+                    "native dispatcher did not acknowledge the attempt receipt callback"
+                )
             backend_run_id = res.get("run_id")
             backend_model = res.get("model")
             backend_usage = res.get("usage") or {}
@@ -3247,6 +3273,16 @@ def _selftest() -> None:
     import contextlib
     import io
     import tempfile
+
+    malformed_values: list[Any] = [[], {}]
+    for malformed in malformed_values:
+        for key in ("decision", "confidence"):
+            invalid = _baseline_adjudication({})
+            invalid[key] = malformed
+            assert _validate_adjudicator(invalid), (key, malformed)
+        invalid = _baseline_adjudication({})
+        invalid["evidence_assessment"][0]["status"] = malformed
+        assert _validate_adjudicator(invalid), malformed
 
     fake_cap = {"agents": {a: {"state": "ok"} for a in ("gemini", "codex", "cursor", "vibe")}}
     old_db = feedback.DB_PATH

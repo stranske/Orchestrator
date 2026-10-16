@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 
 import pytest
@@ -135,6 +136,483 @@ def test_collector_issued_input_reaches_existing_native_runner_without_truncatio
         "later_truth": "PASS",
     }
     assert retro.summarize([forged])["adjudicated"] == 0
+
+
+def test_native_admission_reserves_once_persists_raw_before_brain_and_preserves_original(
+    qualified_input, tmp_path, monkeypatch
+):
+    repo, row, qualification, _ = qualified_input
+    row["run_id"] = "original-run"
+    case = retro.qualify_collected_case(row, repo, qualification)
+    original = tmp_path / "original.json"
+    original.write_text(json.dumps({"rows": [row]}))
+    original_bytes = original.read_bytes()
+    journal_path = tmp_path / "native.sqlite"
+    journal = retro.NativeAttemptJournal(journal_path)
+    order = []
+
+    def offload(*_args, **_kwargs):
+        order.append("offload")
+        receipt = {"exit": 0, "run_id": "native-once", "output": json.dumps(proposal())}
+        _kwargs["attempt_started_callback"]({"run_id": "native-once"})
+        _kwargs["attempt_receipt_callback"](receipt)
+        return {**receipt, "attempt_receipt_callback_called": True}
+
+    monkeypatch.setattr(roles.dispatcher, "offload", offload)
+
+    def record_role(**_kwargs):
+        order.append("brain")
+        with sqlite3.connect(journal_path) as conn:
+            assert (
+                conn.execute("SELECT state FROM native_attempts").fetchone()[0] == "raw_persisted"
+            )
+
+    monkeypatch.setattr(roles.feedback, "record_role_run", record_role)
+    projection = retro.admit_collected_retry(
+        original_report=original,
+        output=tmp_path / "projection.json",
+        case_id="one",
+        case=case,
+        journal=journal,
+        backend="gemini",
+        dispatch=True,
+        cwd=str(repo),
+        expected_report_sha256=hashlib.sha256(original_bytes).hexdigest(),
+    )
+    assert original.read_bytes() == original_bytes
+    assert projection["original_case_id"] == "one"
+    assert order == ["offload", "brain"]
+    with sqlite3.connect(journal_path) as conn:
+        raw, state = conn.execute("SELECT raw_response,state FROM native_attempts").fetchone()
+    assert json.loads(raw)["decision"] == "reject_blocker"
+    assert state == "validated"
+    with pytest.raises(ValueError, match="already reserved|validated binary"):
+        retro.admit_collected_retry(
+            original_report=original,
+            output=tmp_path / "duplicate.json",
+            case_id="one",
+            case=case,
+            journal=journal,
+            backend="gemini",
+            dispatch=True,
+            cwd=str(repo),
+        )
+    monkeypatch.setattr(roles.dispatcher, "offload", lambda *_a, **_kw: pytest.fail("redispatch"))
+    refreshed = retro.refresh_native_projection(
+        original_report=original,
+        output=tmp_path / "refreshed.json",
+        case_id="one",
+        case=case,
+        journal=journal,
+        truth_reader=lambda *_args: "PASS",
+    )
+    assert refreshed["native_summary"] == {"graded": 1, "agree": 1, "unknown": 0}
+    assert len(refreshed["rows"]) == 1
+    # Administrative reassignment and a different checkout must not strand a
+    # paid receipt whose substantive evidence and original report are unchanged.
+    moved_repo = tmp_path / "moved-repo"
+    shutil.copytree(repo, moved_repo)
+    changed_qualification = copy.deepcopy(qualification)
+    changed_qualification["criterion_mapping"][0]["unknowns"][0].update(
+        owner="new operator", next_action="Inspect the same receipt from the new checkout."
+    )
+    rebuilt = retro.qualify_collected_case(row, moved_repo, changed_qualification)
+    assert rebuilt._digest != case._digest
+    assert retro._native_substantive_revision(rebuilt) == retro._native_substantive_revision(case)
+    restarted = retro.NativeAttemptJournal(journal_path)
+    moved = retro.refresh_native_projection(
+        original_report=original,
+        output=tmp_path / "moved.json",
+        case_id="one",
+        case=rebuilt,
+        journal=restarted,
+        truth_reader=lambda *_args: "PASS",
+    )
+    assert moved["native_summary"] == refreshed["native_summary"]
+    assert moved["rows"][0]["native_projection"]["attempt_id"] == projection["native_attempt_id"]
+    # A different complete task contract must not reuse the paid receipt, even
+    # when the spend identity and acceptance-criterion text remain unchanged.
+    changed_row = copy.deepcopy(row)
+    changed_contract = copy.deepcopy(qualification)
+    body = qualification["snapshot"]["body"].replace(
+        "Read the complete source.", "Do not read the source; inspect only metadata."
+    )
+    changed_row["inventory_provenance"] = {
+        "source_criterion_tasks": body,
+        "pr_body_sha256": hashlib.sha256(body.encode()).hexdigest(),
+    }
+    changed_contract["snapshot"]["body"] = body
+    different = retro.qualify_collected_case(changed_row, repo, changed_contract)
+    assert retro._native_substantive_revision(different) == retro._native_substantive_revision(case)
+    rejected = tmp_path / "changed-contract.json"
+    with pytest.raises(ValueError, match="complete task contract"):
+        retro.refresh_native_projection(
+            original_report=original,
+            output=rejected,
+            case_id="one",
+            case=different,
+            journal=restarted,
+            truth_reader=lambda *_args: "PASS",
+        )
+    assert not rejected.exists()
+    assert original.read_bytes() == original_bytes
+    # Missing/corrupt/schema-less Brain storage is a failed read, not pending
+    # durability. No projection may be published in any of these cases.
+    for damage in ("missing", "corrupt", "missing-schema"):
+        brain = tmp_path / (damage + ".sqlite")
+        if damage == "corrupt":
+            brain.write_bytes(b"not a SQLite database")
+        elif damage == "missing-schema":
+            with sqlite3.connect(brain) as conn:
+                conn.execute("CREATE TABLE unrelated (value TEXT)")
+        output = tmp_path / (damage + ".json")
+        with pytest.raises(sqlite3.Error):
+            retro.refresh_native_projection(
+                original_report=original,
+                output=output,
+                case_id="one",
+                case=rebuilt,
+                journal=restarted,
+                db=brain,
+            )
+        assert not output.exists()
+    assert original.read_bytes() == original_bytes
+    unknown = retro.refresh_native_projection(
+        original_report=original,
+        output=tmp_path / "unknown.json",
+        case_id="one",
+        case=case,
+        journal=journal,
+        truth_reader=lambda *_args: None,
+    )
+    assert unknown["native_summary"] == {"graded": 0, "agree": 0, "unknown": 1}
+    with pytest.raises(ValueError, match="trusted native admission"):
+        retro.refresh_native_projection(
+            original_report=original,
+            output=tmp_path / "forged.json",
+            case_id="one",
+            case=case,
+            journal=retro.NativeAttemptJournal(tmp_path / "forged.sqlite"),
+            truth_reader=lambda *_args: "PASS",
+        )
+
+
+@pytest.mark.parametrize("field", ["decision", "confidence", "status"])
+@pytest.mark.parametrize("malformed", [[], {}])
+def test_malformed_native_proposal_is_consumed_and_recoverable(
+    qualified_input, tmp_path, monkeypatch, field, malformed
+):
+    repo, row, qualification, _ = qualified_input
+    row["run_id"] = "original-run"
+    case = retro.qualify_collected_case(row, repo, qualification)
+    original = tmp_path / "original.json"
+    original.write_text(json.dumps({"rows": [row]}))
+    invalid = proposal()
+    if field == "status":
+        invalid["evidence_assessment"][0][field] = malformed
+    else:
+        invalid[field] = malformed
+    assert roles.ROLE_REGISTRY["adjudicator"].validate(invalid)
+    calls = []
+
+    def offload(*args, **kwargs):
+        assert kwargs["max_network_retries"] == 0
+        calls.append(True)
+        response = {"exit": 0, "run_id": "paid-invalid", "output": json.dumps(invalid)}
+        kwargs["attempt_started_callback"]({"run_id": "paid-invalid"})
+        kwargs["attempt_receipt_callback"](response)
+        return {**response, "attempt_receipt_callback_called": True}
+
+    monkeypatch.setattr(roles.dispatcher, "offload", offload)
+    monkeypatch.setattr(roles.feedback, "record_role_run", lambda **kwargs: None)
+    journal = retro.NativeAttemptJournal(tmp_path / "native.sqlite")
+    result = retro.admit_collected_retry(
+        original_report=original,
+        output=tmp_path / "attempt.json",
+        case_id="one",
+        case=case,
+        journal=journal,
+        backend="gemini",
+        dispatch=True,
+        cwd=str(repo),
+    )
+    assert result["result"]["errors"] and calls == [True]
+    restarted = retro.NativeAttemptJournal(journal.path)
+    refreshed = retro.refresh_native_projection(
+        original_report=original,
+        output=tmp_path / "refreshed.json",
+        case_id="one",
+        case=case,
+        journal=restarted,
+        truth_reader=lambda *args: "PASS",
+    )
+    assert refreshed["native_summary"]["graded"] == 0 and calls == [True]
+    revision = retro._native_substantive_revision(case)
+    assert not restarted.reserve("one", revision, case._digest, "source")["reserved"]
+    assert restarted.reserve("one", "new-substantive-revision", case._digest, "source")["reserved"]
+
+
+def test_native_spend_revision_ignores_administrative_unknown_assignment(qualified_input):
+    repo, row, qualification, _ = qualified_input
+    first = retro.qualify_collected_case(row, repo, qualification)
+    changed = copy.deepcopy(qualification)
+    changed["criterion_mapping"][0]["unknowns"][0].update(
+        owner="new operator", next_action="Use a different review queue."
+    )
+    second = retro.qualify_collected_case(row, repo, changed)
+    assert retro._native_substantive_revision(first) == retro._native_substantive_revision(second)
+    assert (
+        roles._collected_snapshot(first)["ground_truth_evidence"]["qualification"][
+            "material_evidence_revision"
+        ]
+        != roles._collected_snapshot(second)["ground_truth_evidence"]["qualification"][
+            "material_evidence_revision"
+        ]
+    )
+
+
+def test_native_admission_preflight_is_no_dispatch_and_validates_entire_cohort(
+    qualified_input, tmp_path, monkeypatch
+):
+    repo, row, qualification, _ = qualified_input
+    case = retro.qualify_collected_case(row, repo, qualification)
+    other = {"case_id": "other", "target": "owner/repo#2", "retry_attempts": [None]}
+    original = tmp_path / "original.json"
+    original.write_text(json.dumps({"rows": [row, other]}))
+    monkeypatch.setattr(roles.dispatcher, "offload", lambda *_a, **_kw: pytest.fail("dispatch"))
+    with pytest.raises(ValueError, match="invalid retry attempt history"):
+        retro.admit_collected_retry(
+            original_report=original,
+            output=tmp_path / "projection.json",
+            case_id="one",
+            case=case,
+            journal=retro.NativeAttemptJournal(tmp_path / "native.sqlite"),
+            dispatch=False,
+            cwd=str(repo),
+        )
+    other["retry_attempts"] = []
+    original.write_text(json.dumps({"rows": [row, other]}))
+    prepared = retro.admit_collected_retry(
+        original_report=original,
+        output=tmp_path / "projection.json",
+        case_id="one",
+        case=case,
+        journal=retro.NativeAttemptJournal(tmp_path / "native.sqlite"),
+        dispatch=False,
+        cwd=str(repo),
+    )
+    assert prepared["native_admission"] == "prepared_no_dispatch"
+    assert not (tmp_path / "projection.json").exists()
+
+
+def test_native_journal_raw_persisted_crash_blocks_changed_revision(tmp_path):
+    journal = retro.NativeAttemptJournal(tmp_path / "native.sqlite")
+    first = journal.reserve("case", "A" * 64, "digest", "report")
+    journal.persist_raw(first["attempt_id"], {"run_id": "backend", "output": "{}"})
+    blocked = journal.reserve("case", "B" * 64, "digest", "report")
+    assert blocked["reserved"] is False
+    assert blocked["state"] == "raw_persisted"
+
+
+def test_native_reservation_releases_only_before_started_invocation(tmp_path):
+    journal = retro.NativeAttemptJournal(tmp_path / "native.sqlite")
+    reserved = journal.reserve("case", "A" * 64, "digest", "report", await_start=True)
+    assert reserved["state"] == "reserved"
+    assert journal.release_unstarted(reserved["attempt_id"]) is True
+    again = journal.reserve("case", "A" * 64, "digest", "report", await_start=True)
+    journal.begin_invocation(again["attempt_id"], {"run_id": "paid-one"})
+    assert journal.release_unstarted(again["attempt_id"]) is False
+    journal.persist_raw(again["attempt_id"], {"run_id": "paid-one", "output": "{}"})
+    blocked = journal.reserve("case", "B" * 64, "digest", "report", await_start=True)
+    assert blocked["reserved"] is False
+    assert blocked["state"] == "raw_persisted"
+
+
+def test_native_validate_refuses_missing_started_receipt(tmp_path):
+    journal = retro.NativeAttemptJournal(tmp_path / "native.sqlite")
+    reserved = journal.reserve("case", "A" * 64, "digest", "report", await_start=True)
+    with pytest.raises(ValueError, match="raw persisted"):
+        journal.validate(reserved["attempt_id"], {})
+
+
+def test_native_no_provider_releases_reservation_without_projection(
+    qualified_input, tmp_path, monkeypatch
+):
+    repo, row, qualification, _ = qualified_input
+    row["run_id"] = "original-run"
+    case = retro.qualify_collected_case(row, repo, qualification)
+    original = tmp_path / "original.json"
+    original.write_text(json.dumps({"rows": [row]}))
+    journal = retro.NativeAttemptJournal(tmp_path / "native.sqlite")
+    monkeypatch.setattr(roles, "route_role", lambda *_args, **_kwargs: None)
+    with pytest.raises(ValueError, match="no provider"):
+        retro.admit_collected_retry(
+            original_report=original,
+            output=tmp_path / "projection.json",
+            case_id="one",
+            case=case,
+            journal=journal,
+            dispatch=True,
+            cwd=str(repo),
+        )
+    assert not (tmp_path / "projection.json").exists()
+    assert (
+        journal.reserve(
+            "one",
+            retro._native_substantive_revision(case),
+            case._digest,
+            hashlib.sha256(original.read_bytes()).hexdigest(),
+            await_start=True,
+        )["reserved"]
+        is True
+    )
+
+
+def test_native_predispatch_failure_releases_same_revision_reservation(
+    qualified_input, tmp_path, monkeypatch
+):
+    repo, row, qualification, _ = qualified_input
+    row["run_id"] = "original-run"
+    case = retro.qualify_collected_case(row, repo, qualification)
+    original = tmp_path / "original.json"
+    original.write_text(json.dumps({"rows": [row]}))
+    journal = retro.NativeAttemptJournal(tmp_path / "native.sqlite")
+
+    def predispatch_failure(*_args, **_kwargs):
+        raise ValueError("provider rejected request before invocation")
+
+    monkeypatch.setattr(roles.dispatcher, "offload", predispatch_failure)
+    with pytest.raises(ValueError, match="before invocation"):
+        retro.admit_collected_retry(
+            original_report=original,
+            output=tmp_path / "projection.json",
+            case_id="one",
+            case=case,
+            journal=journal,
+            backend="gemini",
+            dispatch=True,
+            cwd=str(repo),
+        )
+    assert not (tmp_path / "projection.json").exists()
+    assert (
+        journal.reserve(
+            "one",
+            retro._native_substantive_revision(case),
+            case._digest,
+            hashlib.sha256(original.read_bytes()).hexdigest(),
+            await_start=True,
+        )["reserved"]
+        is True
+    )
+
+
+def test_native_started_raw_failure_preserves_unknown_and_blocks_all_revisions(
+    qualified_input, tmp_path, monkeypatch
+):
+    repo, row, qualification, _ = qualified_input
+    row["run_id"] = "original-run"
+    case = retro.qualify_collected_case(row, repo, qualification)
+    original = tmp_path / "original.json"
+    original.write_text(json.dumps({"rows": [row]}))
+    journal = retro.NativeAttemptJournal(tmp_path / "native.sqlite")
+
+    def started_then_raw(*_args, **kwargs):
+        kwargs["attempt_started_callback"]({"run_id": "paid-before-raw"})
+        kwargs["attempt_receipt_callback"](
+            {"exit": 0, "run_id": "paid-before-raw", "output": json.dumps(proposal())}
+        )
+        pytest.fail("raw receipt failure must stop completion")
+
+    monkeypatch.setattr(roles.dispatcher, "offload", started_then_raw)
+    monkeypatch.setattr(
+        journal, "persist_raw", lambda *_args: (_ for _ in ()).throw(OSError("disk full"))
+    )
+    with pytest.raises(OSError, match="disk full"):
+        retro.admit_collected_retry(
+            original_report=original,
+            output=tmp_path / "projection.json",
+            case_id="one",
+            case=case,
+            journal=journal,
+            backend="gemini",
+            dispatch=True,
+            cwd=str(repo),
+        )
+    with sqlite3.connect(journal.path) as conn:
+        state, backend_id = conn.execute(
+            "SELECT state,backend_run_id FROM native_attempts"
+        ).fetchone()
+    assert (state, backend_id) == ("in_flight", "paid-before-raw")
+    assert not journal.reserve("one", "B" * 64, case._digest, "report", await_start=True)[
+        "reserved"
+    ]
+
+
+def test_native_interrupt_after_raw_persistence_stays_unknown(
+    qualified_input, tmp_path, monkeypatch
+):
+    repo, row, qualification, _ = qualified_input
+    row["run_id"] = "original-run"
+    case = retro.qualify_collected_case(row, repo, qualification)
+    original = tmp_path / "original.json"
+    original.write_text(json.dumps({"rows": [row]}))
+    journal = retro.NativeAttemptJournal(tmp_path / "native.sqlite")
+
+    def interrupted(*_args, **kwargs):
+        kwargs["attempt_started_callback"]({"run_id": "paid-interrupted"})
+        kwargs["attempt_receipt_callback"]({"run_id": "paid-interrupted", "output": "{}"})
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(roles.dispatcher, "offload", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        retro.admit_collected_retry(
+            original_report=original,
+            output=tmp_path / "projection.json",
+            case_id="one",
+            case=case,
+            journal=journal,
+            backend="gemini",
+            dispatch=True,
+            cwd=str(repo),
+        )
+    with sqlite3.connect(journal.path) as conn:
+        assert conn.execute("SELECT state FROM native_attempts").fetchone()[0] == "raw_persisted"
+    assert not (tmp_path / "projection.json").exists()
+    assert not journal.reserve("one", "B" * 64, case._digest, "report", await_start=True)[
+        "reserved"
+    ]
+
+
+def test_invalid_native_receipts_neither_grade_nor_block_future_revision(tmp_path):
+    journal = retro.NativeAttemptJournal(tmp_path / "native.sqlite")
+    first = journal.reserve("case", "A" * 64, "digest", "report")
+    journal.persist_raw(first["attempt_id"], {"run_id": "backend", "output": "{}"})
+    journal.validate(
+        first["attempt_id"],
+        {
+            "backend_run_id": "backend",
+            "raw_output": "{}",
+            "errors": ["bad"],
+            "proposal": proposal(),
+        },
+    )
+    assert journal.has_binary_decision("case") is False
+    assert journal.reserve("case", "B" * 64, "digest", "report")["reserved"] is True
+
+
+def test_native_journal_refuses_non_native_database(tmp_path):
+    path = tmp_path / "brain.sqlite"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE outcomes(run_id TEXT)")
+    with pytest.raises(ValueError, match="non-native"):
+        retro.NativeAttemptJournal(path)
+
+
+def test_native_cli_mode_conflict_is_rejected(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["adjudicator_retro", "--selftest", "--native-admit", "one"])
+    with pytest.raises(SystemExit) as caught:
+        retro.main()
+    assert caught.value.code == 2
 
 
 def test_serialized_or_copied_packet_cannot_manufacture_collector_authority(qualified_input):
@@ -364,6 +842,95 @@ def test_cli_rejects_malformed_report_shapes_without_traceback(
     assert caught.value.code == 2
     assert "error:" in capsys.readouterr().err
     assert not output.exists()
+
+
+@pytest.fixture
+def native_cli(qualified_input, tmp_path, monkeypatch):
+    repo, row, qualification, _ = qualified_input
+    report, enriched, qual, output, journal = (
+        tmp_path / name
+        for name in (
+            "original.json",
+            "enriched.json",
+            "qualification.json",
+            "output.json",
+            "native.db",
+        )
+    )
+    report.write_text(json.dumps({"rows": [row]}))
+    enriched.write_bytes(report.read_bytes())
+    qual.write_text(json.dumps(qualification))
+    monkeypatch.setattr(
+        roles.dispatcher, "offload", lambda *args, **kwargs: pytest.fail("invalid CLI dispatched")
+    )
+
+    def argv(mode):
+        return [
+            "adjudicator_retro",
+            mode,
+            "one",
+            "--report",
+            str(report),
+            "--case-input",
+            str(enriched),
+            "--repository",
+            str(repo),
+            "--qualification",
+            str(qual),
+            "--output",
+            str(output),
+            "--native-journal",
+            str(journal),
+            "--expected-source-hash",
+            hashlib.sha256(report.read_bytes()).hexdigest(),
+        ]
+
+    return argv, report, enriched, output, journal
+
+
+@pytest.mark.parametrize("mode", ["--native-admit", "--native-refresh"])
+@pytest.mark.parametrize("which", ["original", "enriched"])
+@pytest.mark.parametrize("saved", [[], {"rows": None}, {"rows": {}}, {"rows": [None]}])
+def test_native_cli_rejects_malformed_reports_without_traceback(
+    native_cli, monkeypatch, capsys, mode, which, saved
+):
+    argv, report, enriched, output, journal = native_cli
+    (report if which == "original" else enriched).write_text(json.dumps(saved))
+    before = report.read_bytes()
+    monkeypatch.setattr("sys.argv", argv(mode))
+    with pytest.raises(SystemExit) as caught:
+        retro.main()
+    assert caught.value.code == 2
+    assert "error:" in capsys.readouterr().err
+    assert report.read_bytes() == before
+    assert not output.exists() and not journal.exists()
+
+
+@pytest.mark.parametrize("mode", ["--native-admit", "--native-refresh"])
+def test_native_cli_reports_corrupt_journal_without_traceback(
+    native_cli, monkeypatch, capsys, mode
+):
+    argv, report, _, output, journal = native_cli
+    before = report.read_bytes()
+    journal.write_bytes(b"not a SQLite database")
+    monkeypatch.setattr("sys.argv", argv(mode))
+    with pytest.raises(SystemExit) as caught:
+        retro.main()
+    assert caught.value.code == 2
+    assert "error:" in capsys.readouterr().err
+    assert not output.exists() and report.read_bytes() == before
+
+
+@pytest.mark.parametrize("mode", ["--native-admit", "--native-refresh"])
+@pytest.mark.parametrize("conflict", [False, True])
+def test_native_cli_errors_name_selected_mode(monkeypatch, capsys, mode, conflict):
+    monkeypatch.setattr(
+        "sys.argv", ["adjudicator_retro", mode, "one"] + (["--retry"] if conflict else [])
+    )
+    with pytest.raises(SystemExit) as caught:
+        retro.main()
+    assert caught.value.code == 2
+    assert mode + (" cannot be combined" if conflict else " requires") in capsys.readouterr().err
 
 
 def supporting_descriptor(repo, row, git, *, ranges=None):
@@ -639,3 +1206,29 @@ def test_supporting_manifest_count_is_bounded_before_git_reads(qualified_input, 
         retro._collect_supporting_sources(
             [item] * (retro.MAX_SUPPORTING_SOURCES + 1), repo, item["evaluated_sha"], [], 1000
         )
+
+
+@pytest.mark.parametrize("mode", ["--native-admit", "--native-refresh"])
+@pytest.mark.parametrize("which", ["original", "enriched"])
+@pytest.mark.parametrize("nested", ["packet", "ground_truth_evidence"])
+@pytest.mark.parametrize("invalid", [None, [], "invalid"])
+def test_native_cli_rejects_malformed_nested_objects(
+    native_cli, monkeypatch, capsys, mode, which, nested, invalid
+):
+    argv, report, enriched, output, journal = native_cli
+    path = report if which == "original" else enriched
+    saved = json.loads(path.read_text())
+    row = saved["rows"][0]
+    if nested == "packet":
+        row["packet"] = invalid
+    else:
+        row["packet"]["ground_truth_evidence"] = invalid
+    path.write_text(json.dumps(saved))
+    before = report.read_bytes()
+    monkeypatch.setattr("sys.argv", argv(mode))
+    with pytest.raises(SystemExit) as caught:
+        retro.main()
+    assert caught.value.code == 2
+    assert "must be an object" in capsys.readouterr().err
+    assert report.read_bytes() == before
+    assert not output.exists() and not journal.exists()
