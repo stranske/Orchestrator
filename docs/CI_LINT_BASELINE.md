@@ -36,7 +36,7 @@ this actual measurement supplies the missing complete recorded toolchain.
 command and captured output, strict report, installed versions, source head,
 and script/pin digests. Existing historical measurements remain below.
 Coverage startup does not establish full-suite, execution-mirror or combined
-coverage acceptance. The integrated 3,467 collection floor (current main3,466 plus one executed strict-version regression), capability/skip controls,
+coverage acceptance. The integrated 3,470 collection floor (current main3,469 plus one executed strict-version regression), capability/skip controls,
 complete-toolchain matching and enforcement policy remain unchanged. No
 repository pins or generated branch were changed for this preparation.
 

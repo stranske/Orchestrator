@@ -1,0 +1,18 @@
+{
+  "argv": [
+    ".venv/bin/python",
+    "-m",
+    "pytest",
+    "tests/test_ci_lint_baseline.py",
+    "tests/test_ci_gate_config.py",
+    "-v",
+    "-o",
+    "addopts="
+  ],
+  "source_head": "cf87bad89061684ce984eeed6429f0eb3f3843c4",
+  "exit_code": 0,
+  "passed": 21,
+  "stdout_sha256": "71a31f4344390b2642e6d3c2e07503c2459f481d6e8f7376ca0bf83d42fd0cb7",
+  "stdout_bytes": 3112,
+  "full_stdout": "focused-verbose.log"
+}
