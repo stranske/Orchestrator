@@ -336,6 +336,86 @@ def test_weekly_line_names_unmeasured_cost_and_grade_denominator(tmp_path):
     assert "graded 0; costs measured 0" in line
 
 
+def _complete_packet():
+    revision = "a" * 40
+    return {
+        "ground_truth_evidence": {
+            "diff_patch": {"revision": revision, "text": "diff --git a/x.py b/x.py\n"},
+            "acceptance_criteria": [{"text": "a requirement", "revision": revision}],
+        }
+    }
+
+
+def _metadata_packet():
+    return {"ground_truth_evidence": {"diff_summary": [], "gate_runs": []}}
+
+
+def _advice_row(packet, decision, truth):
+    # The role records needs_more_evidence for every retrospective-source case, whatever it decided.
+    return {
+        "packet": packet,
+        "decision": decision,
+        "disposition": "needs_more_evidence",
+        "later_truth": truth,
+        "merge_rule_verdict": "PASS",
+    }
+
+
+def _advice_rows():
+    return [
+        _advice_row(_complete_packet(), "reject_blocker", "PASS"),  # agrees
+        _advice_row(_complete_packet(), "uphold_blocker", "PASS"),  # disagrees
+        _advice_row(_metadata_packet(), "reject_blocker", "PASS"),  # counts and statuses only
+        _advice_row(_complete_packet(), "needs_more_evidence", "PASS"),  # abstained
+        _advice_row(_complete_packet(), "reject_blocker", None),  # no later truth yet
+    ]
+
+
+def test_advice_graded_counts_committed_decisions_on_complete_packets_beside_the_strict_graded():
+    summary = retro.summarize(_advice_rows())
+    assert summary["advice_graded"] == 2
+    assert summary["advice_agree"] == 1
+    assert summary["advice_disagree"] == 1
+    # The strict number is untouched: the role's plan, not the model's decision, is what it counts.
+    assert summary["graded"] == 0 and summary["agree"] == 0 and summary["disagree"] == 0
+    assert summary["adjudicated"] == 0 and summary["proposed_decisions"] == 4
+
+
+def test_weekly_line_ends_with_the_advice_count_and_keeps_every_earlier_field(tmp_path):
+    rows = _advice_rows()
+    legacy = retro.summarize(rows)
+    for key in ("advice_graded", "advice_agree", "advice_disagree"):
+        legacy.pop(key)
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps({"summary": legacy, "rows": rows}))
+    line = retro.weekly_line(path)
+    assert line.endswith("advice graded 2 (agree 1, disagree 1))")
+    assert "graded 0; costs measured" in line and "retry pending" in line
+    # A fresh summary carries the keys and prints the same line.
+    path.write_text(json.dumps({"summary": retro.summarize(rows), "rows": rows}))
+    assert retro.weekly_line(path) == line
+    # A summary that predates the field, with no rows to count from, is UNKNOWN and never 0.
+    path.write_text(json.dumps({"summary": legacy}))
+    unknown = retro.weekly_line(path)
+    assert unknown.endswith("advice graded UNKNOWN)") and "advice graded 0" not in unknown
+
+
+def test_advice_graded_is_a_measured_zero_when_nothing_qualifies(tmp_path):
+    rows = [
+        _advice_row(_metadata_packet(), "uphold_blocker", "FAIL"),
+        _advice_row(_complete_packet(), "needs_more_evidence", "PASS"),
+    ]
+    summary = retro.summarize(rows)
+    assert summary["advice_graded"] == 0
+    assert summary["advice_agree"] == 0 and summary["advice_disagree"] == 0
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps({"summary": summary, "rows": rows}))
+    assert retro.weekly_line(path).endswith("advice graded 0 (agree 0, disagree 0))")
+    assert retro.weekly_line(tmp_path / "missing.json").startswith(
+        "adjudicator shadow: cases UNKNOWN"
+    )
+
+
 def test_saved_error_rows_do_not_gain_window_dependent_grades(private_brain, tmp_path):
     path = tmp_path / "report.json"
     retro.run(dispatch=False, path=path, db=private_brain, evidence_reader=evidence)
