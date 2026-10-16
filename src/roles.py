@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -41,6 +42,7 @@ import capabilities
 import dispatcher
 import epic_lane
 import feedback
+import paths
 import redirect_plan
 import redirect_policy
 import router
@@ -268,6 +270,28 @@ def _issue_body_prompt(ctx: dict) -> str:
     )
 
 
+ISSUE_FORMAT_GUARD = ".github/scripts/issue_format.py"
+
+
+def _issue_format_guard() -> Any:
+    """The fleet's issue format guard, loaded from this tree; None when it cannot be loaded.
+
+    The guard calls itself the single definition of an agent-processable issue and the exec mirror
+    ships it with `.github/`, so the validator reads its heading aliases instead of keeping a copy
+    that can drift. `None` becomes a named validation error, never a fallback to another rule.
+    """
+    name = "orchestrator_issue_format_guard"
+    try:
+        spec = importlib.util.spec_from_file_location(name, paths.REPO_ROOT / ISSUE_FORMAT_GUARD)
+        module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+        sys.modules[name] = module  # a dataclass in the guard looks its own module up
+        spec.loader.exec_module(module)  # type: ignore[union-attr]
+    except Exception:
+        sys.modules.pop(name, None)
+        return None
+    return module
+
+
 def _validate_issue_body(proposal: Any) -> list[str]:
     if not isinstance(proposal, dict):
         return ["proposal is not a JSON object"]
@@ -280,11 +304,25 @@ def _validate_issue_body(proposal: Any) -> list[str]:
     body = proposal.get("issue_body")
     if not isinstance(body, str) or not body.strip():
         return errs + ["issue_body must be a non-empty string"]
-    sections = dict(re.findall(r"^## ([^\r\n]+)\r?\n(.*?)(?=^## |\Z)", body, re.M | re.S))
-    for name in ("Why", "Tasks", "Acceptance Criteria", "Non-Goals"):
-        if not sections.get(name, "").strip():
+    guard = _issue_format_guard()
+    try:
+        # The guard's own lookup, so the validator accepts exactly the headings the guard accepts.
+        wanted = {
+            "Why": guard.RECOMMENDED["Why"],
+            "Tasks": guard.REQUIRED["Tasks"],
+            "Acceptance Criteria": guard.REQUIRED["Acceptance Criteria"],
+            "Non-Goals": guard.RECOMMENDED["Non-Goals"],
+        }
+        sections = {}
+        for name, aliases in wanted.items():
+            start = guard._find(body, aliases)
+            sections[name] = "" if start is None else guard._section_text(body, start)
+    except (AttributeError, KeyError):  # no guard file, or a guard whose tables moved
+        return errs + [f"issue_body validator cannot load {ISSUE_FORMAT_GUARD}"]
+    for name in wanted:
+        if not sections[name].strip():
             errs.append(f"issue_body requires a non-empty ## {name} section")
-    if not re.search(r"^\s*- \[ \] \S", sections.get("Tasks", ""), re.M):
+    if not re.search(r"^\s*- \[ \] \S", sections["Tasks"], re.M):
         errs.append("issue_body Tasks requires unchecked task checkboxes")
     return errs
 
