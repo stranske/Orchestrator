@@ -247,15 +247,24 @@ def _canonical_bytes(document: dict[str, Any]) -> bytes:
 
 
 def _semantic_for_compare(document: dict[str, Any]) -> dict[str, Any]:
-    """Compare export semantics without timestamp-only churn."""
+    """Compare export semantics without timestamp-only churn.
+
+    Dictionary capacity rows drop ``observed_at`` so a tick-only refresh does not
+    republish. Non-dict or otherwise malformed rows are kept so the next write
+    can repair them instead of comparing as equal after they were filtered out.
+    """
     semantic = {key: value for key, value in document.items() if key != "generated_at"}
     capacity_block = semantic.get("capacity")
     if isinstance(capacity_block, dict):
-        semantic["capacity"] = {
-            agent: {key: value for key, value in entry.items() if key != "observed_at"}
-            for agent, entry in capacity_block.items()
-            if isinstance(entry, dict)
-        }
+        compared: dict[str, Any] = {}
+        for agent, entry in capacity_block.items():
+            if isinstance(entry, dict):
+                compared[agent] = {
+                    key: value for key, value in entry.items() if key != "observed_at"
+                }
+            else:
+                compared[agent] = entry
+        semantic["capacity"] = compared
     return semantic
 
 
@@ -384,6 +393,37 @@ def _selftest() -> None:
                 build_document(
                     db_path, minimum=20, now=fixed_now, capacity_snapshot=capacity_snapshot
                 ),
+            )
+            is False
+        )
+        # State and window each republish independently; observed_at alone does not.
+        shed_snapshot = json.loads(json.dumps(capacity_snapshot))
+        shed_agent = next(iter(capacity.AGENTS))
+        shed_snapshot["agents"][shed_agent]["state"] = capacity.SHED
+        assert (
+            write_document(
+                output,
+                build_document(db_path, minimum=20, now=fixed_now, capacity_snapshot=shed_snapshot),
+            )
+            is True
+        )
+        window_snapshot = json.loads(json.dumps(shed_snapshot))
+        window_snapshot["agents"][shed_agent]["window"] = "1h"
+        assert (
+            write_document(
+                output,
+                build_document(
+                    db_path, minimum=20, now=fixed_now, capacity_snapshot=window_snapshot
+                ),
+            )
+            is True
+        )
+        observed_only = json.loads(json.dumps(window_snapshot))
+        observed_only["generated_at"] = int(observed_only.get("generated_at") or 0) + 3600
+        assert (
+            write_document(
+                output,
+                build_document(db_path, minimum=20, now=fixed_now, capacity_snapshot=observed_only),
             )
             is False
         )

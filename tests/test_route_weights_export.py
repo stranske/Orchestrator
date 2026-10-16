@@ -201,6 +201,49 @@ def test_capacity_observed_at_only_change_does_not_trigger_write_document(tmp_pa
     )
 
 
+def test_capacity_window_change_triggers_write_document(tmp_path: Path) -> None:
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    target = tmp_path / "route-weights.json"
+    first = _capacity_fixture()
+    second = _capacity_fixture()
+    second["agents"] = {
+        agent: {**entry, "window": "1h" if agent == "codex" else entry["window"]}
+        for agent, entry in second["agents"].items()
+    }
+
+    assert (
+        export.write_document(
+            target, export.build_document(database, now=100, capacity_snapshot=first)
+        )
+        is True
+    )
+    assert (
+        export.write_document(
+            target, export.build_document(database, now=100, capacity_snapshot=second)
+        )
+        is True
+    )
+
+
+def test_malformed_capacity_entry_triggers_rewrite(tmp_path: Path) -> None:
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    target = tmp_path / "route-weights.json"
+    snapshot = _capacity_fixture()
+    document = export.build_document(database, now=100, capacity_snapshot=snapshot)
+    assert export.write_document(target, document) is True
+
+    malformed = json.loads(target.read_text(encoding="utf-8"))
+    malformed["capacity"]["rogue"] = None
+    target.write_text(json.dumps(malformed, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    assert export.write_document(target, document) is True
+    repaired = json.loads(target.read_text(encoding="utf-8"))
+    assert "rogue" not in repaired["capacity"]
+    assert set(repaired["capacity"]) == set(capacity.AGENTS)
+
+
 def test_export_includes_capacity_block(tmp_path: Path) -> None:
     database = tmp_path / "weights.db"
     export._fixture_db(database)
