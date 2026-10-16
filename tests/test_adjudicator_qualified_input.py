@@ -627,3 +627,15 @@ def test_material_revision_ignores_unordered_changed_inventory(qualified_input, 
     else:
         row["packet"]["ground_truth_evidence"]["diff_summary"].reverse()
     assert revision() == first
+
+
+def test_supporting_manifest_count_is_bounded_before_git_reads(qualified_input, monkeypatch):
+    repo, row, qualification, git = qualified_input
+    item = supporting_descriptor(repo, row, git)
+    monkeypatch.setattr(
+        retro, "_collect_git_blob", lambda *args: pytest.fail("oversized manifest read Git")
+    )
+    with pytest.raises(ValueError, match="descriptor count limit"):
+        retro._collect_supporting_sources(
+            [item] * (retro.MAX_SUPPORTING_SOURCES + 1), repo, item["evaluated_sha"], [], 1000
+        )

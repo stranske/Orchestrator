@@ -1044,6 +1044,9 @@ def _criterion_texts(body: str) -> list[str]:
     return criteria
 
 
+MAX_SUPPORTING_SOURCES = 32
+
+
 def _collect_supporting_sources(
     manifest: Any, repository: Path, sha: str, changed_paths: list[str], byte_limit: int
 ) -> list[dict]:
@@ -1055,6 +1058,8 @@ def _collect_supporting_sources(
     """
     if not isinstance(manifest, list):
         raise ValueError("supporting_sources must be a list")
+    if len(manifest) > MAX_SUPPORTING_SOURCES:
+        raise ValueError("supporting manifest exceeds descriptor count limit")
     records = []
     seen = set(changed_paths)
     for item in manifest:
@@ -1525,6 +1530,45 @@ def weekly_line(path: Path | None = None) -> str:
 
 
 def _selftest() -> None:
+    with tempfile.TemporaryDirectory() as supporting_root:
+        repository = Path(supporting_root)
+        _local_git(repository, "init", "-q")
+        (repository / "inherited.py").write_text("first\nsecond\n")
+        _local_git(repository, "add", "inherited.py")
+        _local_git(
+            repository,
+            "-c",
+            "user.name=Selftest",
+            "-c",
+            "user.email=selftest@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "supporting source",
+        )
+        sha = _local_git(repository, "rev-parse", "HEAD").decode().strip()
+        descriptor = {
+            "path": "inherited.py",
+            "evaluated_sha": sha,
+            "blob_sha": _local_git(repository, "rev-parse", sha + ":inherited.py").decode().strip(),
+            "sha256": hashlib.sha256(b"first\nsecond\n").hexdigest(),
+            "line_ranges": [[1, 1]],
+        }
+        baseline = _collect_supporting_sources([descriptor], repository, sha, [], 1000)
+        assert baseline[0]["excerpts"][0]["bytes_utf8"] == "first\n"
+        for invalid, changed in [
+            ({**descriptor, "sha256": "0" * 64}, []),
+            (descriptor, ["inherited.py"]),
+            ({**descriptor, "line_ranges": [[1, 3]]}, []),
+        ]:
+            try:
+                _collect_supporting_sources([invalid], repository, sha, changed, 1000)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("invalid supporting source accepted")
+            assert _collect_supporting_sources([descriptor], repository, sha, [], 1000) == baseline
     assert _row_metadata_only(
         {
             "packet": {
@@ -1600,7 +1644,7 @@ def _selftest() -> None:
     assert [r["run_id"] for r in attempt_order([fresh, aged], queue, retry=False)] == ["new", "old"]
     assert summarize([{"decision": None}])["retry_pending"] == 1
     assert summarize([{"decision": "reject_blocker"}])["retry_pending"] == 0
-    print("adjudicator_retro selftest: 15 checks passed")
+    print("adjudicator_retro selftest: 18 checks passed")
 
 
 def main() -> int:
