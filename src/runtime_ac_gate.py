@@ -403,7 +403,12 @@ def recheck_merged(
         elif (
             executable
             and all(r.get("status") == "PASS" for r in executable)
-            and run["gate"]["verdict"] == "PASS"
+            # Manual criteria cannot be supplied to a machine recheck, so the gate's own verdict
+            # reads NEEDS_REVIEW for every spec that mixes named tests with manual items: all
+            # three rechecks of 2026-10-16 ran their named tests green and were still
+            # UNRUNNABLE. The recheck's question is the named test on the merged tip; a gate
+            # verdict other than PASS or that manual NEEDS_REVIEW still keeps it from PASS.
+            and run["gate"]["verdict"] in {"PASS", "NEEDS_REVIEW"}
         ):
             result = "PASS"
         else:

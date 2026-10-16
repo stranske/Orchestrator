@@ -1400,6 +1400,38 @@ def test_post_merge_recheck_runs_the_named_test_without_the_ingest_opt_in(
     assert case["comments"][0]["body"].startswith("runtime-AC post-merge FAIL")
 
 
+def test_post_merge_recheck_passes_when_every_named_test_passes_despite_manual_criteria(
+    post_merge_case, monkeypatch
+):
+    """A spec mixing named tests with manual criteria reads NEEDS_REVIEW at the gate; the recheck's
+    verdict is about the named tests, so green tests are PASS. A gate FAIL is not."""
+    case = post_merge_case
+
+    def mixed(*_a, **_kw):
+        return {
+            "gate": {"verdict": "NEEDS_REVIEW"},
+            "check_results": [
+                {"type": "command", "status": "PASS", "returncode": 0},
+                {"type": "manual", "status": "NEEDS_REVIEW"},
+                {"type": "manual", "status": "NEEDS_REVIEW"},
+            ],
+        }
+
+    monkeypatch.setattr(runtime_ac, "run_verification", mixed)
+    result = gate.recheck_merged(case["spec"], case["checkout"])
+    assert result["result"] == "PASS" and result["reason"] is None
+    monkeypatch.setattr(
+        runtime_ac,
+        "run_verification",
+        lambda *_a, **_kw: {
+            "gate": {"verdict": "FAIL"},
+            "check_results": [{"type": "command", "status": "PASS", "returncode": 0}],
+        },
+    )
+    result = gate.recheck_merged(case["spec"], case["checkout"])
+    assert result["result"] == "UNRUNNABLE" and result["reason"] == "incomplete"
+
+
 def test_post_merge_recheck_manual_only_spec_comments_one_line_once(post_merge_case, monkeypatch):
     """A spec with no executable check is about the delivery, so it is said once, in one line."""
     case = post_merge_case
