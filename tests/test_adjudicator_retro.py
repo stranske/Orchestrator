@@ -306,13 +306,19 @@ def test_concurrent_report_writes_publish_complete_private_files(tmp_path, monke
 
     def synchronized_replace(source, target):
         temporary_paths.append(source)
-        barrier.wait(timeout=10)
         return original_replace(source, target)
 
     monkeypatch.setattr(Path, "replace", synchronized_replace)
     rows = [[{"case_id": "first"}], [{"case_id": "second"}]]
+
+    def concurrent_writer(row):
+        # Writers start together; replacement is now intentionally serialized
+        # with native publication, so a barrier inside replace would deadlock.
+        barrier.wait(timeout=10)
+        return retro._persist_report(path, row, 2)
+
     with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(lambda r: retro._persist_report(path, r, 2), rows))
+        results = list(pool.map(concurrent_writer, rows))
     assert len(set(temporary_paths)) == 2
     assert json.loads(path.read_text()) in results
     assert all(not p.exists() for p in temporary_paths)

@@ -80,3 +80,9 @@ Generic retrospective `run` and `_persist_report` refuse a report marked as a
 native publication. The marker blocks accidental overwrite but cannot grant a
 native grade: journal receipt authentication and fresh collection are repeated
 for every publication.
+
+Canonical and generic writers share the same destination lock, including custom
+report paths; an alternate lock cannot be supplied to evade serialization. The
+cohort CLI optionally accepts a `replay_runner` registry key per manifest entry.
+It executes that fixed producer freshly and passes its opaque receipt into
+qualification; manifest JSON cannot import a replay receipt or change its binding.

@@ -773,7 +773,10 @@ def publish_native_cohort(
     initial_canonical = canonical_path.read_bytes()
     if hashlib.sha256(initial_canonical).hexdigest() != expected_canonical_hash:
         raise ValueError("canonical report changed before native publication")
-    lock_path = lock_path or (Path.home() / ".codex/.orchestrator-mirror.publish.lock")
+    shared_lock = _publication_lock_path(canonical_path)
+    if lock_path is not None and Path(lock_path).resolve() != shared_lock.resolve():
+        raise ValueError("native publication must use the canonical destination lock")
+    lock_path = shared_lock
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+") as lock:
         try:
@@ -2456,17 +2459,6 @@ def run(
 
 def _persist_report(path: Path, rows: list[dict], population: int, db: Path | None = None) -> dict:
     """Serialize generic persistence with canonical native publication."""
-    if path.resolve() != report_path().resolve():
-        if path.exists():
-            try:
-                existing = json.loads(path.read_text())
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                raise ValueError("generic persistence refuses unreadable existing report") from exc
-            if isinstance(existing, dict) and "native_publication" in existing:
-                raise ValueError(
-                    "generic retrospective persistence refuses native canonical publication"
-                )
-        return _persist_report_locked(path, rows, population, db=db)
     lock_path = _publication_lock_path(path)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+") as lock:
@@ -2838,7 +2830,11 @@ def main() -> int:
             for entry in manifest:
                 if (
                     not isinstance(entry, dict)
-                    or set(entry) != {"case_id", "input_report", "repository", "qualification"}
+                    or set(entry)
+                    not in (
+                        {"case_id", "input_report", "repository", "qualification"},
+                        {"case_id", "input_report", "repository", "qualification", "replay_runner"},
+                    )
                     or any(not isinstance(value, str) or not value for value in entry.values())
                 ):
                     raise ValueError("cohort manifest requires case_id and three explicit paths")
@@ -2859,12 +2855,30 @@ def main() -> int:
                 ]
                 if len(matches) != 1:
                     raise ValueError("cohort input must contain exactly one matching case")
+                qualification = json.loads(location("qualification").read_text())
+                replay_receipt = None
+                if "replay_runner" in entry:
+                    import adjudicator_replay
+
+                    runner_path = entry["replay_runner"]
+                    runner = adjudicator_replay.REVIEWED_RUNNERS.get(runner_path)
+                    if runner is None:
+                        raise ValueError("cohort replay runner is not registered")
+                    replay_receipt = adjudicator_replay.collect_replay(
+                        location("repository"),
+                        key,
+                        qualification["snapshot"]["headRefOid"],
+                        runner_path,
+                        runner.sha256,
+                        runner.tests,
+                    )
                 cases[key] = qualify_collected_case(
                     matches[0],
                     location("repository"),
-                    json.loads(location("qualification").read_text()),
+                    qualification,
                     byte_limit=args.byte_limit,
                     prompt_byte_limit=args.packet_byte_limit,
+                    replay_receipt=replay_receipt,
                 )
             if args.native_publish:
                 result = publish_native_cohort(

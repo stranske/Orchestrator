@@ -1,6 +1,8 @@
 import copy
 import hashlib
+import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -215,3 +217,99 @@ def test_qualified_replay_uses_stable_material_not_full_packet_noise(replay_qual
     first._payload["original_case_id"] = "forged"
     with pytest.raises(replay.ReplayRefused):
         retro.qualify_collected_case(row, repo, qualification, replay_receipt=first)
+
+
+def test_native_publish_cli_dispatches_manifest_replay_to_opaque_qualification(
+    replay_qualified_input, tmp_path, monkeypatch
+):
+    """A replay-bearing manifest must not reach publication without its token."""
+    repo, row, qualification, _ = replay_qualified_input
+    sha = qualification["snapshot"]["headRefOid"]
+    runner_path = "scripts/private-runner.py"
+    runner = replay.ReviewedRunner(runner_path, "b" * 64, ("control",), "one", sha, ())
+    monkeypatch.setattr(replay, "REVIEWED_RUNNERS", {runner_path: runner})
+    token = _issued_replay_token("one", sha, stdout="cli proof", executed_at=3.0)
+    observed = {}
+
+    def collect(repository, case_id, evaluated_sha, path, expected_hash, expected_tests, **_kwargs):
+        observed["collect"] = (
+            Path(repository),
+            case_id,
+            evaluated_sha,
+            path,
+            expected_hash,
+            expected_tests,
+        )
+        return token
+
+    def qualify(candidate, repository, candidate_qualification, **kwargs):
+        observed["receipt"] = kwargs.get("replay_receipt")
+        assert candidate == row
+        assert Path(repository) == repo
+        assert candidate_qualification == qualification
+        assert observed["receipt"] is token  # RED if the CLI omits replay dispatch.
+        return "issued-case"
+
+    def publish(**kwargs):
+        assert kwargs["cases"] == {"one": "issued-case"}
+        return {"native_summary": {"graded": 1, "unknown": 0}}
+
+    monkeypatch.setattr(replay, "collect_replay", collect)
+    monkeypatch.setattr(retro, "qualify_collected_case", qualify)
+    monkeypatch.setattr(retro, "publish_native_cohort", publish)
+    monkeypatch.setattr(retro.NativeAttemptJournal, "open_existing", lambda _path: object())
+    report, output, journal, canonical, manifest = (
+        tmp_path / name
+        for name in (
+            "original.json",
+            "output.json",
+            "journal.sqlite",
+            "canonical.json",
+            "manifest.json",
+        )
+    )
+    report.write_text(json.dumps({"rows": [row]}))
+    output.write_text("{}")
+    journal.write_text("fixture")
+    canonical.write_text("{}")
+    qualification_path = tmp_path / "qualification.json"
+    enriched_path = tmp_path / "enriched.json"
+    qualification_path.write_text(json.dumps(qualification))
+    enriched_path.write_text(json.dumps({"rows": [row]}))
+    manifest.write_text(
+        json.dumps(
+            [
+                {
+                    "case_id": "one",
+                    "input_report": enriched_path.name,
+                    "repository": str(repo),
+                    "qualification": qualification_path.name,
+                    "replay_runner": runner_path,
+                }
+            ]
+        )
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "adjudicator_retro",
+            "--native-publish",
+            str(canonical),
+            "--report",
+            str(report),
+            "--output",
+            str(output),
+            "--native-journal",
+            str(journal),
+            "--expected-source-hash",
+            hashlib.sha256(report.read_bytes()).hexdigest(),
+            "--expected-canonical-hash",
+            hashlib.sha256(canonical.read_bytes()).hexdigest(),
+            "--cohort-manifest",
+            str(manifest),
+        ],
+    )
+    assert retro.main() == 0
+    assert observed["collect"] == (repo, "one", sha, runner_path, runner.sha256, runner.tests)
+    assert observed["receipt"] is token

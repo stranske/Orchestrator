@@ -98,7 +98,7 @@ def test_native_publication_rebuilds_summary_preserves_originals_and_accumulates
         journal=journal,
         expected_source_hash=source_hash,
         expected_canonical_hash=hashlib.sha256(canonical.read_bytes()).hexdigest(),
-        lock_path=tmp_path / "publish.lock",
+        lock_path=tmp_path / ".orchestrator-mirror.publish.lock",
     )
     published = json.loads(canonical.read_text())
     assert published["summary"]["graded"] == 1
@@ -114,7 +114,7 @@ def test_native_publication_rebuilds_summary_preserves_originals_and_accumulates
         journal=journal,
         expected_source_hash=source_hash,
         expected_canonical_hash=hashlib.sha256(canonical.read_bytes()).hexdigest(),
-        lock_path=tmp_path / "publish.lock",
+        lock_path=tmp_path / ".orchestrator-mirror.publish.lock",
     )
     assert first["historical_summary"] == second["historical_summary"]
     assert json.loads(canonical.read_text())["summary"]["graded"] == 1
@@ -135,7 +135,7 @@ def test_native_publication_rejects_stale_or_foreign_canonical_and_generic_clobb
             journal=journal,
             expected_source_hash=source_hash,
             expected_canonical_hash="0" * 64,
-            lock_path=tmp_path / "publish.lock",
+            lock_path=tmp_path / ".orchestrator-mirror.publish.lock",
         )
     canonical.write_text(
         json.dumps({"rows": [], "native_publication": {"source_report_sha256": "foreign"}})
@@ -148,7 +148,7 @@ def test_native_publication_rejects_stale_or_foreign_canonical_and_generic_clobb
             journal=journal,
             expected_source_hash=source_hash,
             expected_canonical_hash=hashlib.sha256(canonical.read_bytes()).hexdigest(),
-            lock_path=tmp_path / "publish.lock",
+            lock_path=tmp_path / ".orchestrator-mirror.publish.lock",
         )
     with pytest.raises(ValueError, match="generic retrospective run"):
         retro.run(path=canonical, dispatch=False, evidence_reader=lambda _row: {})
@@ -176,9 +176,28 @@ def test_native_publication_rejects_atomic_replace_failure(tmp_path, monkeypatch
             journal=journal,
             expected_source_hash=hashlib.sha256(original.read_bytes()).hexdigest(),
             expected_canonical_hash=hashlib.sha256(before).hexdigest(),
-            lock_path=tmp_path / "publish.lock",
+            lock_path=tmp_path / ".orchestrator-mirror.publish.lock",
         )
     assert canonical.read_bytes() == before
+
+
+def test_custom_canonical_uses_and_requires_the_generic_persistence_lock(tmp_path, monkeypatch):
+    original, canonical, _ = _source(tmp_path)
+    journal = retro.NativeAttemptJournal(tmp_path / "native.sqlite")
+    _record(journal, original, "native-paid-a")
+    shared = tmp_path / ".orchestrator-mirror.publish.lock"
+    assert retro._publication_lock_path(canonical) == shared
+    monkeypatch.setattr(retro, "refresh_native_cohort", _candidate)
+    with pytest.raises(ValueError, match="lock"):
+        retro.publish_native_cohort(
+            original_report=original,
+            canonical_path=canonical,
+            cases={},
+            journal=journal,
+            expected_source_hash=hashlib.sha256(original.read_bytes()).hexdigest(),
+            expected_canonical_hash=hashlib.sha256(canonical.read_bytes()).hexdigest(),
+            lock_path=tmp_path / "different.lock",
+        )
 
 
 def _validated_native(journal, original, case, backend_id):
@@ -224,7 +243,7 @@ def test_real_native_publication_authenticates_case_and_preserves_history(
         expected_source_hash=hashlib.sha256(original.read_bytes()).hexdigest(),
         expected_canonical_hash=hashlib.sha256(canonical.read_bytes()).hexdigest(),
         truth_reader=lambda *_args: "PASS",
-        lock_path=tmp_path / "publish.lock",
+        lock_path=tmp_path / ".orchestrator-mirror.publish.lock",
     )
     published = json.loads(canonical.read_text())
     assert result["summary"]["graded"] == published["summary"]["graded"] == 1, result["rows"][0][
@@ -279,7 +298,7 @@ def test_real_cumulative_publication_retains_a_then_b_and_reader_threshold(
             expected_source_hash=source_hash,
             expected_canonical_hash=hashlib.sha256(canonical.read_bytes()).hexdigest(),
             truth_reader=lambda *_a: "PASS",
-            lock_path=tmp_path / "publish.lock",
+            lock_path=tmp_path / ".orchestrator-mirror.publish.lock",
         )
         assert result["summary"]["graded"] == index + 1
         assert (json.loads(canonical.read_text())["summary"]["graded"] >= 29) == (index == 28)
@@ -299,7 +318,7 @@ def test_real_cumulative_publication_retains_a_then_b_and_reader_threshold(
             expected_source_hash=source_hash,
             expected_canonical_hash=hashlib.sha256(before).hexdigest(),
             truth_reader=lambda *_a: "PASS",
-            lock_path=tmp_path / "publish.lock",
+            lock_path=tmp_path / ".orchestrator-mirror.publish.lock",
         )
     assert canonical.read_bytes() == before
 
@@ -328,6 +347,6 @@ def test_native_publication_holds_journal_writer_lock_through_replace(tmp_path, 
         journal=journal,
         expected_source_hash=hashlib.sha256(original.read_bytes()).hexdigest(),
         expected_canonical_hash=hashlib.sha256(canonical.read_bytes()).hexdigest(),
-        lock_path=tmp_path / "publish.lock",
+        lock_path=tmp_path / ".orchestrator-mirror.publish.lock",
     )
     assert locked == [True]
