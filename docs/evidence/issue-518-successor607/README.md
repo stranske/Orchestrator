@@ -33,3 +33,5 @@ canonical guarded merge, actual native verification and Maint52/71 regenerated
 acceptance remain mandatory. Zero coverage-startup blockers prove startup only.
 
 The integrated source was also actually run through the corrected strict-nine collector under the proposed bundle. `integration-20261016/proposed/` binds source133fec07, all nine matching actual versions, zero blockers and3467collection. Full text commands are lossless compressed and binary archive output is separately hash-bound. The collection listing is losslessly compressed with a structured argv/exit/count/hash receipt; it remains recoverable in full.
+
+Second integration: main advanced to 387e2d364bb2a67f0f4c1472a31183e60c15cd13 (floor3469). Current integration preserves its full floor record and ceilings plus one executed strict-nine regression; expected union3470 is measured separately below. Previous integration-20261016 proof remains immutable historical evidence, not coverage for this newer head.
