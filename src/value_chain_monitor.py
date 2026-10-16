@@ -125,16 +125,11 @@ def _open_issues(inputs: dict[str, Any]) -> int | None:
 
 
 def _disputes(inputs: dict[str, Any]) -> int | None:
-    events = inputs.get("completion_events")
-    if events is None:
-        return None
-    return sum(
-        "adjudicator" in e["payload"].get("role_ids", [])
-        and e["payload"].get("result", {}).get("disagreement") is True
-        and e["payload"].get("result", {}).get("selector_reason_id")
-        == "persisted_evidence_disagreement"
-        for e in events
-    )
+    # The adjudicator's situation is the persisted verifier disputes in the window, counted from
+    # the Brain (`_dispute_count`), never from events its own selector wrote: a selector that does
+    # not fire would make the row read "no situation" however many disputes exist. None is unread,
+    # 0 is a readable Brain holding none.
+    return inputs.get("disputes")
 
 
 # Callables can be replaced/extended without changing reporting or adding telemetry.
@@ -308,6 +303,20 @@ def acted_on_window_index(
     return index, "value-chain monitor, first-invocation deadline windows"
 
 
+def _dispute_count(db: Path, now: int) -> int | None:
+    """Persisted verifier disputes in the window, from the one definition of a dispute.
+
+    `adjudicator_retro.disputes` opens the Brain read-only, so this never creates the database
+    or initialises a schema. None when the read fails: unknown, not zero.
+    """
+    import adjudicator_retro  # imported here, as switch_review does, to avoid an import cycle
+
+    try:
+        return len(adjudicator_retro.disputes(db=db, now=now, days=WINDOW_DAYS))
+    except (sqlite3.Error, OSError):
+        return None
+
+
 def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
     """Accepted completion events and influence edges in the window, read-only.
 
@@ -429,6 +438,9 @@ def fleet_issues(gh_fn: Callable, since: int, now: int, repos: list[str]) -> lis
 
 def collect_inputs(*, now: int, gh_fn: Callable, repos: list[str], db: Path) -> dict[str, Any]:
     inputs = _brain(db, now - WINDOW_DAYS * 86400, now)
+    inputs["disputes"] = _dispute_count(db, now)
+    if inputs["disputes"] is None:
+        inputs["errors"].append("dispute population unavailable")
     inputs["fleet_issues"] = fleet_issues(gh_fn, now - WINDOW_DAYS * 86400, now, repos)
     if inputs["fleet_issues"] is None:
         inputs["errors"].append("fleet issue population incomplete or inaccessible")

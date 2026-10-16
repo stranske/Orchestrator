@@ -9,6 +9,7 @@ import adversarial
 import capabilities
 import capability_admission
 import capability_advisor
+import feedback
 import switch_review
 import value_chain_monitor as monitor
 
@@ -184,22 +185,81 @@ def test_situation_registry_counts_input_not_invocations():
 
 
 def test_persisted_dispute_count_is_independent_of_role_invocation():
-    inputs = {
-        "completion_events": [
-            {
-                "payload": {
-                    "role_ids": ["adjudicator"],
-                    "result": {
-                        "disagreement": True,
-                        "selector_reason_id": "persisted_evidence_disagreement",
-                        "invoked": False,
-                    },
-                }
-            }
-        ]
+    # The situation is the persisted disputes, whatever the adjudicator's own selector recorded.
+    selector_event = {
+        "payload": {
+            "role_ids": ["adjudicator"],
+            "result": {
+                "disagreement": True,
+                "selector_reason_id": "persisted_evidence_disagreement",
+                "invoked": False,
+            },
+        }
     }
-    assert monitor.situation_count("role-adjudicator", inputs) == 1
+    sighted = {"disputes": 290, "completion_events": [selector_event]}
+    unsighted = {"disputes": 290, "completion_events": []}
+    assert monitor.situation_count("role-adjudicator", sighted) == 290
+    assert monitor.situation_count("role-adjudicator", unsighted) == 290
+    assert monitor.situation_count("role-adjudicator", {"disputes": 0}) == 0
     assert monitor.situation_count("role-adjudicator", {}) is None
+    # An unread population stays unknown even when the selector's events are present.
+    assert (
+        monitor.situation_count("role-adjudicator", {"completion_events": [selector_event]}) is None
+    )
+
+
+def brain_with_outcomes(tmp_path, monkeypatch, rows, name="brain.db"):
+    """A private Brain holding one run and one outcome per (run_id, ts, verifier, adjudicated)."""
+    path = tmp_path / name
+    monkeypatch.setattr(feedback, "DB_PATH", path)
+    with feedback._conn() as conn:
+        for run_id, ts, verifier, adjudicated in rows:
+            conn.execute(
+                "INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)", (run_id, ts, f"o/r#{run_id}")
+            )
+            conn.execute(
+                "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+                "VALUES (?,?,?,1)",
+                (run_id, verifier, adjudicated),
+            )
+    return path
+
+
+def test_dispute_count_reads_the_persisted_brain_read_only(tmp_path, monkeypatch):
+    inside = NOW - 1000
+    disputes = brain_with_outcomes(
+        tmp_path,
+        monkeypatch,
+        [
+            ("a", inside, "NON_PASS", "PASS"),
+            ("b", inside, "NON_PASS", "PASS"),
+            ("c", inside, "PASS", "FAIL"),
+            ("agree", inside, "PASS", "PASS"),
+            ("old", NOW - 91 * 86400, "NON_PASS", "PASS"),
+        ],
+    )
+    assert monitor._dispute_count(disputes, NOW) == 3
+    agreeing = brain_with_outcomes(
+        tmp_path, monkeypatch, [("x", inside, "PASS", "PASS")], name="agreeing.db"
+    )
+    measured_zero = monitor._dispute_count(agreeing, NOW)
+    assert measured_zero == 0 and measured_zero is not None
+    missing = tmp_path / "missing.db"
+    assert monitor._dispute_count(missing, NOW) is None
+    assert not missing.exists()
+
+
+def test_collect_inputs_carries_the_dispute_population_and_names_its_absence(tmp_path, monkeypatch):
+    path = brain_with_outcomes(tmp_path, monkeypatch, [("a", NOW - 1000, "NON_PASS", "PASS")])
+    gh = lambda args: (True, "", "")  # noqa: E731 - no repository is read
+    inputs = monitor.collect_inputs(now=NOW, gh_fn=gh, repos=[], db=path)
+    assert inputs["disputes"] == 1
+    assert monitor.situation_count("role-adjudicator", inputs) == 1
+    assert "dispute population unavailable" not in inputs["errors"]
+    gone = monitor.collect_inputs(now=NOW, gh_fn=gh, repos=[], db=tmp_path / "missing.db")
+    assert gone["disputes"] is None
+    assert "dispute population unavailable" in gone["errors"]
+    assert monitor.situation_count("role-adjudicator", gone) is None
 
 
 def test_missing_brain_is_unknown_and_does_not_create_database(tmp_path):
