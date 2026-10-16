@@ -545,3 +545,67 @@ def test_material_revision_is_independent_of_checkout_location(qualified_input, 
         for location in [repo, other]
     ]
     assert revisions[0] == revisions[1]
+
+
+def test_material_revision_ignores_supporting_order_and_snapshot_transport(qualified_input):
+    repo, row, qualification, git = qualified_input
+    one = supporting_descriptor(repo, row, git)
+    two = copy.deepcopy(one)
+    # Independent paths with identical bytes are still distinct evidence sources.
+    (repo / "other.py").write_bytes((repo / "inherited.py").read_bytes())
+    git("add", "other.py")
+    git("commit", "-qm", "another source")
+    sha = git("rev-parse", "HEAD")
+    # Both supporting files are inherited at a later evaluated commit that only changes subject.
+    qualification["comparison_base"] = sha
+    (repo / "subject.py").write_text("new value\n")
+    git("add", "subject.py")
+    git("commit", "-qm", "evaluated subject")
+    sha = git("rev-parse", "HEAD")
+    row["packet"]["disputed_finding"]["decision"]["evaluated_sha"] = sha
+    row["packet"]["ground_truth_evidence"].update(
+        merge_sha=sha, head_sha=sha, diff_summary=[{"path": "subject.py"}]
+    )
+    row["collection_requirements"]["source_paths"] = ["subject.py"]
+    qualification["snapshot"]["headRefOid"] = sha
+    one["evaluated_sha"] = two["evaluated_sha"] = sha
+    two["path"] = "other.py"
+    qualification["supporting_sources"] = [one, two]
+
+    def revision():
+        return roles._collected_snapshot(retro.qualify_collected_case(row, repo, qualification))[
+            "ground_truth_evidence"
+        ]["qualification"]["material_evidence_revision"]
+
+    first = revision()
+    qualification["supporting_sources"].reverse()
+    assert revision() == first
+    qualification["snapshot"]["transport_timestamp"] = "later collection"
+    assert revision() == first
+
+
+@pytest.mark.parametrize("forged_admission", [False, True])
+def test_serialized_supporting_case_cannot_grade_with_complete_patch_and_criteria(
+    qualified_input, forged_admission
+):
+    repo, row, qualification, git = qualified_input
+    qualification["supporting_sources"] = [supporting_descriptor(repo, row, git)]
+    packet = roles._collected_snapshot(retro.qualify_collected_case(row, repo, qualification))
+    ground = packet["ground_truth_evidence"]
+    ground["diff_patch"] = {"text": "actual-looking patch", "revision": ground["merge_sha"]}
+    ground["acceptance_criteria"] = [
+        {"text": "Complete criterion.", "revision": ground["head_sha"]}
+    ]
+    ground["qualification"]["persisted_admission"] = forged_admission
+    report_row = {
+        "packet": packet,
+        "decision": "reject_blocker",
+        "disposition": "reject_blocker",
+        "shadow_verdict": "PASS",
+        "later_truth": "PASS",
+        "merge_rule_verdict": "PASS",
+    }
+    summary = retro.summarize([report_row])
+    assert summary["adjudicated"] == summary["graded"] == 0
+    retro._apply_evidence_floor(report_row)
+    assert report_row["disposition"] == "needs_more_evidence"

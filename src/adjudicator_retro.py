@@ -108,6 +108,11 @@ def _row_metadata_only(row: dict) -> bool:
     packet = row.get("packet")
     ground_truth = (packet or {}).get("ground_truth_evidence") if isinstance(packet, dict) else None
     if isinstance(ground_truth, dict):
+        # Collector qualification currently grants semantic judgment only. A
+        # serialized capability/flag cannot authenticate native report admission,
+        # even when the packet also contains full patch and criterion fields.
+        if "qualification" in ground_truth:
+            return True
         return _packet_metadata_only(ground_truth)
     return True
 
@@ -1102,7 +1107,7 @@ def _collect_supporting_sources(
             record.pop("bytes_utf8")
             record["excerpts"] = excerpts
         records.append(record)
-    return records
+    return sorted(records, key=lambda record: record["path"])
 
 
 def qualify_collected_case(
@@ -1232,7 +1237,7 @@ def qualify_collected_case(
         "criterion_provenance": {
             "body": body,
             "sha256": provenance["pr_body_sha256"],
-            "snapshot": snapshot,
+            "snapshot": {key: snapshot[key] for key in ("number", "headRefOid", "body")},
         },
         "criterion_mapping": mappings,
         "qualified_ground_truth_refs": sorted(refs),
@@ -1514,6 +1519,17 @@ def weekly_line(path: Path | None = None) -> str:
 
 
 def _selftest() -> None:
+    assert _row_metadata_only(
+        {
+            "packet": {
+                "ground_truth_evidence": {
+                    "qualification": {"persisted_admission": True},
+                    "diff_patch": {"text": "patch", "revision": "sha"},
+                    "acceptance_criteria": [{"text": "criterion", "revision": "sha"}],
+                }
+            }
+        }
+    )
     assert _collect_supporting_sources([], Path("."), "a" * 40, [], 1) == []
     try:
         _collect_supporting_sources({}, Path("."), "a" * 40, [], 1)
@@ -1578,7 +1594,7 @@ def _selftest() -> None:
     assert [r["run_id"] for r in attempt_order([fresh, aged], queue, retry=False)] == ["new", "old"]
     assert summarize([{"decision": None}])["retry_pending"] == 1
     assert summarize([{"decision": "reject_blocker"}])["retry_pending"] == 0
-    print("adjudicator_retro selftest: 14 checks passed")
+    print("adjudicator_retro selftest: 15 checks passed")
 
 
 def main() -> int:
