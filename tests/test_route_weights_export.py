@@ -146,6 +146,30 @@ def test_build_document_loads_capacity_via_capacity_build(tmp_path: Path, monkey
     assert set(document["capacity"]) == set(capacity.AGENTS)
 
 
+def test_export_ignores_stale_capacity_out_artifact(tmp_path: Path, monkeypatch) -> None:
+    """A readable but stale capacity.OUT must not suppress a live state change."""
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    out_dir = tmp_path / "handoff"
+    out_dir.mkdir()
+    stale_out = out_dir / "capacity.json"
+    stale_out.write_text(
+        json.dumps(_capacity_fixture(codex_state=capacity.OK, generated_at=1)),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(export.capacity, "OUT", stale_out)
+    live = _capacity_fixture(codex_state=capacity.SHED, generated_at=99)
+    monkeypatch.setattr(export.capacity, "build", lambda: live)
+
+    document = export.build_document(database, now=100)
+    assert document["capacity"]["codex"]["state"] == capacity.SHED
+    assert document["capacity"]["codex"]["observed_at"] == 99
+    # Pin: one call site loads via the helper; never read the handoff artifact.
+    source = Path(export.__file__).read_text(encoding="utf-8")
+    assert source.count("= _current_capacity_snapshot()") == 1
+    assert "OUT.read_text" not in source
+
+
 def test_capacity_block_has_one_entry_per_configured_agent(tmp_path: Path) -> None:
     database = tmp_path / "weights.db"
     export._fixture_db(database)

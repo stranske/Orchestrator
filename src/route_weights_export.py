@@ -96,10 +96,20 @@ def _ranking(rows: list[sqlite3.Row], minimum: int) -> list[dict[str, Any]]:
     return sorted(ranking, key=lambda row: (-row["posterior"], -row["success_rate"], row["agent"]))
 
 
+def _current_capacity_snapshot() -> dict[str, Any]:
+    """Fresh in-process capacity snapshot for the export.
+
+    Always call ``capacity.build()`` — never the tick-written handoff JSON. That
+    artifact can lag a shed-marker flip or pool change; a standalone export must
+    observe current inputs so a state change still triggers publication.
+    """
+    return capacity.build()
+
+
 def _capacity_block(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     """Per-agent capacity state for remote consumers (state and window only)."""
     if snapshot is None:
-        snapshot = capacity.build()
+        snapshot = _current_capacity_snapshot()
     observed_at = int(snapshot.get("generated_at") or 0)
     agents = snapshot.get("agents") or {}
     block: dict[str, Any] = {}
