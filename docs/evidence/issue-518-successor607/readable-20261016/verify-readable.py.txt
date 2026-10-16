@@ -8,6 +8,8 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import tempfile
+import re
 
 ROOT = Path(__file__).resolve().parent
 BASE = ROOT.parent
@@ -22,8 +24,28 @@ def check_bytes(raw, receipt):
     assert hashlib.sha256(raw).hexdigest() == receipt["sha256"]
 
 
-def git(*args):
-    return subprocess.check_output(["git", *args], cwd=ROOT)
+# Isolate recovery from the developer checkout's historical repair refs.
+RECOVERY = tempfile.TemporaryDirectory(prefix="518-evidence-objects-")
+RECOVERY_REPO = Path(RECOVERY.name) / "objects.git"
+subprocess.run(["git", "init", "--bare", "--quiet", str(RECOVERY_REPO)], check=True)
+
+
+def git(*args, data=None):
+    return subprocess.check_output(["git", "--git-dir", str(RECOVERY_REPO), *args], input=data)
+
+
+bindings = read_json(ROOT / "source-bindings.json")
+checkout = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], cwd=ROOT).decode().strip()
+git("fetch", "--quiet", "--no-tags", checkout, bindings["heads"]["merged_main"])
+git("fetch", "--quiet", str(BASE / "measurement-sources.bundle"), "refs/evidence/issue-518/*:refs/evidence/issue-518/*")
+for retained in read_json(ROOT / "retained-git-objects.json"):
+    # Root tree text has exact modes/names/object IDs; --missing permits only
+    # unrelated historical docs references, never the scopes validated below.
+    tree = git("mktree", "--missing", data=(ROOT / retained["tree_text"]).read_bytes()).decode().strip()
+    assert tree == retained["tree"]
+    commit = git("hash-object", "-t", "commit", "-w", "--stdin", data=(ROOT / retained["commit_text"]).read_bytes()).decode().strip()
+    assert commit == retained["commit"]
+    assert git("rev-parse", commit + "^{tree}").decode().strip() == tree
 
 
 def reconstruct_nodes():
@@ -95,6 +117,9 @@ for entry in integrity["entries"]:
     check_bytes(actual, entry["decoded"])
 
 bindings = read_json(ROOT / "source-bindings.json")
+bindings["scope_git_objects"] = {label: bindings["shared_scope_git_objects"] for label in bindings["heads"]}
+for item in bindings["snapshots"]:
+    item["blob_by_head"] = {label: item["shared_git_blob"] for label in bindings["heads"]}
 for label, head in bindings["heads"].items():
     for scope, expected in bindings["scope_git_objects"][label].items():
         assert git("rev-parse", head + ":" + scope).decode().strip() == expected
@@ -108,7 +133,24 @@ for item in bindings["snapshots"]:
 assert all(value == bindings["scope_git_objects"]["measured"] for value in bindings["scope_git_objects"].values())
 assert git("diff", "--name-only", bindings["heads"]["measured"], bindings["heads"]["merged_main"]).decode().splitlines() == bindings["all_changed_paths_measured_to_merged"]
 # A successor's docs-only delta cannot silently mutate the measured implementation.
-assert not git("diff", "--name-only", bindings["heads"]["merged_main"], "HEAD", "--", *bindings["identical_scopes"]).strip()
+assert not subprocess.check_output(["git", "diff", "--name-only", bindings["heads"]["merged_main"], "HEAD", "--", *bindings["identical_scopes"]], cwd=ROOT).strip()
+
+# Check the binary archive itself, not merely its JSON receipt.
+archive = git("archive", bindings["heads"]["measured"])
+for row in read_json(ROOT / "command-index.json"):
+    for name in ("stdout", "stderr"):
+        stream = row["streams"][name]
+        if stream["encoding"] != "historical-binary-receipt":
+            continue
+        receipt = stream["original"]
+        if receipt is None:
+            assert row["index"] == 3  # Historical tar subprocess had null streams.
+            continue
+        if receipt["bytes"] == 0:
+            check_bytes(b"", receipt)
+        else:
+            assert row["index"] == 2 and name == "stdout"
+            check_bytes(archive, receipt)
 
 provenance = read_json(ROOT / "provenance.json")
 assert provenance["source_head"] == bindings["heads"]["measured"]
@@ -119,16 +161,28 @@ focused = read_json(ROOT / "focused-invocation.json")
 assert focused["source_head"] == bindings["heads"]["focused"]
 check_bytes((ROOT / "focused-verbose.log").read_bytes(), {"bytes": focused["stdout_bytes"], "sha256": focused["stdout_sha256"]})
 assert focused["passed"] == 21 and focused["exit_code"] == 0
-receipts = read_json(ROOT / "authenticated-gate-review-merge.json")
+api_index = read_json(ROOT / "api-response-index.json")
+dictionary = read_json(ROOT / api_index["dictionary"])
+original_api = {}
+for entry in api_index["responses"]:
+    template = (ROOT / entry["template"]).read_text()
+    expanded = re.sub(r"@([0-9]+)@", lambda match: dictionary[match[1]], template)
+    for marker, literal in api_index["literal_prefixes"].items():
+        expanded = expanded.replace(marker, literal)
+    raw = expanded.encode()
+    check_bytes(raw, entry)
+    original_api[entry["original"]] = json.loads(raw)
+receipts = {"gate": original_api["518-614-gate-live.json"], "review": original_api["518-614-review-live.json"], "pr": original_api["518-614-pr-live.json"]}
+assert original_api["518-614-gate-jobs-live.json"]["total_count"] == len(original_api["518-614-gate-jobs-live.json"]["jobs"])
 final = bindings["heads"]["reviewed_and_gated"]
 assert receipts["gate"]["head_sha"] == final and receipts["gate"]["conclusion"] == "success"
 assert receipts["gate"]["id"] == 38834930061
 assert receipts["review"]["id"] == 6205929444 and final[:10] in receipts["review"]["body"]
-assert receipts["pr_head"] == final and receipts["pr"]["merged"]
+assert receipts["pr"]["head"]["sha"] == final and receipts["pr"]["merged"]
 assert receipts["pr"]["merge_commit_sha"] == bindings["heads"]["merged_main"]
 guard = read_json(ROOT / "guarded-merge-receipt.json")
 assert guard["merge_executed"] and guard["merge_returncode"] == 0
 assert guard["final_preflight"]["head"] == final and guard["final_preflight"]["active_threads"] == 0
 assert guard["final_preflight"]["check_state"] == "SUCCESS"
 assert guard["final_preflight"]["review_floor_remaining_seconds"] == 0
-print(json.dumps({"status": "PASS", "commands": 12, "collection_nodes": 3470, "focused_passed": 21, "lossless_commands_sha256": hashlib.sha256(reconstructed_commands).hexdigest(), "lossless_collection_sha256": hashlib.sha256(reconstructed_collection).hexdigest(), "source_heads": bindings["heads"], "limits": "Reconstruction, immutable source equivalence and prior actual receipts only; no new execution/native acceptance/merge verdict."}))
+print(json.dumps({"status": "PASS", "commands": 12, "archive_bytes": len(archive), "archive_sha256": hashlib.sha256(archive).hexdigest(), "api_responses": len(original_api), "historical_null_streams": 2, "isolated_recovery": True, "collection_nodes": 3470, "focused_passed": 21, "lossless_commands_sha256": hashlib.sha256(reconstructed_commands).hexdigest(), "lossless_collection_sha256": hashlib.sha256(reconstructed_collection).hexdigest(), "source_heads": bindings["heads"], "limits": "Reconstruction, immutable source equivalence and prior actual receipts only; no new execution/native acceptance/merge verdict."}))
