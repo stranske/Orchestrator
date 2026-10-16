@@ -1241,7 +1241,11 @@ def native_cohort(qualified_input, tmp_path, monkeypatch):
     cases = {}
     for number in (1, 2):
         item = copy.deepcopy(row)
-        item.update(case_id=str(number), run_id=f"original-{number}")
+        item.update(
+            case_id=str(number),
+            run_id=f"original-{number}",
+            backend_run_id="shared-original-receipt",
+        )
         item["target"] = f"owner/repo#{number}"
         item["packet"]["target"] = item["target"]
         contract = copy.deepcopy(qualification)
@@ -1261,6 +1265,9 @@ def native_cohort(qualified_input, tmp_path, monkeypatch):
     )
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     journal = retro.NativeAttemptJournal(tmp_path / "cohort.sqlite")
+    prior = journal.reserve("1", "older-invalid-revision", "older-digest", digest)
+    journal.persist_raw(prior["attempt_id"], {"run_id": "native-invalid-history", "output": "{}"})
+    journal.validate(prior["attempt_id"], {"proposal": {}, "errors": ["invalid original response"]})
     counter = iter((1, 2))
 
     def offload(*_args, **kwargs):
@@ -1303,6 +1310,19 @@ def test_native_cohort_authenticates_multiple_cases_and_preserves_original(nativ
     )
     assert result["summary"] == {"graded": 0}
     assert result["population"] == 299
+    assert result["original_paid_identity_summary"] == {
+        "records": 2,
+        "unique_backend_ids": 1,
+        "repeated_records": 1,
+    }
+    assert len(result["native_receipt_scope"]["selected_contract_checked"]) == 2
+    historical = result["native_receipt_scope"]["retained_ungraded_history"]
+    assert len(historical) == 1
+    retained = next(
+        item for item in result["native_attempts"] if item["attempt_id"] == historical[0]
+    )
+    assert retained["backend_run_id"] == "native-invalid-history"
+    assert json.loads(retained["validated_json"])["errors"] == ["invalid original response"]
     assert result["native_summary"] == {
         "cases": 2,
         "admitted_cases": 2,

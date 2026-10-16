@@ -27,8 +27,13 @@ Each validated case for this original report must appear exactly once; each
 input report must contain exactly one matching row. The collector reissues the
 opaque case from the evaluated Git objects and qualification, rather than
 trusting a saved projection. Missing/corrupt journals fail without initialization.
-All original recursive histories, identities and complete receipt contracts are
-validated before any later-truth read. A late failure publishes no partial
+All original recursive histories and the selected current receipt contracts are
+validated before any later-truth read. `native_receipt_scope` explicitly separates
+selected contract-checked receipts from retained, ungraded historical revisions.
+A journal state named validated is not proof of a valid binary verdict. Repeated
+original paid identities are retained as source facts and exposed through
+`original_paid_identity_summary`; they never create an additional native grade.
+New native backend IDs must be unique and disjoint from every original paid ID. A late failure publishes no partial
 cohort. Source/journal changes during refresh abort; output publication is atomic
 and refuses replacement. A later primary publication must independently check
 these input revisions again under the existing publisher and serial-writer gates.

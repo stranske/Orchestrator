@@ -571,8 +571,9 @@ def refresh_native_cohort(
 ) -> dict:
     """Build one complete, nonpublishing cohort candidate from native receipts.
 
-    Every validated receipt for this original report requires a freshly issued
-    capability. JSON projections are never inputs. All original rows/history and
+    Every case with validated receipts requires a freshly issued capability.
+    The matching current receipt is authenticated; other revisions remain
+    explicitly ungraded historical attempts. JSON projections are never inputs. All original rows/history and
     the original summary remain verbatim; only native_summary counts native
     grades. This function cannot dispatch, reserve, replace the primary report,
     or turn an unadmitted original into a measured case.
@@ -630,7 +631,7 @@ def refresh_native_cohort(
         raise ValueError("native cohort has duplicate paid backend identities")
     projections = {}
     with tempfile.TemporaryDirectory() as scratch:
-        # First authenticate EVERY receipt/contract without touching the Brain.
+        # First authenticate every SELECTED receipt/contract without touching the Brain.
         for index, (key, case) in enumerate(cases.items()):
             refresh_native_projection(
                 original_report=original_report,
@@ -665,7 +666,21 @@ def refresh_native_cohort(
             row["native_projection"] = projections[row["case_id"]]
     graded = sum(item["graded"] for item in projections.values())
     agree = sum(int(item["agree"]) for item in projections.values())
+    selected_ids = {item["attempt_id"] for item in projections.values()}
     result.update(
+        original_paid_identity_summary={
+            "records": len(original_paid),
+            "unique_backend_ids": len(set(original_paid)),
+            "repeated_records": len(original_paid) - len(set(original_paid)),
+        },
+        native_receipt_scope={
+            "selected_contract_checked": sorted(selected_ids),
+            "retained_ungraded_history": sorted(
+                record["attempt_id"]
+                for record in journal_before
+                if record["attempt_id"] not in selected_ids
+            ),
+        },
         source_report_sha256=digest,
         native_admission="trusted_journal_cohort_candidate",
         native_summary={
