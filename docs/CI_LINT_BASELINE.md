@@ -1,5 +1,31 @@
 # Gate python-ci baseline — what is checked, what is deferred, and what would clear it
 
+## Measured pending Maint 52 successor toolchain — 2026-10-15
+
+<!-- measured-with: ruff=0.17.0 black=26.10.1 mypy=2.4.0 pytest=9.1.1 -->
+
+Generated PR #607 at `c3f7ac876c23511f81ed2f728a11e982cf6e002a`
+proposes a newer toolchain than the October 11 measurement. All nine exact
+proposed packages were installed in an isolated Python 3.12.2 environment and
+strictly measured against source `3da6bb956cecbb4ff1eca70a4e40c88f8573a341`.
+The original baseline test fails against those authenticated proposed pins;
+this actual measurement supplies the missing complete recorded toolchain.
+
+| Check | Blocking | Drainable |
+| --- | ---: | ---: |
+| Ruff | 0 findings | 0 |
+| Black | 0 files | 0 |
+| mypy | 0 errors | 0 |
+| Coverage startup | 0 errors | 0 |
+
+[Retained evidence](evidence/issue-518-successor607/README.md) includes every
+command and captured output, strict report, installed versions, source head,
+and script/pin digests. Existing historical measurements remain below.
+Coverage startup does not establish full-suite, execution-mirror or combined
+coverage acceptance. The 2,672 collection floor, capability/skip controls,
+complete-toolchain matching and enforcement policy remain unchanged. No
+repository pins or generated branch were changed for this preparation.
+
 ## Measured pending Maint 52 toolchain — 2026-10-11
 
 <!-- measured-with: ruff=0.16.10 black=26.10.0 mypy=2.4.0 pytest=9.1.1 -->
