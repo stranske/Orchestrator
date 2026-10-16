@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from pathlib import Path
 from unittest.mock import patch
@@ -5,9 +6,18 @@ from unittest.mock import patch
 import capacity
 import route_weights_export as export
 
+V1_KEYS = (
+    "schema",
+    "generated_at",
+    "source_version",
+    "min_observations",
+    "task_types",
+    "reserve",
+    "exploration",
+)
 
-def _capacity_fixture(*, codex_state: str = capacity.OK) -> dict:
-    observed_at = 1_700_000_000
+
+def _capacity_fixture(*, codex_state: str = capacity.OK, generated_at: int = 1_700_000_000) -> dict:
     agents = {
         agent: {
             "state": codex_state if agent == "codex" else capacity.OK,
@@ -15,7 +25,11 @@ def _capacity_fixture(*, codex_state: str = capacity.OK) -> dict:
         }
         for agent, cfg in capacity.AGENTS.items()
     }
-    return {"generated_at": observed_at, "agents": agents}
+    return {"generated_at": generated_at, "agents": agents}
+
+
+def _v1_bytes(document: dict) -> bytes:
+    return json.dumps({key: document[key] for key in V1_KEYS}, sort_keys=True).encode("utf-8")
 
 
 def test_export_filters_threshold_reserve_and_unknown_task_types(tmp_path: Path) -> None:
@@ -60,6 +74,19 @@ def test_policy_version_changes_when_the_weight_version_changes(tmp_path: Path) 
     assert changed["exploration"]["policy_version"] != document["exploration"]["policy_version"]
 
 
+def test_policy_version_unchanged_when_only_capacity_is_added(tmp_path: Path) -> None:
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    without = export.build_document(database, now=100, include_capacity=False)
+    with_capacity = export.build_document(
+        database, now=100, capacity_snapshot=_capacity_fixture()
+    )
+    assert (
+        without["exploration"]["policy_version"]
+        == with_capacity["exploration"]["policy_version"]
+    )
+
+
 def test_missing_weights_sample_remote_prior_without_creating_a_database(tmp_path: Path) -> None:
     database = tmp_path / "absent.db"
     document = export.build_document(database, now=100)
@@ -101,11 +128,12 @@ def test_capacity_block_has_one_entry_per_configured_agent(tmp_path: Path) -> No
     document = export.build_document(database, now=100, capacity_snapshot=snapshot)
 
     assert document["schema"] == export.SCHEMA
+    assert document["capacity_schema"] == export.CAPACITY_SCHEMA
     assert set(document["capacity"]) == set(capacity.AGENTS)
     for agent, entry in document["capacity"].items():
         assert set(entry) == {"state", "window", "observed_at"}
         assert entry["window"] == capacity.AGENTS[agent]["window"]
-    assert all(entry["observed_at"] == 100 for entry in document["capacity"].values())
+        assert entry["observed_at"] == snapshot["generated_at"]
 
 
 def test_capacity_states_are_copied_verbatim_from_the_snapshot(tmp_path: Path) -> None:
@@ -116,16 +144,24 @@ def test_capacity_states_are_copied_verbatim_from_the_snapshot(tmp_path: Path) -
     assert document["capacity"]["codex"]["state"] == capacity.SHED
 
 
-def test_v1_keys_unchanged_except_schema_and_capacity(tmp_path: Path) -> None:
+def test_capacity_states_use_capacity_agent_state_vocabulary(tmp_path: Path) -> None:
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    document = export.build_document(database, capacity_snapshot=_capacity_fixture())
+    observed = {entry["state"] for entry in document["capacity"].values()}
+    assert observed <= capacity.AGENT_STATES
+    assert capacity.AGENT_STATES == frozenset(
+        {"ok", "warn", "shed", "unknown"}
+    )
+
+
+def test_v1_key_values_byte_identical_with_and_without_capacity_block(tmp_path: Path) -> None:
     database = tmp_path / "weights.db"
     export._fixture_db(database)
     snapshot = _capacity_fixture()
-    document = export.build_document(database, now=100, capacity_snapshot=snapshot)
-    v1_keys = ("task_types", "reserve", "min_observations", "source_version")
-    for key in v1_keys:
-        assert key in document
-    exploration = document["exploration"]
-    assert set(exploration) >= {"mode", "rate", "week_start", "challengers", "policy_version"}
+    without = export.build_document(database, now=100, include_capacity=False)
+    with_block = export.build_document(database, now=100, capacity_snapshot=snapshot)
+    assert _v1_bytes(without) == _v1_bytes(with_block)
 
 
 def test_capacity_state_change_triggers_write_document(tmp_path: Path) -> None:
@@ -143,11 +179,27 @@ def test_capacity_state_change_triggers_write_document(tmp_path: Path) -> None:
     ) is True
 
 
+def test_capacity_observed_at_only_change_does_not_trigger_write_document(tmp_path: Path) -> None:
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    target = tmp_path / "route-weights.json"
+    first = _capacity_fixture(codex_state=capacity.OK, generated_at=1_700_000_000)
+    second = _capacity_fixture(codex_state=capacity.OK, generated_at=1_800_000_000)
+
+    assert export.write_document(
+        target, export.build_document(database, now=100, capacity_snapshot=first)
+    ) is True
+    assert export.write_document(
+        target, export.build_document(database, now=100, capacity_snapshot=second)
+    ) is False
+
+
 def test_export_includes_capacity_block(tmp_path: Path) -> None:
     database = tmp_path / "weights.db"
     export._fixture_db(database)
     document = export.build_document(database, capacity_snapshot=_capacity_fixture())
     assert "capacity" in document
+    assert document.get("capacity_schema") == export.CAPACITY_SCHEMA
 
 
 def test_completed_publication_survives_success_heartbeat_failure(tmp_path, monkeypatch, capsys):

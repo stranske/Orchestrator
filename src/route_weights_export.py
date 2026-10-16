@@ -28,7 +28,8 @@ import feedback
 import provision
 import router
 
-SCHEMA = "orchestrator.route-weights/v2"
+SCHEMA = "orchestrator.route-weights/v1"
+CAPACITY_SCHEMA = "orchestrator.route-weights-capacity/v1"
 DEFAULT_MIN_OBSERVATIONS = 20
 EXPORT_BRANCH = "exports/route-weights"
 EXPORT_PATH = Path("config/route-weights.json")
@@ -93,10 +94,11 @@ def _ranking(rows: list[sqlite3.Row], minimum: int) -> list[dict[str, Any]]:
     return sorted(ranking, key=lambda row: (-row["posterior"], -row["success_rate"], row["agent"]))
 
 
-def _capacity_block(snapshot: dict[str, Any] | None, *, observed_at: int) -> dict[str, Any]:
+def _capacity_block(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     """Per-agent capacity state for remote consumers (state and window only)."""
     if snapshot is None:
         snapshot = capacity.build()
+    observed_at = int(snapshot.get("generated_at") or 0)
     agents = snapshot.get("agents") or {}
     block: dict[str, Any] = {}
     for agent in sorted(capacity.AGENTS):
@@ -175,6 +177,7 @@ def build_document(
     *,
     now: int | None = None,
     capacity_snapshot: dict[str, Any] | None = None,
+    include_capacity: bool = True,
 ) -> dict[str, Any]:
     """Build a snapshot with repeatable samples for this week and weight version."""
     if minimum < 1:
@@ -223,11 +226,18 @@ def build_document(
         "task_types": task_types,
         "reserve": reserve,
         "exploration": _exploration_block(version, by_task, task_types, timestamp),
-        "capacity": _capacity_block(capacity_snapshot, observed_at=timestamp),
     }
+    if include_capacity:
+        document["capacity_schema"] = CAPACITY_SCHEMA
+        document["capacity"] = _capacity_block(capacity_snapshot)
     # Bind the tag to the exported policy, including rankings and the sampled
-    # challengers. A timestamp-only refresh retains the same join identity.
-    digest = hashlib.sha256(_canonical_bytes(_semantic_for_compare(document))).hexdigest()
+    # challengers. Capacity is additive under v1 and must not move this identity.
+    routing_semantic = {
+        key: value
+        for key, value in document.items()
+        if key not in ("generated_at", "capacity", "capacity_schema")
+    }
+    digest = hashlib.sha256(_canonical_bytes(routing_semantic)).hexdigest()
     document["exploration"]["policy_version"] = f"route-exploration/v1:{digest}"
     return document
 
@@ -356,6 +366,7 @@ def _selftest() -> None:
             db_path, minimum=20, now=fixed_now, capacity_snapshot=capacity_snapshot
         )
         assert document["schema"] == SCHEMA, document
+        assert document["capacity_schema"] == CAPACITY_SCHEMA, document
         assert set(document["capacity"]) == set(capacity.AGENTS), document
         assert document["source_version"] == 2, document
         ranking = document["task_types"]["implement"]["ranking"]
