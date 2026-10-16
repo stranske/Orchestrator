@@ -1,0 +1,6 @@
+tree f5f2d828804c0525cc78b5aa29ff40cd30ef266d
+parent cf87bad89061684ce984eeed6429f0eb3f3843c4
+author Tim Stranske <stranske@gmail.com> 1792113827 -0500
+committer Tim Stranske <stranske@gmail.com> 1792113827 -0500
+
+docs(ci): preserve transferable exact-source and named execution evidence
