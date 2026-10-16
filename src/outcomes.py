@@ -1875,9 +1875,159 @@ def backfill_triage_disagreements(*, limit: int = 100, _state_fn=None) -> dict:
     return result
 
 
-def link_triage_consumption(*, now: float | None = None, limit: int = 100) -> dict:
+# The pull-request search below reads each pull request once and remembers the answer, so one bound
+# per call is enough to drain it: the next call starts after what the last one read.
+PR_READS_PER_CALL = 20
+# A "does not cover" answer read this soon after a pull request opened is not remembered as final:
+# the workflow writes the closing line a moment after creation, so an early read can miss it.
+PR_COVER_SETTLE_S = 3600
+
+
+def _pr_cover_path() -> Path:
+    import triage_shadow
+
+    return triage_shadow.linked_path().with_name("triage-pr-covers.jsonl")
+
+
+def _read_pr_covers() -> dict[tuple[str, int], dict]:
+    """Remembered pull-request answers, newest row last. A torn row is a lost memory: it is read again."""
+    path = _pr_cover_path()
+    covers: dict[tuple[str, int], dict] = {}
+    if not path.exists():
+        return covers
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+            covers[(row["repo"], int(row["pr"]))] = row
+        except (ValueError, KeyError, TypeError):
+            continue
+    return covers
+
+
+def default_pr_reader(repo: str, number: int) -> dict | None:
+    """One REST read of a pull request, as the fields backlog._pr_issue_refs reads; None on any failure."""
+    try:
+        r = subprocess.run(
+            ["gh", "api", f"repos/{repo}/pulls/{number}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        data = json.loads(r.stdout) if r.returncode == 0 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return {
+        "body": data.get("body") or "",
+        "headRefName": (data.get("head") or {}).get("ref") or "",
+        "createdAt": data.get("created_at") or "",
+    }
+
+
+class _PrSearch:
+    """What one link_triage_consumption call has read, may still read, and could not read."""
+
+    def __init__(self, reader=None, *, now: float | None = None, bound: int = PR_READS_PER_CALL):
+        self.reader = reader or default_pr_reader
+        self.now = time.time() if now is None else now
+        self.covers = _read_pr_covers()
+        self.left = bound
+        self.reads = 0
+        self.unread: set[tuple[str, int]] = set()
+        self.failed: set[tuple[str, int]] = set()
+        self.ran = False
+
+    def settled(self, key: tuple[str, int]) -> bool:
+        known = self.covers.get(key)
+        return known is not None and bool(known.get("final"))
+
+    def answer(self, repo: str, number: int, issue: int) -> str:
+        """``yes`` or ``no`` once the pull request is read, else ``failed`` or ``bound``."""
+        import backlog
+        import triage_shadow
+
+        key = (repo, number)
+        if not self.settled(key):
+            if key in self.failed:
+                self.unread.add(key)
+                return "failed"
+            if self.left <= 0:
+                self.unread.add(key)
+                return "bound"
+            self.left -= 1
+            self.reads += 1
+            pr = self.reader(repo, number)
+            if pr is None:
+                self.failed.add(key)
+                self.unread.add(key)
+                return "failed"
+            refs = sorted(backlog._pr_issue_refs(repo, pr))
+            opened = utc_epoch.from_iso(pr.get("createdAt"))
+            self.covers[key] = {
+                "repo": repo,
+                "pr": number,
+                "covers": refs,
+                "ts": self.now,
+                "final": bool(refs) or opened is None or self.now - opened >= PR_COVER_SETTLE_S,
+            }
+            triage_shadow._append(_pr_cover_path(), self.covers[key])
+        return "yes" if issue in self.covers[key]["covers"] else "no"
+
+
+def first_run_for_pick(
+    conn, picked: str, since_ts: float, pr_reader=None, *, search: _PrSearch | None = None
+) -> tuple[str | None, str]:
+    """The first non-role run after ``since_ts`` that worked the pick, and how it was found.
+
+    Work the opener starts from an issue is recorded on the pull request it opens, so a run on the
+    pick itself (``direct``) is only tried first. Failing that, the first run on a pull request in
+    the pick's repository that covers it (``pull_request``), decided by ``backlog._pr_issue_refs``.
+    With no run the second value says why: ``none`` (every candidate pull request was read and none
+    covers the pick), ``pr_read_failed`` or ``reads_pending`` (the bound stopped the search). The
+    search stops at the first pull request it cannot read, because a later cover would not then be
+    known to be the first. Only ``none`` may be recorded as not followed.
+    """
+    direct = conn.execute(
+        "SELECT run_id FROM runs WHERE target=? AND mode != 'role' AND ts > ? ORDER BY ts,run_id LIMIT 1",
+        (picked, since_ts),
+    ).fetchone()
+    if direct:
+        return direct[0], "direct"
+    repo, _, tail = picked.rpartition("#")
+    if not repo or not tail.isdigit():
+        return None, "none"
+    search = search or _PrSearch(pr_reader)
+    search.ran = True
+    candidates = conn.execute(
+        "SELECT run_id,target,pr_number FROM runs WHERE mode != 'role' AND pr_number IS NOT NULL "
+        "AND ts > ? ORDER BY ts,run_id",
+        (since_ts,),
+    ).fetchall()
+    stopped = None
+    for run_id, target, pr_number in candidates:
+        if target.rpartition("#")[0] != repo:
+            continue
+        key = (repo, int(pr_number))
+        if stopped:
+            if not search.settled(key):
+                search.unread.add(key)
+            continue
+        verdict = search.answer(repo, int(pr_number), int(tail))
+        if verdict == "yes":
+            return run_id, "pull_request"
+        if verdict != "no":
+            stopped = "pr_read_failed" if verdict == "failed" else "reads_pending"
+    return None, stopped or "none"
+
+
+def link_triage_consumption(*, now: float | None = None, limit: int = 100, pr_reader=None) -> dict:
     """Credit only a completed first downstream run matching the consumed pick.
 
+    The run is found on the pick itself or, when there is none, on a pull request that covers it
+    (``first_run_for_pick``). A pull request that could not be read, or that the per-call bound left
+    unread, is never "not followed": the row stays pending and at 48 hours is unresolved. The result
+    carries ``pr_reads`` and ``unread_candidates`` (0 when drained) whenever a search ran.
     Stable attempt identities make retry after an interrupted link append safe.
     Nothing launches a worker or upgrades rejected counterfactual role edges.
     """
@@ -1887,6 +2037,7 @@ def link_triage_consumption(*, now: float | None = None, limit: int = 100) -> di
     consumed = triage_shadow._read_rows(triage_shadow.consumed_path())
     linked = triage_shadow.linked_consumptions(consumed)
     result: dict = {"followed": [], "not_followed": [], "unresolved": [], "pending": []}
+    search = _PrSearch(pr_reader, now=now)
     for row in [r for r in consumed if triage_shadow.consumption_key(r) not in linked][
         : max(0, limit)
     ]:
@@ -1895,11 +2046,10 @@ def link_triage_consumption(*, now: float | None = None, limit: int = 100) -> di
             source = conn.execute(
                 "SELECT role_name FROM runs WHERE run_id=? AND mode='role'", (row["role_run_id"],)
             ).fetchone()
-            run = conn.execute(
-                "SELECT run_id FROM runs WHERE target=? AND mode != 'role' "
-                "AND ts > ? ORDER BY ts,run_id LIMIT 1",
-                (row["picked"], row["ts"] / 1_000_000_000),
-            ).fetchone()
+            run_id, via = first_run_for_pick(
+                conn, row["picked"], row["ts"] / 1_000_000_000, search=search
+            )
+            run = (run_id,) if run_id else None
             completed = (
                 run
                 and conn.execute(
@@ -1927,7 +2077,7 @@ def link_triage_consumption(*, now: float | None = None, limit: int = 100) -> di
             }
             triage_shadow._append(triage_shadow.linked_path(), record)
             result["followed"].append({**record, "edge": edge})
-        elif not run and now - row["ts"] / 1_000_000_000 >= 48 * 3600:
+        elif not run and via == "none" and now - row["ts"] / 1_000_000_000 >= 48 * 3600:
             record = {
                 "consumed_ts": row["ts"],
                 "consumption_id": consumption_id,
@@ -1937,11 +2087,12 @@ def link_triage_consumption(*, now: float | None = None, limit: int = 100) -> di
             triage_shadow._append(triage_shadow.linked_path(), record)
             result["not_followed"].append(record)
         elif now - row["ts"] / 1_000_000_000 >= 48 * 3600:
-            reason = (
-                "invalid_source_role"
-                if not source or source[0] != "triage"
-                else "first_run_incomplete"
-            )
+            if not run:
+                reason = via
+            elif not source or source[0] != "triage":
+                reason = "invalid_source_role"
+            else:
+                reason = "first_run_incomplete"
             record = {
                 "consumed_ts": row["ts"],
                 "consumption_id": consumption_id,
@@ -1953,6 +2104,9 @@ def link_triage_consumption(*, now: float | None = None, limit: int = 100) -> di
             result["unresolved"].append(record)
         else:
             result["pending"].append(row["ts"])
+    if search.ran:
+        result["pr_reads"] = search.reads
+        result["unread_candidates"] = len({k for k in search.unread if not search.settled(k)})
     return result
 
 
