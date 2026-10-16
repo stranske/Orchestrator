@@ -17,6 +17,8 @@ import re
 import time
 from pathlib import Path
 
+import pytest
+
 import adapters
 import agent_auth_check
 import agent_switches
@@ -121,19 +123,22 @@ def test_muse_usage_row_is_appended_per_exec(tmp_path, monkeypatch):
     dispatcher._record_muse_usage(started, "offload", 0, 1.0)
 
 
-def test_muse_usage_is_recorded_for_every_offload_attempt():
-    """Wiring pin: the offload attempt loop calls the recorder, once, under an `agent == muse` guard.
+def test_muse_usage_is_recorded_for_offload_and_delegate():
+    """Wiring pin: BOTH launch paths record usage, each under an `agent == muse` guard.
 
-    Pins the smallest fragment that would be ABSENT if the wiring were removed, with nothing a
-    formatter owns (no argument list, no line break), and asserts it matches exactly ONE site. The
-    needle is split so it cannot match its own line. Occurrences of the bare name are the definition
-    plus the one call, so a second call site would change the count rather than hide behind it.
+    The offload attempt loop and `_spawn` (which `run()` and `delegate()` share) each start a
+    `muse exec`. Pins the smallest fragment that would be ABSENT if the wiring were removed, with
+    nothing a formatter owns, and asserts the exact number of sites: the definition plus one call
+    per path, so a deleted call cannot hide behind a surviving one.
     """
     src = Path(dispatcher.__file__).read_text()
     name = "_record_muse" + "_usage("
-    assert src.count(name) == 2, "definition + exactly one call site"
-    guarded = re.findall(r'if agent == "muse":\s*\n\s*' + re.escape(name), src)
-    assert len(guarded) == 1, "the call must sit directly under an `agent == muse` guard"
+    assert src.count(name) == 3, "definition + offload attempt + delegate spawn"
+    offload = re.findall(r'if agent == "muse":\s*\n(?:\s*#[^\n]*\n)*\s*' + re.escape(name), src)
+    spawn = re.findall(
+        r'if d\["agent"\] == "muse":\s*\n(?:\s*#[^\n]*\n)*\s*' + re.escape(name), src
+    )
+    assert len(offload) == 1 and len(spawn) == 1, (len(offload), len(spawn))
 
 
 def test_muse_is_refused_under_a_write_boundary():
@@ -174,3 +179,72 @@ def test_muse_runtime_home_carries_the_login_record(tmp_path, monkeypatch):
     base = dispatcher._ensure_agent_runtime("muse")
     linked = base / ".config" / "muse" / "auth.json"
     assert linked.is_symlink() and linked.resolve() == login.resolve(), linked
+
+
+def test_muse_direct_dispatch_scrubs_the_key_from_a_copied_environment(monkeypatch):
+    """`adapters.dispatch` hands `env` straight to subprocess.run, bypassing the dispatcher prelude.
+    muse gets a COPY without META_API_KEY in both cases (inherited env and supplied mapping); the
+    caller's mapping is never mutated and every other agent's environment is untouched."""
+    fake = "not-a-real-key-" + "y" * 8
+    monkeypatch.setenv("META_API_KEY", fake)
+    inherited = adapters.agent_subprocess_env("muse", None)
+    assert (
+        inherited is not None and "META_API_KEY" not in inherited
+    ), "inherited env must be scrubbed"
+    supplied = {"PATH": "/usr/bin", "META_API_KEY": fake}
+    cleaned = adapters.agent_subprocess_env("muse", supplied)
+    assert "META_API_KEY" not in cleaned and cleaned["PATH"] == "/usr/bin", cleaned
+    assert supplied["META_API_KEY"] == fake, "the caller's mapping must not be mutated"
+    assert adapters.agent_subprocess_env("vibe", None) is None, "other agents keep inheriting"
+    assert adapters.agent_subprocess_env("vibe", supplied) is supplied, "other agents are untouched"
+    # Wiring pin: dispatch passes the effective env, once.
+    src = Path(adapters.__file__).read_text()
+    assert src.count("env=agent_subprocess" + "_env(agent, env)") == 1
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "[]",
+        "null",
+        "not json at all",
+        '{"providers": null}',
+        '{"providers": []}',
+        '{"providers": {"meta": null}}',
+        '{"providers": {"meta": []}}',
+        '{"providers": {"meta": {"mechanism": "oauth", "subs_active": "yes"}}}',
+    ],
+)
+def test_muse_malformed_login_records_are_unusable_never_an_exception(text):
+    assert agent_auth_check._login_present("muse", "subs_active", text) is False, text
+
+
+def test_muse_usage_log_failure_is_reported_not_swallowed(tmp_path, monkeypatch, capsys):
+    """A measurement that cannot be written must not fail the run, but it must not vanish either:
+    the only consumption record is the one that was just lost, so say so on stderr."""
+    monkeypatch.setenv("ORCH_MUSE_USAGE_LOG", str(tmp_path / "missing" / "deeper" / "x.log"))
+    dispatcher._record_muse_usage(time.time(), "offload", 0, 1.0)  # must not raise
+    err = capsys.readouterr().err
+    assert "muse usage" in err and "not recorded" in err, err
+
+
+def test_muse_has_no_route_table_entry_so_only_explicit_dispatch_reaches_it():
+    """Explicit demand means `dispatcher.py offload/delegate --agent muse`. `select_agent` filters
+    route-table entries and muse has none, so it can never be returned by selection, even with
+    `only={"muse"}`; BACKUP_AGENTS then also holds if an entry is ever added."""
+    in_table = {e["agent"] for entries in router.ROUTE_TABLE.values() for e in _entries(entries)}
+    assert "muse" not in in_table, "a route-table entry would make selection able to return muse"
+    assert "muse" in router.BACKUP_AGENTS
+
+
+def _entries(value):
+    """ROUTE_TABLE values are lists of entries, or mappings of lists, depending on the task type."""
+    if isinstance(value, dict):
+        for inner in value.values():
+            yield from _entries(inner)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            if isinstance(item, dict) and "agent" in item:
+                yield item
+            else:
+                yield from _entries(item)

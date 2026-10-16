@@ -296,8 +296,10 @@ unchanged.
 
 **Muse Code is a backup-only, subscription-login backend (2026-10-15, issue #612).** Meta's `muse`
 CLI joins the delegated sub-agent band as a seat that routine selection NEVER picks: it is in
-`router.BACKUP_AGENTS` with aider, so it runs only on explicit demand (`--agent muse`, `only={"muse"}`)
-until measured outcomes earn it a prior. Its capacity seat is `flat` (`capacity.AGENTS["muse"]`, the owner's
+`router.BACKUP_AGENTS` with aider, and unlike aider it has NO route-table entry, so `select_agent` can
+never return it, even with `only={"muse"}`. The paths that reach it are an explicit
+`dispatcher.py offload --agent muse` (run live 2026-10-15) or `delegate --agent muse`, until measured
+outcomes earn it a prior and a route-table entry. Its capacity seat is `flat` (`capacity.AGENTS["muse"]`, the owner's
 Power Usage plan: a 5-hour and a weekly allowance) with no usage API, so 429-shed is authoritative, as for
 vibe. **The credential is the CLI LOGIN, never an API key.** `META_API_KEY` always overrides that login, and a
 Default-Project key metered pay-as-you-go: measured on the live console, two capped execs under it put 8

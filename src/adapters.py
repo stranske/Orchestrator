@@ -2078,6 +2078,22 @@ def done_marker_cmd(
     )
 
 
+def agent_subprocess_env(agent: str, env: dict | None) -> dict | None:
+    """The environment a direct `dispatch` should hand to the agent process.
+
+    muse runs on the owner's SUBSCRIPTION LOGIN, and `META_API_KEY` always overrides that login, so
+    it never reaches a muse process: a COPY of the effective environment (the process env when none
+    was supplied) without the key. The caller's mapping is never mutated. Every other agent's
+    environment is returned exactly as given, including None (inherit). The detached wrapper in
+    `dispatcher._agent_runtime_prelude` does the same for the offload and delegate paths.
+    """
+    if agent != "muse":
+        return env
+    scrubbed = dict(os.environ if env is None else env)
+    scrubbed.pop("META_API_KEY", None)
+    return scrubbed
+
+
 def dispatch(
     agent: str,
     prompt: str,
@@ -2110,7 +2126,14 @@ def dispatch(
         reasoning_effort=reasoning_effort,
         requested_model=requested_model,
     )
-    proc = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
+    proc = subprocess.run(
+        cmd,
+        cwd=cwd,
+        env=agent_subprocess_env(agent, env),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
     # The run could write its worktree git dir (#452), so this read pins the repository locations.
     status = worktree_git.run(cwd, ["status", "--porcelain"]).stdout.strip()
     selected = execution_profiles.get_profile(profile) if profile is not None else None

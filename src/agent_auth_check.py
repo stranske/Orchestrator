@@ -76,8 +76,14 @@ def _login_present(agent: str, key: str, text: str) -> bool:
     """
     if agent == "muse":
         try:
-            meta = json.loads(text).get("providers", {}).get("meta", {})
-        except (ValueError, AttributeError):
+            document = json.loads(text)
+        except ValueError:
+            return False
+        # Every level must be a mapping: `null`, a list or a scalar anywhere is an UNUSABLE login,
+        # never an exception (the credential sweep must report it, not crash on it).
+        providers = document.get("providers") if isinstance(document, dict) else None
+        meta = providers.get("meta") if isinstance(providers, dict) else None
+        if not isinstance(meta, dict):
             return False
         return meta.get("mechanism") == "oauth" and meta.get(key) is True
     return any(line.strip().lstrip("export ").startswith(key + "=") for line in text.splitlines())
@@ -319,7 +325,28 @@ def _selftest() -> None:
             if _saved is not None:
                 CREDENTIAL_FILES["vibe"] = _saved
 
-    print("agent_auth_check.py selftest: OK (render, unknown-is-not-broken, live sweep)")
+    # muse: the seat is usable only when the LOGIN records an oauth subscription, and a malformed
+    # record at any nesting level is "not usable", never an exception. Correctness-critical (it is
+    # the gate between the subscription login and API spend), so it carries a break demonstration:
+    # relaxing `is True` to a truthiness test makes the "yes" case below fail.
+    _good = '{"providers":{"meta":{"mechanism":"oauth","subs_active":true}}}'
+    assert _login_present("muse", "subs_active", _good) is True
+    assert _login_present("muse", "subs_active", _good.replace("true", "false")) is False
+    for _shape in (
+        "[]",
+        "null",
+        "not json",
+        '{"providers":null}',
+        '{"providers":[]}',
+        '{"providers":{"meta":null}}',
+        '{"providers":{"meta":[]}}',
+        '{"providers":{"meta":{"mechanism":"oauth","subs_active":"yes"}}}',
+    ):
+        assert _login_present("muse", "subs_active", _shape) is False, _shape
+    print(
+        "agent_auth_check.py selftest: OK "
+        "(render, unknown-is-not-broken, live sweep, muse login gate)"
+    )
 
 
 def main(argv) -> int:

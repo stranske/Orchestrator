@@ -848,7 +848,7 @@ def _record_muse_usage(started: float, lane: str, rc: object, seconds: float) ->
     Muse exposes no usage readout (no token/usage/quota field in `--json`, and the console lags up
     to an hour), so the only machine-readable consumption signal is our own exec count against the
     plan's rolling 5-hour allowance. `muse-usage.sh` reads this file. The measurement must never
-    fail the run it measures, so every error is swallowed.
+    fail the run it measures, so a write error is reported on stderr and otherwise ignored.
     """
     try:
         log = Path(
@@ -857,7 +857,11 @@ def _record_muse_usage(started: float, lane: str, rc: object, seconds: float) ->
         )
         with log.open("a") as fh:
             fh.write(f"{int(started)}\t{lane}\t{rc}\t{int(seconds)}\n")
-    except OSError:
+    except OSError as exc:
+        # Nonfatal, but never silent: this row is the attempt's only consumption record.
+        print(
+            f"[orchestrator] muse usage not recorded ({type(exc).__name__}: {exc})", file=sys.stderr
+        )
         return
 
 
@@ -1375,6 +1379,10 @@ def _spawn(d: dict) -> int:
                 error=f"process start failed: {exc}",
             )
             raise
+    if d["agent"] == "muse":
+        # A delegated run is detached, so its exit and duration are not known here; the row counts
+        # the exec (what the plan's allowance is spent on) with rc "spawned" and 0 seconds.
+        _record_muse_usage(started_ts, "delegate", "spawned", 0)
     try:
         stamped = claims.update_metadata(
             d["target"],
