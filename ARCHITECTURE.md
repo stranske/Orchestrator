@@ -1979,7 +1979,10 @@ that predates the field). Under `--retry` the dispatch limit is spent on those r
 unsaved dispute (`attempt_order`). A linked issue's acceptance criteria enter the packet only if its
 body was not edited after the merge, read from the issue's `lastEditedAt`; GitHub's `updatedAt` moves
 on every comment, label and reopen, and refused criteria whose text never changed. A packet left
-without criteria stays metadata-only and is never graded.
+without criteria stays metadata-only and is never graded. A diff line over 4096 bytes is shortened to
+its head and listed in `diff_patch.shortened_lines`, so one generated line (a bookkeeping file's growing
+note) cannot clip the whole patch; a patch still over 256000 bytes after that is clipped and, like a
+packet with no criteria, stays metadata-only.
 This extends the existing role and reporting rails; it does not re-enable tick adjudication. Native CLI terminal token usage is retained
 through the existing role record as ledger effort, never complete-source dollars.
 Shadow reports label measured, imputed and unmeasured attempts separately on

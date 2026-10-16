@@ -47,6 +47,10 @@ import verifier_evidence
 # transport dependency.  It is a local, immutable-commit evidence boundary.
 MAX_COLLECTION_SOURCE_BYTES = 1_048_576
 MAX_DIFF_PATCH_BYTES = 256_000
+# One generated line (a bookkeeping file's growing note) can be most of a patch, and the patch is
+# then clipped as a whole. A diff line over this bound is shortened to its head instead, and listed.
+MAX_DIFF_LINE_BYTES = 4096
+DIFF_LINE_KEEP_BYTES = 1024
 # The one dispatch budget for every adjudicator call this module makes: the retrospective loop,
 # the judge-collected-case seam and the --timeout default all read it. It equals the role's own
 # default (`roles.run_adjudicator_agent`, parameter `timeout`); a test pins the two together so
@@ -201,6 +205,28 @@ def _gate_rollup(pr: dict) -> dict:
         raise ValueError("complete gate evidence unavailable") from exc
 
 
+def _shorten_long_lines(patch_text: str) -> tuple[str, list[dict]]:
+    """Cut each diff line over ``MAX_DIFF_LINE_BYTES`` to its head and a marker naming its size.
+
+    Returns the text and one ``{"path", "diff_line", "bytes"}`` per shortened line, so what was
+    left out is explicit in the packet and never a silent stop. ``path`` is the file named by the
+    nearest preceding ``diff --git`` header, ``diff_line`` the 1-based line in the patch.
+    """
+    shortened: list[dict] = []
+    lines = patch_text.split("\n")
+    path = ""
+    for number, line in enumerate(lines, 1):
+        header = re.match(r"diff --git a/(.+?) b/", line)
+        if header:
+            path = header.group(1)
+        encoded = line.encode("utf-8")
+        if len(encoded) > MAX_DIFF_LINE_BYTES:
+            head = encoded[:DIFF_LINE_KEEP_BYTES].decode("utf-8", errors="ignore")
+            lines[number - 1] = f"{head}[... line shortened: {len(encoded)} bytes ...]"
+            shortened.append({"path": path, "diff_line": number, "bytes": len(encoded)})
+    return "\n".join(lines), shortened
+
+
 def fetch_evidence(row: dict) -> dict:
     repo, sep, number = str(row.get("target") or "").partition("#")
     if not sep or not number.isdigit() or repo.count("/") != 1:
@@ -305,7 +331,7 @@ def fetch_evidence(row: dict) -> dict:
     )
     if patch_proc.returncode:
         raise ValueError("merged PR diff patch unavailable")
-    patch_text = patch_proc.stdout
+    patch_text, shortened_lines = _shorten_long_lines(patch_proc.stdout)
     patch_truncated = len(patch_text.encode("utf-8")) > MAX_DIFF_PATCH_BYTES
     if patch_truncated:
         patch_text = patch_text.encode("utf-8")[:MAX_DIFF_PATCH_BYTES].decode(
@@ -369,6 +395,7 @@ def fetch_evidence(row: dict) -> dict:
                 "revision": pr["headRefOid"],
                 "text": patch_text,
                 **({"truncated": True} if patch_truncated else {}),
+                **({"shortened_lines": shortened_lines} if shortened_lines else {}),
             },
             "acceptance_criteria": acceptance_criteria,
             "acceptance_criteria_errors": acceptance_criteria_errors,

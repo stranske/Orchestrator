@@ -428,7 +428,7 @@ class RetrospectiveEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "merge commit unavailable"):
             retro.fetch_evidence({"target": "owner/repo#1", "verifier_verdict": "NON_PASS"})
 
-    def _criteria_evidence(self, issues, merged_at="2026-10-01T00:00:00Z"):
+    def _criteria_evidence(self, issues, merged_at="2026-10-01T00:00:00Z", patch_text=None):
         """Read a merged PR linked to ``issues``; return its ground truth and the gh calls made."""
         decision = {
             "schema": verifier_evidence.MARKER,
@@ -462,7 +462,8 @@ class RetrospectiveEvidenceTests(unittest.TestCase):
             "closingIssuesReferences": {"nodes": issues},
             "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": contexts}}}]},
         }
-        patch_text = "diff --git a/tests/test_acceptance.py b/tests/test_acceptance.py\n"
+        if patch_text is None:
+            patch_text = "diff --git a/tests/test_acceptance.py b/tests/test_acceptance.py\n"
         # No parenthesized ``with ... as``: black reads it as a Python 3.9+ marker for the whole
         # file and rewrites every older multi-item ``with`` above, which is not this change's diff.
         gh = patch.object(
@@ -557,6 +558,73 @@ class RetrospectiveEvidenceTests(unittest.TestCase):
         selection = query.split("closingIssuesReferences", 1)[1].split("}", 1)[0]
         assert selection.split().count("lastEditedAt") == 1
         assert query.count("lastEditedAt") == 1
+
+    def test_a_one_line_bookkeeping_change_does_not_clip_the_patch(self):
+        small = (
+            "diff --git a/src/x.py b/src/x.py\n--- a/src/x.py\n+++ b/src/x.py\n"
+            "@@ -1 +1 @@\n-old\n+new\n"
+        )
+        huge_line = "+" + "x" * (retro.MAX_DIFF_PATCH_BYTES + 10)
+        floor = (
+            "diff --git a/.verify-floor.json b/.verify-floor.json\n"
+            "--- a/.verify-floor.json\n+++ b/.verify-floor.json\n@@ -1 +1 @@\n"
+            "-" + "y" * 100 + "\n" + huge_line + "\n"
+        )
+        issue = {
+            "number": 2,
+            "body": "## Acceptance Criteria\n- [ ] a requirement",
+            "updatedAt": "2026-10-02T00:00:00Z",
+            "lastEditedAt": None,
+        }
+        ground, _ = self._criteria_evidence([issue], patch_text=small + floor)
+        diff = ground["diff_patch"]
+        assert "truncated" not in diff
+        assert diff["text"].startswith(small)
+        size = len(huge_line.encode("utf-8"))
+        assert f"[... line shortened: {size} bytes ...]" in diff["text"]
+        assert huge_line not in diff["text"]
+        line_number = (small + floor).split("\n").index(huge_line) + 1
+        assert diff["shortened_lines"] == [
+            {"path": ".verify-floor.json", "diff_line": line_number, "bytes": size}
+        ]
+        assert retro._packet_metadata_only(ground) is False
+
+    def test_only_a_line_over_the_bound_is_shortened_and_never_mid_character(self):
+        bound = retro.MAX_DIFF_LINE_BYTES
+        at_bound = "+" + "a" * (bound - 1)
+        over = "+" + "a" * bound
+        text, shortened = retro._shorten_long_lines(
+            "\n".join(["diff --git a/f b/f", at_bound, over])
+        )
+        assert at_bound in text.split("\n") and over not in text
+        assert shortened == [{"path": "f", "diff_line": 3, "bytes": bound + 1}]
+        # The head is cut at a byte limit that falls inside a three-byte character.
+        wide = "+ab" + "\u20ac" * 2000
+        text, shortened = retro._shorten_long_lines(wide)
+        head = text.split("[... line shortened")[0]
+        assert head == wide[: 3 + 340]  # 1023 bytes: the partial character is dropped, not split
+        assert len(head.encode("utf-8")) == 1023 <= retro.DIFF_LINE_KEEP_BYTES
+        assert shortened == [{"path": "", "diff_line": 1, "bytes": len(wide.encode("utf-8"))}]
+        # A patch with no long line comes back byte-for-byte, with nothing listed.
+        plain = "diff --git a/f b/f\n+one\n+two\n"
+        assert retro._shorten_long_lines(plain) == (plain, [])
+
+    def test_a_patch_of_many_ordinary_lines_is_still_clipped(self):
+        line = "+" + "z" * 99 + "\n"
+        patch_text = "diff --git a/big.py b/big.py\n" + line * (
+            retro.MAX_DIFF_PATCH_BYTES // 100 + 50
+        )
+        issue = {
+            "number": 2,
+            "body": "## Acceptance Criteria\n- [ ] a requirement",
+            "updatedAt": "2026-10-02T00:00:00Z",
+            "lastEditedAt": None,
+        }
+        ground, _ = self._criteria_evidence([issue], patch_text=patch_text)
+        diff = ground["diff_patch"]
+        assert diff["truncated"] is True and "shortened_lines" not in diff
+        assert len(diff["text"].encode("utf-8")) <= retro.MAX_DIFF_PATCH_BYTES
+        assert retro._packet_metadata_only(ground) is True
 
     def test_evidence_timeout_is_saved_and_the_batch_continues(self):
         temporary = tempfile.TemporaryDirectory()
