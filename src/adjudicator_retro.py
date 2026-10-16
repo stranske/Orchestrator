@@ -25,6 +25,7 @@ an exit-0 collection result, not an acceptance result.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import math
@@ -255,9 +256,15 @@ class NativeAttemptJournal:
         return False
 
 
-def _native_substantive_revision(case: roles.CollectedAdjudicationCase) -> str:
+def _native_substantive_revision(case: roles.CollectedAdjudicationCase | dict) -> str:
     """A spending key excluding administrative ownership and transport prose."""
-    packet = roles._collected_snapshot(case)
+    packet = (
+        roles._collected_snapshot(case)
+        if isinstance(case, roles.CollectedAdjudicationCase)
+        else case
+    )
+    if not isinstance(packet, dict):
+        raise ValueError("collected case lacks a material evidence revision")
     ground = packet.get("ground_truth_evidence", {})
     if not isinstance(ground, dict):
         raise ValueError("collected case lacks a material evidence revision")
@@ -294,6 +301,16 @@ def _native_substantive_revision(case: roles.CollectedAdjudicationCase) -> str:
         ),
     }
     material["collection"].pop("repository", None)
+    # Replay receipt identity is an audit locator for one execution and carries
+    # time/output-dependent entropy.  Only the producer-authenticated stable
+    # material core may participate in a paid-attempt revision.
+    for index, replay in enumerate(material["collection"].get("execution_replays", [])):
+        if isinstance(replay, dict):
+            material["collection"]["execution_replays"][index] = {
+                "material_evidence": replay.get("material_evidence"),
+                "material_digest": replay.get("material_digest"),
+                "historical_execution": "UNKNOWN; fresh replay does not establish native-attempt history",
+            }
     requirements = material["collection"].get("requirements")
     if isinstance(requirements, dict) and isinstance(requirements.get("source_paths"), list):
         requirements["source_paths"].sort()
@@ -508,10 +525,20 @@ def refresh_native_projection(
     receipt_ground = (
         receipt_case.get("ground_truth_evidence") if isinstance(receipt_case, dict) else None
     )
+    receipt_digest = (
+        hashlib.sha256(
+            json.dumps(receipt_case, sort_keys=True, ensure_ascii=True).encode()
+        ).hexdigest()
+        if isinstance(receipt_case, dict)
+        else None
+    )
     provenance = fresh_ground.get("criterion_provenance")
     if (
         not isinstance(provenance, dict)
+        or not isinstance(receipt_case, dict)
         or not isinstance(receipt_ground, dict)
+        or receipt_digest != record.get("case_digest")
+        or _native_substantive_revision(receipt_case) != revision
         or receipt_ground.get("criterion_provenance") != provenance
     ):
         raise ValueError("native receipt does not bind the complete task contract")
@@ -714,10 +741,213 @@ def refresh_native_cohort(
     return result
 
 
+def publish_native_cohort(
+    *,
+    original_report: Path,
+    canonical_path: Path,
+    cases: dict[str, roles.CollectedAdjudicationCase],
+    journal: NativeAttemptJournal,
+    expected_source_hash: str,
+    expected_canonical_hash: str,
+    db: Path | None = None,
+    truth_reader=None,
+    lock_path: Path | None = None,
+) -> dict:
+    """Atomically publish a freshly reauthenticated native cohort.
+
+    The canonical file is never an input of authority: each publication rebuilds
+    it from immutable source bytes, fresh opaque cases, and the private journal.
+    Existing canonical content is accepted only when it is the unmodified source
+    or a prior publication demonstrably bound to that same source.
+    """
+    original_report = Path(original_report)
+    canonical_path = Path(canonical_path)
+    if canonical_path.resolve() == original_report.resolve() or canonical_path.is_symlink():
+        raise ValueError("native canonical path must be separate from immutable source")
+    source = original_report.read_bytes()
+    source_hash = hashlib.sha256(source).hexdigest()
+    if source_hash != expected_source_hash:
+        raise ValueError("original report changed before native publication")
+    if not canonical_path.exists():
+        raise ValueError("native publication requires an existing canonical report")
+    initial_canonical = canonical_path.read_bytes()
+    if hashlib.sha256(initial_canonical).hexdigest() != expected_canonical_hash:
+        raise ValueError("canonical report changed before native publication")
+    lock_path = lock_path or (Path.home() / ".codex/.orchestrator-mirror.publish.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ValueError("native canonical publication is already in progress") from exc
+        try:
+            current = canonical_path.read_bytes()
+            if hashlib.sha256(current).hexdigest() != expected_canonical_hash:
+                raise ValueError("canonical report changed before publication lock")
+            prior_marker = None
+            if current != source:
+                try:
+                    prior = json.loads(current)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        "canonical report is neither source nor native publication"
+                    ) from exc
+                marker = prior.get("native_publication") if isinstance(prior, dict) else None
+                if (
+                    not isinstance(marker, dict)
+                    or marker.get("source_report_sha256") != source_hash
+                ):
+                    raise ValueError("canonical report has foreign native publication lineage")
+                baseline = json.loads(source)
+                prior_rows = prior.get("rows", [])
+                if len(prior_rows) != len(baseline["rows"]) or prior.get(
+                    "population"
+                ) != baseline.get("population"):
+                    raise ValueError("prior native publication changed original cohort")
+                for original_row, prior_row in zip(baseline["rows"], prior_rows, strict=True):
+                    historical = dict(prior_row)
+                    historical.pop("native_projection", None)
+                    if historical != original_row:
+                        raise ValueError("prior native publication changed immutable original row")
+                prior_marker = marker
+            with tempfile.TemporaryDirectory(dir=canonical_path.parent) as scratch:
+                candidate_path = Path(scratch) / "native-cohort.json"
+                candidate = refresh_native_cohort(
+                    original_report=original_report,
+                    output=candidate_path,
+                    cases=cases,
+                    journal=journal,
+                    expected_source_hash=source_hash,
+                    db=db,
+                    truth_reader=truth_reader,
+                )
+            original = json.loads(source)
+            if candidate.get("rows") is None or len(candidate["rows"]) != len(original["rows"]):
+                raise ValueError("native candidate changed original cohort cardinality")
+            for baseline, rebuilt in zip(original["rows"], candidate["rows"], strict=True):
+                check = dict(rebuilt)
+                check.pop("native_projection", None)
+                if check != baseline:
+                    raise ValueError("native candidate changed immutable original row")
+            if prior_marker is not None:
+                for prior_row, rebuilt in zip(prior["rows"], candidate["rows"], strict=True):
+                    if prior_row.get("native_projection", {}).get("trusted") and not rebuilt.get(
+                        "native_projection", {}
+                    ).get("trusted"):
+                        raise ValueError(
+                            "native publication lost a prior authenticated attempt projection"
+                        )
+            original_ids = [
+                item.get("backend_run_id")
+                for item in _attempt_rows(original["rows"])
+                if item.get("backend_run_id")
+            ]
+            native_ids = [
+                record.get("backend_run_id")
+                for record in candidate["native_attempts"]
+                if record.get("backend_run_id")
+            ]
+            if len(set(native_ids)) != len(native_ids) or set(original_ids) & set(native_ids):
+                raise ValueError("native publication has duplicate paid backend identities")
+            if prior_marker is not None:
+                prior_attempts = set(prior_marker.get("native_attempt_ids", []))
+                prior_paid = set(prior_marker.get("paid_backend_ids", [])) - set(original_ids)
+                if not prior_attempts <= {
+                    record["attempt_id"] for record in candidate["native_attempts"]
+                }:
+                    raise ValueError("native publication lost a prior authenticated attempt")
+                if not prior_paid <= set(native_ids):
+                    raise ValueError("native publication lost a prior paid identity")
+            synthetic_receipts = []
+            for record in candidate["native_attempts"]:
+                backend_id = record.get("backend_run_id")
+                if not backend_id:
+                    continue
+                try:
+                    cost_report = feedback.role_cost_report(backend_id, None, db=db)
+                except (OSError, ValueError, KeyError, TypeError, RuntimeError, sqlite3.Error):
+                    cost_report = {"status": "unmeasured", "cost_usd": None}
+                synthetic_receipts.append(
+                    {"backend_run_id": backend_id, "cost_report": cost_report}
+                )
+            summary = dict(summarize(original["rows"]))
+            native = candidate["native_summary"]
+            binary_admitted = sum(
+                row.get("native_projection", {}).get("decision")
+                in {"uphold_blocker", "reject_blocker"}
+                for row in candidate["rows"]
+            )
+            summary.update(
+                adjudicated=binary_admitted,
+                graded=native["graded"],
+                agree=native["agree"],
+                disagree=native["disagree"],
+                agreement_rate=native["agreement_rate"],
+                merge_rule_agreement_rate=None,
+            )
+            accounting = summarize([*original["rows"], *synthetic_receipts])
+            for key, value in accounting.items():
+                if key.startswith("cost_") or key == "estimated_cost_usd":
+                    summary[key] = value
+            result = candidate
+            result["historical_summary"] = original.get("summary")
+            result["summary"] = summary
+            result["native_publication"] = {
+                "source_report_sha256": source_hash,
+                "canonical_previous_sha256": expected_canonical_hash,
+                "native_attempt_ids": sorted(
+                    record["attempt_id"] for record in candidate["native_attempts"]
+                ),
+                "paid_backend_ids": sorted(set(original_ids) | set(native_ids)),
+            }
+            encoded = json.dumps(result, indent=2) + "\n"
+            # Recheck both mutable inputs at the last possible point; a stale
+            # candidate never overwrites a newer canonical publication.
+            with sqlite3.connect(journal.path, timeout=0) as conn:
+                # Hold the journal writer reservation through the atomic rename.
+                # A new provider reservation cannot race the final input check.
+                conn.execute("BEGIN IMMEDIATE")
+                conn.row_factory = sqlite3.Row
+                last_records = [
+                    dict(row)
+                    for row in conn.execute(
+                        "SELECT * FROM native_attempts WHERE report_sha256=? ORDER BY attempt_id",
+                        (source_hash,),
+                    )
+                ]
+                if (
+                    original_report.read_bytes() != source
+                    or canonical_path.read_bytes() != current
+                    or last_records != candidate["native_attempts"]
+                ):
+                    raise ValueError("native publication input changed during rebuild")
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=canonical_path.parent, delete=False
+                ) as stream:
+                    temporary = Path(stream.name)
+                    try:
+                        stream.write(encoded)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                        temporary.replace(canonical_path)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+            return result
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
 def report_path() -> Path:
     return Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex/orchestrator")) / (
         "capability-program/adjudicator-retro.json"
     )
+
+
+def _publication_lock_path(path: Path) -> Path:
+    """Share the live canonical lock while isolating private report fixtures."""
+    if path.resolve() == report_path().resolve():
+        return Path.home() / ".codex/.orchestrator-mirror.publish.lock"
+    return path.parent / ".orchestrator-mirror.publish.lock"
 
 
 def disputes(*, db: Path | None = None, now: int | None = None, days: int = 90) -> list[dict]:
@@ -1842,6 +2072,7 @@ def qualify_collected_case(
     *,
     byte_limit: int = MAX_COLLECTION_SOURCE_BYTES,
     prompt_byte_limit: int = MAX_COLLECTION_SOURCE_BYTES,
+    replay_receipt: object | None = None,
 ) -> roles.CollectedAdjudicationCase:
     """Issue semantic-judgment input after fresh collection and inventory checks.
 
@@ -1912,7 +2143,7 @@ def qualify_collected_case(
             "complete criterion provenance must match the saved target/head/body snapshot"
         )
     criteria = _criterion_texts(body)
-    mappings = qualification.get("criterion_mapping")
+    mappings = json.loads(json.dumps(qualification.get("criterion_mapping")))
     if not isinstance(mappings, list) or len(mappings) != len(criteria):
         raise ValueError("every explicit acceptance criterion needs one evidence/UNKNOWN mapping")
     collection = collect_case_evidence(row, repository=repository, byte_limit=byte_limit)
@@ -1956,6 +2187,48 @@ def qualify_collected_case(
     refs.update("supporting-git-path:" + item["path"] for item in supporting)
     for mapping in mappings:
         refs.update(item["evidence_ref"] for item in mapping.get("unknowns", []))
+    replay_material = None
+    if replay_receipt is not None:
+        # The producer owns opaque receipt authentication.  This qualifier only
+        # accepts its detached snapshot and persists the stable material core;
+        # timestamps, checkout paths and raw child output cannot buy a retry.
+        import adjudicator_replay
+
+        if not isinstance(replay_receipt, adjudicator_replay.ReplayEvidence):
+            raise ValueError("replay receipt must be issued by the replay producer")
+        receipt = adjudicator_replay.snapshot_receipt(replay_receipt)
+        runner = receipt.get("runner")
+        material = receipt.get("material_evidence")
+        tests = receipt.get("tests")
+        if (
+            receipt.get("original_case_id") != row.get("case_id")
+            or receipt.get("evaluated_sha") != sha
+            or not isinstance(runner, dict)
+            or not isinstance(material, dict)
+            or not isinstance(receipt.get("material_digest"), str)
+            or not isinstance(receipt.get("receipt_identity"), str)
+            or not isinstance(tests, list)
+            or material.get("original_case_id") != row.get("case_id")
+            or material.get("evaluated_sha") != sha
+            or material.get("runner") != runner
+            or material.get("tests") != tests
+        ):
+            raise ValueError("replay receipt does not bind the original evaluated case")
+        replay_ref = "replay-material:" + receipt["material_digest"]
+        if len(mappings) < 2:
+            raise ValueError("replay receipt requires the original two criterion mappings")
+        for mapping in mappings[:2]:
+            mapping["evidence_locations"] = sorted(
+                set(mapping["evidence_locations"]) | {replay_ref}
+            )
+        refs.add(replay_ref)
+        replay_material = {
+            "receipt": receipt,
+            "material_evidence": material,
+            "material_digest": receipt["material_digest"],
+            "receipt_identity": receipt["receipt_identity"],
+            "historical_execution": "UNKNOWN; fresh replay does not establish native-attempt history",
+        }
     packet["ground_truth_evidence"] = {
         **packet["ground_truth_evidence"],
         "collected_evidence": collection,
@@ -1977,6 +2250,10 @@ def qualify_collected_case(
             "persisted_admission": False,
         },
     }
+    if replay_material is not None:
+        packet["ground_truth_evidence"]["collected_evidence"]["execution_replays"] = [
+            replay_material
+        ]
     packet["metadata_only"] = False
     # A deterministic content revision is an identity, never persisted retry or
     # grading authority. Bind all recollected bytes, mappings and explicit UNKNOWNs.
@@ -2023,6 +2300,10 @@ def run(
     reader = evidence_reader or fetch_evidence
     runner = runner or roles.run_adjudicator_agent
     previous = json.loads(path.read_text()) if path.exists() else {}
+    if isinstance(previous, dict) and "native_publication" in previous:
+        raise ValueError(
+            "generic retrospective run refuses to overwrite native canonical publication"
+        )
     saved = {r["case_id"]: r for r in previous.get("rows", [])}
     # Exhaust the lazy traversal before recovery or paid dispatch can mutate state.
     # A malformed later history must not strand an earlier paid attempt on save.
@@ -2174,7 +2455,47 @@ def run(
 
 
 def _persist_report(path: Path, rows: list[dict], population: int, db: Path | None = None) -> dict:
+    """Serialize generic persistence with canonical native publication."""
+    if path.resolve() != report_path().resolve():
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text())
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                raise ValueError("generic persistence refuses unreadable existing report") from exc
+            if isinstance(existing, dict) and "native_publication" in existing:
+                raise ValueError(
+                    "generic retrospective persistence refuses native canonical publication"
+                )
+        return _persist_report_locked(path, rows, population, db=db)
+    lock_path = _publication_lock_path(path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text())
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                raise ValueError("generic persistence refuses unreadable existing report") from exc
+            if isinstance(existing, dict) and "native_publication" in existing:
+                raise ValueError(
+                    "generic retrospective persistence refuses native canonical publication"
+                )
+        return _persist_report_locked(path, rows, population, db=db)
+
+
+def _persist_report_locked(
+    path: Path, rows: list[dict], population: int, db: Path | None = None
+) -> dict:
     """Atomically publish the same shadow evidence returned to the caller."""
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text())
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("generic persistence refuses unreadable existing report") from exc
+        if isinstance(existing, dict) and "native_publication" in existing:
+            raise ValueError(
+                "generic retrospective persistence refuses native canonical publication"
+            )
     for row in rows:
         if _row_metadata_only(row):
             _apply_evidence_floor(row)
@@ -2409,6 +2730,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--native-cohort", action="store_true")
+    parser.add_argument("--native-publish", type=Path, metavar="CANONICAL_REPORT")
     parser.add_argument("--cohort-manifest", type=Path)
     parser.add_argument("--native-admit", metavar="CASE_ID")
     parser.add_argument("--native-refresh", metavar="CASE_ID")
@@ -2419,6 +2741,7 @@ def main() -> int:
     )
     parser.add_argument("--native-journal", type=Path)
     parser.add_argument("--expected-source-hash")
+    parser.add_argument("--expected-canonical-hash")
     parser.add_argument(
         "--collect-case",
         metavar="CASE_ID",
@@ -2469,12 +2792,15 @@ def main() -> int:
     args = parser.parse_args()
     if args.timeout < 1:
         parser.error("--timeout must be at least 1 second")
-    if args.selftest and any((args.native_admit, args.native_refresh, args.native_cohort)):
+    if args.selftest and any(
+        (args.native_admit, args.native_refresh, args.native_cohort, args.native_publish)
+    ):
         parser.error("--selftest cannot be combined with a native mode")
     if args.selftest:
         _selftest()
         return 0
-    if args.native_cohort:
+    if args.native_cohort or args.native_publish:
+        native_mode = "--native-cohort" if args.native_cohort else "--native-publish"
         if any(
             (
                 args.native_admit,
@@ -2489,7 +2815,7 @@ def main() -> int:
                 args.repository,
             )
         ):
-            parser.error("--native-cohort cannot dispatch or combine with another mode")
+            parser.error(f"{native_mode} cannot dispatch or combine with another mode")
         if not all(
             (
                 args.report,
@@ -2497,10 +2823,11 @@ def main() -> int:
                 args.native_journal,
                 args.expected_source_hash,
                 args.cohort_manifest,
+                (not args.native_publish or args.expected_canonical_hash),
             )
         ):
             parser.error(
-                "--native-cohort requires --report --output --native-journal "
+                f"{native_mode} requires --report --output --native-journal "
                 "--expected-source-hash --cohort-manifest"
             )
         try:
@@ -2539,13 +2866,23 @@ def main() -> int:
                     byte_limit=args.byte_limit,
                     prompt_byte_limit=args.packet_byte_limit,
                 )
-            result = refresh_native_cohort(
-                original_report=args.report,
-                output=args.output,
-                cases=cases,
-                journal=NativeAttemptJournal.open_existing(args.native_journal),
-                expected_source_hash=args.expected_source_hash,
-            )
+            if args.native_publish:
+                result = publish_native_cohort(
+                    original_report=args.report,
+                    canonical_path=args.native_publish,
+                    cases=cases,
+                    journal=NativeAttemptJournal.open_existing(args.native_journal),
+                    expected_source_hash=args.expected_source_hash,
+                    expected_canonical_hash=args.expected_canonical_hash,
+                )
+            else:
+                result = refresh_native_cohort(
+                    original_report=args.report,
+                    output=args.output,
+                    cases=cases,
+                    journal=NativeAttemptJournal.open_existing(args.native_journal),
+                    expected_source_hash=args.expected_source_hash,
+                )
         except (
             OSError,
             ValueError,

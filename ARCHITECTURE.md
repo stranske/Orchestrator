@@ -2052,6 +2052,23 @@ the same evidence revision cannot spend again, while a genuinely new revision re
 The native projection is separate from canonical cohort publication; native summary values do
 not satisfy the original canonical graded-count acceptance by themselves.
 
+Canonical native publication rebuilds every admitted original from the immutable cohort, fresh
+collector capabilities, and the producer journal while holding the existing publication lock.
+It checks source, journal and canonical generations before atomic replacement. Ordinary
+`summary.graded` then describes authenticated distinct original cases; the original summary,
+primary records and paid histories remain separately retained. All old and new backend IDs
+contribute once to cost coverage, with measured, imputed and UNKNOWN amounts kept distinct.
+Generic retrospective run/persistence refuses to overwrite this native publication.
+
+A reviewed exact-revision execution-replay producer may add fresh control evidence to a
+collected case. It runs a fixed registered runner in a private immutable checkout, observes
+all named baseline/assertion-failure/restoration phases and issues an opaque digest-checked
+receipt. Serialized receipts cannot issue authority. Raw output and execution time remain
+visible; the spending revision excludes timestamps, temporary paths and equivalent output
+noise. Fresh replay does not establish historical native execution, and cannot select a
+provider decision, alter later truth, or grant a grade on its own.
+
+
 ### CLI
 
 ```bash

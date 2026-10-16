@@ -55,3 +55,28 @@ seven-minute exact-head review floor remain delivery gates.
 This bounded producer does not establish actual native graded >=29, original
 cost coverage, canonical-primary publication, live shadow performance, or source
 #579 completion. The original 58-case report and paid history remain unchanged.
+
+## Canonical publication
+
+`publish_native_cohort` is the only path that writes an authenticated native
+cohort to the canonical report. It starts from immutable source-report bytes,
+requires a fresh opaque collected case for every validated journal case, and
+rebuilds the candidate through `refresh_native_cohort`; a saved projection is
+never an authority input.
+
+Publication takes source and canonical SHA-256 compare-and-swap values and a
+nonblocking `.orchestrator-mirror.publish.lock`. The canonical file must be the
+immutable source on first publication, or a prior publication carrying the same
+source hash. It is replaced only after a final source, journal and canonical
+recheck, through an fsynced temporary file.
+
+Original rows, their order, primary decisions, recursive paid histories, and
+historical summary are retained. Native projections remain separate per row.
+The canonical `summary` reports only authenticated effective native judgments;
+its cost keys combine retained original and journal backend identities once.
+Absent or unreadable accounting remains `unmeasured`, never zero.
+
+Generic retrospective `run` and `_persist_report` refuse a report marked as a
+native publication. The marker blocks accidental overwrite but cannot grant a
+native grade: journal receipt authentication and fresh collection are repeated
+for every publication.
