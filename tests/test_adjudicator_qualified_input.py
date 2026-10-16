@@ -230,6 +230,32 @@ def test_native_admission_reserves_once_persists_raw_before_brain_and_preserves_
     )
     assert moved["native_summary"] == refreshed["native_summary"]
     assert moved["rows"][0]["native_projection"]["attempt_id"] == projection["native_attempt_id"]
+    # A different complete task contract must not reuse the paid receipt, even
+    # when the spend identity and acceptance-criterion text remain unchanged.
+    changed_row = copy.deepcopy(row)
+    changed_contract = copy.deepcopy(qualification)
+    body = qualification["snapshot"]["body"].replace(
+        "Read the complete source.", "Do not read the source; inspect only metadata."
+    )
+    changed_row["inventory_provenance"] = {
+        "source_criterion_tasks": body,
+        "pr_body_sha256": hashlib.sha256(body.encode()).hexdigest(),
+    }
+    changed_contract["snapshot"]["body"] = body
+    different = retro.qualify_collected_case(changed_row, repo, changed_contract)
+    assert retro._native_substantive_revision(different) == retro._native_substantive_revision(case)
+    rejected = tmp_path / "changed-contract.json"
+    with pytest.raises(ValueError, match="complete task contract"):
+        retro.refresh_native_projection(
+            original_report=original,
+            output=rejected,
+            case_id="one",
+            case=different,
+            journal=restarted,
+            truth_reader=lambda *_args: "PASS",
+        )
+    assert not rejected.exists()
+    assert original.read_bytes() == original_bytes
     # Missing/corrupt/schema-less Brain storage is a failed read, not pending
     # durability. No projection may be published in any of these cases.
     for damage in ("missing", "corrupt", "missing-schema"):
@@ -1180,3 +1206,29 @@ def test_supporting_manifest_count_is_bounded_before_git_reads(qualified_input, 
         retro._collect_supporting_sources(
             [item] * (retro.MAX_SUPPORTING_SOURCES + 1), repo, item["evaluated_sha"], [], 1000
         )
+
+
+@pytest.mark.parametrize("mode", ["--native-admit", "--native-refresh"])
+@pytest.mark.parametrize("which", ["original", "enriched"])
+@pytest.mark.parametrize("nested", ["packet", "ground_truth_evidence"])
+@pytest.mark.parametrize("invalid", [None, [], "invalid"])
+def test_native_cli_rejects_malformed_nested_objects(
+    native_cli, monkeypatch, capsys, mode, which, nested, invalid
+):
+    argv, report, enriched, output, journal = native_cli
+    path = report if which == "original" else enriched
+    saved = json.loads(path.read_text())
+    row = saved["rows"][0]
+    if nested == "packet":
+        row["packet"] = invalid
+    else:
+        row["packet"]["ground_truth_evidence"] = invalid
+    path.write_text(json.dumps(saved))
+    before = report.read_bytes()
+    monkeypatch.setattr("sys.argv", argv(mode))
+    with pytest.raises(SystemExit) as caught:
+        retro.main()
+    assert caught.value.code == 2
+    assert "must be an object" in capsys.readouterr().err
+    assert report.read_bytes() == before
+    assert not output.exists() and not journal.exists()

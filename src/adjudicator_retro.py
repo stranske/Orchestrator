@@ -490,6 +490,20 @@ def refresh_native_projection(
     if record is None or record.get("report_sha256") != report_hash:
         raise ValueError("no trusted native admission for this original report and fresh case")
     result = json.loads(record["validated_json"])
+    # The spending key intentionally ignores administrative changes. Receipt
+    # reuse also binds the complete contract actually supplied to the provider.
+    # Read it from the journal-owned result, never a saved projection marker.
+    receipt_case = result.get("case") if isinstance(result, dict) else None
+    receipt_ground = (
+        receipt_case.get("ground_truth_evidence") if isinstance(receipt_case, dict) else None
+    )
+    provenance = fresh_ground.get("criterion_provenance")
+    if (
+        not isinstance(provenance, dict)
+        or not isinstance(receipt_ground, dict)
+        or receipt_ground.get("criterion_provenance") != provenance
+    ):
+        raise ValueError("native receipt does not bind the complete task contract")
     proposal = result.get("proposal") if isinstance(result, dict) else None
     if not _valid_native_receipt(result, record):
         proposal = None
@@ -2291,6 +2305,14 @@ def main() -> int:
                     raise ValueError(f"{label} report must contain a rows list")
                 if any(not isinstance(row, dict) for row in saved_report["rows"]):
                     raise ValueError(f"{label} report rows must be objects")
+                for row in saved_report["rows"]:
+                    packet = row.get("packet")
+                    if not isinstance(packet, dict):
+                        raise ValueError(f"{label} report row packet must be an object")
+                    if not isinstance(packet.get("ground_truth_evidence"), dict):
+                        raise ValueError(
+                            f"{label} report row ground_truth_evidence must be an object"
+                        )
             original_rows = [
                 row for row in original.get("rows", []) if row.get("case_id") == native_case_id
             ]
