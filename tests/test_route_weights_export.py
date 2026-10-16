@@ -180,6 +180,56 @@ def test_capacity_state_change_triggers_write_document(tmp_path: Path) -> None:
     )
 
 
+def test_legacy_export_without_capacity_is_republished_when_capacity_is_added(
+    tmp_path: Path,
+) -> None:
+    """A pre-capacity exports/route-weights artifact must publish once capacity lands."""
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    target = tmp_path / "route-weights.json"
+    legacy = export.build_document(database, now=100, include_capacity=False)
+    with_capacity = export.build_document(database, now=100, capacity_snapshot=_capacity_fixture())
+
+    assert export.write_document(target, legacy) is True
+    assert "capacity" not in json.loads(target.read_text(encoding="utf-8"))
+    assert export.write_document(target, with_capacity) is True
+    published = json.loads(target.read_text(encoding="utf-8"))
+    assert set(published["capacity"]) == set(capacity.AGENTS)
+
+
+def test_semantic_compare_keeps_state_and_window_drops_observed_at() -> None:
+    """Publish when state/window move; tick-only observed_at refresh stays silent."""
+    base = {
+        "schema": export.SCHEMA,
+        "generated_at": "2026-10-16T00:00:00Z",
+        "capacity": {
+            "codex": {"state": capacity.OK, "window": "5h", "observed_at": 100},
+        },
+    }
+    later_observed = {
+        **base,
+        "generated_at": "2026-10-16T01:00:00Z",
+        "capacity": {
+            "codex": {"state": capacity.OK, "window": "5h", "observed_at": 200},
+        },
+    }
+    shed = {
+        **base,
+        "capacity": {
+            "codex": {"state": capacity.SHED, "window": "5h", "observed_at": 100},
+        },
+    }
+    window = {
+        **base,
+        "capacity": {
+            "codex": {"state": capacity.OK, "window": "1h", "observed_at": 100},
+        },
+    }
+    assert export._semantic_for_compare(base) == export._semantic_for_compare(later_observed)
+    assert export._semantic_for_compare(base) != export._semantic_for_compare(shed)
+    assert export._semantic_for_compare(base) != export._semantic_for_compare(window)
+
+
 def test_capacity_observed_at_only_change_does_not_trigger_write_document(tmp_path: Path) -> None:
     database = tmp_path / "weights.db"
     export._fixture_db(database)
