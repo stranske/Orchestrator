@@ -403,7 +403,12 @@ def recheck_merged(
         elif (
             executable
             and all(r.get("status") == "PASS" for r in executable)
-            and run["gate"]["verdict"] == "PASS"
+            # Manual criteria cannot be supplied to a machine recheck, so the gate's own verdict
+            # reads NEEDS_REVIEW for every spec that mixes named tests with manual items: all
+            # three rechecks of 2026-10-16 ran their named tests green and were still
+            # UNRUNNABLE. The recheck's question is the named test on the merged tip; a gate
+            # verdict other than PASS or that manual NEEDS_REVIEW still keeps it from PASS.
+            and run["gate"]["verdict"] in {"PASS", "NEEDS_REVIEW"}
         ):
             result = "PASS"
         else:
@@ -1431,6 +1436,40 @@ def _selftest() -> None:
         assert format_post_merge_summary({"error": "db unavailable"}) == (
             "runtime-AC post-merge: unmeasured (db unavailable)"
         )
+        # recheck_merged's verdict rule, on stubbed runner output. Manual criteria make the gate
+        # read NEEDS_REVIEW, which must not block a PASS when every executable check passed; a
+        # non-PASS executable result under that same gate, or any other gate verdict, is
+        # UNRUNNABLE (incomplete). Measured 2026-10-16: three green rechecks read UNRUNNABLE
+        # because the rule demanded a gate PASS no mixed spec can produce.
+        saved_run_verification = runtime_ac.run_verification
+
+        def stub(payload):
+            runtime_ac.run_verification = lambda spec, **kw: payload
+            return recheck_merged(fixture_spec, tmp)
+
+        try:
+            manual = {"type": "manual", "status": "NEEDS_REVIEW"}
+            green = {"type": "command", "status": "PASS", "returncode": 0}
+            for gate_verdict in ("PASS", "NEEDS_REVIEW"):
+                verdict = stub(
+                    {"gate": {"verdict": gate_verdict}, "check_results": [green, manual]}
+                )
+                assert verdict["result"] == "PASS" and verdict["reason"] is None, verdict
+            for status in ("SKIP", "ERROR"):
+                verdict = stub(
+                    {
+                        "gate": {"verdict": "NEEDS_REVIEW"},
+                        "check_results": [green, {"type": "command", "status": status}, manual],
+                    }
+                )
+                assert verdict["result"] == "UNRUNNABLE", verdict
+                assert verdict["reason"] == "incomplete", verdict
+            verdict = stub({"gate": {"verdict": "FAIL"}, "check_results": [green]})
+            assert (verdict["result"], verdict["reason"]) == ("UNRUNNABLE", "incomplete"), verdict
+            verdict = stub({"gate": {"verdict": "NEEDS_REVIEW"}, "check_results": [manual]})
+            assert (verdict["result"], verdict["reason"]) == ("UNRUNNABLE", "manual_only"), verdict
+        finally:
+            runtime_ac.run_verification = saved_run_verification
         assert required({"labels": ["Type: Runtime-AC"]}, missing_path) is True
         assert required({"labels": ["AC-CHECKS"]}, missing_path) is True
         with tempfile.TemporaryDirectory(prefix="runtime-ac-env-") as env_tmp:
