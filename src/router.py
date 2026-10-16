@@ -1650,6 +1650,22 @@ def _selftest() -> None:
         finally:
             globals()["BACKLOG_JSON"] = old_backlog
 
+        # muse (#612): backup-only, no route-table entry, so selection can never return it.
+        all_ok_muse = cap(
+            {
+                **{a: "ok" for a in ("cursor", "vibe", "codex", "claude", "gemini", "aider")},
+                "muse": "ok",
+            }
+        )
+        for _tt in ("implement", "mechanical", "review", "epic", "testgen", "codemod"):
+            _pick = select_agent(_tt, all_ok_muse)
+            assert _pick is None or _pick["agent"] != "muse", (_tt, _pick)
+        _only = select_agent("implement", all_ok_muse, only={"muse"})
+        assert (
+            _only is None or _only["agent"] != "muse"
+        ), "only={muse} cannot reach a seat with no entry"
+        assert "muse" in BACKUP_AGENTS
+
         print(
             "router.py selftest: OK (route-table prior, capacity sequencing, code>review "
             "priority, ε/Thompson-hybrid exploration, only-if-idle review, claims-gated concurrency, "

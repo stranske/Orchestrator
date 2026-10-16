@@ -1149,6 +1149,19 @@ def _selftest() -> int:
     check(
         old.startswith("policy switches not measured"), "a pre-read artifact is unmeasured, not 0"
     )
+    # muse (#612): the new label derives switches like any other agent label.
+    _mf = {
+        "label_events": [
+            {"ts": 10, "kind": "added", "label": "agent:cursor"},
+            {"ts": 20, "kind": "removed", "label": "agent:cursor"},
+            {"ts": 20, "kind": "added", "label": "agent:muse"},
+        ],
+        "commit_ts": [15, 30],
+    }
+    _md = derive_switches(_mf)
+    check("agent:muse" in AGENT_LABELS, "agent:muse is a switch label")
+    check(_md["agents"] == ["cursor", "muse"], f"muse sequence {_md['agents']}")
+    check(len(_md["switches"]) == 1 and _md["switches"][0]["to_agent"] == "muse", "switch to muse")
     if failures:
         print("agent_switches.py selftest: FAIL — " + "; ".join(failures))
         return 1

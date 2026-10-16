@@ -4211,6 +4211,41 @@ def _selftest() -> None:
             if _old_shadow is not None:
                 os.environ["ORCH_ROLE_SHADOW"] = _old_shadow
 
+        # muse (#612): one TSV row per exec, a failed write is REPORTED, and both launch paths
+        # (offload attempt, delegate spawn) call the recorder. Break demo: remove either call.
+        import io as _mio
+        import tempfile as _mtf
+        from contextlib import redirect_stderr as _mre
+
+        _old_log = os.environ.get("ORCH_MUSE_USAGE_LOG")
+        try:
+            with _mtf.TemporaryDirectory(prefix="muse-usage-") as _mtd:
+                os.environ["ORCH_MUSE_USAGE_LOG"] = str(Path(_mtd) / "u.log")
+                _record_muse_usage(time.time() - 5, "offload", 0, 5.4)
+                _rows = (Path(_mtd) / "u.log").read_text().splitlines()
+                assert len(_rows) == 1 and _rows[0].split("\t")[1:] == ["offload", "0", "5"], _rows
+                os.environ["ORCH_MUSE_USAGE_LOG"] = str(Path(_mtd) / "no" / "such" / "u.log")
+                _mbuf = _mio.StringIO()
+                with _mre(_mbuf):
+                    _record_muse_usage(time.time(), "offload", 0, 1)
+                assert "muse usage not recorded" in _mbuf.getvalue(), _mbuf.getvalue()
+        finally:
+            os.environ.pop("ORCH_MUSE_USAGE_LOG", None)
+            if _old_log is not None:
+                os.environ["ORCH_MUSE_USAGE_LOG"] = _old_log
+        _msrc = Path(__file__).read_text()
+        import re as _mre2
+
+        _mn = "_record_muse" + "_usage("
+        assert _msrc.count("def " + _mn) == 1, "one definition"
+        _mgap = r"\s*\n(?:\s*#[^\n]*\n)*\s*"
+        assert len(_mre2.findall(r'if agent == "muse":' + _mgap + _mre2.escape(_mn), _msrc)) == 1
+        assert (
+            len(_mre2.findall(r'if d\["agent"\] == "muse":' + _mgap + _mre2.escape(_mn), _msrc))
+            == 1
+        )
+        assert "unset META_API_KEY" in _agent_runtime_prelude("muse")
+
         print(
             "dispatcher.py selftest: OK (plan→argv via adapters, task-type prompts, "
             "claim-release wrapper, worktree-seam fallback, offload no-commit guard + isolation, "

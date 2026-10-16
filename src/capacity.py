@@ -1224,8 +1224,31 @@ def _selftest_body(blk):
         assert not _shed("codex") and not flag.exists()
     finally:
         pass
+    # muse (#612): a flat subscription seat that sheds only on an EXPLICIT failed login check.
+    assert AGENTS["muse"]["model"] == "flat" and agent_tiers()["muse"] == "flat"
+    _orig_auth, _orig_shed = globals()["_auth_health"], globals()["_shed"]
+    try:
+        globals()["_shed"] = lambda agent: False
+        globals()["_auth_health"] = lambda agent: {
+            "agent": agent,
+            "checked": True,
+            "authenticated": False,
+            "reason": "subs_active false",
+        }
+        assert _classify("muse", AGENTS["muse"], None)[0] == SHED, "inactive subscription must shed"
+        globals()["_auth_health"] = lambda agent: {
+            "agent": agent,
+            "checked": True,
+            "authenticated": True,
+            "reason": "active",
+        }
+        assert _classify("muse", AGENTS["muse"], None)[0] == OK, "an active login keeps the seat"
+        globals()["_auth_health"] = lambda agent: None
+        assert _classify("muse", AGENTS["muse"], None)[0] == OK, "unmeasurable must not shed"
+    finally:
+        globals()["_auth_health"], globals()["_shed"] = _orig_auth, _orig_shed
     print(
-        "capacity.py selftest: OK (4-state enum, shed override naming its drain, METERED cursor pool, count/dollar/windowed-prepaid capacity)"
+        "capacity.py selftest: OK (4-state enum, shed override naming its drain, METERED cursor pool, count/dollar/windowed-prepaid capacity, muse login gate)"
     )
 
 

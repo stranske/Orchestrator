@@ -693,6 +693,38 @@ def auth_health(agent: str, *, refresh: bool = False, timeout_s: int = 30) -> di
     is not evidence of a bad credential and must never shed a working seat. Only an explicit
     auth-failure signal in a failed probe's output flips `authenticated` to False.
     """
+    if agent == "muse":
+        # No CLI probe exists (`muse login` is interactive and any real call spends the
+        # subscription), so the free signal is the login RECORD: an OAuth login that records an
+        # active subscription. Imported here because agent_auth_check imports this module. An
+        # explicit failure sheds the seat (`capacity._classify`); an unreadable record is NOT a
+        # failure, same rule as every other seat.
+        import agent_auth_check
+
+        state = agent_auth_check._credential_file_state("muse")
+        if state.get("key_present") is None:
+            return {
+                "agent": agent,
+                "authenticated": True,
+                "checked": False,
+                "strength": None,
+                "reason": "muse login record unreadable (not treated as a failure)",
+            }
+        if not state.get("key_present"):
+            return {
+                "agent": agent,
+                "authenticated": False,
+                "checked": True,
+                "strength": "presence",
+                "reason": "muse login missing or without an active subscription (run `muse login`)",
+            }
+        return {
+            "agent": agent,
+            "authenticated": True,
+            "checked": True,
+            "strength": "presence",
+            "reason": "oauth login with an active subscription is recorded (presence-only check)",
+        }
     spec = AUTH_PROBES.get(agent)
     if not spec or not _model_probe_enabled():
         return {
@@ -2784,10 +2816,43 @@ def _selftest_inner(*, gaps: list[str] | None = None):
         raise AssertionError("expected ValueError")
     except ValueError:
         pass
+    # muse (#612): explicit-only subscription-login seat. Break demos: drop a flag from the argv,
+    # the scrub, or the boundary refusal and the matching assert below fails.
+    _m = build_command("muse", "do x")
+    assert _m[:2] == ["muse", "exec"] and "do x" in _m, _m
+    for _flag in ("--no-foreign-personal-context", "--no-session-log", "--disable-approval"):
+        assert _flag in _m, (_flag, _m)
+    for _bad in ("--yolo", "--disable-sandbox", "--api-key-stdin"):
+        assert _bad not in _m, (_bad, _m)
+    _mm = build_command("muse", "x", requested_model="muse-wonder-1.0")
+    assert _mm[_mm.index("--model") + 1] == "muse-wonder-1.0", _mm
+    assert "nested" in (write_boundary_unenforceable("muse") or ""), "muse refuses a write boundary"
+    _env = agent_subprocess_env("muse", {"META_API_KEY": "k", "PATH": "/p"})
+    assert _env is not None and "META_API_KEY" not in _env and _env["PATH"] == "/p", _env
+    assert agent_subprocess_env("vibe", None) is None, "other agents keep inheriting"
+    import json as _mj
+    import tempfile as _mt
+
+    import agent_auth_check as _aac
+
+    with _mt.TemporaryDirectory(prefix="muse-login-") as _md:
+        _mp = Path(_md) / "auth.json"
+        _saved = _aac.CREDENTIAL_FILES.get("muse")
+        try:
+            _aac.CREDENTIAL_FILES["muse"] = (_mp, "subs_active")
+            assert auth_health("muse")["authenticated"] is False, "an absent login sheds the seat"
+            _rec = {"providers": {"meta": {"mechanism": "oauth", "subs_active": True}}}
+            _mp.write_text(_mj.dumps(_rec))
+            assert auth_health("muse")["authenticated"] is True, "an active login is usable"
+            _rec["providers"]["meta"]["subs_active"] = False
+            _mp.write_text(_mj.dumps(_rec))
+            assert auth_health("muse")["authenticated"] is False, "an inactive subscription sheds"
+        finally:
+            _aac.CREDENTIAL_FILES["muse"] = _saved
     print(
         "adapters.py selftest: OK (cursor composer/explicit-frontier/safe-bare-frontier, "
         "vibe subscription, codex/claude cheap-model map, aider venv, gemini lane-ready, "
-        "codex linked-worktree git grant, no broad agent workspace)"
+        "codex linked-worktree git grant, no broad agent workspace, muse seat)"
     )
 
 

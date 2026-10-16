@@ -133,7 +133,7 @@ def test_muse_usage_is_recorded_for_offload_and_delegate():
     """
     src = Path(dispatcher.__file__).read_text()
     name = "_record_muse" + "_usage("
-    assert src.count(name) == 3, "definition + offload attempt + delegate spawn"
+    assert src.count("def " + name) == 1, "exactly one definition"
     offload = re.findall(r'if agent == "muse":\s*\n(?:\s*#[^\n]*\n)*\s*' + re.escape(name), src)
     spawn = re.findall(
         r'if d\["agent"\] == "muse":\s*\n(?:\s*#[^\n]*\n)*\s*' + re.escape(name), src
@@ -248,3 +248,57 @@ def _entries(value):
                 yield item
             else:
                 yield from _entries(item)
+
+
+def _muse_login(tmp_path, monkeypatch, *, mechanism="oauth", active=True):
+    path = tmp_path / "auth.json"
+    path.write_text(
+        json.dumps({"providers": {"meta": {"mechanism": mechanism, "subs_active": active}}})
+    )
+    monkeypatch.setitem(agent_auth_check.CREDENTIAL_FILES, "muse", (path, "subs_active"))
+    return path
+
+
+def test_muse_auth_health_reads_the_login_record(tmp_path, monkeypatch):
+    """No CLI probe exists, so the free signal is the login record: absent or inactive is an
+    EXPLICIT failure (capacity sheds on it); an unreadable record is not checked, never a failure.
+    """
+    path = _muse_login(tmp_path, monkeypatch)
+    ok = adapters.auth_health("muse")
+    assert ok["checked"] is True and ok["authenticated"] is True, ok
+    path.write_text(
+        json.dumps({"providers": {"meta": {"mechanism": "oauth", "subs_active": False}}})
+    )
+    bad = adapters.auth_health("muse")
+    assert bad["checked"] is True and bad["authenticated"] is False, bad
+    assert "muse login" in bad["reason"], bad
+    path.unlink()
+    gone = adapters.auth_health("muse")
+    assert gone["authenticated"] is False, gone
+
+
+def test_muse_capacity_sheds_on_an_inactive_subscription_and_keeps_an_active_one(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(capacity, "_shed", lambda agent: False)
+    path = _muse_login(tmp_path, monkeypatch, active=True)
+    assert capacity._classify("muse", capacity.AGENTS["muse"], None)[0] == capacity.OK
+    path.write_text(
+        json.dumps({"providers": {"meta": {"mechanism": "oauth", "subs_active": False}}})
+    )
+    state = capacity._classify("muse", capacity.AGENTS["muse"], None)
+    assert state[0] == capacity.SHED and "not authenticated" in state[1], state
+
+
+def test_muse_record_that_is_not_an_oauth_login_is_not_admitted(tmp_path, monkeypatch):
+    """The CLI keeps ONE saved credential per provider (`muse logout` removes 'API key or account
+    login'), so a key saved with `muse auth set` replaces the login record instead of sitting
+    beside it. The gate admits only mechanism == oauth with an active subscription, so a record
+    that is not an OAuth login cannot pass. (Whether a stored key could ever COEXIST with a login
+    and take precedence is unverified: pinned here only as far as the record itself goes.)"""
+    path = _muse_login(tmp_path, monkeypatch, mechanism="api_key", active=True)
+    assert agent_auth_check._credential_file_state("muse")["key_present"] is False
+    assert adapters.auth_health("muse")["authenticated"] is False
+    monkeypatch.setattr(capacity, "_shed", lambda agent: False)
+    assert capacity._classify("muse", capacity.AGENTS["muse"], None)[0] == capacity.SHED
+    assert path.exists()

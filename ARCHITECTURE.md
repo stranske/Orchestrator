@@ -308,7 +308,11 @@ Default-Project key metered pay-as-you-go: measured on the live console, two cap
 requests and 81.5k input tokens in the pay-as-you-go ledger (the key the login itself mints, in the
 `Muse Code` project, is untested), while a 30-request keychain-login run moved only the
 subscription meter (under 1% to 1%) and added nothing there. So `_agent_runtime_prelude("muse")` unsets the
-variable by name, and `agent_auth_check` counts the seat usable only when the login records an active
+variable by name, and `adapters.auth_health("muse")` reads that record so `capacity._classify` sheds the seat when the login is
+missing or has no active subscription (an unreadable record is not a failure). Meta documents the credential
+order as the env key, then a stored key, then the stored browser session; whether a stored key can coexist
+with the login is unverified, so the gate admits only an OAuth login record and refuses any other mechanism.
+`agent_auth_check` counts the seat usable only when the login records an active
 subscription (`subs_active`), reading the file's shape and never its contents. The argv is headless with
 the sandbox ON (`--disable-approval`, never `--yolo`), without the owner's personal Claude/Codex rules
 (`--no-foreign-personal-context`) and without a session log. A write boundary is REFUSED for muse
