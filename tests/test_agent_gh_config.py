@@ -60,6 +60,9 @@ def sandbox(monkeypatch, tmp_path):
     """The dispatcher's runtime and real home in tmp_path; no gh or XDG variable inherited."""
     monkeypatch.setattr(dispatcher, "AGENT_RUNTIME_DIR", tmp_path / "agent-runtime")
     monkeypatch.setattr(dispatcher, "REAL_HOME", tmp_path / "home")
+    login = tmp_path / "home/.config/muse/auth.json"
+    login.parent.mkdir(parents=True)
+    login.write_text("{}")  # Runtime-only fixture; no provider process is launched.
     for var in (
         "GH_CONFIG_DIR",
         "XDG_CONFIG_HOME",
