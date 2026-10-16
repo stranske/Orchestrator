@@ -3100,6 +3100,7 @@ def _selftest_inner(*, gaps: list[str] | None = None):
             _login = HOME / ".config/muse/auth.json"
             _login.parent.mkdir(parents=True)
             _login.write_text("{}")
+            (HOME / "Library/Keychains").mkdir(parents=True)
             _env = agent_subprocess_env("muse", {"META_API_KEY": "k", "PATH": "/p"})
             assert _env is not None and "META_API_KEY" not in _env and _env["PATH"] == "/p", _env
     finally:
