@@ -1257,7 +1257,13 @@ def qualify_collected_case(
     # grading authority. Bind all recollected bytes, mappings and explicit UNKNOWNs.
     revision_input = json.loads(json.dumps(packet))
     # A checkout location is transport metadata, not a new evidence revision.
-    revision_input["ground_truth_evidence"]["collected_evidence"].pop("repository")
+    revision_collection = revision_input["ground_truth_evidence"]["collected_evidence"]
+    revision_collection.pop("repository")
+    # The qualification check above compares these inventories as sets. Their
+    # presentation order must not manufacture a new material revision either.
+    revision_collection["requirements"]["source_paths"].sort()
+    revision_collection["sources"].sort(key=lambda record: record["path"])
+    revision_input["ground_truth_evidence"]["diff_summary"].sort(key=lambda item: item["path"])
     packet["ground_truth_evidence"]["qualification"]["material_evidence_revision"] = hashlib.sha256(
         json.dumps(revision_input, sort_keys=True, ensure_ascii=True).encode()
     ).hexdigest()

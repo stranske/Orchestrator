@@ -609,3 +609,21 @@ def test_serialized_supporting_case_cannot_grade_with_complete_patch_and_criteri
     assert summary["adjudicated"] == summary["graded"] == 0
     retro._apply_evidence_floor(report_row)
     assert report_row["disposition"] == "needs_more_evidence"
+
+
+@pytest.mark.parametrize("inventory", ["source_paths", "diff_summary"])
+def test_material_revision_ignores_unordered_changed_inventory(qualified_input, inventory):
+    repo, row, qualification, git = qualified_input
+    qualification["supporting_sources"] = [supporting_descriptor(repo, row, git)]
+
+    def revision():
+        return roles._collected_snapshot(retro.qualify_collected_case(row, repo, qualification))[
+            "ground_truth_evidence"
+        ]["qualification"]["material_evidence_revision"]
+
+    first = revision()
+    if inventory == "source_paths":
+        row["collection_requirements"]["source_paths"].reverse()
+    else:
+        row["packet"]["ground_truth_evidence"]["diff_summary"].reverse()
+    assert revision() == first
