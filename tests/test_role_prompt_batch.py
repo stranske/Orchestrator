@@ -157,6 +157,60 @@ def test_issue_body_rejects_tasks_without_checkboxes():
         ]
 
 
+def with_heading(section, heading):
+    """BODY with one section's heading renamed."""
+    return BODY.replace("## " + section, "## " + heading)
+
+
+def test_issue_body_validator_accepts_every_guard_heading_alias():
+    guard = roles._issue_format_guard()
+    assert guard is not None
+    wanted = {
+        "Why": guard.RECOMMENDED["Why"],
+        "Tasks": guard.REQUIRED["Tasks"],
+        "Acceptance Criteria": guard.REQUIRED["Acceptance Criteria"],
+        "Non-Goals": guard.RECOMMENDED["Non-Goals"],
+    }
+    checked = 0
+    for section, aliases in wanted.items():
+        for alias in aliases:
+            for heading in (alias.title(), alias + " (verified evidence)"):
+                body = with_heading(section, heading)
+                assert roles._validate_issue_body(proposal(body)) == [], heading
+                checked += 1
+    assert checked == 2 * sum(len(aliases) for aliases in wanted.values())
+    # The heading the file-agent-issue template writes, which the validator used to refuse.
+    template = with_heading("Why", "Why (verified evidence)")
+    assert roles._validate_issue_body(proposal(template)) == []
+
+
+def test_issue_body_validator_still_rejects_a_missing_or_empty_section():
+    no_why = BODY.replace(
+        "## Why\nThe batch authoring path needs an issue format contract.\n\n", ""
+    )
+    assert roles._validate_issue_body(proposal(no_why)) == [
+        "issue_body requires a non-empty ## Why section"
+    ]
+    empty_tasks = BODY.replace("- [ ] Add batch authoring in src/roles.py.\n", "")
+    assert roles._validate_issue_body(proposal(empty_tasks)) == [
+        "issue_body requires a non-empty ## Tasks section",
+        "issue_body Tasks requires unchecked task checkboxes",
+    ]
+    no_checkbox = BODY.replace("- [ ]", "-")
+    assert roles._validate_issue_body(proposal(no_checkbox)) == [
+        "issue_body Tasks requires unchecked task checkboxes"
+    ]
+
+
+def test_issue_body_validator_names_a_guard_it_cannot_load(monkeypatch, tmp_path):
+    monkeypatch.setattr(roles.paths, "REPO_ROOT", tmp_path)  # no .github directory here
+    assert roles._issue_format_guard() is None
+    # A body the old exact-name rule accepts is not accepted by a fallback: the error names the file.
+    assert roles._validate_issue_body(proposal()) == [
+        f"issue_body validator cannot load {roles.ISSUE_FORMAT_GUARD}"
+    ]
+
+
 def test_batch_routes_once_and_records_one_run_per_item_with_a_shared_batch_id(
     private_brain,
     monkeypatch,
