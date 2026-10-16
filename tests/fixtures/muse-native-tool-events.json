@@ -1,0 +1,123 @@
+{
+  "source_run": "offload:muse:1792148211073946000",
+  "normalization": "Session, command, task and call IDs replaced; native payload shapes/text preserved. Timestamps and sequence omitted.",
+  "events": [
+    {
+      "schema_version": 1,
+      "stream": {
+        "kind": "session",
+        "id": "s1"
+      },
+      "record_type": "event",
+      "durability": "durable",
+      "causation_id": "c1",
+      "payload_type": "task.lifecycle.output",
+      "payload_schema_version": 1,
+      "payload": {
+        "kind": "task_lifecycle",
+        "command_id": "c1",
+        "run_stream": {
+          "kind": "run",
+          "id": "c1"
+        },
+        "task_stream": {
+          "kind": "task",
+          "id": "t1"
+        },
+        "task_id": "t1",
+        "event": {
+          "kind": "output",
+          "task_id": "t1",
+          "chunk": "tool failed: Operation not permitted (os error 1)",
+          "final_result": true
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "stream": {
+        "kind": "session",
+        "id": "s1"
+      },
+      "record_type": "event",
+      "durability": "durable",
+      "causation_id": "c1",
+      "payload_type": "task.lifecycle.failed",
+      "payload_schema_version": 1,
+      "payload": {
+        "kind": "task_lifecycle",
+        "command_id": "c1",
+        "run_stream": {
+          "kind": "run",
+          "id": "c1"
+        },
+        "task_stream": {
+          "kind": "task",
+          "id": "t1"
+        },
+        "task_id": "t1",
+        "event": {
+          "kind": "failed",
+          "task_id": "t1",
+          "reason": "Operation not permitted (os error 1)"
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "stream": {
+        "kind": "session",
+        "id": "s1"
+      },
+      "record_type": "event",
+      "durability": "durable",
+      "causation_id": "c1",
+      "payload_type": "tool.result",
+      "payload_schema_version": 1,
+      "payload": {
+        "kind": "tool_result",
+        "command_id": "c1",
+        "run_stream": {
+          "kind": "run",
+          "id": "c1"
+        },
+        "call_id": "call1",
+        "text": "tool failed: Operation not permitted (os error 1)",
+        "correlation_facts": {
+          "tool_name": "read_file",
+          "outcome": "failure"
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "stream": {
+        "kind": "session",
+        "id": "s1"
+      },
+      "record_type": "event",
+      "durability": "durable",
+      "causation_id": "c1",
+      "payload_type": "task.lifecycle.rejected",
+      "payload_schema_version": 1,
+      "payload": {
+        "kind": "task_lifecycle",
+        "command_id": "c1",
+        "run_stream": {
+          "kind": "run",
+          "id": "c1"
+        },
+        "task_stream": {
+          "kind": "task",
+          "id": "t1"
+        },
+        "task_id": "t1",
+        "event": {
+          "kind": "rejected",
+          "task_id": "t1",
+          "reason": "skip_if_running"
+        }
+      }
+    }
+  ]
+}

@@ -58,6 +58,7 @@ import rate_incidents
 root = Path(sys.argv[2])
 login = root / 'home/.config/muse/auth.json'
 login.parent.mkdir(parents=True)
+(login.parents[2] / 'Library/Keychains').mkdir(parents=True)
 login.write_text(json.dumps({'providers': {'meta': {'mechanism': 'oauth', 'subs_active': True}}}))
 responses = iter(json.loads(sys.argv[3]))
 clock = [36000.0]

@@ -2157,6 +2157,33 @@ def ensure_muse_auth_link(auth_src: Path, auth_dst: Path) -> None:
                     raise ValueError("Muse runtime auth alias changed during setup") from None
 
 
+def ensure_muse_keychain_link(real_home: Path, runtime: Path) -> None:
+    """Expose only macOS's existing credential store to Muse's private HOME.
+
+    The OAuth login needs this directory, not the owner's HOME or Muse settings.
+    A native private-HOME trial with this one alias authenticated successfully;
+    private HOME alone and either auth-record path failed. Never copy credentials.
+    """
+    if sys.platform != "darwin":
+        return
+    import fcntl
+
+    source = real_home / "Library" / "Keychains"
+    destination = runtime / "Library" / "Keychains"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.with_name(".keychain-link.lock").open("a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        if not source.is_dir():
+            raise ValueError("Muse private HOME requires the existing macOS Keychains directory")
+        if destination.is_symlink():
+            if destination.resolve() != source.resolve():
+                destination.unlink()  # Only an owned alias; never its credential target.
+        elif destination.exists():
+            raise ValueError("refusing to replace non-symlink Muse runtime Keychains path")
+        if not destination.is_symlink():
+            destination.symlink_to(source, target_is_directory=True)
+
+
 def agent_subprocess_env(agent: str, env: dict | None) -> dict | None:
     """The environment a direct `dispatch` should hand to the agent process.
 
@@ -2176,11 +2203,13 @@ def agent_subprocess_env(agent: str, env: dict | None) -> dict | None:
     auth_src = HOME / ".config" / "muse" / "auth.json"
     auth_dst = runtime / ".config" / "muse" / "auth.json"
     ensure_muse_auth_link(auth_src, auth_dst)
+    ensure_muse_keychain_link(HOME, runtime)
     (runtime / ".local/state").mkdir(parents=True, exist_ok=True)
-    # The installed CLI reads user settings through XDG_CONFIG_HOME. Keep HOME for its
-    # keychain-backed subscription credential, and link only the login record into XDG state.
+    # Private HOME and XDG roots isolate normal personal configuration discovery.
+    # Only the existing login record and macOS credential-store directory are aliased.
     scrubbed.update(
         {
+            "HOME": str(runtime),
             "MUSE_AUTH_PATH": str(auth_dst),
             "ORCH_AGENT_RUNTIME": str(runtime),
             "XDG_CACHE_HOME": str(runtime / ".cache"),
@@ -2225,6 +2254,10 @@ def muse_terminal_text(jsonl: str) -> str:
         "task.lifecycle.side_effect_intent",
         "task.lifecycle.started",
         "task.lifecycle.status",
+        "task.lifecycle.output",
+        "task.lifecycle.failed",
+        "task.lifecycle.rejected",
+        "tool.result",
     }
     for line in str(jsonl or "").splitlines():
         if not line.strip():
@@ -2287,6 +2320,43 @@ def muse_terminal_text(jsonl: str) -> str:
                 or payload.get("run_stream") != {"kind": "run", "id": command}
             ):
                 return ""
+        # Native tool-bearing runs emit these task outcomes before their one run
+        # terminal. A denied/failed child tool can still produce a useful completed
+        # review; never promote child output or failure into the run verdict.
+        if kind in {
+            "task.lifecycle.output",
+            "task.lifecycle.failed",
+            "task.lifecycle.rejected",
+            "tool.result",
+        }:
+            expected_kind = "tool_result" if kind == "tool.result" else "task_lifecycle"
+            if (
+                event.get("durability") != "durable"
+                or event.get("record_type") != "event"
+                or payload.get("kind") != expected_kind
+                or payload.get("command_id") != command
+                or payload.get("run_stream") != {"kind": "run", "id": command}
+            ):
+                return ""
+            if kind == "tool.result":
+                if (
+                    not isinstance(payload.get("call_id"), str)
+                    or not payload["call_id"]
+                    or not isinstance(payload.get("text"), str)
+                ):
+                    return ""
+            else:
+                task = payload.get("task_id")
+                child = payload.get("event")
+                if (
+                    not isinstance(task, str)
+                    or not task
+                    or payload.get("task_stream") != {"kind": "task", "id": task}
+                    or not isinstance(child, dict)
+                    or child.get("kind") != kind.rsplit(".", 1)[-1]
+                    or child.get("task_id") != task
+                ):
+                    return ""
         if kind == "session.run.linked":
             if linked or payload.get("kind") != "session_run_linked":
                 return ""
