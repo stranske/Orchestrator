@@ -30,3 +30,5 @@ historical markers with unobserved versions. Native4289533177 also corrected
 the current collection floor to3,463. The floor file itself is unchanged.
 
 Native4289572205 corrected strict collection itself: all nine distribution versions are checked against exact pins before any measurement, in addition to existing actual CLI version checks. A one-node regression loops all nine mismatches and passes only when every mismatch refuses measurement. Original RED and21focusedGREEN retained. Floor advances only one executed regression node,3463 to3464, with every ceiling unchanged; hosted full verification remains mandatory.
+
+Final proposed-pin report/provenance and lossless commands were rerun using the corrected strict-nine collector at source65fb9b0b. All nine actual installed versions match and every measured blocker remains zero. Final collector produced3464 test collection, preserving the exact current raised floor. Current-pins/ retains the earlier actual current-bundle observation.
