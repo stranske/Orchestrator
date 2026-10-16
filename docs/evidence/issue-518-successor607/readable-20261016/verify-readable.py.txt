@@ -1,0 +1,134 @@
+"""Validate lossless evidence; no measurement reruns, model calls or mutations.
+
+Run from this checkout with the approved Python interpreter:
+  /opt/anaconda3/bin/python3 docs/evidence/issue-518-successor607/readable-20261016/verify-readable.py.txt
+"""
+import gzip
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+
+ROOT = Path(__file__).resolve().parent
+BASE = ROOT.parent
+
+
+def read_json(path):
+    return json.loads(path.read_bytes())
+
+
+def check_bytes(raw, receipt):
+    assert len(raw) == receipt["bytes"], (len(raw), receipt["bytes"])
+    assert hashlib.sha256(raw).hexdigest() == receipt["sha256"]
+
+
+def git(*args):
+    return subprocess.check_output(["git", *args], cwd=ROOT)
+
+
+def reconstruct_nodes():
+    layout = read_json(ROOT / "collection-node-layout.json")
+    file = prefix = function = None
+    nodes = []
+    for line in (ROOT / layout["file"]).read_text().splitlines():
+        kind, value = line.split(":", 1)
+        if kind == "F":
+            file, prefix, function = value, None, None
+        elif kind == "S":
+            assert file is not None
+            prefix = value
+        elif kind == "N":
+            assert file is not None and prefix is not None
+            nodes.append(file + "::" + prefix + value + "\n")
+        elif kind == "P":
+            assert prefix is not None
+            function = prefix + value
+        elif kind == "A":
+            assert file is not None and function is not None
+            nodes.append(file + "::" + function + value + "\n")
+        else:
+            raise AssertionError(kind)
+    assert len(nodes) == layout["records"] == 3470
+    raw = ("".join(nodes) + layout["trailing_literal"]).encode()
+    check_bytes(raw, layout["decoded"])
+    return raw
+
+
+nodes = reconstruct_nodes()
+
+
+def concatenate(paths):
+    return b"".join(nodes if p == "@collection-nodes" else (ROOT / p).read_bytes() for p in paths)
+
+
+commands = []
+for index, row in enumerate(read_json(ROOT / "command-index.json")):
+    assert row["index"] == index
+    command = dict(row["metadata"])
+    for name in ("stdout", "stderr"):
+        stream = row["streams"][name]
+        if stream["encoding"] == "historical-binary-receipt":
+            command[name] = stream["original"]
+        else:
+            raw = concatenate(stream["segments"])
+            check_bytes(raw, stream)
+            command[name] = raw.decode("utf-8")
+    commands.append(command)
+reconstructed_commands = (json.dumps(commands, indent=2) + "\n").encode()
+collection = read_json(ROOT / "collection-index.json")
+reconstructed_collection = concatenate(collection["segments"])
+check_bytes(reconstructed_collection, collection)
+assert len(commands) == 12
+integrity = read_json(ROOT / "readable-integrity.json")
+for entry in integrity["entries"]:
+    original = (BASE / entry["source"]).read_bytes()
+    if "compressed" in entry:
+        check_bytes(original, entry["compressed"])
+        original = gzip.decompress(original)
+    if entry["readable"] == "command-index.json":
+        actual = reconstructed_commands
+    elif entry["readable"] == "collection-index.json":
+        actual = reconstructed_collection
+    else:
+        actual = (ROOT / entry["readable"]).read_bytes()
+    assert actual == original, entry["source"]
+    check_bytes(actual, entry["decoded"])
+
+bindings = read_json(ROOT / "source-bindings.json")
+for label, head in bindings["heads"].items():
+    for scope, expected in bindings["scope_git_objects"][label].items():
+        assert git("rev-parse", head + ":" + scope).decode().strip() == expected
+for item in bindings["snapshots"]:
+    for label, head in bindings["heads"].items():
+        raw = git("show", head + ":" + item["path"])
+        check_bytes(raw, item)
+        assert git("rev-parse", head + ":" + item["path"]).decode().strip() == item["blob_by_head"][label]
+        if item["readable"]:
+            assert raw == (ROOT / item["readable"]).read_bytes()
+assert all(value == bindings["scope_git_objects"]["measured"] for value in bindings["scope_git_objects"].values())
+assert git("diff", "--name-only", bindings["heads"]["measured"], bindings["heads"]["merged_main"]).decode().splitlines() == bindings["all_changed_paths_measured_to_merged"]
+# A successor's docs-only delta cannot silently mutate the measured implementation.
+assert not git("diff", "--name-only", bindings["heads"]["merged_main"], "HEAD", "--", *bindings["identical_scopes"]).strip()
+
+provenance = read_json(ROOT / "provenance.json")
+assert provenance["source_head"] == bindings["heads"]["measured"]
+assert hashlib.sha256(git("show", provenance["source_head"] + ":scripts/ci_lint_baseline.py")).hexdigest() == provenance["script_sha256"]
+assert hashlib.sha256((ROOT / "proposed-pins.env").read_bytes()).hexdigest() == provenance["pins_sha256"]
+assert len(provenance["versions"]) == 9 and provenance["collected"] == 3470
+focused = read_json(ROOT / "focused-invocation.json")
+assert focused["source_head"] == bindings["heads"]["focused"]
+check_bytes((ROOT / "focused-verbose.log").read_bytes(), {"bytes": focused["stdout_bytes"], "sha256": focused["stdout_sha256"]})
+assert focused["passed"] == 21 and focused["exit_code"] == 0
+receipts = read_json(ROOT / "authenticated-gate-review-merge.json")
+final = bindings["heads"]["reviewed_and_gated"]
+assert receipts["gate"]["head_sha"] == final and receipts["gate"]["conclusion"] == "success"
+assert receipts["gate"]["id"] == 38834930061
+assert receipts["review"]["id"] == 6205929444 and final[:10] in receipts["review"]["body"]
+assert receipts["pr_head"] == final and receipts["pr"]["merged"]
+assert receipts["pr"]["merge_commit_sha"] == bindings["heads"]["merged_main"]
+guard = read_json(ROOT / "guarded-merge-receipt.json")
+assert guard["merge_executed"] and guard["merge_returncode"] == 0
+assert guard["final_preflight"]["head"] == final and guard["final_preflight"]["active_threads"] == 0
+assert guard["final_preflight"]["check_state"] == "SUCCESS"
+assert guard["final_preflight"]["review_floor_remaining_seconds"] == 0
+print(json.dumps({"status": "PASS", "commands": 12, "collection_nodes": 3470, "focused_passed": 21, "lossless_commands_sha256": hashlib.sha256(reconstructed_commands).hexdigest(), "lossless_collection_sha256": hashlib.sha256(reconstructed_collection).hexdigest(), "source_heads": bindings["heads"], "limits": "Reconstruction, immutable source equivalence and prior actual receipts only; no new execution/native acceptance/merge verdict."}))

@@ -1,0 +1,14 @@
+M	docs/CI_LINT_BASELINE.md
+M	docs/evidence/issue-518-successor607/README.md
+A	docs/evidence/issue-518-successor607/integration-second-20261016/collection-summary.json
+A	docs/evidence/issue-518-successor607/integration-second-20261016/collection.log.gz
+A	docs/evidence/issue-518-successor607/integration-second-20261016/focused-green.log
+A	docs/evidence/issue-518-successor607/integration-second-20261016/focused-invocation.json
+A	docs/evidence/issue-518-successor607/integration-second-20261016/focused-verbose.log
+A	docs/evidence/issue-518-successor607/integration-second-20261016/proposed/commands-integrity.json
+A	docs/evidence/issue-518-successor607/integration-second-20261016/proposed/commands.json.gz
+A	docs/evidence/issue-518-successor607/integration-second-20261016/proposed/provenance.json
+A	docs/evidence/issue-518-successor607/integration-second-20261016/proposed/report.json
+A	docs/evidence/issue-518-successor607/measurement-sources-integrity.json
+A	docs/evidence/issue-518-successor607/measurement-sources-transfer-proof.json
+A	docs/evidence/issue-518-successor607/measurement-sources.bundle

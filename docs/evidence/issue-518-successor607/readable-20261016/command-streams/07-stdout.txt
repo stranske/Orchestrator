@@ -1,0 +1,2 @@
+black, 26.10.1 (compiled: yes)
+Python (CPython) 3.12.2
