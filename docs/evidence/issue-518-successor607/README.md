@@ -21,3 +21,10 @@ repository pins are restored after each overlay in a finally block.
 The zero coverage startup count is not a full-suite or provider verdict.
 Hosted exact-head CI, review, guarded merge, native verification and source-owned
 Maint52/71 regeneration remain required.
+
+Native review4289533170 exposed the prior four-pin matching gap. The final
+checker requires all nine tools; each tool is independently exercised by the
+unknown/incomplete/hybrid controls without adding collected nodes. The actual
+current bundle was freshly measured too (current-pins/), rather than padding
+historical markers with unobserved versions. Native4289533177 also corrected
+the current collection floor to3,463. The floor file itself is unchanged.

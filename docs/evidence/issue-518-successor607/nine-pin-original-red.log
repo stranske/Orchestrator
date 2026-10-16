@@ -1,0 +1,2 @@
+Original committed helper accepts an unmeasured COVERAGE_VERSION=0.0.0: True
+Expected False; actual True.

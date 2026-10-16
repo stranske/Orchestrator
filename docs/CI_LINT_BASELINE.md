@@ -1,8 +1,20 @@
 # Gate python-ci baseline — what is checked, what is deferred, and what would clear it
 
+## Measured unchanged repository toolchain — 2026-10-15
+
+<!-- measured-with: ruff=0.16.10 black=26.10.0 mypy=2.4.0 pytest=9.1.1 isort=9.0.2 docformatter=1.7.8 pytest-cov=7.1.0 pytest-xdist=3.8.0 coverage=7.16.2 -->
+
+The unchanged current bundle was also freshly installed and strictly measured
+against `b0aa0da43c128b763099e42b70d4c3cfb99a2f30`. All nine actual versions,
+commands and zero-blocker report are retained in
+[evidence/issue-518-successor607/current-pins](evidence/issue-518-successor607/current-pins/).
+This supplies a complete nine-pin current measurement without inventing values
+for old four-pin historical markers. Unknown, incomplete and hybrid bundles
+are rejected across all nine tools, including coverage startup dependencies.
+
 ## Measured pending Maint 52 successor toolchain — 2026-10-15
 
-<!-- measured-with: ruff=0.17.0 black=26.10.1 mypy=2.4.0 pytest=9.1.1 -->
+<!-- measured-with: ruff=0.17.0 black=26.10.1 mypy=2.4.0 pytest=9.1.1 isort=9.0.2 docformatter=1.7.8 pytest-cov=7.1.0 pytest-xdist=3.8.0 coverage=7.16.2 -->
 
 Generated PR #607 at `c3f7ac876c23511f81ed2f728a11e982cf6e002a`
 proposes a newer toolchain than the October 11 measurement. All nine exact
@@ -22,7 +34,7 @@ this actual measurement supplies the missing complete recorded toolchain.
 command and captured output, strict report, installed versions, source head,
 and script/pin digests. Existing historical measurements remain below.
 Coverage startup does not establish full-suite, execution-mirror or combined
-coverage acceptance. The 2,672 collection floor, capability/skip controls,
+coverage acceptance. The current 3,463 collection floor, capability/skip controls,
 complete-toolchain matching and enforcement policy remain unchanged. No
 repository pins or generated branch were changed for this preparation.
 
