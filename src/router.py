@@ -583,6 +583,17 @@ def select_agent(
         "exploration_mode": _exploration_mode(exploration_mode) if explored else "",
     }
     profiles = _automatic_profiles(entry, transport=profile_transport)
+    if (
+        entry["agent"] == "gemini"
+        and not profiles
+        and (
+            profile_transport != "remote"
+            or execution_profiles.profiles_for_agent("gemini", transport=profile_transport)
+        )
+    ):
+        # Model health may change since admission (for example a catalog refresh).
+        # Never turn that disappearance into an unprofiled local dispatch.
+        return None
     if entry["agent"] == "codex" and execution_profiles.codex_operator_tier_override(
         entry.get("mode")
     ):

@@ -1357,3 +1357,22 @@ def test_automatic_gemini_respects_effective_model_policy(monkeypatch, scenario,
     else:
         selected = dispatcher._select_offload_profile("gemini", "full")
         assert (selected["requested_model"] if selected else None) == expected
+
+
+@pytest.mark.parametrize("transport", ["local", "remote"])
+def test_router_refuses_gemini_when_final_profile_resolution_disappears(monkeypatch, transport):
+    """A second health read must never downgrade an admitted profile into agent-only dispatch."""
+    profile = execution_profiles.get_profile("gemini-4-argon-high")
+    reads = iter([[profile], []])
+    monkeypatch.setattr(router, "_automatic_profiles", lambda *_a, **_kw: next(reads))
+    monkeypatch.setattr(execution_profiles, "profiles_for_agent", lambda *_a, **_kw: [profile])
+    assert (
+        router.select_agent(
+            "implement",
+            {"agents": {"gemini": {"state": "ok"}}},
+            only={"gemini"},
+            exploration_rate=0,
+            profile_transport=transport,
+        )
+        is None
+    )
