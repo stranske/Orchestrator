@@ -590,7 +590,7 @@ def _ensure_agent_runtime(agent: str) -> Path:
         # credentials"). Link the owner's record in; the token itself stays in the macOS keychain,
         # reachable with the real HOME retained. Linked, never copied, so a re-login is picked up
         # without importing personal Muse settings into the isolated XDG configuration root.
-        _runtime_link(
+        adapters.ensure_muse_auth_link(
             REAL_HOME / ".config" / "muse" / "auth.json", base / ".config" / "muse" / "auth.json"
         )
     elif agent == "gemini":

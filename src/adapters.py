@@ -2130,6 +2130,25 @@ def done_marker_cmd(
     )
 
 
+def ensure_muse_auth_link(auth_src: Path, auth_dst: Path) -> None:
+    """Pin the owned runtime alias to the intended login without copying or editing credentials."""
+    auth_dst.parent.mkdir(parents=True, exist_ok=True)
+    if auth_dst.is_symlink():
+        if auth_dst.resolve() != auth_src.resolve():
+            auth_dst.unlink()  # Remove only the stale runtime alias, never its target.
+    elif auth_dst.exists():
+        raise ValueError(
+            "unexpected non-link Muse runtime auth record; refusing another credential source"
+        )
+    if auth_src.exists() and not auth_dst.is_symlink():
+        try:
+            auth_dst.symlink_to(auth_src)
+        except FileExistsError:
+            # Another invocation may have installed this same alias. Accept only that safe race.
+            if not auth_dst.is_symlink() or auth_dst.resolve() != auth_src.resolve():
+                raise ValueError("Muse runtime auth alias changed during setup") from None
+
+
 def agent_subprocess_env(agent: str, env: dict | None) -> dict | None:
     """The environment a direct `dispatch` should hand to the agent process.
 
@@ -2148,9 +2167,7 @@ def agent_subprocess_env(agent: str, env: dict | None) -> dict | None:
         (runtime / subdir).mkdir(parents=True, exist_ok=True)
     auth_src = HOME / ".config" / "muse" / "auth.json"
     auth_dst = runtime / ".config" / "muse" / "auth.json"
-    auth_dst.parent.mkdir(parents=True, exist_ok=True)
-    if auth_src.exists() and not auth_dst.exists():
-        auth_dst.symlink_to(auth_src)
+    ensure_muse_auth_link(auth_src, auth_dst)
     (runtime / ".local/state").mkdir(parents=True, exist_ok=True)
     # The installed CLI reads user settings through XDG_CONFIG_HOME. Keep HOME for its
     # keychain-backed subscription credential, and link only the login record into XDG state.

@@ -470,6 +470,24 @@ def test_muse_direct_dispatch_environment_is_xdg_isolated(tmp_path, monkeypatch)
     assert env["TMPDIR"] == str(runtime / "tmp") and "META_API_KEY" not in env
     linked = runtime / ".config" / "muse" / "auth.json"
     assert linked.is_symlink() and linked.resolve() == login.resolve()
+    # A dangling alias from an older runtime must point to today's intended OAuth record,
+    # rather than merely suppressing FileExistsError and leaving authentication broken.
+    linked.unlink()
+    linked.symlink_to(tmp_path / "missing-old-login.json")
+    adapters.agent_subprocess_env("muse", {"HOME": str(real_home)})
+    assert linked.resolve() == login.resolve() and login.read_text() == "{}"
+    linked.unlink()
+    linked.write_text("unexpected private credential record")
+    with pytest.raises(ValueError, match="unexpected non-link"):
+        adapters.agent_subprocess_env("muse", {"HOME": str(real_home)})
+    assert linked.read_text() == "unexpected private credential record"
+    # The offload/delegate path uses the same repaired alias contract.
+    linked.unlink()
+    linked.symlink_to(tmp_path / "another-missing-login.json")
+    monkeypatch.setattr(dispatcher, "REAL_HOME", real_home)
+    monkeypatch.setattr(dispatcher, "AGENT_RUNTIME_DIR", tmp_path / "runtime")
+    dispatcher._ensure_agent_runtime("muse")
+    assert linked.resolve() == login.resolve()
 
 
 @pytest.mark.parametrize(

@@ -5117,7 +5117,8 @@ def record_muse_subscription_cost(
         # overwrite a measured historical cost row merely to add the execution facts below.
         if existing is None or existing[0] in {"ledger", "imputed:subscription"}:
             c.execute(
-                "INSERT OR REPLACE INTO costs VALUES (?,?,?,?,?,?,?)",
+                "INSERT OR REPLACE INTO costs "
+                "(run_id,tokens_in,tokens_out,cost_usd,latency_s,source,pulled_ts) VALUES (?,?,?,?,?,?,?)",
                 (
                     run_id,
                     None,
