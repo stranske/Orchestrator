@@ -218,13 +218,13 @@ class NativeAttemptJournal:
             if changed != 1:
                 raise ValueError("native validation requires exactly one raw persisted receipt")
 
-    def verified(self, case_id: str, revision: str, digest: str) -> dict | None:
+    def verified(self, case_id: str, revision: str) -> dict | None:
         with sqlite3.connect(self.path) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT * FROM native_attempts WHERE case_id=? AND material_revision=? "
-                "AND case_digest=? AND state='validated'",
-                (case_id, revision, digest),
+                "AND state='validated'",
+                (case_id, revision),
             ).fetchone()
         return dict(row) if row is not None else None
 
@@ -484,7 +484,9 @@ def refresh_native_projection(
     ):
         raise ValueError("fresh collected capability does not bind the original case")
     revision = _native_substantive_revision(case)
-    record = journal.verified(case_id, revision, case._digest)
+    # Match the spend identity: checkout paths and UNKNOWN owner wording are
+    # administrative metadata, while the original report and receipt remain bound.
+    record = journal.verified(case_id, revision)
     if record is None or record.get("report_sha256") != report_hash:
         raise ValueError("no trusted native admission for this original report and fresh case")
     result = json.loads(record["validated_json"])
@@ -894,15 +896,10 @@ def later_truth(row: dict) -> str | None:
 
 def native_later_truth(run_id: str, db: Path | None = None) -> str | None:
     """Read the original run's durable outcome without creating schema or writes."""
-    try:
-        with sqlite3.connect(
-            f"file:{(db or feedback.DB_PATH).resolve()}?mode=ro", uri=True
-        ) as conn:
-            row = conn.execute(
-                "SELECT durability,durability_checked_ts FROM outcomes WHERE run_id=?", (run_id,)
-            ).fetchone()
-    except (OSError, sqlite3.Error):
-        return None
+    with sqlite3.connect(f"file:{(db or feedback.DB_PATH).resolve()}?mode=ro", uri=True) as conn:
+        row = conn.execute(
+            "SELECT durability,durability_checked_ts FROM outcomes WHERE run_id=?", (run_id,)
+        ).fetchone()
     if row is None:
         return None
     return later_truth({"durability": row[0], "durability_checked_ts": row[1]})
@@ -2197,7 +2194,7 @@ def main() -> int:
     parser.add_argument(
         "--case-input",
         type=Path,
-        help="enriched report containing the same original case anchors; used only by --native-admit",
+        help="enriched report with original case anchors; used by --native-admit and --native-refresh",
     )
     parser.add_argument("--native-journal", type=Path)
     parser.add_argument("--expected-source-hash")
@@ -2260,12 +2257,13 @@ def main() -> int:
         if args.native_admit and args.native_refresh:
             parser.error("choose exactly one of --native-admit and --native-refresh")
         native_case_id = args.native_admit or args.native_refresh
+        mode_flag = "--native-admit" if args.native_admit else "--native-refresh"
         if args.native_refresh and args.dispatch:
             parser.error("--native-refresh never dispatches")
         if any(
             (args.collect_case, args.prepare_collected_case, args.judge_collected_case, args.retry)
         ):
-            parser.error("--native-admit cannot be combined with another adjudicator mode")
+            parser.error(f"{mode_flag} cannot be combined with another adjudicator mode")
         if not all(
             (
                 args.report,
@@ -2278,7 +2276,7 @@ def main() -> int:
             )
         ):
             parser.error(
-                "--native-admit requires --report --case-input --repository --qualification --output "
+                f"{mode_flag} requires --report --case-input --repository --qualification --output "
                 "--native-journal and --expected-source-hash"
             )
         try:
@@ -2286,6 +2284,13 @@ def main() -> int:
                 raise ValueError("original report changed before native operation")
             original = json.loads(args.report.read_text(encoding="utf-8"))
             enriched = json.loads(args.case_input.read_text(encoding="utf-8"))
+            for label, saved_report in (("original", original), ("enriched", enriched)):
+                if not isinstance(saved_report, dict) or not isinstance(
+                    saved_report.get("rows"), list
+                ):
+                    raise ValueError(f"{label} report must contain a rows list")
+                if any(not isinstance(row, dict) for row in saved_report["rows"]):
+                    raise ValueError(f"{label} report rows must be objects")
             original_rows = [
                 row for row in original.get("rows", []) if row.get("case_id") == native_case_id
             ]
@@ -2338,7 +2343,14 @@ def main() -> int:
                     timeout=args.timeout,
                     expected_report_sha256=args.expected_source_hash,
                 )
-        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            sqlite3.Error,
+            subprocess.SubprocessError,
+        ) as exc:
             parser.error(str(exc))
         print(json.dumps(result, indent=2))
         return 0

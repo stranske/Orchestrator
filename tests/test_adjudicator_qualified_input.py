@@ -208,6 +208,49 @@ def test_native_admission_reserves_once_persists_raw_before_brain_and_preserves_
     )
     assert refreshed["native_summary"] == {"graded": 1, "agree": 1, "unknown": 0}
     assert len(refreshed["rows"]) == 1
+    # Administrative reassignment and a different checkout must not strand a
+    # paid receipt whose substantive evidence and original report are unchanged.
+    moved_repo = tmp_path / "moved-repo"
+    shutil.copytree(repo, moved_repo)
+    changed_qualification = copy.deepcopy(qualification)
+    changed_qualification["criterion_mapping"][0]["unknowns"][0].update(
+        owner="new operator", next_action="Inspect the same receipt from the new checkout."
+    )
+    rebuilt = retro.qualify_collected_case(row, moved_repo, changed_qualification)
+    assert rebuilt._digest != case._digest
+    assert retro._native_substantive_revision(rebuilt) == retro._native_substantive_revision(case)
+    restarted = retro.NativeAttemptJournal(journal_path)
+    moved = retro.refresh_native_projection(
+        original_report=original,
+        output=tmp_path / "moved.json",
+        case_id="one",
+        case=rebuilt,
+        journal=restarted,
+        truth_reader=lambda *_args: "PASS",
+    )
+    assert moved["native_summary"] == refreshed["native_summary"]
+    assert moved["rows"][0]["native_projection"]["attempt_id"] == projection["native_attempt_id"]
+    # Missing/corrupt/schema-less Brain storage is a failed read, not pending
+    # durability. No projection may be published in any of these cases.
+    for damage in ("missing", "corrupt", "missing-schema"):
+        brain = tmp_path / (damage + ".sqlite")
+        if damage == "corrupt":
+            brain.write_bytes(b"not a SQLite database")
+        elif damage == "missing-schema":
+            with sqlite3.connect(brain) as conn:
+                conn.execute("CREATE TABLE unrelated (value TEXT)")
+        output = tmp_path / (damage + ".json")
+        with pytest.raises(sqlite3.Error):
+            retro.refresh_native_projection(
+                original_report=original,
+                output=output,
+                case_id="one",
+                case=rebuilt,
+                journal=restarted,
+                db=brain,
+            )
+        assert not output.exists()
+    assert original.read_bytes() == original_bytes
     unknown = retro.refresh_native_projection(
         original_report=original,
         output=tmp_path / "unknown.json",
@@ -773,6 +816,95 @@ def test_cli_rejects_malformed_report_shapes_without_traceback(
     assert caught.value.code == 2
     assert "error:" in capsys.readouterr().err
     assert not output.exists()
+
+
+@pytest.fixture
+def native_cli(qualified_input, tmp_path, monkeypatch):
+    repo, row, qualification, _ = qualified_input
+    report, enriched, qual, output, journal = (
+        tmp_path / name
+        for name in (
+            "original.json",
+            "enriched.json",
+            "qualification.json",
+            "output.json",
+            "native.db",
+        )
+    )
+    report.write_text(json.dumps({"rows": [row]}))
+    enriched.write_bytes(report.read_bytes())
+    qual.write_text(json.dumps(qualification))
+    monkeypatch.setattr(
+        roles.dispatcher, "offload", lambda *args, **kwargs: pytest.fail("invalid CLI dispatched")
+    )
+
+    def argv(mode):
+        return [
+            "adjudicator_retro",
+            mode,
+            "one",
+            "--report",
+            str(report),
+            "--case-input",
+            str(enriched),
+            "--repository",
+            str(repo),
+            "--qualification",
+            str(qual),
+            "--output",
+            str(output),
+            "--native-journal",
+            str(journal),
+            "--expected-source-hash",
+            hashlib.sha256(report.read_bytes()).hexdigest(),
+        ]
+
+    return argv, report, enriched, output, journal
+
+
+@pytest.mark.parametrize("mode", ["--native-admit", "--native-refresh"])
+@pytest.mark.parametrize("which", ["original", "enriched"])
+@pytest.mark.parametrize("saved", [[], {"rows": None}, {"rows": {}}, {"rows": [None]}])
+def test_native_cli_rejects_malformed_reports_without_traceback(
+    native_cli, monkeypatch, capsys, mode, which, saved
+):
+    argv, report, enriched, output, journal = native_cli
+    (report if which == "original" else enriched).write_text(json.dumps(saved))
+    before = report.read_bytes()
+    monkeypatch.setattr("sys.argv", argv(mode))
+    with pytest.raises(SystemExit) as caught:
+        retro.main()
+    assert caught.value.code == 2
+    assert "error:" in capsys.readouterr().err
+    assert report.read_bytes() == before
+    assert not output.exists() and not journal.exists()
+
+
+@pytest.mark.parametrize("mode", ["--native-admit", "--native-refresh"])
+def test_native_cli_reports_corrupt_journal_without_traceback(
+    native_cli, monkeypatch, capsys, mode
+):
+    argv, report, _, output, journal = native_cli
+    before = report.read_bytes()
+    journal.write_bytes(b"not a SQLite database")
+    monkeypatch.setattr("sys.argv", argv(mode))
+    with pytest.raises(SystemExit) as caught:
+        retro.main()
+    assert caught.value.code == 2
+    assert "error:" in capsys.readouterr().err
+    assert not output.exists() and report.read_bytes() == before
+
+
+@pytest.mark.parametrize("mode", ["--native-admit", "--native-refresh"])
+@pytest.mark.parametrize("conflict", [False, True])
+def test_native_cli_errors_name_selected_mode(monkeypatch, capsys, mode, conflict):
+    monkeypatch.setattr(
+        "sys.argv", ["adjudicator_retro", mode, "one"] + (["--retry"] if conflict else [])
+    )
+    with pytest.raises(SystemExit) as caught:
+        retro.main()
+    assert caught.value.code == 2
+    assert mode + (" cannot be combined" if conflict else " requires") in capsys.readouterr().err
 
 
 def supporting_descriptor(repo, row, git, *, ranges=None):
