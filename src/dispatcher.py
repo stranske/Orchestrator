@@ -1663,7 +1663,8 @@ def _select_offload_profile(agent: str, mode: str | None) -> dict | None:
         # names for that tier; a single-lane seat (cursor, vibe, aider) has no ladder and keeps its
         # one profile. Falling back to the full candidate set means a seat whose tier model has no
         # registered profile behaves exactly as before rather than losing its profile entirely.
-        tier_model = adapters.resolve_model(agent, adapters.DEFAULT_OFFLOAD_TIER)
+        tier = mode if mode in adapters.MODEL_TIER_NAMES else adapters.DEFAULT_OFFLOAD_TIER
+        tier_model = adapters.resolve_model(agent, tier)
         tiered = [p for p in profiles if tier_model and p["requested_model"] == tier_model]
         candidate_ids = sorted(profile["profile_id"] for profile in (tiered or profiles))
         envelope = execution_profiles.select_profile(
@@ -3988,10 +3989,8 @@ def _selftest() -> None:
         # registering one top-tier profile per seat silently overrode it: every gemini read was
         # routed to Pro.
         #
-        # gemini is the case that matters, because its two lines are NOT one version ladder: Flash
-        # (3.7/3.6/3.5) is the fast mid tier and Pro (3.1) is the higher-end reasoning tier, so
-        # `3.7 > 3.1` is newer Flash rather than better than Pro. Both are legitimate; the task
-        # decides, and an advisory read is not the task for Pro.
+        # Gemini now uses the owner-approved Argon effort ladder. An advisory read takes
+        # medium; explicit cheap/full requests retain their low/high rung.
         for seat in ("codex", "claude", "gemini"):
             wanted = adapters.resolve_model(seat, adapters.DEFAULT_OFFLOAD_TIER)
             chosen = _select_offload_profile(seat, "offload")
@@ -4000,10 +3999,10 @@ def _selftest() -> None:
         # And the reasoning tier is still REGISTERED, so full-tier work can still ask for it -- the
         # fix is choosing per task, not deleting the expensive rung.
         gemini_ids = {p["profile_id"] for p in execution_profiles.profiles_for_agent("gemini")}
-        assert "gemini-3.1-pro-high" in gemini_ids, gemini_ids
-        assert "gemini-3.8-flash-high" in gemini_ids, gemini_ids
+        assert "gemini-4-argon-high" in gemini_ids, gemini_ids
+        assert "gemini-4-argon-medium" in gemini_ids, gemini_ids
         # The cheap rung is registered too, so the ladder the router names is fully reachable.
-        assert "gemini-3.8-flash-low" in gemini_ids, gemini_ids
+        assert "gemini-4-argon-low" in gemini_ids, gemini_ids
 
         # AGY REPORTS IN ITS LOG, and the log must be PER RUN. agy's structured output carries only
         # conversation_id/cwd/usage; its log carries

@@ -1,0 +1,47 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________ test_argon_successor_tiers_reach_matching_offload_profiles __________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1098f2900>
+
+    def test_argon_successor_tiers_reach_matching_offload_profiles(monkeypatch):
+        import dispatcher
+        import execution_profiles
+    
+        monkeypatch.setenv("ORCH_MODEL_PROBE", "0")
+        for name in (
+            "ORCH_GEMINI_MODEL",
+            "ORCH_GEMINI_MODEL_CHEAP",
+            "ORCH_GEMINI_MODEL_MID",
+            "ORCH_GEMINI_MODEL_FULL",
+            "ORCH_GEMINI_MAX_TIER",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        expected = {
+            "cheap": "gemini-4-argon-low",
+            "mid": "gemini-4-argon-medium",
+            "full": "gemini-4-argon-high",
+        }
+        assert adapters.MODEL_TIERS["gemini"] == expected
+        assert adapters.DEFAULT_GEMINI_MODEL == expected["full"]
+        for mode, tier in (
+            ("cheap", "cheap"),
+            ("mid", "mid"),
+            ("full", "full"),
+            ("offload", "mid"),
+            (None, "mid"),
+        ):
+            chosen = dispatcher._select_offload_profile("gemini", mode)
+            assert chosen is not None
+>           assert chosen["requested_model"] == expected[tier]
+E           AssertionError: assert 'gemini-4-argon-medium' == 'gemini-4-argon-low'
+E             
+E             - gemini-4-argon-low
+E             ?                ^^^
+E             + gemini-4-argon-medium
+E             ?                ^^^^^^
+
+tests/test_model_tier_resolution.py:1103: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_model_tier_resolution.py::test_argon_successor_tiers_reach_matching_offload_profiles
+1 failed in 0.29s

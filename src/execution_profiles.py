@@ -191,7 +191,8 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
         # cheap rung but profile selection and feedback bucketing could not reach it. That is the
         # SAME defect as the Pro-only regression described above, one rung further down -- a ladder
         # is only a choice if every rung it names is registered.
-        # Keep historical profile identities addressable; production retirement selects3.8.
+        # Historical Flash/Pro identities stay immutable and addressable. Production selection
+        # follows PROFILE_RETIREMENTS to the owner-approved Argon effort ladder.
         _profile(
             "gemini-3.7-flash-high",
             "gemini-3.7-flash-high",
@@ -231,6 +232,34 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
         _profile(
             "gemini-3.1-pro-high",
             "gemini-3.1-pro-high",
+            "high",
+            agent="gemini",
+            provider="google",
+            pool="gemini-prepaid",
+            adapter_version="agy-cli-profile-v1",
+        ),
+        # Owner-approved Argon successor: retain old identities for historical evidence.
+        _profile(
+            "gemini-4-argon-low",
+            "gemini-4-argon-low",
+            "low",
+            agent="gemini",
+            provider="google",
+            pool="gemini-prepaid",
+            adapter_version="agy-cli-profile-v1",
+        ),
+        _profile(
+            "gemini-4-argon-medium",
+            "gemini-4-argon-medium",
+            "medium",
+            agent="gemini",
+            provider="google",
+            pool="gemini-prepaid",
+            adapter_version="agy-cli-profile-v1",
+        ),
+        _profile(
+            "gemini-4-argon-high",
+            "gemini-4-argon-high",
             "high",
             agent="gemini",
             provider="google",
@@ -332,6 +361,9 @@ CREATE TABLE IF NOT EXISTS route_weights_v2 (
 PROFILE_RETIREMENTS: dict[str, str] = {
     "gemini-3.7-flash-high": "gemini-3.8-flash-high",
     "gemini-3.7-flash-low": "gemini-3.8-flash-low",
+    "gemini-3.8-flash-low": "gemini-4-argon-low",
+    "gemini-3.8-flash-high": "gemini-4-argon-medium",
+    "gemini-3.1-pro-high": "gemini-4-argon-high",
     "codex-5.6-sol-high": "codex-6.1-sol-high",
     "codex-5.6-sol-medium": "codex-6.1-sol-medium",
     "codex-5.6-luna-high": "codex-6-luna-high",
