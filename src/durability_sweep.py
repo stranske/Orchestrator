@@ -1253,9 +1253,14 @@ def _post_merge_rechecks(*, dry_run: bool, gh, now: int, spec_dir=None) -> dict:
                                 raise RuntimeError("checkout does not match merge commit")
                             observation = runtime_ac_gate.recheck_merged(spec, worktree)
                     except Exception as exc:
-                        observation = {"result": "UNRUNNABLE", "transcript": str(exc)}
+                        observation = {
+                            "result": "UNRUNNABLE",
+                            "reason": "tool_error",
+                            "transcript": str(exc),
+                        }
                     result = {
                         "result": observation["result"],
+                        "reason": observation.get("reason"),
                         "issue": issue,
                         "merge_sha": sha,
                         "reopened": False,
@@ -1278,7 +1283,19 @@ def _post_merge_rechecks(*, dry_run: bool, gh, now: int, spec_dir=None) -> dict:
                     result["transcript_hash"] = hashlib.sha256(transcript.read_bytes()).hexdigest()
                     persist()
                     summary["rechecked"] += 1
-                if result["result"] in {"FAIL", "UNRUNNABLE"}:
+                # FAIL is evidence about the delivery and is always commented. UNRUNNABLE is
+                # commented when its cause is in the SPEC or the delivery (`manual_only`,
+                # `hollow_break`, or no recorded reason), which the fleet can act on. A runner
+                # that skipped commands by configuration, threw, or could not launch the test says
+                # nothing about the delivery, so it records the event and writes no comment: the
+                # first three rechecks (2026-10-16) posted 4 KB JSON transcripts to fleet issues
+                # naming the sweep's own switch as the issue's state.
+                runner_side = (
+                    result["result"] == "UNRUNNABLE"
+                    and result.get("reason") in runtime_ac_gate.RUNNER_SIDE_UNRUNNABLE
+                )
+                comment_due = result["result"] in {"FAIL", "UNRUNNABLE"} and not runner_side
+                if comment_due:
                     marker = f"runtime-AC post-merge {result['result']} on {sha}"
                     if not result.get("commented"):
                         comments, error = gh(
@@ -1303,9 +1320,17 @@ def _post_merge_rechecks(*, dry_run: bool, gh, now: int, spec_dir=None) -> dict:
                             if hashlib.sha256(raw).hexdigest() != result.get("transcript_hash"):
                                 raise RuntimeError("post-merge transcript hash mismatch")
                             text = raw.decode("utf-8")
-                            body = marker + "\n\n```text\n" + text[:55000] + "\n```"
-                            if len(text) > 55000:
-                                body += "\nFull transcript retained at " + str(transcript)
+                            if result.get("reason") == "manual_only":
+                                body = (
+                                    marker + " — the issue's acceptance criteria name no "
+                                    "executable test, so no rail can re-run this delivery; a "
+                                    "named test in the issue is what makes a post-merge recheck "
+                                    "possible"
+                                )
+                            else:
+                                body = marker + "\n\n```text\n" + text[:55000] + "\n```"
+                                if len(text) > 55000:
+                                    body += "\nFull transcript retained at " + str(transcript)
                             _, error = gh(
                                 [
                                     "gh",

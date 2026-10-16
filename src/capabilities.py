@@ -438,9 +438,15 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "flags_defaults": {
             "orchestrate_default": {"ORCH_RUN_RUNTIME_AC": "1"},
             "command_execution_default": {"ORCH_RUNTIME_AC_ALLOW_COMMANDS": "0"},
+            "post_merge_commands_default": {"ORCH_RUNTIME_AC_POST_MERGE_COMMANDS": "1"},
             "post_merge_reopen_default": {"ORCH_RUNTIME_AC_REOPEN": "0"},
         },
-        "gate_reason": "advisory canary is limited to explicit runtime-AC items; command execution stays off",
+        "gate_reason": (
+            "advisory canary is limited to explicit runtime-AC items; the keepalive ingest's "
+            "command execution stays opt-in (ORCH_RUNTIME_AC_ALLOW_COMMANDS=0) while the "
+            "post-merge recheck runs command checks by default "
+            "(ORCH_RUNTIME_AC_POST_MERGE_COMMANDS=1, its own kill switch)"
+        ),
         "gate_evidence": (
             "required closer must carry a runtime-AC label or spec; "
             f"ORCH_RUNTIME_AC_REOPEN defaults OFF, expires {RUNTIME_AC_REOPEN_EXPIRY}; "

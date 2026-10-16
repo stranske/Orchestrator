@@ -1226,6 +1226,9 @@ def post_merge_case(private_brain, monkeypatch):
     monkeypatch.setenv("ORCH_STATE_DIR", str(private_brain))
     monkeypatch.setenv("ORCH_RUN_RUNTIME_AC", "1")
     monkeypatch.setenv("ORCH_RUNTIME_AC_ALLOW_COMMANDS", "1")
+    # The recheck's own switch defaults ON; an inherited `=0` would turn the default-on tests
+    # into UNRUNNABLE, so the fixture starts from the default.
+    monkeypatch.delenv(gate.POST_MERGE_COMMANDS_FLAG, raising=False)
     monkeypatch.setenv("ORCH_RUNTIME_AC_REOPEN", "1")
     monkeypatch.setattr(backlog, "SUPPORTED_REPOS", ["owner/repo"])
     monkeypatch.setattr(
@@ -1302,12 +1305,16 @@ def test_post_merge_recheck_reopens_on_fail(post_merge_case):
     assert payload["result"] == "FAIL" and payload["reopened"] is True
     assert gate.post_merge_summary() == {
         "rechecked": 1,
+        "passed": 0,
         "failed": 1,
         "reopened": 1,
         "unrunnable": 0,
+        "unrunnable_reasons": {},
     }
     line = gate.format_post_merge_summary(gate.post_merge_summary())
-    assert line == "runtime-AC post-merge: rechecked 1, failed 1, reopened 1, unrunnable 0"
+    assert (
+        line == "runtime-AC post-merge: rechecked 1, passed 0, failed 1, reopened 1, unrunnable 0"
+    )
     assert line in switch_review.format_report(
         {
             "generated_at": 1792022400,
@@ -1340,16 +1347,78 @@ def test_post_merge_recheck_never_reopens_without_the_flag(post_merge_case, monk
     assert gate.post_merge_summary()["reopened"] == 0
 
 
-def test_post_merge_recheck_unrunnable_comments_once(post_merge_case, monkeypatch):
+def test_post_merge_recheck_commands_disabled_is_unrunnable_and_silent(
+    post_merge_case, monkeypatch
+):
+    """The runner's own switch is not the delivery's state: an event, a reason, no comment."""
     case = post_merge_case
-    monkeypatch.setenv("ORCH_RUNTIME_AC_ALLOW_COMMANDS", "0")
+    monkeypatch.setenv(gate.POST_MERGE_COMMANDS_FLAG, "0")
+    case["run"]()
+    case["run"]()
+    assert case["comments"] == []
+    assert not any("PATCH" in a for a in case["calls"])
+    summary = gate.post_merge_summary()
+    assert summary["unrunnable"] == 1 and summary["passed"] == 0
+    assert summary["unrunnable_reasons"] == {"commands_disabled": 1}
+    assert "unrunnable 1 (commands_disabled 1)" in gate.format_post_merge_summary(summary)
+
+
+@pytest.mark.parametrize(
+    "value,allowed",
+    [
+        (None, True),
+        ("1", True),
+        ("yes", True),
+        ("", True),
+        ("0", False),
+        ("false", False),
+        ("no", False),
+        ("off", False),
+        (" OFF ", False),
+    ],
+)
+def test_post_merge_commands_allowed_reads_every_documented_value(value, allowed):
+    """The post-merge policy is its own switch: every documented disabled word, and absence."""
+    env = {} if value is None else {gate.POST_MERGE_COMMANDS_FLAG: value}
+    assert gate.post_merge_commands_allowed(env) is allowed
+    # The ingest opt-in never reaches this policy in either direction.
+    assert (
+        gate.post_merge_commands_allowed({"ORCH_RUNTIME_AC_ALLOW_COMMANDS": "0", **env}) is allowed
+    )
+
+
+def test_post_merge_recheck_runs_the_named_test_without_the_ingest_opt_in(
+    post_merge_case, monkeypatch
+):
+    """Command checks are on by default here; the ingest's opt-in no longer gates the recheck."""
+    case = post_merge_case
+    monkeypatch.delenv("ORCH_RUNTIME_AC_ALLOW_COMMANDS", raising=False)
+    case["run"]()
+    summary = gate.post_merge_summary()
+    assert summary["failed"] == 1 and summary["unrunnable"] == 0
+    assert len(case["comments"]) == 1
+    assert case["comments"][0]["body"].startswith("runtime-AC post-merge FAIL")
+
+
+def test_post_merge_recheck_manual_only_spec_comments_one_line_once(post_merge_case, monkeypatch):
+    """A spec with no executable check is about the delivery, so it is said once, in one line."""
+    case = post_merge_case
+    monkeypatch.setattr(
+        runtime_ac,
+        "run_verification",
+        lambda *_a, **_kw: {
+            "gate": {"verdict": "NEEDS_REVIEW"},
+            "check_results": [{"type": "manual", "status": "NEEDS_REVIEW"}],
+        },
+    )
     case["run"]()
     case["run"]()
     assert len(case["comments"]) == 1
-    assert "UNRUNNABLE" in case["comments"][0]["body"]
-    assert "allow-command-checks" in case["comments"][0]["body"]
+    body = case["comments"][0]["body"]
+    assert body.startswith("runtime-AC post-merge UNRUNNABLE") and "```" not in body
+    assert "no executable test" in body
     assert not any("PATCH" in a for a in case["calls"])
-    assert gate.post_merge_summary()["unrunnable"] == 1
+    assert gate.post_merge_summary()["unrunnable_reasons"] == {"manual_only": 1}
 
 
 def test_post_merge_recheck_retries_delivery_without_reexecution(post_merge_case):
@@ -1412,9 +1481,11 @@ def test_post_merge_recheck_reuses_named_and_deliberate_break_runner(post_merge_
     assert case["comments"] == [] and not any("PATCH" in a for a in case["calls"])
     assert gate.post_merge_summary() == {
         "rechecked": 1,
+        "passed": 1,
         "failed": 0,
         "reopened": 0,
         "unrunnable": 0,
+        "unrunnable_reasons": {},
     }
 
 
@@ -1447,8 +1518,11 @@ def test_post_merge_recheck_tool_failures_never_reopen(
         },
     )
     case["run"]()
-    assert gate.post_merge_summary()["unrunnable"] == 1
+    summary = gate.post_merge_summary()
+    assert summary["unrunnable"] == 1 and summary["unrunnable_reasons"] == {"incomplete": 1}
     assert not any("PATCH" in a for a in case["calls"])
+    # A launcher or collection failure is not the delivery's state either: no comment.
+    assert case["comments"] == []
 
 
 def test_post_merge_recheck_refuses_wrong_merge_checkout(post_merge_case, monkeypatch):
@@ -1462,8 +1536,10 @@ def test_post_merge_recheck_refuses_wrong_merge_checkout(post_merge_case, monkey
 
     monkeypatch.setattr(provision, "temporary_exact_head_worktree", wrong_checkout)
     case["run"]()
-    assert gate.post_merge_summary()["unrunnable"] == 1
-    assert "does not match merge commit" in case["comments"][0]["body"]
+    summary = gate.post_merge_summary()
+    assert summary["unrunnable"] == 1 and summary["unrunnable_reasons"] == {"tool_error": 1}
+    # The runner's own checkout failure is not the delivery's state: event and transcript only.
+    assert case["comments"] == []
     assert not any("PATCH" in a for a in case["calls"])
 
 
@@ -1525,7 +1601,15 @@ def test_post_merge_summary_preserves_valid_rows_when_one_is_malformed(
 
     monkeypatch.setattr(feedback, "_conn", connection)
     summary = gate.post_merge_summary()
-    assert summary == {"rechecked": 1, "failed": 1, "reopened": 1, "unrunnable": 0, "malformed": 2}
+    assert summary == {
+        "rechecked": 1,
+        "passed": 0,
+        "failed": 1,
+        "reopened": 1,
+        "unrunnable": 0,
+        "unrunnable_reasons": {},
+        "malformed": 2,
+    }
     assert "rechecked 1" in gate.format_post_merge_summary(summary)
     assert "malformed 2" in gate.format_post_merge_summary(summary)
 
