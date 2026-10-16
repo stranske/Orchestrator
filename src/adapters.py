@@ -1879,8 +1879,8 @@ def build_command(
         return ["vibe", "--prompt", prompt, "--auto-approve", "--output", "text", "--trust"]
     if agent == "muse":
         # Muse Code (Meta) on the owner's SUBSCRIPTION LOGIN (keychain OAuth, device-code), never an
-        # API key: `META_API_KEY` always overrides the login and meters pay-as-you-go (measured on the
-        # live console 2026-10-15), so the dispatcher wrapper scrubs it (`_agent_runtime_prelude`).
+        # API key: `META_API_KEY` always overrides the login, and a Default-Project key metered pay-as-you-go
+        # (measured on the live console 2026-10-15; the `Muse Code`-project key is untested), so the dispatcher wrapper scrubs it (`_agent_runtime_prelude`).
         # --disable-approval skips prompts but KEEPS the sandbox (Meta: `--yolo` drops both, so it is
         # forbidden here). --no-foreign-personal-context stops the owner's personal Claude Code/Codex
         # rules and 30 skills from steering a fleet worker; --no-session-log keeps the prompt off disk.

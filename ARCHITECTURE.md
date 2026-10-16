@@ -299,9 +299,10 @@ CLI joins the delegated sub-agent band as a seat that routine selection NEVER pi
 `router.BACKUP_AGENTS` with aider, so it runs only on explicit demand (`--agent muse`, `only={"muse"}`)
 until measured outcomes earn it a prior. Its capacity seat is `flat` (`capacity.AGENTS["muse"]`, the owner's
 Power Usage plan: a 5-hour and a weekly allowance) with no usage API, so 429-shed is authoritative, as for
-vibe. **The credential is the CLI LOGIN, never an API key.** `META_API_KEY` always overrides that login and
-meters pay-as-you-go: measured on the live console, two capped execs under the key put 8 requests and
-81.5k input tokens in the pay-as-you-go ledger, while a 30-request keychain-login run moved only the
+vibe. **The credential is the CLI LOGIN, never an API key.** `META_API_KEY` always overrides that login, and a
+Default-Project key metered pay-as-you-go: measured on the live console, two capped execs under it put 8
+requests and 81.5k input tokens in the pay-as-you-go ledger (the key the login itself mints, in the
+`Muse Code` project, is untested), while a 30-request keychain-login run moved only the
 subscription meter (under 1% to 1%) and added nothing there. So `_agent_runtime_prelude("muse")` unsets the
 variable by name, and `agent_auth_check` counts the seat usable only when the login records an active
 subscription (`subs_active`), reading the file's shape and never its contents. The argv is headless with

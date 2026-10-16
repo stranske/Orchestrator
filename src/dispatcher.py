@@ -833,7 +833,8 @@ def _agent_runtime_prelude(agent: str) -> str:
         exports.append(f"export VIBE_HOME={shlex.quote(str(base / '.vibe'))}")
     elif agent == "muse":
         # The seat is the owner's SUBSCRIPTION LOGIN. `META_API_KEY` always overrides that login
-        # (`muse login --help`) and meters PAY-AS-YOU-GO (measured on the live console 2026-10-15), so a
+        # (`muse login --help`), and a Default-Project key metered PAY-AS-YOU-GO (measured on the live
+        # console 2026-10-15; the `Muse Code`-project key is untested), so a
         # key inherited from a session, lane or launchd environment would silently turn subscription
         # use into API spend. Unset it by NAME only: the value is never read or written here. HOME
         # stays real because the login lives in the macOS keychain (the gemini/agy precedent).

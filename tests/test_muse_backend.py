@@ -2,8 +2,8 @@
 
 Muse is Meta's terminal coding agent. The owner's rule: use the account's subscription capacity
 through the CLI login, never direct API spend. Measured 2026-10-15 on the live console: a
-`META_API_KEY` call lands in the pay-as-you-go ledger (8 requests, 81.5k input tokens for two capped
-execs) while keychain-login calls draw the subscription meter. `META_API_KEY` also always overrides
+`META_API_KEY` call with a Default-Project key lands in the pay-as-you-go ledger (8 requests, 81.5k
+input tokens for two capped execs; the `Muse Code`-project key the login mints is untested) while keychain-login calls draw the subscription meter. `META_API_KEY` also always overrides
 the login (`muse login --help`), so a stray key in the environment silently converts subscription use
 into API spend. These tests pin the three properties that keep it on the login:
 

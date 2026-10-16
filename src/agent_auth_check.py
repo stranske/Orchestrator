@@ -43,8 +43,8 @@ CREDENTIAL_FILES = {
     "vibe": (HOME / ".vibe" / ".env", "MISTRAL_API_KEY"),
     # muse: NOT an API key. `muse login` stores an OAuth device-code credential in the keychain and
     # records its shape in this JSON (mechanism, storage, subs_active); the expected key is the
-    # subscription flag. A `META_API_KEY` would override it and bill pay-as-you-go, so the seat is
-    # only usable when the LOGIN says subs_active.
+    # subscription flag. A `META_API_KEY` would override it (a Default-Project key metered
+    # pay-as-you-go when tested 2026-10-15), so the seat is only usable when the LOGIN says subs_active.
     "muse": (HOME / ".config" / "muse" / "auth.json", "subs_active"),
 }
 REFRESH_HINT = {
@@ -58,7 +58,7 @@ REFRESH_HINT = {
     ),
     "aider": "console.mistral.ai → API keys, then set MISTRAL_API_KEY in ~/.codex/handoff/aider.env",
     "vibe": "console.mistral.ai → API keys, then set MISTRAL_API_KEY in ~/.vibe/.env (chmod 600)",
-    "muse": "run `muse login` (device-code, browser approval); never set META_API_KEY, which bills pay-as-you-go",
+    "muse": "run `muse login` (device-code, browser approval); never set META_API_KEY, which overrides the login and can bill pay-as-you-go",
 }
 AGENTS = ("cursor", "codex", "claude", "gemini", "vibe", "aider", "muse")
 

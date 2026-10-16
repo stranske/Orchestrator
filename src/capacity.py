@@ -185,8 +185,9 @@ AGENTS = {
     # muse (Meta Muse Code) — the owner's SUBSCRIPTION login (Power Usage plan, 5h + weekly allowance
     # per Meta's console), never an API key. No usage API (no token/usage/quota field in `--json`;
     # the console lags up to an hour), so 429-shed is authoritative, like vibe. BACKUP-ONLY via
-    # router.BACKUP_AGENTS until measured outcomes earn it a prior. A key-authenticated call meters
-    # PAY-AS-YOU-GO, which is why this seat is the login and the wrapper scrubs META_API_KEY.
+    # router.BACKUP_AGENTS until measured outcomes earn it a prior. A call authenticated with a
+    # Default-Project API key metered PAY-AS-YOU-GO (tested 2026-10-15; the key the login itself mints in
+    # the `Muse Code` project is untested), which is why this seat is the login and the wrapper scrubs META_API_KEY.
     "muse": {"account": "meta-muse-code-sub", "model": "flat", "window": "5h+weekly"},
     # aider — BACKUP-ONLY as of 2026-06-21 (owner directive): router.BACKUP_AGENTS holds it OUT of
     # routine auto-selection; reachable only on explicit demand (`--agent aider` / `only={"aider"}`).
