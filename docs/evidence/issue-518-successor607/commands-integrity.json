@@ -1,6 +1,9 @@
 {
-  "raw_bytes": 142839250,
-  "raw_sha256": "f357d7db10fcd636a8a124e61b644831e9bcf5489c4d2e2b92c34984e31b322d",
-  "gzip_bytes": 45631844,
-  "gzip_sha256": "7a467f709ca85980432768080493e0e50dacf9189e5fa2c64b61c443bba0f1f4"
+  "raw_bytes": 372599,
+  "raw_sha256": "58b24da6e68a1fe1ab699c529f6ebabbea8785c3d749e7efc72e3928ac90fddd",
+  "gzip_bytes": 65059,
+  "gzip_sha256": "6b78a2147075c626c4ed4efc0a982f56c16ebe1176ed20c3ec15c361f55ac344",
+  "binary_outputs_hash_bound_separately": 2,
+  "original_full_capture": "/Users/teacher/.codex/automations/sync-dependency-pr-closer/evidence/finish-20261015T2245Z/518-final-strict-commands-full.json",
+  "original_full_capture_sha256": "f357d7db10fcd636a8a124e61b644831e9bcf5489c4d2e2b92c34984e31b322d"
 }
