@@ -2333,6 +2333,7 @@ def dispatch(
     that is or holds `/`, the home dir or the control plane is refused for every agent.
     """
     refuse_broad_workspace(agent, cwd)
+    process_env = agent_subprocess_env(agent, env)
     muse_prompt = muse_prompt_file(prompt) if agent == "muse" else None
     try:
         cmd = build_command(
@@ -2350,7 +2351,7 @@ def dispatch(
         proc = subprocess.run(
             cmd,
             cwd=cwd,
-            env=agent_subprocess_env(agent, env),
+            env=process_env,
             capture_output=True,
             text=True,
             timeout=timeout,

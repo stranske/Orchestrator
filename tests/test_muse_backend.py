@@ -463,7 +463,8 @@ def test_muse_direct_dispatch_scrubs_the_key_from_a_copied_environment(tmp_path,
     assert adapters.agent_subprocess_env("vibe", supplied) is supplied, "other agents are untouched"
     # Wiring pin: dispatch passes the effective env, once.
     src = Path(adapters.__file__).read_text()
-    assert src.count("env=agent_subprocess" + "_env(agent, env)") == 1
+    assert src.count("process_env = agent_subprocess" + "_env(agent, env)") == 1
+    assert src.count("env=process_env,") == 1
 
 
 def test_muse_direct_dispatch_environment_is_xdg_isolated(tmp_path, monkeypatch):
@@ -613,6 +614,7 @@ def test_muse_credential_missing_is_reported_without_a_billing_call(tmp_path, mo
     monkeypatch.setattr(dispatcher, "AGENT_RUNTIME_DIR", tmp_path / "runtime")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    monkeypatch.setattr(adapters, "muse_prompt_file", forbidden_call)
     with pytest.raises(ValueError, match="login record is missing"):
         adapters.dispatch("muse", "never call a provider", cwd=str(workspace))
     with pytest.raises(ValueError, match="login record is missing"):
@@ -621,7 +623,6 @@ def test_muse_credential_missing_is_reported_without_a_billing_call(tmp_path, mo
     monkeypatch.setattr(dispatcher, "_select_offload_profile", lambda *args: None)
     monkeypatch.setattr(dispatcher, "_capability_heartbeat", lambda *args, **kwargs: None)
     monkeypatch.setattr(dispatcher, "_offload_prompt", lambda prompt, *args, **kwargs: prompt)
-    monkeypatch.setattr(adapters, "muse_prompt_file", forbidden_call)
     with pytest.raises(ValueError, match="login record is missing"):
         dispatcher.offload("muse", "never allocate a prompt or call a provider", cwd=str(workspace))
 
