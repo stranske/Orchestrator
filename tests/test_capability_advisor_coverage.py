@@ -95,6 +95,9 @@ def test_pr_reference_and_fetch_failures_do_not_guess(monkeypatch):
     assert advisor._pr_number_from("review o/r#42", "o/r", None) == 42
     assert advisor._pr_number_from("review #19", "", {"pr": "not-an-int"}) is None
     assert advisor._pr_number_from("review #19", "", None) == 19
+    # The boundary the fix changed: an identifier glued to the hash is not a reference (the old `\b` pattern matched it).
+    assert advisor._pr_number_from("abc#19", "", None) is None
+    assert advisor._pr_number_from("PR#19", "", None) is None
 
     monkeypatch.setattr(
         advisor.fleet_shapes, "fetch_facts", lambda *_args: (_ for _ in ()).throw(OSError())
@@ -119,6 +122,8 @@ def test_observable_surface_detects_multiple_marker_kinds_and_ignores_hidden_tre
     assert {"html:index.html", "component:widget.tsx", "dependency:fastapi:package.json"} <= set(
         result["markers"]
     )
+    # The hidden tree is IGNORED, not merely not required: nothing under `.git` may appear as a marker.
+    assert not any("ignored.html" in marker for marker in result["markers"])
     assert advisor.detect_observable_surface(tmp_path / "missing")["observable"] is None
 
 

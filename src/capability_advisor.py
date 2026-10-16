@@ -5280,6 +5280,30 @@ def _selftest_findability() -> None:
     )
 
 
+def _selftest_pr_reference() -> None:
+    """The PR a consult is about, read out of the task text.
+
+    ASSERTS ON WHAT `_pr_number_from` RETURNS to a caller, for the forms an agent actually writes. The old
+    pattern began with a word boundary, which exists only BETWEEN a word character and a non-word one: it
+    never matched a bare `#19` after a space or a bracket (documented support that never worked) and it
+    wrongly matched the tail of an identifier (`abc#19`). Both halves are pinned here, so putting either
+    one back breaks this selftest.
+    """
+    # BARE references, after the punctuation people really put before them.
+    for text in ("review #19", "(#19)", "[#19]", "Closes #19.", "#19", "ref:#19"):
+        assert _pr_number_from(text, "", None) == 19, f"{text!r} must name PR 19"
+    # QUALIFIED references still win and keep their number.
+    assert _pr_number_from("see o/r#42 and #7", "", None) == 42
+    assert _pr_number_from("see o/r#42", "o/r", None) == 42
+    # An identifier glued to the hash is NOT a reference, and neither is a number too long to be a PR.
+    for text in ("abc#19", "PR#19", "v1.2#3", "#1234567"):
+        assert _pr_number_from(text, "", None) is None, f"{text!r} must not name a PR"
+    print(
+        "capability_advisor pr-reference selftest: OK (bare references parse; a reference glued to an "
+        "identifier does not)"
+    )
+
+
 def _selftest() -> None:
     import tempfile
     from pathlib import Path
@@ -5541,6 +5565,7 @@ def main(argv: list[str]) -> int:
         _selftest_preconditions()
         _selftest_findability()
         _selftest_reach()
+        _selftest_pr_reference()
         return 0
     if args.consult_tick_phases:
         # ALWAYS 0. This is called from the hourly tick, which drives real dispatch; a capability
