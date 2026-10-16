@@ -1268,6 +1268,7 @@ def native_cohort(qualified_input, tmp_path, monkeypatch):
     prior = journal.reserve("1", "older-invalid-revision", "older-digest", digest)
     journal.persist_raw(prior["attempt_id"], {"run_id": "native-invalid-history", "output": "{}"})
     journal.validate(prior["attempt_id"], {"proposal": {}, "errors": ["invalid original response"]})
+    monkeypatch.setattr(roles, "route_role", lambda *_args, **_kwargs: None)
     counter = iter((1, 2))
 
     def offload(*_args, **kwargs):
@@ -1286,6 +1287,7 @@ def native_cohort(qualified_input, tmp_path, monkeypatch):
             case_id=key,
             case=case,
             journal=journal,
+            backend="gemini",
             dispatch=True,
         )
     # A cohort refresh must never attempt another provider call.
