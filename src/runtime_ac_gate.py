@@ -334,12 +334,21 @@ def observe_shadow_spec(
     return {"status": status, "blocks": False, "gate_event": event}
 
 
-def recheck_merged(spec: dict, merged_worktree: str | Path) -> dict:
+def recheck_merged(
+    spec: dict, merged_worktree: str | Path, *, allow_command_checks: bool | None = None
+) -> dict:
     """Run the existing named-check/break runner; manual or missing evidence is unknown.
 
     The caller provisions and pins the merge commit. Never mutate the authored spec
-    or consume this observation as merge authority.
+    or consume this observation as merge authority. An UNRUNNABLE result carries its
+    `reason` (one of UNRUNNABLE_REASONS), because "cannot run" has four causes and only one
+    of them — `manual_only`, a spec with no executable check — is about the delivery.
     """
+    allow = (
+        post_merge_commands_allowed(os.environ)
+        if allow_command_checks is None
+        else bool(allow_command_checks)
+    )
     try:
         current = copy.deepcopy(spec)
         current.setdefault("runtime_context", {})["worktree"] = str(merged_worktree)
@@ -353,7 +362,7 @@ def recheck_merged(spec: dict, merged_worktree: str | Path) -> dict:
         run = runtime_ac.run_verification(
             current,
             confirm_run=True,
-            allow_command_checks=env_flag(os.environ, "ORCH_RUNTIME_AC_ALLOW_COMMANDS"),
+            allow_command_checks=allow,
             timeout=env_int(os.environ, "ORCH_RUNTIME_AC_TIMEOUT", 120),
         )
         checks = run["check_results"]
@@ -399,9 +408,24 @@ def recheck_merged(spec: dict, merged_worktree: str | Path) -> dict:
             result = "PASS"
         else:
             result = "UNRUNNABLE"
-        return {"result": result, "transcript": json.dumps(run, indent=2, default=str)}
+        reason = None
+        if result == "UNRUNNABLE":
+            if not executable:
+                reason = "manual_only"
+            elif any(
+                r.get("status") == "SKIP" and "allow-command-checks" in str(r.get("reason") or "")
+                for r in executable
+            ):
+                reason = "commands_disabled"
+            else:
+                reason = "incomplete"
+        return {
+            "result": result,
+            "reason": reason,
+            "transcript": json.dumps(run, indent=2, default=str),
+        }
     except Exception as exc:
-        return {"result": "UNRUNNABLE", "transcript": str(exc)}
+        return {"result": "UNRUNNABLE", "reason": "tool_error", "transcript": str(exc)}
 
 
 def post_merge_summary() -> dict:
@@ -430,11 +454,21 @@ def post_merge_summary() -> dict:
             malformed += 1
             continue
         results.append(result)
+    reasons: dict[str, int] = {}
+    for r in results:
+        if r.get("result") == "UNRUNNABLE":
+            key = str(r.get("reason") or "unclassified")
+            reasons[key] = reasons.get(key, 0) + 1
     summary = {
         "rechecked": len(results),
+        # PASS is printed, not implied: a drained line reads "passed N ... unrunnable 0".
+        "passed": sum(r.get("result") == "PASS" for r in results),
         "failed": sum(r.get("result") == "FAIL" for r in results),
         "reopened": sum(r.get("reopened") is True for r in results),
         "unrunnable": sum(r.get("result") == "UNRUNNABLE" for r in results),
+        # Every cause counted beside the total, so "unrunnable 3" cannot read as "3 broken
+        # deliveries" when it means the runner's own switch was off.
+        "unrunnable_reasons": dict(sorted(reasons.items())),
     }
     if malformed:
         summary["malformed"] = malformed
@@ -444,10 +478,17 @@ def post_merge_summary() -> dict:
 def format_post_merge_summary(section: dict) -> str:
     if section.get("error"):
         return f"runtime-AC post-merge: unmeasured ({section['error']})"
+    reasons = section.get("unrunnable_reasons") or {}
+    reason_bit = (
+        " (" + ", ".join(f"{name} {count}" for name, count in sorted(reasons.items())) + ")"
+        if reasons
+        else ""
+    )
     return (
         f"runtime-AC post-merge: rechecked {section['rechecked']}, "
+        f"passed {section.get('passed', 0)}, "
         f"failed {section['failed']}, reopened {section['reopened']}, "
-        f"unrunnable {section['unrunnable']}"
+        f"unrunnable {section['unrunnable']}{reason_bit}"
         + (f", malformed {section['malformed']}" if section.get("malformed") else "")
     )
 
@@ -542,6 +583,28 @@ def env_int(env: Mapping[str, Any], name: str, default: int) -> int:
         return int(env.get(name, default))
     except (TypeError, ValueError):
         return default
+
+
+POST_MERGE_COMMANDS_FLAG = "ORCH_RUNTIME_AC_POST_MERGE_COMMANDS"
+UNRUNNABLE_REASONS = ("commands_disabled", "manual_only", "tool_error", "incomplete")
+
+
+def post_merge_commands_allowed(env: Mapping[str, Any]) -> bool:
+    """Command checks are ON by default in the post-merge recheck; `=0` is its own kill switch.
+
+    The recheck exists to run the issue's NAMED TEST on the merged tip, in a disposable exact-head
+    checkout, through `shlex.split` with no shell. The keepalive ingest's shadow execution keeps its
+    separate `ORCH_RUNTIME_AC_ALLOW_COMMANDS` opt-in because it runs on open PRs the fleet is still
+    writing. Measured 2026-10-16: the first three rechecks were UNRUNNABLE because the sweep's
+    environment never set the ingest's flag — the mechanism's drain was a switch its own run never
+    set, so every command check was SKIP and the verdict could never be PASS or FAIL.
+    """
+    return str(env.get(POST_MERGE_COMMANDS_FLAG, "1")).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
 
 
 def gate_status(

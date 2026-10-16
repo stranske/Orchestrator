@@ -438,6 +438,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "flags_defaults": {
             "orchestrate_default": {"ORCH_RUN_RUNTIME_AC": "1"},
             "command_execution_default": {"ORCH_RUNTIME_AC_ALLOW_COMMANDS": "0"},
+            "post_merge_commands_default": {"ORCH_RUNTIME_AC_POST_MERGE_COMMANDS": "1"},
             "post_merge_reopen_default": {"ORCH_RUNTIME_AC_REOPEN": "0"},
         },
         "gate_reason": "advisory canary is limited to explicit runtime-AC items; command execution stays off",

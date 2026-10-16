@@ -171,6 +171,11 @@ planned with `shadow_execution_budget`. `runtime_ac_checkout_failures` and per-t
 `runtime_ac_checkout_errors` distinguish checkout/cleanup failures from disabled execution.
 Disposable trees are removed after each observation. Command checks retain their separate
 `ORCH_RUNTIME_AC_ALLOW_COMMANDS` opt-in; shadow verdicts never write outcomes or enforce merges.
+The post-merge recheck in the durability sweep runs command checks by default, because its purpose
+is the issue's named test on the merged tip; `ORCH_RUNTIME_AC_POST_MERGE_COMMANDS=0` is its own kill
+switch. An UNRUNNABLE recheck carries its reason (`commands_disabled`, `manual_only`, `tool_error`,
+`incomplete`), the weekly line prints `passed` and the reasons, and only a `manual_only` spec is
+commented on the issue, in one line.
 Live execution is observable only after the normal manual mirror sync.
 
 ### The tick (hourly `orchestrate.sh --active`)
