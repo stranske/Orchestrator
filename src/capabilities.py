@@ -3710,6 +3710,32 @@ def _selftest() -> None:
         assert stale["entrypoint"] == KNOWN_GATES["role-prompt"]["entrypoint"]
         assert stale["flags_defaults"]["ORCH_ROLE_SHADOW"] == "1"
 
+        # Source599: reconcile an existing offload row without lifecycle or acting credit.
+        offload = _blank_capability("offload")
+        offload.update(
+            {
+                "status": "wired",
+                "downstream_consumer": "No consumer — original prose row",
+                "event_history": [{"type": "invocation", "run_id": "original-offload"}],
+                "outcome_links": [{"run_id": "original-offload", "status": "pending"}],
+            }
+        )
+        preserved = json.loads(json.dumps(offload))
+        assert _reconcile_known_declarations(
+            {"offload": offload}, 102
+        ), "offload consumer reconciliation missing"
+        assert "roles.py:run_prompt_agent" in offload["downstream_consumer"]
+        assert "feedback.py:record_role_run" in offload["downstream_consumer"]
+        assert offload["status"] == preserved["status"]
+        assert offload["outcome_links"] == preserved["outcome_links"]
+        assert offload["event_history"][0] == preserved["event_history"][0]
+        assert offload["event_history"][-1]["type"] == "declaration_reconciled"
+        assert offload["event_history"][-1]["activation_inferred"] is False
+        assert offload.get("kill_switch_category") == preserved.get("kill_switch_category")
+        assert not _reconcile_known_declarations(
+            {"offload": offload}, 103
+        ), "offload reconciliation must be idempotent"
+
         # A declared status is a FLOOR. Above it (`shadow` over role-prompt's `wired`), a status a
         # lifecycle transition set stands and one only a declaration placed follows it down; below
         # it (a row revived to `observed`), the row is lifted whoever put it there.

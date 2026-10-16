@@ -98,7 +98,7 @@ pending PR-body addition.
 
 ## Current-head closer review repair
 
-Fresh guarded Sol review at51ac7dbf found that the original source599 offload row was omitted from both declaration tables, so the original table-only test could pass while its live prose remained. A read-only live-ledger audit confirmed that row still exists. The added overlay names existing role consumers and the existing backend-run binding; it grants no lifecycle status or measured credit. The new regression starts from the original prose row and requires successful, idempotent reconciliation with unchanged status, event history and outcome links. It assertion-fails before the overlay and passes after it. All original post-sync/October27 acceptance remains open.
+Fresh guarded Sol review at51ac7dbf found that the original source599 offload row was omitted from both declaration tables, so the original table-only test could pass while its live prose remained. A read-only live-ledger audit confirmed that row still exists. The added overlay names existing role consumers and the existing backend-run binding; it grants no lifecycle status or measured credit. The new regression starts from the original prose row and requires successful, idempotent reconciliation with unchanged status and outcome links and preserved prior invocation history; reconciliation appends its declaration event. It assertion-fails before the overlay and passes after it. All original post-sync/October27 acceptance remains open.
 
 ## 2026-10-16 keepalive admission-debt regression
 
