@@ -2003,6 +2003,19 @@ neither this input nor its serialized result authenticates a historical native e
 changes historical NON_PASS. Default invocation is a dry run; only explicit `--dispatch` calls
 the existing role backend and records its native role receipt. This creates no role or ledger.
 
+Native original-case retry uses a separate private SQLite receipt journal, never the persisted
+report JSON, as its trust boundary. The journal reserves one `(original case, substantive evidence
+revision)` before provider dispatch and commits the raw response, backend ID, usage and error
+before JSON parsing, Brain telemetry, cost refresh or a success event. A crash after reservation
+is `in_flight UNKNOWN` and blocks automatic redispatch; this is deliberately not an exactly-once
+claim across the provider boundary. The original report is immutable input and any native result
+is a separately created projection bound to its source hash, original case ID and full retained
+paid-attempt lineage. Restart admission requires both the journal's trusted record and a freshly
+issued in-process collected case; copied JSON fields, packet hashes and `persisted_admission`
+cannot authenticate it. The spend revision excludes administrative owner/action/order wording
+while retaining collected bytes, coverage and UNKNOWN references. Native admission still does not
+grade a case without independently established later truth.
+
 ### CLI
 
 ```bash

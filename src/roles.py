@@ -2868,6 +2868,7 @@ def run_adjudicator_agent(
     cwd: str = ".",
     timeout: int = 600,
     exploration_rate: float | None = None,
+    lifecycle_hook=None,
 ) -> dict:
     """SHADOW ONLY. Assess a disputed blocker/veto; never mutates or emits final panel verdicts."""
     role = ROLE_REGISTRY["adjudicator"]
@@ -2936,6 +2937,13 @@ def run_adjudicator_agent(
                 isolate=retrospective_origin,
                 subject_id=feedback.work_item_subject(compact_case.get("target")),
             )
+            # A caller that has made a durable paid-attempt reservation gets the
+            # untouched provider response before this function parses it, writes
+            # Brain telemetry, or reports a capability success.  The hook is
+            # deliberately narrow: it is an execution receipt, not authority to
+            # manufacture a collected-case capability or a report admission.
+            if lifecycle_hook is not None:
+                lifecycle_hook(res)
             backend_run_id = res.get("run_id")
             backend_model = res.get("model")
             backend_usage = res.get("usage") or {}
