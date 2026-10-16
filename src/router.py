@@ -502,8 +502,15 @@ def select_agent(
             continue
         if st == "warn" and not allow_warn:
             continue
+        raw_agent_profiles = execution_profiles.profiles_for_agent(
+            entry["agent"], transport=profile_transport
+        )
         agent_profiles = _automatic_profiles(entry, transport=profile_transport)
-        if entry["agent"] == "gemini" and not agent_profiles:
+        if (
+            entry["agent"] == "gemini"
+            and not agent_profiles
+            and (raw_agent_profiles or profile_transport != "remote")
+        ):
             # A missing tier profile is a configuration fault. Do not turn it into
             # a profile-less Gemini dispatch that bypasses the model policy.
             continue

@@ -1624,13 +1624,21 @@ def _select_offload_profile(agent: str, mode: str | None) -> dict | None:
         # it: with only a Pro profile registered, every gemini read was routed to the reasoning
         # tier, and with three codex profiles it picked whichever sorted first.
         #
-        # An offload is an advisory READ. Where the seat has a tier ladder, take the rung the ladder
-        # names for that tier; a single-lane seat (cursor, vibe, aider) has no ladder and keeps its
-        # one profile. Falling back to the full candidate set means a seat whose tier model has no
-        # registered profile behaves exactly as before rather than losing its profile entirely.
+        # Gemini's tier is a spend policy. A fresh automatic offload must use a
+        # profile for the live resolved tier model, or refuse before dispatch.
+        # Other agents retain the legacy fallback for their unprofiled/single-lane
+        # paths.
         tier = mode if mode in adapters.MODEL_TIER_NAMES else adapters.DEFAULT_OFFLOAD_TIER
-        tier_model = adapters.resolve_model(agent, tier)
+        if agent == "gemini":
+            health = adapters.model_health(agent, tier)
+            if not health["resolvable"]:
+                return None
+            tier_model = health["model"]
+        else:
+            tier_model = adapters.resolve_model(agent, tier)
         tiered = [p for p in profiles if tier_model and p["requested_model"] == tier_model]
+        if agent == "gemini" and not tiered:
+            return None
         candidate_ids = sorted(profile["profile_id"] for profile in (tiered or profiles))
         envelope = execution_profiles.select_profile(
             "offload",
@@ -1799,6 +1807,17 @@ def offload(
         # ORCH_OFFLOAD_TIER overrides. Cursor stays on Composer: it has no verified tier pins
         # (CLI unauthenticated) and frontier draws the metered mid-tier pool (LOCAL_POLICY.md). (2026-08-08)
         mode = "composer" if agent == "cursor" else adapters.DEFAULT_OFFLOAD_TIER
+    automatic_profile = None
+    if agent == "gemini" and not profile_id:
+        automatic_profile = _select_offload_profile(agent, mode)
+        if automatic_profile is None:
+            return {
+                "agent": agent,
+                "exit": 2,
+                "output": "",
+                "error": f"Gemini {mode} offload profile is unavailable or unresolved",
+                "run_id": None,
+            }
     # Infrastructure capabilities are never ROUTED to — they run as part of the work — so they
     # record use at their own code path rather than through a matcher. Inert outside an active
     # tick (ORCH_CAPABILITY_HEARTBEATS), so tests and manual runs stay silent. Never allowed to
@@ -1865,7 +1884,7 @@ def offload(
     prepared_prompt = _offload_prompt(prompt, run_cwd, agent)
     if relocated:
         prepared_prompt = f"{prepared_prompt}\n{_relocated_workspace_rule(relocated)}"
-    profile = execution_profiles.get_profile(profile_id) if profile_id else None
+    profile = execution_profiles.get_profile(profile_id) if profile_id else automatic_profile
     if profile is None:
         # SELECT one when the caller did not name it. This single line is why no worker execution
         # attempt had ever been recorded: the worker-attempt write below is guarded on `profile`,

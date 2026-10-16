@@ -24,6 +24,7 @@ import pytest
 
 import adapters
 import capacity
+import dispatcher
 import env_prereq
 import execution_profiles
 import router
@@ -1198,6 +1199,93 @@ def test_router_fails_closed_when_gemini_route_tier_has_no_profile(monkeypatch):
         )
         is None
     )
+
+
+def test_router_preserves_unprofiled_remote_gemini_admission():
+    """Remote transport has no profile registry; retain its established agent-only route."""
+    selected = router.select_agent(
+        "implement",
+        {"agents": {"gemini": {"state": "ok"}}},
+        only={"gemini"},
+        exploration_rate=0.0,
+        profile_transport="remote",
+    )
+    assert selected is not None
+    assert selected["agent"] == "gemini"
+    assert "selected_profile_id" not in selected
+    assert "requested_model" not in selected
+
+
+def test_router_refuses_remote_gemini_when_registered_profile_misses_route_tier(monkeypatch):
+    """A future remote profile registry must obey the tier constraint once it exists."""
+    original = execution_profiles.profiles_for_agent
+    monkeypatch.setattr(
+        execution_profiles,
+        "profiles_for_agent",
+        lambda agent, **kwargs: (
+            [execution_profiles.get_profile("gemini-3.8-flash-high")]
+            if agent == "gemini" and kwargs.get("transport") == "remote"
+            else original(agent, **kwargs)
+        ),
+    )
+    assert (
+        router.select_agent(
+            "implement",
+            {"agents": {"gemini": {"state": "ok"}}},
+            only={"gemini"},
+            exploration_rate=0.0,
+            profile_transport="remote",
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("mode", "catalog"),
+    (
+        ("cheap", ["gemini-4.2-flash-low"]),
+        ("mid", ["gemini-4-argon-low", "gemini-4-argon-medium", "gemini-4-argon-high"]),
+    ),
+)
+def test_gemini_offload_refuses_unmatched_or_unresolvable_tier_before_execution(
+    monkeypatch, mode, catalog
+):
+    """The real offload caller must stop before workspace, heartbeat, or subprocess work."""
+    _fake_catalog(monkeypatch, catalog)
+
+    def unexpected_boundary(*_args, **_kwargs):
+        raise AssertionError("unavailable Gemini tier must not reach an execution boundary")
+
+    monkeypatch.setattr(dispatcher.adapters, "agent_workspace", unexpected_boundary)
+    monkeypatch.setattr(dispatcher, "_capability_heartbeat", unexpected_boundary)
+    monkeypatch.setattr(dispatcher.subprocess, "run", unexpected_boundary)
+    assert dispatcher._select_offload_profile("gemini", mode) is None
+    refused = dispatcher.offload("gemini", "read", mode=mode)
+    assert refused["exit"] == 2
+    assert refused["run_id"] is None
+    assert "unavailable or unresolved" in refused["error"]
+
+
+def test_gemini_offload_refuses_when_tier_profile_is_missing(monkeypatch):
+    """A readable catalog cannot turn a missing mid profile into another tier's argv."""
+    _fake_catalog(monkeypatch, ["gemini-3.8-flash-high"])
+    original = execution_profiles.profiles_for_agent
+    monkeypatch.setattr(
+        execution_profiles,
+        "profiles_for_agent",
+        lambda agent, **kwargs: [
+            profile
+            for profile in original(agent, **kwargs)
+            if profile["requested_model"] != "gemini-3.8-flash-high"
+        ],
+    )
+    monkeypatch.setattr(
+        dispatcher.adapters,
+        "agent_workspace",
+        lambda *_args, **_kwargs: pytest.fail("missing profile must not allocate a workspace"),
+    )
+    assert dispatcher._select_offload_profile("gemini", "mid") is None
+    assert dispatcher.offload("gemini", "read", mode="mid")["exit"] == 2
 
 
 def test_argon_retirement_preserves_historical_profile_identity():
