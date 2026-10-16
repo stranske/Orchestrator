@@ -193,6 +193,22 @@ def test_capacity_states_are_copied_verbatim_from_the_snapshot(tmp_path: Path) -
     assert document["capacity"]["codex"]["state"] == capacity.SHED
 
 
+def test_capacity_block_coerces_malformed_agent_fields(tmp_path: Path) -> None:
+    """Null/non-string state, bad observed_at, and non-dict rows must not leak."""
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    snapshot = _capacity_fixture()
+    snapshot["generated_at"] = "not-an-int"
+    snapshot["agents"]["codex"] = {"state": None, "window": ""}
+    snapshot["agents"]["claude"] = "not-a-row"
+    document = export.build_document(database, capacity_snapshot=snapshot)
+    assert document["capacity"]["codex"]["state"] == capacity.UNKNOWN
+    assert document["capacity"]["codex"]["window"] == capacity.AGENTS["codex"]["window"]
+    assert document["capacity"]["codex"]["observed_at"] == 0
+    assert document["capacity"]["claude"]["state"] == capacity.UNKNOWN
+    assert document["capacity"]["claude"]["window"] == capacity.AGENTS["claude"]["window"]
+
+
 def test_capacity_states_use_capacity_agent_state_vocabulary(tmp_path: Path) -> None:
     database = tmp_path / "weights.db"
     export._fixture_db(database)

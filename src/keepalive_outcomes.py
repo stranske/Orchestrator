@@ -684,8 +684,16 @@ def _export_policy_at(dispatch_ts: int) -> dict | None:
             f"?ref={sha}",
         ]
     )
-    if not isinstance(document, dict) or document.get("schema") != route_weights_export.SCHEMA:
+    # Require a string schema before equality: a list/object value must fail open
+    # (retain no policy), never raise when compared or membership-tested.
+    schema = document.get("schema") if isinstance(document, dict) else None
+    if (
+        not isinstance(document, dict)
+        or not isinstance(schema, str)
+        or schema != route_weights_export.SCHEMA
+    ):
         return None
+
     exploration = document.get("exploration")
     if not isinstance(exploration, dict):
         return None
@@ -1688,11 +1696,13 @@ def _selftest_dispatch_policy(now: int) -> None:
     for bad_document in (
         {},
         {"schema": route_weights_export.SCHEMA},
+        {"schema": []},  # wrong-shaped: must fail open, never TypeError
         document(1, "unknown"),
         document(1, []),
     ):
         with mock.patch(__name__ + "._run_json", side_effect=[[{"sha": old_sha}], bad_document]):
             assert _export_policy_at(earlier) is None, bad_document
+
     undated = runner_comment(101, earlier)
     undated["body"] = outcomes.RUNNER_MARKER_RE.sub(
         "<!-- runner-reservation:codex:101:v1 "

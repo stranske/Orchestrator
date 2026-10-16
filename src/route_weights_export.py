@@ -110,15 +110,26 @@ def _capacity_block(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     """Per-agent capacity state for remote consumers (state and window only)."""
     if snapshot is None:
         snapshot = _current_capacity_snapshot()
-    observed_at = int(snapshot.get("generated_at") or 0)
-    agents = snapshot.get("agents") or {}
+    agents = snapshot.get("agents") if isinstance(snapshot.get("agents"), dict) else {}
+    observed_raw = snapshot.get("generated_at")
+    try:
+        observed_at = int(observed_raw)
+    except (TypeError, ValueError):
+        observed_at = 0
     block: dict[str, Any] = {}
     for agent in sorted(capacity.AGENTS):
-        row = agents.get(agent) or {}
+        raw = agents.get(agent)
+        row = raw if isinstance(raw, dict) else {}
         cfg = capacity.AGENTS[agent]
+        state = row.get("state")
+        if not isinstance(state, str) or not state:
+            state = capacity.UNKNOWN
+        window = row.get("window")
+        if not isinstance(window, str) or not window:
+            window = str(cfg.get("window") or "")
         block[agent] = {
-            "state": row.get("state", capacity.UNKNOWN),
-            "window": row.get("window", cfg["window"]),
+            "state": state,
+            "window": window,
             "observed_at": observed_at,
         }
     return block
