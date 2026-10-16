@@ -24,7 +24,10 @@ import pytest
 
 import adapters
 import capacity
+import dispatcher
 import env_prereq
+import execution_profiles
+import router
 
 # Captured at import, BEFORE the autouse fixture below replaces it, so a future test that genuinely
 # wants the host predicate has something to restore:
@@ -282,7 +285,7 @@ def test_build_command_honours_every_tier(tmp_path, monkeypatch):
     expected = {
         "codex": ("gpt-6-luna", "gpt-5.6-terra", "gpt-6.1-sol"),
         "claude": ("claude-haiku-4-5", "claude-sonnet-5-5", "claude-sonnet-5-5"),
-        "gemini": ("gemini-4-argon-low", "gemini-4-argon-medium", "gemini-4-argon-high"),
+        "gemini": ("gemini-3.8-flash-low", "gemini-3.8-flash-high", "gemini-4-argon-high"),
     }
     for agent, models in expected.items():
         for tier, model in zip(adapters.MODEL_TIER_NAMES, models):
@@ -292,10 +295,11 @@ def test_build_command_honours_every_tier(tmp_path, monkeypatch):
             assert model == adapters.MODEL_TIERS[agent][expected_tier], (agent, tier)
 
 
-def test_gemini_tiers_use_the_owner_approved_argon_effort_ladder():
-    """Owner-approved successor keeps all three effort rungs distinct."""
-    for tier, effort in (("cheap", "low"), ("mid", "medium"), ("full", "high")):
-        assert adapters.MODEL_TIERS["gemini"][tier] == f"gemini-4-argon-{effort}"
+def test_gemini_cheap_and_mid_are_flash_and_only_full_is_argon():
+    """Same shape as codex/claude: routine tiers run the cheaper model, only full the frontier one."""
+    for tier in ("cheap", "mid"):
+        assert "flash" in adapters.MODEL_TIERS["gemini"][tier], tier
+    assert adapters.MODEL_TIERS["gemini"]["full"] == "gemini-4-argon-high"
 
 
 def test_offload_defaults_to_the_mid_tier():
@@ -343,6 +347,32 @@ def test_rename_keeps_a_flash_tier_on_flash(monkeypatch):
     _fake_catalog(monkeypatch, ["gemini-4.2-flash-low", "gemini-4.1-pro-high"])
     health = adapters.model_health("gemini", "cheap")
     assert health["model"] == "gemini-4.2-flash-low", health
+
+
+@pytest.mark.parametrize("tier", ("cheap", "mid"))
+def test_missing_flash_family_fails_closed_instead_of_promoting_to_argon(monkeypatch, tier):
+    """A missing low-cost family is unavailable, not permission to spend Argon."""
+    monkeypatch.delenv(f"ORCH_GEMINI_MODEL_{tier.upper()}", raising=False)
+    _fake_catalog(
+        monkeypatch,
+        ["gemini-4-argon-low", "gemini-4-argon-medium", "gemini-4-argon-high"],
+    )
+    health = adapters.model_health("gemini", tier)
+    assert not health["resolvable"], health
+    assert health["model"] == adapters.MODEL_TIERS["gemini"][tier], health
+
+
+def test_unknown_gemini_family_keeps_legacy_catalog_fallback():
+    """Only recognised tier families fail closed; unknown legacy pins keep their old fallback."""
+    assert (
+        adapters._auto_resolve(
+            "gemini",
+            "cheap",
+            "gemini-9-unknown-low",
+            ["gemini-4-argon-high", "gemini-3.8-flash-low"],
+        )
+        == "gemini-4-argon-high"
+    )
 
 
 def test_non_gemini_rename_is_reported_not_guessed(monkeypatch):
@@ -1085,8 +1115,8 @@ def test_argon_successor_tiers_reach_matching_offload_profiles(monkeypatch, tmp_
     ):
         monkeypatch.delenv(name, raising=False)
     expected = {
-        "cheap": "gemini-4-argon-low",
-        "mid": "gemini-4-argon-medium",
+        "cheap": "gemini-3.8-flash-low",
+        "mid": "gemini-3.8-flash-high",
         "full": "gemini-4-argon-high",
     }
     assert adapters.MODEL_TIERS["gemini"] == expected
@@ -1101,7 +1131,7 @@ def test_argon_successor_tiers_reach_matching_offload_profiles(monkeypatch, tmp_
         chosen = dispatcher._select_offload_profile("gemini", mode)
         assert chosen is not None
         assert chosen["requested_model"] == expected[tier]
-        assert chosen["reasoning_effort"] == {"cheap": "low", "mid": "medium", "full": "high"}[tier]
+        assert chosen["reasoning_effort"] == {"cheap": "low", "mid": "high", "full": "high"}[tier]
         assert chosen["profile_id"] not in execution_profiles.PROFILE_RETIREMENTS
         argv = adapters.build_command(
             "gemini", "read only", mode=mode, cwd=tmp_path, profile=chosen
@@ -1109,25 +1139,179 @@ def test_argon_successor_tiers_reach_matching_offload_profiles(monkeypatch, tmp_
         assert argv[argv.index("--model") + 1] == chosen["requested_model"]
 
 
+@pytest.mark.parametrize(
+    ("task_type", "mode"),
+    (
+        ("codemod", "cheap"),
+        ("testgen", "mid"),
+        ("review", "mid"),
+        ("implement", "full"),
+        ("epic", "full"),
+        ("cross_repo", "full"),
+        ("runtime_ac", "full"),
+    ),
+)
+def test_router_automatic_gemini_profile_matches_route_tier(task_type, mode):
+    """Profile priors must not override the route's Gemini spend tier."""
+    profiles = execution_profiles.profiles_for_agent("gemini")
+    cap = {
+        "agents": {"gemini": {"state": "ok"}},
+        "profiles": {profile["profile_id"]: {"state": "ok"} for profile in profiles},
+    }
+    expected_model = adapters.MODEL_TIERS["gemini"][mode]
+    selected = router.select_agent(
+        task_type,
+        cap,
+        only={"gemini"},
+        exploration_rate=0.0,
+        profile_seed=7,
+        profile_scores={
+            profile["profile_id"]: 100.0
+            for profile in profiles
+            if profile["requested_model"] != expected_model
+        },
+        causal_context={"target": "owner/repo#gemini-tier"},
+    )
+    assert selected is not None
+    assert selected["mode"] == mode
+    assert selected["requested_model"] == expected_model
+    assert {
+        execution_profiles.get_profile(profile_id)["requested_model"]
+        for profile_id in selected["candidate_profile_ids"]
+    } == {expected_model}
+
+
+def test_router_fails_closed_when_gemini_route_tier_has_no_profile(monkeypatch):
+    """An incomplete tier map must not dispatch Gemini without a profile envelope."""
+    profiles = execution_profiles.profiles_for_agent("gemini")
+    cap = {
+        "agents": {"gemini": {"state": "ok"}},
+        "profiles": {profile["profile_id"]: {"state": "ok"} for profile in profiles},
+    }
+    monkeypatch.delitem(adapters.MODEL_TIERS["gemini"], "full")
+    assert (
+        router.select_agent(
+            "implement",
+            cap,
+            only={"gemini"},
+            exploration_rate=0.0,
+            causal_context={"target": "owner/repo#missing-gemini-tier"},
+        )
+        is None
+    )
+
+
+def test_router_preserves_unprofiled_remote_gemini_admission():
+    """Remote transport has no profile registry; retain its established agent-only route."""
+    selected = router.select_agent(
+        "implement",
+        {"agents": {"gemini": {"state": "ok"}}},
+        only={"gemini"},
+        exploration_rate=0.0,
+        profile_transport="remote",
+    )
+    assert selected is not None
+    assert selected["agent"] == "gemini"
+    assert "selected_profile_id" not in selected
+    assert "requested_model" not in selected
+
+
+def test_router_refuses_remote_gemini_when_registered_profile_misses_route_tier(monkeypatch):
+    """A future remote profile registry must obey the tier constraint once it exists."""
+    original = execution_profiles.profiles_for_agent
+    monkeypatch.setattr(
+        execution_profiles,
+        "profiles_for_agent",
+        lambda agent, **kwargs: (
+            [execution_profiles.get_profile("gemini-3.8-flash-high")]
+            if agent == "gemini" and kwargs.get("transport") == "remote"
+            else original(agent, **kwargs)
+        ),
+    )
+    assert (
+        router.select_agent(
+            "implement",
+            {"agents": {"gemini": {"state": "ok"}}},
+            only={"gemini"},
+            exploration_rate=0.0,
+            profile_transport="remote",
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("mode", "catalog"),
+    (
+        ("cheap", ["gemini-4.2-flash-low"]),
+        ("mid", ["gemini-4-argon-low", "gemini-4-argon-medium", "gemini-4-argon-high"]),
+    ),
+)
+def test_gemini_offload_refuses_unmatched_or_unresolvable_tier_before_execution(
+    monkeypatch, mode, catalog
+):
+    """The real offload caller must stop before workspace, heartbeat, or subprocess work."""
+    _fake_catalog(monkeypatch, catalog)
+
+    def unexpected_boundary(*_args, **_kwargs):
+        raise AssertionError("unavailable Gemini tier must not reach an execution boundary")
+
+    monkeypatch.setattr(dispatcher.adapters, "agent_workspace", unexpected_boundary)
+    monkeypatch.setattr(dispatcher, "_capability_heartbeat", unexpected_boundary)
+    monkeypatch.setattr(dispatcher.subprocess, "run", unexpected_boundary)
+    assert dispatcher._select_offload_profile("gemini", mode) is None
+    refused = dispatcher.offload("gemini", "read", mode=mode)
+    assert refused["exit"] == 2
+    assert refused["run_id"] is None
+    assert "unavailable or unresolved" in refused["error"]
+
+
+def test_gemini_offload_refuses_when_tier_profile_is_missing(monkeypatch):
+    """A readable catalog cannot turn a missing mid profile into another tier's argv."""
+    _fake_catalog(monkeypatch, ["gemini-3.8-flash-high"])
+    original = execution_profiles.profiles_for_agent
+    monkeypatch.setattr(
+        execution_profiles,
+        "profiles_for_agent",
+        lambda agent, **kwargs: [
+            profile
+            for profile in original(agent, **kwargs)
+            if profile["requested_model"] != "gemini-3.8-flash-high"
+        ],
+    )
+    monkeypatch.setattr(
+        dispatcher.adapters,
+        "agent_workspace",
+        lambda *_args, **_kwargs: pytest.fail("missing profile must not allocate a workspace"),
+    )
+    assert dispatcher._select_offload_profile("gemini", "mid") is None
+    assert dispatcher.offload("gemini", "read", mode="mid")["exit"] == 2
+
+
 def test_argon_retirement_preserves_historical_profile_identity():
     import execution_profiles
 
     expected = {
-        "gemini-3.7-flash-low": "gemini-4-argon-low",
-        "gemini-3.7-flash-high": "gemini-4-argon-medium",
-        "gemini-3.8-flash-low": "gemini-4-argon-low",
-        "gemini-3.8-flash-high": "gemini-4-argon-medium",
+        "gemini-3.7-flash-low": "gemini-3.8-flash-low",
+        "gemini-3.7-flash-high": "gemini-3.8-flash-high",
         "gemini-3.1-pro-high": "gemini-4-argon-high",
     }
     for old, successor in expected.items():
         assert execution_profiles.get_profile(old)["requested_model"] == old
         assert execution_profiles.resolve_production_profile_id(old) == successor
-    active = execution_profiles.profiles_for_agent("gemini", transport="offload")
-    assert {p["requested_model"] for p in active} == set(expected.values())
+    # Current Flash is NOT retired: its identity resolves to itself.
+    for flash in ("gemini-3.8-flash-low", "gemini-3.8-flash-high"):
+        assert execution_profiles.resolve_production_profile_id(flash) == flash
+    active = {
+        p["requested_model"]
+        for p in execution_profiles.profiles_for_agent("gemini", transport="offload")
+    }
+    assert {"gemini-3.8-flash-low", "gemini-3.8-flash-high", "gemini-4-argon-high"} <= active
 
 
 def test_argon_rename_preserves_family_and_effort(monkeypatch):
-    for tier, effort in (("cheap", "low"), ("mid", "medium"), ("full", "high")):
+    """Only the full tier is Argon; a missing Argon family must not fall back to Pro or Flash."""
+    for tier, effort in (("full", "high"),):
         monkeypatch.delenv(f"ORCH_GEMINI_MODEL_{tier.upper()}", raising=False)
         monkeypatch.delenv("ORCH_GEMINI_MODEL", raising=False)
         _fake_catalog(monkeypatch, ["gemini-3.8-flash-high", "gemini-3.1-pro-high"])
@@ -1145,3 +1329,50 @@ def test_argon_rename_preserves_family_and_effort(monkeypatch):
             )
             renamed = adapters.model_health("gemini", tier)
             assert renamed["model"] == f"gemini-{newest}-argon-{effort}"
+
+
+@pytest.mark.parametrize("scenario", ["ceiling", "override", "unresolvable"])
+@pytest.mark.parametrize("surface", ["router", "offload"])
+def test_automatic_gemini_respects_effective_model_policy(monkeypatch, scenario, surface):
+    """An immutable profile must not bypass the live operator policy or catalog health."""
+    monkeypatch.delenv("ORCH_GEMINI_MAX_TIER", raising=False)
+    monkeypatch.delenv("ORCH_GEMINI_MODEL", raising=False)
+    monkeypatch.delenv("ORCH_GEMINI_MODEL_FULL", raising=False)
+    if scenario == "ceiling":
+        monkeypatch.setenv("ORCH_GEMINI_MAX_TIER", "mid")
+        _fake_catalog(monkeypatch, list(adapters.MODEL_TIERS["gemini"].values()))
+        expected = "gemini-3.8-flash-high"
+    elif scenario == "override":
+        monkeypatch.setenv("ORCH_GEMINI_MODEL_FULL", "gemini-4-argon-medium")
+        _fake_catalog(monkeypatch, ["gemini-4-argon-medium", "gemini-4-argon-high"])
+        expected = "gemini-4-argon-medium"
+    else:
+        _fake_catalog(monkeypatch, ["gemini-3.8-flash-high"])
+        expected = None
+    if surface == "router":
+        selected = router._automatic_profiles(
+            {"agent": "gemini", "mode": "full", "late": False}, transport="local"
+        )
+        assert {p["requested_model"] for p in selected} == ({expected} if expected else set())
+    else:
+        selected = dispatcher._select_offload_profile("gemini", "full")
+        assert (selected["requested_model"] if selected else None) == expected
+
+
+@pytest.mark.parametrize("transport", ["local", "remote"])
+def test_router_refuses_gemini_when_final_profile_resolution_disappears(monkeypatch, transport):
+    """A second health read must never downgrade an admitted profile into agent-only dispatch."""
+    profile = execution_profiles.get_profile("gemini-4-argon-high")
+    reads = iter([[profile], []])
+    monkeypatch.setattr(router, "_automatic_profiles", lambda *_a, **_kw: next(reads))
+    monkeypatch.setattr(execution_profiles, "profiles_for_agent", lambda *_a, **_kw: [profile])
+    assert (
+        router.select_agent(
+            "implement",
+            {"agents": {"gemini": {"state": "ok"}}},
+            only={"gemini"},
+            exploration_rate=0,
+            profile_transport=transport,
+        )
+        is None
+    )

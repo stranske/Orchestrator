@@ -1624,13 +1624,22 @@ def _select_offload_profile(agent: str, mode: str | None) -> dict | None:
         # it: with only a Pro profile registered, every gemini read was routed to the reasoning
         # tier, and with three codex profiles it picked whichever sorted first.
         #
-        # An offload is an advisory READ. Where the seat has a tier ladder, take the rung the ladder
-        # names for that tier; a single-lane seat (cursor, vibe, aider) has no ladder and keeps its
-        # one profile. Falling back to the full candidate set means a seat whose tier model has no
-        # registered profile behaves exactly as before rather than losing its profile entirely.
+        # Gemini's tier is a spend policy. A fresh automatic offload must use a
+        # profile for the live resolved tier model, or refuse before dispatch.
+        # Other agents retain the legacy fallback for their unprofiled/single-lane
+        # paths.
         tier = mode if mode in adapters.MODEL_TIER_NAMES else adapters.DEFAULT_OFFLOAD_TIER
-        tier_model = adapters.resolve_model(agent, tier)
+        if agent == "gemini":
+            tier = adapters.effective_tier(agent, tier)
+            health = adapters.model_health(agent, tier)
+            if not health["resolvable"]:
+                return None
+            tier_model = health["model"]
+        else:
+            tier_model = adapters.resolve_model(agent, tier)
         tiered = [p for p in profiles if tier_model and p["requested_model"] == tier_model]
+        if agent == "gemini" and not tiered:
+            return None
         candidate_ids = sorted(profile["profile_id"] for profile in (tiered or profiles))
         envelope = execution_profiles.select_profile(
             "offload",
@@ -1799,6 +1808,17 @@ def offload(
         # ORCH_OFFLOAD_TIER overrides. Cursor stays on Composer: it has no verified tier pins
         # (CLI unauthenticated) and frontier draws the metered mid-tier pool (LOCAL_POLICY.md). (2026-08-08)
         mode = "composer" if agent == "cursor" else adapters.DEFAULT_OFFLOAD_TIER
+    automatic_profile = None
+    if agent == "gemini" and not profile_id:
+        automatic_profile = _select_offload_profile(agent, mode)
+        if automatic_profile is None:
+            return {
+                "agent": agent,
+                "exit": 2,
+                "output": "",
+                "error": f"Gemini {mode} offload profile is unavailable or unresolved",
+                "run_id": None,
+            }
     # Infrastructure capabilities are never ROUTED to — they run as part of the work — so they
     # record use at their own code path rather than through a matcher. Inert outside an active
     # tick (ORCH_CAPABILITY_HEARTBEATS), so tests and manual runs stay silent. Never allowed to
@@ -1865,7 +1885,7 @@ def offload(
     prepared_prompt = _offload_prompt(prompt, run_cwd, agent)
     if relocated:
         prepared_prompt = f"{prepared_prompt}\n{_relocated_workspace_rule(relocated)}"
-    profile = execution_profiles.get_profile(profile_id) if profile_id else None
+    profile = execution_profiles.get_profile(profile_id) if profile_id else automatic_profile
     if profile is None:
         # SELECT one when the caller did not name it. This single line is why no worker execution
         # attempt had ever been recorded: the worker-attempt write below is guarded on `profile`,
@@ -2776,8 +2796,27 @@ def _selftest_spawn_reads_the_agents_status(plan: dict, root: Path) -> None:
     assert "--exit-code 7" in steps[1], ("complete is told the agent's status", steps)
 
 
+def _selftest_gemini_refusal() -> None:
+    from unittest.mock import patch
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("unavailable automatic Gemini profile reached execution")
+
+    with patch.dict(os.environ, {"ORCH_OFFLOAD_DISABLED": "0"}), patch.object(
+        execution_profiles, "profiles_for_agent", return_value=[]
+    ), patch.object(adapters, "agent_workspace", side_effect=forbidden), patch.object(
+        sys.modules[__name__], "_capability_heartbeat", side_effect=forbidden
+    ), patch.object(
+        subprocess, "run", side_effect=forbidden
+    ):
+        result = offload("gemini", "selftest refusal", mode="mid")
+        assert result["exit"] == 2 and result["run_id"] is None, result
+
+
 def _selftest() -> None:
     import tempfile
+
+    _selftest_gemini_refusal()
 
     tmp = tempfile.mkdtemp(prefix="dispatcher-selftest-")
     os.environ["HANDOFF_DIR"] = tmp
@@ -3949,8 +3988,8 @@ def _selftest() -> None:
         # registering one top-tier profile per seat silently overrode it: every gemini read was
         # routed to Pro.
         #
-        # Gemini now uses the owner-approved Argon effort ladder. An advisory read takes
-        # medium; explicit cheap/full requests retain their low/high rung.
+        # Gemini cheap/mid ride 3.8 Flash and only full is Argon High. An advisory read takes
+        # mid; explicit cheap/full requests retain their tier.
         for seat in ("codex", "claude", "gemini"):
             wanted = adapters.resolve_model(seat, adapters.DEFAULT_OFFLOAD_TIER)
             chosen = _select_offload_profile(seat, "offload")
@@ -3960,9 +3999,9 @@ def _selftest() -> None:
         # fix is choosing per task, not deleting the expensive rung.
         gemini_ids = {p["profile_id"] for p in execution_profiles.profiles_for_agent("gemini")}
         assert "gemini-4-argon-high" in gemini_ids, gemini_ids
-        assert "gemini-4-argon-medium" in gemini_ids, gemini_ids
+        assert "gemini-3.8-flash-high" in gemini_ids, gemini_ids
         # The cheap rung is registered too, so the ladder the router names is fully reachable.
-        assert "gemini-4-argon-low" in gemini_ids, gemini_ids
+        assert "gemini-3.8-flash-low" in gemini_ids, gemini_ids
 
         # AGY REPORTS IN ITS LOG, and the log must be PER RUN. agy's structured output carries only
         # conversation_id/cwd/usage; its log carries

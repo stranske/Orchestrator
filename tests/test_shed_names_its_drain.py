@@ -32,6 +32,7 @@ import pytest
 import adapters
 import capacity
 import dispatcher
+import execution_profiles
 import ledger_reconcile
 import rate_incidents
 import switch_review
@@ -116,7 +117,13 @@ def stores(tmp_path, monkeypatch):
     monkeypatch.setattr(dispatcher, "_capability_heartbeat", lambda *args, **kwargs: None)
     monkeypatch.setattr(dispatcher, "_default_offload_timeout", lambda *args, **kwargs: 1)
     monkeypatch.setattr(dispatcher, "_offload_prompt", lambda prompt, *args: prompt)
-    monkeypatch.setattr(dispatcher, "_select_offload_profile", lambda *args: None)
+    monkeypatch.setattr(
+        dispatcher,
+        "_select_offload_profile",
+        lambda agent, *_args: (
+            execution_profiles.get_profile("gemini-3.8-flash-high") if agent == "gemini" else None
+        ),
+    )
     monkeypatch.setattr(dispatcher, "_agent_log_tail_from_argv", lambda *args, **kwargs: "")
     monkeypatch.setattr(
         dispatcher.adapters, "can_report_cli_identity", lambda *args: (False, "test")

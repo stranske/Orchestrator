@@ -11,6 +11,7 @@ import pytest
 
 import adapters
 import dispatcher
+import execution_profiles
 import rate_incidents
 
 
@@ -21,7 +22,13 @@ def _isolate_offload(monkeypatch, tmp_path):
     monkeypatch.setattr(dispatcher, "DISPATCH_LOG_DIR", tmp_path / "logs")
     monkeypatch.setattr(dispatcher, "_default_offload_timeout", lambda *_: 20)
     monkeypatch.setattr(dispatcher, "_offload_prompt", lambda prompt, *_: prompt)
-    monkeypatch.setattr(dispatcher, "_select_offload_profile", lambda *_: None)
+    monkeypatch.setattr(
+        dispatcher,
+        "_select_offload_profile",
+        lambda agent, *_args: (
+            execution_profiles.get_profile("gemini-3.8-flash-high") if agent == "gemini" else None
+        ),
+    )
     monkeypatch.setattr(dispatcher, "_capability_heartbeat", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(dispatcher, "_net_hygiene_prelude", lambda: "")
     monkeypatch.setattr(dispatcher, "_agent_runtime_prelude", lambda *_: "")
