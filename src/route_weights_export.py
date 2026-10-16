@@ -28,6 +28,8 @@ import feedback
 import provision
 import router
 
+# Workflows agent_delegation_policy.js accepts only this string; bumping to /v2
+# would fail-open away from learned weights. Capacity is additive via CAPACITY_SCHEMA.
 SCHEMA = "orchestrator.route-weights/v1"
 CAPACITY_SCHEMA = "orchestrator.route-weights-capacity/v1"
 DEFAULT_MIN_OBSERVATIONS = 20

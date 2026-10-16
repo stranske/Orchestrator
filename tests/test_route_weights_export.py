@@ -118,6 +118,34 @@ def test_challenger_excludes_the_thresholded_consumer_winner(tmp_path: Path) -> 
     assert document["exploration"]["challengers"]["implement"] == "gemini"
 
 
+def test_route_weights_schema_stays_v1_for_workflows_consumer() -> None:
+    """Hosted keepalive rejects any schema other than orchestrator.route-weights/v1."""
+    assert export.SCHEMA == "orchestrator.route-weights/v1"
+    assert export.CAPACITY_SCHEMA == "orchestrator.route-weights-capacity/v1"
+
+
+def test_build_document_loads_capacity_via_capacity_build(tmp_path: Path, monkeypatch) -> None:
+    """Reuse capacity.build in-process (no CLI); emit one capacity entry per agent."""
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    calls: list[int] = []
+    fixture = _capacity_fixture(codex_state=capacity.SHED, generated_at=42)
+
+    def fake_build():
+        calls.append(1)
+        return fixture
+
+    monkeypatch.setattr(export.capacity, "build", fake_build)
+
+    document = export.build_document(database, now=100)
+    assert calls == [1]
+    assert document["schema"] == export.SCHEMA
+    assert document["capacity_schema"] == export.CAPACITY_SCHEMA
+    assert document["capacity"]["codex"]["state"] == capacity.SHED
+    assert document["capacity"]["codex"]["observed_at"] == 42
+    assert set(document["capacity"]) == set(capacity.AGENTS)
+
+
 def test_capacity_block_has_one_entry_per_configured_agent(tmp_path: Path) -> None:
     database = tmp_path / "weights.db"
     export._fixture_db(database)
