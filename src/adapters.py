@@ -2848,7 +2848,10 @@ def _selftest_inner(*, gaps: list[str] | None = None):
             _mp.write_text(_mj.dumps(_rec))
             assert auth_health("muse")["authenticated"] is False, "an inactive subscription sheds"
         finally:
-            _aac.CREDENTIAL_FILES["muse"] = _saved
+            if _saved is not None:
+                _aac.CREDENTIAL_FILES["muse"] = _saved
+            else:
+                _aac.CREDENTIAL_FILES.pop("muse", None)
     print(
         "adapters.py selftest: OK (cursor composer/explicit-frontier/safe-bare-frontier, "
         "vibe subscription, codex/claude cheap-model map, aider venv, gemini lane-ready, "
