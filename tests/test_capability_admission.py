@@ -827,9 +827,9 @@ def test_declared_consumers_resolve_in_the_tree():
                 continue
             resolution = admission.consumer_resolution(declaration)
             if declaration.get("consumer_missing") is True:
-                assert str(declaration.get("notes") or "").strip(), (
-                    f"{source}:{cid}: explain the absent consumer"
-                )
+                assert str(
+                    declaration.get("notes") or ""
+                ).strip(), f"{source}:{cid}: explain the absent consumer"
                 continue
             if not resolution["tokens"] or resolution["unresolved"]:
                 failures[f"{source}:{cid}"] = resolution

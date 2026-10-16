@@ -1990,7 +1990,10 @@ unmeasured costs. The closer-lane advisor offers this role only when the caller'
 `verifier_verdict` and `merge_disposition` disagree; missing facts withhold the offer. Weekly switch
 review consumes the saved report and prints its case, agreement, disagreement and cost counts, and
 the number of saved rows still awaiting a retry (`retry pending`, 0 when drained, UNKNOWN for a report
-that predates the field). Under `--retry` the dispatch limit is spent on those rows before any newer
+that predates the field), then `advice graded N (agree A, disagree D)`: the model's committed decisions on
+complete packets that have later truth, counted from the decision itself because the role replaces every
+retrospective-source decision with `needs_more_evidence`, so the strict `graded` cannot move (UNKNOWN when
+neither the summary nor the rows can give it). Under `--retry` the dispatch limit is spent on those rows before any newer
 unsaved dispute (`attempt_order`). A linked issue's acceptance criteria enter the packet only if its
 body was not edited after the merge, read from the issue's `lastEditedAt`; GitHub's `updatedAt` moves
 on every comment, label and reopen, and refused criteria whose text never changed. A packet left
