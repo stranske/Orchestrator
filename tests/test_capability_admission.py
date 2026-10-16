@@ -150,10 +150,7 @@ def test_safety_guard_exemption_is_declared_and_narrow():
     # NARROWNESS, control case: `offload` had the identical complaint on the same day and got a REAL
     # switch instead of an exemption. It must stay out of the table, and its switch must still exist
     # in the tree -- `known_controls()` reads the source, so this fails if the guard is deleted.
-    assert (
-        capabilities.KNOWN_DECLARATIONS.get("offload", {}).get("kill_switch_category")
-        != "safety_guard"
-    )
+    assert "offload" not in capabilities.KNOWN_DECLARATIONS
     assert "ORCH_OFFLOAD_DISABLED" in admission.known_controls()
     # DRIFT GUARD: nothing may carry the exemption that the code table does not declare. This is what
     # catches a category typed into a live ledger instead of into the diff.

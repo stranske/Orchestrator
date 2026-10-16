@@ -1927,7 +1927,9 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         "downstream_consumer": "adversarial.py:file_followup consumes the panel verdict after merge",
     },
     "capability-activation-audit": {
-        "downstream_consumer": "verify.py:run_gates fails verification when the activation audit exits nonzero",
+        "downstream_consumer": (
+            "verify.py:run_gates fails verification when the activation audit exits nonzero"
+        ),
     },
     "capability-firing-monitor": {
         "downstream_consumer": "switch_review.py:firing_regressions consumes persisted findings",
@@ -1948,13 +1950,16 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         "downstream_consumer": "epic_lane.py:build_dispatch_prompts hands validated DAG tasks to workers",
     },
     "feature-scan": {
-        "downstream_consumer": "feature_scan.py:apply_scan writes the scan's unlogged structures to the registry on --apply",
+        "downstream_consumer": (
+            "feature_scan.py:apply_scan writes the scan's unlogged structures to the registry "
+            "on --apply"
+        ),
     },
     "frontend-verifier": {
-        "downstream_consumer": "runtime_ac.py:_completed_result consumes frontend verifier exit status and JSON; runtime_ac.py:evaluate_results fails the runtime gate on failed checks",
-    },
-    "offload": {
-        "downstream_consumer": "roles.py:_parse_json consumes backend output before role validation",
+        "downstream_consumer": (
+            "runtime_ac.py:_completed_result consumes frontend verifier exit status and JSON; "
+            "runtime_ac.py:evaluate_results fails the runtime gate on failed checks"
+        ),
     },
     "partitioned-review": {
         "downstream_consumer": "partitioned_review.py:synthesize_results validates and combines partition outputs",
