@@ -108,6 +108,11 @@ def _row_metadata_only(row: dict) -> bool:
     packet = row.get("packet")
     ground_truth = (packet or {}).get("ground_truth_evidence") if isinstance(packet, dict) else None
     if isinstance(ground_truth, dict):
+        # Collector qualification currently grants semantic judgment only. A
+        # serialized capability/flag cannot authenticate native report admission,
+        # even when the packet also contains full patch and criterion fields.
+        if "qualification" in ground_truth:
+            return True
         return _packet_metadata_only(ground_truth)
     return True
 
@@ -1039,6 +1044,77 @@ def _criterion_texts(body: str) -> list[str]:
     return criteria
 
 
+MAX_SUPPORTING_SOURCES = 32
+
+
+def _collect_supporting_sources(
+    manifest: Any, repository: Path, sha: str, changed_paths: list[str], byte_limit: int
+) -> list[dict]:
+    """Recollect inherited Git bytes; supporting paths never expand the PR diff.
+
+    Descriptors bind the full blob, even when explicit inclusive line ranges
+    select a smaller, non-exhaustive prompt excerpt. Caller-supplied contents
+    and completeness flags are never evidence.
+    """
+    if not isinstance(manifest, list):
+        raise ValueError("supporting_sources must be a list")
+    if len(manifest) > MAX_SUPPORTING_SOURCES:
+        raise ValueError("supporting manifest exceeds descriptor count limit")
+    records = []
+    seen = set(changed_paths)
+    for item in manifest:
+        if not isinstance(item, dict) or set(item) != {
+            "path",
+            "evaluated_sha",
+            "blob_sha",
+            "sha256",
+            "line_ranges",
+        }:
+            raise ValueError("supporting source descriptor has invalid fields")
+        path = item["path"]
+        if not isinstance(path, str) or not _safe_source_path(path) or path in seen:
+            raise ValueError("supporting paths must be unique, safe and outside the diff")
+        seen.add(path)
+        if item["evaluated_sha"] != sha:
+            raise ValueError("supporting source must bind the evaluated revision")
+        record, gaps = _collect_git_blob(repository, sha, path, byte_limit)
+        if gaps or not record["complete"]:
+            raise ValueError("supporting source collection failed: " + json.dumps(gaps))
+        if item["blob_sha"] != record["blob_sha"] or item["sha256"] != record["sha256"]:
+            raise ValueError("supporting source blob/hash mismatch")
+        ranges = item["line_ranges"]
+        if not isinstance(ranges, list):
+            raise ValueError("supporting line_ranges must be a list")
+        lines = record["bytes_utf8"].splitlines(keepends=True)
+        previous_end = 0
+        excerpts = []
+        for span in ranges:
+            if (
+                not isinstance(span, list)
+                or len(span) != 2
+                or any(type(n) is not int for n in span)
+                or not (previous_end < span[0] <= span[1] <= len(lines))
+            ):
+                raise ValueError("supporting line ranges must be ordered, disjoint and in bounds")
+            text = "".join(lines[span[0] - 1 : span[1]])
+            excerpts.append(
+                {
+                    "start_line": span[0],
+                    "end_line": span[1],
+                    "bytes_utf8": text,
+                    "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                }
+            )
+            previous_end = span[1]
+        record["line_ranges"] = ranges
+        record["exhaustive"] = not ranges
+        if ranges:
+            record.pop("bytes_utf8")
+            record["excerpts"] = excerpts
+        records.append(record)
+    return sorted(records, key=lambda record: record["path"])
+
+
 def qualify_collected_case(
     row: dict,
     repository: Path,
@@ -1130,6 +1206,10 @@ def qualify_collected_case(
                 raise ValueError("incomplete before-source evidence: " + json.dumps(before_gaps))
             before_sources.append(before)
     collection["before_sources"] = before_sources
+    supporting = _collect_supporting_sources(
+        qualification.get("supporting_sources", []), repository, sha, actual_paths, byte_limit
+    )
+    collection["supporting_sources"] = supporting
     locations = {item["location"] for item in collection["acceptance_artifacts"]}
     for criterion, mapping in zip(criteria, mappings):
         if not isinstance(mapping, dict) or mapping.get("criterion") != criterion:
@@ -1153,6 +1233,7 @@ def qualify_collected_case(
         ):
             raise ValueError("criterion mapping needs collected artifacts or named owned UNKNOWNs")
     refs = set(actual_paths) | locations
+    refs.update("supporting-git-path:" + item["path"] for item in supporting)
     for mapping in mappings:
         refs.update(item["evidence_ref"] for item in mapping.get("unknowns", []))
     packet["ground_truth_evidence"] = {
@@ -1161,7 +1242,7 @@ def qualify_collected_case(
         "criterion_provenance": {
             "body": body,
             "sha256": provenance["pr_body_sha256"],
-            "snapshot": snapshot,
+            "snapshot": {key: snapshot[key] for key in ("number", "headRefOid", "body")},
         },
         "criterion_mapping": mappings,
         "qualified_ground_truth_refs": sorted(refs),
@@ -1177,6 +1258,20 @@ def qualify_collected_case(
         },
     }
     packet["metadata_only"] = False
+    # A deterministic content revision is an identity, never persisted retry or
+    # grading authority. Bind all recollected bytes, mappings and explicit UNKNOWNs.
+    revision_input = json.loads(json.dumps(packet))
+    # A checkout location is transport metadata, not a new evidence revision.
+    revision_collection = revision_input["ground_truth_evidence"]["collected_evidence"]
+    revision_collection.pop("repository")
+    # The qualification check above compares these inventories as sets. Their
+    # presentation order must not manufacture a new material revision either.
+    revision_collection["requirements"]["source_paths"].sort()
+    revision_collection["sources"].sort(key=lambda record: record["path"])
+    revision_input["ground_truth_evidence"]["diff_summary"].sort(key=lambda item: item["path"])
+    packet["ground_truth_evidence"]["qualification"]["material_evidence_revision"] = hashlib.sha256(
+        json.dumps(revision_input, sort_keys=True, ensure_ascii=True).encode()
+    ).hexdigest()
     result = roles._issue_collected_case(packet, prompt_byte_limit)
     prompt = roles.ROLE_REGISTRY["adjudicator"].build_prompt(
         {"case": roles._collected_snapshot(result), "complete_collected_case": True}
@@ -1435,6 +1530,63 @@ def weekly_line(path: Path | None = None) -> str:
 
 
 def _selftest() -> None:
+    with tempfile.TemporaryDirectory() as supporting_root:
+        repository = Path(supporting_root)
+        _local_git(repository, "init", "-q")
+        (repository / "inherited.py").write_text("first\nsecond\n")
+        _local_git(repository, "add", "inherited.py")
+        _local_git(
+            repository,
+            "-c",
+            "user.name=Selftest",
+            "-c",
+            "user.email=selftest@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "supporting source",
+        )
+        sha = _local_git(repository, "rev-parse", "HEAD").decode().strip()
+        descriptor = {
+            "path": "inherited.py",
+            "evaluated_sha": sha,
+            "blob_sha": _local_git(repository, "rev-parse", sha + ":inherited.py").decode().strip(),
+            "sha256": hashlib.sha256(b"first\nsecond\n").hexdigest(),
+            "line_ranges": [[1, 1]],
+        }
+        baseline = _collect_supporting_sources([descriptor], repository, sha, [], 1000)
+        assert baseline[0]["excerpts"][0]["bytes_utf8"] == "first\n"
+        for invalid, changed in [
+            ({**descriptor, "sha256": "0" * 64}, []),
+            (descriptor, ["inherited.py"]),
+            ({**descriptor, "line_ranges": [[1, 3]]}, []),
+        ]:
+            try:
+                _collect_supporting_sources([invalid], repository, sha, changed, 1000)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("invalid supporting source accepted")
+            assert _collect_supporting_sources([descriptor], repository, sha, [], 1000) == baseline
+    assert _row_metadata_only(
+        {
+            "packet": {
+                "ground_truth_evidence": {
+                    "qualification": {"persisted_admission": True},
+                    "diff_patch": {"text": "patch", "revision": "sha"},
+                    "acceptance_criteria": [{"text": "criterion", "revision": "sha"}],
+                }
+            }
+        }
+    )
+    assert _collect_supporting_sources([], Path("."), "a" * 40, [], 1) == []
+    try:
+        _collect_supporting_sources({}, Path("."), "a" * 40, [], 1)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("malformed supporting manifest accepted")
     try:
         build_packet({"target": "owner/repo#1"}, {})
     except ValueError:
@@ -1492,7 +1644,7 @@ def _selftest() -> None:
     assert [r["run_id"] for r in attempt_order([fresh, aged], queue, retry=False)] == ["new", "old"]
     assert summarize([{"decision": None}])["retry_pending"] == 1
     assert summarize([{"decision": "reject_blocker"}])["retry_pending"] == 0
-    print("adjudicator_retro selftest: 12 checks passed")
+    print("adjudicator_retro selftest: 18 checks passed")
 
 
 def main() -> int:
