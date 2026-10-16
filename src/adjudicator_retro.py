@@ -205,7 +205,7 @@ def fetch_evidence(row: dict) -> dict:
       pullRequest(number:$n){number state headRefOid mergedAt mergeCommit{oid}
       files(first:100){pageInfo{hasNextPage} nodes{path additions deletions}}
       comments(last:100){pageInfo{hasPreviousPage} nodes{body url author{login}}}
-      closingIssuesReferences(first:5){nodes{number body updatedAt}}
+      closingIssuesReferences(first:5){nodes{number body updatedAt lastEditedAt}}
       commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){
         pageInfo{hasNextPage endCursor} nodes{__typename ... on CheckRun{name conclusion detailsUrl}
         ... on StatusContext{context state targetUrl}}}}}}}}}}"""
@@ -317,7 +317,10 @@ def fetch_evidence(row: dict) -> dict:
         if not isinstance(body, str):
             continue
         issue_updated = str(issue.get("updatedAt") or "")
-        if merged_at and issue_updated and issue_updated > merged_at:
+        # ``updatedAt`` moves on any comment, label or reopen; only ``lastEditedAt`` (null when the
+        # body was never edited) says the criteria text changed after the merge.
+        issue_edited = str(issue.get("lastEditedAt") or "")
+        if merged_at and issue_edited and issue_edited > merged_at:
             acceptance_criteria_errors.append(
                 {
                     "issue": int(issue["number"]) if str(issue.get("number", "")).isdigit() else 0,

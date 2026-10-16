@@ -1929,7 +1929,10 @@ unmeasured costs. The closer-lane advisor offers this role only when the caller'
 review consumes the saved report and prints its case, agreement, disagreement and cost counts, and
 the number of saved rows still awaiting a retry (`retry pending`, 0 when drained, UNKNOWN for a report
 that predates the field). Under `--retry` the dispatch limit is spent on those rows before any newer
-unsaved dispute (`attempt_order`).
+unsaved dispute (`attempt_order`). A linked issue's acceptance criteria enter the packet only if its
+body was not edited after the merge, read from the issue's `lastEditedAt`; GitHub's `updatedAt` moves
+on every comment, label and reopen, and refused criteria whose text never changed. A packet left
+without criteria stays metadata-only and is never graded.
 This extends the existing role and reporting rails; it does not re-enable tick adjudication. Native CLI terminal token usage is retained
 through the existing role record as ledger effort, never complete-source dollars.
 Shadow reports label measured, imputed and unmeasured attempts separately on
