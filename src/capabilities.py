@@ -1533,8 +1533,32 @@ def artifact_lifecycle(cap: dict[str, Any]) -> str | None:
     return f"artifact {', '.join(keys)}" if keys else None
 
 
-def renewal_blocker(cap: dict[str, Any], *, now: int) -> str | None:
-    """Why `renew` would refuse this row, or None when it would renew it."""
+FIX_REF_PATTERN = re.compile(
+    r"(?:[\w.-]+/[\w.-]+#\d+|https://github\.com/[\w.-]+/[\w.-]+/(?:issues|pull)/\d+)"
+)
+
+
+def names_a_fix(refs: list[str] | None) -> bool:
+    """A dated fix ref is an issue or PR (`owner/repo#N` or its GitHub URL), not a run id or prose."""
+    return any(FIX_REF_PATTERN.search(str(ref or "")) for ref in refs or [])
+
+
+def renewal_blocker(
+    cap: dict[str, Any],
+    *,
+    now: int,
+    acting: int | None = None,
+    evidence_refs: list[str] | None = None,
+) -> str | None:
+    """Why `renew` would refuse this row, or None when it would renew it.
+
+    `acting` is the value-chain monitor's `acted_on` for this row over its rolling window (None
+    when unmeasured, which never blocks). ACTING IS THE RENEWAL CURRENCY (owner decision
+    2026-10-17, M1 restated): a row that is invoked but has not acted in the trailing window
+    renews only with a dated fix ref for the first break the weekly row names; otherwise the
+    expiry retires it, the zero-attention default. Measured when decided: 9 of 48 rows acting in
+    the rolling window, 16 of 21 expiries on 2027-01-02, and no renewal had ever consulted acting.
+    """
     expiry = cap.get("expiry")
     if expiry is None:
         return "it carries no expiry, so no timeout will retire it and there is nothing to renew"
@@ -1560,7 +1584,26 @@ def renewal_blocker(cap: dict[str, Any], *, now: int) -> str | None:
             f"it already runs to {utc_date(int(expiry))}, at or past a fresh "
             f"{GATED_TTL_DAYS}-day window, so a renewal would not extend it"
         )
+    if acting == 0 and cap.get("last_invocation") and not names_a_fix(evidence_refs):
+        return (
+            "it is invoked but nothing acted on its output in the trailing window (value-chain "
+            "monitor acted_on 0): a renewal needs a dated fix ref (owner/repo#N or a GitHub "
+            "issue/PR URL) for the first break the weekly row names, or the expiry retires it"
+        )
     return None
+
+
+def acting_in_trailing_window(capability_id: str, *, now: int | None = None) -> int | None:
+    """The monitor's rolling `acted_on` for one row; None when the Brain cannot be read."""
+    try:
+        import value_chain_monitor as monitor
+
+        index, _reason = monitor.acted_on_index(
+            feedback.DB_PATH, _now() if now is None else int(now), [capability_id]
+        )
+    except Exception:  # noqa: BLE001 — unmeasured is a word, never a zero
+        return None
+    return None if index is None else int(index.get(capability_id, 0))
 
 
 def renew_command(capability_id: str) -> str:
@@ -1587,8 +1630,12 @@ def renew(
     evidence_refs: list[str] | None,
     path: Path = REG,
     timestamp: int | None = None,
+    acting: int | None = None,
 ) -> dict[str, Any]:
     """Hold a row past its expiry for one more GATED_TTL_DAYS, as a recorded, evidenced decision.
+
+    `acting` is the monitor's rolling `acted_on` for the row (the CLI reads it; None is
+    unmeasured and never blocks): see `renewal_blocker`.
 
     Refuses, writing nothing, without a reason and at least one evidence ref, and for any row
     `renewal_blocker` names. A row retired BY ITS EXPIRY comes back to the status the timeout
@@ -1612,7 +1659,7 @@ def renew(
         cap = capabilities.get(capability_id)
         if cap is None:
             raise ValueError(f"unknown capability: {capability_id}")
-        blocker = renewal_blocker(cap, now=ts)
+        blocker = renewal_blocker(cap, now=ts, acting=acting, evidence_refs=refs)
         if blocker:
             raise ValueError(f"cannot renew {capability_id}: {blocker}")
         previous_expiry = int(cap["expiry"])
@@ -1632,6 +1679,7 @@ def renew(
                 "last_invocation": cap.get("last_invocation"),
                 "last_success": cap.get("last_success"),
                 "outcome_links": len(cap.get("outcome_links") or []),
+                "acting_trailing_window": acting,
             },
         }
         # An activation deadline seeded WITH the expiry moves with it; one set on its own is a
@@ -4759,7 +4807,12 @@ def main(argv: list[str]) -> int:
         return 0
     if args.command == "renew":
         try:
-            result = renew(args.name, reason=args.reason, evidence_refs=args.evidence_ref)
+            result = renew(
+                args.name,
+                reason=args.reason,
+                evidence_refs=args.evidence_ref,
+                acting=acting_in_trailing_window(args.name),
+            )
         except (AssertionError, ValueError) as exc:
             # A refusal is an expected answer, not a crash, and it writes nothing.
             result = {"capability_id": args.name, "renewed": False, "refused": str(exc)}
