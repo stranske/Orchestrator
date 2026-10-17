@@ -4100,6 +4100,55 @@ def _selftest() -> None:
         ), retry_gem
         assert legacy_calls == 2, legacy_calls
 
+        # A zero exit with partial prose is still uncertain when this run's own agy
+        # log says its provider turn is in progress. Do not spend a retry on top of it.
+        captured.clear()
+        uncertain_calls = {"count": 0}
+        old_network_retries = os.environ.get("ORCH_OFFLOAD_NETWORK_RETRIES")
+
+        class PartialTurnCompleted:
+            returncode = 0
+            stdout = "Partial answer while the provider is still working."
+            stderr = ""
+
+        def fake_partial_turn_run(cmd, cwd=None, **_kwargs):
+            captured["cmd"] = cmd
+            captured["cwd"] = cwd
+            if cmd[:2] == ["bash", "-lc"]:
+                uncertain_calls["count"] += 1
+                _write_agy_log(
+                    cmd,
+                    cwd,
+                    "Print timeout after 60s with turn in progress; returning partial output\n",
+                )
+                return PartialTurnCompleted()
+            return Completed()
+
+        try:
+            os.environ["ORCH_OFFLOAD_NETWORK_RETRIES"] = "1"
+            adapter_module.build_command = fake_gemini_build_command
+            subprocess_module.run = fake_partial_turn_run
+            uncertain_gem = offload(
+                "gemini",
+                "Return a bounded answer.",
+                cwd=str(nongit),
+                isolate=True,
+                timeout=1,
+            )
+        finally:
+            adapter_module.build_command = old_build_command
+            subprocess_module.run = old_subprocess_run
+            if old_network_retries is None:
+                os.environ.pop("ORCH_OFFLOAD_NETWORK_RETRIES", None)
+            else:
+                os.environ["ORCH_OFFLOAD_NETWORK_RETRIES"] = old_network_retries
+        assert uncertain_calls["count"] == 1, uncertain_calls
+        assert uncertain_gem["exit"] != 0 and uncertain_gem["raw_exit"] == 0, uncertain_gem
+        assert uncertain_gem["outcome_uncertain"] is True, uncertain_gem
+        assert uncertain_gem["retry_safe"] is False, uncertain_gem
+        assert uncertain_gem["outcome_status"] == "uncertain", uncertain_gem
+        assert uncertain_gem["attempts"] == 1 and "retried" not in uncertain_gem, uncertain_gem
+
         captured.clear()
 
         def fake_timeout_run(cmd, cwd=None, **_kwargs):

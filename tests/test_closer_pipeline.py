@@ -790,6 +790,176 @@ def test_uncertain_native_interpretation_is_durable_and_never_retried(tmp_path):
     assert calls == [("prepare", "a"), ("interpret", "a")]
 
 
+def test_issue_uncertainty_without_head_stays_bound_by_revision_after_restart(tmp_path):
+    path = tmp_path / "uncertain-issue.json"
+    clock = [1000.0]
+    target = "owner/repo#17"
+    semantic = "closer-evidence-semantic/v1:" + "f" * 64
+    calls = []
+
+    def prepare(name, _context):
+        calls.append(("prepare", name))
+        return {
+            "revision": "issue-revision-1",
+            "identity": name,
+            "semantic_cache_key": semantic,
+            "snapshot": {"kind": "issue", "head": None, "base": None},
+        }
+
+    def interpret(name, context):
+        calls.append(("interpret", name))
+        return {
+            "status": "uncertain",
+            "provider_outcome": {
+                "schema": "closer-provider-outcome-uncertain/v1",
+                "target": name,
+                "head": None,
+                "revision": context["revision"],
+                "identity": context["identity"],
+                "semantic_cache_key": semantic,
+                "actual": {
+                    "agent": "gemini",
+                    "requested_profile": "gemini-low",
+                    "run_id": "agy-issue-turn-17",
+                    "exit": 124,
+                    "outcome_status": "uncertain",
+                    "retry_safe": False,
+                },
+            },
+        }
+
+    first_callbacks = callbacks(interpret=interpret)
+    first_callbacks["prepare"] = prepare
+    first = run(path, [target], first_callbacks, seconds=60, now=lambda: clock[0])
+    assert first["targets"][target]["status"] == "uncertain"
+    assert validate_stop(path, [target], now=lambda: clock[0])["reasons"] == [
+        f"unresolved_native_provider_outcome:{target}:agy-issue-turn-17"
+    ]
+
+    # Expire the first round so the next cadence takes the full prior-stop and
+    # carry path. The issue's no-head binding must survive in the carried prepare.
+    clock[0] += 61
+    resumed_calls = []
+    resumed_callbacks = callbacks(
+        interpret=lambda name, _ctx: resumed_calls.append(("interpret", name))
+        or {"substantive_needs": []},
+        act=lambda name, _ctx: resumed_calls.append(("act", name))
+        or {"status": "completed", "target_complete": True},
+    )
+    resumed_callbacks["prepare"] = lambda name, _ctx: resumed_calls.append(("prepare", name)) or {
+        "revision": "unrelated-revision",
+        "identity": name,
+        "semantic_cache_key": "closer-evidence-semantic/v1:"
+        + hashlib.sha256(name.encode()).hexdigest(),
+        "snapshot": {"kind": "pr", "head": "e" * 40},
+    }
+    resumed = run(
+        path,
+        [target, "owner/repo#18"],
+        resumed_callbacks,
+        seconds=60,
+        now=lambda: clock[0],
+    )
+
+    assert resumed["targets"][target]["status"] == "uncertain"
+    assert resumed_calls == [
+        ("prepare", "owner/repo#18"),
+        ("interpret", "owner/repo#18"),
+        ("act", "owner/repo#18"),
+    ]
+    assert validate_stop(path, [target, "owner/repo#18"], now=lambda: clock[0])["reasons"] == [
+        f"unresolved_native_provider_outcome:{target}:agy-issue-turn-17"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("kind", "malformation"),
+    [
+        ("pr", "missing_head"),
+        ("unknown", "missing_head"),
+        ("issue", "revision_mismatch"),
+    ],
+    ids=["pr-needs-head", "unknown-kind-needs-head", "issue-needs-revision-binding"],
+)
+def test_rejected_uncertainty_receipt_blocks_restart_and_never_retries(
+    tmp_path, kind, malformation
+):
+    path = tmp_path / f"malformed-{kind}-{malformation}.json"
+    clock = [2000.0]
+    target = "owner/repo#19"
+    semantic = "closer-evidence-semantic/v1:" + "a" * 64
+    calls = []
+
+    def prepare(name, _context):
+        calls.append(("prepare", name))
+        return {
+            "revision": "issue-revision-19",
+            "identity": name,
+            "semantic_cache_key": semantic,
+            "snapshot": {"kind": kind, "head": None},
+        }
+
+    def interpret(name, context):
+        calls.append(("interpret", name))
+        revision = context["revision"]
+        if malformation == "revision_mismatch":
+            revision = "different-revision"
+        return {
+            "status": "uncertain",
+            "provider_outcome": {
+                "schema": "closer-provider-outcome-uncertain/v1",
+                "target": name,
+                "head": None,
+                "revision": revision,
+                "identity": context["identity"],
+                "semantic_cache_key": semantic,
+                "actual": {
+                    "agent": "gemini",
+                    "requested_profile": "gemini-low",
+                    "run_id": "agy-malformed-turn-19",
+                    "exit": 124,
+                    "outcome_status": "uncertain",
+                    "retry_safe": False,
+                },
+            },
+        }
+
+    initial_callbacks = callbacks(interpret=interpret)
+    initial_callbacks["prepare"] = prepare
+    first = run(path, [target], initial_callbacks, seconds=60, now=lambda: clock[0])
+    row = first["targets"][target]
+    assert row["status"] == "failed"
+    assert row["error"] == closer_pipeline.UNBOUND_UNCERTAIN_PROVIDER_ERROR
+    stop = validate_stop(path, [target], now=lambda: clock[0])
+    assert not stop["valid"]
+    assert stop["reasons"] == [f"unresolved_pipeline_work:{target}:failed"]
+
+    # A malformed unknown provider outcome is not reclassified as a read-only
+    # failure. It blocks the next run before any existing or unrelated target can
+    # launch another turn.
+    clock[0] += 61
+    restart_calls = []
+    retry_callbacks = callbacks(
+        interpret=lambda name, _ctx: restart_calls.append(("interpret", name))
+        or {"substantive_needs": []},
+    )
+    retry_callbacks["prepare"] = lambda name, _ctx: restart_calls.append(("prepare", name)) or {
+        "revision": "new-revision",
+        "identity": name,
+    }
+    restart = run(
+        path,
+        [target, "owner/repo#20"],
+        retry_callbacks,
+        seconds=60,
+        now=lambda: clock[0],
+    )
+    assert restart["status"] == "blocked"
+    assert restart["reason"] == "prior_run_has_no_valid_stop"
+    assert restart_calls == []
+    assert calls == [("prepare", target), ("interpret", target)]
+
+
 def test_mixed_native_uncertainty_and_readonly_failure_allow_only_safe_carry(tmp_path):
     path = tmp_path / "mixed-uncertainty.json"
     clock = [2000.0]

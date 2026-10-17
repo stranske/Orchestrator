@@ -7,6 +7,7 @@ import hashlib
 import json
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -417,6 +418,344 @@ def _snapshot_from_document(monkeypatch, document, runs=None):
 
     monkeypatch.setattr(github, "api", fake_api)
     return github.snapshot(TARGET)
+
+
+def test_snapshot_retains_complete_native_label_timeline(monkeypatch):
+    document = _graphql_pr()
+    document["timelineItems"] = {
+        "nodes": [
+            {
+                "id": "LE_native_7",
+                "createdAt": "2026-10-17T23:19:06Z",
+                "label": {"name": "verify:compare"},
+            }
+        ],
+        "pageInfo": {"hasPreviousPage": False},
+    }
+    current = _snapshot_from_document(monkeypatch, document)
+    assert current["label_events_complete"] is True
+    assert current["label_events"] == [
+        {
+            "id": "LE_native_7",
+            "created_at": "2026-10-17T23:19:06Z",
+            "label": "verify:compare",
+        }
+    ]
+    document["timelineItems"]["pageInfo"]["hasPreviousPage"] = True
+    assert _snapshot_from_document(monkeypatch, document)["label_events"] == []
+
+
+def _verified_label_fixture():
+    now = time.time()
+    event_at = now - 10
+
+    def stamp(epoch):
+        return datetime.fromtimestamp(epoch, timezone.utc).isoformat()
+
+    current = snapshot(
+        state="MERGED",
+        merge=MERGE,
+        merged_at=stamp(now - 100),
+        labels=["verify:compare"],
+        label_events_complete=True,
+        label_events=[
+            {"id": "LE_native_7", "created_at": stamp(event_at), "label": "verify:compare"}
+        ],
+        verifier_run_identity_unknown=True,
+    )
+    op = {
+        **operation("post_merge_verify"),
+        "status": "completed",
+        "revision": "before-label-revision",
+        "invoked_at": now - 15,
+        "completed_at": now - 5,
+        "result": {"verification_key": f"{TARGET}:{MERGE}:compare"},
+    }
+    inner = {
+        "status": "deferred",
+        "action": "collect_evidence",
+        "observation_freshness": "fresh",
+        "revision": current["revision"],
+        "evidence": current,
+        "operation": op,
+    }
+    row = {
+        "target": TARGET,
+        "status": "deferred",
+        "action": "collect_evidence",
+        "eligible": False,
+        "reason": "collect terminal or unattributed verifier evidence; do not rerun",
+        "next_trigger": "bounded worker capacity/profile or senior closer",
+        "observation_freshness": "fresh",
+        "revision": current["revision"],
+        "operation_id": op["id"],
+        "operation_status": "completed",
+    }
+    receipt = {
+        "stop_valid": True,
+        "accounting": [row],
+        "events": [
+            {
+                "kind": "revision_refreshed",
+                "target": TARGET,
+                "revision": op["revision"],
+            },
+            {
+                "kind": "operation_submitted",
+                "target": TARGET,
+                "action": "post_merge_verify",
+                "operation_id": op["id"],
+            },
+        ],
+        "progress": [{"target": TARGET, "action": "post_merge_verify"}],
+    }
+    return row, receipt, inner
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "wrong_head",
+        "wrong_merge",
+        "uncertain_operation",
+        "absent_event",
+        "stale_revision",
+        "invalid_stop",
+    ],
+)
+def test_verified_label_wait_rejects_unbound_progress(changed):
+    row, receipt, inner = _verified_label_fixture()
+    if changed == "wrong_head":
+        inner["operation"]["binding"]["head"] = "c" * 40
+    elif changed == "wrong_merge":
+        inner["operation"]["binding"]["merge"] = "c" * 40
+    elif changed == "uncertain_operation":
+        inner["operation"]["status"] = "unknown"
+    elif changed == "absent_event":
+        inner["evidence"]["label_events"] = []
+    elif changed == "stale_revision":
+        inner["revision"] = "stale"
+    else:
+        receipt["stop_valid"] = False
+    assert adapter._verified_post_merge_label_pending(TARGET, row, receipt, inner) is None
+
+
+def test_verified_label_wait_survives_new_queue_receipt_without_old_events():
+    row, receipt, inner = _verified_label_fixture()
+    receipt["events"] = []
+    receipt["progress"] = []
+    pending = adapter._verified_post_merge_label_pending(TARGET, row, receipt, inner)
+    assert pending["status"] == "pending"
+    assert pending["pending_evidence"]["event_id"] == "LE_native_7"
+    again = adapter._verified_post_merge_label_pending(TARGET, row, receipt, inner)
+    assert again["pending_evidence"] == pending["pending_evidence"]
+    inner["evidence"]["verifier"] = {"verdict": "PASS"}
+    assert adapter._verified_post_merge_label_pending(TARGET, row, receipt, inner) is None
+
+
+def _active_verifier_fixture():
+    row, receipt, inner = _verified_label_fixture()
+    current = inner["evidence"]
+    run_id = 39078553053
+    current["verifier_runs"] = [
+        {
+            "id": run_id,
+            "status": "in_progress",
+            "conclusion": None,
+            "run_attempt": 1,
+            "head_sha": HEAD,
+            "path": ".github/workflows/agents-verifier.yml",
+            "event": "pull_request_target",
+            "linked_pr": TARGET,
+            "created_at": datetime.fromtimestamp(time.time() - 8, timezone.utc).isoformat(),
+        }
+    ]
+    current["verifier_run_identity_unknown"] = False
+    current["revision"] = adapter.digest({k: v for k, v in current.items() if k != "revision"})
+    inner.update(action="wait", revision=current["revision"])
+    row.update(
+        action="wait",
+        reason=f"existing verifier run {run_id} active",
+        revision=current["revision"],
+    )
+    receipt["events"] = []
+    receipt["progress"] = []
+    return row, receipt, inner
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "unattributed",
+        "wrong_head",
+        "wrong_merge",
+        "terminal",
+        "unknown_status",
+        "wrong_target",
+        "stale_revision",
+        "invalid_stop",
+        "wrong_workflow",
+    ],
+)
+def test_active_verifier_wait_requires_exact_linked_live_run(changed):
+    row, receipt, inner = _active_verifier_fixture()
+    run = inner["evidence"]["verifier_runs"][0]
+    if changed == "unattributed":
+        run.pop("linked_pr")
+    elif changed == "wrong_head":
+        run["head_sha"] = "c" * 40
+    elif changed == "wrong_merge":
+        inner["evidence"]["merge"] = "not-a-merge-sha"
+    elif changed == "terminal":
+        run.update(status="completed", conclusion="success")
+    elif changed == "unknown_status":
+        run["status"] = "unknown"
+    elif changed == "wrong_target":
+        inner["evidence"]["target"] = "o/r#8"
+    elif changed == "stale_revision":
+        inner["revision"] = "stale"
+    elif changed == "invalid_stop":
+        receipt["stop_valid"] = False
+    else:
+        run["path"] = ".github/workflows/unrelated.yml"
+    assert adapter._verified_active_verifier_pending(TARGET, row, receipt, inner) is None
+
+
+def test_active_verifier_wait_survives_later_cadence_without_native_attribution():
+    row, receipt, inner = _active_verifier_fixture()
+    pending = adapter._verified_active_verifier_pending(TARGET, row, receipt, inner)
+    assert pending["status"] == "pending"
+    assert pending["pending_kind"] == "async_operation"
+    assert pending["pending_evidence"]["operation_id"] == "39078553053"
+    assert pending["pending_evidence"]["workflow_run_id"] == 39078553053
+    assert adapter._verified_active_verifier_pending(TARGET, row, receipt, inner) == pending
+    inner["evidence"]["verifier"] = {"verdict": "NON_PASS"}
+    assert adapter._verified_active_verifier_pending(TARGET, row, receipt, inner) is None
+
+
+def test_staged_action_waits_on_confirmed_native_label_after_completed_verify(
+    tmp_path, monkeypatch
+):
+    row, receipt, inner = _verified_label_fixture()
+    current = inner["evidence"]
+
+    class PreparedGitHub(FakeGitHub):
+        def __init__(self, *, deadline):
+            super().__init__(current)
+            self.deadline = deadline
+
+    monkeypatch.setattr(adapter, "GitHub", PreparedGitHub)
+    monkeypatch.setattr(
+        adapter,
+        "_pipeline_low_route",
+        lambda **_kwargs: pytest.fail("durable label request must not invoke a low provider"),
+    )
+    receipt["events"] = []
+    receipt["progress"] = []
+    monkeypatch.setattr(closer_queue, "run_round", lambda *_a, **_k: receipt)
+    monkeypatch.setattr(closer_queue, "_read_state", lambda _path: {"items": {TARGET: inner}})
+    captured = {}
+    action_state = tmp_path / "inner-actions.json"
+    action_state.write_text("{}")
+
+    def run_pipeline(_path, targets, **callbacks):
+        prep = {
+            "snapshot": current,
+            "revision": current["revision"],
+            "proposal": {"action": "collect_evidence"},
+        }
+        interpreted = callbacks["interpret"](
+            targets[0],
+            {
+                "prepare": prep,
+                "deadline": time.time() + 60,
+                "action_state_path": str(action_state),
+            },
+        )
+        assert interpreted["classification"] == "deterministic_post_merge_label_wait"
+        captured["result"] = callbacks["act"](
+            targets[0],
+            {
+                "prepare": prep,
+                "interpret": interpreted,
+                "deadline": time.time() + 60,
+                "revision": current["revision"],
+                "work_key": "confirmed-label-test",
+                "action_state_path": str(action_state),
+            },
+        )
+        return {"targets": {targets[0]: captured["result"]}}
+
+    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=run_pipeline))
+    backend = closer(tmp_path, current)
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
+
+    result = captured["result"]
+    assert result["status"] == "pending"
+    assert result["pending_kind"] == "external_event"
+    assert result["pending_evidence"]["event_id"] == "LE_native_7"
+    assert result["pending_evidence"]["operation_id"] == inner["operation"]["id"]
+    assert result["pending_evidence"]["merge"] == MERGE
+    assert result["queue_receipt"] is receipt
+    assert backend.gh.calls == []
+
+
+def test_staged_action_waits_on_pr_linked_active_run_without_provider_or_label(
+    tmp_path, monkeypatch
+):
+    row, receipt, inner = _active_verifier_fixture()
+    current = inner["evidence"]
+
+    class PreparedGitHub(FakeGitHub):
+        def __init__(self, *, deadline):
+            super().__init__(current)
+            self.deadline = deadline
+
+    monkeypatch.setattr(adapter, "GitHub", PreparedGitHub)
+    monkeypatch.setattr(
+        adapter,
+        "_pipeline_low_route",
+        lambda **_kwargs: pytest.fail("active verifier wait must not invoke a low provider"),
+    )
+    monkeypatch.setattr(closer_queue, "run_round", lambda *_a, **_k: receipt)
+    monkeypatch.setattr(closer_queue, "_read_state", lambda _path: {"items": {TARGET: inner}})
+    captured = {}
+
+    def run_pipeline(_path, targets, **callbacks):
+        prep = {
+            "snapshot": current,
+            "revision": current["revision"],
+            "proposal": {"action": "wait", "reason": row["reason"]},
+        }
+        interpreted = callbacks["interpret"](
+            targets[0], {"prepare": prep, "deadline": time.time() + 60}
+        )
+        assert interpreted["classification"] == "deterministic_wait"
+        captured["result"] = callbacks["act"](
+            targets[0],
+            {
+                "prepare": prep,
+                "interpret": interpreted,
+                "deadline": time.time() + 60,
+                "revision": current["revision"],
+                "work_key": "active-verifier-test",
+                "action_state_path": str(tmp_path / "inner-actions.json"),
+            },
+        )
+        return {"targets": {targets[0]: captured["result"]}}
+
+    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=run_pipeline))
+    backend = closer(tmp_path, current)
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
+
+    result = captured["result"]
+    assert result["status"] == "pending"
+    assert result["pending_kind"] == "async_operation"
+    assert result["pending_evidence"]["operation_id"] == "39078553053"
+    assert result["queue_receipt"] is receipt
+    assert backend.gh.calls == []
 
 
 def test_actual_snapshot_counts_outdated_unresolved_threads(monkeypatch):
@@ -928,9 +1267,18 @@ def test_snapshot_verifier_wait_uses_only_current_pr_attribution(tmp_path, monke
     current = _snapshot_from_document(monkeypatch, document, [unrelated, manual])
     assert current["verifier_run_identity_unknown"] and current["verifier_runs"] == []
     assert closer(tmp_path, current).select(current)[0] == "collect_evidence"
-    attributed = {"id": 11, "status": "in_progress", "pull_requests": [{"number": 7}]}
+    attributed = {
+        "id": 11,
+        "status": "in_progress",
+        "pull_requests": [{"number": 7}],
+        "head_sha": HEAD,
+        "path": ".github/workflows/agents-verifier.yml",
+        "event": "pull_request_target",
+    }
     current = _snapshot_from_document(monkeypatch, document, [unrelated, manual, attributed])
     assert [run["id"] for run in current["verifier_runs"]] == [11]
+    assert current["verifier_runs"][0]["linked_pr"] == TARGET
+    assert current["verifier_runs"][0]["head_sha"] == HEAD
     assert closer(tmp_path, current).select(current)[0] == "wait"
 
 

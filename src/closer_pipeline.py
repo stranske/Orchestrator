@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
 SCHEMA = "closer-pipeline/v1"
+UNBOUND_UNCERTAIN_PROVIDER_ERROR = "provider_outcome_uncertainty_without_valid_bound_run"
 STAGES = ("prepare", "interpret", "exception", "act", "reconcile")
 CEILINGS = {"io": 8, "low": 4, "exception": 2}
 MAX_TARGETS = 1024
@@ -93,12 +94,12 @@ def _valid_uncertain_provider_outcome(value: Any, target: str, item: Mapping[str
     ):
         return False
     head = outcome.get("head")
+    revision = item.get("revision")
     if (
         outcome.get("target") != target
-        or not isinstance(head, str)
-        or len(head) != 40
-        or any(char not in "0123456789abcdef" for char in head)
-        or outcome.get("revision") != item.get("revision")
+        or not isinstance(revision, str)
+        or not revision.strip()
+        or outcome.get("revision") != revision
         or outcome.get("identity") != item.get("identity", target)
     ):
         return False
@@ -106,7 +107,19 @@ def _valid_uncertain_provider_outcome(value: Any, target: str, item: Mapping[str
     if not isinstance(prepared, Mapping):
         return False
     snapshot = prepared.get("snapshot")
-    if not isinstance(snapshot, Mapping) or snapshot.get("head") != head:
+    if not isinstance(snapshot, Mapping):
+        return False
+    if head is None:
+        # Standalone issue snapshots have no PR head. Their exact preparation
+        # revision plus target/identity is the binding that survives a restart.
+        if snapshot.get("kind") != "issue" or snapshot.get("head") is not None:
+            return False
+    elif (
+        not isinstance(head, str)
+        or len(head) != 40
+        or any(char not in "0123456789abcdef" for char in head)
+        or snapshot.get("head") != head
+    ):
         return False
     semantic = _semantic_cache_token(prepared)
     if not semantic or outcome.get("semantic_cache_key") != semantic:
@@ -227,11 +240,14 @@ def _carry_item(item: Mapping[str, Any]) -> dict[str, Any]:
     if item.get("status") == "uncertain" and item.get("stage") == "interpret":
         outcome = item.get("provider_outcome_uncertain")
         if isinstance(outcome, Mapping):
+            prepared = item.get("results", {}).get("prepare", {})
+            prepared_snapshot = prepared.get("snapshot") if isinstance(prepared, Mapping) else None
+            kind = prepared_snapshot.get("kind") if isinstance(prepared_snapshot, Mapping) else None
             results["prepare"] = {
                 "revision": item.get("revision"),
                 "identity": item.get("identity"),
                 "semantic_cache_key": outcome.get("semantic_cache_key"),
-                "snapshot": {"head": outcome.get("head")},
+                "snapshot": {"head": outcome.get("head"), "kind": kind},
             }
     return {**carried, "results": results}
 
@@ -289,7 +305,11 @@ def _safe_prior_continuation(
                 if reason != f"unresolved_pipeline_work:{target}:{status}":
                     continue
                 stage = item.get("stage")
-                if status == "failed" and stage in {"prepare", "interpret", "exception"}:
+                if (
+                    status == "failed"
+                    and stage in {"prepare", "interpret", "exception"}
+                    and item.get("error") != UNBOUND_UNCERTAIN_PROVIDER_ERROR
+                ):
                     matched = True
                 elif (
                     status == "parked"
@@ -324,7 +344,11 @@ def _safe_prior_continuation(
             continue
         if target in native_targets and status == "uncertain" and item.get("stage") == "interpret":
             continue
-        if status == "failed" and item.get("stage") in {"prepare", "interpret", "exception"}:
+        if (
+            status == "failed"
+            and item.get("stage") in {"prepare", "interpret", "exception"}
+            and item.get("error") != UNBOUND_UNCERTAIN_PROVIDER_ERROR
+        ):
             continue
         if (
             status == "parked"
@@ -873,7 +897,7 @@ def _run_pipeline_impl(
                             if not _valid_uncertain_provider_outcome(value, target, item):
                                 item.update(
                                     status="failed",
-                                    error="provider_outcome_uncertainty_without_valid_bound_run",
+                                    error=UNBOUND_UNCERTAIN_PROVIDER_ERROR,
                                     deferred_next_trigger="human_review",
                                 )
                                 return
