@@ -9,6 +9,28 @@
 
 ![Orchestrator loop: deterministic rails vs. callable agent-roles](orchestrator-loop.svg)
 
+## Status-driven local closer
+
+`closer_dispatcher.py` composes existing rails for the local closer lifecycle;
+`closer_queue.py` persists the assigned items and operation receipts. It inventories
+status, schedules bounded independent private work, collects results and continues
+other items while checks, review or verification wait. It is a deterministic
+coordinator, not a new agent role or a second demand scheduler. Existing claims
+serialize target/source/repository mutations across ledgers. Workers use existing
+`dispatcher.offload`; Luna extracts evidence and proposes findings, while the senior
+closer integrates original Tasks/AC evidence. Exact-head merge authority remains in
+`merge_guard`; native post-merge evidence remains in `verifier_evidence`.
+
+Postrun validates assignment accounting and actual remaining budget before end-round
+or relay. No pass quota or one-complex-repository limit can authorize early stop.
+Unknown mutation outcomes reconcile before retry, source/review/head changes
+invalidate prior evidence, and verifier requests are deduplicated. Source closure
+composes the separately owned supervisor actor when deployed and explicitly enabled;
+this coordinator does not enable it. Deployment uses the existing mirror sync and
+canonical local prompt renderers, preserving demand scheduling and safety gates.
+See [the operating contract](docs/CLOSER_DISPATCHER.md) for trusted disposition input,
+resource bounds, recovery and separate operational acceptance.
+
 ## Where this sits in the larger pipeline (READ FIRST)
 
 **This document describes ONE COMPONENT.** Everything below — rails, roles, the feedback loop — is

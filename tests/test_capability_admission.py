@@ -638,7 +638,7 @@ def test_consumer_acts_fails_a_declared_consumer_that_never_acted(tmp_path):
     ok, detail = admission.req_consumer_acts(
         _consumer_cap("t-never", "x.py:consume", first_invocation=old), ctx
     )
-    assert not ok and "never acted" in detail
+    assert not ok and "not acting" in detail and "trailing window" in detail
     ok, detail = admission.req_consumer_acts(
         _consumer_cap("t-grace", "x.py:consume", first_invocation=fresh), ctx
     )
@@ -805,14 +805,20 @@ def _deadline_evidence(monkeypatch, tmp_path, *, action_day, now_day):
     return admission.consumer_class(cap, ctx)
 
 
-def test_consumer_deadline_rejects_first_action_on_day_fifteen(monkeypatch, tmp_path):
+def test_consumer_acting_is_the_trailing_window_not_a_first_invocation_deadline(
+    monkeypatch, tmp_path
+):
+    # An act on day 15 counts: the 14-day deadline after first invocation is gone (owner
+    # decision 2026-10-17, M1 restated); acting is read from the monitor's rolling window.
     category, ok, _ = _deadline_evidence(monkeypatch, tmp_path, action_day=15, now_day=16)
-    assert category == "never_acted" and not ok
-
-
-def test_consumer_deadline_retains_timely_action_after_monitor_window(monkeypatch, tmp_path):
-    category, ok, _ = _deadline_evidence(monkeypatch, tmp_path, action_day=1, now_day=100)
     assert category == "acting" and ok
+
+
+def test_an_act_outside_the_trailing_window_is_not_acting_now(monkeypatch, tmp_path):
+    # Day 1's act is outside a 90-day window read on day 100: the row is not acting NOW, which is
+    # the renewal currency, and the label says trailing window, never NEVER ACTED.
+    category, ok, detail = _deadline_evidence(monkeypatch, tmp_path, action_day=1, now_day=100)
+    assert category == "not_acting" and not ok and "trailing window" in detail
 
 
 def test_declared_consumers_resolve_in_the_tree():
