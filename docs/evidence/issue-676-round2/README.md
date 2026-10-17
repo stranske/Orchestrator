@@ -7,7 +7,7 @@ The exporter builds one fresh capacity snapshot shared by both additive blocks.
 Both `_dense_simplex` and `shadow_prices` remain byte-identical to `d881907`.
 
 - `focused-green.txt`: `python3 -m pytest tests/test_comparative.py tests/test_route_weights_export*.py tests/test_pacing.py -q`; 246 passed.
-- `collect.txt`: final merged tree collects 4128 tests = main's 4053 +75 comparative cases (11 net new cases in round 2). Both floor counts are 4128 expectations; all main ceilings and main's note are preserved.
+- `collect.txt`: requested-main merge collects 4128 tests = main's 4053 +75 comparative cases (11 net new cases in round 2). Both floor counts are 4128 expectations; all main ceilings and main's note are preserved.
 - `resets-gate-red.txt`: reinstate the numeric `resets_available` gate in an isolated module copy; the fixture built by real `pacing.evaluate(..., resets=None)` fails (`inputs_unmeasured` versus `optimal`).
 - `resets-gate-restored-green.txt`: restore the isolated module byte for byte; the same test passes. Matching SHA-256 values prove restoration. The worktree/full verifier never saw the deliberately broken module.
 - `live-report.txt` / `live-report-stderr.txt`: `python3 src/route_weights_export.py --comparative-report --window-days 14` with temporary runtime/state and a read-only SQLite backup. `isolation.txt` records paths and missing history sources. Neither capacity-ledger.ndjson nor pacing-history.ndjson exists in the live state; the result remains unmeasured, not zero differing classes.
@@ -30,3 +30,11 @@ the summary, `pytest-failures.txt` lists every exact JUnit failure message, and
 captures the temporary-home containment assertion in full. The exporter shed
 marker test passed focused but failed in the full sandbox; current-head CI
 confirmation remains pending. No pre-existing-main attribution is made.
+
+Before push, main advanced to `0c0059e` (#688). It was merged; only the floor
+conflicted. Final collection (`postsync-collect.txt`) is 4133 = latest main 4058
++75 comparative cases. The latest main note and every ceiling are preserved.
+`postsync-green.txt` reruns the full requested focused suite plus
+`tests/test_runtime_ac_shadow.py`: 322 passed. Full verification was not repeated
+after this unrelated runtime-admission synchronization; `verify.txt` is scoped
+to the requested `8c53ae1` merge. Final combined-head CI remains pending.
