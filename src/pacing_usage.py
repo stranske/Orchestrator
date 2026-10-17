@@ -1,10 +1,10 @@
 """Local pacing evidence I/O. No credentials, browser scraping or provider calls.
 
-Confirmed Claude desktop source: ~/Library/Application Support/Claude/plan-usage-history.json
-(samples: t milliseconds, u.sd weekly percent, u.fh five-hour percent). Refresh is
-app-driven, not guaranteed; use each record's t, never the file modification time.
-Codex source: ~/.codex/sessions/**/rollout-*.jsonl token_count events,
-rate_limits.primary weekly percent and reset epoch. Credits are never extracted.
+Codex: freshest scheduled app-server poll or session rollout weekly primary.
+Claude: freshest scheduled /usage all-models week or desktop percentage history.
+Polls: ~/.codex/orchestrator/usage-poll/{codex,claude}-usage.json; original ts
+controls freshness. Weekly poll reset epochs define T1, T0=T1-7d. Fresh Codex
+credit statuses/expiries are authoritative; no identifiers enter pacing evidence.
 Fallback: agent-specific weekly-*.json plus timestamp-matched quota calibration.
 Mixed-agent ccusage totals are never silently attributed to Codex or Claude.
 """
@@ -29,6 +29,7 @@ CLAUDE_USAGE = Path.home() / "Library/Application Support/Claude/plan-usage-hist
 SNAPSHOTS = Path.home() / ".codex/usage-snapshots"
 CODEX_SESSIONS = Path.home() / ".codex/sessions"
 ROLLOUT_FILE_LIMIT = 300
+POLL_DIR = STATE_DIR / "usage-poll"
 
 
 def read_json(path: Path):
@@ -52,7 +53,7 @@ def read_rows(path: Path) -> list[dict]:
                         bad += 1
                 except ValueError:
                     bad += 1
-    except FileNotFoundError:
+    except OSError:
         return []
     if bad:
         print(f"FYI {path.name}: {bad} malformed rows omitted", file=sys.stderr)
@@ -86,18 +87,14 @@ def reset_inventory(path: Path, now: float) -> tuple[dict, list[str]]:
             data.pop(pool, None)
             messages.append(f"FYI {pool}: resets=unknown; invalid expiry")
             continue
-        for i, entry in enumerate(entries, 1):
+        for entry in entries:
             if entry.get("consumed_at"):
-                messages.append(
-                    f"FYI {pool}: reset {entry.get('id', i)} consumed at {entry['consumed_at']}"
-                )
+                messages.append(f"FYI {pool}: reset consumed at {entry['consumed_at']}")
             elif (expiry := pacing.timestamp(entry["expires"])) is not None and expiry <= now:
-                messages.append(
-                    f"FYI {pool}: reset {entry.get('id', i)} expired {entry['expires']}"
-                )
+                messages.append(f"FYI {pool}: reset expired {entry['expires']}")
             else:
                 messages.append(
-                    f"FYI {pool}: reset {entry.get('id', i)} expires {entry['expires']}; "
+                    f"FYI {pool}: reset expires {entry['expires']}; "
                     "owner-supplied expiry UNKNOWN (30-day estimate)"
                 )
     return data, messages
@@ -132,11 +129,25 @@ def rollout_observations(root: Path, now: float, *, stats: dict | None = None) -
     cache = read_json(cache_path)
     cache = cache if isinstance(cache, dict) else {}
     cached = cache.get("files", {}) if cache.get("version") == 1 else {}
-    files = sorted(root.glob("**/rollout-*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    unreadable = vanished = total_files = 0
+    candidates = []
+    try:
+        for path in root.glob("**/rollout-*.jsonl"):
+            total_files += 1
+            try:
+                candidates.append((path.stat().st_mtime, path))
+            except FileNotFoundError:
+                vanished += 1
+                unreadable += 1
+            except OSError:
+                unreadable += 1
+    except OSError:
+        unreadable += 1
+    files = [path for _, path in sorted(candidates, key=lambda pair: pair[0], reverse=True)]
     omitted = max(0, len(files) - ROLLOUT_FILE_LIMIT)
     rows: list[dict] = []
     updated = {}
-    malformed = unreadable = files_read = files_cached = bytes_read = 0
+    malformed = files_read = files_cached = bytes_read = 0
     for path in files[:ROLLOUT_FILE_LIMIT]:
         try:
             stat = path.stat()
@@ -226,6 +237,9 @@ def rollout_observations(root: Path, now: float, *, stats: dict | None = None) -
                 )
                 rows.extend(r for r in file_rows if r["ts"] <= now)
                 malformed += file_bad
+        except FileNotFoundError:
+            vanished += 1
+            unreadable += 1
         except OSError:
             unreadable += 1
     try:
@@ -244,10 +258,11 @@ def rollout_observations(root: Path, now: float, *, stats: dict | None = None) -
         files_read=files_read,
         files_cached=files_cached,
         bytes_read=bytes_read,
-        total_files=len(files),
+        total_files=total_files,
         omitted=omitted,
         malformed=malformed,
         unreadable_files=unreadable,
+        vanished_files=vanished,
     )
     if stats is not None:
         stats.update(scan)
@@ -262,6 +277,11 @@ def codex_rollout_usage(root: Path, now: float) -> dict | None:
     rows = rollout_observations(root, now, stats=stats)
     if not rows:
         return None
+    return dict(rows[-1], **reset_changes(rows), scan=stats)
+
+
+def reset_changes(rows: list[dict]) -> dict:
+    rows = sorted(rows, key=lambda r: r["ts"])
     resets = []
     signals = []
     for left, right in zip(rows, rows[1:]):
@@ -275,13 +295,20 @@ def codex_rollout_usage(root: Path, now: float) -> dict | None:
             early = right["period_end"] - pacing.PERIOD_SECONDS < left["period_end"] - 1
             if dropped and shift > pacing.TICK_SECONDS and early:
                 resets.append(right["ts"])
-    return dict(
-        rows[-1], reset_events=sorted(set(resets)), reset_signals=sorted(set(signals)), scan=stats
-    )
+    return dict(reset_events=sorted(set(resets)), reset_signals=sorted(set(signals)))
 
 
 def consume_detected_resets(inventory: dict, datum: dict, *, now: float, record: bool) -> list[str]:
     """Idempotently debit oldest-expiring bank entries, preserving the audit trail."""
+    poll = datum.get("poll") or {}
+    if poll.get("fresh"):
+        # A plan rollover is not proof of a credit consumption. Never mutate the
+        # hand inventory while the provider supplies the actual inventory.
+        return [
+            "FYI codex: fresh poll inventory; auto-debit disabled; "
+            f"reset signals={len(datum.get('reset_signals', []))}; "
+            f"available={poll.get('resets_available', 'unknown')}"
+        ]
     entries = inventory.get("codex")
     if not isinstance(entries, list):
         return []
@@ -291,6 +318,8 @@ def consume_detected_resets(inventory: dict, datum: dict, *, now: float, record:
         "auto-debit requires usage drop + >one-tick advance of T1 before scheduled rollover"
     ]
     baseline = pacing.timestamp(inventory.get("observed_at")) or 0
+    if poll.get("resets") is not None and poll.get("ts") is not None:
+        baseline = max(baseline, poll["ts"])
     consumed = {pacing.timestamp(e.get("consumed_at")) for e in entries}
     for ts in datum.get("reset_events", []):
         if ts <= baseline or ts in consumed:
@@ -316,6 +345,145 @@ def consume_detected_resets(inventory: dict, datum: dict, *, now: float, record:
     return messages
 
 
+def fraction(value):
+    return value / 100 if isinstance(value, (int, float)) and 0 <= value <= 100 else None
+
+
+def polled_usage(pool: str, now: float, directory: Path | None = None, *, data=None) -> dict:
+    """Allowlist poll fields once for selection, marker recovery, health and reports."""
+    directory = POLL_DIR if directory is None else directory
+    data = read_json(directory / f"{pool}-usage.json") if data is None else data
+    data = data if isinstance(data, dict) else {}
+    ts = pacing.timestamp(data.get("ts"))
+    if ts is not None and ts > now:
+        ts = None
+    window = data.get("primary" if pool == "codex" else "weekly") or {}
+    if not isinstance(window, dict):
+        window = {}
+    used = fraction(window.get("used_percent"))
+    end = pacing.timestamp(window.get("resets_at"))
+    valid = used is not None and end is not None
+    if pool == "codex":
+        valid = valid and window.get("window_minutes") == 10080
+    else:
+        valid = valid and str(window.get("label", "")).lower() == "all models"
+    short = data.get("secondary" if pool == "codex" else "session") or {}
+    if not isinstance(short, dict):
+        short = {}
+    age = now - ts if ts is not None else None
+    fresh = valid and age is not None and age <= pacing.STALE_AFTER_SECONDS
+    poll: dict = dict(
+        ts=ts,
+        age=age,
+        fresh=fresh,
+        valid=valid,
+        ticks_missed=age / pacing.POLL_TICK_SECONDS if age is not None else None,
+    )
+    if pool == "codex":
+        credits = data.get("reset_credits")
+        entries = None
+        if isinstance(credits, list) and all(
+            isinstance(c, dict)
+            and pacing.timestamp(c.get("expires_at")) is not None
+            and isinstance(c.get("status"), str)
+            for c in credits
+        ):
+            entries = [
+                dict(expires=c["expires_at"], source="codex-app-server")
+                for c in credits
+                if c["status"] == "available" and (pacing.timestamp(c["expires_at"]) or 0) > now
+            ]
+        poll.update(resets=entries, resets_available=len(entries) if entries is not None else None)
+    else:
+        poll["all_models_used_fraction"] = used
+        poll["weekly_buckets"] = [
+            dict(
+                label=b["label"],
+                used_fraction=fraction(b.get("used_percent")),
+                period_end=pacing.timestamp(b.get("resets_at")),
+            )
+            for b in (data.get("buckets") or [])
+            if isinstance(b, dict)
+            and b.get("kind") == "week"
+            and isinstance(b.get("label"), str)
+            and b["label"].lower() != "all models"
+        ]
+    return dict(
+        ts=ts,
+        used_fraction=used if valid else None,
+        period_end=end,
+        short_used_fraction=(
+            fraction(short.get("used_percent"))
+            if pool == "claude" or short.get("window_minutes") == 300
+            else None
+        ),
+        source=(
+            "codex-app-server:account/rateLimits/read" if pool == "codex" else "claude-cli:/usage"
+        ),
+        poll=poll,
+    )
+
+
+def poller_health(pool: str, poll: dict) -> list[str]:
+    age, ticks = poll.get("age"), poll.get("ticks_missed")
+    age = round(age, 1) if age is not None else "unknown"
+    ticks = round(ticks, 2) if ticks is not None else "unknown"
+    allowance = f"allowance={pacing.POLL_STALE_TICKS} ticks/{pacing.STALE_AFTER_SECONDS}s"
+    lines = [
+        f"POLLER {pool}: last ok ts={poll.get('ts')}; age={age}; "
+        f"ticks missed={ticks}; {allowance}; valid={poll.get('valid')}"
+    ]
+    if not poll.get("fresh"):
+        lines.append(
+            f"POLLER STALE: {pool} age={age}s — launchd com.stranske.usage-poll; "
+            f"{allowance}; drain: successful scheduled poll"
+        )
+    return lines
+
+
+def poll_coverage(
+    start: float, end: float, *, now: float, snapshots: list[dict] | None = None
+) -> tuple[int, int]:
+    """One population of 600-second poll slots, shared by pass numbers 2 and 3.
+
+    Both providers must have a valid actual poll in each slot. Re-reading a stale
+    latest file or recording extra capacity snapshots cannot manufacture coverage.
+    """
+    ticks = range(int(start), int(end), pacing.POLL_TICK_SECONDS)
+    present = {}
+    for pool in ("codex", "claude"):
+        rows = read_rows(POLL_DIR / f"{pool}-usage.ndjson")
+        latest = read_json(POLL_DIR / f"{pool}-usage.json")
+        if isinstance(latest, dict):
+            rows.append(latest)
+        slots = set()
+        for row in rows:
+            datum = polled_usage(pool, now, data=row)
+            ts = datum["ts"]
+            if datum["poll"]["valid"] and ts is not None and start <= ts < end:
+                slots.add(int((ts - int(start)) // pacing.POLL_TICK_SECONDS))
+        present[pool] = slots
+    covered = present["codex"] & present["claude"]
+    if snapshots is not None:
+        covered = {
+            slot
+            for slot in covered
+            if all(
+                (observed_agents(snapshots, int(start) + slot * pacing.POLL_TICK_SECONDS) or {})
+                .get(pool, {})
+                .get("state")
+                in ("ok", "warn", "shed")
+                for pool in ("codex", "claude")
+            )
+        }
+    return len(covered), len(ticks)
+
+
+def observed_agents(snapshots: list[dict], ts: float) -> dict | None:
+    matches = [s for s in snapshots if 0 <= ts - s["ts"] <= pacing.STALE_AFTER_SECONDS]
+    return max(matches, key=lambda s: s["ts"])["agents"] if matches else None
+
+
 def usage(
     pool: str,
     now: float,
@@ -323,11 +491,16 @@ def usage(
     snapshots: Path = SNAPSHOTS,
     claude_path: Path = CLAUDE_USAGE,
     sessions: Path | None = None,
+    poll_dir: Path | None = None,
 ) -> dict:
+    polled = polled_usage(pool, now, poll_dir)
+    candidates = []
+    if polled["ts"] is not None and polled["used_fraction"] is not None:
+        candidates.append(polled)
     if pool == "codex":
         observed = codex_rollout_usage(CODEX_SESSIONS if sessions is None else sessions, now)
         if observed is not None:
-            return observed
+            candidates.append(observed)
     if pool == "claude":
         data = read_json(claude_path) or {}
         rows = data.get("samples", [])
@@ -343,20 +516,65 @@ def usage(
             row = max(valid, key=lambda r: r["t"])
             ts = row["t"] / 1000
             if 0 <= row["u"]["sd"] <= 100 and ts <= now:
-                return dict(
-                    used_fraction=row["u"]["sd"] / 100,
-                    ts=ts,
-                    short_used_fraction=(
-                        row["u"]["fh"] / 100
-                        if isinstance(row["u"].get("fh"), (int, float))
-                        and 0 <= row["u"]["fh"] <= 100
-                        else None
-                    ),
-                    source="claude-desktop:plan-usage-history.json:u.sd",
+                candidates.append(
+                    dict(
+                        used_fraction=row["u"]["sd"] / 100,
+                        period_end=polled.get("period_end"),
+                        ts=ts,
+                        short_used_fraction=(
+                            row["u"]["fh"] / 100
+                            if isinstance(row["u"].get("fh"), (int, float))
+                            and 0 <= row["u"]["fh"] <= 100
+                            else None
+                        ),
+                        source="claude-desktop:plan-usage-history.json:u.sd",
+                    )
                 )
+    if candidates:
+        selected = dict(max(candidates, key=lambda r: r["ts"]))
+        selected["poll"] = polled["poll"]
+        # Short-window recovery must use its own timestamp when the freshest
+        # weekly datum is a rollout/desktop observation.
+        if polled["poll"]["fresh"] and polled["short_used_fraction"] is not None:
+            selected.update(
+                short_used_fraction=polled["short_used_fraction"], short_ts=polled["ts"]
+            )
+        else:
+            selected["short_ts"] = selected["ts"]
+        if pool == "codex":
+            rollout = next((r for r in candidates if r.get("scan")), {})
+            directory = POLL_DIR if poll_dir is None else poll_dir
+            historical = [
+                polled_usage(pool, now, directory, data=r)
+                for r in read_rows(directory / "codex-usage.ndjson")
+            ]
+            observations = [
+                r
+                for r in historical + candidates
+                if r.get("ts") is not None
+                and r.get("used_fraction") is not None
+                and r.get("period_end") is not None
+            ]
+            changes = reset_changes(observations)
+            for key in ("reset_events", "reset_signals"):
+                selected[key] = sorted(set(changes[key] + rollout.get(key, [])))
+            if rollout.get("scan"):
+                selected["scan"] = rollout["scan"]
+        return selected
     cap = calibration.get(f"{pool}_weekly_token_cap")
-    paths = sorted(snapshots.glob("weekly-*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-    for path in paths:
+    paths = []
+    unreadable = 0
+    try:
+        for path in snapshots.glob("weekly-*.json"):
+            try:
+                paths.append((path.stat().st_mtime, path))
+            except OSError:
+                unreadable += 1
+    except OSError:
+        unreadable += 1
+    if unreadable:
+        print(f"FYI weekly snapshot scan: unreadable_files={unreadable}", file=sys.stderr)
+    for mtime, path in sorted(paths, key=lambda pair: pair[0], reverse=True):
         rows = weekly_tokens(path, pool)
         if not rows:
             continue
@@ -364,23 +582,30 @@ def usage(
         if not isinstance(cap, (int, float)) or cap <= 0:
             return dict(
                 used_fraction=None,
-                ts=path.stat().st_mtime,
+                ts=mtime,
                 source="ccusage-unscaled:weekly-agent-tokens",
+                poll=polled["poll"],
                 weekly_tokens=row["tokens"],
                 period_start=row["period_start"],
             )
         # Calendar-week aggregates cannot measure a bank-reset-shifted week.
-        bounds = pacing.period(pool, now, start=calibration.get("codex_period_start"))
+        bounds = pacing.period(
+            pool,
+            now,
+            start=calibration.get("codex_period_start"),
+            end=calibration.get("claude_period_end"),
+        )
         if bounds is None or abs(row["period_start"] - bounds[0]) > 1:
             continue
         return dict(
             used_fraction=row["tokens"] / cap,
-            ts=path.stat().st_mtime,
+            ts=mtime,
             source="ccusage-calibrated:weekly-agent-tokens",
+            poll=polled["poll"],
             weekly_tokens=row["tokens"],
             period_start=row["period_start"],
         )
-    return dict(used_fraction=None, ts=None, source="none")
+    return dict(used_fraction=None, ts=None, source="none", poll=polled["poll"])
 
 
 def usage_snapshot(now: float) -> dict:
@@ -398,6 +623,7 @@ def usage_snapshot(now: float) -> dict:
             pool,
             now,
             start=calibration.get("codex_period_start"),
+            end=calibration.get("claude_period_end"),
             reset_at=max(times) if times else None,
         )
         aligned = dict(calibration)
@@ -554,7 +780,11 @@ def integrate(
         ]
         reset_at = max(reset_times) if reset_times else None
         bounds = pacing.period(
-            pool, now, start=calibration.get("codex_period_start"), reset_at=reset_at
+            pool,
+            now,
+            start=calibration.get("codex_period_start"),
+            reset_at=reset_at,
+            end=calibration.get("claude_period_end"),
         )
         source_calibration = dict(calibration)
         if pool == "codex" and bounds:
@@ -564,6 +794,32 @@ def integrate(
             if usage_data is not None
             else usage(pool, now, source_calibration, snapshots=SNAPSHOTS, claude_path=CLAUDE_USAGE)
         )
+        poll = datum.get("poll") or polled_usage(pool, now)["poll"]
+        datum["poll"] = poll
+        messages.extend(poller_health(pool, poll))
+        if pool == "claude":
+            for bucket in poll.get("weekly_buckets", []):
+                messages.append(
+                    f"FYI claude weekly bucket {bucket['label']}: "
+                    f"u={bucket['used_fraction']} T1={bucket['period_end']}"
+                )
+                if (
+                    bucket["used_fraction"] is not None
+                    and poll.get("all_models_used_fraction") is not None
+                    and bucket["used_fraction"] > poll["all_models_used_fraction"]
+                ):
+                    messages.append(
+                        f"FYI claude: {bucket['label']} weekly usage higher than "
+                        "all models; informational (dispatch uses Sonnet)"
+                    )
+        elif poll.get("fresh"):
+            hand_count = len(pacing.active_resets(entries, now)) if entries is not None else None
+            entries = poll.get("resets")
+            messages.append(
+                f"FYI codex resets: poll={poll.get('resets_available')} "
+                f"hand file={hand_count if hand_count is not None else 'unknown'}; "
+                "using fresh poll; expiries=" + str([e["expires"] for e in entries or []])
+            )
         # A recording tick can lower the calibrated cap before integration.
         if datum.get("source", "").startswith("ccusage-calibrated"):
             cap = source_calibration.get(f"{pool}_weekly_token_cap")
@@ -575,9 +831,10 @@ def integrate(
             )
         if pool == "codex" and datum.get("period_end") is not None:
             messages.extend(consume_detected_resets(inventory, datum, now=now, record=record))
+        if datum.get("period_end") is not None:
             bounds = (datum["period_end"] - pacing.PERIOD_SECONDS, datum["period_end"])
         start, end = bounds if bounds else (None, None)
-        if bounds and datum.get("ts") is not None and datum["ts"] < bounds[0]:
+        if bounds and datum.get("ts") is not None and (datum["ts"] < bounds[0] or now >= bounds[1]):
             datum["used_fraction"] = None
         exhausted: list[float] = []
         if bounds:
@@ -629,6 +886,17 @@ def integrate(
         ranks = {"ok": 0, "warn": 1, "shed": 2}
         if row["state"] in ranks and agent["state"] in ranks:
             agent["state"] = max((agent["state"], row["state"]), key=lambda state: ranks[state])
+        row["measurement"] = (
+            "measured"
+            if datum.get("used_fraction") is not None and not row.get("stale") and bounds
+            else "unknown"
+        )
+        row["poller"] = poll
+        row["reset_expiries"] = (
+            [e["expires"] for e in pacing.active_resets(entries, now)]
+            if entries is not None
+            else None
+        )
         agent["pacing"] = row
         agent["reason"] += f"; pacing.state={row['state']}; " + row["reason"]
         messages.extend(row["fyi"])
@@ -662,6 +930,9 @@ def report(handoff: Path, *, now: float, current: dict | None = None) -> str:
         "Evidence class: usage store + rate-limit ledger (dispatch share: capacity-ledger dispatch starts)",
     ]
     lines.extend(current.get("pacing_fyi", []))
+    if not any(line.startswith("POLLER ") for line in lines):
+        for pool in ("codex", "claude"):
+            lines.extend(poller_health(pool, polled_usage(pool, now)["poll"]))
 
     def measured(value):
         return "unmeasured" if value is None else value
@@ -671,8 +942,9 @@ def report(handoff: Path, *, now: float, current: dict | None = None) -> str:
         lines.append(
             f"pool {pool}: u={measured(row.get('used_fraction'))} "
             f"ũ={measured(row.get('projected_fraction'))} "
-            f"state={row.get('state', 'unknown')} w_p={measured(row.get('routing_weight'))} "
+            f"state={row.get('state', 'unknown')} pacing={row.get('measurement', 'unknown')} w_p={measured(row.get('routing_weight'))} "
             f"resets={row.get('resets_available') if row.get('resets_available') is not None else 'unknown'} source={row.get('source', 'none')} "
+            f"T1={row.get('period_end')} reset_expiries={row.get('reset_expiries')} "
             f"ts={row.get('ts')} stale={row.get('ts') is not None and now - row['ts'] > pacing.STALE_AFTER_SECONDS}; "
             f"{row.get('reason', 'usage unmeasured; clears on fresh usage/period sample')}"
         )
@@ -708,8 +980,7 @@ def report(handoff: Path, *, now: float, current: dict | None = None) -> str:
     ]
 
     def observed(ts):
-        matches = [s for s in snapshots if 0 <= ts - s["ts"] <= pacing.STALE_AFTER_SECONDS]
-        return matches[-1]["agents"] if matches else None
+        return observed_agents(snapshots, ts)
 
     # Use the latest completed pool period for both population queries.
     periods: list[tuple[float, float]] = []
@@ -727,11 +998,9 @@ def report(handoff: Path, *, now: float, current: dict | None = None) -> str:
         return "\n".join(lines)
     start, end = max(periods, key=lambda p: p[1])
     relevant = [r for r in incidents if start <= (pacing.timestamp(r.get("ts")) or 0) < end]
-    ticks = list(range(int(start), int(end), pacing.TICK_SECONDS))
-    # Each 15-minute slot needs its own observation; a neighbouring tick cannot fill a gap.
-    covered = sum(any(t <= s["ts"] < t + pacing.TICK_SECONDS for s in snapshots) for t in ticks)
-    coverage = covered == len(ticks)
-    coverage_text = f"coverage={covered}/{len(ticks)} ticks"
+    covered, expected = poll_coverage(start, end, now=now, snapshots=snapshots)
+    coverage = covered == expected
+    coverage_text = f"coverage={covered}/{expected} ticks (poll ticks={pacing.POLL_TICK_SECONDS}s)"
     classified = [r for r in relevant if observed(pacing.timestamp(r["ts"])) is not None]
     violations = sum(
         any(

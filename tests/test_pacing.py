@@ -12,8 +12,25 @@ import pacing_usage
 import route_weights_export
 import router
 
-START = pacing.CLAUDE_RESET_ANCHOR - pacing.PERIOD_SECONDS
+END = pacing.timestamp("2026-10-18T05:00:00Z")
+START = END - pacing.PERIOD_SECONDS
 SOURCE = "fixture-percent"
+
+
+@pytest.fixture(autouse=True)
+def isolated_polls(tmp_path, monkeypatch):
+    monkeypatch.setattr(pacing_usage, "POLL_DIR", tmp_path / "polls")
+
+
+@pytest.fixture
+def poll_history(tmp_path):
+    pacing_usage.POLL_DIR.mkdir()
+    for pool in ("codex", "claude"):
+        rows = []
+        for ts in range(int(START), int(END), pacing.POLL_TICK_SECONDS):
+            window = dict(used_percent=80, resets_at=END, window_minutes=10080, label="all models")
+            rows.append(dict(ts=ts, **{"primary" if pool == "codex" else "weekly": window}))
+        pacing_usage.append_rows(pacing_usage.POLL_DIR / f"{pool}-usage.ndjson", rows)
 
 
 def resets(n=0):
@@ -59,7 +76,7 @@ def test_banked_resets_relieve_reserve_RESET_BOOST():
         row["effective_reserve"] == 0
     ), "RESET_BOOST must consume resets_available in reserve math"
     assert row["state"] == "warn", "RESET_BOOST banked resets must keep projected exhaustion warn"
-    assert "bank-0" in row["fyi"][0]
+    assert "oldest-expiring reset" in row["fyi"][0]
     # Also exercise an actual state difference induced by the reserve formula.
     assert evaluate(day=6, u=0.8)["state"] == "warn"
     assert evaluate(day=6, u=0.8, n=2)["state"] == "ok", "RESET_BOOST changes pacing state"
@@ -102,9 +119,9 @@ def test_codex_reset_moves_period_claude_stays_fixed():
         now,
         now + pacing.PERIOD_SECONDS,
     )
-    assert pacing.period("claude", now, start=START, reset_at=now) == (
+    assert pacing.period("claude", now, start=START, reset_at=now, end=END) == (
         START,
-        pacing.CLAUDE_RESET_ANCHOR,
+        END,
     )
     assert pacing.period("codex", now) is None
 
@@ -371,7 +388,7 @@ def test_429_calibration_miss_consumed_and_cap_lowered(tmp_path):
     )
 
 
-def test_report_measured_zero_is_not_unmeasured(tmp_path):
+def test_report_measured_zero_is_not_unmeasured(tmp_path, poll_history):
     # Complete snapshot coverage, a real empty incident ledger, and populations in
     # both states allow a measured zero to be represented and assessed.
     end = START + pacing.PERIOD_SECONDS
@@ -502,7 +519,9 @@ def test_claude_reset_clears_exhaustion_without_moving_T1(tmp_path, monkeypatch)
     monkeypatch.setattr(pacing_usage, "RESETS_FILE", tmp_path / "resets.json")
     monkeypatch.setattr(pacing_usage, "CALIBRATION_FILE", tmp_path / "cap.json")
     monkeypatch.setattr(
-        pacing_usage, "usage", lambda *a, **k: dict(used_fraction=0.2, ts=now, source=SOURCE)
+        pacing_usage,
+        "usage",
+        lambda *a, **k: dict(used_fraction=0.2, ts=now, source=SOURCE, period_end=END),
     )
     pacing_usage.RESETS_FILE.write_text(
         json.dumps({"codex": [], "claude": [dict(expires="2026-11-16", consumed_at=now - 1800)]})
@@ -515,7 +534,7 @@ def test_claude_reset_clears_exhaustion_without_moving_T1(tmp_path, monkeypatch)
     pacing_usage.integrate(agents, now=now, handoff=tmp_path)
     row = agents["claude"]["pacing"]
     assert row["state"] == "ok"
-    assert row["period_end"] == pacing.CLAUDE_RESET_ANCHOR
+    assert row["period_end"] == END
 
 
 def rollout_file(root, observations):
@@ -559,6 +578,8 @@ def test_codex_rollout_fresh_stale_and_sanitized(tmp_path, age, stale):
         "reset_signals",
         "short_used_fraction",
         "scan",
+        "poll",
+        "short_ts",
     }
     row = evaluate(
         now=START + age,
@@ -753,23 +774,31 @@ def test_export_ignores_volatile_pacing_but_publishes_capacity_changes():
 
 
 @pytest.mark.parametrize("missing,noncodex", [(False, False), (True, True)])
-def test_report_zero_share_and_missing_tick_are_unmeasured(tmp_path, missing, noncodex):
+def test_report_zero_share_and_missing_tick_are_unmeasured(
+    tmp_path, missing, noncodex, poll_history
+):
     end = START + pacing.PERIOD_SECONDS
     rows = [
         dict(
             ts=t,
             event="pacing_snapshot",
             agents=dict(
+                claude=dict(state="ok"),
                 codex=dict(
                     state="ok" if t < START + pacing.DAY_SECONDS else "warn",
                     pacing=dict(period_start=START, period_end=end),
-                )
+                ),
             ),
         )
         for t in range(int(START), int(end), pacing.TICK_SECONDS)
     ]
     if missing:
         rows.pop(100)
+        for pool in ("codex", "claude"):
+            path = pacing_usage.POLL_DIR / f"{pool}-usage.ndjson"
+            polls = pacing_usage.read_rows(path)
+            polls.pop(100)
+            path.write_text("".join(json.dumps(r) + "\n" for r in polls))
     rows += [
         dict(ts=START + 10, event="start", agent="codex", count=1),
         dict(
@@ -782,7 +811,7 @@ def test_report_zero_share_and_missing_tick_are_unmeasured(tmp_path, missing, no
     pacing_usage.append_rows(tmp_path / "capacity-ledger.ndjson", rows)
     (tmp_path / "rate-limit-incidents.ndjson").write_text("")
     text = pacing_usage.report(tmp_path, now=end)
-    assert f"coverage={671 if missing else 672}/672 ticks" in text
+    assert f"coverage={1007 if missing else 1008}/1008 ticks" in text
     assert "3: unmeasured" in text or "unmeasured — no non-codex dispatches" in text
     assert "counts=" in text
 
@@ -985,7 +1014,7 @@ def test_build_reuses_usage_in_marker_and_pacing(tmp_path, monkeypatch):
     assert capacity._BUILD_PACING_USAGE.get() is None
 
 
-def test_report_zero_constrained_positive_baseline_is_fail(tmp_path):
+def test_report_zero_constrained_positive_baseline_is_fail(tmp_path, poll_history):
     end = START + pacing.PERIOD_SECONDS
     pacing_usage.append_rows(
         tmp_path / "capacity-ledger.ndjson",
@@ -994,10 +1023,11 @@ def test_report_zero_constrained_positive_baseline_is_fail(tmp_path):
                 ts=t,
                 event="pacing_snapshot",
                 agents=dict(
+                    claude=dict(state="ok"),
                     codex=dict(
                         state="ok" if t < START + pacing.DAY_SECONDS else "warn",
                         pacing=dict(period_start=START, period_end=end),
-                    )
+                    ),
                 ),
             )
             for t in range(int(START), int(end), pacing.TICK_SECONDS)
