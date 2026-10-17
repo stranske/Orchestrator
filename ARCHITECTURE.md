@@ -1525,7 +1525,7 @@ UNKNOWN. The snapshot date remains visible; a newer heartbeat marks an old findi
 No alarm is cleared, no regression rule changes, and no owner question or automated action is added.
 Route export (`route_weights_export.py`, schema `orchestrator.route-weights/v1` on branch
 `exports/route-weights`) records invocation on every daily run and success only after an actual
-publication; the published JSON keeps every v1 routing key byte-identical and adds additive
+publication; the published JSON preserves existing v1 routing values and adds additive
 `capacity_schema` (`orchestrator.route-weights-capacity/v1`) plus a `capacity` block with per-agent
 `state`, `window`, and `observed_at` from the capacity snapshot's own `generated_at` (no token or
 account fields). Semantic change detection includes capacity `state` and `window` but not
@@ -1544,6 +1544,46 @@ identical task evidence publish immediately. Refusals print task count and infin
 plus the required flag for partial loss. Overrides log the reason. Commit provenance records the
 resolved DB, source version and Git identity (or `orchestrator-export`). Shadow output remains
 available for diagnosis.
+Routing economics extends this existing export rail in shadow (`comparative.py`, #676).
+Absolute advantage orders agents by durable-PASS posterior; comparative advantage orders
+`q[a,k] - (lambda[a] + p[a]) * c[a,k]`. Lambda is the opportunity cost of pool capacity:
+price adjustment moves an over-budget agent's least-advantaged class to its runner-up,
+up to 50 iterations. Slack capacity and zero list prices give lambda zero and the absolute
+order; `max_iter` is explicitly not convergence or an optimality proof. This is an additive
+`comparative` block with schema `orchestrator.route-weights-comparative/v1` beside `capacity`;
+the enclosing export remains `/v1`, every ranking entry gains an integer `comparative_rank`
+or null, and posterior order, reserve separation, and exploration policy identity stay intact.
+Dedup: the existing export and switch-review rails already own these surfaces; no opportunity-cost
+calculation existed in the tree or improvement log. This extends them, with no new dispatch path,
+capability lifecycle, or change to the learner or hosted consumer.
+
+The adapter reads only #668's `capacity.build()["pools"][pool]["pacing"]` contract:
+`state`, `used_fraction`, `allowed_fraction`, `period_end`, `resets_available`, and optional
+`burn_per_day`. Budget is `allowed_fraction - used_fraction`; cost is `burn_per_day / agent's
+window run count`, multiplied by the locally measured class/agent mean-token ratio (otherwise
+1.0, explicitly `imputed`). Demand is class runs divided by all window runs, across all sources,
+over 14 days. Only latest-version quality cells with at least 20 observations count, across all
+task classes, including classes outside the hosted consumer's export. Subscription
+marginal price is zero; Muse and metered seats require whole-run ccusage list-price evidence.
+The capacity tier alone does not establish billing mode: Claude's ordinary subscription pool
+is zero-price, while a `-metered` or `-paygo` pool needs list-price evidence at the learner's
+minimum complete-cost coverage.
+Absent burn, ambiguous pool mapping, missing measurements, observations older than two hours,
+or an expired period yield `inputs_unmeasured`, null lambdas/ranks, and reasons, never zero or
+an assertion that comparative equals posterior. Inputs include pacing observation time and
+per-agent cost provenance. Reads do not create or migrate the Brain.
+
+`route_weights_export.py --comparative-report --window-days 14 --pacing-history PATH`
+reads NDJSON capacity snapshots, retaining the latest per UTC hour and counting differing hours
+per class with posterior/comparative tops and max lambda. It uses the latest quality weights
+and each snapshot's trailing run window, excluding future runs. Until #668 names its history
+transport, PATH is explicit; the configurable state-directory default is `pacing-history.ndjson`,
+not a claim that #668 already writes there. The CLI report returns before heartbeat, export write,
+or publication. Missing history prints unmeasured; measured all-zero lambdas with no differences
+print `not_testable_slack`. Switch review reads the same report and prints one summary line.
+The live pass number requires at least one differing class with measured Codex and Claude prices
+over the 14-day pacing-history window, checked no earlier than 2026-11-07 and 14 days after
+the first #668 state. Fixture success does not meet that live pass number or enable consumption.
 Dedup: firing history and its ledger-only silence annotation already existed; the weekly reader
 and independent cadence evidence were missing. Existing heartbeat repairs from main are retained.
 

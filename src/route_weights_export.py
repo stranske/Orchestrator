@@ -196,10 +196,8 @@ def _current_capacity_snapshot() -> dict[str, Any]:
     return capacity.build()
 
 
-def _capacity_block(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+def _capacity_block(snapshot: dict[str, Any]) -> dict[str, Any]:
     """Per-agent capacity state for remote consumers (state and window only)."""
-    if snapshot is None:
-        snapshot = _current_capacity_snapshot()
     agents_raw = snapshot.get("agents")
     agents = agents_raw if isinstance(agents_raw, dict) else {}
     observed_raw = snapshot.get("generated_at")
@@ -345,6 +343,8 @@ def build_document(
         "exploration": _exploration_block(version, by_task, task_types, timestamp),
     }
     if include_capacity:
+        if capacity_snapshot is None:
+            capacity_snapshot = _current_capacity_snapshot()
         document["capacity_schema"] = CAPACITY_SCHEMA
         document["capacity"] = _capacity_block(capacity_snapshot)
     # Bind the tag to the exported policy, including rankings and the sampled
@@ -356,7 +356,33 @@ def build_document(
     }
     digest = hashlib.sha256(_canonical_bytes(routing_semantic)).hexdigest()
     document["exploration"]["policy_version"] = f"route-exploration/v1:{digest}"
+    _add_comparative(document, db_path, capacity_snapshot, timestamp)
     return document
+
+
+def _add_comparative(document: dict, db_path: Path, snapshot: dict | None, now: int) -> None:
+    """Add shadow ranks after hashing the existing policy; never reorder its entries."""
+    import comparative
+
+    # Opportunity cost includes every evidenced class, beyond this export's consumer set.
+    result = comparative.measure(db_path, snapshot, now=now)
+    for task, section in document["task_types"].items():
+        positions = {
+            row["agent"]: index for index, row in enumerate(result["ranks"].get(task, []), 1)
+        }
+        for row in section["ranking"]:
+            row["comparative_rank"] = (
+                positions.get(row["agent"]) if result["status"] != "inputs_unmeasured" else None
+            )
+    for task, rows in document["reserve"].items():
+        positions = {
+            row["agent"]: index for index, row in enumerate(result["ranks"].get(task, []), 1)
+        }
+        for row in rows:
+            row["comparative_rank"] = (
+                positions.get(row["agent"]) if result["status"] != "inputs_unmeasured" else None
+            )
+    document["comparative"] = {key: value for key, value in result.items() if key != "ranks"}
 
 
 def _canonical_bytes(document: dict[str, Any]) -> bytes:
@@ -382,6 +408,14 @@ def _semantic_for_compare(document: dict[str, Any]) -> dict[str, Any]:
             else:
                 compared[agent] = entry
         semantic["capacity"] = compared
+    if isinstance(semantic.get("comparative"), dict) and isinstance(
+        semantic["comparative"].get("inputs"), dict
+    ):
+        block = dict(semantic["comparative"])
+        block["inputs"] = {
+            key: value for key, value in block["inputs"].items() if key != "pacing_observed_at"
+        }
+        semantic["comparative"] = block
     return semantic
 
 
@@ -700,6 +734,11 @@ def main() -> int:
         default=Path(os.environ["ORCH_STATE_DIR"]) if os.environ.get("ORCH_STATE_DIR") else None,
     )
     parser.add_argument("--feedback-db", type=Path)
+    parser.add_argument("--comparative-report", action="store_true")
+    parser.add_argument("--window-days", type=int, default=14)
+    parser.add_argument(
+        "--pacing-history", type=Path, help="NDJSON capacity.build() snapshots from #668"
+    )
     parser.add_argument(
         "--allow-evidence-regression",
         action="store_true",
@@ -714,6 +753,21 @@ def main() -> int:
         _selftest()
         return 0
     db_path = feedback.resolve_db_path(args.feedback_db)
+    if args.comparative_report:
+        import comparative
+
+        if args.window_days < 1:
+            parser.error("--window-days must be positive")
+        print(
+            comparative.format_report(
+                comparative.report(
+                    db_path,
+                    args.pacing_history or comparative.history_path(args.state_dir),
+                    window_days=args.window_days,
+                )
+            )
+        )
+        return 0
     document = build_document(db_path, args.min_observations)
     # Credit INVOCATION only after the document builds; `success` below records publication's
     # result. A success alone moves `last_success` only, so this daily step exported every day from
