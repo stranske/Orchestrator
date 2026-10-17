@@ -246,7 +246,7 @@ def _kill_switch_triggered(declared: Any, env: Mapping[str, str]) -> bool:
         return bool(name) and env.get(str(name)) == str(value)
     if isinstance(declared, str):
         match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", declared.strip())
-        return bool(match) and env.get(match.group(1)) == match.group(2)
+        return match is not None and env.get(match.group(1)) == match.group(2)
     return False
 
 
@@ -264,14 +264,16 @@ def _artifact_mapping(binding: Mapping[str, Any]) -> Mapping[str, Any]:
 
 def _binding_expires_at(binding: Mapping[str, Any]) -> int | None:
     artifact = _artifact_mapping(binding)
-    lifecycle = artifact.get("lifecycle") if isinstance(artifact.get("lifecycle"), Mapping) else {}
-    policy = binding.get("lifecycle_policy") or {}
+    lifecycle_raw = artifact.get("lifecycle")
+    lifecycle: Mapping[str, Any] = lifecycle_raw if isinstance(lifecycle_raw, Mapping) else {}
+    policy_raw = binding.get("lifecycle_policy")
+    policy: Mapping[str, Any] = policy_raw if isinstance(policy_raw, Mapping) else {}
     deadlines: list[int] = []
     for value in (
         artifact.get("expires_at"),
         lifecycle.get("expires_at"),
-        policy.get("expires_at") if isinstance(policy, Mapping) else None,
-        policy.get("expiry") if isinstance(policy, Mapping) else None,
+        policy.get("expires_at"),
+        policy.get("expiry"),
     ):
         if value is not None:
             try:
@@ -292,7 +294,8 @@ def _binding_ineligible(
         return "expired"
     env_map: Mapping[str, str] = os.environ if env is None else env
     artifact = _artifact_mapping(binding)
-    lifecycle = artifact.get("lifecycle") if isinstance(artifact.get("lifecycle"), Mapping) else {}
+    lifecycle_raw = artifact.get("lifecycle")
+    lifecycle: Mapping[str, Any] = lifecycle_raw if isinstance(lifecycle_raw, Mapping) else {}
     for declared in (artifact.get("kill_switch"), lifecycle.get("kill_switch")):
         if _kill_switch_triggered(declared, env_map):
             return "kill_switch"
