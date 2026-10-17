@@ -1,4 +1,42 @@
 {
+  "capacity": {
+    "aider": {
+      "observed_at": 1792205575,
+      "state": "ok",
+      "window": "daily"
+    },
+    "claude": {
+      "observed_at": 1792205575,
+      "state": "ok",
+      "window": "5h+weekly"
+    },
+    "codex": {
+      "observed_at": 1792205575,
+      "state": "ok",
+      "window": "5h"
+    },
+    "cursor": {
+      "observed_at": 1792205575,
+      "state": "ok",
+      "window": "monthly"
+    },
+    "gemini": {
+      "observed_at": 1792205575,
+      "state": "ok",
+      "window": "5h+weekly"
+    },
+    "muse": {
+      "observed_at": 1792205575,
+      "state": "ok",
+      "window": "5h+weekly"
+    },
+    "vibe": {
+      "observed_at": 1792205575,
+      "state": "ok",
+      "window": "subscription"
+    }
+  },
+  "capacity_schema": "orchestrator.route-weights-capacity/v1",
   "exploration": {
     "challengers": {
       "codemod": "gemini",
@@ -13,7 +51,7 @@
     "rate": 0.05,
     "week_start": 1792022400
   },
-  "generated_at": "2026-10-15T19:04:50Z",
+  "generated_at": "2026-10-17T02:52:50Z",
   "min_observations": 20,
   "reserve": {
     "implement": [
