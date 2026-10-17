@@ -304,12 +304,33 @@ def _binding_deadline_unparseable(binding: Mapping[str, Any]) -> bool:
     return False
 
 
+def _skill_package_invalid(binding: Mapping[str, Any]) -> bool:
+    """Whether a skill binding's package no longer validates on disk.
+
+    ``_artifact_mapping`` swallows this failure and returns ``{}``, so without
+    an explicit check the later selector match in ``_matches`` re-validates
+    the same package and raises instead of returning a refusal.
+    """
+    if binding.get("kind") != "skill":
+        return False
+    artifact = binding.get("artifact")
+    if not isinstance(artifact, str):
+        return False
+    try:
+        capability_compiler.validate_skill_package(Path(artifact))
+    except Exception:
+        return True
+    return False
+
+
 def _binding_ineligible(
     binding: Mapping[str, Any], now: int, env: Mapping[str, str] | None = None
 ) -> str | None:
     """Fail-closed refusal for a direct binding invocation, or None if eligible."""
     if (binding.get("rollback") or {}).get("phase") == "pending":
         return "rollback_pending"
+    if _skill_package_invalid(binding):
+        return "artifact_invalid"
     if _binding_deadline_unparseable(binding):
         return "expired"
     expires_at = _binding_expires_at(binding)

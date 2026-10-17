@@ -336,7 +336,7 @@ def test_capability_expiry_malformed_expiry_fails_closed_without_sweep():
     assert decision["rejection_reasons"]["expiring"] == ["expired"]
 
 
-def test_router_plan_expiry_is_read_only_and_rejects_expired_row(tmp_path):
+def test_router_plan_expiry_is_read_only_and_rejects_expired_row(tmp_path, monkeypatch):
     import router
 
     cap = capabilities._blank_capability("expiring")
@@ -369,13 +369,23 @@ def test_router_plan_expiry_is_read_only_and_rejects_expired_row(tmp_path):
     ledger = tmp_path / "capabilities.json"
     # Raw write: `save` validates and refuses an expired active row, which is
     # exactly the persisted state a raw `create=False` reader must refuse.
-    ledger.write_text(json.dumps({"capabilities": {"expiring": cap}}), encoding="utf-8")
+    ledger.write_text(
+        json.dumps(
+            {"schema_version": capabilities.SCHEMA_VERSION, "capabilities": {"expiring": cap}}
+        ),
+        encoding="utf-8",
+    )
     before = ledger.read_bytes()
+    # Exercise the raw `load(create=False)` branch in `router.plan`: omit
+    # `capability_records` and repoint every spelling of the default ledger
+    # (the `REG` global and the default bound when `load` was defined).
+    monkeypatch.setattr(capabilities, "REG", ledger)
+    monkeypatch.setattr(capabilities.load, "__defaults__", (ledger,))
+    monkeypatch.setattr(capabilities.load_declared, "__defaults__", (ledger,))
     result = router.plan(
         [{"target": "owner/repo#23", "task_type": "implement", "lane": "opener"}],
         {"agents": {"codex": {"state": "ok"}}},
         dry_run=True,
-        capability_records={"expiring": cap},
         now=NOW,
     )
     assert ledger.read_bytes() == before

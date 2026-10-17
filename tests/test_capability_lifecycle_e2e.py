@@ -662,6 +662,35 @@ def test_direct_invoke_target_fail_closed_declarations_refuse_without_writes(
     assert capability_targets.get_binding(version_id, registry_path=registry)["invocations"] == []
 
 
+def test_direct_invoke_target_broken_skill_package_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    registry, version_id = ctx["registry"], ctx["version_id"]
+    payload = json.loads(registry.read_text(encoding="utf-8"))
+    target = payload["targets"][version_id]
+    target["kind"] = "skill"
+    target["artifact"] = str(tmp_path / "missing-skill-package")
+    registry.write_text(json.dumps(payload), encoding="utf-8")
+    binding = capability_targets.get_binding(version_id, registry_path=registry)
+    cap = {"expiry": ctx["now"] + 86400, "kill_switch": "ORCH_CAPABILITY_SKILL_ENABLED=0"}
+    assert capability_lifecycle._invocation_ineligible(cap, binding, ctx["now"], {}) == (
+        "artifact_invalid"
+    )
+    result = capability_targets.invoke_target(
+        binding,
+        trigger={"skill_name": "missing", "target": "owner/repo#23"},
+        registry_path=registry,
+        ledger_path=ctx["ledger"],
+        target_run_id="direct:broken-skill",
+        inputs={"artifact_refs": []},
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "artifact_invalid"}, result
+    assert capability_targets.get_binding(version_id, registry_path=registry)["invocations"] == []
+    assert "causal_edge" not in result
+
+
 def test_compiled_invocation_malformed_ledger_expiry_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
