@@ -1171,6 +1171,7 @@ def ingest_keepalive_outcomes(
     _issue_fetch_fn=None,
     _spec_dir=None,
     _replacement_fn=None,
+    shadow_budget: int | None = None,
 ) -> IngestSummary:
     repos = repos or _active_repos()
     pr_fetch_fn = _pr_fetch_fn or _fetch_prs
@@ -1238,6 +1239,15 @@ def ingest_keepalive_outcomes(
     }
 
     shadow_execution_attempts = 0
+    # One budget spans all repositories; the flag orchestrate.sh exports raises it above the
+    # constant, and an explicit argument (the one-off backfill) wins over both.
+    import runtime_ac_gate as _runtime_ac_gate
+
+    shadow_budget_limit = (
+        max(0, int(shadow_budget))
+        if shadow_budget is not None
+        else _runtime_ac_gate.execution_budget(default=MAX_RUNTIME_AC_SHADOW_EXECUTIONS)
+    )
 
     def observe_shadow(repo, pr, run_id):
         nonlocal shadow_execution_attempts
@@ -1263,7 +1273,7 @@ def ingest_keepalive_outcomes(
                     observation = {"spec_dir": _spec_dir, "head_sha": pr.get("headRefOid")}
                     if not runtime_ac_gate.env_flag(os.environ, "ORCH_RUN_RUNTIME_AC"):
                         runtime_ac_gate.observe_shadow_spec(target, run_id, **observation)
-                    elif shadow_execution_attempts >= MAX_RUNTIME_AC_SHADOW_EXECUTIONS:
+                    elif shadow_execution_attempts >= shadow_budget_limit:
                         runtime_ac_gate.observe_shadow_spec(
                             target,
                             run_id,
@@ -2108,6 +2118,13 @@ def main(argv: list[str]) -> int:
         "--repos", nargs="+", help="owner/repo values; defaults to active registry repos"
     )
     parser.add_argument("--lookback-days", type=int, default=30)
+    parser.add_argument(
+        "--shadow-budget",
+        type=int,
+        default=None,
+        help="disposable exact-head shadow executions this run may make "
+        "(default: ORCH_RUNTIME_AC_SHADOW_BUDGET, else 3)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--include-non-agent",
@@ -2169,6 +2186,7 @@ def main(argv: list[str]) -> int:
             lookback_days=args.lookback_days,
             dry_run=args.dry_run,
             include_non_agent=args.include_non_agent,
+            shadow_budget=args.shadow_budget,
         )
     )
     # The rows written before the keepalive read existed are re-judged once each, after the ingest
