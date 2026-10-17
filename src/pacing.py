@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 RESERVE_FRACTION = 0.15
 RESET_BOOST = 0.5
 BURN_WINDOW_HOURS = 6
+MAX_WEIGHT_CHANGE = 0.25
 EARLY_SPEND_BAND = 0.10
 PASS_LOWER_MARGIN = 0.10
 PASS_UPPER_MARGIN = 0.05
@@ -71,40 +72,45 @@ def elapsed_fraction(now: float, start: float, end: float) -> float:
     return min(1.0, max(0.0, (now - start) / (end - start)))
 
 
-def burn_rate(samples: list[dict], now: float, start: float, *, source=None) -> float | None:
-    """EWMA of du/day on the last W hours; spanning intervals are clipped to W.
+def burn_estimate(
+    samples: list[dict], now: float, start: float, *, source=None
+) -> tuple[float | None, float]:
+    """Return EWMA du/day and the observed span in hours inside the burn window.
 
-    A repeated fresh flat sample measures zero. A stale observation does not invent
-    a flat sample. Negative jumps mark a reset and cannot debit the new period.
+    Only distinct timestamps from this source/period count. A negative usage jump
+    starts a new history, including for pools whose scheduled period stays fixed.
+    Sparse history still reports its span, but cannot define a burn rate.
     """
-    rows = sorted(
-        (
-            r
-            for r in samples
-            if start <= r["ts"] <= now
-            and r.get("used_fraction") is not None
-            and (source is None or r.get("source") == source)
-        ),
-        key=lambda r: r["ts"],
-    )
-    if len(rows) < 2:
-        return None
     window = BURN_WINDOW_HOURS * 3600
+    by_time = {
+        r["ts"]: r
+        for r in samples
+        if max(start, now - window) <= r["ts"] <= now
+        and r.get("used_fraction") is not None
+        and (source is None or r.get("source") == source)
+    }
+    rows = [by_time[t] for t in sorted(by_time)]
+    restart = 0
+    for i in range(1, len(rows)):
+        if rows[i]["used_fraction"] < rows[i - 1]["used_fraction"]:
+            restart = i
+    rows = rows[restart:]
+    span_h = (rows[-1]["ts"] - rows[0]["ts"]) / 3600 if rows else 0.0
+    if len(rows) < 3 or span_h < 1:
+        return None, span_h
     weighted = mass = 0.0
     for left, right in zip(rows, rows[1:]):
         dt = right["ts"] - left["ts"]
-        if dt <= 0 or right["ts"] <= now - window:
-            continue
         delta = right["used_fraction"] - left["used_fraction"]
-        if delta < 0:
-            weighted = mass = 0.0
-            continue
-        a = max(left["ts"], now - window)
-        b = right["ts"]
-        weight = math.exp(-(now - b) / window) - math.exp(-(now - a) / window)
+        weight = math.exp(-(now - right["ts"]) / window) - math.exp(-(now - left["ts"]) / window)
         weighted += delta / dt * DAY_SECONDS * weight
         mass += weight
-    return weighted / mass if mass > 0 else None
+    return (weighted / mass if mass > 0 else None), span_h
+
+
+def burn_rate(samples: list[dict], now: float, start: float, *, source=None) -> float | None:
+    """Compatibility view of the minimum-sample-qualified EWMA estimate."""
+    return burn_estimate(samples, now, start, source=source)[0]
 
 
 def routing_weight(projected: float, reserve: float) -> float:
@@ -134,6 +140,7 @@ def evaluate(
     source_ts: float | None,
     exhausted_at: float | None = None,
     previous_state: str | None = None,
+    previous_weight: float | None = None,
 ) -> dict:
     bank = active_resets(resets, now) if resets is not None else None
     n = len(bank) if bank is not None else None
@@ -143,9 +150,13 @@ def evaluate(
         used_fraction=used_fraction,
         allowed_fraction=None,
         projected_fraction=None,
+        effective_projected_fraction=None,
+        span_h=None,
+        confidence=None,
         burn_rate_per_day=None,
         burn_per_day=None,
         routing_weight=None,
+        previous_routing_weight=previous_weight,
         period_start=period_start,
         period_end=period_end,
         resets_available=n,
@@ -175,54 +186,82 @@ def evaluate(
         latched = False
     u = max(0.0, used_fraction)
     allowed = (1 - reserve) * elapsed_fraction(now, period_start, period_end)
-    rate = burn_rate(samples, now, period_start, source=source)
-    projected = u + rate * max(0, period_end - now) / DAY_SECONDS if rate is not None else None
+    rate, span_h = burn_estimate(samples, now, period_start, source=source)
+    confidence = min(1.0, max(0.0, span_h / BURN_WINDOW_HOURS))
+    remaining_days = max(0, period_end - now) / DAY_SECONDS
+    projected = u + rate * remaining_days if rate is not None else None
+    effective_projected = u + confidence * rate * remaining_days if rate is not None else None
     if u >= 1 or latched:
         state = "shed"
-    elif projected is None:
+    elif effective_projected is None or confidence < 1:
         state = "ok" if u <= allowed + EARLY_SPEND_BAND else "warn"
-    elif projected <= 1 - reserve:
+    elif effective_projected <= 1 - reserve:
         state = "ok"
-    elif projected <= 1 or (n is not None and n >= 1):
+    elif effective_projected <= 1 or (n is not None and n >= 1):
         state = "warn"
     else:
         state = "shed"
-    # Cold-start schedule test governs state; the literal weight uses observed u
-    # until a projection is measurable, visibly labelled in the result.
-    weight = routing_weight(projected if projected is not None else u, reserve)
+    # Keep the reserve/weight formula: without a qualified burn use observed u.
+    # A new history starts from full weight; recorded ticks supply their prior.
+    prior_weight = min(1.0, max(0.0, previous_weight)) if previous_weight is not None else 1.0
+    weight = routing_weight(effective_projected if effective_projected is not None else u, reserve)
     if state == "shed":
         weight = 0.0
+    if u < 1 and not latched:
+        weight = min(
+            prior_weight + MAX_WEIGHT_CHANGE, max(prior_weight - MAX_WEIGHT_CHANGE, weight)
+        )
     result.update(
         state=state,
         allowed_fraction=allowed,
         projected_fraction=projected,
+        effective_projected_fraction=effective_projected,
+        span_h=span_h,
+        confidence=confidence,
+        previous_routing_weight=prior_weight,
         burn_rate_per_day=rate,
         burn_per_day=rate,
         routing_weight=weight,
     )
-    if projected is not None and projected > 1 and bank and not latched and u < 1:
+    if (
+        effective_projected is not None
+        and effective_projected > 1
+        and bank
+        and not latched
+        and u < 1
+    ):
         reset = bank[0]
         result["fyi"].append(
             f"pool {pool}: would consume reset {reset.get('id', '1')} "
             f"expires={reset['expires']} (expiry owner estimate UNKNOWN)"
         )
-    if state == "ok" and previous_state == "shed" and projected is not None:
-        result["fyi"].append(f"pool {pool}: ũ={projected:.2f} ≤ 1−r_eff → ok")
     if previous_state == "shed" and state != "shed":
         if projected is None:
             result["fyi"].append(f"pool {pool}: shed → {state} (reset/rollover; ũ=unmeasured)")
-        elif state != "ok":
+        elif confidence < 1:
+            result["fyi"].append(
+                f"pool {pool}: shed → {state}; schedule decides state (c={confidence:.3f}); "
+                f"ũ_eff={effective_projected:.2f}; clears on fresh samples or reset at {period_end:.0f}"
+            )
+        elif state == "ok":
+            result["fyi"].append(f"pool {pool}: ũ={projected:.2f} ≤ 1−r_eff → ok")
+        else:
             result["fyi"].append(
                 f"pool {pool}: shed → {state}; ũ={projected:.2f} vs 1−r_eff={1 - reserve:.2f}; "
                 f"u={u:.2f}; clears toward ok on fresh flat samples or reset at {period_end:.0f}"
             )
-    if projected is None:
-        blocking = f"u={u:.2f} vs g(e)+δ={allowed + EARLY_SPEND_BAND:.2f}; ũ=unmeasured"
+    if effective_projected is None or confidence < 1:
+        projection_text = (
+            "ũ=unmeasured"
+            if effective_projected is None
+            else f"ũ_eff={effective_projected:.2f}; c={confidence:.3f}; schedule decides state"
+        )
+        blocking = f"u={u:.2f} vs g(e)+δ={allowed + EARLY_SPEND_BAND:.2f}; {projection_text}"
         clear = "fresh samples or schedule advancing"
     else:
-        blocking = f"ũ={projected:.2f} vs 1-r_eff={1 - reserve:.2f}"
+        blocking = f"ũ={effective_projected:.2f} vs 1-r_eff={1 - reserve:.2f}"
         hours = (
-            max(0, (projected - (1 - reserve)) / rate * 24)
+            max(0, (effective_projected - (1 - reserve)) / rate * 24)
             if rate is not None and rate > 0
             else None
         )
@@ -230,6 +269,7 @@ def evaluate(
     if latched or u >= 1:
         clear = f"reset at {period_end:.0f} or banked reset event"
     result["reason"] = (
-        f"{pool}: {blocking}; {state}; w_p={weight:.3f}; clears in {clear} or on reset"
+        f"{pool}: {blocking}; span_h={span_h:.3f}; {state}; "
+        f"w_p_prev→w_p={prior_weight:.3f}→{weight:.3f}; clears in {clear} or on reset"
     )
     return result
