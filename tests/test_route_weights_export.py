@@ -452,14 +452,20 @@ def test_completed_publication_survives_success_heartbeat_failure(tmp_path, monk
 
 
 @pytest.mark.parametrize("exists", [False, True], ids=["missing-db", "empty-db"])
-def test_publish_guard_refuses_empty_db(tmp_path, monkeypatch, capsys, exists):
+@pytest.mark.parametrize("allow", [False, True], ids=["default", "owner-override"])
+def test_publish_guard_refuses_empty_db(tmp_path, monkeypatch, capsys, exists, allow):
     """The real CLI must fail at the guard, before touching the publication repo."""
     database = tmp_path / "empty.db"
     if exists:
         sqlite3.connect(database).close()
     monkeypatch.setenv("ORCH_ROUTE_WEIGHTS_PUBLISH", "1")
     monkeypatch.setattr(export, "_current_capacity_snapshot", _capacity_fixture)
-    monkeypatch.setattr(export.capabilities, "daily_heartbeat", lambda *a, **k: None)
+    heartbeats = []
+    monkeypatch.setattr(
+        export.capabilities,
+        "daily_heartbeat",
+        lambda capability, event, **kwargs: heartbeats.append((capability, event)),
+    )
     monkeypatch.setattr(
         export.provision,
         "ensure_canonical",
@@ -474,13 +480,17 @@ def test_publish_guard_refuses_empty_db(tmp_path, monkeypatch, capsys, exists):
             "--state-dir",
             str(tmp_path),
             "--publish",
-        ],
+        ]
+        + (["--allow-evidence-regression"] if allow else []),
     )
     assert export.main() == 1, "publish_guard must refuse the empty DB"
     output = capsys.readouterr()
     assert f"db={database} source_version=0" in output.err
     assert "publish_guard refused: source_version == 0" in output.err
     assert database.exists() is exists, "read-only export must not create a missing DB"
+    assert heartbeats == [("route-weights-export", "invocation")], (
+        "publish_guard refusal must not record a successful publication"
+    )
 
 
 def test_publish_guard_refuses_all_false_evidence(tmp_path):
