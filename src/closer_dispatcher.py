@@ -2142,7 +2142,12 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     "status": "deferred",
                     "reason": "worker_capacity",
                     "resource_evidence": {
-                        "capacity": {"lane": "exception", "active": occupied, "limit": 1}
+                        "capacity": {
+                            "lane": "exception",
+                            "active": occupied,
+                            "limit": 1,
+                            "sampled_at": time.time(),
+                        }
                     },
                     "next_trigger": "shared Codex pool becomes available",
                 }

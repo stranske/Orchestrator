@@ -1060,6 +1060,117 @@ def test_pipeline_low_route_uses_any_live_low_profile_not_luna_assumption(tmp_pa
     assert selected["only"] == {"gemini"}
 
 
+def test_busy_shared_exception_pool_returns_valid_fresh_capacity_proof(tmp_path, monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    import closer_evidence
+    import closer_pipeline
+    import dispatcher
+    import execution_profiles
+
+    current = snapshot(base="c" * 40)
+    packet = {
+        "schema": "closer-evidence/v1",
+        "target": TARGET,
+        "head": HEAD,
+        "base": current["base"],
+        "producer_sha256": "d" * 64,
+        "semantic_cache_key": "closer-evidence-semantic/v1:" + "e" * 64,
+        "sections": {},
+        "manifest": {"packet_sha256": "f" * 64},
+    }
+
+    class PreparedGitHub(FakeGitHub):
+        def __init__(self, *, deadline):
+            super().__init__(current)
+            self.deadline = deadline
+
+    monkeypatch.setattr(adapter, "GitHub", PreparedGitHub)
+    monkeypatch.setattr(closer_evidence, "collect_evidence", lambda *_a, **_k: packet)
+    monkeypatch.setattr(closer_evidence, "validate_packet", lambda _p: True)
+    monkeypatch.setattr(closer_evidence, "drift_sample", lambda *_a, **_k: [])
+    monkeypatch.setattr(adapter, "_pipeline_capacity", lambda: {"io": 1, "low": 1, "exception": 1})
+
+    def reserve_low_route(**kwargs):
+        if "codex-low" in kwargs["unavailable_profiles"]:
+            return (None, "exhausted")
+        load = kwargs["load"]
+        load["codex"] = load.get("codex", 0) + 1
+        load["pool:codex-subscription"] = load.get("pool:codex-subscription", 0) + 1
+        return (
+            {"agent": "codex", "profile_id": "codex-low", "pools": ["codex-subscription"]},
+            "available",
+        )
+
+    monkeypatch.setattr(adapter, "_pipeline_low_route", reserve_low_route)
+    monkeypatch.setattr(execution_profiles, "default_codex_profile", lambda _task: "codex-strong")
+    monkeypatch.setattr(
+        execution_profiles,
+        "PROFILE_REGISTRY",
+        {"codex-strong": {"capacity_pool_ids": ["codex-subscription"]}},
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_fresh_capacity_report",
+        lambda: {
+            "profiles": {
+                "codex-strong": {
+                    "state": "ok",
+                    "capacity_pool_ids": ["codex-subscription"],
+                }
+            },
+            "pools": {"codex-subscription": {"state": "ok"}},
+        },
+    )
+    entered = threading.Event()
+    release = threading.Event()
+
+    def offload(*_args, **_kwargs):
+        entered.set()
+        assert release.wait(5)
+        return {"exit": 1, "run_id": "transport-failure", "error": "offline fixture"}
+
+    monkeypatch.setattr(dispatcher, "offload", offload)
+    backend = closer(tmp_path, current, apply=True, workers=True)
+    monkeypatch.setattr(
+        backend, "campaign_admission", lambda *_a, **_k: {"allowed": True, "timeout": 60}
+    )
+    monkeypatch.setattr(
+        backend, "worker", lambda *_a, **_k: pytest.fail("busy shared pool must defer")
+    )
+    captured = {}
+
+    def pipeline_stub(_path, _targets, **callbacks):
+        prep = callbacks["prepare"](TARGET, {"deadline": time.time() + 60})
+        context = {"prepare": prep, "deadline": time.time() + 60}
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(callbacks["interpret"], TARGET, context)
+            assert entered.wait(5)
+            result = callbacks["exception"](
+                TARGET,
+                {
+                    "prepare": prep,
+                    "interpret": {"proposal": {}, "substantive_needs": []},
+                    "deadline": context["deadline"],
+                    "work_key": "exception-capacity-test",
+                },
+            )
+            captured["result"] = result
+            release.set()
+            future.result(timeout=5)
+        return {"targets": {TARGET: {"status": "deferred"}}}
+
+    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=pipeline_stub))
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
+
+    deferred = captured["result"]
+    assert deferred["reason"] == "worker_capacity"
+    assert deferred["resource_evidence"]["capacity"]["active"] == 1
+    assert closer_pipeline._valid_worker_capacity(deferred["resource_evidence"], time.time())
+
+
 def test_queue_observation_failure_is_accounted_unknown_and_never_runs_action(tmp_path):
     def fail_observe(_target):
         raise RuntimeError("incomplete live read")
