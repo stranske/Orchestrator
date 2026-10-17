@@ -1,7 +1,8 @@
 """Shadow routing economics; reads Brain and #668 capacity snapshots, never dispatches.
 
 q and cost are agent -> task -> number. Missing measurements stay None, including
-lambda; zero denotes a measured slack price. No dependency on unmerged pacing code.
+lambda; zero denotes a measured slack price. Freshness and reserve inputs follow
+the shared pacing contract.
 """
 
 from __future__ import annotations
@@ -16,9 +17,10 @@ from contextlib import closing
 from pathlib import Path
 from typing import TypeGuard
 
+from pacing import STALE_AFTER_SECONDS
+
 SCHEMA = "orchestrator.route-weights-comparative/v1"
 WINDOW_DAYS = 14
-MAX_AGE_SECONDS = 2 * 3600
 MIN_MEASURED_HOUR_SHARE = 0.5
 _SIMPLEX_EPS = 1e-12
 
@@ -277,7 +279,11 @@ def measure(
             pacing.get("observed_at", pacing.get("source_ts", pacing.get("ts", observed)))
         )
         end = _timestamp(pacing.get("period_end"))
-        if stamp is None or not 0 <= now - stamp <= MAX_AGE_SECONDS:
+        if (
+            stamp is None
+            or stamp > now
+            or ("stale" not in pacing and now - stamp > STALE_AFTER_SECONDS)
+        ):
             missing("observed_at/source_ts/ts absent, stale or in the future")
             continue
         if end is None or end <= now:
@@ -286,15 +292,21 @@ def measure(
         if pacing.get("state") not in ("ok", "warn", "shed"):
             missing("state unmeasured or invalid")
             continue
-        if not _number(pacing.get("resets_available")):
-            missing("resets_available unmeasured")
+        # Allowance-to-date is diagnostic; the LP spends remaining-period capacity.
+        sources[agent]["allowed_fraction"] = pacing.get("allowed_fraction")
+        if "effective_reserve" not in pacing:
+            missing("effective_reserve missing")
             continue
-        used, allowed = pacing.get("used_fraction"), pacing.get("allowed_fraction")
-        if not all(_number(v) and v >= 0 for v in (used, allowed)):
-            missing("used_fraction or allowed_fraction unmeasured or invalid")
+        used, reserve = pacing.get("used_fraction"), pacing["effective_reserve"]
+        if not _number(used) or used < 0:
+            missing("used_fraction unmeasured or invalid")
             continue
-        budget[agent] = max(0.0, allowed - used)
-        sources[agent]["over_allowance"] = used > allowed
+        if not _number(reserve) or not 0 <= reserve <= 1:
+            missing("effective_reserve unmeasured or invalid")
+            continue
+        remaining = (1 - reserve) - used
+        budget[agent] = max(0.0, remaining)
+        sources[agent]["over_reserve"] = remaining < 0
         burn_key = next(
             (key for key in ("burn_rate_per_day", "burn_per_day") if _number(pacing.get(key))), None
         )

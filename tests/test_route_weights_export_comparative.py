@@ -7,6 +7,7 @@ import sys
 import pytest
 
 import comparative
+import pacing
 import route_weights_export as export
 import switch_review
 
@@ -48,6 +49,7 @@ def fixture(tmp_path):
                     "state": "ok",
                     "used_fraction": 0.5,
                     "allowed_fraction": allowed,
+                    "effective_reserve": 0.25 if agent == "codex" else 0.0,
                     "period_end": NOW + 86400,
                     "resets_available": 0,
                     "burn_per_day": 1.0,
@@ -85,9 +87,8 @@ def test_export_carries_comparative_rank_and_keeps_v1_order(tmp_path):
         "pacing",
         "burn_per_day",
         "used_fraction",
-        "allowed_fraction",
+        "effective_reserve",
         "period_end",
-        "resets_available",
         "stale",
         "expired",
         "future",
@@ -102,7 +103,7 @@ def test_missing_or_stale_pacing_exports_null_and_reason(tmp_path, missing):
     elif missing == "pools":
         del snapshot["pools"]
     elif missing == "stale":
-        snapshot["generated_at"] -= comparative.MAX_AGE_SECONDS + 1
+        snapshot["generated_at"] -= comparative.STALE_AFTER_SECONDS + 1
     elif missing == "future":
         snapshot["generated_at"] += 1
     elif missing == "expired":
@@ -196,7 +197,7 @@ def test_report_counts_distinct_hours_and_slack_verdict(tmp_path):
         {"comparative": report}
     )
     for pool in snapshot["pools"].values():
-        pool["pacing"]["allowed_fraction"] = 10
+        pool["pacing"]["burn_per_day"] = 0.01
     path.write_text(json.dumps(snapshot) + "\n")
     slack = comparative.report(db, path, now=NOW)
     assert slack["status"] == "not_testable_slack"
@@ -249,7 +250,7 @@ def test_timestamp_only_change_does_not_republish_or_change_policy(tmp_path):
 def test_zero_budget_optimizes_and_reports_unmet_demand(tmp_path):
     db, snapshot = fixture(tmp_path)
     for pool in snapshot["pools"].values():
-        pool["pacing"]["allowed_fraction"] = pool["pacing"]["used_fraction"]
+        pool["pacing"]["effective_reserve"] = 1 - pool["pacing"]["used_fraction"]
     result = comparative.measure(db, snapshot, now=NOW)
     assert result["status"] == "optimal"
     assert result["objective"] == 0
@@ -286,8 +287,8 @@ def test_opportunity_cost_includes_classes_outside_the_hosted_export(tmp_path):
                 "INSERT INTO runs VALUES (?,?,?,'analysis','keepalive')",
                 (f"{agent}-analysis", NOW - 30, agent),
             )
-    snapshot["pools"]["codex-subscription"]["pacing"]["allowed_fraction"] = 0.62
-    snapshot["pools"]["cursor-subscription"]["pacing"]["allowed_fraction"] = 10
+    snapshot["pools"]["codex-subscription"]["pacing"]["effective_reserve"] = 0.38
+    snapshot["pools"]["cursor-subscription"]["pacing"]["burn_per_day"] = 0.01
     doc = export.build_document(db, now=NOW, capacity_snapshot=snapshot)
     assert "analysis" not in doc["task_types"]
     assert doc["comparative"]["assignment"]["analysis"]["codex"] > 0
@@ -339,7 +340,7 @@ def test_explicit_stale_flag_is_unmeasured(agents_fixture):
     assert any("agents[codex].pacing: stale=true" in s for s in r["reasons"])
 
 
-def test_realistic_units_bind_codex_and_clamp_over_allowance(agents_fixture):
+def test_realistic_units_bind_codex_and_clamp_over_reserve(agents_fixture):
     db, snapshot = agents_fixture
     with sqlite3.connect(db) as conn:
         conn.execute("DELETE FROM runs")
@@ -355,7 +356,8 @@ def test_realistic_units_bind_codex_and_clamp_over_allowance(agents_fixture):
             burn_rate_per_day=0.08,
             period_end=NOW + 3 * 86400,
             used_fraction=0.5,
-            allowed_fraction=0.65 if a == "codex" else 1.0,
+            allowed_fraction=0.4,
+            effective_reserve=0.35 if a == "codex" else 0.0,
         )
     r = comparative.measure(db, snapshot, now=NOW)
     assert r["status"] == "optimal"
@@ -364,11 +366,11 @@ def test_realistic_units_bind_codex_and_clamp_over_allowance(agents_fixture):
     assert r["inputs"]["budget"]["codex"] == pytest.approx(0.15)
     assert r["usage"]["codex"] == pytest.approx(0.15)
     assert r["lambda"]["codex"] > 0
-    snapshot["agents"]["codex"]["pacing"]["allowed_fraction"] = 0.4
+    snapshot["agents"]["codex"]["pacing"]["used_fraction"] = 0.9
     snapshot["agents"]["cursor"]["pacing"]["period_end"] = NOW + 86400
     r = comparative.measure(db, snapshot, now=NOW)
     assert r["inputs"]["budget"]["codex"] == 0
-    assert r["inputs"]["cost_source_by_agent"]["codex"]["over_allowance"] is True
+    assert r["inputs"]["cost_source_by_agent"]["codex"]["over_reserve"] is True
     assert r["inputs"]["demand"]["implement"] == 80
     assert r["inputs"]["period_end"] == NOW + 86400
 
@@ -399,7 +401,7 @@ def test_ledger_filter_ts_and_one_stale_hour_keeps_window_verdict(agents_fixture
         row.pop("generated_at")
         row.update(ts=NOW + i * 3600, event="pacing_snapshot")
         for a in row["agents"].values():
-            a["pacing"].update(ts=row["ts"], allowed_fraction=10, stale=(i == 4))
+            a["pacing"].update(ts=row["ts"], burn_rate_per_day=0.01, stale=(i == 4))
         rows.append(row)
     rows += [dict(event="dispatch", ts=NOW + 13 * 3600, agents={})]
     path = comparative.history_path(tmp_path)
@@ -438,3 +440,86 @@ def test_diagnostic_drift_does_not_publish(agents_fixture, tmp_path, field):
     assert not export.write_document(target, second)
     second["comparative"]["inputs"]["cost_source_by_agent"]["codex"]["imputed"] = []
     assert export.write_document(target, second)
+
+
+@pytest.fixture
+def main_680_pacing_fixture(tmp_path):
+    """Use evaluate() itself so unknown reset inventory matches the live contract."""
+    db, snapshot = fixture(tmp_path)
+    snapshot["agents"] = {}
+    for agent in ("codex", "cursor"):
+        row = pacing.evaluate(
+            agent,
+            now=NOW,
+            used_fraction=0.394,
+            period_start=NOW - 3 * 86400,
+            period_end=NOW + 4 * 86400,
+            resets=None,
+            samples=[
+                dict(ts=NOW - 6 * 3600, used_fraction=0.374, source="fixture-percent"),
+                dict(ts=NOW, used_fraction=0.394, source="fixture-percent"),
+            ],
+            source="fixture-percent",
+            source_ts=NOW,
+        )
+        assert row["resets_available"] is None
+        assert row["effective_reserve"] == 0.15
+        assert row["allowed_fraction"] < row["used_fraction"]
+        snapshot["agents"][agent] = {"pacing": row}
+    del snapshot["pools"]
+    return db, snapshot
+
+
+def test_main_680_unknown_resets_remain_optimal(main_680_pacing_fixture):
+    db, snapshot = main_680_pacing_fixture
+    result = comparative.measure(db, snapshot, now=NOW)
+    assert result["status"] == "optimal"
+    assert result["inputs"]["budget"] == pytest.approx(dict(codex=0.456, cursor=0.456))
+    assert result["inputs"]["cost_source_by_agent"]["codex"]["over_reserve"] is False
+
+
+def test_effective_reserve_missing_is_unmeasured(main_680_pacing_fixture):
+    db, snapshot = main_680_pacing_fixture
+    del snapshot["agents"]["codex"]["pacing"]["effective_reserve"]
+    result = comparative.measure(db, snapshot, now=NOW)
+    assert result["status"] == "partial"
+    assert result["inputs"]["budget"]["codex"] is None
+    assert result["lambda"]["codex"] is None
+    assert "codex: agents[codex].pacing: effective_reserve missing" in result["reasons"]
+
+
+@pytest.mark.parametrize("allowance", [None, 0, 0.99, "absent"])
+def test_allowance_to_date_is_only_fyi(main_680_pacing_fixture, allowance):
+    db, snapshot = main_680_pacing_fixture
+    row = snapshot["agents"]["codex"]["pacing"]
+    row["allowed_fraction"] = allowance
+    if allowance == "absent":
+        del row["allowed_fraction"]
+    result = comparative.measure(db, snapshot, now=NOW)
+    assert result["status"] == "optimal"
+    assert result["inputs"]["budget"]["codex"] == pytest.approx(0.456)
+    assert result["inputs"]["cost_source_by_agent"]["codex"]["allowed_fraction"] == row.get(
+        "allowed_fraction"
+    )
+
+
+def test_explicit_freshness_uses_shared_pacing_verdict(main_680_pacing_fixture):
+    db, snapshot = main_680_pacing_fixture
+    row = snapshot["agents"]["codex"]["pacing"]
+    row["ts"] = NOW - pacing.STALE_AFTER_SECONDS - 1
+    # An explicit verdict is authoritative; legacy pools without it use the shared age limit.
+    assert comparative.measure(db, snapshot, now=NOW)["status"] == "optimal"
+    del row["stale"]
+    assert comparative.measure(db, snapshot, now=NOW)["status"] == "partial"
+    row["ts"] = NOW - pacing.STALE_AFTER_SECONDS
+    assert comparative.measure(db, snapshot, now=NOW)["status"] == "optimal"
+
+
+@pytest.mark.parametrize("reserve", [None, -0.1, 1.1, True, float("nan")])
+def test_invalid_effective_reserve_is_unmeasured(main_680_pacing_fixture, reserve):
+    db, snapshot = main_680_pacing_fixture
+    snapshot["agents"]["codex"]["pacing"]["effective_reserve"] = reserve
+    result = comparative.measure(db, snapshot, now=NOW)
+    assert result["status"] == "partial"
+    assert result["inputs"]["budget"]["codex"] is None
+    assert any("effective_reserve unmeasured or invalid" in r for r in result["reasons"])

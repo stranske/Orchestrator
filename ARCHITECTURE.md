@@ -1574,10 +1574,15 @@ ranking entry gains an integer `comparative_rank` or null with a reason. Reserve
 and exploration policy identity stay intact. This adds no dispatch path or lifecycle.
 
 The adapter prefers `agents[agent]["pacing"]` (#680), falling back to `pools[pool]["pacing"]`.
-It accepts numeric `burn_rate_per_day` or `burn_per_day`, checks explicit stale flags and
-observation timestamps, and reports the actual missing agent/key. Budget is the remaining
-period fraction `max(0, allowed_fraction-used_fraction)`; negative balances are labelled
-`over_allowance`. Cost is burn/day divided by observed runs/day, times the local class/agent
+It accepts numeric `burn_rate_per_day` or `burn_per_day`, honors the shared pacing `stale`
+flag, and reports the actual missing agent/key. Legacy inputs without `stale` use
+`pacing.STALE_AFTER_SECONDS`; missing/future observation timestamps remain unmeasured.
+Unknown `resets_available` does not block measurement: the LP consumes `effective_reserve`.
+Budget is remaining-period capacity `B[a] = max(0, (1 - effective_reserve) - used_fraction)`;
+negative balances are clamped to zero and labelled `over_reserve`. A missing reserve yields
+an unmeasured B with reason `effective_reserve missing`; no reserve is guessed.
+`allowed_fraction` is allowance-to-date, retained only as FYI, never used as the budget.
+Cost is burn/day divided by observed runs/day, times the local class/agent
 mean-token ratio (otherwise 1.0, explicitly imputed). Demand is trailing-window class run
 count times seconds remaining divided by window seconds. The common horizon is the earliest
 period_end of fully measured agents. Only latest-version quality cells with n_obs >= 20 count,
