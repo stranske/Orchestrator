@@ -25,6 +25,10 @@ POLICY_END = "<!-- END CLOSER STATUS DISPATCHER POLICY -->"
 GATE_START = "# BEGIN CLOSER STATUS DISPATCHER STOP GATE v1"
 GATE_END = "# END CLOSER STATUS DISPATCHER STOP GATE"
 TRAP_ANCHOR = "trap 'rm -rf \"$LANE_MUTEX_DIR\" 2>/dev/null || true' EXIT"
+TRAP_ANCHORS = (
+    TRAP_ANCHOR,
+    TRAP_ANCHOR[: -len("' EXIT")] + "; launch_keepalive_label_repair' EXIT",
+)
 PROMPT_TOKEN = re.compile(
     r'''(?m)^prompt\s*=\s*(?P<value>"""[\s\S]*?"""|'''
     + "'''[\\s\\S]*?'''"
@@ -103,9 +107,11 @@ def updated_postrun(original: bytes, *, enforce: bool) -> bytes:
         if text[start - 2 : start] != "\n\n" or text[end : end + 1] != "\n":
             raise ValueError("installed stop gate delimiters changed")
         text = text[: start - 2] + text[end + 1 :]
-    if text.count(TRAP_ANCHOR) != 1:
+    anchors = [anchor for anchor in TRAP_ANCHORS if text.count(anchor) == 1]
+    if len(anchors) != 1 or sum(text.count(anchor) for anchor in TRAP_ANCHORS) != 1:
         raise ValueError("postrun mutex-release anchor changed; inspect before installing")
-    return text.replace(TRAP_ANCHOR, TRAP_ANCHOR + "\n\n" + stop_gate(enforce)).encode("utf-8")
+    anchor = anchors[0]
+    return text.replace(anchor, anchor + "\n\n" + stop_gate(enforce)).encode("utf-8")
 
 
 def atomic_write(path: Path, content: bytes, expected: bytes | None) -> None:
