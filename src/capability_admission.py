@@ -422,18 +422,24 @@ def req_findable(cap: dict, ctx: dict) -> tuple[bool, str]:
 #             defined in that file in this tree, as `req_caller_exists` checks the entrypoint.
 #             Prose ("the weekly review and the closer") cannot be checked and no longer passes.
 #   dynamic — for a capability agents select (anything not `exercise_bound`), the value-chain
-#             monitor's `acted_on` is above zero within CONSUMER_GRACE_SECONDS of the FIRST
-#             `invocation` event. The count is `value_chain_monitor.acted_on_window_index`, the same
-#             Brain edges and classifier as the weekly row, bounded to the first-invocation
-#             deadline instead of the report's rolling window. An `exercise_bound` rail is consumed by other rails and leaves no Brain
-#             edge; its acting is proven by the rail exercise, so only the static step applies.
+#             monitor's `acted_on` is above zero in its rolling window, once CONSUMER_GRACE_SECONDS
+#             have passed since the FIRST `invocation` event. The count is
+#             `value_chain_monitor.acted_on_index`, the same Brain edges, window and classifier as
+#             the weekly row. Until 2026-10-17 it was a 14-day window after first invocation: a
+#             proxy that was unobservable for the rows that predate edge recording, vacuous for new
+#             rows (0 admitted since enforcement), and that stamped NEVER ACTED on the two most
+#             successful capabilities. Acting is now the RENEWAL currency as well
+#             (`capabilities.renewal_blocker`): a row invoked but not acting in the trailing window
+#             renews only with a dated fix ref (owner decision 2026-10-17, M1 restated). An
+#             `exercise_bound` rail is consumed by other rails and leaves no Brain edge; its acting
+#             is proven by the rail exercise, so only the static step applies.
 #
 # Latched-gate check. (1) What decrements it: wiring the consumer so an influence edge is recorded,
 # or editing the declaration to a real symbol — code changes that need nothing from this gate.
 # (2) Can that run while the gate is closed: yes, nothing here blocks a consumer from being wired.
-# (3) One window: the grace is read from the ledger's first `invocation` event and the acting from
-# that fixed first-invocation window, both consumed here. (4) What it prints when drained: `format_report`
-# prints "every declared consumer resolves; none is prose, missing or never acted" with every
+# (3) One window: the acting count is the monitor's rolling window, the same number the weekly row
+# prints, consumed here and by the renewal rule. (4) What it prints when drained: `format_report`
+# prints "every declared consumer resolves; none is prose, missing or not acting" with every
 # passing state counted beside it; a Brain this machine cannot read prints "unmeasured", which is
 # a word and never a zero. "Acting" is CAPABILITY-LEVEL: an edge records the consuming run, not
 # the rail, so the declared symbol is verified statically and the acting is verified per
@@ -453,7 +459,7 @@ CONSUMER_CLASSES = (
     "exercise_bound",
     "unmeasured",
     "not_invoked",
-    "never_acted",
+    "not_acting",
     "prose",
     "unresolved",
     "undeclared",
@@ -557,27 +563,24 @@ _ACTED_ON_CACHE: dict[tuple, dict] = {}
 
 
 def acted_on_context(ledger: dict, *, now: int | None = None) -> dict:
-    """The monitor's acts within each first-invocation deadline, or None when unreadable.
+    """The monitor's acts per capability over its rolling window, or None when unreadable.
 
-    Cached per Brain path and hour, because `report()` admits every live row with one context and
-    the tests beside this module build several; the Brain read is seconds, not free.
+    ONE computation with the weekly row (`value_chain_monitor.acted_on_index`): the gate, the
+    printed row and the renewal rule read the same Brain, window and classifier. Cached per Brain
+    path and hour, because `report()` admits every live row with one context and the tests beside
+    this module build several; the Brain read is seconds, not free.
     """
     import feedback
 
     now = _now() if now is None else now
     db = feedback.DB_PATH
-    firsts = {cid: first_invocation_ts(cap) for cid, cap in ledger.items()}
-    windows = {
-        cid: (first, min(now, first + CONSUMER_GRACE_SECONDS))
-        for cid, first in firsts.items()
-        if first is not None and first <= now
-    }
-    key = (str(db), now // 3600, tuple(sorted(firsts.items())))
+    ids = tuple(sorted(ledger))
+    key = (str(db), now // 3600, ids)
     if key not in _ACTED_ON_CACHE:
         try:
             import value_chain_monitor as monitor
 
-            index, reason = monitor.acted_on_window_index(db, windows)
+            index, reason = monitor.acted_on_index(db, now, list(ids))
             if index is not None:
                 index = {cid: index.get(cid, 0) for cid in ledger}
         except Exception as exc:  # noqa: BLE001
@@ -636,8 +639,8 @@ def consumer_class(cap: dict, ctx: dict) -> tuple[str, bool, str]:
             True,
             (
                 f"consumer {consumer} resolves; this capability's output was acted on by {acted} "
-                "run(s) within its first 14 days (value-chain monitor) — the Brain records the consuming run, not the rail, so "
-                "attribution to the declared symbol is not verified"
+                "run(s) in the trailing window (value-chain monitor) — the Brain records the "
+                "consuming run, not the rail, so attribution to the declared symbol is not verified"
             ),
         )
     first = first_invocation_ts(cap)
@@ -661,11 +664,13 @@ def consumer_class(cap: dict, ctx: dict) -> tuple[str, bool, str]:
             ),
         )
     return (
-        "never_acted",
+        "not_acting",
         False,
         (
-            f"declared consumer {consumer} never acted: first invoked {(now - first) // 86400} days "
-            "ago, acted_on 0 within its first 14 days — declared, not wired"
+            f"declared consumer {consumer} resolves but is not acting: nothing acted on this "
+            f"capability in the trailing window (value-chain monitor acted_on 0); first invoked "
+            f"{(now - first) // 86400} days ago. The weekly row names the first break; a renewal "
+            "of this row needs a dated fix ref for it"
         ),
     )
 
@@ -693,9 +698,7 @@ def consumer_report(ledger: dict, ctx: dict, rows: list[dict]) -> dict:
         "deferred": [r["capability_id"] for r in rows if "consumer_acts" in r["deferred"]],
         # A declaration edit each: no code, no evidence to wait for.
         "drainable": sorted(classes["prose"] + classes["unresolved"] + classes["undeclared"]),
-        "drained": not any(
-            classes[c] for c in ("never_acted", "prose", "unresolved", "undeclared")
-        ),
+        "drained": not any(classes[c] for c in ("not_acting", "prose", "unresolved", "undeclared")),
     }
 
 
@@ -1223,20 +1226,20 @@ def format_report(rep: dict) -> str:
             f"{by['acting']}, "
             f"in grace {by['grace']}, not invoked {by['not_invoked']}, exercise-bound "
             f"{by['exercise_bound']}, unmeasured {by['unmeasured']}",
-            f"                   never acted {by['never_acted']} (blocking {len(cons['blocking'])}, "
+            f"                   not acting (trailing window) {by['not_acting']} (blocking {len(cons['blocking'])}, "
             f"pre-cutoff debt {len(cons['deferred'])}); prose {by['prose']}, missing "
             f"{by['unresolved']}, undeclared {by['undeclared']} — DRAINABLE {len(cons['drainable'])} "
             "(a declaration edit each)",
         ]
         if cons["drained"]:
             out.append(
-                "                   every declared consumer resolves; none is prose, missing or never "
-                f"acted — acting (capability-level) {by['acting']}, in grace {by['grace']}, not "
+                "                   every declared consumer resolves; none is prose, missing or not "
+                f"acting — acting (capability-level) {by['acting']}, in grace {by['grace']}, not "
                 f"invoked {by['not_invoked']}, exercise-bound {by['exercise_bound']}, unmeasured "
                 f"{by['unmeasured']}"
             )
-        for cid in cons["by_class"]["never_acted"]:
-            out.append(f"                   NEVER ACTED {cid}")
+        for cid in cons["by_class"]["not_acting"]:
+            out.append(f"                   NOT ACTING (trailing window) {cid}")
     if rep["legacy_debt"]:
         out += ["", "  legacy debt (pay down opportunistically; never a human queue):"]
         counts: dict[str, int] = {}

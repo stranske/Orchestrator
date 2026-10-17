@@ -9,6 +9,28 @@
 
 ![Orchestrator loop: deterministic rails vs. callable agent-roles](orchestrator-loop.svg)
 
+## Status-driven local closer
+
+`closer_dispatcher.py` composes existing rails for the local closer lifecycle;
+`closer_queue.py` persists the assigned items and operation receipts. It inventories
+status, schedules bounded independent private work, collects results and continues
+other items while checks, review or verification wait. It is a deterministic
+coordinator, not a new agent role or a second demand scheduler. Existing claims
+serialize target/source/repository mutations across ledgers. Workers use existing
+`dispatcher.offload`; Luna extracts evidence and proposes findings, while the senior
+closer integrates original Tasks/AC evidence. Exact-head merge authority remains in
+`merge_guard`; native post-merge evidence remains in `verifier_evidence`.
+
+Postrun validates assignment accounting and actual remaining budget before end-round
+or relay. No pass quota or one-complex-repository limit can authorize early stop.
+Unknown mutation outcomes reconcile before retry, source/review/head changes
+invalidate prior evidence, and verifier requests are deduplicated. Source closure
+composes the separately owned supervisor actor when deployed and explicitly enabled;
+this coordinator does not enable it. Deployment uses the existing mirror sync and
+canonical local prompt renderers, preserving demand scheduling and safety gates.
+See [the operating contract](docs/CLOSER_DISPATCHER.md) for trusted disposition input,
+resource bounds, recovery and separate operational acceptance.
+
 ## Where this sits in the larger pipeline (READ FIRST)
 
 **This document describes ONE COMPONENT.** Everything below — rails, roles, the feedback loop — is
@@ -1527,9 +1549,24 @@ Route export (`route_weights_export.py`, schema `orchestrator.route-weights/v1` 
 `exports/route-weights`) records invocation on every daily run and success only after an actual
 publication; the published JSON keeps every v1 routing key byte-identical and adds additive
 `capacity_schema` (`orchestrator.route-weights-capacity/v1`) plus a `capacity` block with per-agent
-`state`, `window`, and `observed_at` from the capacity snapshot's own `generated_at` (no token or
-account fields). Semantic change detection includes capacity `state` and `window` but not
-`observed_at` alone, so a shed or recovered seat republishes without touching posteriors or
+`state`, `window`, and `observed_at` from the capacity snapshot's own `generated_at`, plus
+an additive `pacing` block for Codex/Claude (fractions, projection, EWMA burn, routing weight,
+period bounds, reset inventory and source freshness; no credentials). `pacing.py` defines the
+weekly window and constants once. The capacity tick appends source-labelled observations and
+snapshots even while shed. Codex weekly percent/reset epochs come from timestamped rollout token-count events;
+Claude uses desktop weekly history. Unknown/stale pacing preserves native routability; shared
+ccusage totals never become per-agent percentages. Both burn-rate aliases are retained.
+`router.select_agent` preserves load/late/state/policy/drain tiers and samples tied pools by
+posterior × pacing weight within Codex/Claude only (legacy exploration runs first), then falls
+back to zero-weight warn pools, then pacing-shed pools with
+`fail-toward-motion`; auth/model/manual holds retain authority. The plan and persisted dispatch
+metadata carry all candidate weights and projections. `capacity.py pick-agent` exposes that same
+selection for the separate relay follow-up; it prints the agent on stdout and evidence on stderr.
+`capacity.py pacing-report` queries completed-period usage, incidents with another pool ok, and
+non-Codex dispatch share in constrained versus ok hours; missing populations stay unmeasured.
+`switch_review` prints that weekly check. Reset inventory and calibration are local runtime data;
+see `docs/capacity-pacing.md`. Semantic change detection includes capacity state, weekly usage and reset changes,
+excluding observation clocks, reasons and burn/schedule/projection drift, so a shed or recovered seat republishes without touching posteriors or
 `exploration.policy_version`. Rail exercise records invocation without
 `--record`, which governs exercise verdicts only.
 The learner and exporter share feedback.py's instance DB selection: explicit DB, DB environment,
