@@ -175,6 +175,63 @@ def test_replay_records_fixture_errors_instead_of_raising(monkeypatch):
     assert report["rows"][2]["detail"]["error"] == "broken"
 
 
+def test_replay_uses_live_labels_and_successful_routing_without_network(monkeypatch):
+    """Live fixtures retain their provenance while every routing shape stays locally controlled."""
+    fixture = {"live": True, "repo": "Orchestrator", "issue": 666, "labels": [], "title": "old"}
+    monkeypatch.setattr(
+        recurrence,
+        "_fetch_issue",
+        lambda *_args: {"labels": [{"name": "task:test"}], "title": "current title"},
+    )
+    assert recurrence._labels_of(fixture, offline=False) == (
+        ["task:test"],
+        "current title",
+        "live Orchestrator#666",
+    )
+
+    import adversarial
+    import backlog
+    import runtime_ac_gate
+
+    monkeypatch.setattr(backlog, "classify", lambda labels: "testgen")
+    monkeypatch.setattr(runtime_ac_gate, "eligibility", lambda *_args: {"required": True})
+    monkeypatch.setattr(adversarial, "high_stakes_reason", lambda *_args: "risk:major")
+    monkeypatch.setattr(
+        recurrence,
+        "FIXTURES",
+        (
+            {
+                "capability": "routing",
+                "kind": "classify",
+                "expect_task_type": "testgen",
+                "labels": ["task:test"],
+                "title": "t",
+                "source": "s",
+            },
+            {
+                "capability": "gate",
+                "kind": "gate_required",
+                "labels": [],
+                "title": "t",
+                "source": "s",
+            },
+            {
+                "capability": "risk",
+                "kind": "high_stakes",
+                "labels": [],
+                "title": "t",
+                "source": "s",
+            },
+        ),
+    )
+    monkeypatch.setattr(recurrence, "PREDICATE_FIXTURES", ())
+    report = recurrence.replay(offline=True)
+    assert report["would_fire"] == report["total"] == 3
+    assert report["rows"][0]["actual"] == "testgen"
+    assert report["rows"][1]["eligibility"] == {"required": True}
+    assert report["rows"][2]["reason"] == "risk:major"
+
+
 def test_format_report_renders_miss_and_repaired_fire_details():
     text = recurrence.format_report(
         {
