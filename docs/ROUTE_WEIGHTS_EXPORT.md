@@ -21,9 +21,23 @@ The document is versioned and has this contract:
       "evidence_ok": true
     }
   },
-  "reserve": {"implement": [{"agent": "claude", "posterior": 0.58, "n_obs": 31, "success_rate": 0.55}]}
+  "reserve": {"implement": [{"agent": "claude", "posterior": 0.58, "n_obs": 31, "success_rate": 0.55}]},
+  "capacity_schema": "orchestrator.route-weights-capacity/v1",
+  "capacity": {
+    "codex": {"state": "ok", "window": "5h", "observed_at": 1725321600}
+  }
 }
 ```
+
+`capacity_schema` and `capacity` are additive under the v1 route-weights schema so the Workflows
+consumer (`agent_delegation_policy.js`, which accepts only `orchestrator.route-weights/v1`) keeps
+reading posteriors. The block has one entry per configured agent in `capacity.AGENTS`, with `state`
+copied verbatim from that tick's `capacity.build()` snapshot (`ok`, `warn`, `shed`, or `unknown`),
+the agent's configured `window`, and `observed_at` set to the capacity snapshot's `generated_at`
+(not the export's `generated_at`). Publish change detection compares `state` and `window` but
+ignores `observed_at` alone so an unchanged pool state does not republish. Token counts, costs, and
+account identifiers are intentionally omitted. v1 routing keys are byte-identical with or without
+the capacity block; `exploration.policy_version` is likewise unchanged when only capacity is added.
 
 Only the latest `route_weights` version is read. The public `task_types` keys are the consumer
 contract: `implement`, `review`, `testgen`, `mechanical`, `codemod`, and `cross_repo`; each is also

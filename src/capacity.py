@@ -49,6 +49,7 @@ OUT = HANDOFF / "capacity.json"
 SHED_DIR = HANDOFF / "capacity-shed"  # touch <agent> here on an observed 429 -> forces shed
 
 OK, WARN, SHED, UNKNOWN = "ok", "warn", "shed", "unknown"
+AGENT_STATES = frozenset({OK, WARN, SHED, UNKNOWN})
 
 
 # Static capacity model. Limit numbers are the public plan caps (PR #2350 Rev-2b);
