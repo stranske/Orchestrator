@@ -19,9 +19,10 @@ PASS_UPPER_MARGIN = 0.05
 PASS_SHARE_MULTIPLIER = 2
 DAY_SECONDS = 86400
 PERIOD_SECONDS = 7 * DAY_SECONDS
-TICK_SECONDS = 900
-STALE_AFTER_SECONDS = 2 * TICK_SECONDS
-CLAUDE_RESET_ANCHOR = datetime(2026, 10, 18, 4, 59, tzinfo=timezone.utc).timestamp()
+TICK_SECONDS = 900  # Capacity recording cadence; distinct from scheduled usage polls.
+POLL_TICK_SECONDS = 600
+POLL_STALE_TICKS = 3
+STALE_AFTER_SECONDS = POLL_STALE_TICKS * POLL_TICK_SECONDS
 
 
 def timestamp(value) -> float | None:
@@ -52,13 +53,13 @@ def effective_reserve(resets_available: int) -> float:
     return RESERVE_FRACTION * max(0.0, 1 - RESET_BOOST * resets_available)
 
 
-def period(pool: str, now: float, *, start=None, reset_at=None) -> tuple[float, float] | None:
+def period(
+    pool: str, now: float, *, start=None, reset_at=None, end=None
+) -> tuple[float, float] | None:
     if pool == "claude":
-        end = CLAUDE_RESET_ANCHOR
-        end += math.floor((now - end) / PERIOD_SECONDS) * PERIOD_SECONDS
-        if end <= now:
-            end += PERIOD_SECONDS
-        return end - PERIOD_SECONDS, end
+        finish = timestamp(end)
+        # Only a provider-observed weekly boundary is authoritative. No guessed anchor.
+        return (finish - PERIOD_SECONDS, finish) if finish is not None else None
     origin = timestamp(reset_at if reset_at is not None else start)
     if origin is None or origin > now:
         return None
@@ -232,8 +233,8 @@ def evaluate(
     ):
         reset = bank[0]
         result["fyi"].append(
-            f"pool {pool}: would consume reset {reset.get('id', '1')} "
-            f"expires={reset['expires']} (expiry owner estimate UNKNOWN)"
+            f"pool {pool}: would consume oldest-expiring reset "
+            f"expires={reset['expires']} (expiry source={reset.get('source', 'owner estimate UNKNOWN')})"
         )
     if previous_state == "shed" and state != "shed":
         if projected is None:
