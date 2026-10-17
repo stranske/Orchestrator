@@ -1029,23 +1029,177 @@ def test_staged_prepare_runs_before_pending_ci_wait_selection(tmp_path, monkeypa
     )
 
     def run_pipeline(path, targets, **kwargs):
+        seen["path"] = path
+        seen["reconcile"] = kwargs["reconcile"]
         prepared = kwargs["prepare"](TARGET, {"deadline": time.time() + 30})
         seen["prepared"] = prepared
         assert prepared["proposal"]["action"] == "wait"
         assert prepared["proposal"]["next_trigger"] == "check conclusion change"
         assert prepared["evidence_summary"]["sections"]["source"]["status"] == "complete"
         seen["shadow"] = kwargs["interpret"](TARGET, {"prepare": prepared})
+        seen["shadow_action"] = kwargs["act"](TARGET, {"prepare": prepared})
         return {"valid": True, "targets": {TARGET: {"status": "parked"}}}
 
     monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=run_pipeline))
-    backend = closer(tmp_path, current)
+    backend = closer(tmp_path, current, apply=True, workers=True)
+    monkeypatch.setattr(
+        backend, "execute", lambda *_a, **_k: pytest.fail("shadow mode must never execute")
+    )
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=2, shadow=True)
     result = adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 330)
     assert result["valid"]
+    assert seen["path"] == adapter._pipeline_state_path(args.state, shadow=True)
+    assert seen["path"] != adapter._pipeline_state_path(args.state, shadow=False)
+    assert seen["reconcile"] is None
     assert seen["prepared"]["snapshot"]["checks"] == "PENDING"
     assert seen["shadow"]["classification"] == "not_run_shadow"
     assert seen["shadow"]["authority"] is False
+    assert seen["shadow_action"]["target_complete"] is True
     assert not (tmp_path / "state.json").exists()
+
+
+def test_validate_stop_can_select_shadow_pipeline_ledger(tmp_path, monkeypatch, capsys):
+    state = tmp_path / "state.json"
+    shadow_path = adapter._pipeline_state_path(state, shadow=True)
+    shadow_path.write_text("{}")
+    seen = {}
+
+    def validate(path, assignment_targets=None):
+        seen["path"] = path
+        return {"valid": False, "reasons": ["offline fixture"]}
+
+    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(validate_stop=validate))
+    assert adapter.main(["validate-stop", "--state", str(state), "--shadow"]) == 78
+    capsys.readouterr()
+    assert seen["path"] == shadow_path
+
+
+def test_validate_missing_shadow_state_never_falls_back_to_production_queue(
+    tmp_path, monkeypatch, capsys
+):
+    state = tmp_path / "state.json"
+    state.write_text("production queue state")
+    monkeypatch.setattr(
+        closer_queue,
+        "validate_stop",
+        lambda *_a, **_k: pytest.fail("shadow validation must not inspect production state"),
+    )
+    assert adapter.main(["validate-stop", "--state", str(state), "--shadow"]) == 78
+    assert json.loads(capsys.readouterr().out)["reasons"] == ["missing_shadow_pipeline_state"]
+
+
+def test_capacity_deferred_uses_route_exhaustion_proof_without_second_lookup(tmp_path, monkeypatch):
+    import closer_pipeline
+
+    captured = {}
+    capacity_evidence = {
+        "capacity": {
+            "lane": "low",
+            "available": 0,
+            "required": 1,
+            "sampled_at": time.time(),
+        }
+    }
+
+    def run_pipeline(_path, targets, **callbacks):
+        captured["result"] = callbacks["act"](
+            targets[0],
+            {
+                "interpret": {
+                    "classification": "capacity_deferred",
+                    "resource_evidence": capacity_evidence,
+                    "next_trigger": "capacity_recheck",
+                }
+            },
+        )
+        return {"targets": {targets[0]: captured["result"]}}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "closer_pipeline",
+        SimpleNamespace(
+            run_pipeline=run_pipeline,
+            _valid_worker_capacity=closer_pipeline._valid_worker_capacity,
+        ),
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_pipeline_capacity",
+        lambda: pytest.fail("route exhaustion must not trigger a second capacity lookup"),
+    )
+    backend = closer(tmp_path, snapshot())
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
+
+    result = captured["result"]
+    assert result["status"] == "deferred"
+    assert result["reason"] == "worker_capacity"
+    capacity = result["resource_evidence"]["capacity"]
+    assert capacity["lane"] == "low"
+    assert capacity["available"] == 0
+    assert result["resource_evidence"] == capacity_evidence
+    assert closer_pipeline._valid_worker_capacity(result["resource_evidence"], time.time())
+
+
+@pytest.mark.parametrize(
+    ("reason", "inner", "expected_status"),
+    [
+        ("claim_held", {"holder": {"agent": "other"}}, "deferred"),
+        ("PR closed or draft", {}, "blocked"),
+    ],
+)
+def test_only_proven_non_ci_waits_become_pipeline_continuations(
+    tmp_path, monkeypatch, reason, inner, expected_status
+):
+    action_state = tmp_path / "inner-actions.json"
+    queue_receipt = {
+        "stop_valid": True,
+        "accounting": [
+            {
+                "target": TARGET,
+                "status": "ineligible",
+                "eligible": False,
+                "reason": reason,
+                "next_trigger": "wait for fresh source condition",
+                "action": "wait",
+            }
+        ],
+        "events": [],
+    }
+    monkeypatch.setattr(closer_queue, "run_round", lambda *_a, **_k: queue_receipt)
+    monkeypatch.setattr(
+        closer_queue,
+        "_read_state",
+        lambda _path: {"items": {TARGET: inner}},
+    )
+    captured = {}
+
+    def run_pipeline(_path, targets, **callbacks):
+        captured["result"] = callbacks["act"](
+            targets[0],
+            {
+                "prepare": {"snapshot": {}},
+                "interpret": {"classification": "deterministic_wait"},
+                "deadline": time.time() + 60,
+                "revision": "observed-revision",
+                "work_key": "ordinary-wait-test",
+                "action_state_path": str(action_state),
+            },
+        )
+        return {"targets": {targets[0]: captured["result"]}}
+
+    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=run_pipeline))
+    backend = closer(tmp_path, snapshot())
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
+
+    result = captured["result"]
+    assert result["status"] == expected_status
+    assert result["next_trigger"] == "wait for fresh source condition"
+    assert result["queue_receipt"] == queue_receipt
+    if expected_status == "deferred":
+        assert result["reason"] == "claim_held"
+        assert result["resource_evidence"] == {"holder": {"agent": "other"}}
 
 
 @pytest.mark.parametrize(
@@ -1126,9 +1280,12 @@ def test_pipeline_low_route_uses_any_live_low_profile_not_luna_assumption(tmp_pa
         json.dumps(
             {
                 "generated_at": time.time(),
-                "agents": {"gemini": {"state": "ok"}},
-                "profiles": {"gemini-flash-low": {"state": "ok"}},
-                "pools": {"gemini-api": {"state": "ok"}},
+                "agents": {"gemini": {"state": "ok"}, "aider": {"state": "ok"}},
+                "profiles": {
+                    "gemini-flash-low": {"state": "ok"},
+                    "aider-flash-low": {"state": "ok"},
+                },
+                "pools": {"gemini-api": {"state": "ok"}, "aider-paygo": {"state": "ok"}},
             }
         )
     )
@@ -1140,7 +1297,7 @@ def test_pipeline_low_route_uses_any_live_low_profile_not_luna_assumption(tmp_pa
             {
                 "profile_id": f"{agent}-flash-low",
                 "reasoning_effort": "low",
-                "capacity_pool_ids": ["gemini-api"],
+                "capacity_pool_ids": ["aider-paygo" if agent == "aider" else "gemini-api"],
             }
         ],
     )
@@ -1155,6 +1312,8 @@ def test_pipeline_low_route_uses_any_live_low_profile_not_luna_assumption(tmp_pa
     assert route["agent"] == "gemini"
     assert route["profile_id"] == "gemini-flash-low"
     assert selected["only"] == {"gemini"}
+    monkeypatch.setattr(adapter.gh_capacity, "state", lambda *_: (adapter.gh_capacity.OK, {}))
+    assert adapter._pipeline_capacity()["low"] == 1
 
 
 def test_busy_shared_exception_pool_returns_valid_fresh_capacity_proof(tmp_path, monkeypatch):

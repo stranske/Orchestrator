@@ -23,11 +23,19 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import closer_evidence
 import gh_capacity
 import verifier_evidence
 
 TARGET = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _pipeline_state_path(state_path, *, shadow=False):
+    suffix = ".shadow.pipeline.json" if shadow else ".pipeline.json"
+    return Path(str(state_path) + suffix)
+
+
 EXCLUDED = {"stranske/collab-admin", "stranske/collab-deliverables"}
 FAILURES = {"FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"}
 TERMINAL = {"completed", "cancelled", "failure", "success"}
@@ -157,7 +165,7 @@ def bounded_run(command, *, timeout):
         return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
-class RoundDeadlineExhausted(TimeoutError):
+class RoundDeadlineExhausted(TimeoutError, closer_evidence.RoundControlException):
     """A read-only round callback reached its configured active deadline."""
 
     def __init__(self, *, deadline: float, remaining_seconds: float):
@@ -166,7 +174,7 @@ class RoundDeadlineExhausted(TimeoutError):
         super().__init__("round deadline exhausted during read-only GitHub access")
 
 
-class RoundCapacityDeferred(RuntimeError):
+class RoundCapacityDeferred(RuntimeError, closer_evidence.RoundControlException):
     """A read-only GitHub call was skipped by its authoritative throttle ledger."""
 
     def __init__(self, *, resource: str, throttle: dict, observed_at: float):
@@ -1263,13 +1271,19 @@ def _pipeline_low_route(*, load=None, unavailable_profiles=None, with_status=Fal
         available_profiles = {}
         busy_unfailed_profile = False
         for agent, row in report["agents"].items():
+            # Vibe is approved for this bounded lane; Aider is explicitly not.
+            # Keep this exclusion local to closer routing rather than changing
+            # the shared profile registry used by other workflows.
+            if str(agent).casefold() == "aider":
+                continue
             if row.get("state") not in {"ok", "warn"}:
                 continue
             profiles = execution_profiles.profiles_for_agent(agent, transport="offload")
             profiles = [
                 p
                 for p in profiles
-                if p["profile_id"] not in unavailable_profiles
+                if str(p.get("agent", "")).casefold() != "aider"
+                and p["profile_id"] not in unavailable_profiles
                 and p["reasoning_effort"] in {"none", "minimal", "low"}
                 and report.get("profiles", {}).get(p["profile_id"], {}).get("state")
                 in {"ok", "warn"}
@@ -1357,6 +1371,11 @@ def _pipeline_capacity():
         if row.get("state") not in {"ok", "warn"}:
             continue
         for profile in execution_profiles.profiles_for_agent(agent, transport="offload"):
+            if (
+                str(agent).casefold() == "aider"
+                or str(profile.get("agent", "")).casefold() == "aider"
+            ):
+                continue
             if profile["reasoning_effort"] in {"none", "minimal", "low"} and report.get(
                 "profiles", {}
             ).get(profile["profile_id"], {}).get("state") in {"ok", "warn"}:
@@ -1434,7 +1453,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
 
     state_path = Path(args.state)
     receipt_reserve = PIPELINE_RECEIPT_RESERVE_SECONDS
-    pipeline_path = Path(str(state_path) + ".pipeline.json")
+    shadow = bool(args.shadow)
+    pipeline_path = _pipeline_state_path(state_path, shadow=shadow)
     retained_dir = Path(str(state_path) + ".evidence")
     state_doc = {}
     try:
@@ -1873,6 +1893,17 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     "authority": False,
                 }
             return {
+                "status": "deferred",
+                "reason": "worker_capacity",
+                "next_trigger": "capacity_recheck",
+                "resource_evidence": {
+                    "capacity": {
+                        "lane": "low",
+                        "available": 0,
+                        "required": 1,
+                        "sampled_at": time.time(),
+                    }
+                },
                 "classification": "capacity_deferred",
                 "substantive_needs": [],
                 "authority": False,
@@ -2323,20 +2354,19 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             isinstance(interpreted, dict)
             and interpreted.get("classification") == "capacity_deferred"
         ):
-            cap = _pipeline_capacity()
-            lane_cap = int(cap.get("low", 0))
+            evidence = interpreted.get("resource_evidence")
+            import closer_pipeline
+
+            if not closer_pipeline._valid_worker_capacity(evidence, time.time()):
+                return {
+                    "status": "blocked",
+                    "reason": "capacity_deferred_without_fresh_route_evidence",
+                }
             return {
                 "status": "deferred",
-                "reason": "no fresh low-reasoning profile capacity",
-                "next_trigger": "capacity_recheck",
-                "resource_evidence": {
-                    "capacity": {
-                        "lane": "low",
-                        "available": lane_cap,
-                        "required": 1,
-                        "sampled_at": time.time(),
-                    }
-                },
+                "reason": "worker_capacity",
+                "next_trigger": interpreted.get("next_trigger") or "capacity_recheck",
+                "resource_evidence": evidence,
             }
         prep_snapshot = context.get("prepare", {}).get("snapshot", {})
         dependency = (
@@ -2448,6 +2478,44 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     },
                     "queue_receipt": receipt,
                 }
+        if (
+            receipt.get("stop_valid")
+            and row.get("action") == "wait"
+            and row.get("eligible") is False
+            and row.get("status") in {"deferred", "ineligible"}
+        ):
+            inner = closer_queue._read_state(Path(action_state)).get("items", {}).get(target, {})
+            if not isinstance(inner, dict):
+                inner = {}
+            if inner.get("revision") != row.get("revision"):
+                inner = {}
+            resource = None
+            if reason == "claim_held":
+                holder = inner.get("holder")
+                if holder:
+                    resource = {"holder": holder}
+            elif reason in {"operation_running", "repo_operation_running"}:
+                operation = inner.get("operation") or {}
+                if (
+                    isinstance(operation, dict)
+                    and operation.get("status") in closer_queue.PENDING_OPERATION_STATES
+                    and isinstance(operation.get("id"), str)
+                    and operation["id"]
+                    and operation["id"] == row.get("operation_id")
+                ):
+                    resource = {"operation_id": operation["id"]}
+            elif reason == "receipt_reserve":
+                resource = {}
+            if resource is not None:
+                result = {
+                    "status": "deferred",
+                    "reason": reason,
+                    "next_trigger": next_trigger,
+                    "queue_receipt": receipt,
+                }
+                if resource:
+                    result["resource_evidence"] = resource
+                return result
         return {
             "status": "blocked",
             "reason": reason,
@@ -2532,7 +2600,6 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "reason": f"queue reconciliation failed: {type(exc).__name__}",
             }
 
-    shadow = bool(args.shadow)
     pipeline = closer_pipeline.run_pipeline(
         pipeline_path,
         targets,
@@ -2562,7 +2629,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             if shadow
             else act
         ),
-        reconcile=reconcile_action,
+        reconcile=None if shadow else reconcile_action,
         # Shadow callbacks are deterministic no-provider/no-action handlers. Give
         # the coordinator scheduler lanes so every target receives a full proposal
         # receipt without claiming real worker capacity or dispatching anything.
@@ -2606,18 +2673,27 @@ def main(argv=None):
     validate = sub.add_parser("validate-stop")
     validate.add_argument("--state", required=True)
     validate.add_argument("--assignment")
+    validate.add_argument("--shadow", action="store_true")
     args = p.parse_args(argv)
     import closer_queue
 
     if args.command == "validate-stop":
         targets = targets_from_assignment(args.assignment) if args.assignment else None
-        pipeline_path = Path(str(args.state) + ".pipeline.json")
+        pipeline_path = _pipeline_state_path(args.state, shadow=args.shadow)
         if pipeline_path.is_file():
             import closer_pipeline
 
             result = closer_pipeline.validate_stop(pipeline_path, assignment_targets=targets)
             print(json.dumps(result, sort_keys=True))
             return 0 if result.get("valid") else 78
+        if args.shadow:
+            result = {
+                "valid": False,
+                "stop_valid": False,
+                "reasons": ["missing_shadow_pipeline_state"],
+            }
+            print(json.dumps(result, sort_keys=True))
+            return 78
         result = closer_queue.validate_stop(args.state, assignment_targets=targets)
         print(json.dumps(result, sort_keys=True))
         return 0 if result.get("valid") else 78
@@ -2683,7 +2759,7 @@ def main(argv=None):
         import closer_pipeline
 
         validation = closer_pipeline.validate_stop(
-            str(args.state) + ".pipeline.json", assignment_targets=targets
+            _pipeline_state_path(args.state, shadow=args.shadow), assignment_targets=targets
         )
         result["validation"] = validation
         print(json.dumps(result, sort_keys=True))

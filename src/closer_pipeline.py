@@ -178,9 +178,43 @@ def _carry_item(item: Mapping[str, Any]) -> dict[str, Any]:
         "pending_kind",
         "pending_evidence",
         "resource_evidence",
+        "known_completed_action",
         "carried",
     )
     return {**{key: item[key] for key in keys if key in item}, "results": {}}
+
+
+def _safe_prior_unresolved_only(prior_stop: Mapping[str, Any], previous: Mapping[str, Any]) -> bool:
+    """Allow a fresh cadence only for terminal rows whose effects are known safe."""
+    reasons = prior_stop.get("reasons")
+    rows = previous.get("targets")
+    if not isinstance(reasons, list) or not reasons or not isinstance(rows, Mapping):
+        return False
+    for reason in reasons:
+        if not isinstance(reason, str) or not reason.startswith("unresolved_pipeline_work:"):
+            return False
+        matched = False
+        for target, item in rows.items():
+            if not isinstance(target, str) or not isinstance(item, Mapping):
+                continue
+            status = item.get("status")
+            if reason != f"unresolved_pipeline_work:{target}:{status}":
+                continue
+            stage = item.get("stage")
+            if status == "failed" and stage in {"prepare", "interpret", "exception"}:
+                matched = True
+            elif (
+                status == "parked"
+                and stage == "act"
+                and item.get("known_completed_action") is True
+                and isinstance(item.get("progress_key"), str)
+                and bool(item.get("progress_key"))
+            ):
+                matched = True
+            break
+        if not matched:
+            return False
+    return True
 
 
 def _empty() -> dict[str, Any]:
@@ -253,7 +287,7 @@ def _capacity(capacity_fn: Callable[[], Mapping[str, Any]]) -> dict[str, int]:
     return result
 
 
-def run_pipeline(
+def _run_pipeline_impl(
     state_path: str | Path,
     targets: Iterable[str],
     *,
@@ -270,6 +304,7 @@ def run_pipeline(
     round_deadline_exception: type[BaseException] | None = None,
     round_capacity_exception: type[BaseException] | None = None,
     now: Callable[[], float] = time.time,
+    _run_lock_ref: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Run independent targets with per-stage bounded pools and durable receipts.
 
@@ -324,19 +359,17 @@ def run_pipeline(
             "finished_at": now(),
             "targets": {},
         }
+    if _run_lock_ref is not None:
+        _run_lock_ref.append(run_lock)
     with _locked(path):
-        try:
-            state = _load(path)
-        except Exception:
-            fcntl.flock(run_lock.fileno(), fcntl.LOCK_UN)
-            run_lock.close()
-            raise
+        prior_stop: dict[str, Any] | None = None
+        state = _load(path)
         candidates = [
             (key, value)
             for key, value in state["runs"].items()
             if float(value.get("deadline", 0)) > now()
             and any(
-                row.get("status") not in {"completed", "deferred", "failed"}
+                row.get("status") in {"queued", "running", "uncertain", "pending"}
                 for row in value.get("targets", {}).values()
             )
         ]
@@ -387,9 +420,9 @@ def run_pipeline(
                     else now
                 )
                 prior_stop = validate_stop(path, previous_assignment, now=prior_stop_now)
-                if not prior_stop.get("valid"):
-                    fcntl.flock(run_lock.fileno(), fcntl.LOCK_UN)
-                    run_lock.close()
+                if not prior_stop.get("valid") and not _safe_prior_unresolved_only(
+                    prior_stop, previous
+                ):
                     return {
                         "schema": "closer-pipeline-receipt/v1",
                         "authority": False,
@@ -416,7 +449,7 @@ def run_pipeline(
                 state["runs"].values(), key=lambda row: float(row.get("created", 0))
             ):
                 for old_target, old_item in old_run.get("targets", {}).items():
-                    if old_item.get("status") not in {"completed", "failed", "deferred"}:
+                    if old_item.get("status") not in {"completed", "deferred"}:
                         latest[old_target] = old_item
             for old_target, old_item in state["carry"].items():
                 latest[old_target] = old_item
@@ -435,6 +468,8 @@ def run_pipeline(
                     carried.append(old_target)
                 run["targets"][old_target] = item
             run["carry_targets"] = sorted(carried)
+            if prior_stop is not None and not prior_stop.get("valid"):
+                run["prior_stop"] = _bounded(prior_stop, limit=64 * 1024)
             # Keep only a small run history; unresolved targets are additionally
             # copied into the top-level carry ledger before old runs are trimmed.
             state["runs"] = {run_id: run}
@@ -687,6 +722,36 @@ def run_pipeline(
                             item["results"].pop("exception", None)
                         item["stage"] = "interpret"
                     elif stage == "interpret":
+                        if value.get("classification") == "capacity_deferred":
+                            # Capacity is transient operational evidence. Never
+                            # retain it in the semantic cache, even for legacy
+                            # callback results that lack a typed deferral.
+                            if cache_key:
+                                doc.get("cache", {}).pop(cache_key, None)
+                            resource = value.get("resource_evidence")
+                            reason = value.get("reason")
+                            trigger = value.get("next_trigger")
+                            if (
+                                value.get("status") == "deferred"
+                                and reason == "worker_capacity"
+                                and isinstance(trigger, str)
+                                and trigger.strip()
+                                and isinstance(resource, Mapping)
+                                and _valid_worker_capacity(resource, now())
+                            ):
+                                item.update(
+                                    status="deferred",
+                                    deferred_reason=reason,
+                                    deferred_next_trigger=trigger,
+                                    resource_evidence=dict(resource),
+                                )
+                            else:
+                                item.update(
+                                    status="failed",
+                                    error="capacity_deferral_without_fresh_route_evidence",
+                                    deferred_next_trigger="fresh_capacity_report",
+                                )
+                            return
                         # Admission guards may stop before any provider call. Preserve
                         # that exact event dependency instead of escalating it to the
                         # strong-worker lane or advancing to an action.
@@ -817,6 +882,7 @@ def run_pipeline(
                     else:
                         status = value.get("status")
                         if status == "completed":
+                            item["known_completed_action"] = True
                             if value.get("target_complete") is True:
                                 item["status"] = "completed"
                             else:
@@ -1026,9 +1092,20 @@ def run_pipeline(
 
                     cached = state.get("cache", {}).get(cache_key) if cache_key else None
                     if isinstance(cached, Mapping) and isinstance(cached.get("value"), Mapping):
-                        future = Future()
-                        future.set_result(cached["value"])
-                    else:
+                        cached_value = cached["value"]
+                        if (
+                            stage == "interpret"
+                            and cached_value.get("classification") == "capacity_deferred"
+                        ):
+                            # Older coordinator receipts cached this transient
+                            # route result as a semantic decision. Force a fresh
+                            # route/capacity check on the next cadence.
+                            state.get("cache", {}).pop(cache_key, None)
+                            cached = None
+                        else:
+                            future = Future()
+                            future.set_result(cached_value)
+                    if not isinstance(cached, Mapping):
                         future = executors[lane].submit(invoke)
                     futures[future] = (target, stage, key, cache_key, now())
                     active[lane] += 1
@@ -1153,9 +1230,55 @@ def run_pipeline(
         run["receipt_summary"] = {key: value for key, value in receipt.items() if key != "targets"}
         run.pop("receipt", None)
         _save(path, state)
-        fcntl.flock(run_lock.fileno(), fcntl.LOCK_UN)
-        run_lock.close()
         return receipt
+
+
+def run_pipeline(
+    state_path: str | Path,
+    targets: Iterable[str],
+    *,
+    prepare: Callable[[str, Mapping[str, Any]], Mapping[str, Any]],
+    interpret: Callable[[str, Mapping[str, Any]], Mapping[str, Any]],
+    act: Callable[[str, Mapping[str, Any]], Mapping[str, Any]],
+    exception: Callable[[str, Mapping[str, Any]], Mapping[str, Any]],
+    reconcile: Callable[[str, Mapping[str, Any]], Mapping[str, Any]] | None = None,
+    capacity_fn: Callable[[], Mapping[str, Any]],
+    deadline: float,
+    max_io_workers: int = 4,
+    max_low_workers: int = 2,
+    max_exception_workers: int = 1,
+    round_deadline_exception: type[BaseException] | None = None,
+    round_capacity_exception: type[BaseException] | None = None,
+    now: Callable[[], float] = time.time,
+) -> dict[str, Any]:
+    """Run the scheduler while guaranteeing its process lease is always released."""
+    held: list[Any] = []
+    try:
+        return _run_pipeline_impl(
+            state_path,
+            targets,
+            prepare=prepare,
+            interpret=interpret,
+            act=act,
+            exception=exception,
+            reconcile=reconcile,
+            capacity_fn=capacity_fn,
+            deadline=deadline,
+            max_io_workers=max_io_workers,
+            max_low_workers=max_low_workers,
+            max_exception_workers=max_exception_workers,
+            round_deadline_exception=round_deadline_exception,
+            round_capacity_exception=round_capacity_exception,
+            now=now,
+            _run_lock_ref=held,
+        )
+    finally:
+        if held:
+            run_lock = held[0]
+            if not run_lock.closed:
+                with contextlib.suppress(OSError):
+                    fcntl.flock(run_lock.fileno(), fcntl.LOCK_UN)
+                run_lock.close()
 
 
 def _save_state_locked(path: Path, state: Mapping[str, Any]) -> None:

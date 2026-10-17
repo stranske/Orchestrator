@@ -50,6 +50,10 @@ REQUIRED_SECTIONS = {
 VALID_STATUS = {"complete", "partial", "pending", "missing", "unknown", "truncated"}
 
 
+class RoundControlException:
+    """Marker for scheduler-level deadline/capacity control-flow exceptions."""
+
+
 def _bytes(value: Any) -> bytes:
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
@@ -468,6 +472,8 @@ def _diff_section(snapshot: dict, api: Callable, deadline: float, root: Path) ->
             truncated=status == "truncated",
         )
     except Exception as exc:
+        if _is_round_control_exception(exc):
+            raise
         return _section(
             "unknown",
             reason=f"compare lookup failed: {type(exc).__name__}",
@@ -494,6 +500,8 @@ def _review_section(snapshot: dict, review_threads_fetch, deadline: float, root:
             complete = result.get("complete") is True and result.get("has_next_page") is False
             cursor = result.get("end_cursor")
         except Exception as exc:
+            if _is_round_control_exception(exc):
+                raise
             return _section("unknown", reason=f"thread comment lookup failed: {type(exc).__name__}")
     else:
         complete = False
@@ -599,6 +607,11 @@ def _discover_ci_runs(
     return collected, complete, cursor
 
 
+def _is_round_control_exception(exc: Exception) -> bool:
+    """Keep typed scheduler deferrals visible to the pipeline's resource/deadline policy."""
+    return isinstance(exc, RoundControlException)
+
+
 def _artifact_section(
     snapshot: dict,
     api: Callable,
@@ -611,6 +624,8 @@ def _artifact_section(
     try:
         runs, inventory_complete, cursor = _discover_ci_runs(snapshot, api, deadline)
     except Exception as exc:
+        if _is_round_control_exception(exc):
+            raise
         return _section("unknown", reason=f"CI run inventory failed: {type(exc).__name__}")
     if not runs:
         return _section(
@@ -654,8 +669,49 @@ def _artifact_section(
             continue
         subject = _subject_target(snapshot)
         subject_repo, subject_num = subject.split("#", 1)
-        run = api(f"repos/{subject_repo}/actions/runs/{run_id}")
-        associated = [int(row.get("number", -1)) for row in run.get("pull_requests", [])]
+        try:
+            run = api(f"repos/{subject_repo}/actions/runs/{run_id}")
+        except Exception as exc:
+            if _is_round_control_exception(exc):
+                raise
+            any_pending = True
+            unavailable.append(
+                {
+                    "run_id": run_id,
+                    "status": "unknown",
+                    "reason": f"run lookup failed: {type(exc).__name__}",
+                }
+            )
+            continue
+        pull_requests = run.get("pull_requests") if isinstance(run, dict) else None
+        if not isinstance(run, dict) or not isinstance(pull_requests, list):
+            any_pending = True
+            unavailable.append(
+                {
+                    "run_id": run_id,
+                    "status": "unknown",
+                    "reason": "run detail or pull-request association is malformed",
+                }
+            )
+            continue
+        associated: list[int] = []
+        malformed_association = False
+        for row in pull_requests:
+            number = row.get("number") if isinstance(row, dict) else None
+            if type(number) is not int or number <= 0:
+                malformed_association = True
+                break
+            associated.append(number)
+        if malformed_association:
+            any_pending = True
+            unavailable.append(
+                {
+                    "run_id": run_id,
+                    "status": "unknown",
+                    "reason": "pull-request association contains a malformed number",
+                }
+            )
+            continue
         if run.get("head_sha") != snapshot.get("head") or int(subject_num) not in associated:
             continue
         identity = {
@@ -718,6 +774,8 @@ def _artifact_section(
             art_doc = api(f"repos/{subject_repo}/actions/runs/{run_id}/artifacts?per_page=100")
             artifacts = art_doc.get("artifacts", [])
         except Exception as exc:
+            if _is_round_control_exception(exc):
+                raise
             artifacts = []
             unavailable.append(
                 {
@@ -835,6 +893,8 @@ def _artifact_section(
                         }
                     )
             except Exception as exc:
+                if _is_round_control_exception(exc):
+                    raise
                 missing = {
                     **artifact_identity,
                     "status": "unknown",
@@ -846,7 +906,11 @@ def _artifact_section(
     retrieval_status = (
         "truncated"
         if truncated
-        else "partial" if (any_pending or unavailable) else "complete" if receipt else "missing"
+        else (
+            "partial"
+            if (any_pending or unavailable) and (run_rows or artifacts_all)
+            else "unknown" if any_pending or unavailable else "complete" if receipt else "missing"
+        )
     )
     # A complete retrieval inventory does not establish that every required job/check ran.
     # That requires a separately configured required-check topology, which this producer lacks.
@@ -1412,6 +1476,8 @@ def _native_verifier_section(
                 if not found:
                     missing.append({**ident, "reason": "no native input snapshot in artifact"})
             except Exception as exc:
+                if _is_round_control_exception(exc):
+                    raise
                 entry = {
                     **ident,
                     "status": "unknown",
@@ -1485,6 +1551,8 @@ def _native_verifier_section(
             reason="native verifier NON_PASS evidence is resolution-only, never acceptance proof",
         )
     except Exception as exc:
+        if _is_round_control_exception(exc):
+            raise
         return _section(
             "unknown",
             {"verifier": marker},

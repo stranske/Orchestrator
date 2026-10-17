@@ -640,11 +640,14 @@ def integrate_ordinary(
         or prep.get("producer_sha256") != current_producer
     ):
         return _result("wait", "producer_changed", raw_findings=raw_findings)
+    expected_subject_pr = (
+        closer_evidence._subject_target(dict(snapshot)) if snapshot.get("kind") == "pr" else None
+    )
     if any(
         (
             packet.get("target") != target,
             snapshot.get("target") != target,
-            packet.get("subject_pr") != snapshot.get("pr_target", target),
+            packet.get("subject_pr") != expected_subject_pr,
             packet.get("head") != snapshot.get("head"),
             packet.get("base") != snapshot.get("base"),
             proposal.get("target") != target,

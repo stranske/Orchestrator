@@ -5,6 +5,9 @@ import json
 import threading
 import time
 
+import pytest
+
+import closer_pipeline
 from closer_pipeline import run_pipeline, validate_stop
 
 
@@ -481,6 +484,57 @@ def test_zero_low_capacity_yields_without_waiting_for_long_deadline(tmp_path):
     assert receipt["targets"]["a"]["status"] == "deferred"
     assert receipt["targets"]["a"]["deferred_reason"] == "worker_capacity"
     assert validate_stop(path, ["a"])["valid"]
+
+
+def test_interpret_worker_capacity_deferral_is_not_cached_across_cadences(tmp_path):
+    path = tmp_path / "state.json"
+    semantic_key = "closer-evidence-semantic/v1:" + hashlib.sha256(b"a").hexdigest()
+    interpreted = []
+    acted = []
+
+    def interpret(_target, _context):
+        interpreted.append(True)
+        if len(interpreted) == 1:
+            return {
+                "status": "deferred",
+                "reason": "worker_capacity",
+                "next_trigger": "capacity_recheck",
+                "resource_evidence": {
+                    "capacity": {
+                        "lane": "low",
+                        "available": 0,
+                        "required": 1,
+                        "sampled_at": time.time(),
+                    }
+                },
+                "classification": "capacity_deferred",
+                "substantive_needs": [],
+            }
+        return {"substantive_needs": []}
+
+    cb = callbacks(
+        interpret=interpret,
+        act=lambda target, _context: acted.append(target)
+        or {"status": "completed", "target_complete": True},
+    )
+    # Keep the evidence identity stable across invocations, exactly as a
+    # capacity-only recovery should.
+    cb["prepare"] = lambda target, _context: {
+        "revision": "rev-1",
+        "identity": target,
+        "semantic_cache_key": semantic_key,
+    }
+
+    first = run(path, ["a"], cb)
+    assert first["targets"]["a"]["status"] == "deferred"
+    assert first["targets"]["a"]["deferred_reason"] == "worker_capacity"
+    assert validate_stop(path, ["a"])["valid"]
+    assert not acted
+
+    second = run(path, ["a"], cb)
+    assert second["targets"]["a"]["status"] == "completed"
+    assert interpreted == [True, True]
+    assert acted == ["a"]
 
 
 def test_interpretation_external_event_pending_short_circuits_exception_and_act(tmp_path):
@@ -993,6 +1047,98 @@ def test_interpret_error_does_not_authorize_action(tmp_path):
     receipt = run(tmp_path / "state.json", ["a"], cb)
     assert not acted
     assert receipt["targets"]["a"]["status"] == "failed"
+
+
+def test_failed_readonly_target_is_re_admitted_and_prior_stop_audited(tmp_path):
+    path = tmp_path / "state.json"
+    first = run(
+        path,
+        ["a"],
+        callbacks(interpret=lambda *_: (_ for _ in ()).throw(RuntimeError("transient read"))),
+    )
+    assert first["targets"]["a"]["status"] == "failed"
+
+    second = run(path, ["a"])
+    assert second["targets"]["a"]["status"] == "completed"
+    state = json.loads(path.read_text())
+    new_run = state["runs"][second["run_id"]]
+    assert new_run["prior_stop"]["valid"] is False
+    assert any(
+        reason == "unresolved_pipeline_work:a:failed" for reason in new_run["prior_stop"]["reasons"]
+    )
+
+
+def test_confirmed_parked_action_can_reprepare_but_unknown_action_cannot(tmp_path):
+    path = tmp_path / "parked.json"
+    first = run(path, ["a"])
+    state = json.loads(path.read_text())
+    row = state["runs"][first["run_id"]]["targets"]["a"]
+    row.update(
+        status="parked",
+        stage="act",
+        progress_key="known-progress",
+        known_completed_action=True,
+        results={"act": {"status": "completed", "target_complete": False}},
+    )
+    path.write_text(json.dumps(state))
+
+    second = run(path, ["a"])
+    assert second["targets"]["a"]["status"] == "completed"
+
+    unsafe_path = tmp_path / "unsafe.json"
+    failed = run(
+        unsafe_path,
+        ["a"],
+        callbacks(interpret=lambda *_: (_ for _ in ()).throw(RuntimeError("read failed"))),
+    )
+    state = json.loads(unsafe_path.read_text())
+    row = state["runs"][failed["run_id"]]["targets"]["a"]
+    row.update(status="failed", stage="act")
+    path_state = state
+    unsafe_path.write_text(json.dumps(path_state))
+    blocked = run(unsafe_path, ["a"])
+    assert blocked["status"] == "blocked"
+    assert blocked["reason"] == "prior_run_has_no_valid_stop"
+
+
+def test_unrelated_prior_accounting_error_still_blocks_reentry(tmp_path):
+    path = tmp_path / "state.json"
+    first = run(
+        path,
+        ["a"],
+        callbacks(interpret=lambda *_: (_ for _ in ()).throw(RuntimeError("transient read"))),
+    )
+    state = json.loads(path.read_text())
+    state["runs"][first["run_id"]]["assignment"] = ["a", "missing"]
+    path.write_text(json.dumps(state))
+    blocked = run(path, ["a"])
+    assert blocked["status"] == "blocked"
+    assert blocked["prior_stop"]["reasons"] == [
+        "assignment_not_fully_accounted",
+        "unresolved_pipeline_work:a:failed",
+    ]
+
+
+def test_run_lock_is_released_when_state_save_raises(tmp_path, monkeypatch):
+    path = tmp_path / "state.json"
+    original_save = closer_pipeline._save
+    save_calls = 0
+
+    def fail_receipt_save(*args, **kwargs):
+        nonlocal save_calls
+        save_calls += 1
+        if save_calls == 5:
+            raise OSError("simulated receipt write failure")
+        return original_save(*args, **kwargs)
+
+    monkeypatch.setattr(closer_pipeline, "_save", fail_receipt_save)
+    with pytest.raises(OSError, match="simulated receipt write failure"):
+        run(path, ["a"])
+    assert save_calls == 5
+
+    monkeypatch.setattr(closer_pipeline, "_save", original_save)
+    receipt = run(path, ["a"], seconds=1)
+    assert receipt["targets"]["a"]["status"] == "completed"
 
 
 def test_reprepare_replaces_stale_revision_before_act(tmp_path):

@@ -14,10 +14,17 @@ TARGET = "owner/repo#12"
 HEAD = "a" * 40
 BASE = "b" * 40
 BODY = "## Tasks\n- [ ] Ship the report"
+ABSENT = object()
 
 
 def fixture(
-    tmp_path, *, dispositions=None, native=False, native_report=True, native_manifest_pr=12
+    tmp_path,
+    *,
+    dispositions=None,
+    native=False,
+    native_report=True,
+    native_manifest_pr=12,
+    pr_target=ABSENT,
 ):
     snap = {
         "target": TARGET,
@@ -30,6 +37,8 @@ def fixture(
         "threads": [],
         "sources": [{"target": "owner/repo#2", "body": BODY, "state": "open", "labels": []}],
     }
+    if pr_target is not ABSENT:
+        snap["pr_target"] = pr_target
     stream = io.BytesIO()
     with zipfile.ZipFile(stream, "w") as archive:
         archive.writestr(
@@ -315,6 +324,10 @@ def test_stale_identity_producer_and_evidence_bindings_wait(tmp_path):
 
 
 def test_subject_pr_alias_and_impossible_numeric_receipts_are_rejected(tmp_path):
+    for label, alias in (("missing", ABSENT), ("null", None), ("empty", "")):
+        fx = fixture(tmp_path / label, pr_target=alias)
+        assert fx[1]["subject_pr"] == TARGET
+        assert check(fx)["status"] == "accepted"
     fx = fixture(tmp_path)
     fx[0]["pr_target"] = "owner/repo#13"
     assert check(fx)["reason"] == "target_or_revision_changed"

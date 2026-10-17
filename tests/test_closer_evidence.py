@@ -765,3 +765,119 @@ def test_assigned_issue_alias_uses_delivery_pr_for_diff_and_ci_identity(tmp_path
 
     rejected = collect(tmp_path / "wrong", alias, api=wrong_pr_api)
     assert rejected["sections"]["ci_artifacts"]["status"] == "missing"
+
+
+@pytest.mark.parametrize(
+    ("bad_detail", "reason"),
+    [
+        ("raise", "run lookup failed: RuntimeError"),
+        ({"pull_requests": None}, "run detail or pull-request association is malformed"),
+        (
+            {"pull_requests": [{"number": None}]},
+            "pull-request association contains a malformed number",
+        ),
+    ],
+    ids=["run-detail-api-failure", "null-pull-requests", "null-pr-number"],
+)
+def test_bad_ci_run_detail_is_retained_as_unknown_and_other_runs_continue(
+    tmp_path, bad_detail, reason
+):
+    def api(endpoint, **kwargs):
+        if "/compare/" in endpoint:
+            return base_api(endpoint)
+        if "/actions/runs?" in endpoint:
+            return {"workflow_runs": [{"id": 7, "head_sha": HEAD}, {"id": 8, "head_sha": HEAD}]}
+        if endpoint.endswith("/runs/7"):
+            if bad_detail == "raise":
+                raise RuntimeError("simulated HTTP 503")
+            return {
+                "id": 7,
+                "run_attempt": 1,
+                "head_sha": HEAD,
+                "pull_requests": bad_detail["pull_requests"],
+                "status": "completed",
+                "conclusion": "success",
+            }
+        if endpoint.endswith("/runs/8"):
+            return {
+                "id": 8,
+                "run_attempt": 1,
+                "head_sha": HEAD,
+                "pull_requests": [{"number": 12}],
+                "status": "completed",
+                "conclusion": "success",
+            }
+        if endpoint.endswith("/runs/8/artifacts?per_page=100"):
+            return {"artifacts": []}
+        raise AssertionError(endpoint)
+
+    packet = collect(tmp_path, api=api)
+
+    assert evidence.validate_packet(packet)
+    ci = packet["sections"]["ci_artifacts"]
+    assert ci["status"] != "complete", ci
+    assert ci["content"]["runs"][0]["id"] == 8, ci
+    unavailable = next(item for item in ci["content"]["unavailable"] if item["run_id"] == 7)
+    assert unavailable["status"] == "unknown"
+    assert unavailable["reason"] == reason
+    assert packet["sections"]["source"]["status"] == "complete"
+
+
+def test_round_capacity_deferral_from_run_detail_is_not_converted_to_acceptance_unknown(tmp_path):
+    from closer_dispatcher import RoundCapacityDeferred, RoundDeadlineExhausted
+
+    assert issubclass(RoundCapacityDeferred, evidence.RoundControlException)
+    assert issubclass(RoundDeadlineExhausted, evidence.RoundControlException)
+
+    # `python src/closer_dispatcher.py` defines these classes in __main__, not
+    # the importable module. Shared marker inheritance makes that execution form
+    # preserve the typed deferral too.
+    MainStyleCapacityDeferred = type(
+        "RoundCapacityDeferred",
+        (RuntimeError, evidence.RoundControlException),
+        {"__module__": "__main__"},
+    )
+
+    def api_for(exception):
+        def api(endpoint, **kwargs):
+            if "/compare/" in endpoint:
+                return base_api(endpoint)
+            if "/actions/runs?" in endpoint:
+                return {"workflow_runs": [{"id": 7, "head_sha": HEAD}]}
+            if endpoint.endswith("/runs/7"):
+                raise exception
+            raise AssertionError(endpoint)
+
+        return api
+
+    actual = RoundCapacityDeferred(
+        resource="core",
+        throttle={"state": "shed", "reset_in_s": 30},
+        observed_at=100,
+    )
+    with pytest.raises(RoundCapacityDeferred):
+        collect(tmp_path / "imported", api=api_for(actual))
+    with pytest.raises(MainStyleCapacityDeferred):
+        collect(tmp_path / "main", api=api_for(MainStyleCapacityDeferred("typed deferral")))
+
+
+def test_only_unavailable_run_detail_produces_unknown_ci_section_but_keeps_packet(tmp_path):
+    def api(endpoint, **kwargs):
+        if "/compare/" in endpoint:
+            return base_api(endpoint)
+        if "/actions/runs?" in endpoint:
+            return {"workflow_runs": [{"id": 7, "head_sha": HEAD}]}
+        if endpoint.endswith("/runs/7"):
+            raise RuntimeError("simulated HTTP 404")
+        raise AssertionError(endpoint)
+
+    packet = collect(tmp_path, api=api)
+
+    assert evidence.validate_packet(packet)
+    ci = packet["sections"]["ci_artifacts"]
+    assert ci["status"] == "unknown", ci
+    assert ci["content"]["unavailable"] == [
+        {"run_id": 7, "status": "unknown", "reason": "run lookup failed: RuntimeError"}
+    ]
+    assert packet["sections"]["source"]["status"] == "complete"
+    assert Path(packet["manifest"]["section_files"]["source"]["path"]).exists()
