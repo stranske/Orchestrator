@@ -1280,9 +1280,26 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "redirect-policy": "its matcher IS `{kind: lane_event, name: stall_detected}` -- the "
         "closer's fleet discovery already classifies capacity-stuck and "
         "no-commits-for-4-hours targets by hand every round",
-        "redirect-plan": "`{kind: lane_event, name: redirect_decision}` -- once a stall is "
-        "classified this is the only module that turns it into a corrected "
-        "prompt/switch plan instead of a fresh guess",
+        # `redirect-plan` was bound here 2026-09-02..2026-10-17: 2,004 offers in 90 days, 0
+        # triggers. The judgment it was meant to carry is the role itself, offered at the one
+        # moment the closer already classifies by hand (owner decision 2026-10-17, M4 restated).
+        "role-redirect": "CAPACITY-STUCK CASE (`agent:<X>` with `agent:rate-limited`, or no "
+        "commits for 4h): take the target's report from $ORCH_STATE_DIR/redirect-sweep.json "
+        "(reports[], hourly) and run `python3 ~/.codex/orchestrator-mirror/roles.py redirect "
+        "--report-json <that report> --lane closer --json`; it proposes switch / retry / decompose "
+        "with a role_run_id. Apply your usual `agent:auto` when it agrees and record trigger or "
+        "decline either way. 736 usable proposals, 0 acted on, because its only consumer was the "
+        "tick's shadowed lane. Pool: 10 acted on with later truth.",
+    },
+    # The repo-review uploader in Workflows writes issue bodies in batches of three or more (738
+    # of 927 fleet issues in 90 days). It consults nothing yet: the binding is declared here so
+    # the Workflows-side consult has a surface to name, and until it lands the admission report
+    # counts this binding as bound_to_unconsulted_surface, which is the truth.
+    "repo-review-uploader": {
+        "role-prompt": "BATCH BODY AUTHORING: `python3 ~/.codex/orchestrator-mirror/roles.py "
+        "prompt --batch '<JSON list of {target, goal} items>' --output-dir <dir> --json` writes "
+        "one validated body per item and a manifest that keeps the failed bodies (#589). Pool: "
+        "20 bodies in real batches, judged by validator pass rate and opener pickup within 48h.",
     },
     "opener-lane": {
         "deliberate-break-verifier": "the lane performs this exact break-then-revert proof in 271 of "
@@ -1291,6 +1308,23 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "codemod-campaign": "materialises phase series one issue at a time with no campaign identity "
         "(Trend #5935-#5942 is eight issues)",
         "runtime-ac-checks": "stale-checkbox defects on its own PRs are unverified acceptance criteria",
+        # LANE MOMENTS (owner decision 2026-10-17, M4 restated). The four judgment roles were bound
+        # only to the Claude `orchestrate` skill (13 offers in 30 days) while their consumers sat
+        # behind the tick's shadowed dispatch lane, so 987 batch situations, 210 open-issue cycles,
+        # 38 epics and the week's 8 actionable stalls never saw a role. Each binding below names
+        # the moment, the command and the pool that triggers its evaluation (watchdog 2026-11-08,
+        # final 2026-11-30). A binding is data: promotion stays a `binding_promotion` event.
+        "role-triage": "ISSUE SELECTION: the hourly triage ranking of this same open-issue "
+        "population is $ORCH_STATE_DIR/capability-program/triage-ranking.json (fresh within 2h; "
+        "92 targets on 2026-10-17, agreeing with the priority rule on 17 of 112 cycles). Order "
+        "your candidates with `ORCH_TRIAGE_CONSUME=1 python3 "
+        "~/.codex/orchestrator-mirror/triage_shadow.py --consume --candidates <json list file>`: "
+        "it reorders, never claims. Following it records a consumption the daily linker judges "
+        "(followed, then merged+durable). Pool: 30 followed.",
+        "role-decomposer": "EPIC MATERIALIZATION (38 epics in 90 days, 0 invocations): "
+        "`python3 ~/.codex/orchestrator-mirror/roles.py decompose --goal '<the epic, in your "
+        "words>' --repo <owner/repo> --target <owner/repo#N> --json` returns a validated task DAG "
+        "to file as sub-issues instead of one oversized issue. Pool: 5 epics.",
     },
     # `repo-audit` is SIX PHASES, not one context, so it binds per phase. Phase attribution comes
     # from the skill's own playbook text; volume from 177 audit documents across the four
@@ -1869,10 +1903,17 @@ CONSULT_SITES: dict[str, dict] = {
 # the difference between an acknowledged defect and an oversight is legible. When a consult is added,
 # MOVE the entry into `CONSULT_SITES` — the selftest will tell you if you forget.
 KNOWN_UNCONSULTED: dict[str, str] = {
-    # EMPTY, AND THAT IS THE DRAINED STATE, not a missing table. Both former entries (opener-lane,
-    # closer-lane) moved to CONSULT_SITES on 2026-08-29 once their consult was verified live —
-    # which is exactly the procedure the block above prescribes. An empty table here means every
-    # bound surface has a declared consult; it does NOT mean the question stopped being asked.
+    # Both former entries (opener-lane, closer-lane) moved to CONSULT_SITES on 2026-08-29 once
+    # their consult was verified live — the procedure the block above prescribes. An empty table
+    # means every bound surface has a declared consult; it does NOT mean the question stopped
+    # being asked.
+    "repo-review-uploader": (
+        "declared 2026-10-17 AHEAD of its consult (M4 restated): the Workflows repo-review "
+        "uploader writes 738 of 927 fleet issues in batches and will consult this surface for "
+        "role-prompt. Until that lands the binding is unreachable by design. FIX: "
+        "stranske/Workflows#4051 adds the consult to scripts/upload_repo_review_issues.py; when it "
+        "merges, declare the site in CONSULT_SITES and delete this entry"
+    ),
 }
 
 
@@ -2405,6 +2446,9 @@ CAPABILITY_PRECONDITIONS: dict[str, dict] = {
     # stays in the answer (never concealed), marked `auto_declined`, and the lane writes nothing.
     "redirect-policy": {"requires_pr": "stalled_worker"},
     "redirect-plan": {"requires_pr": "stalled_worker"},
+    # The role is offered at the same moment the plan rail was: a PR with no stall signal declines
+    # it by precondition, a stalled one is offered plainly (M4 restated, 2026-10-17).
+    "role-redirect": {"requires_pr": "stalled_worker"},
     "cross-repo-coordination": {"requires_pr": "multi_repo_change"},
     "codemod-campaign": {"requires_pr": "repeated_pattern"},
     "runtime-ac-checks": {"requires_pr": "nontrivial_change"},
