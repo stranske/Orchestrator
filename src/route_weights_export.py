@@ -92,7 +92,6 @@ def update_exploration_window(db_path: Path, state_dir: Path, *, now: int | None
         finally:
             connection.close()
     except sqlite3.Error as exc:
-        counts = dict.fromkeys(counts, None)
         errors.append(f"per-policy counts unmeasured: {exc}")
     extended = isinstance(previous, dict) and previous.get("extended") is True
     if instant.strftime("%Y%m%d") >= EXPLORATION_WINDOW_END and not errors:
@@ -101,7 +100,7 @@ def update_exploration_window(db_path: Path, state_dir: Path, *, now: int | None
         "start": EXPLORATION_WINDOW_START,
         "end": EXPLORATION_WINDOW_EXTENDED_END if extended else EXPLORATION_WINDOW_END,
         "extended": extended,
-        "n_by_policy": counts,
+        "n_by_policy": counts if not errors else dict.fromkeys(counts, None),
         "min_per_policy": EXPLORATION_WINDOW_MIN_PER_POLICY,
         "decided_at": instant.isoformat().replace("+00:00", "Z"),
     }

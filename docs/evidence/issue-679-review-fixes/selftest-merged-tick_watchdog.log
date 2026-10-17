@@ -1,0 +1,21 @@
+Traceback (most recent call last):
+  File "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__679__opener/src/tick_watchdog.py", line 1112, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__679__opener/src/tick_watchdog.py", line 1075, in main
+    return _selftest()
+           ^^^^^^^^^^^
+  File "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__679__opener/src/tick_watchdog.py", line 1019, in _selftest
+    table = snapshot()
+            ^^^^^^^^^^
+  File "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__679__opener/src/tick_watchdog.py", line 149, in snapshot
+    out = subprocess.run(
+          ^^^^^^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.12/subprocess.py", line 548, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.12/subprocess.py", line 1026, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+  File "/opt/anaconda3/lib/python3.12/subprocess.py", line 1953, in _execute_child
+    raise child_exception_type(errno_num, err_msg, err_filename)
+PermissionError: [Errno 1] Operation not permitted: 'ps'
