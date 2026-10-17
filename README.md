@@ -714,7 +714,9 @@ the ledger `expiry` and the artifact `expires_at` on its binding. The same entry
 when the ledger row's declared `kill_switch` env var carries its declared value (`kill_switch`),
 when the ledger marks `rollback_pending`, or while the target's `rollback.phase` is `pending`
 (both `rollback_pending`); `capability_targets.invoke_target` applies the same expiry, kill-switch
-and pending-rollback refusals to direct callers. A refusal returns `invoked: False` with that
+and pending-rollback refusals to direct callers. A ledger that cannot be read at all fails
+closed as `ledger_unreadable` on both entrypoints rather than raising or masquerading as
+`expired` (renewal cannot repair a corrupt ledger). A refusal returns `invoked: False` with that
 reason, writes no registry/binding invocation and records no consumption edge.
 
 Do not maintain a second static list of supposedly active or gated features here. Generate the

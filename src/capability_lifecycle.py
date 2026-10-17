@@ -253,7 +253,10 @@ def invoke_compiled_target(
 ) -> dict[str, Any]:
     """Invoke a matching real producer/consumer and write its version-exact edge."""
     now = int(timestamp or time.time())
-    cap = capabilities.load(Path(ledger_path), create=False).get(capability_id)
+    try:
+        cap = capabilities.load(Path(ledger_path), create=False).get(capability_id)
+    except Exception:
+        return {"matched": False, "invoked": False, "reason": "ledger_unreadable"}
     if not cap:
         raise ValueError(f"unknown capability: {capability_id}")
     if cap["status"] not in {"wired", "shadow", "exercised", "canary", "active"}:

@@ -364,8 +364,8 @@ def _ledger_ineligible(
     A direct caller must not bypass ``invoke_compiled_target`` by invoking a
     binding whose ledger row is expired, kill-switched or rollback-pending.
     The ledger is read raw (``create=False``, read-only); a missing file or
-    missing row carries no ledger condition, while an unreadable ledger or an
-    unparseable expiry fails closed as ``expired``.
+    missing row carries no ledger condition, while an unreadable ledger fails
+    closed as ``ledger_unreadable`` and an unparseable expiry as ``expired``.
     """
     if ledger_path is None or not Path(ledger_path).exists():
         return None
@@ -374,7 +374,7 @@ def _ledger_ineligible(
 
         rows = capabilities.load(Path(ledger_path), create=False)
     except Exception:
-        return "expired"
+        return "ledger_unreadable"
     cap = None
     for row in rows.values():
         if not isinstance(row, Mapping):

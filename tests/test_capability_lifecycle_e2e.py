@@ -855,6 +855,58 @@ def test_compiled_invocation_malformed_ledger_expiry_fails_closed(
     assert "causal_edge" not in result
 
 
+def test_compiled_invocation_unreadable_ledger_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    ctx["ledger"].write_text("{", encoding="utf-8")
+    registry_before = ctx["registry"].read_bytes()
+    result = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="workflow:unreadable-ledger:1",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": False, "invoked": False, "reason": "ledger_unreadable"}, result
+    assert "causal_edge" not in result
+    assert ctx["ledger"].read_bytes() == b"{"
+    assert ctx["registry"].read_bytes() == registry_before
+    assert (
+        capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])[
+            "invocations"
+        ]
+        == []
+    )
+
+
+def test_direct_invoke_target_unreadable_ledger_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    binding = capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])
+    ctx["ledger"].write_text("{", encoding="utf-8")
+    result = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=ctx["registry"],
+        ledger_path=ctx["ledger"],
+        target_run_id="direct:unreadable-ledger",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "ledger_unreadable"}, result
+    assert "causal_edge" not in result
+    assert (
+        capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])[
+            "invocations"
+        ]
+        == []
+    )
+
+
 def test_high_risk_candidate_uses_bounded_brain_owner_question(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
