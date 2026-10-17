@@ -218,6 +218,24 @@ def test_capacity_states_use_capacity_agent_state_vocabulary(tmp_path: Path) -> 
     assert capacity.AGENT_STATES == frozenset({"ok", "warn", "shed", "unknown"})
 
 
+def test_capacity_block_rejects_nonempty_unknown_state() -> None:
+    snapshot = _capacity_fixture(codex_state="paused")
+    assert export._capacity_block(snapshot)["codex"]["state"] == capacity.UNKNOWN
+
+
+def test_capacity_block_handles_infinite_timestamp() -> None:
+    for timestamp in (float("inf"), float("-inf"), "Infinity"):
+        snapshot = _capacity_fixture()
+        snapshot["generated_at"] = timestamp
+        assert export._capacity_block(snapshot)["codex"]["observed_at"] == 0
+
+
+def test_export_selftest_handles_all_initial_capacity_states(monkeypatch) -> None:
+    for state in sorted(capacity.AGENT_STATES):
+        monkeypatch.setattr(export.capacity, "build", lambda: _capacity_fixture(codex_state=state))
+        export._selftest()
+
+
 def test_v1_key_values_byte_identical_with_and_without_capacity_block(tmp_path: Path) -> None:
     database = tmp_path / "weights.db"
     export._fixture_db(database)

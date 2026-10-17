@@ -115,7 +115,7 @@ def _capacity_block(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     observed_raw = snapshot.get("generated_at")
     try:
         observed_at = int(observed_raw) if observed_raw is not None else 0
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         observed_at = 0
     block: dict[str, Any] = {}
     for agent in sorted(capacity.AGENTS):
@@ -123,7 +123,7 @@ def _capacity_block(snapshot: dict[str, Any] | None) -> dict[str, Any]:
         row = raw if isinstance(raw, dict) else {}
         cfg = capacity.AGENTS[agent]
         state = row.get("state")
-        if not isinstance(state, str) or not state:
+        if not isinstance(state, str) or state not in capacity.AGENT_STATES:
             state = capacity.UNKNOWN
         window = row.get("window")
         if not isinstance(window, str) or not window:
@@ -423,7 +423,10 @@ def _selftest() -> None:
         # State and window each republish independently; observed_at alone does not.
         shed_snapshot = json.loads(json.dumps(capacity_snapshot))
         shed_agent = next(iter(capacity.AGENTS))
-        shed_snapshot["agents"][shed_agent]["state"] = capacity.SHED
+        current_state = shed_snapshot["agents"][shed_agent]["state"]
+        shed_snapshot["agents"][shed_agent]["state"] = (
+            capacity.OK if current_state == capacity.SHED else capacity.SHED
+        )
         assert (
             write_document(
                 output,
