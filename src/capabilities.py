@@ -1034,7 +1034,8 @@ def capability_expired(cap: Mapping[str, Any], now: int | None = None) -> bool:
 
     Uses the same boundary as ``_expire_in_place`` (``now >= expiry``) but never
     mutates the row, so raw ``load(create=False)`` readers can refuse expired
-    rows before any sweep retires them.
+    rows before any sweep retires them. A present but unparseable ``expiry``
+    fails closed (treated as expired); only a missing expiry is not expired.
     """
     expiry = cap.get("expiry")
     if expiry is None:
@@ -1043,7 +1044,7 @@ def capability_expired(cap: Mapping[str, Any], now: int | None = None) -> bool:
     try:
         return current >= int(expiry)
     except (TypeError, ValueError):
-        return False
+        return True
 
 
 def capability_routing_decision(

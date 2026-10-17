@@ -560,6 +560,94 @@ def test_direct_invoke_target_ineligible_refuses_without_writes(
     assert capability_targets.get_binding(version_id, registry_path=registry)["invocations"] == []
 
 
+def test_invocation_disabled_binding_control_still_returns_binding_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    payload = json.loads(ctx["registry"].read_text(encoding="utf-8"))
+    payload["targets"][ctx["version_id"]]["enabled"] = False
+    ctx["registry"].write_text(json.dumps(payload), encoding="utf-8")
+    result = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="workflow:disabled:1",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": False, "invoked": False, "reason": "binding_disabled"}, result
+    assert (
+        capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])[
+            "invocations"
+        ]
+        == []
+    )
+    assert "causal_edge" not in result
+
+
+@pytest.mark.parametrize(
+    ("case", "reason"),
+    [
+        ("malformed_artifact_expiry", "expired"),
+        ("binding_kill_switch", "kill_switch"),
+        ("policy_kill_switch", "kill_switch"),
+    ],
+)
+def test_direct_invoke_target_fail_closed_declarations_refuse_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, reason: str
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    registry, version_id = ctx["registry"], ctx["version_id"]
+    payload = json.loads(registry.read_text(encoding="utf-8"))
+    target = payload["targets"][version_id]
+    if case == "malformed_artifact_expiry":
+        target["artifact"]["lifecycle"]["expires_at"] = "not-a-timestamp"
+    elif case == "binding_kill_switch":
+        target["kill_switch"] = "ORCH_DIRECT_BINDING_DISABLED=1"
+        monkeypatch.setenv("ORCH_DIRECT_BINDING_DISABLED", "1")
+    else:
+        target["lifecycle_policy"]["kill_switch"] = "ORCH_DIRECT_POLICY_DISABLED=1"
+        monkeypatch.setenv("ORCH_DIRECT_POLICY_DISABLED", "1")
+    registry.write_text(json.dumps(payload), encoding="utf-8")
+    binding = capability_targets.get_binding(version_id, registry_path=registry)
+    result = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=registry,
+        ledger_path=ctx["ledger"],
+        target_run_id=f"direct:{case}",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": reason}, result
+    assert capability_targets.get_binding(version_id, registry_path=registry)["invocations"] == []
+
+
+def test_compiled_invocation_malformed_ledger_expiry_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    _mutate_json(ctx["ledger"], "capabilities", ctx["capability_id"], expiry="not-a-timestamp")
+    result = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="workflow:malformed-expiry:1",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "expired"}, result
+    assert (
+        capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])[
+            "invocations"
+        ]
+        == []
+    )
+    assert "causal_edge" not in result
+
+
 def test_high_risk_candidate_uses_bounded_brain_owner_question(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

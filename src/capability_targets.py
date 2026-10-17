@@ -283,12 +283,35 @@ def _binding_expires_at(binding: Mapping[str, Any]) -> int | None:
     return min(deadlines) if deadlines else None
 
 
+def _binding_deadline_unparseable(binding: Mapping[str, Any]) -> bool:
+    artifact = _artifact_mapping(binding)
+    lifecycle_raw = artifact.get("lifecycle")
+    lifecycle: Mapping[str, Any] = lifecycle_raw if isinstance(lifecycle_raw, Mapping) else {}
+    policy_raw = binding.get("lifecycle_policy")
+    policy: Mapping[str, Any] = policy_raw if isinstance(policy_raw, Mapping) else {}
+    for value in (
+        artifact.get("expires_at"),
+        lifecycle.get("expires_at"),
+        policy.get("expires_at"),
+        policy.get("expiry"),
+    ):
+        if value is None:
+            continue
+        try:
+            int(value)
+        except (TypeError, ValueError):
+            return True
+    return False
+
+
 def _binding_ineligible(
     binding: Mapping[str, Any], now: int, env: Mapping[str, str] | None = None
 ) -> str | None:
     """Fail-closed refusal for a direct binding invocation, or None if eligible."""
     if (binding.get("rollback") or {}).get("phase") == "pending":
         return "rollback_pending"
+    if _binding_deadline_unparseable(binding):
+        return "expired"
     expires_at = _binding_expires_at(binding)
     if expires_at is not None and int(now) >= expires_at:
         return "expired"
@@ -296,7 +319,14 @@ def _binding_ineligible(
     artifact = _artifact_mapping(binding)
     lifecycle_raw = artifact.get("lifecycle")
     lifecycle: Mapping[str, Any] = lifecycle_raw if isinstance(lifecycle_raw, Mapping) else {}
-    for declared in (artifact.get("kill_switch"), lifecycle.get("kill_switch")):
+    policy_raw = binding.get("lifecycle_policy")
+    policy: Mapping[str, Any] = policy_raw if isinstance(policy_raw, Mapping) else {}
+    for declared in (
+        binding.get("kill_switch"),
+        policy.get("kill_switch"),
+        artifact.get("kill_switch"),
+        lifecycle.get("kill_switch"),
+    ):
         if _kill_switch_triggered(declared, env_map):
             return "kill_switch"
     return None

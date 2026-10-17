@@ -312,6 +312,30 @@ def test_capability_expiry_rejects_at_boundary_without_sweep(offset, expired):
         assert "expiring" not in decision["rejection_reasons"]
 
 
+def test_capability_expiry_malformed_expiry_fails_closed_without_sweep():
+    cap = capabilities._blank_capability("expiring")
+    cap.update(
+        {
+            "status": "active",
+            "matcher": {"repository": "owner/repo", "task_types": ["implement"]},
+            "expiry": "not-a-timestamp",
+            "capability_version_id": "capability-version:expiring",
+            "artifact_hash": "sha256:artifact",
+            "lifecycle_policy_hash": "sha256:policy",
+        }
+    )
+    assert capabilities.capability_expired(cap, NOW) is True
+    decision = capabilities.capability_routing_decision(
+        {"repository": "owner/repo", "task_type": "implement", "lane": "opener"},
+        capabilities_by_id={"expiring": cap},
+        seed=7,
+        now=NOW,
+    )
+    assert decision["selected_capability_id"] is None
+    assert decision["fallback"] == "baseline"
+    assert decision["rejection_reasons"]["expiring"] == ["expired"]
+
+
 def test_router_plan_expiry_is_read_only_and_rejects_expired_row(tmp_path):
     import router
 
