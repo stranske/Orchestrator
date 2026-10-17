@@ -1,1 +1,9 @@
-{"codex": [{"expires": "2026-11-16"}, {"expires": "2026-11-16"}], "claude": []}
+{
+  "observed_at": "2026-10-17T14:55:07Z",
+  "codex": [
+    {
+      "expires": "2026-11-16"
+    }
+  ],
+  "claude": []
+}

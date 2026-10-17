@@ -26,25 +26,24 @@ Refresh is app-driven, not guaranteed. The reader uses the observation timestamp
 not the file mtime. Its fixed weekly anchor is 2026-10-18 04:59Z; subsequent anchors
 are seven days apart, including 2026-10-25. A banked reset does not move that anchor.
 
-No usable Codex percent store was located. Search locations included:
+Codex's machine-readable weekly source is
+`~/.codex/sessions/**/rollout-*.jsonl`: `type=event_msg`,
+`payload.type=token_count`, `payload.rate_limits.primary.window_minutes=10080`,
+`used_percent` divided by 100, and `resets_at` as epoch T1. T0 is T1 minus seven
+days. Freshness uses the line's own `timestamp`. Only these allowlisted fields
+are extracted: credits and all other account payloads are never copied or printed.
+The reader scans the newest 300 files by mtime and uses the newest timestamped
+weekly observation; the number of older files excluded is printed explicitly.
+Refresh requires active Codex sessions, including `codex exec` dispatches.
 
-- `~/Library/Application Support/Codex` and `com.openai.codex`:
-  local/session storage were searched for `rate_limits`, `primary_window`,
-  `used_percent`; app cache/state filenames were inventoried.
-- `~/.codex/.codex-global-state.json`: no usage percentage payload found;
-  rate-limit announcement dismissal keys are not quota observations.
-- Read-only SQLite schemas in `~/.codex`: `state_5.sqlite`, `logs_2.sqlite`,
-  `thread_history_1.sqlite`, `queue_1.sqlite`, `goals_1.sqlite`, `memories_1.sqlite`.
-  None exposed a provider percentage/rate-limit table or column. Token accounting
-  is not a plan percentage. Logs may contain text not indexed as structured usage.
-- Matching OpenAI/Claude paths under `~/Library/Containers`,
-  `~/Library/Group Containers`, `~/Library/Caches`, and `~/Library/Logs`.
-  The matching filename inventory was limited to depth four; deeper caches,
-  compressed stores and proprietary app internals remain unverified.
-
-This is a bounded absence finding, not proof a private Codex store cannot exist.
-No auth stores, tokens or arbitrary log excerpts were printed. A new stable source
-needs a schema-specific reader and fixture before being trusted.
+A separate read-only scan of all files modified in the last week measured fresh
+weekly evidence at **521/672 15-minute ticks (77.53%)**, using the two-tick freshness
+threshold. It scanned 543/556 files (13 older mtimes excluded), with 16,857 distinct
+weekly observations and zero malformed/unreadable records. The remaining 22.47%
+of ticks lacked fresh usage; this is observed availability, not a refresh SLA.
+Evidence: `docs/evidence/issue-668/rollout-freshness.txt`. This corrects the earlier
+bounded app-support/SQLite search's absence claim; calibration is a fallback,
+not a prerequisite for the rollout source.
 
 Fallback: `~/.codex/usage-snapshots/weekly-*.json`, plus a calibrated per-pool cap.
 All three files use `agent=all`; the latest file names both Claude and Codex in
@@ -70,18 +69,33 @@ cap is lowered to observed spend. Missing correction inputs remain unmeasured.
 
 ## Runtime inventory and reset events
 
-Install the exact owner state from `docs/capacity-resets.sample.json` as
-`~/.codex/orchestrator/capacity-resets.json`. The two Codex expiry dates are UNKNOWN:
+Install the updated owner state from `docs/capacity-resets.sample.json` as
+`~/.codex/orchestrator/capacity-resets.json`. One Codex bank entry remains after the observed 2026-10-17 14:55Z reset. Its expiry is UNKNOWN:
 2026-11-16 is the owner's 30-day estimate from 2026-10-17. Every inventory FYI makes
 that uncertainty explicit. Absence or malformed entries reports `resets=unknown`
 and conservatively uses no reset relief, without claiming a measured zero balance.
 Expired entries drop out on every read; consumed entries emit an FYI.
 
-To record a real consumption event, preserve its entry and add `consumed_at` as an
-ISO UTC timestamp. Codex T0 jumps to the latest consumption instant and T1=T0+7d;
-Claude keeps its anchor. Fresh usage is required in that period. Physical exhaustion
-or a ledger 429 latches shed until the period rolls or an explicit reset occurs;
-new inventory alone does not erase actual exhaustion. A consumed reset releases
+Rollout reset signals are detected from a >1-second reset-epoch change or a usage
+percentage drop. The full-week scan found 47 such signals, including small
+percent reversals and 2–4-second T1 jitter. To avoid false debits, a confirmed
+banked consumption requires both a usage drop and a T1 advance greater than one
+tick (900 seconds), before the old scheduled rollover. Signals and confirmed
+consumptions are counted separately; ordinary scheduled rollover costs no bank
+entry. This is an explicit refinement of the literal either-signal debit request
+based on observed concurrent-session noise. Automatic inventory accounting is idempotent: consumed entries
+are retained for audit, the oldest expiry is debited first, and `observed_at` marks
+the inventory baseline so historical signals cannot debit a newly installed
+balance. The sample baseline follows today's already-accounted reset. Read-only
+builds calculate the effective inventory without writing; recording ticks persist
+it. Manually entered `consumed_at` remains a fallback. Codex T0 follows the observed
+T1 minus seven days; Claude retains its fixed anchor.
+
+An incident keeps shed latched only until a fresh measured weekly u<1 observation
+postdates it, or the period/reset rolls. Thus a Claude five-hour 429 or a ledger
+scan hit cannot latch weekly pacing for days despite fresh weekly headroom. With
+missing or stale usage, the hold remains. Physical u>=1 still sheds.
+A consumed reset releases
 only a dated, active provider-quota marker older than the consumption event;
 ordinary auth/model checks run afterward. Manual/unreadable holds remain closed.
 For Claude, pre-consumption exhaustion samples are discarded without shifting T1.
@@ -99,14 +113,25 @@ The normal capacity CLI records samples in
 `src/capacity.py pacing-report` prints all three pass queries and evidence classes.
 Usage-at-reset needs a fresh snapshot within two ticks of completed T1. An empty
 incident ledger is measured zero only with full-period snapshot coverage; absent
-coverage stays unmeasured. Dispatch-share denominators count actual positive-count
+coverage stays unmeasured. Reports print coverage=N/M ticks and observed counts
+even when one missing tick prevents a period verdict. A zero non-Codex share in
+both populations is unmeasured, never a vacuous PASS. Dispatch-share denominators count actual positive-count
 `event=start` rows, not planner invocations. Other dispatch surfaces without such
 records remain a coverage limitation, not evidence of population-wide success.
 
 Every pacing reason prints the blocking quantity and a drainable quantity or reset
 horizon. The clearance estimate holds u and the current smoothed burn fixed; new
 spend can move it. All sampling, expiry handling and time advancement run while
-shed. The recovered branch emits `pool <p>: ũ=<x> ≤ 1−r_eff → ok`.
+shed. Unknown/stale pacing retains the native capacity state; measured pacing can only
+worsen native state. Measured weighting applies only within identical policy tiers
+(load, late, ok/warn, capacity bias, drain urgency); all-unknown pacing retains
+legacy selection and epsilon exploration. Claude stays reserved unless its own
+pacing is measured-ok (or the existing high-leverage/last-resort rule applies).
+Both `burn_rate_per_day` and `burn_per_day` are emitted with identical values.
+Export comparisons ignore clock/projection/burn diagnostics; usage, state and reset
+changes still publish immediately, while diagnostics refresh on normal cadence.
+
+The recovered branch emits `pool <p>: ũ=<x> ≤ 1−r_eff → ok`.
 
 The runtime `handoff-relay.sh` is outside this PR. Its agent-choice follow-up is:
 
@@ -119,6 +144,6 @@ The CLI prints just the agent on stdout and all pacing candidates/numbers on std
 It reads learned posteriors without modifying them. Ready-for-review infrastructure
 PR; only `autofix` label, no agent label, no source-workflow delegation.
 
-Merge, mirror sync, runtime inventory installation, source calibration/freshness,
+Merge, mirror sync, runtime inventory installation, source freshness (calibration only for the fallback),
 relay consumption, and reset-time pass measurements are separate acceptance
 boundaries. None is established by local green tests alone.

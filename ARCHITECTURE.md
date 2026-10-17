@@ -1531,17 +1531,19 @@ publication; the published JSON keeps every v1 routing key byte-identical and ad
 an additive `pacing` block for Codex/Claude (fractions, projection, EWMA burn, routing weight,
 period bounds, reset inventory and source freshness; no credentials). `pacing.py` defines the
 weekly window and constants once. The capacity tick appends source-labelled observations and
-snapshots even while shed. Unknown/stale usage is visible; shared ccusage totals never become
-per-agent percentages. `router.select_agent` samples eligible pools in proportion to posterior ×
-pacing weight, then falls back to zero-weight warn pools, then pacing-shed pools with
+snapshots even while shed. Codex weekly percent/reset epochs come from timestamped rollout token-count events;
+Claude uses desktop weekly history. Unknown/stale pacing preserves native routability; shared
+ccusage totals never become per-agent percentages. Both burn-rate aliases are retained.
+`router.select_agent` preserves load/late/state/policy/drain tiers and samples tied pools by
+posterior × pacing weight, then falls back to zero-weight warn pools, then pacing-shed pools with
 `fail-toward-motion`; auth/model/manual holds retain authority. The plan and persisted dispatch
 metadata carry all candidate weights and projections. `capacity.py pick-agent` exposes that same
 selection for the separate relay follow-up; it prints the agent on stdout and evidence on stderr.
 `capacity.py pacing-report` queries completed-period usage, incidents with another pool ok, and
 non-Codex dispatch share in constrained versus ok hours; missing populations stay unmeasured.
 `switch_review` prints that weekly check. Reset inventory and calibration are local runtime data;
-see `docs/capacity-pacing.md`. Semantic change detection includes capacity and pacing but not
-`observed_at` alone, so a shed or recovered seat republishes without touching posteriors or
+see `docs/capacity-pacing.md`. Semantic change detection includes capacity state, weekly usage and reset changes,
+excluding observation clocks, reasons and burn/schedule/projection drift, so a shed or recovered seat republishes without touching posteriors or
 `exploration.policy_version`. Rail exercise records invocation without
 `--record`, which governs exercise verdicts only.
 The learner and exporter share feedback.py's instance DB selection: explicit DB, DB environment,

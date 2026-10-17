@@ -28,12 +28,13 @@ Pacing sources (2026-10-17): Claude desktop persists timestamped weekly percenta
 in ~/Library/Application Support/Claude/plan-usage-history.json, samples[].t (ms)
 and samples[].u.sd (%). Refresh is app-driven (observed cadence documented in
  docs/capacity-pacing.md), not guaranteed. Sources older than two 15-minute ticks
-are stale. Codex: no usable percent record found in app support, local SQLite
-schemas/global state, Electron usage-key search, matching containers/caches/logs.
-This is a bounded search, not proof no private store exists. Fallback is
-~/.codex/usage-snapshots/weekly-*.json agent-specific tokens plus calibrated cap;
-shared Claude+Codex totals and 5h projections cannot stand in for weekly usage.
-Missing calibration/usage yields source=none, state=unknown. See pacing_usage.py.
+are stale. Codex reads ~/.codex/sessions/**/rollout-*.jsonl token_count events:
+rate_limits.primary.used_percent (window_minutes=10080) and resets_at (epoch).
+The event timestamp measures freshness; T0=T1-7d. Only these usage fields are
+extracted; credits are never retained or printed. Source refresh requires an
+active session. Agent-specific ccusage weekly tokens plus calibrated cap remain
+the fallback; mixed-agent and 5h totals cannot measure weekly consumption.
+Missing/stale usage sets pacing.state=unknown while retaining the native state.
 The normal tick appends usage samples and snapshots; build() remains read-only.
 
 Read-only build; `--selftest` runs fully offline. Simple-first + legible by
@@ -514,7 +515,27 @@ def _shed(agent: str) -> bool:
             and created is not None
             and any(stamp > created for stamp in reset_events)
         )
-        if not reset_clears:
+        sample_clears = False
+        if (
+            agent in ("codex", "claude")
+            and marker["state"] == "active"
+            and marker.get("category") in ("quota", "rate_limit", "capacity")
+            and created is not None
+            and not reset_clears
+        ):
+            now = time.time()
+            datum = pacing_usage.usage(
+                agent, now, pacing_usage.read_json(pacing_usage.CALIBRATION_FILE) or {}
+            )
+            used, observed = datum.get("used_fraction"), datum.get("ts")
+            sample_clears = (
+                used is not None
+                and 0 <= used < 1
+                and observed is not None
+                and created < observed <= now
+                and now - observed <= pacing.STALE_AFTER_SECONDS
+            )
+        if not (reset_clears or sample_clears):
             return True
     try:
         Path(marker["path"]).unlink()
@@ -1340,9 +1361,10 @@ def main(argv):
         parser.add_argument("--candidates", required=True)
         parser.add_argument("--task-type", default="implement")
         args = parser.parse_args(argv[1:])
+        snapshot = build()
         choice = router.select_agent(
             args.task_type,
-            build(),
+            snapshot,
             only=set(args.candidates.split(",")),
             learned=(router.learned_ranks() or {}).get(args.task_type),
         )
@@ -1350,7 +1372,14 @@ def main(argv):
             print("unmeasured: no dispatchable candidate", file=sys.stderr)
             return 1
         print(choice["agent"])
-        print(json.dumps(choice.get("pacing_decision", {})), file=sys.stderr)
+        decision = choice.get("pacing_decision") or {
+            "policy": "legacy (pacing unmeasured in selected tier)",
+            "candidates": [
+                {"agent": agent, **snapshot.get("agents", {}).get(agent, {})}
+                for agent in args.candidates.split(",")
+            ],
+        }
+        print(json.dumps(decision), file=sys.stderr)
         return 0
     HANDOFF.mkdir(parents=True, exist_ok=True)
     snap = build(record_pacing=True)

@@ -471,6 +471,11 @@ def _pacing_shed_fallback(cap: dict, agent: str) -> bool:
     )
 
 
+def _measured_pacing(row: dict) -> bool:
+    pace = row.get("pacing") or {}
+    return pace.get("state") in ("ok", "warn", "shed") and pace.get("routing_weight") is not None
+
+
 def _pacing_choice(scored, cap, learned, rng):
     """Posterior × literal pacing weight; warn-zero before shed fallback."""
     rows = []
@@ -483,12 +488,19 @@ def _pacing_choice(scored, cap, learned, rng):
             learned, entry["agent"], _prior_posterior_from_rank(idx, len(scored))
         )
         rows.append((row, posterior, max(0.0, weight)))
-    positive = [r for r in rows if r[0][2] in ("ok", "warn") and r[2] > 0]
-    warn = [r for r in rows if r[0][2] in ("ok", "warn")]
-    tier = positive or warn or rows
-    under_cap = min(r[0][0][0] for r in tier)
-    tier = [r for r in tier if r[0][0][0] == under_cap]
-    policy = "posterior*pacing" if positive else "fallback-warn" if warn else "fail-toward-motion"
+    non_shed = [r for r in rows if r[0][2] in ("ok", "warn")]
+    eligible = non_shed or rows
+    # Preserve every legacy policy tier; replace only the final learned ranking.
+    best_tier = min(r[0][0][:-1] for r in eligible)
+    eligible = [r for r in eligible if r[0][0][:-1] == best_tier]
+    positive = [r for r in eligible if non_shed and r[2] > 0]
+    tier = positive or eligible
+    policy = (
+        "posterior*pacing" if positive else "fallback-warn" if non_shed else "fail-toward-motion"
+    )
+    if not any(_measured_pacing(cap.get("agents", {}).get(r[0][1]["agent"], {})) for r in eligible):
+        # Other tiers having measurements cannot randomize this unmeasured tier.
+        return eligible[0][0], None
     weights = [r[1] * (r[2] if positive else 1.0) for r in tier]
     # Zero posterior mass is uninformative; it must not stop all-shed motion.
     if sum(weights) <= 0:
@@ -555,7 +567,7 @@ def select_agent(
         return None
     load = load or {}
     scored: list[ScoredSelection] = []
-    pacing_active = any(isinstance(r.get("pacing"), dict) for r in cap.get("agents", {}).values())
+    pacing_active = any(_measured_pacing(r) for r in cap.get("agents", {}).values())
     for idx, entry in enumerate(spec["agents"]):
         if only is not None and entry["agent"] not in only:
             continue
@@ -608,8 +620,10 @@ def select_agent(
             _capacity_policy_bias(task_type, entry["agent"], cap),
             _drain_urgency(entry["agent"], cap),
         )  # 16(e): continuous pacing within the tier
-        if learned:  # feedback-learned reorder WITHIN the tier (opt-in via data)
-            score = score + (_learned_rank(learned, entry["agent"], len(learned) + idx),)
+        # Stable table rank is the legacy learned-rank fallback.
+        score = score + (
+            _learned_rank(learned, entry["agent"], len(learned) + idx) if learned else idx,
+        )
         scored.append((score, entry, st, idx))
     if not scored:
         return None
@@ -620,13 +634,17 @@ def select_agent(
     pacing_decision = None
     if pacing_active:
         picked, pacing_decision = _pacing_choice(scored, cap, learned, rng)
-    epsilon = 0.0 if pacing_active else _exploration_rate(exploration_rate)
+    changed_by_pacing = pacing_decision is not None and picked != scored[0]
+    epsilon = 0.0 if changed_by_pacing else _exploration_rate(exploration_rate)
     if epsilon > 0 and rng.random() < epsilon:
         mode = _exploration_mode(exploration_mode)
+        exploration_scored = scored
+        if pacing_active:
+            exploration_scored = [r for r in scored if r[2] != "shed"] or scored
         challenger = (
-            _thompson_exploration_choice(scored, learned, rng)
+            _thompson_exploration_choice(exploration_scored, learned, rng)
             if mode == "thompson-hybrid"
-            else _exploration_choice(scored, learned, rng)
+            else _exploration_choice(exploration_scored, learned, rng)
         )
         if challenger is not None:
             picked = challenger
@@ -908,9 +926,16 @@ def select_remote_agent(
     weekly cap is scarce — and used ONLY when `high_leverage=True` or no cheaper keepalive agent has
     capacity (last-resort). Returns the chosen entry {agent, mode, state} or None. The caller hands the
     agent to dispatcher.delegate_remote()."""
-    pacing_active = any(isinstance(r.get("pacing"), dict) for r in cap.get("agents", {}).values())
+    measured_ok_reserves = {
+        agent
+        for agent in RESERVE_AGENTS
+        if _measured_pacing(cap.get("agents", {}).get(agent, {}))
+        and cap["agents"][agent]["pacing"]["state"] == "ok"
+    }
     pool = (
-        KEEPALIVE_AGENTS if high_leverage or pacing_active else (KEEPALIVE_AGENTS - RESERVE_AGENTS)
+        KEEPALIVE_AGENTS
+        if high_leverage
+        else (KEEPALIVE_AGENTS - RESERVE_AGENTS) | measured_ok_reserves
     )
     pick = select_agent(
         task_type,
@@ -921,8 +946,8 @@ def select_remote_agent(
         profile_transport="remote",
     )
     if (
-        pick is None and not high_leverage
-    ):  # last resort: nothing cheaper has capacity -> allow reserve
+        pick is None or pick["state"] == "shed"
+    ) and not high_leverage:  # last resort: nothing cheaper has capacity -> allow reserve
         pick = select_agent(
             task_type,
             cap,

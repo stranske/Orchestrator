@@ -144,6 +144,7 @@ def evaluate(
         allowed_fraction=None,
         projected_fraction=None,
         burn_rate_per_day=None,
+        burn_per_day=None,
         routing_weight=None,
         period_start=period_start,
         period_end=period_end,
@@ -169,6 +170,9 @@ def evaluate(
             f"{result['state']}; clears on fresh usage or reset at {period_end:.0f}"
         )
         return result
+    # A newer measured observation is stronger evidence than a window-ambiguous 429.
+    if latched and exhausted_at is not None and source_ts > exhausted_at and used_fraction < 1:
+        latched = False
     u = max(0.0, used_fraction)
     allowed = (1 - reserve) * elapsed_fraction(now, period_start, period_end)
     rate = burn_rate(samples, now, period_start, source=source)
@@ -193,6 +197,7 @@ def evaluate(
         allowed_fraction=allowed,
         projected_fraction=projected,
         burn_rate_per_day=rate,
+        burn_per_day=rate,
         routing_weight=weight,
     )
     if projected is not None and projected > 1 and bank and not latched and u < 1:
@@ -203,6 +208,8 @@ def evaluate(
         )
     if state == "ok" and previous_state == "shed" and projected is not None:
         result["fyi"].append(f"pool {pool}: ũ={projected:.2f} ≤ 1−r_eff → ok")
+    if previous_state == "shed" and state != "shed" and projected is None:
+        result["fyi"].append(f"pool {pool}: shed → {state} (reset/rollover; ũ=unmeasured)")
     if projected is None:
         blocking = f"u={u:.2f} vs g(e)+δ={allowed + EARLY_SPEND_BAND:.2f}; ũ=unmeasured"
         clear = "fresh samples or schedule advancing"

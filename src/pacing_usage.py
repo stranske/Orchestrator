@@ -3,8 +3,9 @@
 Confirmed Claude desktop source: ~/Library/Application Support/Claude/plan-usage-history.json
 (samples: t milliseconds, u.sd weekly percent, u.fh five-hour percent). Refresh is
 app-driven, not guaranteed; use each record's t, never the file modification time.
-No usable Codex percent store located in the documented 2026-10-17 search. Codex
-fallback: agent-specific weekly-*.json plus timestamp-matched quota calibration.
+Codex source: ~/.codex/sessions/**/rollout-*.jsonl token_count events,
+rate_limits.primary weekly percent and reset epoch. Credits are never extracted.
+Fallback: agent-specific weekly-*.json plus timestamp-matched quota calibration.
 Mixed-agent ccusage totals are never silently attributed to Codex or Claude.
 """
 
@@ -23,6 +24,8 @@ RESETS_FILE = STATE_DIR / "capacity-resets.json"
 CALIBRATION_FILE = STATE_DIR / "capacity-calibration.json"
 CLAUDE_USAGE = Path.home() / "Library/Application Support/Claude/plan-usage-history.json"
 SNAPSHOTS = Path.home() / ".codex/usage-snapshots"
+CODEX_SESSIONS = Path.home() / ".codex/sessions"
+ROLLOUT_FILE_LIMIT = 300
 
 
 def read_json(path: Path):
@@ -113,13 +116,129 @@ def weekly_tokens(path: Path, pool: str) -> list[dict]:
     return rows
 
 
+def rollout_observations(root: Path, now: float) -> list[dict]:
+    """Read only an allowlisted weekly payload. Never retain credits or raw events."""
+    files = sorted(root.glob("**/rollout-*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    omitted = max(0, len(files) - ROLLOUT_FILE_LIMIT)
+    if omitted:
+        print(
+            f"FYI codex rollouts: scanning {len(files)-omitted}/{len(files)} newest files; "
+            f"omitted={omitted} older files",
+            file=sys.stderr,
+        )
+    rows = []
+    malformed = unreadable = 0
+    for path in files[:ROLLOUT_FILE_LIMIT]:
+        try:
+            with path.open() as stream:
+                for line in stream:
+                    if '"token_count"' not in line or '"rate_limits"' not in line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                        payload = event.get("payload") or {}
+                        primary = (payload.get("rate_limits") or {}).get("primary") or {}
+                        ts = pacing.timestamp(event.get("timestamp"))
+                        percent = primary.get("used_percent")
+                        end = pacing.timestamp(primary.get("resets_at"))
+                        if (
+                            event.get("type") == "event_msg"
+                            and payload.get("type") == "token_count"
+                            and primary.get("window_minutes") == 10080
+                            and ts is not None
+                            and ts <= now
+                            and end is not None
+                            and isinstance(percent, (int, float))
+                            and 0 <= percent <= 100
+                        ):
+                            rows.append(
+                                dict(
+                                    ts=ts,
+                                    used_fraction=percent / 100,
+                                    period_end=end,
+                                    source="codex-rollout:rate_limits.primary",
+                                )
+                            )
+                    except (ValueError, TypeError, AttributeError):
+                        malformed += 1
+        except OSError:
+            unreadable += 1
+    if malformed or unreadable:
+        print(
+            f"FYI codex rollouts: malformed={malformed}, unreadable_files={unreadable}",
+            file=sys.stderr,
+        )
+    return sorted(rows, key=lambda r: r["ts"])
+
+
+def codex_rollout_usage(root: Path, now: float) -> dict | None:
+    rows = rollout_observations(root, now)
+    if not rows:
+        return None
+    resets = []
+    signals = []
+    for left, right in zip(rows, rows[1:]):
+        dropped = right["used_fraction"] < left["used_fraction"]
+        shift = right["period_end"] - left["period_end"]
+        if right["ts"] > left["ts"] and (abs(shift) > 1 or dropped):
+            signals.append(right["ts"])
+            # Real concurrent rollouts contain percent reversals and epoch jitter.
+            # An early rollover needs BOTH independent signals; ordinary scheduled
+            # rollover grants a new period without spending a bank entry.
+            early = right["period_end"] - pacing.PERIOD_SECONDS < left["period_end"] - 1
+            if dropped and shift > pacing.TICK_SECONDS and early:
+                resets.append(right["ts"])
+    return dict(rows[-1], reset_events=sorted(set(resets)), reset_signals=sorted(set(signals)))
+
+
+def consume_detected_resets(inventory: dict, datum: dict, *, now: float, record: bool) -> list[str]:
+    """Idempotently debit oldest-expiring bank entries, preserving the audit trail."""
+    entries = inventory.get("codex")
+    if not isinstance(entries, list):
+        return []
+    messages = [
+        f"FYI codex: reset signals={len(datum.get('reset_signals', []))}; "
+        f"confirmed bank consumptions={len(datum.get('reset_events', []))}; "
+        "auto-debit requires usage drop + >one-tick advance of T1 before scheduled rollover"
+    ]
+    baseline = pacing.timestamp(inventory.get("observed_at")) or 0
+    consumed = {pacing.timestamp(e.get("consumed_at")) for e in entries}
+    for ts in datum.get("reset_events", []):
+        if ts <= baseline or ts in consumed:
+            continue
+        bank = sorted(
+            pacing.active_resets(entries, ts), key=lambda e: pacing.timestamp(e["expires"]) or 0
+        )
+        if not bank:
+            messages.append(
+                f"FYI codex: reset detected at {ts:.0f}; no recorded bank entry available"
+            )
+            continue
+        bank[0]["consumed_at"] = ts
+        consumed.add(ts)
+        messages.append(
+            f"FYI codex: auto-consumed oldest-expiring reset at {ts:.0f}; expires={bank[0]['expires']}"
+        )
+    if record and datum.get("ts") is not None:
+        inventory["observed_at"] = max(baseline, datum["ts"])
+        temporary = RESETS_FILE.with_suffix(".tmp")
+        temporary.write_text(json.dumps(inventory, indent=2) + "\n")
+        temporary.replace(RESETS_FILE)
+    return messages
+
+
 def usage(
     pool: str,
     now: float,
     calibration: dict,
     snapshots: Path = SNAPSHOTS,
     claude_path: Path = CLAUDE_USAGE,
+    sessions: Path | None = None,
 ) -> dict:
+    if pool == "codex":
+        observed = codex_rollout_usage(CODEX_SESSIONS if sessions is None else sessions, now)
+        if observed is not None:
+            return observed
     if pool == "claude":
         data = read_json(claude_path) or {}
         rows = data.get("samples", [])
@@ -172,12 +291,18 @@ def usage(
 def calibrate(incidents: list[dict], samples: list[dict], destination: Path) -> tuple[bool, str]:
     evidence = []
     seen = set()
+    counts = dict(seen=0, unmatched=0, duplicate=0, no_weekly_tokens=0)
     for incident in incidents:
         if incident.get("agent") != "codex" or incident.get("category") != "quota":
             continue
+        counts["seen"] += 1
         ts = pacing.timestamp(incident.get("ts"))
         key = incident.get("incident_id") or incident.get("evidence_hash")
-        if ts is None or not key or key in seen:
+        if key in seen:
+            counts["duplicate"] += 1
+            continue
+        if ts is None or not key:
+            counts["unmatched"] += 1
             continue
         seen.add(key)
         extra = incident.get("extra") or {}
@@ -196,11 +321,15 @@ def calibrate(incidents: list[dict], samples: list[dict], destination: Path) -> 
                 sample = min(matches, key=lambda r: abs(r["ts"] - ts))
                 tokens, start = sample["weekly_tokens"], sample.get("period_start")
         if not isinstance(tokens, (int, float)) or tokens <= 0 or start is None:
+            counts["no_weekly_tokens"] += 1
+            counts["unmatched"] += 1
             continue
         evidence.append(dict(incident_id=key, ts=ts, weekly_tokens=tokens, period_start=start))
     if len(evidence) < 2:
         return False, (
             f"calibrate-codex: refuses to write: {len(evidence)} matched quota incidents; "
+            + ", ".join(f"{k}={v}" for k, v in counts.items())
+            + "; "
             "need at least 2 distinct incidents with agent-specific weekly token projections "
             "and period_start at each incident (shared 5h projection is insufficient)"
         )
@@ -310,6 +439,9 @@ def integrate(agents: dict, *, now: float, handoff: Path, record: bool = False) 
         if pool == "codex" and bounds:
             source_calibration["codex_period_start"] = bounds[0]
         datum = usage(pool, now, source_calibration, snapshots=SNAPSHOTS, claude_path=CLAUDE_USAGE)
+        if pool == "codex" and datum.get("period_end") is not None:
+            messages.extend(consume_detected_resets(inventory, datum, now=now, record=record))
+            bounds = (datum["period_end"] - pacing.PERIOD_SECONDS, datum["period_end"])
         start, end = bounds if bounds else (None, None)
         if bounds and datum.get("ts") is not None and datum["ts"] < bounds[0]:
             datum["used_fraction"] = None
@@ -360,10 +492,11 @@ def integrate(agents: dict, *, now: float, handoff: Path, record: bool = False) 
         )
         # Infrastructure/auth/explicit shed markers remain authoritative.
         agent = agents[pool]
-        if agent["state"] != "shed":
-            agent["state"] = row["state"]
+        ranks = {"ok": 0, "warn": 1, "shed": 2}
+        if row["state"] in ranks and agent["state"] in ranks:
+            agent["state"] = max((agent["state"], row["state"]), key=lambda state: ranks[state])
         agent["pacing"] = row
-        agent["reason"] += "; " + row["reason"]
+        agent["reason"] += f"; pacing.state={row['state']}; " + row["reason"]
         messages.extend(row["fyi"])
     if record:
         append_rows(samples_path, new_samples)
@@ -454,15 +587,17 @@ def report(handoff: Path, *, now: float, current: dict | None = None) -> str:
                 periods.append((float(begin), float(finish)))
     if not periods:
         lines += [
-            "2: unmeasured — would need completed-period snapshots and rate-limit ledger coverage [usage store + rate-limit ledger]",
-            "3: unmeasured — would need dispatches in both codex ok and warn/shed hours [usage store + rate-limit ledger]",
+            f"2: unmeasured — would need completed-period snapshots and rate-limit ledger coverage; coverage=0/unknown ticks; observed incidents={len(incidents)} [usage store + rate-limit ledger]",
+            f"3: unmeasured — would need dispatches in both codex ok and warn/shed hours; coverage=0/unknown ticks; observed dispatches={len(starts)} [usage store + rate-limit ledger]",
         ]
         return "\n".join(lines)
     start, end = max(periods, key=lambda p: p[1])
     relevant = [r for r in incidents if start <= (pacing.timestamp(r.get("ts")) or 0) < end]
-    coverage = all(
-        observed(t) is not None for t in range(int(start), int(end), pacing.TICK_SECONDS)
-    )
+    ticks = list(range(int(start), int(end), pacing.TICK_SECONDS))
+    # Each 15-minute slot needs its own observation; a neighbouring tick cannot fill a gap.
+    covered = sum(any(t <= s["ts"] < t + pacing.TICK_SECONDS for s in snapshots) for t in ticks)
+    coverage = covered == len(ticks)
+    coverage_text = f"coverage={covered}/{len(ticks)} ticks"
     classified = [r for r in relevant if observed(pacing.timestamp(r["ts"])) is not None]
     violations = sum(
         any(
@@ -477,11 +612,11 @@ def report(handoff: Path, *, now: float, current: dict | None = None) -> str:
         and (handoff / "rate-limit-incidents.ndjson").exists()
     ):
         lines.append(
-            f"2: {violations} incidents while another pool ok; {'PASS' if violations == 0 else 'FAIL'} [usage store + rate-limit ledger]"
+            f"2: {violations} incidents while another pool ok; {coverage_text}; {'PASS' if violations == 0 else 'FAIL'} [usage store + rate-limit ledger]"
         )
     else:
         lines.append(
-            f"2: unmeasured — would need full-period ledger/snapshot coverage; observed violations={violations} [usage store + rate-limit ledger]"
+            f"2: unmeasured — would need full-period ledger/snapshot coverage; {coverage_text}; observed violations={violations}; incidents={len(classified)}/{len(relevant)} [usage store + rate-limit ledger]"
         )
     groups = {"ok": [0, 0], "constrained": [0, 0]}
     omitted = 0
@@ -496,18 +631,23 @@ def report(handoff: Path, *, now: float, current: dict | None = None) -> str:
             continue
         groups[group][0] += int(event["agent"] != "codex")
         groups[group][1] += 1
-    if all(g[1] > 0 for g in groups.values()) and omitted == 0:
+    if coverage and all(g[1] > 0 for g in groups.values()) and omitted == 0:
         base = groups["ok"][0] / groups["ok"][1]
         constrained = groups["constrained"][0] / groups["constrained"][1]
-        passed = constrained >= pacing.PASS_SHARE_MULTIPLIER * base
+        passed = constrained > 0 and constrained >= pacing.PASS_SHARE_MULTIPLIER * base
+        verdict = (
+            ("PASS" if passed else "FAIL")
+            if constrained > 0
+            else "unmeasured — no non-codex dispatches"
+        )
         lines.append(
             f"3: non-codex share ok={base:.3f}, warn/shed={constrained:.3f}; "
-            f"target ≥{pacing.PASS_SHARE_MULTIPLIER}×; {'PASS' if passed else 'FAIL'}; "
+            f"target ≥{pacing.PASS_SHARE_MULTIPLIER}×; {verdict}; {coverage_text}; "
             f"counts={groups} [usage store + rate-limit ledger]"
         )
     else:
         lines.append(
             f"3: unmeasured — would need dispatches in both codex ok and warn/shed hours; "
-            f"counts={groups}, unclassified={omitted} [usage store + rate-limit ledger]"
+            f"{coverage_text}; counts={groups}, unclassified={omitted} [usage store + rate-limit ledger]"
         )
     return "\n".join(lines)
