@@ -163,7 +163,11 @@ def test_weekly_evidence_is_deduplicated_and_never_credits_invocation(tmp_path, 
     assert not adv.record_shape_measurement(section, now=now + 1, path=p)
     row = capabilities.load_declared(p)["adversarial-review"]
     assert row["last_invocation"] in (None, 0)
-    assert [e["type"] for e in row["event_history"]] == ["match"]
+    # Reviewed declaration overlays can add an administrative reconciliation event;
+    # it is not a second weekly measurement or invocation credit.
+    assert [e["type"] for e in row["event_history"] if e["type"] != "declaration_reconciled"] == [
+        "match"
+    ]
     assert not adv.shape_shadow_readiness(path=p, now=now)[0]
 
 

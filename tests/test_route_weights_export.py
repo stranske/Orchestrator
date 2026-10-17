@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from pathlib import Path
 from unittest.mock import patch
@@ -5,16 +6,37 @@ from unittest.mock import patch
 import capacity
 import route_weights_export as export
 
+V1_KEYS = (
+    "schema",
+    "generated_at",
+    "source_version",
+    "min_observations",
+    "task_types",
+    "reserve",
+    "exploration",
+)
 
-def _snap(**kwargs):
-    return export._fixture_capacity_snapshot(**kwargs)
+
+def _capacity_fixture(*, codex_state: str = capacity.OK, generated_at: int = 1_700_000_000) -> dict:
+    agents = {
+        agent: {
+            "state": codex_state if agent == "codex" else capacity.OK,
+            "window": cfg["window"],
+        }
+        for agent, cfg in capacity.AGENTS.items()
+    }
+    return {"generated_at": generated_at, "agents": agents}
+
+
+def _v1_bytes(document: dict) -> bytes:
+    return json.dumps({key: document[key] for key in V1_KEYS}, sort_keys=True).encode("utf-8")
 
 
 def test_export_filters_threshold_reserve_and_unknown_task_types(tmp_path: Path) -> None:
     database = tmp_path / "weights.db"
     export._fixture_db(database)
 
-    document = export.build_document(database, minimum=20, capacity_snapshot=_snap())
+    document = export.build_document(database, minimum=20)
 
     ranking = document["task_types"]["implement"]["ranking"]
     assert [row["agent"] for row in ranking] == ["codex"]
@@ -29,141 +51,42 @@ def test_write_document_detects_an_unchanged_semantic_export(tmp_path: Path) -> 
     database = tmp_path / "weights.db"
     export._fixture_db(database)
     target = tmp_path / "route-weights.json"
-    snap = _snap()
 
-    assert export.write_document(target, export.build_document(database, capacity_snapshot=snap))
+    snapshot = _capacity_fixture()
     assert (
-        export.write_document(target, export.build_document(database, capacity_snapshot=snap))
+        export.write_document(target, export.build_document(database, capacity_snapshot=snapshot))
+        is True
+    )
+    assert (
+        export.write_document(target, export.build_document(database, capacity_snapshot=snapshot))
         is False
     )
-
-
-def test_capacity_state_change_triggers_publication(tmp_path: Path) -> None:
-    database = tmp_path / "weights.db"
-    export._fixture_db(database)
-    target = tmp_path / "route-weights.json"
-    assert export.write_document(target, export.build_document(database, capacity_snapshot=_snap()))
-    shed = _snap(states={"codex": capacity.SHED})
-    assert export.write_document(target, export.build_document(database, capacity_snapshot=shed))
-
-
-def test_capacity_window_or_observed_at_change_triggers_publication(tmp_path: Path) -> None:
-    database = tmp_path / "weights.db"
-    export._fixture_db(database)
-    target = tmp_path / "route-weights.json"
-    assert export.write_document(
-        target, export.build_document(database, capacity_snapshot=_snap(generated_at=100))
-    )
-    assert export.write_document(
-        target, export.build_document(database, capacity_snapshot=_snap(generated_at=200))
-    )
-    window_flip = _snap(generated_at=200)
-    window_flip["agents"]["codex"]["window"] = "monthly"
-    assert export.write_document(
-        target, export.build_document(database, capacity_snapshot=window_flip)
-    )
-
-
-def test_capacity_block_present_with_one_entry_per_configured_agent(tmp_path: Path) -> None:
-    database = tmp_path / "weights.db"
-    export._fixture_db(database)
-    document = export.build_document(database, capacity_snapshot=_snap())
-    assert document["schema"] == export.SCHEMA
-    assert "capacity" in document, "capacity block must be present"
-    assert set(document["capacity"]) == set(capacity.AGENTS)
-
-
-def test_capacity_states_copied_verbatim(tmp_path: Path) -> None:
-    database = tmp_path / "weights.db"
-    export._fixture_db(database)
-    states = {
-        "codex": capacity.OK,
-        "claude": capacity.WARN,
-        "cursor": capacity.SHED,
-        "gemini": capacity.UNKNOWN,
-    }
-    snap = _snap(states=states, generated_at=42)
-    document = export.build_document(database, capacity_snapshot=snap)
-    for agent, state in states.items():
-        entry = document["capacity"][agent]
-        assert entry["state"] == state
-        assert entry["window"] == capacity.AGENTS[agent]["window"]
-        assert entry["observed_at"] == 42
-
-
-def test_v1_keys_unchanged_snapshot(tmp_path: Path) -> None:
-    database = tmp_path / "weights.db"
-    export._fixture_db(database)
-    document = export.build_document(database, minimum=20, capacity_snapshot=_snap())
-    assert export.V1_DOCUMENT_KEYS.issubset(document)
-    # Additive capacity must not reshape the v1 ranking contract.
-    ranking = document["task_types"]["implement"]["ranking"]
-    assert ranking == [
-        {
-            "agent": "codex",
-            "posterior": 0.9,
-            "n_obs": 25,
-            "success_rate": 0.88,
-        }
-    ]
-    assert document["reserve"]["implement"][0]["agent"] == "claude"
-    assert "exploration" in document
-
-
-def test_shed_pool_flips_state_within_one_export(tmp_path: Path) -> None:
-    database = tmp_path / "weights.db"
-    export._fixture_db(database)
-    ok_doc = export.build_document(database, capacity_snapshot=_snap())
-    assert ok_doc["capacity"]["codex"]["state"] == capacity.OK
-    shed_doc = export.build_document(
-        database, capacity_snapshot=_snap(states={"codex": capacity.SHED})
-    )
-    assert shed_doc["capacity"]["codex"]["state"] == capacity.SHED
-    # Rankings and other v1 fields stay identical across the flip.
-    assert ok_doc["task_types"] == shed_doc["task_types"]
-    assert ok_doc["reserve"] == shed_doc["reserve"]
-
-
-def test_capacity_block_does_not_rewrite_policy_version(tmp_path: Path) -> None:
-    database = tmp_path / "weights.db"
-    export._fixture_db(database)
-    a = export.build_document(database, now=100, capacity_snapshot=_snap())
-    b = export.build_document(
-        database, now=100, capacity_snapshot=_snap(states={"codex": capacity.SHED})
-    )
-    assert a["exploration"]["policy_version"] == b["exploration"]["policy_version"]
-
-
-def test_load_capacity_snapshot_reads_out_without_shelling(tmp_path: Path, monkeypatch) -> None:
-    artifact = tmp_path / "capacity.json"
-    payload = _snap(generated_at=99, states={"codex": capacity.SHED})
-    artifact.write_text(
-        __import__("json").dumps(payload),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(export.capacity, "OUT", artifact)
-    built = []
-    monkeypatch.setattr(export.capacity, "build", lambda: built.append("build") or payload)
-    loaded = export._load_capacity_snapshot()
-    assert loaded["agents"]["codex"]["state"] == capacity.SHED
-    assert built == []
 
 
 def test_policy_version_changes_when_the_weight_version_changes(tmp_path: Path) -> None:
     database = tmp_path / "weights.db"
     export._fixture_db(database)
-    snap = _snap()
-    document = export.build_document(database, now=100, capacity_snapshot=snap)
+    document = export.build_document(database, now=100)
     with sqlite3.connect(database) as c:
         c.execute("UPDATE route_weights SET version=3 WHERE version=2")
-    changed = export.build_document(database, now=100, capacity_snapshot=snap)
+    changed = export.build_document(database, now=100)
     assert changed["source_version"] == 3
     assert changed["exploration"]["policy_version"] != document["exploration"]["policy_version"]
 
 
+def test_policy_version_unchanged_when_only_capacity_is_added(tmp_path: Path) -> None:
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    without = export.build_document(database, now=100, include_capacity=False)
+    with_capacity = export.build_document(database, now=100, capacity_snapshot=_capacity_fixture())
+    assert (
+        without["exploration"]["policy_version"] == with_capacity["exploration"]["policy_version"]
+    )
+
+
 def test_missing_weights_sample_remote_prior_without_creating_a_database(tmp_path: Path) -> None:
     database = tmp_path / "absent.db"
-    document = export.build_document(database, now=100, capacity_snapshot=_snap())
+    document = export.build_document(database, now=100)
     assert document["source_version"] == 0
     assert not database.exists()
     for task_type, challenger in document["exploration"]["challengers"].items():
@@ -175,7 +98,7 @@ def test_export_does_not_label_an_exploitation_pick_as_a_challenger(tmp_path: Pa
     with patch.object(
         export.router, "select_agent", return_value={"agent": "codex", "exploration": False}
     ):
-        document = export.build_document(tmp_path / "absent.db", now=100, capacity_snapshot=_snap())
+        document = export.build_document(tmp_path / "absent.db", now=100)
     assert all(challenger is None for challenger in document["exploration"]["challengers"].values())
 
 
@@ -190,11 +113,279 @@ def test_challenger_excludes_the_thresholded_consumer_winner(tmp_path: Path) -> 
             "INSERT INTO route_weights (version, task_type, agent, posterior, n_obs, success_rate) "
             "VALUES (2, 'implement', 'cursor', 0.5, 100, 0.5)"
         )
-    document = export.build_document(
-        database, now=2 * export.WEEK_SECONDS, capacity_snapshot=_snap()
-    )
+    document = export.build_document(database, now=2 * export.WEEK_SECONDS)
     assert document["task_types"]["implement"]["ranking"][0]["agent"] == "codex"
     assert document["exploration"]["challengers"]["implement"] == "gemini"
+
+
+def test_route_weights_schema_stays_v1_for_workflows_consumer() -> None:
+    """Hosted keepalive rejects any schema other than orchestrator.route-weights/v1."""
+    assert export.SCHEMA == "orchestrator.route-weights/v1"
+    assert export.CAPACITY_SCHEMA == "orchestrator.route-weights-capacity/v1"
+
+
+def test_build_document_loads_capacity_via_capacity_build(tmp_path: Path, monkeypatch) -> None:
+    """Reuse capacity.build in-process (no CLI); emit one capacity entry per agent."""
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    calls: list[int] = []
+    fixture = _capacity_fixture(codex_state=capacity.SHED, generated_at=42)
+
+    def fake_build():
+        calls.append(1)
+        return fixture
+
+    monkeypatch.setattr(export.capacity, "build", fake_build)
+
+    document = export.build_document(database, now=100)
+    assert calls == [1]
+    assert document["schema"] == export.SCHEMA
+    assert document["capacity_schema"] == export.CAPACITY_SCHEMA
+    assert document["capacity"]["codex"]["state"] == capacity.SHED
+    assert document["capacity"]["codex"]["observed_at"] == 42
+    assert set(document["capacity"]) == set(capacity.AGENTS)
+
+
+def test_export_ignores_stale_capacity_out_artifact(tmp_path: Path, monkeypatch) -> None:
+    """A readable but stale capacity.OUT must not suppress a live state change."""
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    out_dir = tmp_path / "handoff"
+    out_dir.mkdir()
+    stale_out = out_dir / "capacity.json"
+    stale_out.write_text(
+        json.dumps(_capacity_fixture(codex_state=capacity.OK, generated_at=1)),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(export.capacity, "OUT", stale_out)
+    live = _capacity_fixture(codex_state=capacity.SHED, generated_at=99)
+    monkeypatch.setattr(export.capacity, "build", lambda: live)
+
+    document = export.build_document(database, now=100)
+    assert document["capacity"]["codex"]["state"] == capacity.SHED
+    assert document["capacity"]["codex"]["observed_at"] == 99
+    # Pin: one call site loads via the helper; never read the handoff artifact.
+    source = Path(export.__file__).read_text(encoding="utf-8")
+    assert source.count("= _current_capacity_snapshot()") == 1
+    assert "OUT.read_text" not in source
+
+
+def test_capacity_block_has_one_entry_per_configured_agent(tmp_path: Path) -> None:
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    snapshot = _capacity_fixture()
+    document = export.build_document(database, now=100, capacity_snapshot=snapshot)
+
+    assert document["schema"] == export.SCHEMA
+    assert document["capacity_schema"] == export.CAPACITY_SCHEMA
+    assert set(document["capacity"]) == set(capacity.AGENTS)
+    for agent, entry in document["capacity"].items():
+        assert set(entry) == {"state", "window", "observed_at"}
+        assert entry["window"] == capacity.AGENTS[agent]["window"]
+        assert entry["observed_at"] == snapshot["generated_at"]
+
+
+def test_capacity_states_are_copied_verbatim_from_the_snapshot(tmp_path: Path) -> None:
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    snapshot = _capacity_fixture(codex_state=capacity.SHED)
+    document = export.build_document(database, capacity_snapshot=snapshot)
+    assert document["capacity"]["codex"]["state"] == capacity.SHED
+
+
+def test_capacity_block_coerces_malformed_agent_fields(tmp_path: Path) -> None:
+    """Null/non-string state, bad observed_at, and non-dict rows must not leak."""
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    snapshot = _capacity_fixture()
+    snapshot["generated_at"] = "not-an-int"
+    snapshot["agents"]["codex"] = {"state": None, "window": ""}
+    snapshot["agents"]["claude"] = "not-a-row"
+    document = export.build_document(database, capacity_snapshot=snapshot)
+    assert document["capacity"]["codex"]["state"] == capacity.UNKNOWN
+    assert document["capacity"]["codex"]["window"] == capacity.AGENTS["codex"]["window"]
+    assert document["capacity"]["codex"]["observed_at"] == 0
+    assert document["capacity"]["claude"]["state"] == capacity.UNKNOWN
+    assert document["capacity"]["claude"]["window"] == capacity.AGENTS["claude"]["window"]
+
+
+def test_capacity_states_use_capacity_agent_state_vocabulary(tmp_path: Path) -> None:
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    document = export.build_document(database, capacity_snapshot=_capacity_fixture())
+    observed = {entry["state"] for entry in document["capacity"].values()}
+    assert observed <= capacity.AGENT_STATES
+    assert capacity.AGENT_STATES == frozenset({"ok", "warn", "shed", "unknown"})
+
+
+def test_capacity_block_rejects_nonempty_unknown_state() -> None:
+    snapshot = _capacity_fixture(codex_state="paused")
+    assert export._capacity_block(snapshot)["codex"]["state"] == capacity.UNKNOWN
+
+
+def test_capacity_block_handles_infinite_timestamp() -> None:
+    for timestamp in (float("inf"), float("-inf"), "Infinity"):
+        snapshot = _capacity_fixture()
+        snapshot["generated_at"] = timestamp
+        assert export._capacity_block(snapshot)["codex"]["observed_at"] == 0
+
+
+def test_export_selftest_handles_all_initial_capacity_states(monkeypatch) -> None:
+    for state in sorted(capacity.AGENT_STATES):
+        monkeypatch.setattr(export.capacity, "build", lambda: _capacity_fixture(codex_state=state))
+        export._selftest()
+
+
+def test_v1_key_values_byte_identical_with_and_without_capacity_block(tmp_path: Path) -> None:
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    snapshot = _capacity_fixture()
+    without = export.build_document(database, now=100, include_capacity=False)
+    with_block = export.build_document(database, now=100, capacity_snapshot=snapshot)
+    assert _v1_bytes(without) == _v1_bytes(with_block)
+
+
+def test_capacity_state_change_triggers_write_document(tmp_path: Path) -> None:
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    target = tmp_path / "route-weights.json"
+    ok_snapshot = _capacity_fixture(codex_state=capacity.OK)
+    shed_snapshot = _capacity_fixture(codex_state=capacity.SHED)
+
+    assert (
+        export.write_document(
+            target, export.build_document(database, capacity_snapshot=ok_snapshot)
+        )
+        is True
+    )
+    assert (
+        export.write_document(
+            target, export.build_document(database, capacity_snapshot=shed_snapshot)
+        )
+        is True
+    )
+
+
+def test_legacy_export_without_capacity_is_republished_when_capacity_is_added(
+    tmp_path: Path,
+) -> None:
+    """A pre-capacity exports/route-weights artifact must publish once capacity lands."""
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    target = tmp_path / "route-weights.json"
+    legacy = export.build_document(database, now=100, include_capacity=False)
+    with_capacity = export.build_document(database, now=100, capacity_snapshot=_capacity_fixture())
+
+    assert export.write_document(target, legacy) is True
+    assert "capacity" not in json.loads(target.read_text(encoding="utf-8"))
+    assert export.write_document(target, with_capacity) is True
+    published = json.loads(target.read_text(encoding="utf-8"))
+    assert set(published["capacity"]) == set(capacity.AGENTS)
+
+
+def test_semantic_compare_keeps_state_and_window_drops_observed_at() -> None:
+    """Publish when state/window move; tick-only observed_at refresh stays silent."""
+    base = {
+        "schema": export.SCHEMA,
+        "generated_at": "2026-10-16T00:00:00Z",
+        "capacity": {
+            "codex": {"state": capacity.OK, "window": "5h", "observed_at": 100},
+        },
+    }
+    later_observed = {
+        **base,
+        "generated_at": "2026-10-16T01:00:00Z",
+        "capacity": {
+            "codex": {"state": capacity.OK, "window": "5h", "observed_at": 200},
+        },
+    }
+    shed = {
+        **base,
+        "capacity": {
+            "codex": {"state": capacity.SHED, "window": "5h", "observed_at": 100},
+        },
+    }
+    window = {
+        **base,
+        "capacity": {
+            "codex": {"state": capacity.OK, "window": "1h", "observed_at": 100},
+        },
+    }
+    assert export._semantic_for_compare(base) == export._semantic_for_compare(later_observed)
+    assert export._semantic_for_compare(base) != export._semantic_for_compare(shed)
+    assert export._semantic_for_compare(base) != export._semantic_for_compare(window)
+
+
+def test_capacity_observed_at_only_change_does_not_trigger_write_document(tmp_path: Path) -> None:
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    target = tmp_path / "route-weights.json"
+    first = _capacity_fixture(codex_state=capacity.OK, generated_at=1_700_000_000)
+    second = _capacity_fixture(codex_state=capacity.OK, generated_at=1_800_000_000)
+
+    assert (
+        export.write_document(
+            target, export.build_document(database, now=100, capacity_snapshot=first)
+        )
+        is True
+    )
+    assert (
+        export.write_document(
+            target, export.build_document(database, now=100, capacity_snapshot=second)
+        )
+        is False
+    )
+
+
+def test_capacity_window_change_triggers_write_document(tmp_path: Path) -> None:
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    target = tmp_path / "route-weights.json"
+    first = _capacity_fixture()
+    second = _capacity_fixture()
+    second["agents"] = {
+        agent: {**entry, "window": "1h" if agent == "codex" else entry["window"]}
+        for agent, entry in second["agents"].items()
+    }
+
+    assert (
+        export.write_document(
+            target, export.build_document(database, now=100, capacity_snapshot=first)
+        )
+        is True
+    )
+    assert (
+        export.write_document(
+            target, export.build_document(database, now=100, capacity_snapshot=second)
+        )
+        is True
+    )
+
+
+def test_malformed_capacity_entry_triggers_rewrite(tmp_path: Path) -> None:
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    target = tmp_path / "route-weights.json"
+    snapshot = _capacity_fixture()
+    document = export.build_document(database, now=100, capacity_snapshot=snapshot)
+    assert export.write_document(target, document) is True
+
+    malformed = json.loads(target.read_text(encoding="utf-8"))
+    malformed["capacity"]["rogue"] = None
+    target.write_text(json.dumps(malformed, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    assert export.write_document(target, document) is True
+    repaired = json.loads(target.read_text(encoding="utf-8"))
+    assert "rogue" not in repaired["capacity"]
+    assert set(repaired["capacity"]) == set(capacity.AGENTS)
+
+
+def test_export_includes_capacity_block(tmp_path: Path) -> None:
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    document = export.build_document(database, capacity_snapshot=_capacity_fixture())
+    assert "capacity" in document
+    assert document.get("capacity_schema") == export.CAPACITY_SCHEMA
 
 
 def test_completed_publication_survives_success_heartbeat_failure(tmp_path, monkeypatch, capsys):
@@ -214,7 +405,6 @@ def test_completed_publication_survives_success_heartbeat_failure(tmp_path, monk
     monkeypatch.setattr(
         export, "publish_document", lambda document: published.append(document) or True
     )
-    monkeypatch.setattr(export, "_load_capacity_snapshot", lambda: _snap())
 
     def heartbeat(capability, event, **kwargs):
         if event == "success":
@@ -223,6 +413,5 @@ def test_completed_publication_survives_success_heartbeat_failure(tmp_path, monk
     monkeypatch.setattr(export.capabilities, "daily_heartbeat", heartbeat)
     assert export.main() == 0
     assert len(published) == 1
-    assert "capacity" in published[0]
     assert (tmp_path / "route-weights-export.json").exists()
     assert "capability heartbeat failed: fixture ledger unavailable" in capsys.readouterr().err

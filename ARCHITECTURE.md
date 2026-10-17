@@ -890,15 +890,17 @@ the hashed sample that once labelled an auto arm was retired on 2026-09-22, when
 labelling every PR it creates `agent:auto`. The policy still picks the replacement; this surface only
 makes the pair observable. (It is not drawn in the loop diagram, which is unchanged.)
 
-**Route-weights export (schema v2).** `route_weights_export.py` publishes the daily fail-open
-snapshot at `exports/route-weights/config/route-weights.json` (`orchestrator.route-weights/v2`).
-Besides the v1 rankings / reserve / exploration block, the document carries a `capacity` map — one
-entry per `capacity.AGENTS` seat with `state`, `window`, and `observed_at` taken from the current
-`capacity.py` snapshot (in-process; never shelled out). Hosted keepalive and intake consumers can
-therefore skip a shed or exhausted seat without a second capacity probe. See
-`docs/ROUTE_WEIGHTS_EXPORT.md` for the contract.
-
 ## The capability layer — what the tool can do, and how a surface finds it
+
+Consumer declarations in `capabilities.KNOWN_GATES` and `KNOWN_DECLARATIONS` name the
+existing acting rail as `file.py:symbol`, including the local handover for external
+workers. Resolution proves that a symbol exists, not that it acted. A declaration
+with no local consumer carries `consumer_missing: true` and an explanation; this
+diagnostic survives reconciliation and grants no admission waiver, lifecycle
+promotion, or measured action. The admission gate retains its original grace and
+enforcement rules. `test_declared_consumers_resolve_in_the_tree` guards the reviewed
+bindings against prose and unresolved symbols.
+
 
 This doc described rails and roles and never once said "capability", which let a whole session treat
 the two axes as one. They are orthogonal:
@@ -1521,9 +1523,15 @@ reads `step last ran`. An artifact alone does not prove successful execution, an
 for redirect linking does not prove an authorised apply. Missing or unreadable evidence stays
 UNKNOWN. The snapshot date remains visible; a newer heartbeat marks an old finding as history.
 No alarm is cleared, no regression rule changes, and no owner question or automated action is added.
-Route export (`route-weights-export`, schema v2 with the per-agent `capacity` block) records
-invocation on every daily run and success only after an actual publication;
-rail exercise records invocation without `--record`, which governs exercise verdicts only.
+Route export (`route_weights_export.py`, schema `orchestrator.route-weights/v1` on branch
+`exports/route-weights`) records invocation on every daily run and success only after an actual
+publication; the published JSON keeps every v1 routing key byte-identical and adds additive
+`capacity_schema` (`orchestrator.route-weights-capacity/v1`) plus a `capacity` block with per-agent
+`state`, `window`, and `observed_at` from the capacity snapshot's own `generated_at` (no token or
+account fields). Semantic change detection includes capacity `state` and `window` but not
+`observed_at` alone, so a shed or recovered seat republishes without touching posteriors or
+`exploration.policy_version`. Rail exercise records invocation without
+`--record`, which governs exercise verdicts only.
 Dedup: firing history and its ledger-only silence annotation already existed; the weekly reader
 and independent cadence evidence were missing. Existing heartbeat repairs from main are retained.
 

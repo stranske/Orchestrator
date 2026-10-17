@@ -28,23 +28,10 @@ import feedback
 import provision
 import router
 
-SCHEMA_V1 = "orchestrator.route-weights/v1"
-SCHEMA = "orchestrator.route-weights/v2"
-# Historical commits on exports/route-weights remain v1 until republished; consumers
-# and joiners that read the branch must accept both until the cadence has caught up.
-KNOWN_SCHEMAS = frozenset({SCHEMA_V1, SCHEMA})
-# v1 top-level keys retained so a reader that only checks key presence still validates.
-V1_DOCUMENT_KEYS = frozenset(
-    {
-        "schema",
-        "generated_at",
-        "source_version",
-        "min_observations",
-        "task_types",
-        "reserve",
-        "exploration",
-    }
-)
+# Workflows agent_delegation_policy.js accepts only this string; bumping to /v2
+# would fail-open away from learned weights. Capacity is additive via CAPACITY_SCHEMA.
+SCHEMA = "orchestrator.route-weights/v1"
+CAPACITY_SCHEMA = "orchestrator.route-weights-capacity/v1"
 DEFAULT_MIN_OBSERVATIONS = 20
 EXPORT_BRANCH = "exports/route-weights"
 EXPORT_PATH = Path("config/route-weights.json")
@@ -66,60 +53,6 @@ def _now() -> str:
     return (
         dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     )
-
-
-def _load_capacity_snapshot() -> dict[str, Any]:
-    """Return the current capacity.py snapshot in-process (never shell out).
-
-    Prefer the tick-written artifact at ``capacity.OUT`` when present and well-formed;
-    otherwise compute a fresh snapshot via ``capacity.build``.
-    """
-    try:
-        data = json.loads(capacity.OUT.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, UnicodeError):
-        data = None
-    if isinstance(data, dict) and isinstance(data.get("agents"), dict):
-        return data
-    return capacity.build()
-
-
-def _capacity_block(snapshot: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
-    """Project per-agent state/window/observed_at for the public export.
-
-    One entry per configured ``capacity.AGENTS`` seat. Token counts, costs and
-    account identifiers are deliberately omitted.
-    """
-    snap = _load_capacity_snapshot() if snapshot is None else snapshot
-    agents = snap.get("agents") if isinstance(snap.get("agents"), dict) else {}
-    observed_raw = snap.get("generated_at")
-    try:
-        observed_at = int(observed_raw)
-    except (TypeError, ValueError):
-        observed_at = 0
-    block: dict[str, dict[str, Any]] = {}
-    for agent, cfg in capacity.AGENTS.items():
-        row = agents.get(agent) if isinstance(agents.get(agent), dict) else {}
-        state = row.get("state")
-        if not isinstance(state, str) or not state:
-            state = capacity.UNKNOWN
-        window = row.get("window")
-        if not isinstance(window, str) or not window:
-            window = str(cfg.get("window") or "")
-        block[agent] = {
-            "state": state,
-            "window": window,
-            "observed_at": observed_at,
-        }
-    return block
-
-
-def _semantic_payload(document: dict[str, Any]) -> dict[str, Any]:
-    """Document fields that decide whether a republish is warranted.
-
-    Everything except ``generated_at`` — including the ``capacity`` block — so a
-    change in any agent ``state``, ``window``, or ``observed_at`` triggers publication.
-    """
-    return {key: value for key, value in document.items() if key != "generated_at"}
 
 
 def _read_rows(db_path: Path) -> tuple[int, list[sqlite3.Row]]:
@@ -161,6 +94,46 @@ def _ranking(rows: list[sqlite3.Row], minimum: int) -> list[dict[str, Any]]:
         if int(row["n_obs"]) >= minimum
     ]
     return sorted(ranking, key=lambda row: (-row["posterior"], -row["success_rate"], row["agent"]))
+
+
+def _current_capacity_snapshot() -> dict[str, Any]:
+    """Fresh in-process capacity snapshot for the export.
+
+    Always call ``capacity.build()`` — never the tick-written handoff JSON. That
+    artifact can lag a shed-marker flip or pool change; a standalone export must
+    observe current inputs so a state change still triggers publication.
+    """
+    return capacity.build()
+
+
+def _capacity_block(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    """Per-agent capacity state for remote consumers (state and window only)."""
+    if snapshot is None:
+        snapshot = _current_capacity_snapshot()
+    agents_raw = snapshot.get("agents")
+    agents = agents_raw if isinstance(agents_raw, dict) else {}
+    observed_raw = snapshot.get("generated_at")
+    try:
+        observed_at = int(observed_raw) if observed_raw is not None else 0
+    except (TypeError, ValueError, OverflowError):
+        observed_at = 0
+    block: dict[str, Any] = {}
+    for agent in sorted(capacity.AGENTS):
+        raw = agents.get(agent)
+        row = raw if isinstance(raw, dict) else {}
+        cfg = capacity.AGENTS[agent]
+        state = row.get("state")
+        if not isinstance(state, str) or state not in capacity.AGENT_STATES:
+            state = capacity.UNKNOWN
+        window = row.get("window")
+        if not isinstance(window, str) or not window:
+            window = str(cfg.get("window") or "")
+        block[agent] = {
+            "state": state,
+            "window": window,
+            "observed_at": observed_at,
+        }
+    return block
 
 
 def _exploration_block(
@@ -228,6 +201,7 @@ def build_document(
     *,
     now: int | None = None,
     capacity_snapshot: dict[str, Any] | None = None,
+    include_capacity: bool = True,
 ) -> dict[str, Any]:
     """Build a snapshot with repeatable samples for this week and weight version."""
     if minimum < 1:
@@ -277,14 +251,18 @@ def build_document(
         "reserve": reserve,
         "exploration": _exploration_block(version, by_task, task_types, timestamp),
     }
+    if include_capacity:
+        document["capacity_schema"] = CAPACITY_SCHEMA
+        document["capacity"] = _capacity_block(capacity_snapshot)
     # Bind the tag to the exported policy, including rankings and the sampled
-    # challengers. Capacity is operational state, not policy identity — attach it
-    # after the digest so a seat flip does not rewrite exploration.policy_version.
-    # A timestamp-only refresh retains the same join identity.
-    semantic = _semantic_payload(document)
-    digest = hashlib.sha256(_canonical_bytes(semantic)).hexdigest()
+    # challengers. Capacity is additive under v1 and must not move this identity.
+    routing_semantic = {
+        key: value
+        for key, value in document.items()
+        if key not in ("generated_at", "capacity", "capacity_schema")
+    }
+    digest = hashlib.sha256(_canonical_bytes(routing_semantic)).hexdigest()
     document["exploration"]["policy_version"] = f"route-exploration/v1:{digest}"
-    document["capacity"] = _capacity_block(capacity_snapshot)
     return document
 
 
@@ -292,19 +270,37 @@ def _canonical_bytes(document: dict[str, Any]) -> bytes:
     return (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
-def write_document(path: Path, document: dict[str, Any]) -> bool:
-    """Write only semantic changes, retaining the earlier timestamp on an unchanged export.
+def _semantic_for_compare(document: dict[str, Any]) -> dict[str, Any]:
+    """Compare export semantics without timestamp-only churn.
 
-    The change detector compares the full semantic payload, including ``capacity``,
-    so any agent ``state``, ``window``, or ``observed_at`` change republishes.
+    Dictionary capacity rows drop ``observed_at`` so a tick-only refresh does not
+    republish. Non-dict or otherwise malformed rows are kept so the next write
+    can repair them instead of comparing as equal after they were filtered out.
     """
+    semantic = {key: value for key, value in document.items() if key != "generated_at"}
+    capacity_block = semantic.get("capacity")
+    if isinstance(capacity_block, dict):
+        compared: dict[str, Any] = {}
+        for agent, entry in capacity_block.items():
+            if isinstance(entry, dict):
+                compared[agent] = {
+                    key: value for key, value in entry.items() if key != "observed_at"
+                }
+            else:
+                compared[agent] = entry
+        semantic["capacity"] = compared
+    return semantic
+
+
+def write_document(path: Path, document: dict[str, Any]) -> bool:
+    """Write only semantic changes, retaining the earlier timestamp on an unchanged export."""
     if path.exists():
         try:
             existing = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             existing = None
         if isinstance(existing, dict):
-            if _semantic_payload(existing) == _semantic_payload(document):
+            if _semantic_for_compare(existing) == _semantic_for_compare(document):
                 return False
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
@@ -392,35 +388,20 @@ def _fixture_db(path: Path) -> None:
         connection.close()
 
 
-def _fixture_capacity_snapshot(
-    *,
-    generated_at: int = 1_700_000_000,
-    states: dict[str, str] | None = None,
-) -> dict[str, Any]:
-    """Stable capacity snapshot for selftests and unit tests."""
-    overrides = states or {}
-    agents = {
-        agent: {
-            "state": overrides.get(agent, capacity.OK),
-            "window": cfg["window"],
-        }
-        for agent, cfg in capacity.AGENTS.items()
-    }
-    return {"generated_at": generated_at, "agents": agents}
-
-
 def _selftest() -> None:
     with tempfile.TemporaryDirectory(prefix="route-weights-export-") as directory:
         root = Path(directory)
         db_path = root / "fixture.db"
         _fixture_db(db_path)
-        snap = _fixture_capacity_snapshot()
-        document = build_document(db_path, minimum=20, capacity_snapshot=snap)
+        fixed_now = 100
+        capacity_snapshot = capacity.build()
+        document = build_document(
+            db_path, minimum=20, now=fixed_now, capacity_snapshot=capacity_snapshot
+        )
         assert document["schema"] == SCHEMA, document
+        assert document["capacity_schema"] == CAPACITY_SCHEMA, document
+        assert set(document["capacity"]) == set(capacity.AGENTS), document
         assert document["source_version"] == 2, document
-        assert V1_DOCUMENT_KEYS.issubset(document), sorted(document)
-        assert "capacity" in document, document
-        assert set(document["capacity"]) == set(capacity.AGENTS), document["capacity"]
         ranking = document["task_types"]["implement"]["ranking"]
         assert [row["agent"] for row in ranking] == ["codex"], ranking
         assert all(row["n_obs"] >= 20 for row in ranking), ranking
@@ -431,11 +412,48 @@ def _selftest() -> None:
         output = root / "route-weights-export.json"
         assert write_document(output, document) is True
         assert (
-            write_document(output, build_document(db_path, minimum=20, capacity_snapshot=snap))
+            write_document(
+                output,
+                build_document(
+                    db_path, minimum=20, now=fixed_now, capacity_snapshot=capacity_snapshot
+                ),
+            )
             is False
         )
-        shed = _fixture_capacity_snapshot(states={"codex": capacity.SHED})
-        assert write_document(output, build_document(db_path, minimum=20, capacity_snapshot=shed))
+        # State and window each republish independently; observed_at alone does not.
+        shed_snapshot = json.loads(json.dumps(capacity_snapshot))
+        shed_agent = next(iter(capacity.AGENTS))
+        current_state = shed_snapshot["agents"][shed_agent]["state"]
+        shed_snapshot["agents"][shed_agent]["state"] = (
+            capacity.OK if current_state == capacity.SHED else capacity.SHED
+        )
+        assert (
+            write_document(
+                output,
+                build_document(db_path, minimum=20, now=fixed_now, capacity_snapshot=shed_snapshot),
+            )
+            is True
+        )
+        window_snapshot = json.loads(json.dumps(shed_snapshot))
+        window_snapshot["agents"][shed_agent]["window"] = "1h"
+        assert (
+            write_document(
+                output,
+                build_document(
+                    db_path, minimum=20, now=fixed_now, capacity_snapshot=window_snapshot
+                ),
+            )
+            is True
+        )
+        observed_only = json.loads(json.dumps(window_snapshot))
+        observed_only["generated_at"] = int(observed_only.get("generated_at") or 0) + 3600
+        assert (
+            write_document(
+                output,
+                build_document(db_path, minimum=20, now=fixed_now, capacity_snapshot=observed_only),
+            )
+            is False
+        )
     print("route_weights_export.py selftest: OK")
 
 

@@ -11,7 +11,7 @@ The document is versioned and has this contract:
 
 ```json
 {
-  "schema": "orchestrator.route-weights/v2",
+  "schema": "orchestrator.route-weights/v1",
   "generated_at": "2026-09-03T00:00:00Z",
   "source_version": 61,
   "min_observations": 20,
@@ -22,12 +22,22 @@ The document is versioned and has this contract:
     }
   },
   "reserve": {"implement": [{"agent": "claude", "posterior": 0.58, "n_obs": 31, "success_rate": 0.55}]},
+  "capacity_schema": "orchestrator.route-weights-capacity/v1",
   "capacity": {
-    "codex": {"state": "ok", "window": "5h", "observed_at": 1700000000},
-    "claude": {"state": "ok", "window": "5h+weekly", "observed_at": 1700000000}
+    "codex": {"state": "ok", "window": "5h", "observed_at": 1725321600}
   }
 }
 ```
+
+`capacity_schema` and `capacity` are additive under the v1 route-weights schema so the Workflows
+consumer (`agent_delegation_policy.js`, which accepts only `orchestrator.route-weights/v1`) keeps
+reading posteriors. The block has one entry per configured agent in `capacity.AGENTS`, with `state`
+copied verbatim from that tick's `capacity.build()` snapshot (`ok`, `warn`, `shed`, or `unknown`),
+the agent's configured `window`, and `observed_at` set to the capacity snapshot's `generated_at`
+(not the export's `generated_at`). Publish change detection compares `state` and `window` but
+ignores `observed_at` alone so an unchanged pool state does not republish. Token counts, costs, and
+account identifiers are intentionally omitted. v1 routing keys are byte-identical with or without
+the capacity block; `exploration.policy_version` is likewise unchanged when only capacity is added.
 
 Only the latest `route_weights` version is read. The public `task_types` keys are the consumer
 contract: `implement`, `review`, `testgen`, `mechanical`, `codemod`, and `cross_repo`; each is also
@@ -35,18 +45,9 @@ checked against `router.ROUTE_TABLE`. Rankings contain only rows with `n_obs >= 
 `evidence_ok` is false when no non-reserve row meets that threshold. `claude` is never in a public
 ranking: it is a reserve seat and appears only under `reserve`, which a consumer must ignore.
 
-Schema `orchestrator.route-weights/v2` keeps every v1 top-level key and adds `capacity`: one entry
-per configured `capacity.AGENTS` seat with that seat's `state` (`ok` / `warn` / `shed` / `unknown`),
-`window`, and `observed_at` (epoch seconds from the capacity snapshot). Token counts, costs and
-account identifiers are never published. The exporter reads the current snapshot in-process from
-`capacity.py` (the tick-written `capacity.OUT` when present, else `capacity.build`); it does not
-shell out. A change in any agent `state`, `window`, or `observed_at` is a semantic change and
-triggers republication; a timestamp-only refresh of `generated_at` does not.
-
 The consumer must fail open: on an unavailable, malformed, schema-incompatible, stale, or
 `evidence_ok: false` task entry, retain its own current static delegation policy. An empty ranking
-is not a zero score or an instruction to choose a fallback agent. A v1-only reader that rejects
-schema `v2` fails open until it is updated to accept the additive `capacity` block.
+is not a zero score or an instruction to choose a fallback agent.
 
 Publishing is deliberately double-gated. `--publish` has no remote effect unless
 `ORCH_ROUTE_WEIGHTS_PUBLISH=1`; then the exporter uses `provision.ensure_canonical` for
