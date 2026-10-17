@@ -460,7 +460,7 @@ def _selftest() -> None:
                 yield str(root / "repo")
 
             snapshot = {"number": 1, "headRefOid": sha, "body": AC_BODY}
-            common = dict(
+            common: dict[str, Any] = dict(
                 db=feedback.DB_PATH,
                 path=root / "live.json",
                 now=now + 1,
