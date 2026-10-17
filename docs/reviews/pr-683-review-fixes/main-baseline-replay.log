@@ -1,0 +1,90 @@
+Unchanged origin/main b5de92e82cdcd675c2a576505a7c2609986670e5, extracted via git archive.
+Representative tests selected from the full verifier failure list; same restricted runtime.
+Command: /opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_agent_gh_config.py::test_both_experiment_paths_pin_gh tests/test_agent_workspace_never_broad.py::test_every_evaluator_runs_in_a_scratch_workspace_of_its_own[vibe] tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_backslash tests/test_tick_watchdog.py::test_the_process_table_keeps_whole_command_lines tests/test_propensity_selftest_private_state.py::test_private_live_state_swaps_every_store_trips_on_a_touch_and_restores tests/test_model_tier_resolution.py::test_capacity_sheds_seat_when_model_unresolvable tests/test_build_exec_mirror.py::test_the_documented_copier_builds_through_the_builder
+.FFFFFF                                                                  [100%]
+=================================== FAILURES ===================================
+______ test_every_evaluator_runs_in_a_scratch_workspace_of_its_own[vibe] _______
+/private/tmp/pr683-main-baseline-c5bpn9az/tests/test_agent_workspace_never_broad.py:376: in test_every_evaluator_runs_in_a_scratch_workspace_of_its_own
+    command = exp_abcd._eval_command(agent, "prompt.txt")
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/private/tmp/pr683-main-baseline-c5bpn9az/src/exp_abcd.py:1323: in _eval_command
+    prelude = dispatcher._agent_runtime_prelude(agent) + dispatcher._auth_prelude(agent)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/private/tmp/pr683-main-baseline-c5bpn9az/src/dispatcher.py:797: in _agent_runtime_prelude
+    base = _ensure_agent_runtime(agent)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/private/tmp/pr683-main-baseline-c5bpn9az/src/dispatcher.py:578: in _ensure_agent_runtime
+    _write_vibe_runtime_config(
+/private/tmp/pr683-main-baseline-c5bpn9az/src/dispatcher.py:542: in _write_vibe_runtime_config
+    dst.unlink()
+/opt/anaconda3/lib/python3.12/pathlib.py:1342: in unlink
+    os.unlink(self)
+E   PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/agent-runtime/vibe/.vibe/config.toml'
+___________________ SeatbeltRegexQuotingTests.test_backslash ___________________
+tests/test_seatbelt_regex_quoting.py:39: in test_backslash
+    self.check_root(r"back\slash")
+tests/test_seatbelt_regex_quoting.py:28: in check_root
+    _assert_native_profile_enforces_unusual_allowed_roots(root, name)
+tests/test_seatbelt_regex_quoting.py:151: in _assert_native_profile_enforces_unusual_allowed_roots
+    assert proc.returncode == 0, f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+E   AssertionError: stdout:
+E     stderr: sandbox-exec: sandbox_apply: Operation not permitted
+E
+E   assert 71 == 0
+E    +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath "/Users/te.../.git/hooks/pre-commit"]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\n').returncode
+_______________ test_the_process_table_keeps_whole_command_lines _______________
+tests/test_tick_watchdog.py:266: in test_the_process_table_keeps_whole_command_lines
+    row = _wait_for(lambda: tick_watchdog.snapshot().get(child.pid), "the child in ps")
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_tick_watchdog.py:48: in _wait_for
+    value = predicate()
+            ^^^^^^^^^^^
+tests/test_tick_watchdog.py:266: in <lambda>
+    row = _wait_for(lambda: tick_watchdog.snapshot().get(child.pid), "the child in ps")
+                            ^^^^^^^^^^^^^^^^^^^^^^^^
+src/tick_watchdog.py:149: in snapshot
+    out = subprocess.run(
+/opt/anaconda3/lib/python3.12/subprocess.py:548: in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/subprocess.py:1026: in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+/opt/anaconda3/lib/python3.12/subprocess.py:1953: in _execute_child
+    raise child_exception_type(errno_num, err_msg, err_filename)
+E   PermissionError: [Errno 1] Operation not permitted: 'ps'
+___ test_private_live_state_swaps_every_store_trips_on_a_touch_and_restores ____
+tests/test_propensity_selftest_private_state.py:151: in test_private_live_state_swaps_every_store_trips_on_a_touch_and_restores
+    with cp._private_live_state() as private:
+/opt/anaconda3/lib/python3.12/contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src/capability_propensity.py:5111: in _private_live_state
+    assert not nested, f"the private store {td} sits inside a live root {nested}"
+E   AssertionError: the private store /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/propensity-selftest-p1y78svq sits inside a live root ['/Users/teacher/.codex/orchestrator']
+_______________ test_capacity_sheds_seat_when_model_unresolvable _______________
+tests/test_model_tier_resolution.py:420: in test_capacity_sheds_seat_when_model_unresolvable
+    assert meta["availability"] == "unavailable_model_unresolved", meta
+E   AssertionError: {'policy': 'auth-failed', 'availability': 'unavailable_auth_failed', 'next_action': 'Refresh gemini credentials, then re-check with `python3 capacity.py --json`. The fleet reads the credential FILE, not an interactive login session.'}
+E   assert 'unavailable_auth_failed' == 'unavailable_model_unresolved'
+E
+E     - unavailable_model_unresolved
+E     + unavailable_auth_failed
+____________ test_the_documented_copier_builds_through_the_builder _____________
+tests/test_build_exec_mirror.py:346: in test_the_documented_copier_builds_through_the_builder
+    assert proc.returncode == 0, proc.stderr
+E   AssertionError: mktemp: mkstemp failed on /var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/tmp.cNOtiBTCxu: Operation not permitted
+E     ERR: orch-sync-mirror.sh aborted at line 33 (rc 1): /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2789/test_the_documented_copier_bui0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.
+E
+E   assert 1 == 0
+E    +  where 1 = CompletedProcess(args=['bash', '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-27...the_documented_copier_bui0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.\n').returncode
+tracked test inputs: NOT CHECKED -- /private/tmp/pr683-main-baseline-c5bpn9az is not a git checkout. In the exec mirror that loses nothing: its tests/ IS `git archive HEAD tests`, so every file in it was tracked
+=========================== short test summary info ============================
+FAILED tests/test_agent_workspace_never_broad.py::test_every_evaluator_runs_in_a_scratch_workspace_of_its_own[vibe]
+FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_backslash
+FAILED tests/test_tick_watchdog.py::test_the_process_table_keeps_whole_command_lines
+FAILED tests/test_propensity_selftest_private_state.py::test_private_live_state_swaps_every_store_trips_on_a_touch_and_restores
+FAILED tests/test_model_tier_resolution.py::test_capacity_sheds_seat_when_model_unresolvable
+FAILED tests/test_build_exec_mirror.py::test_the_documented_copier_builds_through_the_builder
+6 failed, 1 passed in 6.69s
+
+EXIT_CODE=1

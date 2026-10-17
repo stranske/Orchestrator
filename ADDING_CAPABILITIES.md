@@ -46,6 +46,18 @@ one most worth learning before the code exists — and returns the other three (
 fixture) as explicit **obligations** rather than silently skipping them, because silently skipping is
 how they got skipped.
 
+### Important capability goals (U-GOALS)
+
+A new important capability adds a `FEATURES` entry in `src/feature_goals.py`, with
+at least one owner-stated goal and a named measure function. When the query does
+not exist, return `Measurement(None, ...)` and print `unmeasured — would need <query>`.
+A missing source is never zero. This is an admission checklist item, not a new
+blocking gate. Weekly switch review always prints the ledger; the daily
+`feature-goals` cadence reports and reconciles one `goal-drift` issue per feature
+after `GOAL_SILENCE_DAYS` of observed drift, closing it on measured recovery.
+It never blocks, pauses or expires a capability. Disable with
+`ORCH_DISABLE_STEPS=feature-goals`; rollback removes the cadence and report call.
+
 ### The ten parts
 
 | # | Requirement | The failure it prevents |
