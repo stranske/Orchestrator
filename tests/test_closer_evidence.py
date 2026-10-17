@@ -492,6 +492,7 @@ def test_native_manual_nonpass_requires_exact_manifest_and_source_run(tmp_path):
                 "id": 900,
                 "run_attempt": 2,
                 "event": "workflow_dispatch",
+                "path": ".github/workflows/agents-verifier.yml",
                 "status": "completed",
                 "conclusion": "success",
                 "head_sha": "e" * 40,
@@ -512,6 +513,7 @@ def test_native_manual_nonpass_requires_exact_manifest_and_source_run(tmp_path):
     assert native["content"]["input_manifest"]["raw"]["sha256"]
     assert native["provenance"]["acceptance_proof"] is False
     assert native["content"]["run"]["head_sha"] == "e" * 40
+    assert native["content"]["run"]["path"] == ".github/workflows/agents-verifier.yml"
 
     wrong_source_stream = io.BytesIO()
     with zipfile.ZipFile(wrong_source_stream, "w") as archive:
@@ -548,6 +550,96 @@ def test_native_manual_nonpass_requires_exact_manifest_and_source_run(tmp_path):
         artifact_fetch=lambda _artifact, **_kw: archive_stream.getvalue(),
     )
     assert bad["sections"]["native_merge_verifier"]["status"] == "unknown"
+
+
+def test_native_pull_request_target_empty_pr_list_matches_trusted_workflow(tmp_path):
+    merge = "d" * 40
+    marker = {
+        "schema": "verifier-corpus-decision/v1",
+        "repo": "acme/repo",
+        "pr": "12",
+        "head_sha": HEAD,
+        "evaluated_sha": merge,
+        "run_id": "901",
+        "run_attempt": "1",
+        "verdict": "NON_PASS",
+    }
+    manifest = {
+        "schema": "workflows-verifier-input-snapshot/v1",
+        "repository": "acme/repo",
+        "pr": 12,
+        "merge_sha": merge,
+        "source_run_id": "901",
+    }
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w") as archive:
+        archive.writestr("input-snapshot.json", json.dumps(manifest))
+        archive.writestr("comparison.json", json.dumps({"findings": []}))
+        archive.writestr("comparison-comment.md", "No findings")
+        archive.writestr("verifier-context.md", "Context")
+        archive.writestr("verifier-pr-diff.patch", "diff --git a/a b/a\n")
+
+    def api(endpoint, **kwargs):
+        if "/compare/" in endpoint:
+            return base_api(endpoint)
+        if "/actions/runs?" in endpoint:
+            return {"workflow_runs": []}
+        if endpoint.endswith("/runs/901"):
+            return {
+                "id": 901,
+                "run_attempt": 1,
+                "event": "pull_request_target",
+                "path": ".github/workflows/agents-verifier.yml",
+                "status": "completed",
+                "conclusion": "success",
+                "head_sha": HEAD,
+                "repository": {"full_name": "acme/repo"},
+                "pull_requests": [],
+            }
+        if endpoint.endswith("/runs/901/artifacts?per_page=100"):
+            return {"artifacts": [{"id": 90, "name": "comparison-results-901", "expired": False}]}
+        raise AssertionError(endpoint)
+
+    packet = collect(
+        tmp_path,
+        snapshot(merge=merge, verifier=marker),
+        api=api,
+        artifact_fetch=lambda _artifact, **_kw: stream.getvalue(),
+    )
+    native = packet["sections"]["native_merge_verifier"]
+    assert native["status"] == "complete"
+    assert native["content"]["run"]["event"] == "pull_request_target"
+    assert native["content"]["run"]["path"] == ".github/workflows/agents-verifier.yml"
+    assert native["content"]["artifacts"][0]["run_attempt"] == 1
+    assert native["provenance"]["acceptance_proof"] is False
+
+    def wrong_workflow(endpoint, **kwargs):
+        result = api(endpoint, **kwargs)
+        if endpoint.endswith("/runs/901"):
+            result["path"] = ".github/workflows/untrusted.yml"
+        return result
+
+    rejected = collect(
+        tmp_path / "wrong-workflow",
+        snapshot(merge=merge, verifier=marker),
+        api=wrong_workflow,
+        artifact_fetch=lambda _artifact, **_kw: stream.getvalue(),
+    )
+    assert rejected["sections"]["native_merge_verifier"]["status"] == "unknown"
+
+    def wrong_event(endpoint, **kwargs):
+        result = api(endpoint, **kwargs)
+        if endpoint.endswith("/runs/901"):
+            result["event"] = "pull_request"
+        return result
+
+    rejected_event = collect(
+        tmp_path / "wrong-event",
+        snapshot(merge=merge, verifier=marker),
+        api=wrong_event,
+        artifact_fetch=lambda _artifact, **_kw: stream.getvalue(),
+    )
+    assert rejected_event["sections"]["native_merge_verifier"]["status"] == "unknown"
 
 
 def test_assigned_issue_alias_uses_delivery_pr_for_diff_and_ci_identity(tmp_path):

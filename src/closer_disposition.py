@@ -249,7 +249,8 @@ def _native_resolution_index(packet: dict, root: Path, verifier: Mapping[str, An
         or provenance.get("evaluated_sha") != verifier.get("evaluated_sha")
         or str(run.get("id")) != str(verifier.get("run_id"))
         or str(run.get("run_attempt")) != str(verifier.get("run_attempt"))
-        or run.get("event") != "workflow_dispatch"
+        or run.get("event") not in {"pull_request_target", "workflow_dispatch"}
+        or run.get("path") != ".github/workflows/agents-verifier.yml"
         or run.get("status") != "completed"
         or manifest.get("merge_sha") != verifier.get("evaluated_sha")
     ):

@@ -1181,14 +1181,15 @@ def _native_verifier_section(
         if (
             str(run.get("id")) != run_id
             or str(run.get("run_attempt")) != attempt
-            or str(run.get("event")) != "workflow_dispatch"
+            or str(run.get("event")) not in {"workflow_dispatch", "pull_request_target"}
+            or str(run.get("path")) != ".github/workflows/agents-verifier.yml"
             or run.get("status") != "completed"
             or actual_repo.lower() != repo.lower()
         ):
             return _section(
                 "unknown",
                 {"verifier": marker},
-                reason="native run repository/event/attempt identity mismatch",
+                reason="native run repository/workflow/event/attempt identity mismatch",
             )
         if time.monotonic() >= deadline:
             return _section("pending", {"verifier": marker}, reason="collection deadline reached")
@@ -1314,7 +1315,7 @@ def _native_verifier_section(
         manifest_ref = manifests[0]["raw"]
         native_run = {
             k: run.get(k)
-            for k in ("id", "run_attempt", "status", "conclusion", "head_sha", "event")
+            for k in ("id", "run_attempt", "status", "conclusion", "head_sha", "event", "path")
         }
         content = {
             "verifier": marker,

@@ -107,10 +107,13 @@ def fixture(tmp_path, *, dispositions=None, native=False, native_report=True):
             return {
                 "id": 34,
                 "run_attempt": 1,
-                "event": "workflow_dispatch",
+                "event": "pull_request_target",
+                "path": ".github/workflows/agents-verifier.yml",
                 "status": "completed",
-                "conclusion": "failure",
+                "conclusion": "success",
                 "repository": {"full_name": "owner/repo"},
+                "head_sha": HEAD,
+                "pull_requests": [],
             }
         if endpoint.endswith("/runs/34/artifacts?per_page=100"):
             return {
@@ -395,7 +398,7 @@ def test_ordinary_nonpass_resolution_preserves_raw_verdict_without_pass_authorit
         }
     ]
     result = check(fx)
-    assert result["status"] == "ordinary_nonpass"
+    assert result["status"] == "ordinary_nonpass", result
     assert result["disposition"]["acceptance_authority"] is False
     assert result["disposition"]["raw_verdicts"][0]["raw"]["verdict"] == "NON_PASS"
     resolution = fx[4]["proposal"]["resolutions"][0]
@@ -452,8 +455,18 @@ def test_native_merge_input_is_resolution_only_and_exact_run_bound(tmp_path):
         }
     ]
     result = check(fx)
-    assert result["status"] == "ordinary_nonpass"
+    assert result["status"] == "ordinary_nonpass", result
     assert result["disposition"]["acceptance_authority"] is False
+    run = section["content"]["run"]
+    root = Path(_ref["path"]).parent.parent
+    run["event"] = "workflow_dispatch"
+    assert (raw_ref["path"], raw_ref["sha256"]) in d._native_resolution_index(packet, root, marker)
+    run["event"] = "push"
+    assert not d._native_resolution_index(packet, root, marker)
+    run["event"] = "pull_request_target"
+    run["path"] = ".github/workflows/unrelated.yml"
+    assert not d._native_resolution_index(packet, root, marker)
+    run["path"] = ".github/workflows/agents-verifier.yml"
     interpretation["proposal"]["resolutions"][0]["proofs"][0]["run_attempt"] = 2
     assert check(fx)["reason"] == "nonpass_resolution_proof_missing"
     bare = fixture(tmp_path / "bare", native=True, native_report=False)
