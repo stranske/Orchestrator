@@ -115,9 +115,10 @@ def test_close_gate_rule_requires_green_merge_sha_ci_and_gate(tmp_path):
 @pytest.mark.parametrize("verdict", ["CONCERNS", "FAIL", "NON_PASS"])
 def test_close_never_overrides_nonpass_with_green_gates(tmp_path, verdict):
     pr, issue, calls, recorded, options = closure_fixture(tmp_path, verdict)
+    options["gate"] = lambda *args: pytest.fail("nonpass must veto gate execution")
     result = supervisor.close_verified_issues(**options)
     assert result["closed"] == 0 and issue["state"] == "open" and not recorded
-    assert "verdict=CONCERNS" in result["items"][0]["reason"]
+    assert result["skips"] == {f"verdict={verdict}": 1}
 
 
 @pytest.mark.parametrize("verdict", ["ERROR", "MALFORMED"])
@@ -148,6 +149,40 @@ def test_close_reports_exact_gate_and_ci_skips(tmp_path, reason):
     options["gate"] = lambda *args: {"result": "UNRUNNABLE", "reason": reason}
     result = supervisor.close_verified_issues(**options)
     assert result["skips"] == {reason: 1} and not recorded
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+@pytest.mark.parametrize("reason", ["verdict=CONCERNS", "no gate commands", "ci not green"])
+def test_close_cli_prints_counted_skip_reasons(tmp_path, monkeypatch, capsys, reason, json_output):
+    pr, issue, calls, recorded, options = closure_fixture(
+        tmp_path, "CONCERNS" if reason == "verdict=CONCERNS" else "MISSING"
+    )
+    pr["closingIssuesReferences"]["nodes"].append(
+        {"number": 8, "repository": {"nameWithOwner": REPO}}
+    )
+    original = options["gh"]
+
+    def gh(args):
+        source = original(args)
+        return {**source, "number": int(args[1].rsplit("/", 1)[1])}
+
+    options["gh"] = gh
+    options["ci_green"] = lambda *args: reason != "ci not green"
+    options["gate"] = lambda *args: {"result": "UNRUNNABLE", "reason": "no gate commands"}
+    actor = supervisor.close_verified_issues
+    monkeypatch.setattr(supervisor, "_capability_heartbeat", lambda *args: None)
+    monkeypatch.setattr(supervisor, "close_verified_issues", lambda **kwargs: actor(**options))
+
+    assert supervisor.main(["--close-verified"] + (["--json"] if json_output else [])) == 0
+    output = capsys.readouterr().out
+    if json_output:
+        result = json.loads(output)
+        assert result["closed"] == 0 and result["skips"] == {reason: 2}
+    else:
+        assert "supervisor closures: 0; errors=0;" in output
+        assert f'"{reason}": 2' in output
+    assert issue["state"] == "open" and not recorded
+    assert not any("PATCH" in call for call in calls)
 
 
 @pytest.mark.parametrize("change", ["issue", "verdict", "merge", "hold"])

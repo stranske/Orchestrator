@@ -97,13 +97,21 @@ def _closure_verdict(repo: str, pr: dict) -> str:
         body = row["body"]
         decision = verifier_evidence.decision_from_pr(repo, {**pr, "comments": {"nodes": [row]}})
         if decision:
-            return decision["verdict"]
+            if decision["verdict"] == "PASS":
+                return "PASS"
+            # The corpus normalizes provider findings to NON_PASS. Keep the
+            # specific finding for counted operator diagnostics without changing
+            # its veto on the deterministic fallback.
+            for verdict in ("FAIL", "CONCERNS", "NON_PASS"):
+                if verdict in decision["provider_verdicts"]:
+                    return verdict
+            return "NON_PASS"  # Includes a failed CI verdict with PASS providers.
         if verifier_evidence.MARKER in body:
             return "UNKNOWN"
-        if re.search(r"verif(?:ier|ication)", body, re.I) and re.search(
-            r"\b(?:CONCERNS|FAIL|ERROR|NON_PASS)\b", body
-        ):
-            return "NON_PASS"
+        if re.search(r"verif(?:ier|ication)", body, re.I):
+            finding = re.search(r"\b(?:CONCERNS|FAIL|ERROR|NON_PASS)\b", body)
+            if finding:
+                return finding.group()
     return "MISSING"
 
 
@@ -203,8 +211,8 @@ def _close_verified_issue(
         )
     ):
         row["reason"] = "source issue held"
-    elif verdict in {"NON_PASS", "UNKNOWN"}:
-        row["reason"] = "verdict=CONCERNS/FAIL/ERROR or unknown verifier evidence"
+    elif verdict not in {"PASS", "MISSING"}:
+        row["reason"] = f"verdict={verdict}"
     else:
         rule = "verifier PASS" if verdict == "PASS" else "merge-SHA acceptance gates and green CI"
         if verdict != "PASS":
@@ -227,7 +235,7 @@ def _close_verified_issue(
             or edge not in fresh["closingIssuesReferences"]["nodes"]
             or current.get("state") != "open"
             or current.get("updated_at") != issue.get("updated_at")
-            or fresh_verdict in {"NON_PASS", "UNKNOWN"}
+            or fresh_verdict not in {"PASS", "MISSING"}
             or (verdict == "PASS" and fresh_verdict != "PASS")
             or repo.lower() in holds()
             or issue_target.lower() in holds()
