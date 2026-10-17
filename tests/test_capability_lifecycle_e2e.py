@@ -560,6 +560,44 @@ def test_direct_invoke_target_ineligible_refuses_without_writes(
     assert capability_targets.get_binding(version_id, registry_path=registry)["invocations"] == []
 
 
+@pytest.mark.parametrize(
+    ("case", "reason"),
+    [
+        ("expired_ledger", "expired"),
+        ("ledger_kill_switch", "kill_switch"),
+        ("ledger_rollback_pending", "rollback_pending"),
+    ],
+)
+def test_direct_invoke_target_ledger_ineligible_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, reason: str
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    registry, version_id, ledger = ctx["registry"], ctx["version_id"], ctx["ledger"]
+    if case == "expired_ledger":
+        _mutate_json(ledger, "capabilities", ctx["capability_id"], expiry=ctx["now"] - 1)
+    elif case == "ledger_kill_switch":
+        monkeypatch.setenv("ORCH_CAPABILITY_WORKFLOW_ENABLED", "0")
+    else:
+        _mutate_json(
+            ledger, "capabilities", ctx["capability_id"], rollback_pending={"reason": "regressed"}
+        )
+    before = ledger.read_bytes()
+    binding = capability_targets.get_binding(version_id, registry_path=registry)
+    result = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=registry,
+        ledger_path=ledger,
+        target_run_id=f"direct:{case}",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": reason}, result
+    assert capability_targets.get_binding(version_id, registry_path=registry)["invocations"] == []
+    assert "causal_edge" not in result
+    assert ledger.read_bytes() == before
+
+
 def test_invocation_disabled_binding_control_still_returns_binding_disabled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

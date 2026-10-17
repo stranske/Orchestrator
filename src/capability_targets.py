@@ -332,6 +332,49 @@ def _binding_ineligible(
     return None
 
 
+def _ledger_ineligible(
+    binding: Mapping[str, Any],
+    ledger_path: Path | None,
+    now: int,
+    env: Mapping[str, str] | None = None,
+) -> str | None:
+    """Ledger-side refusal for a direct invocation, or None if eligible/absent.
+
+    A direct caller must not bypass ``invoke_compiled_target`` by invoking a
+    binding whose ledger row is expired, kill-switched or rollback-pending.
+    The ledger is read raw (``create=False``, read-only); a missing file or
+    missing row carries no ledger condition, while an unreadable ledger or an
+    unparseable expiry fails closed as ``expired``.
+    """
+    if ledger_path is None or not Path(ledger_path).exists():
+        return None
+    try:
+        import capabilities
+
+        rows = capabilities.load(Path(ledger_path), create=False)
+    except Exception:
+        return "expired"
+    cap = None
+    for row in rows.values():
+        if not isinstance(row, Mapping):
+            continue
+        if row.get("capability_version_id") == binding.get("capability_version_id"):
+            cap = row
+            break
+        if cap is None and row.get("capability_id") == binding.get("capability_id"):
+            cap = row
+    if cap is None:
+        return None
+    if cap.get("rollback_pending"):
+        return "rollback_pending"
+    if capabilities.capability_expired(cap, int(now)):
+        return "expired"
+    env_map: Mapping[str, str] = os.environ if env is None else env
+    if _kill_switch_triggered(cap.get("kill_switch"), env_map):
+        return "kill_switch"
+    return None
+
+
 def invoke_target(
     binding: Mapping[str, Any],
     *,
@@ -350,6 +393,9 @@ def invoke_target(
     if not current or not current.get("enabled"):
         return {"matched": False, "invoked": False, "reason": "binding_disabled"}
     ineligible = _binding_ineligible(current, now, env)
+    if ineligible:
+        return {"matched": True, "invoked": False, "reason": ineligible}
+    ineligible = _ledger_ineligible(current, ledger_path, now, env)
     if ineligible:
         return {"matched": True, "invoked": False, "reason": ineligible}
     if not _matches(current, trigger):
