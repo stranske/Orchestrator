@@ -476,6 +476,13 @@ def publish_document(
                 raise PublicationRefused(
                     f"publish_guard refused: remote {EXPORT_PATH} is not a JSON object"
                 )
+            remote_tasks = loaded.get("task_types", {})
+            if not isinstance(remote_tasks, dict) or not all(
+                isinstance(row, dict) for row in remote_tasks.values()
+            ):
+                raise PublicationRefused(
+                    f"publish_guard refused: remote {EXPORT_PATH} has malformed task_types"
+                )
             published = loaded
         _require_publishable(document, published, allow_evidence_regression, state_dir=state_dir)
         has_local = (

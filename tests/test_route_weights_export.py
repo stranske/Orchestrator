@@ -889,8 +889,10 @@ def test_export_branch_without_artifact_can_publish_fresh(tmp_path, monkeypatch,
     [
         ("not-json\n", "is not valid JSON"),
         ("[]\n", "is not a JSON object"),
+        ('{"task_types": []}\n', "has malformed task_types"),
+        ('{"task_types": {"implement": null}}\n', "has malformed task_types"),
     ],
-    ids=["invalid-json", "non-object"],
+    ids=["invalid-json", "non-object", "task-types-list", "task-types-null-row"],
 )
 def test_export_branch_with_malformed_artifact_refuses(tmp_path, monkeypatch, payload, match):
     """A present but unusable remote artifact must refuse cleanly, not traceback."""

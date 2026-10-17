@@ -1,6 +1,6 @@
 {
-  "collected": 3933,
-  "passed": 3933,
+  "collected": 3935,
+  "passed": 3935,
   "skipped_max": 31,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 52,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "PR #663: floor +2 for malformed remote export artifact refusal cases (invalid JSON + non-object). Prior CI-shaped verify: 3931 collected / 3931 passed+skipped; ceilings unchanged."
+  "note": "PR #663: floor +2 for malformed remote task_types shape refusal cases (list + null row). Prior: 3933 collected for invalid JSON + non-object; ceilings unchanged."
 }
