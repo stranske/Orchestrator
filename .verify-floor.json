@@ -1,6 +1,6 @@
 {
-  "collected": 3935,
-  "passed": 3935,
+  "collected": 3942,
+  "passed": 3942,
   "skipped_max": 31,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 52,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "PR #663: floor +2 for malformed remote task_types shape refusal cases (list + null row). Prior: 3933 collected for invalid JSON + non-object; ceilings unchanged."
+  "note": "PR #663 conflict-only merge of origin/main: src/verify.py measured 3942 collected (+7 recurrence coverage tests). Pass expectation retained; skip/selftest/gate/mypy ceilings unchanged."
 }
