@@ -266,6 +266,34 @@ def test_capacity_state_change_triggers_write_document(tmp_path: Path) -> None:
     )
 
 
+def test_shed_pool_marker_flips_state_within_one_export(tmp_path: Path, monkeypatch) -> None:
+    """A live capacity.build() after touching SHED_DIR/<agent> must shed that seat in-export."""
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    shed_dir = tmp_path / "capacity-shed"
+    shed_dir.mkdir()
+    monkeypatch.setattr(capacity, "SHED_DIR", shed_dir)
+    monkeypatch.setattr(capacity, "_ccusage_active_block", lambda timeout_s=30: None)
+    monkeypatch.setattr(capacity, "_auth_health", lambda agent: None)
+    monkeypatch.setattr(capacity, "_model_health", lambda agent, tier="full": None)
+    monkeypatch.setattr(capacity, "_tier_models", lambda agent: {})
+    monkeypatch.setattr(capacity, "_tier_ceiling", lambda agent: None)
+    monkeypatch.setattr(capacity, "_capability_heartbeat", lambda *a, **k: None)
+
+    before = export.build_document(database, now=100)
+    assert before["capacity"]["codex"]["state"] != capacity.SHED
+    assert set(before["capacity"]) == set(capacity.AGENTS)
+
+    (shed_dir / "codex").touch()
+    after = export.build_document(database, now=100)
+    assert after["capacity"]["codex"]["state"] == capacity.SHED
+    assert after["capacity"]["codex"]["window"] == capacity.AGENTS["codex"]["window"]
+    # Other seats stay non-shed; only the marked pool flips within this export.
+    for agent, entry in after["capacity"].items():
+        if agent != "codex":
+            assert entry["state"] != capacity.SHED, (agent, entry)
+
+
 def test_legacy_export_without_capacity_is_republished_when_capacity_is_added(
     tmp_path: Path,
 ) -> None:
