@@ -1375,6 +1375,8 @@ def main(argv):
     if argv and argv[0] == "pacing-report":
         import pacing_usage
 
+        # report() renders the selected Claude source's age and cap provenance,
+        # including an independently aged ccusage fallback when desktop is stale.
         now = time.time()
         current = {
             "agents": {
