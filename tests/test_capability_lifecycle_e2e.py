@@ -524,6 +524,87 @@ def test_compiled_invocation_expiry_refuses_after_expiry_and_invokes_before(
     )
 
 
+def test_expired_row_never_reaches_workflow_producer_or_consumer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    _mutate_json(ctx["ledger"], "capabilities", ctx["capability_id"], expiry=ctx["now"] - 1)
+    calls: list[str] = []
+
+    def _spy(name: str):
+        def _record(*args, **kwargs):
+            calls.append(name)
+            raise AssertionError(f"{name} must be unreachable for an expired row")
+
+        return _record
+
+    monkeypatch.setattr(compiler, "dry_run_workflow_rail", _spy("dry_run_workflow_rail"))
+    monkeypatch.setattr(compiler, "consume_workflow_output", _spy("consume_workflow_output"))
+    refused = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="workflow:expiry:producer",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert refused == {"matched": True, "invoked": False, "reason": "expired"}, refused
+    binding = capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])
+    direct = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=ctx["registry"],
+        ledger_path=ctx["ledger"],
+        target_run_id="workflow:expiry:direct",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert direct == {"matched": True, "invoked": False, "reason": "expired"}, direct
+    assert calls == []
+    assert (
+        capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])[
+            "invocations"
+        ]
+        == []
+    )
+
+
+def test_compiled_invocation_consults_shared_capability_expired_before_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    seen: list[tuple[object, object]] = []
+    real_predicate = capabilities.capability_expired
+
+    def _forcing_predicate(cap, now=None):
+        seen.append((cap.get("expiry"), now))
+        return True
+
+    monkeypatch.setattr(capabilities, "capability_expired", _forcing_predicate)
+    binding_lookups: list[str] = []
+    real_get_binding = capability_targets.get_binding
+
+    def _spy_get_binding(*args, **kwargs):
+        binding_lookups.append("get_binding")
+        return real_get_binding(*args, **kwargs)
+
+    monkeypatch.setattr(capability_targets, "get_binding", _spy_get_binding)
+    assert real_predicate({"expiry": ctx["now"] + 86400}, ctx["now"]) is False
+    refused = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="workflow:expiry:shared-predicate",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert refused == {"matched": True, "invoked": False, "reason": "expired"}, refused
+    assert seen and seen[0][1] == ctx["now"]
+    assert binding_lookups == []
+
+
 @pytest.mark.parametrize(
     ("case", "reason"),
     [
