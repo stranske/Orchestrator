@@ -312,6 +312,9 @@ def build_document(
         )
 
     version, rows = _read_rows(db_path)
+    # Emit provenance before capacity/exploration work: a later failure must not
+    # hide which Brain supplied this run's evidence.
+    print(f"db={db_path} source_version={version}", file=sys.stderr, flush=True)
     by_task: dict[str, list[sqlite3.Row]] = {task_type: [] for task_type in CONSUMER_TASK_TYPES}
     for row in rows:
         task_type = str(row["task_type"])
@@ -623,7 +626,6 @@ def main() -> int:
         return 0
     db_path = feedback.resolve_db_path(args.feedback_db, args.state_dir)
     document = build_document(db_path, args.min_observations)
-    print(f"db={db_path} source_version={document['source_version']}", file=sys.stderr, flush=True)
     # The run is credited as an INVOCATION before the work, and the `success` below records its
     # result. A success alone moves `last_success` only, so this daily step exported every day from
     # 2026-09-04 while the firing monitor read it as silent since its one consult trial. Guarded: a

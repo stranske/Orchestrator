@@ -667,6 +667,15 @@ def test_feedback_db_path_binding(tmp_path, monkeypatch, capsys, selection):
     assert export.feedback.resolve_db_path(*resolver.call_args.args) == expected.resolve()
     assert f"db={expected.resolve()} source_version=2" in capsys.readouterr().err
 
+    # Each selection must remain diagnosable even if building the snapshot fails.
+    def fail_capacity():
+        raise OSError("capacity snapshot unavailable")
+
+    monkeypatch.setattr(export, "_current_capacity_snapshot", fail_capacity)
+    with pytest.raises(OSError, match="capacity snapshot unavailable"):
+        export.main()
+    assert capsys.readouterr().err == f"db={expected.resolve()} source_version=2\n"
+
 
 def test_cadence_surfaces_export_refusal(tmp_path):
     script = (Path(__file__).resolve().parents[1] / "orchestrate.sh").read_text()
