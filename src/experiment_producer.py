@@ -374,7 +374,8 @@ def named_test(spec):
             from synthesis_promotion import _safe_command
 
             try:
-                if _safe_command(shlex.split(command)):
+                tokens = shlex.split(command)
+                if _safe_command(tokens) and (named_test_paths(command) or "--selftest" in tokens):
                     return command.strip()
             except ValueError:
                 pass

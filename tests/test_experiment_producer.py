@@ -589,12 +589,11 @@ def test_keepalive_label_retries_and_expired_subject_is_released(tmp_path, monke
 
 
 def plan_fixture(monkeypatch, *, shed=True):
-    import capacity
     import research_scheduler
     import router
 
     agents = ["codex", "claude", "cursor", "vibe", "muse"]
-    cap = {"agents": {a: {"state": "ok"} for a in agents}}
+    cap = {"agents": {a: {"state": "shed" if shed and a == "claude" else "ok"} for a in agents}}
     monkeypatch.setattr(
         router, "ROUTE_TABLE", {"implement": {"agents": [{"agent": a} for a in agents]}}
     )
@@ -606,11 +605,6 @@ def plan_fixture(monkeypatch, *, shed=True):
             {"agent": a, "task_type": "implement", "age_days": 100 if a == "claude" else 25}
             for a in agents
         ],
-    )
-    monkeypatch.setattr(
-        capacity,
-        "experiment_pacing",
-        lambda *a: {a: "shed" if shed and a == "claude" else "ok" for a in agents},
     )
     monkeypatch.setattr(research_scheduler, "spare_capacity", lambda *a: {a: 5 for a in agents})
     return cap, dict(
@@ -684,6 +678,7 @@ def test_shed_agent_does_not_latch_firing_launch(tmp_path, monkeypatch, capsys, 
 
 
 def test_no_named_test_is_skipped_before_admission(monkeypatch):
+    assert producer.named_test("`pytest -q`") is None
     cap, kwargs = plan_fixture(monkeypatch)
     plan = producer.build_plan([{"target": "a/b#3", "body": "Implement a feature"}], cap, **kwargs)
     assert plan["planned"] == []

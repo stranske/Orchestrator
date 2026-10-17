@@ -1043,6 +1043,8 @@ def experiment_pacing(snapshot: dict) -> dict[str, str]:
         state = row.get("pacing_state", row.get("pacing", row.get("state", "unknown")))
         if isinstance(state, dict):
             state = state.get("state", "unknown")
+        if row.get("state", "ok") != "ok":
+            state = row["state"]
         pool_ids = [
             key
             for key, definition in execution_profiles.CAPACITY_POOLS.items()
