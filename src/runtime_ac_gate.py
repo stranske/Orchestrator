@@ -545,7 +545,6 @@ def post_merge_summary() -> dict:
         # deliveries" when it means the runner's own switch was off.
         "unrunnable_reasons": dict(sorted(reasons.items())),
     }
-    summary["reopen"] = reopen_policy(os.environ, summary)
     if malformed:
         summary["malformed"] = malformed
     return summary
@@ -554,6 +553,9 @@ def post_merge_summary() -> dict:
 def format_post_merge_summary(section: dict) -> str:
     if section.get("error"):
         return f"runtime-AC post-merge: unmeasured ({section['error']})"
+    # The reopen policy is a function of the switch and this section's executed count; it is
+    # computed here, where it is printed, so the summary dict keeps the shape its readers pin.
+    policy = reopen_policy(os.environ, section)
     reasons = section.get("unrunnable_reasons") or {}
     reason_bit = (
         " (" + ", ".join(f"{name} {count}" for name, count in sorted(reasons.items())) + ")"
@@ -566,11 +568,7 @@ def format_post_merge_summary(section: dict) -> str:
         f"failed {section['failed']}, reopened {section['reopened']}, "
         f"unrunnable {section['unrunnable']}{reason_bit}"
         + (f", malformed {section['malformed']}" if section.get("malformed") else "")
-        + (
-            f", reopen {policy['mode']} (executed {policy['executed']} of {policy['floor']})"
-            if (policy := section.get("reopen"))
-            else ""
-        )
+        + f", reopen {policy['mode']} (executed {policy['executed']} of {policy['floor']})"
     )
 
 

@@ -1359,7 +1359,12 @@ def test_post_merge_recheck_never_reopens_below_ten_executed_rechecks(post_merge
     assert not any("PATCH" in a or "labels[]=runtime-ac:reopened" in a for a in case["calls"])
     summary = gate.post_merge_summary()
     assert summary["reopened"] == 0
-    assert summary["reopen"] == {"mode": "auto", "allowed": False, "executed": 1, "floor": 10}
+    assert gate.reopen_policy({}, summary) == {
+        "mode": "auto",
+        "allowed": False,
+        "executed": 1,
+        "floor": 10,
+    }
     assert "reopen auto (executed 1 of 10)" in gate.format_post_merge_summary(summary)
 
 
@@ -1805,11 +1810,16 @@ def test_post_merge_reopen_opens_on_ten_executed_rechecks(post_merge_case, monke
     assert any("PATCH" in a for a in case["calls"]), "ten executed rechecks open the reopen path"
     summary = gate.post_merge_summary()
     assert summary["reopened"] == 1
-    assert summary["reopen"] == {"mode": "auto", "allowed": True, "executed": 11, "floor": 10}
+    assert gate.reopen_policy({}, summary) == {
+        "mode": "auto",
+        "allowed": True,
+        "executed": 11,
+        "floor": 10,
+    }
     assert "reopen auto (executed 11 of 10)" in gate.format_post_merge_summary(summary)
     # Deliberate break, in place: the kill switch still wins over the evidence.
     monkeypatch.setenv("ORCH_RUNTIME_AC_REOPEN", "0")
-    assert gate.post_merge_summary()["reopen"]["allowed"] is False
+    assert "reopen off (executed 11 of 10)" in gate.format_post_merge_summary(summary)
 
 
 def test_post_merge_legacy_row_without_a_reason_is_rechecked_once(

@@ -1146,8 +1146,6 @@ def _post_merge_rechecks(*, dry_run: bool, gh, now: int, spec_dir=None) -> dict:
     # decision per sweep, from the evidence the event plane holds when the sweep starts.
     budget = runtime_ac_gate.execution_budget(default=3)
     reopen = runtime_ac_gate.reopen_policy(os.environ, runtime_ac_gate.post_merge_summary())
-    summary["budget"] = budget
-    summary["reopen_policy"] = reopen
     candidates = _merged_verifier_candidates()
     for repo, number in sorted(candidates):
         if repo.lower() not in {r.lower() for r in backlog.SUPPORTED_REPOS}:
