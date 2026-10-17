@@ -45,9 +45,12 @@ def test_relearn_ignores_runs_before_the_model_epoch(tmp_path, monkeypatch):
     monkeypatch.setattr(feedback, "MODEL_EPOCHS_PATH", tmp_path / "none.json")
     version = feedback.relearn({"implement": {"gemini": 0.5}}, window_days=3650)
     with feedback._conn() as c:
-        assert c.execute(
-            "SELECT n_obs FROM route_weights WHERE version=? AND agent='gemini'", (version,)
-        ).fetchone()[0] == 3
+        assert (
+            c.execute(
+                "SELECT n_obs FROM route_weights WHERE version=? AND agent='gemini'", (version,)
+            ).fetchone()[0]
+            == 3
+        )
 
 
 def test_judge_reliability_drops_evaluations_before_the_epoch(tmp_path, monkeypatch):
