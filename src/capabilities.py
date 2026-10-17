@@ -1030,11 +1030,30 @@ def _matches_trigger(cap: dict[str, Any], trigger: dict[str, Any]) -> tuple[bool
     return not reasons, reasons
 
 
+def capability_expired(cap: Mapping[str, Any], now: int | None = None) -> bool:
+    """Whether a row's ledger ``expiry`` has been reached at ``now`` (read-only).
+
+    Uses the same boundary as ``_expire_in_place`` (``now >= expiry``) but never
+    mutates the row, so raw ``load(create=False)`` readers can refuse expired
+    rows before any sweep retires them. A present but unparseable ``expiry``
+    fails closed (treated as expired); only a missing expiry is not expired.
+    """
+    expiry = cap.get("expiry")
+    if expiry is None:
+        return False
+    current = int(time.time()) if now is None else int(now)
+    try:
+        return current >= int(expiry)
+    except (TypeError, ValueError):
+        return True
+
+
 def capability_routing_decision(
     trigger: dict[str, Any],
     *,
     capabilities_by_id: dict[str, dict[str, Any]],
     seed: int,
+    now: int | None = None,
 ) -> dict[str, Any]:
     """Select active versions deterministically, independent of execution profile."""
     eligible, rejected = [], {}
@@ -1045,6 +1064,9 @@ def capability_routing_decision(
             continue
         if cap.get("rollback_pending"):
             rejected[capability_id] = ["rollback_pending"]
+            continue
+        if capability_expired(cap, now):
+            rejected[capability_id] = ["expired"]
             continue
         if cap.get("status") != "active":
             rejected[capability_id] = [f"status:{cap.get('status')}"]
