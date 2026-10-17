@@ -85,6 +85,73 @@ def test_conservative_migration_does_not_infer_activation(tmp_path):
     assert migrated["range-lane-rollout"]["expiry"] > 100
 
 
+def test_module_adoption_records_lineage_once_and_refuses_drift(tmp_path):
+    ledger = tmp_path / "capabilities.json"
+    source = tmp_path / "runner.py"
+    source.write_text("def run():\n    return 'one'\n", encoding="utf-8")
+    adopted = capabilities._blank_capability("module-fixture")
+    adopted.update({"entrypoint": "runner.py:run", "status": "wired"})
+    missing = capabilities._blank_capability("missing-source")
+    missing.update({"entrypoint": "missing.py:run", "status": "wired"})
+    capabilities.save({"module-fixture": adopted, "missing-source": missing}, ledger)
+
+    first = capabilities.adopt_module_version(
+        "module-fixture", path=ledger, root=tmp_path, timestamp=7
+    )
+    assert first == {
+        "capability_id": "module-fixture",
+        "adopted": True,
+        "capability_version_id": first["capability_version_id"],
+        "sources": ["runner.py"],
+    }
+    assert capabilities.adopt_module_version("missing-source", path=ledger, root=tmp_path)[
+        "reason"
+    ].startswith("entrypoint does not resolve")
+
+    source.write_text("def run():\n    return 'two'\n", encoding="utf-8")
+    drift = capabilities.adopt_module_version("module-fixture", path=ledger, root=tmp_path)
+    assert drift["adopted"] is False and drift["reason"] == "version_drift"
+    assert drift["current_version_id"] == first["capability_version_id"]
+
+
+def test_routing_requires_a_matching_active_version_and_uses_the_best_prior():
+    def capability(capability_id, **updates):
+        row = capabilities._blank_capability(capability_id)
+        row.update(
+            {
+                "status": "active",
+                "matcher": {"field": "task_type", "value": "implement"},
+                "capability_version_id": f"version:{capability_id}",
+                "artifact_hash": f"hash:{capability_id}",
+                "lifecycle_policy_hash": f"policy:{capability_id}",
+                "routing_prior": {"posterior": 0.5},
+                **updates,
+            }
+        )
+        return row
+
+    decision = capabilities.capability_routing_decision(
+        {"task_type": "implement"},
+        capabilities_by_id={
+            "lower": capability("lower"),
+            "higher": capability("higher", routing_prior={"posterior": 0.9}),
+            "rolling-back": capability("rolling-back", rollback_pending=True),
+            "unversioned": capability("unversioned", artifact_hash=None),
+            "wrong-task": capability(
+                "wrong-task", matcher={"field": "task_type", "value": "review"}
+            ),
+        },
+        seed=23,
+    )
+    assert decision["selected_capability_id"] == "higher"
+    assert decision["eligible_capability_ids"] == ["higher", "lower"]
+    assert decision["rejection_reasons"] == {
+        "rolling-back": ["rollback_pending"],
+        "unversioned": ["immutable_lineage_missing"],
+        "wrong-task": ["task_type_mismatch"],
+    }
+
+
 def test_unknown_heartbeat_fails_closed(tmp_path):
     ledger = tmp_path / "capabilities.json"
     capabilities.save({}, ledger)
