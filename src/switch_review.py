@@ -1631,6 +1631,8 @@ def review(
     carried as an FYI section; a caller that passes none gets no such section."""
     _capability_heartbeat()
 
+    import feature_goals
+
     live_review_clock = now is None
     now = int(now if now is not None else time.time())
     states = switch_states(now=now, env=env, path=path, sources=sources)
@@ -1706,6 +1708,7 @@ def review(
         "mirror_drift": mirror_drift(),
         "fleet_gates": fleet_gates(now=now),
         "firing_regressions": firing_regressions(now=now, path=path),
+        "feature_goals": feature_goals.report(now),
         "exploration_gate": _exploration_gate(),
         # Same rule again: a row retired by its expiry with nobody having looked is a decision that
         # never happened. FYI only, so it is not counted in `raise_count` and raises no question.
@@ -1964,6 +1967,11 @@ def format_report(rep: dict) -> str:
         import value_chain_monitor
 
         lines += value_chain_monitor.format_lines(rep["value_chain"])
+    import feature_goals
+
+    lines += feature_goals.format_lines(
+        rep.get("feature_goals") or feature_goals.drift([], goals=feature_goals.FEATURES)
+    )
     if "issue_size_quality" in rep:
         import issue_size_quality
 
@@ -2137,6 +2145,8 @@ def format_report(rep: dict) -> str:
         lines += credential_redaction.format_lines(exposure)
     if (
         not rep["raise_count"]
+        and not (rep.get("feature_goals") or {}).get("drifting")
+        and not (rep.get("feature_goals") or {}).get("errors")
         and not rep.get("stale_runners")
         and (rep.get("mirror_drift") or {}).get("status") == "ok"
         and not (rep.get("fleet_gates") or {}).get("suspect")

@@ -721,6 +721,24 @@ if _cadence_due redirect-apply-link && _attempt_ok redirect-apply-link; then
     if [[ "$redirect_apply_ok" == "1" ]]; then _mark_success redirect-apply-link; else _mark_fail redirect-apply-link "see $STAMP_DIR/redirect-apply.log"; fi
   fi
 fi
+# Owner goals are independent of a Sunday task firing. Reconcile on recovery too:
+# limiting filing to exit 3 would leave every recovered issue open forever.
+if _cadence_due feature-goals && _attempt_ok feature-goals; then
+  echo "  [cadence] feature goals (daily; report and reconcile goal-drift issues)"
+  feature_goals_rc=0
+  python3 "$ORCH/feature_goals.py" --check > "$STAMP_DIR/feature-goals.log" 2>&1 || feature_goals_rc=$?
+  if [[ "$feature_goals_rc" == "0" || "$feature_goals_rc" == "3" ]]; then
+    if _gh_gate graphql && _gh_gate core; then
+      if python3 "$ORCH/feature_goals.py" --file-drift-issues >> "$STAMP_DIR/feature-goals.log" 2>&1; then
+        _mark_success feature-goals
+      else
+        _mark_fail feature-goals "see $STAMP_DIR/feature-goals.log"
+      fi
+    else echo "  [cadence] feature goal issue reconciliation SKIPPED — gh deferred (stamp untouched)"; fi
+  else
+    _mark_fail feature-goals "see $STAMP_DIR/feature-goals.log"
+  fi
+fi
 if _cadence_due switch-review && _attempt_ok switch-review; then
   # Held switches must be revisited, not forgotten. ORCH_RANGE_LANE_ROLLOUT was turned on
   # 2026-07-08, reviewed 07-15, extended to 07-22 — and then silently ended up off with no recorded
