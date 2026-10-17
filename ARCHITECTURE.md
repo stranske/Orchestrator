@@ -662,10 +662,15 @@ is removed on no winner, discard or 72 hours without a PR; failed label mutation
 
 `orchestrate.sh` has one independent export block: producer defaults ON, research and
 dispatch retain their existing OFF defaults. First deployment persists a UTC trial end
-21 days later; macOS bash 3.2 compares `date -u +%Y%m%d` as integers. After that date,
-the default becomes OFF unless `experiment_producer.py --trial-verdict` has persisted
-`pass`. The verdict requires six merged winner PRs from the trial's launch cohort, with
-unknown merge states preventing a pass. Explicit environment overrides remain available.
+21 days later. The default stays ON through the seven-day winner merge grace and while
+merge states remain unknown; only a persisted `fail` self-expires it. After grace,
+`experiment_producer.py --trial-verdict` polls at most once per UTC day until it persists
+an immutable `pass` or `fail`. Passing requires six winner PRs from the trial's launch
+cohort merged by the grace deadline. Unknown merge states record their count and stay
+`pending` for a later daily retry. Explicit environment overrides remain available.
+The launch switch only stops new experiments: existing producer experiments retain
+collect, judge, delivery, reconciliation and lock-release followup for 30 days, subject
+to the existing frozen-spec, budget, panel and 72-hour no-PR lock limits.
 `switch_review.py --text-out` always prints launched, evaluated (at least two scored arms),
 winner PRs, merged winners, fresh/total cells, and skip counts/reasons, including zeros.
 A local green gate proves this wiring; it does not prove deployment or a passed live trial.

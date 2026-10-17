@@ -1856,13 +1856,11 @@ def producer_followup(
         fleet_shapes.write_json_atomic(delivery_path, delivery)
         return {**result, **delivery}
     age = now - meta.get("launched_ts", (edir / "meta.json").stat().st_mtime)
-    if age >= 72 * 3600:
+    if age >= producer.PRODUCER_LOCK_MAX_HOURS * 3600:
         delivery.update(status="discarded", reason="72h_without_pr")
         producer.release_lock(edir, target, delivery, gh_fn=gh_fn, now=now)
         fleet_shapes.write_json_atomic(delivery_path, delivery)
         return {**result, **delivery}
-    if os.environ.get("ORCH_EXPERIMENT_PRODUCER", "0") != "1":
-        return {**result, "status": "producer_disabled"}
     spec_path = edir / "spec.md"
     spec = spec_path.read_text() if spec_path.exists() else ""
     if (

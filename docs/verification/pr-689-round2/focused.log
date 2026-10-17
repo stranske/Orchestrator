@@ -1,0 +1,959 @@
+........................................................................ [ 21%]
+...............................F.....F.FF.FF...FFFF.......................................................................................................... [ 68%]
+..................................................F..................... [ 90%]
+.................................                                        [100%]
+=================================== FAILURES ===================================
+__________ test_a_stuck_tick_is_reported_with_the_kill_that_frees_it ___________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2956/test_a_stuck_tick_is_reported_0')
+
+    def test_a_stuck_tick_is_reported_with_the_kill_that_frees_it(tmp_path: Path) -> None:
+        state = tmp_path / "state"
+        tick = tmp_path / "tick.sh"
+        tick.write_text(
+            "set -euo pipefail\n"
+            f'{shlex.quote(sys.executable)} {shlex.quote(str(WATCHDOG))} start --state-dir "$STATE" '
+            '--tick-pid "$$"\n'
+            f"{shlex.quote(sys.executable)} -c {shlex.quote(DEADLOCKED)} "
+            '|| echo "STEP-FAILED rc=$?"\n'
+            'echo "TICK-REACHED-ITS-END"\n',
+            encoding="utf-8",
+        )
+        proc = subprocess.Popen(
+            ["bash", str(tick)],
+            env=_fast_env(STATE=str(state)),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        stuck_pid = None
+        try:
+            # The child is caught as soon as it forks; wait until it has exec'd, so the record names
+            # the command rather than the fork (same pid either way -- `kill` frees it in both cases).
+>           rec = _wait_for(
+                lambda: "os.pipe()" in (_record(state).get("oldest_command") or {}).get("command", "")
+                and _record(state).get("drain")
+                and _record(state),
+                "a drain naming the stuck command",
+                state=state,
+            )
+
+tests/test_tick_watchdog.py:116: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+predicate = <function test_a_stuck_tick_is_reported_with_the_kill_that_frees_it.<locals>.<lambda> at 0x105604cc0>
+what = 'a drain naming the stuck command', timeout = 60.0
+state = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2956/test_a_stuck_tick_is_reported_0/state')
+
+    def _wait_for(predicate, what: str, timeout: float = WAIT_S, state: Path | None = None):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            value = predicate()
+            if value:
+                return value
+            time.sleep(0.05)
+        # Say what the watcher DID record: a timeout alone told the first Linux CI failure nothing.
+        seen = ""
+        if state is not None:
+            history = state / tick_watchdog.HISTORY_NAME
+            seen = f"; record={_record(state)!r}; history=" + (
+                history.read_text(encoding="utf-8") if history.exists() else "<none>"
+            )
+>       raise AssertionError(f"timed out after {timeout:.0f}s waiting for {what}{seen}")
+E       AssertionError: timed out after 60s waiting for a drain naming the stuck command; record={}; history=<none>
+
+tests/test_tick_watchdog.py:59: AssertionError
+_______________ test_the_process_table_keeps_whole_command_lines _______________
+
+    def test_the_process_table_keeps_whole_command_lines() -> None:
+        """Linux procps cuts every line to 80 columns when its output is a pipe, which left the first
+        Linux CI run's record naming the stuck command as `/opt/hostedtoolcache/Python/3.12.1`: the
+        ALERT could not say what was stuck. A command line far wider than any terminal must survive."""
+        tail = "y" * 300
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)  # " + tail], stdin=subprocess.DEVNULL
+        )
+        try:
+>           row = _wait_for(lambda: tick_watchdog.snapshot().get(child.pid), "the child in ps")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_tick_watchdog.py:266: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_tick_watchdog.py:48: in _wait_for
+    value = predicate()
+            ^^^^^^^^^^^
+tests/test_tick_watchdog.py:266: in <lambda>
+    row = _wait_for(lambda: tick_watchdog.snapshot().get(child.pid), "the child in ps")
+                            ^^^^^^^^^^^^^^^^^^^^^^^^
+src/tick_watchdog.py:149: in snapshot
+    out = subprocess.run(
+/opt/anaconda3/lib/python3.12/subprocess.py:548: in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/subprocess.py:1026: in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <Popen: returncode: 255 args: ('ps', '-A', '-ww', '-o', 'pid=,ppid=,stat=,ls...>
+args = ['ps', '-A', '-ww', '-o', 'pid=,ppid=,stat=,lstart=,command=']
+executable = b'ps', preexec_fn = None, close_fds = True, pass_fds = ()
+cwd = None
+env = {'ORCH_FEEDBACK_DB': '/tmp/689-focused-feedback.db', 'SHELL': '/bin/zsh', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': '', ...}
+startupinfo = None, creationflags = 0, shell = False, p2cread = 12
+p2cwrite = -1, c2pread = 14, c2pwrite = 15, errread = 16, errwrite = 17
+restore_signals = True, gid = None, gids = None, uid = None, umask = -1
+start_new_session = False, process_group = -1
+
+    def _execute_child(self, args, executable, preexec_fn, close_fds,
+                       pass_fds, cwd, env,
+                       startupinfo, creationflags, shell,
+                       p2cread, p2cwrite,
+                       c2pread, c2pwrite,
+                       errread, errwrite,
+                       restore_signals,
+                       gid, gids, uid, umask,
+                       start_new_session, process_group):
+        """Execute program (POSIX version)"""
+    
+        if isinstance(args, (str, bytes)):
+            args = [args]
+        elif isinstance(args, os.PathLike):
+            if shell:
+                raise TypeError('path-like args is not allowed when '
+                                'shell is true')
+            args = [args]
+        else:
+            args = list(args)
+    
+        if shell:
+            # On Android the default shell is at '/system/bin/sh'.
+            unix_shell = ('/system/bin/sh' if
+                      hasattr(sys, 'getandroidapilevel') else '/bin/sh')
+            args = [unix_shell, "-c"] + args
+            if executable:
+                args[0] = executable
+    
+        if executable is None:
+            executable = args[0]
+    
+        sys.audit("subprocess.Popen", executable, args, cwd, env)
+    
+        if (_USE_POSIX_SPAWN
+                and os.path.dirname(executable)
+                and preexec_fn is None
+                and not close_fds
+                and not pass_fds
+                and cwd is None
+                and (p2cread == -1 or p2cread > 2)
+                and (c2pwrite == -1 or c2pwrite > 2)
+                and (errwrite == -1 or errwrite > 2)
+                and not start_new_session
+                and process_group == -1
+                and gid is None
+                and gids is None
+                and uid is None
+                and umask < 0):
+            self._posix_spawn(args, executable, env, restore_signals,
+                              p2cread, p2cwrite,
+                              c2pread, c2pwrite,
+                              errread, errwrite)
+            return
+    
+        orig_executable = executable
+    
+        # For transferring possible exec failure from child to parent.
+        # Data format: "exception name:hex errno:description"
+        # Pickle is not used; it is complex and involves memory allocation.
+        errpipe_read, errpipe_write = os.pipe()
+        # errpipe_write must not be in the standard io 0, 1, or 2 fd range.
+        low_fds_to_close = []
+        while errpipe_write < 3:
+            low_fds_to_close.append(errpipe_write)
+            errpipe_write = os.dup(errpipe_write)
+        for low_fd in low_fds_to_close:
+            os.close(low_fd)
+        try:
+            try:
+                # We must avoid complex work that could involve
+                # malloc or free in the child process to avoid
+                # potential deadlocks, thus we do all this here.
+                # and pass it to fork_exec()
+    
+                if env is not None:
+                    env_list = []
+                    for k, v in env.items():
+                        k = os.fsencode(k)
+                        if b'=' in k:
+                            raise ValueError("illegal environment variable name")
+                        env_list.append(k + b'=' + os.fsencode(v))
+                else:
+                    env_list = None  # Use execv instead of execve.
+                executable = os.fsencode(executable)
+                if os.path.dirname(executable):
+                    executable_list = (executable,)
+                else:
+                    # This matches the behavior of os._execvpe().
+                    executable_list = tuple(
+                        os.path.join(os.fsencode(dir), executable)
+                        for dir in os.get_exec_path(env))
+                fds_to_keep = set(pass_fds)
+                fds_to_keep.add(errpipe_write)
+                self.pid = _fork_exec(
+                        args, executable_list,
+                        close_fds, tuple(sorted(map(int, fds_to_keep))),
+                        cwd, env_list,
+                        p2cread, p2cwrite, c2pread, c2pwrite,
+                        errread, errwrite,
+                        errpipe_read, errpipe_write,
+                        restore_signals, start_new_session,
+                        process_group, gid, gids, uid, umask,
+                        preexec_fn, _USE_VFORK)
+                self._child_created = True
+            finally:
+                # be sure the FD is closed no matter what
+                os.close(errpipe_write)
+    
+            self._close_pipe_fds(p2cread, p2cwrite,
+                                 c2pread, c2pwrite,
+                                 errread, errwrite)
+    
+            # Wait for exec to fail or succeed; possibly raising an
+            # exception (limited in size)
+            errpipe_data = bytearray()
+            while True:
+                part = os.read(errpipe_read, 50000)
+                errpipe_data += part
+                if not part or len(errpipe_data) > 50000:
+                    break
+        finally:
+            # be sure the FD is closed no matter what
+            os.close(errpipe_read)
+    
+        if errpipe_data:
+            try:
+                pid, sts = os.waitpid(self.pid, 0)
+                if pid == self.pid:
+                    self._handle_exitstatus(sts)
+                else:
+                    self.returncode = sys.maxsize
+            except ChildProcessError:
+                pass
+    
+            try:
+                exception_name, hex_errno, err_msg = (
+                        errpipe_data.split(b':', 2))
+                # The encoding here should match the encoding
+                # written in by the subprocess implementations
+                # like _posixsubprocess
+                err_msg = err_msg.decode()
+            except ValueError:
+                exception_name = b'SubprocessError'
+                hex_errno = b'0'
+                err_msg = 'Bad exception data from child: {!r}'.format(
+                              bytes(errpipe_data))
+            child_exception_type = getattr(
+                    builtins, exception_name.decode('ascii'),
+                    SubprocessError)
+            if issubclass(child_exception_type, OSError) and hex_errno:
+                errno_num = int(hex_errno, 16)
+                if err_msg == "noexec:chdir":
+                    err_msg = ""
+                    # The error must be from chdir(cwd).
+                    err_filename = cwd
+                elif err_msg == "noexec":
+                    err_msg = ""
+                    err_filename = None
+                else:
+                    err_filename = orig_executable
+                if errno_num != 0:
+                    err_msg = os.strerror(errno_num)
+                if err_filename is not None:
+>                   raise child_exception_type(errno_num, err_msg, err_filename)
+E                   PermissionError: [Errno 1] Operation not permitted: 'ps'
+
+/opt/anaconda3/lib/python3.12/subprocess.py:1953: PermissionError
+_________________ test_the_drained_line_is_reachable_and_exact _________________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2956/test_the_drained_line_is_reach0')
+
+    def test_the_drained_line_is_reachable_and_exact(tmp_path: Path) -> None:
+        """Latched-gate question 4: what the watchdog prints when everything is healthy. Most ticks
+        print this line, so it is pinned whole -- a good-news branch no input reaches is a latch."""
+        state = tmp_path / "state"
+        armed = time.time() - 3600
+        tick_watchdog.write_record(
+            state,
+            {
+                "status": "exited",
+                "armed_at": tick_watchdog._iso(armed),
+                "awake_duration_s": 842,
+                "crossings": [],
+            },
+        )
+        _stamp(state, ".last-durability-sweep", 25 * 60)
+>       lines = _start(state)
+                ^^^^^^^^^^^^^
+
+tests/test_tick_watchdog.py:313: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+state = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2956/test_the_drained_line_is_reach0/state')
+env = None
+
+    def _start(state: Path, env: dict[str, str] | None = None) -> list[str]:
+        out = io.StringIO()
+        rc = tick_watchdog.start(
+            state_dir=state, tick_pid=os.getpid(), env=env or {}, out=out, spawn=lambda _argv: None
+        )
+>       assert rc == 0, out.getvalue()
+E       AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E         
+E       assert 2 == 0
+
+tests/test_tick_watchdog.py:294: AssertionError
+_______________ test_a_tick_that_reaches_no_cadence_step_alerts ________________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2956/test_a_tick_that_reaches_no_ca0')
+
+    def test_a_tick_that_reaches_no_cadence_step_alerts(tmp_path: Path) -> None:
+        """Every tick aborting before its first cadence step is never long-running, so the thresholds
+        cannot see it -- the newest outcome of ANY step going stale can."""
+        state = tmp_path / "state"
+        _stamp(state, ".last-durability-sweep", 3 * 86400)
+        _stamp(state, ".fail-pattern-miner", 2 * 86400)  # a failure is an outcome too
+>       lines = _start(state)
+                ^^^^^^^^^^^^^
+
+tests/test_tick_watchdog.py:330: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+state = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2956/test_a_tick_that_reaches_no_ca0/state')
+env = None
+
+    def _start(state: Path, env: dict[str, str] | None = None) -> list[str]:
+        out = io.StringIO()
+        rc = tick_watchdog.start(
+            state_dir=state, tick_pid=os.getpid(), env=env or {}, out=out, spawn=lambda _argv: None
+        )
+>       assert rc == 0, out.getvalue()
+E       AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E         
+E       assert 2 == 0
+
+tests/test_tick_watchdog.py:294: AssertionError
+__________ test_a_previous_tick_that_left_no_end_is_unknown_and_kept ___________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2956/test_a_previous_tick_that_left0')
+
+    def test_a_previous_tick_that_left_no_end_is_unknown_and_kept(tmp_path: Path) -> None:
+        state = tmp_path / "state"
+        tick_watchdog.write_record(
+            state,
+            {
+                "status": "running",
+                "tick_pid": 2**22 + 12345,  # above any pid either platform hands out
+                "tick_started": "Fri Oct 2 01:36:00 2026",
+                "watchdog_pid": None,
+                "armed_at": "2026-10-02T01:36:01Z",
+            },
+        )
+>       lines = _start(state)
+                ^^^^^^^^^^^^^
+
+tests/test_tick_watchdog.py:365: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+state = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2956/test_a_previous_tick_that_left0/state')
+env = None
+
+    def _start(state: Path, env: dict[str, str] | None = None) -> list[str]:
+        out = io.StringIO()
+        rc = tick_watchdog.start(
+            state_dir=state, tick_pid=os.getpid(), env=env or {}, out=out, spawn=lambda _argv: None
+        )
+>       assert rc == 0, out.getvalue()
+E       AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E         
+E       assert 2 == 0
+
+tests/test_tick_watchdog.py:294: AssertionError
+________________ test_an_unreadable_record_is_unknown_not_clean ________________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2956/test_an_unreadable_record_is_u0')
+
+    def test_an_unreadable_record_is_unknown_not_clean(tmp_path: Path) -> None:
+        state = tmp_path / "state"
+        state.mkdir()
+        (state / tick_watchdog.RECORD_NAME).write_text("{not json", encoding="utf-8")
+>       assert "fate is UNKNOWN, not clean" in _start(state)[0]
+                                               ^^^^^^^^^^^^^
+
+tests/test_tick_watchdog.py:375: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+state = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2956/test_an_unreadable_record_is_u0/state')
+env = None
+
+    def _start(state: Path, env: dict[str, str] | None = None) -> list[str]:
+        out = io.StringIO()
+        rc = tick_watchdog.start(
+            state_dir=state, tick_pid=os.getpid(), env=env or {}, out=out, spawn=lambda _argv: None
+        )
+>       assert rc == 0, out.getvalue()
+E       AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E         
+E       assert 2 == 0
+
+tests/test_tick_watchdog.py:294: AssertionError
+__________ test_the_arming_block_as_written_arms_and_records_the_tick __________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2956/test_the_arming_block_as_writt0')
+
+    def test_the_arming_block_as_written_arms_and_records_the_tick(tmp_path: Path) -> None:
+        state = tmp_path / "state"
+        proc = _run_block(state, ORCH_DISABLE_STEPS="")
+        assert proc.returncode == 0, proc.stderr
+>       assert proc.stdout.startswith("  tick-watchdog: armed"), proc.stdout
+E       AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E           WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)
+E         
+E       assert False
+E        +  where False = <built-in method startswith of str object at 0x105a0c120>('  tick-watchdog: armed')
+E        +    where <built-in method startswith of str object at 0x105a0c120> = "  WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed\n  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\n".startswith
+E        +      where "  WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed\n  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\n" = CompletedProcess(args=['bash', '-c', 'set -euo pipefail\nORCH=/Users/teacher/.codex/orchestrator/worktrees/stranske__O...s'); not armed\n  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\n", stderr='').stdout
+
+tests/test_tick_watchdog.py:466: AssertionError
+__________________ test_fleet_summary_carries_the_tick_record __________________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2956/test_fleet_summary_carries_the0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x105d58140>
+
+    def test_fleet_summary_carries_the_tick_record(tmp_path: Path, monkeypatch) -> None:
+        import mcp_server
+    
+>       me = _me()  # a target that IS still the process the record named
+             ^^^^^
+
+tests/test_tick_watchdog.py:494: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_tick_watchdog.py:488: in _me
+    return _wait_for(lambda: tick_watchdog.snapshot().get(os.getpid()), "this process in ps")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_tick_watchdog.py:48: in _wait_for
+    value = predicate()
+            ^^^^^^^^^^^
+tests/test_tick_watchdog.py:488: in <lambda>
+    return _wait_for(lambda: tick_watchdog.snapshot().get(os.getpid()), "this process in ps")
+                             ^^^^^^^^^^^^^^^^^^^^^^^^
+src/tick_watchdog.py:149: in snapshot
+    out = subprocess.run(
+/opt/anaconda3/lib/python3.12/subprocess.py:548: in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/subprocess.py:1026: in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <Popen: returncode: 255 args: ('ps', '-A', '-ww', '-o', 'pid=,ppid=,stat=,ls...>
+args = ['ps', '-A', '-ww', '-o', 'pid=,ppid=,stat=,lstart=,command=']
+executable = b'ps', preexec_fn = None, close_fds = True, pass_fds = ()
+cwd = None
+env = {'ORCH_FEEDBACK_DB': '/tmp/689-focused-feedback.db', 'SHELL': '/bin/zsh', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': '', ...}
+startupinfo = None, creationflags = 0, shell = False, p2cread = 12
+p2cwrite = -1, c2pread = 13, c2pwrite = 14, errread = 15, errwrite = 16
+restore_signals = True, gid = None, gids = None, uid = None, umask = -1
+start_new_session = False, process_group = -1
+
+    def _execute_child(self, args, executable, preexec_fn, close_fds,
+                       pass_fds, cwd, env,
+                       startupinfo, creationflags, shell,
+                       p2cread, p2cwrite,
+                       c2pread, c2pwrite,
+                       errread, errwrite,
+                       restore_signals,
+                       gid, gids, uid, umask,
+                       start_new_session, process_group):
+        """Execute program (POSIX version)"""
+    
+        if isinstance(args, (str, bytes)):
+            args = [args]
+        elif isinstance(args, os.PathLike):
+            if shell:
+                raise TypeError('path-like args is not allowed when '
+                                'shell is true')
+            args = [args]
+        else:
+            args = list(args)
+    
+        if shell:
+            # On Android the default shell is at '/system/bin/sh'.
+            unix_shell = ('/system/bin/sh' if
+                      hasattr(sys, 'getandroidapilevel') else '/bin/sh')
+            args = [unix_shell, "-c"] + args
+            if executable:
+                args[0] = executable
+    
+        if executable is None:
+            executable = args[0]
+    
+        sys.audit("subprocess.Popen", executable, args, cwd, env)
+    
+        if (_USE_POSIX_SPAWN
+                and os.path.dirname(executable)
+                and preexec_fn is None
+                and not close_fds
+                and not pass_fds
+                and cwd is None
+                and (p2cread == -1 or p2cread > 2)
+                and (c2pwrite == -1 or c2pwrite > 2)
+                and (errwrite == -1 or errwrite > 2)
+                and not start_new_session
+                and process_group == -1
+                and gid is None
+                and gids is None
+                and uid is None
+                and umask < 0):
+            self._posix_spawn(args, executable, env, restore_signals,
+                              p2cread, p2cwrite,
+                              c2pread, c2pwrite,
+                              errread, errwrite)
+            return
+    
+        orig_executable = executable
+    
+        # For transferring possible exec failure from child to parent.
+        # Data format: "exception name:hex errno:description"
+        # Pickle is not used; it is complex and involves memory allocation.
+        errpipe_read, errpipe_write = os.pipe()
+        # errpipe_write must not be in the standard io 0, 1, or 2 fd range.
+        low_fds_to_close = []
+        while errpipe_write < 3:
+            low_fds_to_close.append(errpipe_write)
+            errpipe_write = os.dup(errpipe_write)
+        for low_fd in low_fds_to_close:
+            os.close(low_fd)
+        try:
+            try:
+                # We must avoid complex work that could involve
+                # malloc or free in the child process to avoid
+                # potential deadlocks, thus we do all this here.
+                # and pass it to fork_exec()
+    
+                if env is not None:
+                    env_list = []
+                    for k, v in env.items():
+                        k = os.fsencode(k)
+                        if b'=' in k:
+                            raise ValueError("illegal environment variable name")
+                        env_list.append(k + b'=' + os.fsencode(v))
+                else:
+                    env_list = None  # Use execv instead of execve.
+                executable = os.fsencode(executable)
+                if os.path.dirname(executable):
+                    executable_list = (executable,)
+                else:
+                    # This matches the behavior of os._execvpe().
+                    executable_list = tuple(
+                        os.path.join(os.fsencode(dir), executable)
+                        for dir in os.get_exec_path(env))
+                fds_to_keep = set(pass_fds)
+                fds_to_keep.add(errpipe_write)
+                self.pid = _fork_exec(
+                        args, executable_list,
+                        close_fds, tuple(sorted(map(int, fds_to_keep))),
+                        cwd, env_list,
+                        p2cread, p2cwrite, c2pread, c2pwrite,
+                        errread, errwrite,
+                        errpipe_read, errpipe_write,
+                        restore_signals, start_new_session,
+                        process_group, gid, gids, uid, umask,
+                        preexec_fn, _USE_VFORK)
+                self._child_created = True
+            finally:
+                # be sure the FD is closed no matter what
+                os.close(errpipe_write)
+    
+            self._close_pipe_fds(p2cread, p2cwrite,
+                                 c2pread, c2pwrite,
+                                 errread, errwrite)
+    
+            # Wait for exec to fail or succeed; possibly raising an
+            # exception (limited in size)
+            errpipe_data = bytearray()
+            while True:
+                part = os.read(errpipe_read, 50000)
+                errpipe_data += part
+                if not part or len(errpipe_data) > 50000:
+                    break
+        finally:
+            # be sure the FD is closed no matter what
+            os.close(errpipe_read)
+    
+        if errpipe_data:
+            try:
+                pid, sts = os.waitpid(self.pid, 0)
+                if pid == self.pid:
+                    self._handle_exitstatus(sts)
+                else:
+                    self.returncode = sys.maxsize
+            except ChildProcessError:
+                pass
+    
+            try:
+                exception_name, hex_errno, err_msg = (
+                        errpipe_data.split(b':', 2))
+                # The encoding here should match the encoding
+                # written in by the subprocess implementations
+                # like _posixsubprocess
+                err_msg = err_msg.decode()
+            except ValueError:
+                exception_name = b'SubprocessError'
+                hex_errno = b'0'
+                err_msg = 'Bad exception data from child: {!r}'.format(
+                              bytes(errpipe_data))
+            child_exception_type = getattr(
+                    builtins, exception_name.decode('ascii'),
+                    SubprocessError)
+            if issubclass(child_exception_type, OSError) and hex_errno:
+                errno_num = int(hex_errno, 16)
+                if err_msg == "noexec:chdir":
+                    err_msg = ""
+                    # The error must be from chdir(cwd).
+                    err_filename = cwd
+                elif err_msg == "noexec":
+                    err_msg = ""
+                    err_filename = None
+                else:
+                    err_filename = orig_executable
+                if errno_num != 0:
+                    err_msg = os.strerror(errno_num)
+                if err_filename is not None:
+>                   raise child_exception_type(errno_num, err_msg, err_filename)
+E                   PermissionError: [Errno 1] Operation not permitted: 'ps'
+
+/opt/anaconda3/lib/python3.12/subprocess.py:1953: PermissionError
+___________ test_a_drain_whose_target_has_exited_is_never_advertised ___________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2956/test_a_drain_whose_target_has_0')
+
+    def test_a_drain_whose_target_has_exited_is_never_advertised(tmp_path: Path) -> None:
+        """A record outlives its watcher. If the target exited and its pid was handed to an unrelated
+        process, printing the recorded `kill` would hand a reader the command that kills the wrong
+        process -- so the drain is re-checked against a fresh process table every time it is shown."""
+        tick_watchdog.write_record(tmp_path, _stuck_record(2**22 + 999, "Fri Oct 2 01:40:00 2026"))
+        report = tick_watchdog.summary(tmp_path)
+        assert report["drain"] is None, report
+        assert "kill" not in report["line"] and "no longer applies" in report["line"], report
+>       me = _me()  # same pid as a live process, but NOT the start time the record named: recycled
+             ^^^^^
+
+tests/test_tick_watchdog.py:527: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_tick_watchdog.py:488: in _me
+    return _wait_for(lambda: tick_watchdog.snapshot().get(os.getpid()), "this process in ps")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_tick_watchdog.py:48: in _wait_for
+    value = predicate()
+            ^^^^^^^^^^^
+tests/test_tick_watchdog.py:488: in <lambda>
+    return _wait_for(lambda: tick_watchdog.snapshot().get(os.getpid()), "this process in ps")
+                             ^^^^^^^^^^^^^^^^^^^^^^^^
+src/tick_watchdog.py:149: in snapshot
+    out = subprocess.run(
+/opt/anaconda3/lib/python3.12/subprocess.py:548: in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/subprocess.py:1026: in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <Popen: returncode: 255 args: ('ps', '-A', '-ww', '-o', 'pid=,ppid=,stat=,ls...>
+args = ['ps', '-A', '-ww', '-o', 'pid=,ppid=,stat=,lstart=,command=']
+executable = b'ps', preexec_fn = None, close_fds = True, pass_fds = ()
+cwd = None
+env = {'ORCH_FEEDBACK_DB': '/tmp/689-focused-feedback.db', 'SHELL': '/bin/zsh', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': '', ...}
+startupinfo = None, creationflags = 0, shell = False, p2cread = 12
+p2cwrite = -1, c2pread = 13, c2pwrite = 14, errread = 15, errwrite = 16
+restore_signals = True, gid = None, gids = None, uid = None, umask = -1
+start_new_session = False, process_group = -1
+
+    def _execute_child(self, args, executable, preexec_fn, close_fds,
+                       pass_fds, cwd, env,
+                       startupinfo, creationflags, shell,
+                       p2cread, p2cwrite,
+                       c2pread, c2pwrite,
+                       errread, errwrite,
+                       restore_signals,
+                       gid, gids, uid, umask,
+                       start_new_session, process_group):
+        """Execute program (POSIX version)"""
+    
+        if isinstance(args, (str, bytes)):
+            args = [args]
+        elif isinstance(args, os.PathLike):
+            if shell:
+                raise TypeError('path-like args is not allowed when '
+                                'shell is true')
+            args = [args]
+        else:
+            args = list(args)
+    
+        if shell:
+            # On Android the default shell is at '/system/bin/sh'.
+            unix_shell = ('/system/bin/sh' if
+                      hasattr(sys, 'getandroidapilevel') else '/bin/sh')
+            args = [unix_shell, "-c"] + args
+            if executable:
+                args[0] = executable
+    
+        if executable is None:
+            executable = args[0]
+    
+        sys.audit("subprocess.Popen", executable, args, cwd, env)
+    
+        if (_USE_POSIX_SPAWN
+                and os.path.dirname(executable)
+                and preexec_fn is None
+                and not close_fds
+                and not pass_fds
+                and cwd is None
+                and (p2cread == -1 or p2cread > 2)
+                and (c2pwrite == -1 or c2pwrite > 2)
+                and (errwrite == -1 or errwrite > 2)
+                and not start_new_session
+                and process_group == -1
+                and gid is None
+                and gids is None
+                and uid is None
+                and umask < 0):
+            self._posix_spawn(args, executable, env, restore_signals,
+                              p2cread, p2cwrite,
+                              c2pread, c2pwrite,
+                              errread, errwrite)
+            return
+    
+        orig_executable = executable
+    
+        # For transferring possible exec failure from child to parent.
+        # Data format: "exception name:hex errno:description"
+        # Pickle is not used; it is complex and involves memory allocation.
+        errpipe_read, errpipe_write = os.pipe()
+        # errpipe_write must not be in the standard io 0, 1, or 2 fd range.
+        low_fds_to_close = []
+        while errpipe_write < 3:
+            low_fds_to_close.append(errpipe_write)
+            errpipe_write = os.dup(errpipe_write)
+        for low_fd in low_fds_to_close:
+            os.close(low_fd)
+        try:
+            try:
+                # We must avoid complex work that could involve
+                # malloc or free in the child process to avoid
+                # potential deadlocks, thus we do all this here.
+                # and pass it to fork_exec()
+    
+                if env is not None:
+                    env_list = []
+                    for k, v in env.items():
+                        k = os.fsencode(k)
+                        if b'=' in k:
+                            raise ValueError("illegal environment variable name")
+                        env_list.append(k + b'=' + os.fsencode(v))
+                else:
+                    env_list = None  # Use execv instead of execve.
+                executable = os.fsencode(executable)
+                if os.path.dirname(executable):
+                    executable_list = (executable,)
+                else:
+                    # This matches the behavior of os._execvpe().
+                    executable_list = tuple(
+                        os.path.join(os.fsencode(dir), executable)
+                        for dir in os.get_exec_path(env))
+                fds_to_keep = set(pass_fds)
+                fds_to_keep.add(errpipe_write)
+                self.pid = _fork_exec(
+                        args, executable_list,
+                        close_fds, tuple(sorted(map(int, fds_to_keep))),
+                        cwd, env_list,
+                        p2cread, p2cwrite, c2pread, c2pwrite,
+                        errread, errwrite,
+                        errpipe_read, errpipe_write,
+                        restore_signals, start_new_session,
+                        process_group, gid, gids, uid, umask,
+                        preexec_fn, _USE_VFORK)
+                self._child_created = True
+            finally:
+                # be sure the FD is closed no matter what
+                os.close(errpipe_write)
+    
+            self._close_pipe_fds(p2cread, p2cwrite,
+                                 c2pread, c2pwrite,
+                                 errread, errwrite)
+    
+            # Wait for exec to fail or succeed; possibly raising an
+            # exception (limited in size)
+            errpipe_data = bytearray()
+            while True:
+                part = os.read(errpipe_read, 50000)
+                errpipe_data += part
+                if not part or len(errpipe_data) > 50000:
+                    break
+        finally:
+            # be sure the FD is closed no matter what
+            os.close(errpipe_read)
+    
+        if errpipe_data:
+            try:
+                pid, sts = os.waitpid(self.pid, 0)
+                if pid == self.pid:
+                    self._handle_exitstatus(sts)
+                else:
+                    self.returncode = sys.maxsize
+            except ChildProcessError:
+                pass
+    
+            try:
+                exception_name, hex_errno, err_msg = (
+                        errpipe_data.split(b':', 2))
+                # The encoding here should match the encoding
+                # written in by the subprocess implementations
+                # like _posixsubprocess
+                err_msg = err_msg.decode()
+            except ValueError:
+                exception_name = b'SubprocessError'
+                hex_errno = b'0'
+                err_msg = 'Bad exception data from child: {!r}'.format(
+                              bytes(errpipe_data))
+            child_exception_type = getattr(
+                    builtins, exception_name.decode('ascii'),
+                    SubprocessError)
+            if issubclass(child_exception_type, OSError) and hex_errno:
+                errno_num = int(hex_errno, 16)
+                if err_msg == "noexec:chdir":
+                    err_msg = ""
+                    # The error must be from chdir(cwd).
+                    err_filename = cwd
+                elif err_msg == "noexec":
+                    err_msg = ""
+                    err_filename = None
+                else:
+                    err_filename = orig_executable
+                if errno_num != 0:
+                    err_msg = os.strerror(errno_num)
+                if err_filename is not None:
+>                   raise child_exception_type(errno_num, err_msg, err_filename)
+E                   PermissionError: [Errno 1] Operation not permitted: 'ps'
+
+/opt/anaconda3/lib/python3.12/subprocess.py:1953: PermissionError
+______ test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming ______
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2956/test_ticks_that_never_reach_a_0')
+
+    def test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming(tmp_path: Path) -> None:
+        """A machine that has NEVER recorded a cadence outcome has no newest outcome to age, so the
+        alert needs a baseline: the first tick the watchdog armed here."""
+        state = tmp_path / "state"
+        two_days_ago = tick_watchdog._iso(time.time() - 2 * 86400)
+        tick_watchdog.write_record(
+            state, {"status": "exited", "armed_at": two_days_ago, "first_armed_at": two_days_ago}
+        )
+>       lines = _start(state)
+                ^^^^^^^^^^^^^
+
+tests/test_tick_watchdog.py:540: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+state = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2956/test_ticks_that_never_reach_a_0/state')
+env = None
+
+    def _start(state: Path, env: dict[str, str] | None = None) -> list[str]:
+        out = io.StringIO()
+        rc = tick_watchdog.start(
+            state_dir=state, tick_pid=os.getpid(), env=env or {}, out=out, spawn=lambda _argv: None
+        )
+>       assert rc == 0, out.getvalue()
+E       AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E         
+E       assert 2 == 0
+
+tests/test_tick_watchdog.py:294: AssertionError
+______ test_every_brain_connection_in_the_selftest_opens_a_private_store _______
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2956/test_every_brain_connection_in0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x105bd0c80>
+
+    def test_every_brain_connection_in_the_selftest_opens_a_private_store(tmp_path, monkeypatch):
+        live = tmp_path / "inherited-runtime"
+        inherited = live / "feedback" / "orchestrator.db"
+        monkeypatch.setattr(feedback, "DB_PATH", inherited)
+        real_conn = feedback._conn
+        calls: list[tuple[Path, str]] = []
+    
+        def traced_conn():
+            chain = " -> ".join(
+                f"{Path(frame.filename).name}:{frame.lineno}:{frame.name}"
+                for frame in traceback.extract_stack()[:-1]
+                if Path(frame.filename).name in ("exp_abcd.py", "feedback.py")
+            )
+            calls.append((feedback.DB_PATH, chain))
+            return real_conn()
+    
+        # feedback's own functions resolve `_conn` through the module's globals at call time, so this
+        # catches `active_evidence_types()` as well as the selftest's direct `feedback._conn()`.
+        monkeypatch.setattr(feedback, "_conn", traced_conn)
+>       exp_abcd._selftest()
+
+tests/test_exp_abcd_selftest_private_brain.py:52: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/exp_abcd.py:3012: in _selftest
+    _selftest_checks()
+src/exp_abcd.py:3032: in _selftest_checks
+    wv = _wrapped("vibe", ["vibe", "--prompt", "x"])
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/exp_abcd.py:328: in _wrapped
+    f"({dispatcher._agent_runtime_prelude(agent)}"
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/dispatcher.py:797: in _agent_runtime_prelude
+    base = _ensure_agent_runtime(agent)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/dispatcher.py:578: in _ensure_agent_runtime
+    _write_vibe_runtime_config(
+src/dispatcher.py:542: in _write_vibe_runtime_config
+    dst.unlink()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/vibe/.vibe/config.toml')
+missing_ok = False
+
+    def unlink(self, missing_ok=False):
+        """
+        Remove this file or link.
+        If the path is a directory, use rmdir() instead.
+        """
+        try:
+>           os.unlink(self)
+E           PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/agent-runtime/vibe/.vibe/config.toml'
+
+/opt/anaconda3/lib/python3.12/pathlib.py:1342: PermissionError
+=============================== warnings summary ===============================
+tests/test_synthesis_promotion.py::test_hollow_synthesis_never_becomes_candidate_ready
+tests/test_synthesis_promotion.py::test_a_passing_break_names_the_tautologies_it_carried
+  /opt/anaconda3/lib/python3.12/tarfile.py:2221: DeprecationWarning: Python 3.14 will, by default, filter extracted tar archives and reject files or modify their metadata. Use the filter argument to control this behavior.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_tick_watchdog.py::test_a_stuck_tick_is_reported_with_the_kill_that_frees_it
+FAILED tests/test_tick_watchdog.py::test_the_process_table_keeps_whole_command_lines
+FAILED tests/test_tick_watchdog.py::test_the_drained_line_is_reachable_and_exact
+FAILED tests/test_tick_watchdog.py::test_a_tick_that_reaches_no_cadence_step_alerts
+FAILED tests/test_tick_watchdog.py::test_a_previous_tick_that_left_no_end_is_unknown_and_kept
+FAILED tests/test_tick_watchdog.py::test_an_unreadable_record_is_unknown_not_clean
+FAILED tests/test_tick_watchdog.py::test_the_arming_block_as_written_arms_and_records_the_tick
+FAILED tests/test_tick_watchdog.py::test_fleet_summary_carries_the_tick_record
+FAILED tests/test_tick_watchdog.py::test_a_drain_whose_target_has_exited_is_never_advertised
+FAILED tests/test_tick_watchdog.py::test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming
+FAILED tests/test_exp_abcd_selftest_private_brain.py::test_every_brain_connection_in_the_selftest_opens_a_private_store
+11 failed, 323 passed, 2 warnings, 131 subtests passed in 132.52s (0:02:12)
+EXIT=1

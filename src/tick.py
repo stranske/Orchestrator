@@ -255,7 +255,8 @@ def research_tick(
         for row in plan_out.get("skipped") or []:
             if row.get("reason"):
                 if producer_enabled:
-                    experiment_producer.record_skip(row["reason"])
+                    if not experiment_producer.record_skip(row["reason"], target=row.get("target")):
+                        continue
                 research_subjects.record_event(
                     "rejected",
                     target=row.get("target"),
@@ -282,6 +283,7 @@ def research_tick(
                 rng,
                 cells=plan_out.get("producer_cells", []),
                 skip_reason=(plan_out.get("skipped") or [{"reason": "no_subject"}])[-1]["reason"],
+                count_skip=not bool(plan_out.get("skipped")),
             )
         return {**_public_research_plan(plan_out), "planned": [], "active": False}
 

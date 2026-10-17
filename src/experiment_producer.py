@@ -26,6 +26,7 @@ COVERAGE_DAYS = 21
 DAILY_CAP = 4
 WINNER_MERGE_GRACE_DAYS = 7
 PRODUCER_FOLLOWUP_DAYS = 30
+PRODUCER_LOCK_MAX_HOURS = 72
 TERMINAL_STATUSES = {"merged", "no_winner", "discarded", "expired", "member_pushed"}
 
 
@@ -85,7 +86,7 @@ def draw(now, last_draw_ts, rate_per_day, launched_today, rng, *, pools=None, ce
     return {"fire": fire, "p": p, "reason": "draw" if fire else "no_draw"}
 
 
-def cadence_draw(now, rate, rng, *, pools=None, cells=(), skip_reason=None):
+def cadence_draw(now, rate, rng, *, pools=None, cells=(), skip_reason=None, count_skip=True):
     with locked_state():
         state = read_state()
         day = time.strftime("%Y%m%d", time.gmtime(now))
@@ -110,7 +111,7 @@ def cadence_draw(now, rate, rng, *, pools=None, cells=(), skip_reason=None):
             cells_fresh=sum(c.get("age_days", math.inf) <= COVERAGE_DAYS for c in cells),
             cells_total=len(cells),
         )
-        if not result["fire"]:
+        if not result["fire"] and count_skip:
             reasons = state.setdefault("skips", {})
             reasons[result["reason"]] = reasons.get(result["reason"], 0) + 1
         save_state(state)
@@ -127,12 +128,22 @@ def record_launch(now=None):
         save_state(state)
 
 
-def record_skip(reason):
+def record_skip(reason, *, target=None, now=None):
+    """Return whether a skip was recorded; unnamed tests count once per issue/UTC day."""
+    now = time.time() if now is None else now
     with locked_state():
         state = read_state()
+        if reason == "no_named_test" and target:
+            day = time.strftime("%Y%m%d", time.gmtime(now))
+            if state.get("skip_day") != day:
+                state.update(skip_day=day, skip_issues=[])
+            if target in state["skip_issues"]:
+                return False
+            state["skip_issues"].append(target)
         skips = state.setdefault("skips", {})
         skips[reason] = skips.get(reason, 0) + 1
         save_state(state)
+        return True
 
 
 def choose_subject(feed, forum, cells, rng):
@@ -250,14 +261,15 @@ def build_plan(
     pacing = capacity.experiment_pacing(cap)
     for c in cells:
         c["pacing"] = pacing.get(c["agent"], "unknown")
-    candidate_cells = [c for c in cells if c["pacing"] == "ok"]
+    feed_classes = {i.get("task_type", "implement") for i in eligible}
+    candidate_cells = [c for c in cells if c["pacing"] == "ok" and c["task_type"] in feed_classes]
     debt = sum(c.get("age_days", math.inf) > COVERAGE_DAYS for c in cells)
     drainable = sum(c.get("age_days", math.inf) > COVERAGE_DAYS for c in candidate_cells)
     blocked = {a: p for a, p in pacing.items() if p != "ok"}
     if blocked:
         reason = "pacing " + ", ".join(f"{a}={p}" for a, p in sorted(blocked.items()))
         print(f"{reason}; coverage debt {debt} cells > 21d, drainable {drainable}", file=sys.stderr)
-        if not drainable:
+        if not candidate_cells:
             return {
                 "planned": [],
                 "skipped": skipped + [{"reason": reason}],
@@ -418,7 +430,11 @@ def producer_summary(exp_dir=None, *, gh_fn=None):
                 if "error" in answer:
                     errors.append("merge_state_unknown")
                 else:
-                    merged = json.loads(answer["stdout"]).get("merged_at")
+                    merge_state = json.loads(answer["stdout"])
+                    if "merged_at" not in merge_state or merge_state.get("merge_state_unknown"):
+                        errors.append("merge_state_unknown")
+                        continue
+                    merged = merge_state["merged_at"]
                     if merged:
                         metrics["winner_merged"] += int(
                             datetime.fromisoformat(merged.replace("Z", "+00:00")).timestamp()
@@ -435,7 +451,7 @@ def producer_summary(exp_dir=None, *, gh_fn=None):
         )
     except (ValueError, OSError):
         metrics["skips"] = {"unreadable_state": 1}
-    metrics["unknowns"] = sorted(set(errors))
+    metrics["unknowns"] = sorted(errors)
     return metrics
 
 
@@ -458,21 +474,42 @@ def trial_defaults(now=None, *, active=False):
         ), state.get("trial_verdict", "pending")
 
 
+def _cached_verdict(state, now):
+    # A terminal verdict is immutable, including when later GitHub reads would flake.
+    if state.get("trial_verdict") in {"pass", "fail"}:
+        return state["trial_verdict"]
+    if (
+        not state.get("trial_start")
+        or now < state["trial_start"] + (COVERAGE_DAYS + WINNER_MERGE_GRACE_DAYS) * 86400
+    ):
+        return "pending"
+    if state.get("last_verdict_check") == time.strftime("%Y%m%d", time.gmtime(now)):
+        return "pending"
+    return None
+
+
 def trial_verdict(now=None, *, summary_fn=None):
     now = time.time() if now is None else now
-    state = read_state()
-    if not state.get("trial_start") or now < state["trial_start"] + COVERAGE_DAYS * 86400:
-        return "pending"
-    metrics = (summary_fn or producer_summary)()
+    cached = _cached_verdict(read_state(), now)
+    if cached is not None:
+        return cached
     with locked_state():
         state = read_state()
-        if not state.get("trial_start") or now < state["trial_start"] + COVERAGE_DAYS * 86400:
-            return "pending"
-        verdict = (
-            "pass" if metrics["winner_merged"] >= 6 and not metrics.get("unknowns") else "fail"
-        )
-        state.update(trial_verdict=verdict, trial_metrics=metrics)
+        # Another tick may have checked while we waited for the lock.
+        cached = _cached_verdict(state, now)
+        if cached is not None:
+            return cached
+        day = time.strftime("%Y%m%d", time.gmtime(now))
+        # Stamp before polling so even an interrupted/failed check is bounded daily.
+        state["last_verdict_check"] = day
         save_state(state)
+        metrics = (summary_fn or producer_summary)()
+        unknown = len(metrics.get("unknowns") or [])
+        verdict = "pending" if unknown else ("pass" if metrics["winner_merged"] >= 6 else "fail")
+        state.update(trial_verdict=verdict, trial_metrics=metrics, trial_unknown=unknown)
+        save_state(state)
+        if unknown:
+            print(f"[experiment producer] verdict pending; unknown {unknown}", file=sys.stderr)
         return verdict
 
 

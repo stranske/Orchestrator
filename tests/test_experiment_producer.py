@@ -268,19 +268,65 @@ def test_missing_frozen_spec_never_evaluates(tmp_path, monkeypatch):
     assert result["reason"] == "missing_spec_recovery_refused"
 
 
-def test_trial_expires_once_and_requires_six_merged_winners():
+@pytest.mark.parametrize("merged,expected", [(5, "fail"), (6, "pass")])
+def test_trial_expires_once_and_requires_six_merged_winners(merged, expected):
     end, verdict = producer.trial_defaults(1000, active=True)
     assert verdict == "pending"
     assert producer.trial_defaults(1000 + 20 * 86400)[0] == end
+    due = 1000 + (producer.COVERAGE_DAYS + producer.WINNER_MERGE_GRACE_DAYS) * 86400
     assert (
-        producer.trial_verdict(1000 + 20 * 86400, summary_fn=lambda: {"winner_merged": 6})
-        == "pending"
+        producer.trial_verdict(due - 1, summary_fn=lambda: pytest.fail("early poll")) == "pending"
     )
+    assert producer.trial_verdict(due, summary_fn=lambda: {"winner_merged": merged}) == expected
+
+
+def test_verdict_flake_does_not_overwrite_pass(monkeypatch):
+    producer.trial_defaults(1000, active=True)
+    due = 1000 + 28 * 86400
+    assert producer.trial_verdict(due, summary_fn=lambda: {"winner_merged": 6}) == "pass"
+    calls = []
+    monkeypatch.setattr(producer, "gh_call", lambda argv: calls.append(argv) or {"error": "flake"})
+
+    def flaked_summary():
+        producer.gh_call(["gh", "api", "stub"])
+        return {"winner_merged": 0, "unknowns": ["merge_state_unknown"]}
+
+    monkeypatch.setattr(producer, "producer_summary", flaked_summary)
+    assert producer.trial_verdict(due + 86400) == "pass"
+    assert calls == []
+    assert producer.read_state()["trial_verdict"] == "pass"
+
+
+@pytest.mark.parametrize("verdict", ["pass", "fail"])
+def test_persisted_verdict_never_polls(monkeypatch, verdict):
+    producer.save_state({"trial_verdict": verdict})
+    monkeypatch.setattr(producer, "gh_call", lambda *a: pytest.fail("terminal verdict polled gh"))
     assert (
-        producer.trial_verdict(1000 + 21 * 86400, summary_fn=lambda: {"winner_merged": 5}) == "fail"
+        producer.trial_verdict(summary_fn=lambda: pytest.fail("terminal verdict recomputed"))
+        == verdict
     )
+
+
+def test_unknown_verdict_retries_only_once_per_utc_day(capsys):
+    producer.trial_defaults(1000, active=True)
+    due = 1000 + 28 * 86400
+    calls = []
+
+    def summary():
+        calls.append(True)
+        return {"winner_merged": 0, "unknowns": ["merge_state_unknown", "merge_state_unknown"]}
+
+    assert producer.trial_verdict(due, summary_fn=summary) == "pending"
+    assert "unknown 2" in capsys.readouterr().err
+    assert producer.read_state()["trial_unknown"] == 2
+    assert producer.trial_verdict(due + 1, summary_fn=summary) == "pending"
+    assert len(calls) == 1
+    assert producer.read_state()["last_verdict_check"] == time.strftime("%Y%m%d", time.gmtime(due))
+    next_day = (int(due) // 86400 + 1) * 86400
+    assert producer.trial_verdict(next_day, summary_fn=summary) == "pending"
+    assert len(calls) == 2
     assert (
-        producer.trial_verdict(1000 + 21 * 86400, summary_fn=lambda: {"winner_merged": 6}) == "pass"
+        producer.trial_verdict(next_day + 86400, summary_fn=lambda: {"winner_merged": 6}) == "pass"
     )
 
 
@@ -307,11 +353,13 @@ def test_report_zero_values_are_present(monkeypatch):
     )
 
 
+@pytest.mark.parametrize("enabled", ["0", "1"])
 def test_producer_judges_are_two_neutral_agents_and_delivery_bypasses_synthesis(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, enabled
 ):
     root, meta, ranking = fixture_experiment(tmp_path, monkeypatch)
-    meta["launched_ts"] = time.time()
+    monkeypatch.setenv("ORCH_EXPERIMENT_PRODUCER", enabled)
+    meta["launched_ts"] = time.time() - 10 * 3600
     (root / "meta.json").write_text(json.dumps(meta))
     monkeypatch.setattr(exp_abcd, "EXP_DIR", tmp_path)
     for member in meta["members"]:
@@ -378,7 +426,8 @@ def test_followup_member_push_stops_before_judging(tmp_path, monkeypatch):
     assert result["status"] == "member_pushed"
 
 
-def test_producer_guard_retains_missing_spec_and_budget_checks(tmp_path, monkeypatch):
+@pytest.mark.parametrize("enabled", ["0", "1"])
+def test_producer_guard_retains_missing_spec_and_budget_checks(tmp_path, monkeypatch, enabled):
     import sqlite3
 
     import research_usage_guard as guard
@@ -399,7 +448,7 @@ def test_producer_guard_retains_missing_spec_and_budget_checks(tmp_path, monkeyp
         now=1000,
     )
     result = guard.assess_and_record_opportunity(
-        **kwargs, env={"ORCH_RESEARCH_ARM": "0", "ORCH_EXPERIMENT_PRODUCER": "1"}
+        **kwargs, env={"ORCH_RESEARCH_ARM": "0", "ORCH_EXPERIMENT_PRODUCER": enabled}
     )
     assert result["eligible"] is True
     assert (
@@ -454,7 +503,8 @@ def test_real_subject_plan_keeps_reservations_and_pacing(tmp_path, monkeypatch):
     )
 
 
-def test_trial_shell_is_bash32_compatible_and_self_expiring(tmp_path):
+@pytest.mark.parametrize("verdict,expected", [("pending", "1"), ("pass", "1"), ("fail", "0")])
+def test_trial_shell_is_bash32_compatible_and_self_expiring(tmp_path, verdict, expected):
     from paths import REPO_ROOT
 
     source = (REPO_ROOT / "orchestrate.sh").read_text()
@@ -463,7 +513,7 @@ def test_trial_shell_is_bash32_compatible_and_self_expiring(tmp_path):
         "unset _orch_exp_trial _orch_exp_end _orch_exp_verdict _orch_exp_default", start
     ) + len("unset _orch_exp_trial _orch_exp_end _orch_exp_verdict _orch_exp_default")
     block = source[start:end]
-    prelude = 'python3() { echo "20261020 pending"; }; date() { echo 20261021; }; '
+    prelude = f'python3() {{ echo "20261020 {verdict}"; }}; date() {{ echo 20261021; }}; '
     result = subprocess.run(
         [
             "/bin/bash",
@@ -477,14 +527,12 @@ def test_trial_shell_is_bash32_compatible_and_self_expiring(tmp_path):
         text=True,
     )
     assert result.returncode == 0
-    assert result.stdout == "0 2"
+    assert result.stdout == f"{expected} 2"
     result = subprocess.run(
         [
             "/bin/bash",
             "-c",
-            prelude.replace("pending", "pass")
-            + block
-            + '\nprintf "%s" "$ORCH_EXPERIMENT_PRODUCER"',
+            prelude.replace(verdict, "pass") + block + '\nprintf "%s" "$ORCH_EXPERIMENT_PRODUCER"',
         ],
         env={"PATH": "/usr/bin:/bin"},
         capture_output=True,
@@ -616,11 +664,22 @@ def plan_fixture(monkeypatch, *, shed=True):
     )
 
 
-@pytest.mark.parametrize("block", [None, "lock", "unevaluated_cap", "cooldown"])
+@pytest.mark.parametrize("block", [None, "lock", "unevaluated_cap", "cooldown", "fresh_warn"])
 def test_shed_agent_does_not_latch_firing_launch(tmp_path, monkeypatch, capsys, block):
     import tick
 
     cap, kwargs = plan_fixture(monkeypatch)
+    fresh_warn = block == "fresh_warn"
+    if fresh_warn:
+        block = None
+        cap["agents"]["claude"]["state"] = "warn"
+        monkeypatch.setattr(
+            producer,
+            "route_cells",
+            lambda *a, **k: [
+                {"agent": a, "task_type": "implement", "age_days": 1} for a in cap["agents"]
+            ],
+        )
     item = {
         "target": "a/b#3",
         "task_type": "implement",
@@ -673,7 +732,11 @@ def test_shed_agent_does_not_latch_firing_launch(tmp_path, monkeypatch, capsys, 
     arms = launched[0][3]
     assert {a for arm in arms for a in arm["agents"]} <= {"codex", "cursor", "vibe", "muse"}
     assert "claude" not in {a for arm in arms for a in arm["agents"]}
-    assert "coverage debt 5 cells > 21d, drainable 4" in capsys.readouterr().err
+    assert (
+        "coverage debt 0 cells > 21d, drainable 0"
+        if fresh_warn
+        else "coverage debt 5 cells > 21d, drainable 4"
+    ) in capsys.readouterr().err
     assert producer.read_state()["launched_today"] == 1
 
 
@@ -796,7 +859,9 @@ def test_report_writes_due_trial_verdict(monkeypatch, merged, verdict):
     import switch_review
 
     now = time.time()
-    producer.trial_defaults(now - producer.COVERAGE_DAYS * 86400 - 1, active=True)
+    producer.trial_defaults(
+        now - (producer.COVERAGE_DAYS + producer.WINNER_MERGE_GRACE_DAYS) * 86400 - 1, active=True
+    )
     monkeypatch.setattr(
         producer,
         "producer_summary",
@@ -960,3 +1025,106 @@ def test_local_verify_copies_named_node_file(tmp_path, monkeypatch):
     )
     assert result["copied_test_paths"] == ["tests/test_fix.py"]
     assert selected == ["tests/test_fix.py::test_fix"]
+
+
+def test_build_plan_skip_line_has_zero_drainable_for_absent_feed_classes(monkeypatch, capsys):
+    import router
+
+    cap, kwargs = plan_fixture(monkeypatch)
+    for row in cap["agents"].values():
+        row["state"] = "warn"
+    cap["agents"]["codex"]["state"] = "ok"
+    monkeypatch.setattr(
+        router,
+        "ROUTE_TABLE",
+        {
+            "implement": {"agents": [{"agent": "claude"}]},
+            "testgen": {"agents": [{"agent": "codex"}]},
+        },
+    )
+    monkeypatch.setattr(
+        producer,
+        "route_cells",
+        lambda *a, **k: [
+            {"task_type": "implement", "agent": "claude", "age_days": 25},
+            {"task_type": "testgen", "agent": "codex", "age_days": 25},
+        ],
+    )
+    item = {"target": "a/b#3", "body": "`pytest tests/test_fix.py`", "task_type": "implement"}
+    plan = producer.build_plan([item], cap, **kwargs)
+    assert plan["planned"] == []
+    assert capsys.readouterr().err == (
+        "pacing claude=warn, cursor=warn, muse=warn, vibe=warn; "
+        "coverage debt 2 cells > 21d, drainable 0\n"
+    )
+
+
+def test_no_named_test_skip_recorded_once_per_issue_per_utc_day(monkeypatch):
+    import tick
+
+    cap, _ = plan_fixture(monkeypatch, shed=False)
+    monkeypatch.setattr(tick.claims, "reap_stale", lambda: None)
+    monkeypatch.setattr(tick.claims, "active_claims", lambda: {})
+    events = []
+    monkeypatch.setattr(tick.research_subjects, "record_event", lambda *a, **k: events.append(k))
+    clock = [86400.0]
+    monkeypatch.setattr(producer.time, "time", lambda: clock[0])
+    items = [{"target": f"a/b#{n}", "body": "No named test"} for n in (3, 4)]
+    for _ in range(2):
+        tick.research_tick(items, cap, dry_run=False)
+    assert producer.read_state()["skips"]["no_named_test"] == 2
+    assert len(events) == 4  # two issue rejections plus one no_subject per tick
+    assert producer.read_state()["skips"]["no_subject"] == 2
+    clock[0] = 2 * 86400
+    tick.research_tick(items, cap, dry_run=False)
+    assert producer.read_state()["skips"]["no_named_test"] == 4
+
+
+@pytest.mark.parametrize(
+    "response", [{"error": "flake"}, {"stdout": '{"merge_state_unknown": true}'}]
+)
+def test_unknown_winner_merge_never_fails_trial(tmp_path, monkeypatch, response):
+    producer.trial_defaults(1000, active=True)
+    monkeypatch.setattr(exp_abcd, "EXP_DIR", tmp_path)
+    for n in range(2):
+        root = tmp_path / str(n)
+        root.mkdir()
+        (root / "meta.json").write_text(
+            json.dumps(
+                {
+                    "producer": "experiment_producer",
+                    "repo": "a/b",
+                    "launched_ts": 1000,
+                }
+            )
+        )
+        (root / "producer-delivery.json").write_text(json.dumps({"pr_url": "url", "pr_number": n}))
+    calls = []
+    monkeypatch.setattr(producer, "gh_call", lambda argv: calls.append(argv) or response)
+    assert producer.trial_verdict(1000 + 28 * 86400) == "pending"
+    assert len(calls) == 2
+    assert producer.read_state()["trial_unknown"] == 2
+
+
+def test_trial_defaults_failure_is_visible_and_defaults_off():
+    from paths import REPO_ROOT
+
+    source = (REPO_ROOT / "orchestrate.sh").read_text()
+    block = source[
+        source.index("# ORCH-ANCHOR: experiment-producer-trial") : source.index(
+            "# ORCH-ANCHOR: heartbeat-producers"
+        )
+    ]
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            "python3() { return 1; }; " + block + '\nprintf "%s" "$ORCH_EXPERIMENT_PRODUCER"',
+        ],
+        env={"PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert result.stdout == "0"
+    assert "ERROR: experiment producer --trial-defaults failed; defaulting off" in result.stderr

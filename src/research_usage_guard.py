@@ -426,14 +426,19 @@ def assess_and_record_opportunity(
         return result
 
     producer_followup = False
-    if environ.get("ORCH_EXPERIMENT_PRODUCER", "0") == "1":
-        try:
-            import exp_abcd
+    try:
+        import exp_abcd
+        import experiment_producer as producer
 
-            meta = json.loads((exp_abcd.exp_paths(exp_id) / "meta.json").read_text())
-            producer_followup = meta.get("producer") == "experiment_producer"
-        except (OSError, ValueError):
-            pass
+        meta = json.loads((exp_abcd.exp_paths(exp_id) / "meta.json").read_text())
+        producer_followup = (
+            meta.get("producer") == "experiment_producer"
+            and 0
+            <= current_ts - meta.get("launched_ts", 0)
+            <= producer.PRODUCER_FOLLOWUP_DAYS * 86400
+        )
+    except (OSError, ValueError):
+        pass
     # The shell default is defensive, but this in-process check is the actual dispatch invariant.
     if not (_truthy(environ.get("ORCH_RESEARCH_ARM", "0")) or producer_followup):
         result = _save_opportunity(
