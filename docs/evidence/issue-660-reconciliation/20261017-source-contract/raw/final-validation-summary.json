@@ -1,0 +1,58 @@
+{
+  "status": "RED with reproduced admitted-source failures; not full acceptance",
+  "collected": 3949,
+  "passed": 3901,
+  "failed": 24,
+  "skipped": 24,
+  "failed_tests": [
+    "SeatbeltRegexQuotingTests::test_backslash",
+    "SeatbeltRegexQuotingTests::test_combined",
+    "SeatbeltRegexQuotingTests::test_quote",
+    "SeatbeltRegexQuotingTests::test_regex_metacharacters",
+    "test_build_exec_mirror::test_presync_says_whether_ci_verified_the_shipped_tree[documented]",
+    "test_build_exec_mirror::test_presync_says_whether_ci_verified_the_shipped_tree[drifted]",
+    "test_build_exec_mirror::test_the_390_guard_composes_with_the_documented_copier",
+    "test_build_exec_mirror::test_the_documented_copier_builds_through_the_builder",
+    "test_model_tier_resolution::test_auth_failure_is_detected",
+    "test_model_tier_resolution::test_auth_ok_when_probe_succeeds",
+    "test_model_tier_resolution::test_exit_zero_but_failed_is_still_a_failure",
+    "test_model_tier_resolution::test_presence_pass_is_not_reported_as_verified",
+    "test_model_tier_resolution::test_presence_probe_still_detects_a_missing_credential",
+    "test_model_tier_resolution::test_status_style_not_logged_in_is_caught",
+    "test_tick_watchdog::test_a_drain_whose_target_has_exited_is_never_advertised",
+    "test_tick_watchdog::test_a_previous_tick_that_left_no_end_is_unknown_and_kept",
+    "test_tick_watchdog::test_a_stuck_tick_is_reported_with_the_kill_that_frees_it",
+    "test_tick_watchdog::test_a_tick_that_reaches_no_cadence_step_alerts",
+    "test_tick_watchdog::test_an_unreadable_record_is_unknown_not_clean",
+    "test_tick_watchdog::test_fleet_summary_carries_the_tick_record",
+    "test_tick_watchdog::test_the_arming_block_as_written_arms_and_records_the_tick",
+    "test_tick_watchdog::test_the_drained_line_is_reachable_and_exact",
+    "test_tick_watchdog::test_the_process_table_keeps_whole_command_lines",
+    "test_tick_watchdog::test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming"
+  ],
+  "baseline_method": "25 failing cases from initial run replayed on unchanged admitted Git archive; 24 reproduce and the private-path assertion passes there. Final repair fixes that introduced assertion without changing the test. No baseline full-suite claim.",
+  "selftest_failures": [
+    "adapters",
+    "dispatcher",
+    "tick_watchdog"
+  ],
+  "selftest_baselines": "each same failure reproduced on admitted source",
+  "final_source_unchanged_since_validation": true,
+  "targeted": {
+    "passed": 111,
+    "subtests_passed": 8
+  },
+  "node": {
+    "passed": 8
+  },
+  "changed_module_selftests": "both pass; feedback names isolated-ledger missing prerequisite sections",
+  "formatter": "Black whole-tree pass",
+  "configured_lint": "Ruff pass",
+  "typecheck": "mypy two source files pass",
+  "complexity": "supplemental C901: 11 pre-existing diagnostics, no new violating symbols; configured Ruff excludes C901",
+  "remaining": [
+    "clean hosted current-head CI/verify result",
+    "postmerge mirror synchronization and guarded live publication from selected Brain",
+    "source acceptance; no merge or live publication performed"
+  ]
+}

@@ -1,0 +1,1427 @@
+[
+  {
+    "workflow_attempt_id": "stranske/Orchestrator:39025097095:1",
+    "title": "keepalive-dispatch/v2 ordinary pr=663",
+    "head_branch": "main",
+    "head_sha": "7b8703f6c357692c5aceaa43b7cfd243fa3a6025",
+    "native_status": "completed",
+    "native_conclusion": "cancelled",
+    "jobs": []
+  },
+  {
+    "workflow_attempt_id": "stranske/Orchestrator:39021377594:1",
+    "title": "keepalive-dispatch/v2 ordinary pr=663",
+    "head_branch": "main",
+    "head_sha": "7b8703f6c357692c5aceaa43b7cfd243fa3a6025",
+    "native_status": "completed",
+    "native_conclusion": "cancelled",
+    "jobs": []
+  },
+  {
+    "workflow_attempt_id": "stranske/Orchestrator:39001068935:1",
+    "title": "Agents Issue Optimizer #660",
+    "head_branch": "main",
+    "head_sha": "07c975959abdf47dfe254fea8e512bb44cae9aea",
+    "native_status": "completed",
+    "native_conclusion": "success",
+    "jobs": [
+      {
+        "id": 117303903644,
+        "name": "optimize_issue",
+        "status": "completed",
+        "conclusion": "success"
+      }
+    ]
+  },
+  {
+    "workflow_attempt_id": "stranske/Orchestrator:39010949343:1",
+    "title": "keepalive-dispatch/v2 ordinary pr=663",
+    "head_branch": "main",
+    "head_sha": "c6c9a2176ca2a6139eb6bab43c6b2e5056c9aa49",
+    "native_status": "completed",
+    "native_conclusion": "failure",
+    "jobs": [
+      {
+        "id": 117333174564,
+        "name": "Merge automerge-labelled agent PRs",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117333174707,
+        "name": "Prepare autofix context",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117333174758,
+        "name": "Evaluate keepalive loop",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117333175471,
+        "name": "Wake generated delivery reconciler",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117333215196,
+        "name": "Record autofix metrics",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117333215424,
+        "name": "Run Codex autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117333215429,
+        "name": "Run Muse autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117333215522,
+        "name": "Flag for human follow-up",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117333215915,
+        "name": "Run Claude autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117333237273,
+        "name": "Test job creation",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117333237286,
+        "name": "Verify secrets available",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117333252711,
+        "name": "Mark agent running",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117333340877,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "failure"
+      },
+      {
+        "id": 117333341195,
+        "name": "Keepalive next task (Gemini)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117333341216,
+        "name": "Keepalive next task (Claude)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117333341325,
+        "name": "Keepalive next task (Muse)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117333341513,
+        "name": "Keepalive next task (Cursor)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117333486354,
+        "name": "Update keepalive summary",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117333547222,
+        "name": "Record keepalive dispatch completion",
+        "status": "completed",
+        "conclusion": "success"
+      }
+    ]
+  },
+  {
+    "workflow_attempt_id": "stranske/Orchestrator:39017848096:1",
+    "title": "keepalive-dispatch/v2 ordinary pr=663",
+    "head_branch": "main",
+    "head_sha": "7b8703f6c357692c5aceaa43b7cfd243fa3a6025",
+    "native_status": "completed",
+    "native_conclusion": "success",
+    "jobs": [
+      {
+        "id": 117353512606,
+        "name": "Merge automerge-labelled agent PRs",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117353512781,
+        "name": "Evaluate keepalive loop",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117353512807,
+        "name": "Prepare autofix context",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117353513531,
+        "name": "Wake generated delivery reconciler",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117353568069,
+        "name": "Record autofix metrics",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117353569112,
+        "name": "Run Claude autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117353569124,
+        "name": "Run Codex autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117353569234,
+        "name": "Run Muse autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117353569246,
+        "name": "Flag for human follow-up",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117353577022,
+        "name": "Test job creation",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117353578002,
+        "name": "Update keepalive summary",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117353578131,
+        "name": "Mark agent running",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117353578321,
+        "name": "Verify secrets available",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117353578501,
+        "name": "Keepalive next task (Muse)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117353578565,
+        "name": "Keepalive next task (Gemini)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117353578755,
+        "name": "Keepalive next task (Claude)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117353578778,
+        "name": "Keepalive next task (Codex)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117353579070,
+        "name": "Keepalive next task (Cursor)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117353646333,
+        "name": "Record keepalive dispatch completion",
+        "status": "completed",
+        "conclusion": "skipped"
+      }
+    ]
+  },
+  {
+    "workflow_attempt_id": "stranske/Orchestrator:39019976757:1",
+    "title": "keepalive-dispatch/v2 ordinary pr=663",
+    "head_branch": "main",
+    "head_sha": "7b8703f6c357692c5aceaa43b7cfd243fa3a6025",
+    "native_status": "completed",
+    "native_conclusion": "cancelled",
+    "jobs": []
+  },
+  {
+    "workflow_attempt_id": "stranske/Orchestrator:39022800487:1",
+    "title": "keepalive-dispatch/v2 ordinary pr=663",
+    "head_branch": "main",
+    "head_sha": "7b8703f6c357692c5aceaa43b7cfd243fa3a6025",
+    "native_status": "completed",
+    "native_conclusion": "success",
+    "jobs": [
+      {
+        "id": 117367840883,
+        "name": "Merge automerge-labelled agent PRs",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117367841088,
+        "name": "Evaluate keepalive loop",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117367841434,
+        "name": "Wake generated delivery reconciler",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117367841494,
+        "name": "Prepare autofix context",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117367891922,
+        "name": "Record autofix metrics",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117367892505,
+        "name": "Flag for human follow-up",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117367892513,
+        "name": "Run Codex autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117367892540,
+        "name": "Run Muse autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117367892672,
+        "name": "Run Claude autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117367922535,
+        "name": "Test job creation",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117367922713,
+        "name": "Verify secrets available",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117367942425,
+        "name": "Mark agent running",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117367994295,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117367994765,
+        "name": "Keepalive next task (Cursor)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117367994803,
+        "name": "Keepalive next task (Claude)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117367994894,
+        "name": "Keepalive next task (Gemini)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117367995083,
+        "name": "Keepalive next task (Muse)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117368440912,
+        "name": "Update keepalive summary",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117368515972,
+        "name": "Record keepalive dispatch completion",
+        "status": "completed",
+        "conclusion": "success"
+      }
+    ]
+  },
+  {
+    "workflow_attempt_id": "stranske/Orchestrator:39021153531:1",
+    "title": "keepalive-dispatch/v2 ordinary pr=663",
+    "head_branch": "main",
+    "head_sha": "7b8703f6c357692c5aceaa43b7cfd243fa3a6025",
+    "native_status": "completed",
+    "native_conclusion": "success",
+    "jobs": [
+      {
+        "id": 117363073088,
+        "name": "Merge automerge-labelled agent PRs",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117363073193,
+        "name": "Prepare autofix context",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117363073205,
+        "name": "Evaluate keepalive loop",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117363074055,
+        "name": "Wake generated delivery reconciler",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117363114677,
+        "name": "Record autofix metrics",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117363115141,
+        "name": "Run Codex autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117363115334,
+        "name": "Run Muse autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117363115402,
+        "name": "Flag for human follow-up",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117363115545,
+        "name": "Run Claude autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117363145091,
+        "name": "Verify secrets available",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117363145095,
+        "name": "Test job creation",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117363159915,
+        "name": "Mark agent running",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117363237358,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117363237888,
+        "name": "Keepalive next task (Cursor)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117363237910,
+        "name": "Keepalive next task (Gemini)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117363237922,
+        "name": "Keepalive next task (Muse)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117363237925,
+        "name": "Keepalive next task (Claude)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117364550065,
+        "name": "Update keepalive summary",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117364632189,
+        "name": "Record keepalive dispatch completion",
+        "status": "completed",
+        "conclusion": "success"
+      }
+    ]
+  },
+  {
+    "workflow_attempt_id": "stranske/Orchestrator:39028850122:1",
+    "title": "keepalive-dispatch/v2 ordinary pr=663",
+    "head_branch": "main",
+    "head_sha": "7b8703f6c357692c5aceaa43b7cfd243fa3a6025",
+    "native_status": "completed",
+    "native_conclusion": "success",
+    "jobs": [
+      {
+        "id": 117385107761,
+        "name": "Prepare autofix context",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117385107927,
+        "name": "Evaluate keepalive loop",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117385107954,
+        "name": "Merge automerge-labelled agent PRs",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117385108627,
+        "name": "Wake generated delivery reconciler",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117385146076,
+        "name": "Record autofix metrics",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117385146689,
+        "name": "Run Claude autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117385146736,
+        "name": "Run Muse autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117385146855,
+        "name": "Run Codex autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117385147124,
+        "name": "Flag for human follow-up",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117385182834,
+        "name": "Verify secrets available",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117385182940,
+        "name": "Test job creation",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117385203297,
+        "name": "Mark agent running",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117385255907,
+        "name": "Keepalive next task (Cursor) / Cursor (keepalive)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117385256403,
+        "name": "Keepalive next task (Muse)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117385256697,
+        "name": "Keepalive next task (Claude)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117385256822,
+        "name": "Keepalive next task (Gemini)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117385256882,
+        "name": "Keepalive next task (Codex)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117386796338,
+        "name": "Update keepalive summary",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117386869176,
+        "name": "Record keepalive dispatch completion",
+        "status": "completed",
+        "conclusion": "success"
+      }
+    ]
+  },
+  {
+    "workflow_attempt_id": "stranske/Orchestrator:39019445173:1",
+    "title": "keepalive-dispatch/v2 ordinary pr=663",
+    "head_branch": "main",
+    "head_sha": "7b8703f6c357692c5aceaa43b7cfd243fa3a6025",
+    "native_status": "completed",
+    "native_conclusion": "cancelled",
+    "jobs": []
+  },
+  {
+    "workflow_attempt_id": "stranske/Orchestrator:39002997338:1",
+    "title": "keepalive-dispatch/v2 ordinary pr=663",
+    "head_branch": "main",
+    "head_sha": "80229d7b4c41b0354b87fc6ec730735a5c55418c",
+    "native_status": "completed",
+    "native_conclusion": "failure",
+    "jobs": [
+      {
+        "id": 117309659681,
+        "name": "Prepare autofix context",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117309659843,
+        "name": "Evaluate keepalive loop",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117309659845,
+        "name": "Merge automerge-labelled agent PRs",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117309660444,
+        "name": "Wake generated delivery reconciler",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117309712122,
+        "name": "Record autofix metrics",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117309712557,
+        "name": "Run Claude autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117309712830,
+        "name": "Run Muse autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117309712933,
+        "name": "Flag for human follow-up",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117309713099,
+        "name": "Run Codex autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117309741282,
+        "name": "Test job creation",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117309741287,
+        "name": "Verify secrets available",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117309754467,
+        "name": "Mark agent running",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117309820575,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "failure"
+      },
+      {
+        "id": 117309821016,
+        "name": "Keepalive next task (Claude)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117309821118,
+        "name": "Keepalive next task (Cursor)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117309821443,
+        "name": "Keepalive next task (Muse)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117309821516,
+        "name": "Keepalive next task (Gemini)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117309956268,
+        "name": "Update keepalive summary",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117310032559,
+        "name": "Record keepalive dispatch completion",
+        "status": "completed",
+        "conclusion": "success"
+      }
+    ]
+  },
+  {
+    "workflow_attempt_id": "stranske/Orchestrator:39006528777:1",
+    "title": "keepalive-dispatch/v2 ordinary pr=663",
+    "head_branch": "main",
+    "head_sha": "c6c9a2176ca2a6139eb6bab43c6b2e5056c9aa49",
+    "native_status": "completed",
+    "native_conclusion": "failure",
+    "jobs": [
+      {
+        "id": 117320028022,
+        "name": "Prepare autofix context",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117320028159,
+        "name": "Merge automerge-labelled agent PRs",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117320028253,
+        "name": "Evaluate keepalive loop",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117320028857,
+        "name": "Wake generated delivery reconciler",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117320065088,
+        "name": "Record autofix metrics",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117320065529,
+        "name": "Flag for human follow-up",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117320065646,
+        "name": "Run Claude autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117320065883,
+        "name": "Run Codex autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117320066190,
+        "name": "Run Muse autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117320100751,
+        "name": "Verify secrets available",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117320100782,
+        "name": "Test job creation",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117320118667,
+        "name": "Mark agent running",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117320177634,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "failure"
+      },
+      {
+        "id": 117320177997,
+        "name": "Keepalive next task (Muse)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117320178159,
+        "name": "Keepalive next task (Claude)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117320178291,
+        "name": "Keepalive next task (Cursor)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117320178467,
+        "name": "Keepalive next task (Gemini)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117320341897,
+        "name": "Update keepalive summary",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117320406866,
+        "name": "Record keepalive dispatch completion",
+        "status": "completed",
+        "conclusion": "success"
+      }
+    ]
+  },
+  {
+    "workflow_attempt_id": "stranske/Orchestrator:39002206050:1",
+    "title": "keepalive-dispatch/v2 ordinary pr=661",
+    "head_branch": "main",
+    "head_sha": "07c975959abdf47dfe254fea8e512bb44cae9aea",
+    "native_status": "completed",
+    "native_conclusion": "cancelled",
+    "jobs": []
+  },
+  {
+    "workflow_attempt_id": "stranske/Orchestrator:39023656990:1",
+    "title": "keepalive-dispatch/v2 ordinary pr=663",
+    "head_branch": "main",
+    "head_sha": "7b8703f6c357692c5aceaa43b7cfd243fa3a6025",
+    "native_status": "completed",
+    "native_conclusion": "success",
+    "jobs": [
+      {
+        "id": 117370451593,
+        "name": "Prepare autofix context",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117370451687,
+        "name": "Evaluate keepalive loop",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117370451696,
+        "name": "Merge automerge-labelled agent PRs",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117370452048,
+        "name": "Wake generated delivery reconciler",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117370487688,
+        "name": "Record autofix metrics",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117370488409,
+        "name": "Run Claude autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117370488660,
+        "name": "Run Muse autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117370488771,
+        "name": "Run Codex autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117370488784,
+        "name": "Flag for human follow-up",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117370517439,
+        "name": "Verify secrets available",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117370517512,
+        "name": "Test job creation",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117370531572,
+        "name": "Mark agent running",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117370586647,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117370587042,
+        "name": "Keepalive next task (Cursor)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117370587096,
+        "name": "Keepalive next task (Claude)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117370587997,
+        "name": "Keepalive next task (Muse)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117370588064,
+        "name": "Keepalive next task (Gemini)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117371172418,
+        "name": "Update keepalive summary",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117371278208,
+        "name": "Record keepalive dispatch completion",
+        "status": "completed",
+        "conclusion": "success"
+      }
+    ]
+  },
+  {
+    "workflow_attempt_id": "stranske/Orchestrator:39031932594:1",
+    "title": "keepalive-dispatch/v2 ordinary pr=663",
+    "head_branch": "main",
+    "head_sha": "dfc0a98810759260c40ec6a32d43983d1cdb03bc",
+    "native_status": "completed",
+    "native_conclusion": "success",
+    "jobs": [
+      {
+        "id": 117393987372,
+        "name": "Merge automerge-labelled agent PRs",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117393987839,
+        "name": "Evaluate keepalive loop",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117393987897,
+        "name": "Prepare autofix context",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117393988390,
+        "name": "Wake generated delivery reconciler",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117394034902,
+        "name": "Record autofix metrics",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117394035439,
+        "name": "Run Muse autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117394035809,
+        "name": "Run Codex autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117394035906,
+        "name": "Flag for human follow-up",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117394036325,
+        "name": "Run Claude autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117394091028,
+        "name": "Test job creation",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117394091040,
+        "name": "Verify secrets available",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117394107346,
+        "name": "Mark agent running",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117394163857,
+        "name": "Keepalive next task (Cursor) / Cursor (keepalive)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117394164535,
+        "name": "Keepalive next task (Gemini)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117394164538,
+        "name": "Keepalive next task (Muse)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117394164631,
+        "name": "Keepalive next task (Codex)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117394164871,
+        "name": "Keepalive next task (Claude)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117394905395,
+        "name": "Update keepalive summary",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117394982783,
+        "name": "Record keepalive dispatch completion",
+        "status": "completed",
+        "conclusion": "success"
+      }
+    ]
+  },
+  {
+    "workflow_attempt_id": "stranske/Orchestrator:39033240612:1",
+    "title": "keepalive-dispatch/v2 ordinary pr=663",
+    "head_branch": "main",
+    "head_sha": "dfc0a98810759260c40ec6a32d43983d1cdb03bc",
+    "native_status": "completed",
+    "native_conclusion": "success",
+    "jobs": [
+      {
+        "id": 117397857104,
+        "name": "Prepare autofix context",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117397857302,
+        "name": "Evaluate keepalive loop",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117397857340,
+        "name": "Merge automerge-labelled agent PRs",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117397858377,
+        "name": "Wake generated delivery reconciler",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117397911511,
+        "name": "Record autofix metrics",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117397911911,
+        "name": "Flag for human follow-up",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117397911971,
+        "name": "Run Claude autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117397912071,
+        "name": "Run Muse autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117397912437,
+        "name": "Run Codex autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117397967099,
+        "name": "Test job creation",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117397968113,
+        "name": "Update keepalive summary",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117397968399,
+        "name": "Verify secrets available",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117397968562,
+        "name": "Mark agent running",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117397968858,
+        "name": "Keepalive next task (Muse)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117397968897,
+        "name": "Keepalive next task (Claude)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117397969198,
+        "name": "Keepalive next task (Codex)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117397969207,
+        "name": "Keepalive next task (Cursor)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117397969221,
+        "name": "Keepalive next task (Gemini)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117398062728,
+        "name": "Record keepalive dispatch completion",
+        "status": "completed",
+        "conclusion": "skipped"
+      }
+    ]
+  },
+  {
+    "workflow_attempt_id": "stranske/Orchestrator:39013922391:1",
+    "title": "keepalive-dispatch/v2 ordinary pr=663",
+    "head_branch": "main",
+    "head_sha": "c6c9a2176ca2a6139eb6bab43c6b2e5056c9aa49",
+    "native_status": "completed",
+    "native_conclusion": "failure",
+    "jobs": [
+      {
+        "id": 117341980832,
+        "name": "Prepare autofix context",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117341980961,
+        "name": "Evaluate keepalive loop",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117341981092,
+        "name": "Merge automerge-labelled agent PRs",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117341981871,
+        "name": "Wake generated delivery reconciler",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117342024635,
+        "name": "Record autofix metrics",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117342025285,
+        "name": "Run Muse autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117342025301,
+        "name": "Flag for human follow-up",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117342025342,
+        "name": "Run Codex autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117342025406,
+        "name": "Run Claude autofix",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117342057401,
+        "name": "Verify secrets available",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117342057410,
+        "name": "Test job creation",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117342076928,
+        "name": "Mark agent running",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117342136706,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "failure"
+      },
+      {
+        "id": 117342137119,
+        "name": "Keepalive next task (Gemini)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117342137377,
+        "name": "Keepalive next task (Claude)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117342137394,
+        "name": "Keepalive next task (Muse)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117342137710,
+        "name": "Keepalive next task (Cursor)",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 117342284595,
+        "name": "Update keepalive summary",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 117342341581,
+        "name": "Record keepalive dispatch completion",
+        "status": "completed",
+        "conclusion": "success"
+      }
+    ]
+  }
+]

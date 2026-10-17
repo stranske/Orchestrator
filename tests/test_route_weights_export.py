@@ -1,5 +1,7 @@
 import json
+import os
 import sqlite3
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -419,13 +421,15 @@ def test_export_includes_capacity_block(tmp_path: Path) -> None:
 
 
 def test_completed_publication_survives_success_heartbeat_failure(tmp_path, monkeypatch, capsys):
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
     monkeypatch.setenv("ORCH_ROUTE_WEIGHTS_PUBLISH", "1")
     monkeypatch.setattr(
         "sys.argv",
         [
             "route_weights_export.py",
             "--feedback-db",
-            str(tmp_path / "absent.db"),
+            str(database),
             "--state-dir",
             str(tmp_path),
             "--publish",
@@ -433,7 +437,7 @@ def test_completed_publication_survives_success_heartbeat_failure(tmp_path, monk
     )
     published = []
     monkeypatch.setattr(
-        export, "publish_document", lambda document: published.append(document) or True
+        export, "publish_document", lambda document, **kwargs: published.append(document) or True
     )
 
     def heartbeat(capability, event, **kwargs):
@@ -445,6 +449,264 @@ def test_completed_publication_survives_success_heartbeat_failure(tmp_path, monk
     assert len(published) == 1
     assert (tmp_path / "route-weights-export.json").exists()
     assert "capability heartbeat failed: fixture ledger unavailable" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("exists", [False, True], ids=["missing-db", "empty-db"])
+@pytest.mark.parametrize("allow", [False, True], ids=["default", "owner-override"])
+def test_publish_guard_refuses_empty_db(tmp_path, monkeypatch, capsys, exists, allow):
+    """The real CLI must fail at the guard, before touching the publication repo."""
+    database = tmp_path / "empty.db"
+    if exists:
+        sqlite3.connect(database).close()
+    monkeypatch.setenv("ORCH_ROUTE_WEIGHTS_PUBLISH", "1")
+    monkeypatch.setattr(export, "_current_capacity_snapshot", _capacity_fixture)
+    heartbeats = []
+    monkeypatch.setattr(
+        export.capabilities,
+        "daily_heartbeat",
+        lambda capability, event, **kwargs: heartbeats.append((capability, event)),
+    )
+    monkeypatch.setattr(
+        export.provision,
+        "ensure_canonical",
+        lambda *a: pytest.fail("publish_guard must refuse an empty DB before provisioning"),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "route_weights_export.py",
+            "--feedback-db",
+            str(database),
+            "--state-dir",
+            str(tmp_path),
+            "--publish",
+        ]
+        + (["--allow-evidence-regression"] if allow else []),
+    )
+    assert export.main() == 1, "publish_guard must refuse the empty DB"
+    output = capsys.readouterr()
+    assert f"db={database} source_version=0" in output.err
+    assert "publish_guard refused: source_version == 0" in output.err
+    assert database.exists() is exists, "read-only export must not create a missing DB"
+    assert heartbeats == [("route-weights-export", "invocation")]
+
+
+def test_publish_guard_refuses_all_false_evidence(tmp_path):
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE route_weights SET n_obs=0")
+    document = export.build_document(database, capacity_snapshot=_capacity_fixture())
+    assert document["source_version"] == 2
+    ok, reason = export.publish_guard(document, None)
+    assert not ok, "publish_guard must refuse all-false evidence even with a nonzero version"
+    assert "all task types have evidence_ok false" in reason
+
+
+@pytest.mark.parametrize("omit_task", [False, True], ids=["false", "missing-task"])
+def test_publish_guard_refuses_loss_of_published_task_evidence(omit_task):
+    previous = {"task_types": {"review": {"evidence_ok": True}}}
+    current = {"source_version": 2, "task_types": {"implement": {"evidence_ok": True}}}
+    if not omit_task:
+        current["task_types"]["review"] = {"evidence_ok": False}
+    ok, reason = export.publish_guard(current, previous)
+    assert not ok, "publish_guard must preserve each published task's evidence"
+    assert "review" in reason
+
+
+@pytest.mark.parametrize("previous", [None, {"task_types": {"implement": {"evidence_ok": True}}}])
+def test_publish_guard_allows_evidenced_publication(previous):
+    assert export.publish_guard(
+        {"source_version": 2, "task_types": {"implement": {"evidence_ok": True}}}, previous
+    ) == (True, "")
+
+
+@pytest.mark.parametrize("aged", [False, True], ids=["fresh", "aged"])
+@pytest.mark.parametrize("allow", [False, True], ids=["refused", "owner-override"])
+@pytest.mark.parametrize(
+    "regression", ["zero-version", "all-false", "lost-review", "capacity-only"]
+)
+def test_publish_guard_preserves_remote_until_explicit_override(
+    tmp_path, monkeypatch, capsys, allow, regression, aged
+):
+    """Use real fetch/show/commit/push against an isolated local bare remote."""
+
+    def git(repository, *args):
+        return subprocess.run(
+            ["git", "-C", str(repository), *args], check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    for key in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{key}_NAME", "Guard Test")
+        monkeypatch.setenv(f"GIT_{key}_EMAIL", "guard@example.invalid")
+    remote = tmp_path / "remote.git"
+    remote.mkdir()
+    git(remote, "init", "--bare", "--initial-branch=main")
+    checkout = tmp_path / "checkout"
+    git(tmp_path, "clone", str(remote), str(checkout))
+    git(checkout, "config", "user.name", "Publication Tester")
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    previous = export.build_document(database, now=100, capacity_snapshot=_capacity_fixture())
+    previous["task_types"]["review"] = dict(previous["task_types"]["implement"])
+    target = checkout / export.EXPORT_PATH
+    export.write_document(target, previous)
+    git(checkout, "add", ".")
+    git(checkout, "commit", "-m", "fixture publication")
+    git(checkout, "push", "origin", f"HEAD:{export.EXPORT_BRANCH}")
+    before_head = git(remote, "rev-parse", export.EXPORT_BRANCH)
+    before_bytes = target.read_bytes()
+    document = export.build_document(database, now=101, capacity_snapshot=_capacity_fixture())
+    if regression == "zero-version":
+        document["source_version"] = 0
+    elif regression == "all-false":
+        for row in document["task_types"].values():
+            row.update(evidence_ok=False, ranking=[])
+    if regression == "capacity-only":
+        document["task_types"] = json.loads(json.dumps(previous["task_types"]))
+        document["capacity"]["muse"]["state"] = "shed"
+
+    class FixedDateTime(export.dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls.fromtimestamp(200000, tz=tz)
+
+    monkeypatch.setattr(export.dt, "datetime", FixedDateTime)
+    hold_path = tmp_path / "state" / "route-weights-regression-hold.json"
+    if aged:
+        export.write_document(
+            hold_path,
+            {
+                "first_seen": 200000 - 24 * 3600,
+                "task_types": export._regressing_tasks(document, previous),
+                "reason": "fixture evidence loss",
+            },
+        )
+    monkeypatch.setattr(export.provision, "ensure_canonical", lambda *a: checkout)
+    monkeypatch.setenv("ORCH_ROUTE_WEIGHTS_PUBLISH", "1")
+    monkeypatch.setattr(export.capabilities, "daily_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(export, "build_document", lambda *a: document)
+    argv = [
+        "route_weights_export.py",
+        "--publish",
+        "--feedback-db",
+        str(database),
+        "--state-dir",
+        str(tmp_path / "state"),
+    ]
+    monkeypatch.setattr("sys.argv", argv + (["--allow-evidence-regression"] if allow else []))
+    allowed = regression == "capacity-only" or (allow and regression == "lost-review")
+    assert export.main() == (0 if allowed else 1)
+    after_head = git(remote, "rev-parse", export.EXPORT_BRANCH)
+    output = capsys.readouterr()
+    if allowed:
+        assert after_head != before_head
+        published = json.loads(git(remote, "show", f"{export.EXPORT_BRANCH}:{export.EXPORT_PATH}"))
+        assert published == document
+        message = git(remote, "log", "-1", "--format=%B", export.EXPORT_BRANCH)
+        assert message == (
+            f"chore: export route weights (db={database.resolve()} "
+            "source_version=2 by=Publication Tester)"
+        )
+        if regression == "capacity-only":
+            assert published["task_types"] == previous["task_types"]
+            assert not hold_path.exists(), "evidence recovery clears the hold"
+        elif allow:
+            assert "override --allow-evidence-regression" in output.err
+    else:
+        assert after_head == before_head, "publish_guard must leave the remote untouched"
+        assert target.read_bytes() == before_bytes, "publish_guard must preserve publication bytes"
+        assert git(checkout, "branch", "--show-current") == "main"
+        assert "publish_guard refused:" in output.err
+        assert "refused: regressing_tasks=" in output.err
+        assert "drainable_in=" in output.err
+        if regression == "lost-review":
+            assert "regressing_tasks=1, drainable_in=infiniteh" in output.err
+            hold = json.loads(hold_path.read_text())
+            assert hold == {
+                "first_seen": 200000 - (24 * 3600 if aged else 0),
+                "task_types": ["review"],
+                "reason": "evidence_ok true -> false for: review",
+            }
+
+
+@pytest.mark.parametrize(
+    "selection", ["default", "state", "cli-state", "runtime", "env-db", "cli-db"]
+)
+def test_feedback_db_path_binding(tmp_path, monkeypatch, capsys, selection):
+    monkeypatch.setattr(export, "_current_capacity_snapshot", _capacity_fixture)
+    for name in ("ORCH_STATE_DIR", "ORCH_LOCAL_RUNTIME", export.feedback.DB_PATH_ENV):
+        monkeypatch.delenv(name, raising=False)
+    # The resolved path must remain literal when opened through SQLite's URI API.
+    shared_db = tmp_path / "shared #?.db"
+    monkeypatch.setattr(export.feedback, "DB_PATH", shared_db)
+    state = tmp_path / "state"
+    runtime = tmp_path / "runtime"
+    expected = shared_db
+    argv = ["route_weights_export.py"]
+    if selection != "default":
+        monkeypatch.setenv("ORCH_STATE_DIR", str(state))
+        expected = state / "feedback" / "orchestrator.db"
+    if selection == "cli-state":
+        argv += ["--state-dir", str(tmp_path / "cli-state")]
+    if selection in ("runtime", "env-db", "cli-db"):
+        monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(runtime))
+        expected = runtime / "feedback" / "orchestrator.db"
+    if selection in ("env-db", "cli-db"):
+        expected = tmp_path / "env.db"
+        monkeypatch.setenv(export.feedback.DB_PATH_ENV, str(expected))
+    if selection == "cli-db":
+        expected = tmp_path / "explicit.db"
+        argv += ["--feedback-db", str(expected)]
+    expected.parent.mkdir(parents=True, exist_ok=True)
+    export._fixture_db(expected)
+    monkeypatch.setattr("sys.argv", argv)
+    monkeypatch.setattr(export.capabilities, "daily_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(export, "write_document", lambda *a: False)
+    with patch.object(
+        export.feedback, "resolve_db_path", wraps=export.feedback.resolve_db_path
+    ) as resolver:
+        assert export.main() == 0
+    resolver.assert_called_once()
+    assert export.feedback.resolve_db_path(*resolver.call_args.args) == expected.resolve()
+    assert f"db={expected.resolve()} source_version=2" in capsys.readouterr().err
+
+    # Each selection must remain diagnosable even if building the snapshot fails.
+    def fail_capacity():
+        raise OSError("capacity snapshot unavailable")
+
+    monkeypatch.setattr(export, "_current_capacity_snapshot", fail_capacity)
+    with pytest.raises(OSError, match="capacity snapshot unavailable"):
+        export.main()
+    assert capsys.readouterr().err == f"db={expected.resolve()} source_version=2\n"
+
+
+def test_cadence_surfaces_export_refusal(tmp_path):
+    script = (Path(__file__).resolve().parents[1] / "orchestrate.sh").read_text()
+    start = script.index("if _cadence_due route-weights-export ")
+    block = script[start : script.index("if _cadence_due periodic-report ", start)]
+    stubs = """
+_cadence_due() { return 0; }
+_attempt_ok() { return 0; }
+_mark_success() { echo SUCCESS; }
+_mark_fail() { echo "FAIL:$1"; }
+python3() { echo 'publish_guard refused: source_version == 0' >&2; return 1; }
+"""
+    result = subprocess.run(
+        ["bash", "-c", stubs + block],
+        env={
+            **os.environ,
+            "STAMP_DIR": str(tmp_path),
+            "ORCH": str(tmp_path),
+            "ORCH_ROUTE_WEIGHTS_PUBLISH": "1",
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "publish_guard refused: source_version == 0" in result.stdout
+    assert "FAIL:route-weights-export" in result.stdout
+    assert "SUCCESS" not in result.stdout
 
 
 @pytest.mark.parametrize(
@@ -493,3 +755,169 @@ def test_publish_accepts_real_evidence_recovery_over_version_zero(tmp_path):
     export._fixture_db(database)
     document = export.build_document(database, capacity_snapshot=_capacity_fixture())
     export._validate_publication(document, {"source_version": 0, "task_types": {}, "reserve": {}})
+
+
+def test_publication_identity_falls_back_to_exporter(tmp_path, monkeypatch):
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    document = export.build_document(database, capacity_snapshot=_capacity_fixture())
+    monkeypatch.setattr(export.provision, "ensure_canonical", lambda *a: tmp_path)
+
+    def run(argv, **kwargs):
+        if "rev-parse" in argv:
+            return subprocess.CompletedProcess(argv, 1, "")
+        return subprocess.CompletedProcess(argv, 0, "")
+
+    with patch.object(export.subprocess, "run", side_effect=run) as commands:
+        assert export.publish_document(document, db_path=database)
+    commits = [call.args[0] for call in commands.call_args_list if "commit" in call.args[0]]
+    assert commits[0][-1] == (
+        f"chore: export route weights (db={database.resolve()} "
+        "source_version=2 by=orchestrator-export)"
+    )
+
+
+def test_selftest_never_touches_live_hold(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(export.capacity, "build", _capacity_fixture)
+    hold = tmp_path / ".codex" / "orchestrator" / "route-weights-regression-hold.json"
+    export.write_document(hold, {"first_seen": 123, "task_types": ["review"], "reason": "live"})
+    before = hold.read_bytes(), hold.stat().st_mtime_ns
+    # Refuse even reads/touches, including transient mutations later restored by the test.
+    original_open, original_unlink = Path.open, Path.unlink
+
+    def checked_open(path, *args, **kwargs):
+        assert path != hold, "selftest must never access the live hold"
+        return original_open(path, *args, **kwargs)
+
+    def checked_unlink(path, *args, **kwargs):
+        assert path != hold, "selftest must never delete the live hold"
+        return original_unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as guard:
+        guard.setattr(Path, "open", checked_open)
+        guard.setattr(Path, "unlink", checked_unlink)
+        export._selftest()
+    assert (hold.read_bytes(), hold.stat().st_mtime_ns) == before
+
+
+@pytest.mark.parametrize("regressing", [False, True])
+def test_validation_without_state_dir_preserves_live_hold(tmp_path, monkeypatch, regressing):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    hold = tmp_path / ".codex" / "orchestrator" / "route-weights-regression-hold.json"
+    export.write_document(hold, {"first_seen": 1, "task_types": ["review"]})
+    before = hold.read_bytes(), hold.stat().st_mtime_ns
+    document = {"source_version": 2, "task_types": {"implement": {"evidence_ok": True}}}
+    previous = json.loads(json.dumps(document))
+    if regressing:
+        previous["task_types"]["review"] = {"evidence_ok": True}
+        with pytest.raises(export.PublicationRefused, match="drainable_in=infiniteh"):
+            export._validate_publication(document, previous)
+    else:
+        export._validate_publication(document, previous)
+    assert (hold.read_bytes(), hold.stat().st_mtime_ns) == before
+
+
+def test_failed_build_is_never_credited_as_invocation(tmp_path, monkeypatch):
+    monkeypatch.setattr("sys.argv", ["route_weights_export.py", "--state-dir", str(tmp_path)])
+    heartbeats = []
+    monkeypatch.setattr(
+        export.capabilities, "daily_heartbeat", lambda *a, **k: heartbeats.append(a)
+    )
+
+    def failed_build(*args):
+        raise RuntimeError("fixture build failed")
+
+    monkeypatch.setattr(export, "build_document", failed_build)
+    with pytest.raises(RuntimeError, match="fixture build failed"):
+        export.main()
+    assert heartbeats == []
+    assert not (tmp_path / "route-weights-export.json").exists()
+
+
+@pytest.mark.parametrize("evidenced", [False, True])
+def test_export_branch_without_artifact_can_publish_fresh(tmp_path, monkeypatch, capsys, evidenced):
+    def git(repository, *args):
+        return subprocess.run(
+            ["git", "-C", str(repository), *args], check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    for key in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{key}_NAME", "Guard Test")
+        monkeypatch.setenv(f"GIT_{key}_EMAIL", "guard@example.invalid")
+    remote = tmp_path / "remote.git"
+    remote.mkdir()
+    git(remote, "init", "--bare", "--initial-branch=main")
+    checkout = tmp_path / "checkout"
+    git(tmp_path, "clone", str(remote), str(checkout))
+    (checkout / "README.md").write_text("No export artifact yet\n")
+    git(checkout, "add", ".")
+    git(checkout, "commit", "-m", "fixture branch without artifact")
+    git(checkout, "push", "origin", f"HEAD:{export.EXPORT_BRANCH}")
+    before = git(remote, "rev-parse", export.EXPORT_BRANCH)
+    monkeypatch.setattr(export.provision, "ensure_canonical", lambda *a: checkout)
+    document = {
+        "source_version": 2 if evidenced else 0,
+        "task_types": {"implement": {"evidence_ok": evidenced, "ranking": []}},
+    }
+    if evidenced:
+        assert export.publish_document(document, state_dir=tmp_path / "state")
+        assert git(remote, "rev-parse", export.EXPORT_BRANCH) != before
+        assert (
+            json.loads(git(remote, "show", f"{export.EXPORT_BRANCH}:{export.EXPORT_PATH}"))
+            == document
+        )
+        assert (
+            "refused: published artifact missing on branch; publishing fresh"
+            in capsys.readouterr().err
+        )
+    else:
+        with pytest.raises(export.PublicationRefused, match="source_version == 0"):
+            export.publish_document(
+                document, allow_evidence_regression=True, state_dir=tmp_path / "state"
+            )
+        assert git(remote, "rev-parse", export.EXPORT_BRANCH) == before
+
+
+@pytest.mark.parametrize(
+    "payload,match",
+    [
+        ("not-json\n", "is not valid JSON"),
+        ("[]\n", "is not a JSON object"),
+        ('{"task_types": []}\n', "has malformed task_types"),
+        ('{"task_types": {"implement": null}}\n', "has malformed task_types"),
+    ],
+    ids=["invalid-json", "non-object", "task-types-list", "task-types-null-row"],
+)
+def test_export_branch_with_malformed_artifact_refuses(tmp_path, monkeypatch, payload, match):
+    """A present but unusable remote artifact must refuse cleanly, not traceback."""
+
+    def git(repository, *args):
+        return subprocess.run(
+            ["git", "-C", str(repository), *args], check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    for key in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{key}_NAME", "Guard Test")
+        monkeypatch.setenv(f"GIT_{key}_EMAIL", "guard@example.invalid")
+    remote = tmp_path / "remote.git"
+    remote.mkdir()
+    git(remote, "init", "--bare", "--initial-branch=main")
+    checkout = tmp_path / "checkout"
+    git(tmp_path, "clone", str(remote), str(checkout))
+    target = checkout / export.EXPORT_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(payload, encoding="utf-8")
+    git(checkout, "add", ".")
+    git(checkout, "commit", "-m", "fixture malformed publication")
+    git(checkout, "push", "origin", f"HEAD:{export.EXPORT_BRANCH}")
+    before = git(remote, "rev-parse", export.EXPORT_BRANCH)
+    monkeypatch.setattr(export.provision, "ensure_canonical", lambda *a: checkout)
+    document = {
+        "source_version": 2,
+        "task_types": {"implement": {"evidence_ok": True, "ranking": [{"agent": "codex"}]}},
+    }
+    with pytest.raises(export.PublicationRefused, match=match):
+        export.publish_document(document, state_dir=tmp_path / "state")
+    assert git(remote, "rev-parse", export.EXPORT_BRANCH) == before
+    assert git(checkout, "branch", "--show-current") == "main"

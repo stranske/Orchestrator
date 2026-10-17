@@ -1,0 +1,16 @@
+✔ publish_guard CLI refuses missing, override=false (158.423375ms)
+✔ publish_guard CLI refuses missing, override=true (164.911417ms)
+✔ publish_guard CLI refuses empty, override=false (154.303792ms)
+✔ publish_guard CLI refuses empty, override=true (163.411125ms)
+✔ publish_guard CLI refuses empty-table, override=false (266.215042ms)
+✔ publish_guard CLI refuses empty-table, override=true (249.434208ms)
+✔ publish_guard CLI refuses below-threshold, override=false (256.246625ms)
+✔ publish_guard CLI refuses below-threshold, override=true (255.056708ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1714.960292

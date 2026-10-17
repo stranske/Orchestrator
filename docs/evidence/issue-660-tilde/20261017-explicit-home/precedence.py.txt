@@ -1,0 +1,31 @@
+import hashlib,json,os,pathlib,subprocess,sys
+root=pathlib.Path('/tmp/source660-tilde/precedence');root.mkdir();repo=pathlib.Path('/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__663__opener')
+script='''import json,os,sys
+from pathlib import Path
+import feedback
+writer=feedback.DB_PATH
+reader=feedback.resolve_db_path()
+assert writer.expanduser().resolve()==reader, (writer,reader)
+expected=Path(sys.argv[1]).resolve()
+assert reader==expected,(reader,expected)
+api=feedback.resolve_db_path(state_dir=Path(sys.argv[2]))
+assert api==Path(sys.argv[3]).resolve(),(api,sys.argv[3])
+assert feedback.resolve_db_path(Path(sys.argv[4]))==Path(sys.argv[4]).resolve()
+print(json.dumps(dict(writer=str(writer),reader=str(reader),api_fallback=str(api),explicit_winner=sys.argv[4])))'''
+cases=['default','state','runtime','runtime-and-state','tilde-state','tilde-runtime','absolute-db','tilde-db','relative-db','tmp-alias-db','empty-db-with-runtime','empty-db']
+records=[]
+for name in cases:
+ d=root/name;d.mkdir();home=d/'home';home.mkdir();runtime=d/'runtime';state=d/'state';fallback=d/'api';env={k:v for k,v in os.environ.items() if not k.startswith('ORCH_')};env.update(HOME=str(home),PYTHONPATH=str(repo/'src'),ORCH_MODEL_PROBE='0',PYTHONDONTWRITEBYTECODE='1')
+ expected=home/'.codex/orchestrator/feedback/orchestrator.db';api=fallback/'feedback/orchestrator.db'
+ if name in ('state','runtime-and-state','absolute-db','tilde-db','relative-db','tmp-alias-db'):env['ORCH_STATE_DIR']=str(state);expected=state/'feedback/orchestrator.db'
+ if name in ('runtime','runtime-and-state','absolute-db','tilde-db','relative-db','tmp-alias-db','empty-db-with-runtime'):env['ORCH_LOCAL_RUNTIME']=str(runtime);expected=runtime/'feedback/orchestrator.db';api=expected
+ if name=='tilde-state':env['ORCH_STATE_DIR']='~/state';expected=home/'state/feedback/orchestrator.db'
+ if name=='tilde-runtime':env['ORCH_LOCAL_RUNTIME']='~/runtime';expected=home/'runtime/feedback/orchestrator.db';api=expected
+ if name in ('absolute-db','tilde-db','relative-db','tmp-alias-db'):
+  value={'absolute-db':str(d/'chosen.db'),'tilde-db':'~/chosen.db','relative-db':'chosen.db','tmp-alias-db':str(d/'chosen.db')}[name];env['ORCH_FEEDBACK_DB']=value;expected=home/'chosen.db' if name=='tilde-db' else d/'chosen.db';api=expected
+ if name.startswith('empty-db'):env['ORCH_FEEDBACK_DB']=''
+ if name=='empty-db':expected=d;api=fallback/'feedback/orchestrator.db'
+ argv=[sys.executable,'-c',script,str(expected),str(fallback),str(api),str(d/'cli-explicit.db')];p=subprocess.run(argv,cwd=d,env=env,capture_output=True,text=True)
+ record={'case':name,'argv':argv,'cwd':str(d),'env':{k:v for k,v in env.items() if k.startswith('ORCH_') or k=='HOME'},'exit':p.returncode,'stdout':p.stdout,'stderr':p.stderr};records.append(record);assert p.returncode==0,record
+ if name=='empty-db':record['limitation']='Existing invalid empty DB value selects cwd without other overrides; no SQLite opened. No new split; outside explicit-tilde repair.'
+(root.parent/'raw/precedence.json').write_text(json.dumps({'source_sha256':hashlib.sha256((repo/'src/feedback.py').read_bytes()).hexdigest(),'cases':records,'no_database_opened':True},indent=2)+'\n');print('PASS',len(records),'fresh-process precedence configurations; explicit API always wins; no DB opened')

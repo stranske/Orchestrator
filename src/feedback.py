@@ -49,6 +49,35 @@ LOCAL_RUNTIME = Path(os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex"
 DB_PATH_ENV = "ORCH_FEEDBACK_DB"
 DB_PATH = Path(os.environ.get(DB_PATH_ENV, LOCAL_RUNTIME / "feedback" / "orchestrator.db"))
 
+
+def resolve_db_path(explicit: Path | None = None, state_dir: Path | None = None) -> Path:
+    """Resolve the shared Brain path without opening or migrating the store.
+
+    Explicit DB selection wins over the environment, then runtime selection wins
+    over a caller's state-directory fallback and ORCH_STATE_DIR. With no overrides, use DB_PATH so
+    in-process callers can still select a private store.
+    """
+    if explicit is not None:
+        selected = explicit
+    elif os.environ.get(DB_PATH_ENV):
+        selected = Path(os.environ[DB_PATH_ENV])
+    elif os.environ.get("ORCH_LOCAL_RUNTIME"):
+        selected = Path(os.environ["ORCH_LOCAL_RUNTIME"]) / "feedback" / "orchestrator.db"
+    elif state_dir is not None:
+        selected = state_dir / "feedback" / "orchestrator.db"
+    elif os.environ.get("ORCH_STATE_DIR"):
+        selected = Path(os.environ["ORCH_STATE_DIR"]) / "feedback" / "orchestrator.db"
+    else:
+        selected = DB_PATH
+    return selected.expanduser().resolve()
+
+
+# Bind the learner at import through the same instance resolver used by readers.
+# _conn keeps DB_PATH so existing in-process private-store monkeypatches still work.
+# Preserve the legacy spelling of explicit private-copy paths (e.g. /tmp aliases).
+DB_PATH = DB_PATH.expanduser() if os.environ.get(DB_PATH_ENV) else resolve_db_path()
+
+
 # `agent_switches` holds two kinds of switch (2026-09-23): `source='label'` rows come from a PR's
 # `agent:*` label timeline, `source='policy'` rows from the keepalive state marker's delegation_log
 # (the delegation policy never relabels, so its switches are invisible to the timeline) and carry the
@@ -7008,6 +7037,73 @@ def _selftest_refusal_role_edges() -> None:
         conn.close()
 
 
+def _selftest_resolve_db_path() -> None:
+    """Explicit path, ORCH_FEEDBACK_DB, ORCH_LOCAL_RUNTIME, state_dir, then DB_PATH — in that order.
+
+    Deliberate-break→revert (2026-10-17): temporarily forcing the ORCH_FEEDBACK_DB arm ahead of an
+    explicit path fails this case with AssertionError naming the winner; restoring the real
+    precedence order makes the case pass again.
+    """
+    import tempfile
+
+    global DB_PATH
+    saved = {
+        key: os.environ.get(key)
+        for key in (DB_PATH_ENV, "ORCH_LOCAL_RUNTIME", "ORCH_STATE_DIR", "HOME")
+    }
+    previous_default = DB_PATH
+    try:
+        root = Path(tempfile.mkdtemp(prefix="feedback-resolve-db-"))
+        explicit = root / "explicit.db"
+        env_db = root / "env.db"
+        runtime = root / "runtime"
+        state = root / "state"
+        default = root / "default.db"
+        DB_PATH = default
+        for key in (DB_PATH_ENV, "ORCH_LOCAL_RUNTIME", "ORCH_STATE_DIR"):
+            os.environ.pop(key, None)
+
+        assert resolve_db_path() == default.resolve()
+        assert (
+            resolve_db_path(state_dir=state) == (state / "feedback" / "orchestrator.db").resolve()
+        )
+        os.environ["ORCH_STATE_DIR"] = str(state)
+        assert resolve_db_path() == (state / "feedback" / "orchestrator.db").resolve()
+        os.environ["ORCH_LOCAL_RUNTIME"] = str(runtime)
+        assert (
+            resolve_db_path(state_dir=state) == (runtime / "feedback" / "orchestrator.db").resolve()
+        )
+        os.environ[DB_PATH_ENV] = str(env_db)
+        assert resolve_db_path(state_dir=state) == env_db.resolve()
+        assert resolve_db_path(explicit, state) == explicit.resolve()
+        os.environ.pop(DB_PATH_ENV)
+        os.environ.pop("ORCH_LOCAL_RUNTIME")
+        import runpy
+
+        isolated = runpy.run_path(__file__)
+        writer = isolated["_conn"]()
+        try:
+            writer.execute("INSERT INTO route_weights (version) VALUES (73)")
+            writer.commit()
+            assert Path(writer.execute("PRAGMA database_list").fetchone()[2]) == resolve_db_path()
+        finally:
+            writer.close()
+        assert isolated["DB_PATH"] == resolve_db_path(), "state-only learner/reader split"
+        os.environ["HOME"] = str(root)
+        os.environ[DB_PATH_ENV] = "~/private/orchestrator.db"
+        isolated = runpy.run_path(__file__)
+        assert isolated["DB_PATH"] == root / "private" / "orchestrator.db", "literal tilde DB"
+        # Reader canonicalization may spell the same /tmp store as /private/tmp.
+        assert isolated["DB_PATH"].resolve() == resolve_db_path(), "tilde learner/reader split"
+    finally:
+        DB_PATH = previous_default
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 def _selftest():
     import tempfile
 
@@ -7086,6 +7182,7 @@ def _selftest():
             )
         finally:
             legacy.close()
+        _selftest_resolve_db_path()
         _selftest_agent_switches_utc()
         _selftest_refusal_role_edges()
         _selftest_rejected_role_capability_edges()

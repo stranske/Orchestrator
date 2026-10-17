@@ -1,0 +1,1 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="0.224" timestamp="2026-10-17T07:34:55.798798-05:00" hostname="local-host"><testcase classname="tests.test_source660_reconciliation" name="test_state_only_learner_writer_and_cli_share_db" time="0.165" /></testsuite></testsuites>

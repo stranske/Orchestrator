@@ -1,0 +1,2100 @@
+[
+  {
+    "pr": 661,
+    "reservation": {
+      "head_sha": "b3c93f0947c116b7f4d366fa1abeeb35f8cd3898",
+      "key": "145b5a53cb62895095f32cbaa69d4d449f463e9fc8b856eb4725e91f7b02939d",
+      "pr_number": 661,
+      "provider": "codex",
+      "reservation_id": "3eb96caa37b844f5a9437bd4ab662570",
+      "started_at": "2026-10-17T04:05:15Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "7ce0185ce4f9aa80d9ed7b6b7b5c517fa05679cf2b6c5ff6dd2a2b49087552b4",
+      "tasks_completed_before": 0,
+      "tasks_total_before": 21,
+      "workflow_attempt_id": "stranske/Orchestrator:39001134190:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "codex",
+        "record": {
+          "completed_at": "2026-10-17T04:15:28Z",
+          "completion_incomplete": false,
+          "continuation_completions": 0,
+          "head_sha": "b3c93f0947c116b7f4d366fa1abeeb35f8cd3898",
+          "key": "145b5a53cb62895095f32cbaa69d4d449f463e9fc8b856eb4725e91f7b02939d",
+          "observed_head_sha": "38f0ac9a387eaf5237be12b521f1c20b43a1d3bb",
+          "pr_number": 661,
+          "productive": true,
+          "provider": "codex",
+          "reservation_id": "3eb96caa37b844f5a9437bd4ab662570",
+          "result": {
+            "error": "",
+            "final_message_chars": 500,
+            "final_message_sha256": "77e6dd8507ded5421593f8dcab5d31c47a50cf1078b0f231e0703202c6a30116",
+            "provider": "codex",
+            "schema": "runner-result-summary/v1",
+            "success": true,
+            "summary": "Implemented locally: shared DB resolver, regression guard, logged override, cadence refusal logging, documentation, and tests. Ten unittest tests passed. Bypassing the guard failed the empty-DB test as required; restoring it passed. Changes remain uncommitted: Black and pytest are unavailable, so required validation is incomplete. Live publication remains pending. [Prepared PR notes](/tmp/route-weights-pr-body.md) capture results and blockers. Automatic approval review rejected adding `needs-hum",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T04:05:15Z",
+          "status": "completed",
+          "task_progress_reason": "head-changed",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "7ce0185ce4f9aa80d9ed7b6b7b5c517fa05679cf2b6c5ff6dd2a2b49087552b4",
+          "task_set_fingerprint_before": "7ce0185ce4f9aa80d9ed7b6b7b5c517fa05679cf2b6c5ff6dd2a2b49087552b4",
+          "tasks_completed_after": 6,
+          "tasks_completed_before": 0,
+          "tasks_total_after": 21,
+          "tasks_total_before": 21,
+          "unproductive_completions": 0,
+          "workflow_attempt_id": "stranske/Orchestrator:39001134190:1"
+        },
+        "reservation_id": "3eb96caa37b844f5a9437bd4ab662570",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117304753030,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-10-17T04:14:38Z",
+        "implementation_steps": [
+          {
+            "name": "Run Codex",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 22,
+            "started_at": "2026-10-17T04:07:55Z",
+            "completed_at": "2026-10-17T04:14:28Z"
+          },
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 28,
+            "started_at": "2026-10-17T04:14:30Z",
+            "completed_at": "2026-10-17T04:14:32Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 661,
+    "reservation": {
+      "head_sha": "38f0ac9a387eaf5237be12b521f1c20b43a1d3bb",
+      "key": "ca854d93862162871b44472ca0670e9c432e0695d097fbb96a7b6cb9e86f5c45",
+      "pr_number": 661,
+      "provider": "codex",
+      "reservation_id": "e8827ef445e64525bedd7e84026d4557",
+      "started_at": "2026-10-17T04:20:03Z",
+      "status": "pending",
+      "workflow_attempt_id": "stranske/Orchestrator:39002149760:1"
+    },
+    "matching_completions": [],
+    "actual_jobs": [
+      {
+        "id": 117307219570,
+        "name": "Run Codex autofix / Codex (autofix)",
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-10-17T04:24:44Z",
+        "implementation_steps": [
+          {
+            "name": "Run Codex",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 22,
+            "started_at": "2026-10-17T04:20:50Z",
+            "completed_at": "2026-10-17T04:24:31Z"
+          },
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 28,
+            "started_at": "2026-10-17T04:24:34Z",
+            "completed_at": "2026-10-17T04:24:35Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 661,
+    "reservation": {
+      "head_sha": "4411533b2e1394544d187eafe37ce3e24ef243c3",
+      "key": "73182637a21e53384d266696041d9c3a1de5a8502346e54cde86b7b98c2edc68",
+      "pr_number": 661,
+      "provider": "codex",
+      "reservation_id": "980337bb0b9640c3921ec7652b444a34",
+      "started_at": "2026-10-17T04:29:34Z",
+      "status": "pending",
+      "workflow_attempt_id": "stranske/Orchestrator:39002744795:1"
+    },
+    "matching_completions": [],
+    "actual_jobs": [
+      {
+        "id": 117308974553,
+        "name": "Run Codex autofix / Codex (autofix)",
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-10-17T04:31:52Z",
+        "implementation_steps": [
+          {
+            "name": "Run Codex",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 22,
+            "started_at": "2026-10-17T04:30:16Z",
+            "completed_at": "2026-10-17T04:31:46Z"
+          },
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 28,
+            "started_at": "2026-10-17T04:31:48Z",
+            "completed_at": "2026-10-17T04:31:48Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 661,
+    "reservation": {
+      "head_sha": "4411533b2e1394544d187eafe37ce3e24ef243c3",
+      "key": "73182637a21e53384d266696041d9c3a1de5a8502346e54cde86b7b98c2edc68",
+      "pr_number": 661,
+      "provider": "codex",
+      "reservation_id": "daa967f7526e419f9f6f1cc1862f4c71",
+      "started_at": "2026-10-17T13:12:41Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "7ce0185ce4f9aa80d9ed7b6b7b5c517fa05679cf2b6c5ff6dd2a2b49087552b4",
+      "tasks_completed_before": 6,
+      "tasks_total_before": 21,
+      "workflow_attempt_id": "stranske/Orchestrator:39035598641:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "codex",
+        "record": {
+          "completed_at": "2026-10-17T13:17:17Z",
+          "completion_incomplete": true,
+          "continuation_completions": 1,
+          "head_sha": "4411533b2e1394544d187eafe37ce3e24ef243c3",
+          "key": "73182637a21e53384d266696041d9c3a1de5a8502346e54cde86b7b98c2edc68",
+          "observed_head_sha": "4411533b2e1394544d187eafe37ce3e24ef243c3",
+          "pr_number": 661,
+          "productive": false,
+          "provider": "codex",
+          "reservation_id": "daa967f7526e419f9f6f1cc1862f4c71",
+          "result": {
+            "error": "",
+            "final_message_chars": 392,
+            "final_message_sha256": "4f3c01a515cdbf962dc7b114d09e706c2d9ff4b7120212e044450d36501c8618",
+            "provider": "codex",
+            "schema": "runner-result-summary/v1",
+            "success": true,
+            "summary": "Resolved the working-file conflicts, preserving both publication guards and the override flag. Syntax checks, the exporter self-test, and 13 local publication scenarios passed. Completion is blocked: `.git` is read-only, so the resolution remains unstaged and uncommitted. Full verification is incomplete because pytest is missing; network access also blocked installation and GitHub updates.",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T13:12:41Z",
+          "status": "completed",
+          "task_progress_reason": "measured",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "7ce0185ce4f9aa80d9ed7b6b7b5c517fa05679cf2b6c5ff6dd2a2b49087552b4",
+          "task_set_fingerprint_before": "7ce0185ce4f9aa80d9ed7b6b7b5c517fa05679cf2b6c5ff6dd2a2b49087552b4",
+          "tasks_completed_after": 6,
+          "tasks_completed_before": 6,
+          "tasks_completed_delta": 0,
+          "tasks_total_after": 21,
+          "tasks_total_before": 21,
+          "unproductive_completions": 1,
+          "workflow_attempt_id": "stranske/Orchestrator:39035598641:1"
+        },
+        "reservation_id": "daa967f7526e419f9f6f1cc1862f4c71",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117404785303,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "failure",
+        "completed_at": "2026-10-17T13:16:47Z",
+        "implementation_steps": [
+          {
+            "name": "Run Codex",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 26,
+            "started_at": "2026-10-17T13:13:42Z",
+            "completed_at": "2026-10-17T13:16:41Z"
+          },
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "failure",
+            "number": 32,
+            "started_at": "2026-10-17T13:16:42Z",
+            "completed_at": "2026-10-17T13:16:43Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 661,
+    "reservation": {
+      "completion_incomplete": true,
+      "continuation_completions": 1,
+      "head_sha": "4411533b2e1394544d187eafe37ce3e24ef243c3",
+      "key": "73182637a21e53384d266696041d9c3a1de5a8502346e54cde86b7b98c2edc68",
+      "pr_number": 661,
+      "productive": false,
+      "provider": "codex",
+      "reservation_id": "c76402b8c489460dabdc381a74c97297",
+      "started_at": "2026-10-17T13:17:43Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "7ce0185ce4f9aa80d9ed7b6b7b5c517fa05679cf2b6c5ff6dd2a2b49087552b4",
+      "tasks_completed_before": 6,
+      "tasks_total_before": 21,
+      "unproductive_completions": 1,
+      "workflow_attempt_id": "stranske/Orchestrator:39035657038:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "codex",
+        "record": {
+          "completed_at": "2026-10-17T13:19:36Z",
+          "completion_incomplete": true,
+          "continuation_completions": 1,
+          "head_sha": "4411533b2e1394544d187eafe37ce3e24ef243c3",
+          "key": "73182637a21e53384d266696041d9c3a1de5a8502346e54cde86b7b98c2edc68",
+          "observed_head_sha": "4411533b2e1394544d187eafe37ce3e24ef243c3",
+          "pr_number": 661,
+          "productive": false,
+          "provider": "codex",
+          "reservation_id": "c76402b8c489460dabdc381a74c97297",
+          "result": {
+            "error": "No output captured",
+            "final_message_chars": 18,
+            "final_message_sha256": "72ff13afd367d05175e0fef9ad217e8161cc43d8bfee187b7cb05442d621f972",
+            "provider": "codex",
+            "schema": "runner-result-summary/v1",
+            "success": false,
+            "summary": "No output captured",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T13:17:43Z",
+          "status": "error",
+          "task_progress_reason": "measured",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "7ce0185ce4f9aa80d9ed7b6b7b5c517fa05679cf2b6c5ff6dd2a2b49087552b4",
+          "task_set_fingerprint_before": "7ce0185ce4f9aa80d9ed7b6b7b5c517fa05679cf2b6c5ff6dd2a2b49087552b4",
+          "tasks_completed_after": 6,
+          "tasks_completed_before": 6,
+          "tasks_completed_delta": 0,
+          "tasks_total_after": 21,
+          "tasks_total_before": 21,
+          "unproductive_completions": 1,
+          "workflow_attempt_id": "stranske/Orchestrator:39035657038:1"
+        },
+        "reservation_id": "c76402b8c489460dabdc381a74c97297",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117405780802,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "failure",
+        "completed_at": "2026-10-17T13:19:11Z",
+        "implementation_steps": [
+          {
+            "name": "Run Codex",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 26,
+            "started_at": "2026-10-17T13:19:04Z",
+            "completed_at": "2026-10-17T13:19:04Z"
+          },
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 32,
+            "started_at": "2026-10-17T13:19:05Z",
+            "completed_at": "2026-10-17T13:19:05Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "head_sha": "5208b0f3c37f7f2b8ec1b07298782cfcd88a1816",
+      "key": "20adc574a97574007c9b0d307de2ef21a16742724e772ef7b248b1334814c21a",
+      "pr_number": 663,
+      "provider": "codex",
+      "reservation_id": "1fdafdec25844b5da95c5a4fbf9a909b",
+      "started_at": "2026-10-17T04:23:18Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "52ae740ced3bba8d7a3a1af1d825af980a79a5540f8cdd900195206e9ebf4586",
+      "tasks_completed_before": 7,
+      "tasks_total_before": 18,
+      "workflow_attempt_id": "stranske/Orchestrator:39002286335:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "codex",
+        "record": {
+          "completed_at": "2026-10-17T04:28:33Z",
+          "completion_incomplete": false,
+          "continuation_completions": 0,
+          "head_sha": "5208b0f3c37f7f2b8ec1b07298782cfcd88a1816",
+          "key": "20adc574a97574007c9b0d307de2ef21a16742724e772ef7b248b1334814c21a",
+          "observed_head_sha": "a1bf566d011365cdde46c383f6355e328a662866",
+          "pr_number": 663,
+          "productive": true,
+          "provider": "codex",
+          "reservation_id": "1fdafdec25844b5da95c5a4fbf9a909b",
+          "result": {
+            "error": "",
+            "final_message_chars": 500,
+            "final_message_sha256": "86d62f23325ec487b258e9e976c96a45a0cbcd473483c0061c855a658af39807",
+            "provider": "codex",
+            "schema": "runner-result-summary/v1",
+            "success": true,
+            "summary": "Implemented the shared `feedback.py` DB resolver, wired the exporter to it, strengthened path-selection tests, and documented the guard. Passed: six manual CLI path cases, publication unittest, exporter selftest, and manual guard mutation checks. Uncommitted: pytest and Black are unavailable, and network failures prevent installation or PR updates. The required Black gate blocks committing. Full verification and live publication remain outstanding. [Validation notes](docs/verification/issue-660-",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T04:23:18Z",
+          "status": "completed",
+          "task_progress_reason": "head-changed",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "52ae740ced3bba8d7a3a1af1d825af980a79a5540f8cdd900195206e9ebf4586",
+          "task_set_fingerprint_before": "52ae740ced3bba8d7a3a1af1d825af980a79a5540f8cdd900195206e9ebf4586",
+          "tasks_completed_after": 13,
+          "tasks_completed_before": 7,
+          "tasks_total_after": 18,
+          "tasks_total_before": 18,
+          "unproductive_completions": 0,
+          "workflow_attempt_id": "stranske/Orchestrator:39002286335:1"
+        },
+        "reservation_id": "1fdafdec25844b5da95c5a4fbf9a909b",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117307900809,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-10-17T04:28:03Z",
+        "implementation_steps": [
+          {
+            "name": "Run Codex",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 22,
+            "started_at": "2026-10-17T04:24:20Z",
+            "completed_at": "2026-10-17T04:27:56Z"
+          },
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 28,
+            "started_at": "2026-10-17T04:27:57Z",
+            "completed_at": "2026-10-17T04:27:58Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "head_sha": "a1bf566d011365cdde46c383f6355e328a662866",
+      "key": "a88a89af65393508c42a2f7ce62a3f111ebbb1c590ea9ad9fd6b312452d41316",
+      "pr_number": 663,
+      "provider": "codex",
+      "reservation_id": "78e607bf4f254becb8143996232cd89a",
+      "started_at": "2026-10-17T04:33:39Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "52ae740ced3bba8d7a3a1af1d825af980a79a5540f8cdd900195206e9ebf4586",
+      "tasks_completed_before": 13,
+      "tasks_total_before": 18,
+      "workflow_attempt_id": "stranske/Orchestrator:39002997338:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "codex",
+        "record": {
+          "completed_at": "2026-10-17T04:35:21Z",
+          "head_sha": "a1bf566d011365cdde46c383f6355e328a662866",
+          "key": "a88a89af65393508c42a2f7ce62a3f111ebbb1c590ea9ad9fd6b312452d41316",
+          "observed_head_sha": "a1bf566d011365cdde46c383f6355e328a662866",
+          "pr_number": 663,
+          "provider": "codex",
+          "reservation_id": "78e607bf4f254becb8143996232cd89a",
+          "result": {
+            "error": "No output captured",
+            "final_message_chars": 18,
+            "final_message_sha256": "72ff13afd367d05175e0fef9ad217e8161cc43d8bfee187b7cb05442d621f972",
+            "provider": "codex",
+            "schema": "runner-result-summary/v1",
+            "success": false,
+            "summary": "No output captured",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T04:33:39Z",
+          "status": "error",
+          "task_progress_reason": "measured",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "52ae740ced3bba8d7a3a1af1d825af980a79a5540f8cdd900195206e9ebf4586",
+          "task_set_fingerprint_before": "52ae740ced3bba8d7a3a1af1d825af980a79a5540f8cdd900195206e9ebf4586",
+          "tasks_completed_after": 13,
+          "tasks_completed_before": 13,
+          "tasks_completed_delta": 0,
+          "tasks_total_after": 18,
+          "tasks_total_before": 18,
+          "workflow_attempt_id": "stranske/Orchestrator:39002997338:1"
+        },
+        "reservation_id": "78e607bf4f254becb8143996232cd89a",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117309820575,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "failure",
+        "completed_at": "2026-10-17T04:34:51Z",
+        "implementation_steps": [
+          {
+            "name": "Run Codex",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 22,
+            "started_at": "2026-10-17T04:34:46Z",
+            "completed_at": "2026-10-17T04:34:46Z"
+          },
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 28,
+            "started_at": "2026-10-17T04:34:47Z",
+            "completed_at": "2026-10-17T04:34:47Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "completion_incomplete": true,
+      "head_sha": "a1bf566d011365cdde46c383f6355e328a662866",
+      "key": "a88a89af65393508c42a2f7ce62a3f111ebbb1c590ea9ad9fd6b312452d41316",
+      "pr_number": 663,
+      "provider": "codex",
+      "reservation_id": "d3661cd4b00d42dda4aa03b284a60b83",
+      "started_at": "2026-10-17T05:31:09Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "52ae740ced3bba8d7a3a1af1d825af980a79a5540f8cdd900195206e9ebf4586",
+      "tasks_completed_before": 13,
+      "tasks_total_before": 18,
+      "workflow_attempt_id": "stranske/Orchestrator:39006528777:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "codex",
+        "record": {
+          "completed_at": "2026-10-17T05:33:02Z",
+          "completion_incomplete": true,
+          "head_sha": "a1bf566d011365cdde46c383f6355e328a662866",
+          "key": "a88a89af65393508c42a2f7ce62a3f111ebbb1c590ea9ad9fd6b312452d41316",
+          "observed_head_sha": "a1bf566d011365cdde46c383f6355e328a662866",
+          "pr_number": 663,
+          "provider": "codex",
+          "reservation_id": "d3661cd4b00d42dda4aa03b284a60b83",
+          "result": {
+            "error": "No output captured",
+            "final_message_chars": 18,
+            "final_message_sha256": "72ff13afd367d05175e0fef9ad217e8161cc43d8bfee187b7cb05442d621f972",
+            "provider": "codex",
+            "schema": "runner-result-summary/v1",
+            "success": false,
+            "summary": "No output captured",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T05:31:09Z",
+          "status": "error",
+          "task_progress_reason": "measured",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "52ae740ced3bba8d7a3a1af1d825af980a79a5540f8cdd900195206e9ebf4586",
+          "task_set_fingerprint_before": "52ae740ced3bba8d7a3a1af1d825af980a79a5540f8cdd900195206e9ebf4586",
+          "tasks_completed_after": 13,
+          "tasks_completed_before": 13,
+          "tasks_completed_delta": 0,
+          "tasks_total_after": 18,
+          "tasks_total_before": 18,
+          "workflow_attempt_id": "stranske/Orchestrator:39006528777:1"
+        },
+        "reservation_id": "d3661cd4b00d42dda4aa03b284a60b83",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117320177634,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "failure",
+        "completed_at": "2026-10-17T05:32:33Z",
+        "implementation_steps": [
+          {
+            "name": "Run Codex",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 26,
+            "started_at": "2026-10-17T05:32:27Z",
+            "completed_at": "2026-10-17T05:32:27Z"
+          },
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 32,
+            "started_at": "2026-10-17T05:32:28Z",
+            "completed_at": "2026-10-17T05:32:28Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "completion_incomplete": true,
+      "head_sha": "a1bf566d011365cdde46c383f6355e328a662866",
+      "key": "a88a89af65393508c42a2f7ce62a3f111ebbb1c590ea9ad9fd6b312452d41316",
+      "pr_number": 663,
+      "provider": "codex",
+      "reservation_id": "3661ceeb35674d04b539a4cac0146e5e",
+      "started_at": "2026-10-17T06:43:33Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "52ae740ced3bba8d7a3a1af1d825af980a79a5540f8cdd900195206e9ebf4586",
+      "tasks_completed_before": 13,
+      "tasks_total_before": 18,
+      "workflow_attempt_id": "stranske/Orchestrator:39010949343:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "codex",
+        "record": {
+          "completed_at": "2026-10-17T06:45:21Z",
+          "completion_incomplete": true,
+          "head_sha": "a1bf566d011365cdde46c383f6355e328a662866",
+          "key": "a88a89af65393508c42a2f7ce62a3f111ebbb1c590ea9ad9fd6b312452d41316",
+          "observed_head_sha": "a1bf566d011365cdde46c383f6355e328a662866",
+          "pr_number": 663,
+          "provider": "codex",
+          "reservation_id": "3661ceeb35674d04b539a4cac0146e5e",
+          "result": {
+            "error": "No output captured",
+            "final_message_chars": 18,
+            "final_message_sha256": "72ff13afd367d05175e0fef9ad217e8161cc43d8bfee187b7cb05442d621f972",
+            "provider": "codex",
+            "schema": "runner-result-summary/v1",
+            "success": false,
+            "summary": "No output captured",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T06:43:33Z",
+          "status": "error",
+          "task_progress_reason": "measured",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "52ae740ced3bba8d7a3a1af1d825af980a79a5540f8cdd900195206e9ebf4586",
+          "task_set_fingerprint_before": "52ae740ced3bba8d7a3a1af1d825af980a79a5540f8cdd900195206e9ebf4586",
+          "tasks_completed_after": 13,
+          "tasks_completed_before": 13,
+          "tasks_completed_delta": 0,
+          "tasks_total_after": 18,
+          "tasks_total_before": 18,
+          "workflow_attempt_id": "stranske/Orchestrator:39010949343:1"
+        },
+        "reservation_id": "3661ceeb35674d04b539a4cac0146e5e",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117333340877,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "failure",
+        "completed_at": "2026-10-17T06:44:56Z",
+        "implementation_steps": [
+          {
+            "name": "Run Codex",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 26,
+            "started_at": "2026-10-17T06:44:50Z",
+            "completed_at": "2026-10-17T06:44:50Z"
+          },
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 32,
+            "started_at": "2026-10-17T06:44:51Z",
+            "completed_at": "2026-10-17T06:44:52Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "completion_incomplete": true,
+      "head_sha": "a1bf566d011365cdde46c383f6355e328a662866",
+      "key": "a88a89af65393508c42a2f7ce62a3f111ebbb1c590ea9ad9fd6b312452d41316",
+      "pr_number": 663,
+      "provider": "codex",
+      "reservation_id": "3b68f034b98b4bd9b71a0c3df0ada7de",
+      "started_at": "2026-10-17T07:31:22Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "52ae740ced3bba8d7a3a1af1d825af980a79a5540f8cdd900195206e9ebf4586",
+      "tasks_completed_before": 13,
+      "tasks_total_before": 18,
+      "workflow_attempt_id": "stranske/Orchestrator:39013922391:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "codex",
+        "record": {
+          "completed_at": "2026-10-17T07:33:04Z",
+          "completion_incomplete": true,
+          "head_sha": "a1bf566d011365cdde46c383f6355e328a662866",
+          "key": "a88a89af65393508c42a2f7ce62a3f111ebbb1c590ea9ad9fd6b312452d41316",
+          "observed_head_sha": "a1bf566d011365cdde46c383f6355e328a662866",
+          "pr_number": 663,
+          "provider": "codex",
+          "reservation_id": "3b68f034b98b4bd9b71a0c3df0ada7de",
+          "result": {
+            "error": "No output captured",
+            "final_message_chars": 18,
+            "final_message_sha256": "72ff13afd367d05175e0fef9ad217e8161cc43d8bfee187b7cb05442d621f972",
+            "provider": "codex",
+            "schema": "runner-result-summary/v1",
+            "success": false,
+            "summary": "No output captured",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T07:31:22Z",
+          "status": "error",
+          "task_progress_reason": "measured",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "52ae740ced3bba8d7a3a1af1d825af980a79a5540f8cdd900195206e9ebf4586",
+          "task_set_fingerprint_before": "52ae740ced3bba8d7a3a1af1d825af980a79a5540f8cdd900195206e9ebf4586",
+          "tasks_completed_after": 13,
+          "tasks_completed_before": 13,
+          "tasks_completed_delta": 0,
+          "tasks_total_after": 18,
+          "tasks_total_before": 18,
+          "workflow_attempt_id": "stranske/Orchestrator:39013922391:1"
+        },
+        "reservation_id": "3b68f034b98b4bd9b71a0c3df0ada7de",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117342136706,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "failure",
+        "completed_at": "2026-10-17T07:32:39Z",
+        "implementation_steps": [
+          {
+            "name": "Run Codex",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 26,
+            "started_at": "2026-10-17T07:32:32Z",
+            "completed_at": "2026-10-17T07:32:32Z"
+          },
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 32,
+            "started_at": "2026-10-17T07:32:33Z",
+            "completed_at": "2026-10-17T07:32:34Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "head_sha": "4f9f397cff613bdd3c1a8e3489c381bc4dcd9979",
+      "key": "9d5dd2234b9fa19aceb5abbfc937ecbbcd33b9f06d2d84ff394c9825879e5d2c",
+      "pr_number": 663,
+      "provider": "codex",
+      "reservation_id": "d7db9af7e0fb4e68aeba091339f1472c",
+      "started_at": "2026-10-17T08:35:09Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+      "tasks_completed_before": 0,
+      "tasks_total_before": 11,
+      "workflow_attempt_id": "stranske/Orchestrator:39017864057:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "codex",
+        "record": {
+          "completed_at": "2026-10-17T08:40:26Z",
+          "completion_incomplete": false,
+          "continuation_completions": 0,
+          "head_sha": "4f9f397cff613bdd3c1a8e3489c381bc4dcd9979",
+          "key": "9d5dd2234b9fa19aceb5abbfc937ecbbcd33b9f06d2d84ff394c9825879e5d2c",
+          "observed_head_sha": "372170a8531a5450813154abbe8f433d1ad78446",
+          "pr_number": 663,
+          "productive": true,
+          "provider": "codex",
+          "reservation_id": "d7db9af7e0fb4e68aeba091339f1472c",
+          "result": {
+            "error": "",
+            "final_message_chars": 380,
+            "final_message_sha256": "15ec578c24e604ca801adfe4e3067bb005b16fe5cea286f420ce96ef41ccde9d",
+            "provider": "codex",
+            "schema": "runner-result-summary/v1",
+            "success": true,
+            "summary": "Moved DB/version logging before snapshot processing and extended all six DB-selection tests to cover capacity failures. Runtime logging, guard mutation probes, and the Git publication unittest passed. Changes remain uncommitted: pytest and Black are unavailable, and network access blocked installation. Full verification, PR updates, and post-merge publication remain incomplete.",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T08:35:09Z",
+          "status": "completed",
+          "task_progress_reason": "head-changed",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "tasks_completed_after": 6,
+          "tasks_completed_before": 0,
+          "tasks_total_after": 11,
+          "tasks_total_before": 11,
+          "unproductive_completions": 0,
+          "workflow_attempt_id": "stranske/Orchestrator:39017864057:1"
+        },
+        "reservation_id": "d7db9af7e0fb4e68aeba091339f1472c",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117353788463,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-10-17T08:39:50Z",
+        "implementation_steps": [
+          {
+            "name": "Run Codex",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 26,
+            "started_at": "2026-10-17T08:36:19Z",
+            "completed_at": "2026-10-17T08:39:37Z"
+          },
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 32,
+            "started_at": "2026-10-17T08:39:40Z",
+            "completed_at": "2026-10-17T08:39:41Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "head_sha": "372170a8531a5450813154abbe8f433d1ad78446",
+      "key": "fab662c7494654156981dc1e8952013f3a3d935ba480c3c47e53bbb67de71904",
+      "pr_number": 663,
+      "provider": "codex",
+      "reservation_id": "e795ffc3f2114120ba19f3bf272b5ffb",
+      "started_at": "2026-10-17T08:45:03Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+      "tasks_completed_before": 6,
+      "tasks_total_before": 11,
+      "workflow_attempt_id": "stranske/Orchestrator:39018511077:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "codex",
+        "record": {
+          "completed_at": "2026-10-17T08:54:58Z",
+          "completion_incomplete": false,
+          "continuation_completions": 0,
+          "head_sha": "372170a8531a5450813154abbe8f433d1ad78446",
+          "key": "fab662c7494654156981dc1e8952013f3a3d935ba480c3c47e53bbb67de71904",
+          "observed_head_sha": "754ae331e9d1dde11c39462f539238bec0b80e3e",
+          "pr_number": 663,
+          "productive": true,
+          "provider": "codex",
+          "reservation_id": "e795ffc3f2114120ba19f3bf272b5ffb",
+          "result": {
+            "error": "",
+            "final_message_chars": 500,
+            "final_message_sha256": "7e88db07925bf08c157511d3248f64154c23db67faff37956abaa303fe6562b9",
+            "provider": "codex",
+            "schema": "runner-result-summary/v1",
+            "success": true,
+            "summary": "Extended [empty-DB tests](/home/runner/work/Orchestrator/Orchestrator/tests/test_route_weights_export.py:454) to cover overrides and reject success heartbeats after refusal. Exporter selftest and supplementary mutation probes passed. Full verification has no result yet; required pytest and Black checks are blocked by missing tools. Changes remain uncommitted because Black cannot run. Live publication and PR updates are blocked by the absent database and unavailable GitHub access. No acceptance b",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T08:45:03Z",
+          "status": "completed",
+          "task_progress_reason": "head-changed",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "tasks_completed_after": 9,
+          "tasks_completed_before": 6,
+          "tasks_total_after": 11,
+          "tasks_total_before": 11,
+          "unproductive_completions": 0,
+          "workflow_attempt_id": "stranske/Orchestrator:39018511077:1"
+        },
+        "reservation_id": "e795ffc3f2114120ba19f3bf272b5ffb",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117355593991,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-10-17T08:54:21Z",
+        "implementation_steps": [
+          {
+            "name": "Run Codex",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 26,
+            "started_at": "2026-10-17T08:46:20Z",
+            "completed_at": "2026-10-17T08:54:09Z"
+          },
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 32,
+            "started_at": "2026-10-17T08:54:11Z",
+            "completed_at": "2026-10-17T08:54:12Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "head_sha": "754ae331e9d1dde11c39462f539238bec0b80e3e",
+      "key": "bbd42d8aebc42df7424a1b0b001b734b280bcda409a5150ebd63d885b20cab96",
+      "pr_number": 663,
+      "provider": "codex",
+      "reservation_id": "cb3e64195aa24e78a35783f9ee2c54e2",
+      "started_at": "2026-10-17T08:59:26Z",
+      "status": "pending",
+      "workflow_attempt_id": "stranske/Orchestrator:39019393738:1"
+    },
+    "matching_completions": [],
+    "actual_jobs": [
+      {
+        "id": 117358053401,
+        "name": "Run Codex autofix / Codex (autofix)",
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-10-17T09:02:43Z",
+        "implementation_steps": [
+          {
+            "name": "Run Codex",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 26,
+            "started_at": "2026-10-17T09:00:21Z",
+            "completed_at": "2026-10-17T09:02:31Z"
+          },
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 32,
+            "started_at": "2026-10-17T09:02:33Z",
+            "completed_at": "2026-10-17T09:02:35Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "head_sha": "eb27fbdac95fb7d845a4e0ab83d82a4b424a7ccc",
+      "key": "ab3d81a2ad93b005cac3356d5b7de87f296af66dbabeefcda9bede4b64b7bf44",
+      "pr_number": 663,
+      "provider": "codex",
+      "reservation_id": "07ec81bc31bd42b0901153c36952c526",
+      "started_at": "2026-10-17T09:07:39Z",
+      "status": "pending",
+      "workflow_attempt_id": "stranske/Orchestrator:39019922545:1"
+    },
+    "matching_completions": [],
+    "actual_jobs": [
+      {
+        "id": 117359581755,
+        "name": "Run Codex autofix / Codex (autofix)",
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-10-17T09:11:28Z",
+        "implementation_steps": [
+          {
+            "name": "Run Codex",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 26,
+            "started_at": "2026-10-17T09:08:29Z",
+            "completed_at": "2026-10-17T09:11:13Z"
+          },
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 32,
+            "started_at": "2026-10-17T09:11:16Z",
+            "completed_at": "2026-10-17T09:11:17Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "head_sha": "240c20950831494df94c4de94f13ca18a8386e6d",
+      "key": "cfd9f77c04b228be07810d4471fac23696be948ec353f7e4ed5e75cafe6a228f",
+      "pr_number": 663,
+      "provider": "codex",
+      "reservation_id": "6859ab725d1646e896f9f4a04aa7f6f7",
+      "started_at": "2026-10-17T09:16:34Z",
+      "status": "pending",
+      "workflow_attempt_id": "stranske/Orchestrator:39020485345:1"
+    },
+    "matching_completions": [],
+    "actual_jobs": [
+      {
+        "id": 117361182936,
+        "name": "Run Codex autofix / Codex (autofix)",
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-10-17T09:21:01Z",
+        "implementation_steps": [
+          {
+            "name": "Run Codex",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 26,
+            "started_at": "2026-10-17T09:17:15Z",
+            "completed_at": "2026-10-17T09:20:52Z"
+          },
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 32,
+            "started_at": "2026-10-17T09:20:53Z",
+            "completed_at": "2026-10-17T09:20:54Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "head_sha": "1dbaba5b57f6b72dc4d45afde9c0fc2052170183",
+      "key": "a9f753ae6bb77ebd96347e8682dadeca5ac4f8bc5adb0ea93709543265587648",
+      "pr_number": 663,
+      "provider": "codex",
+      "reservation_id": "084423d6b5a1437e9b8e95b237f46da5",
+      "started_at": "2026-10-17T09:27:14Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+      "tasks_completed_before": 9,
+      "tasks_total_before": 11,
+      "workflow_attempt_id": "stranske/Orchestrator:39021153531:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "codex",
+        "record": {
+          "completed_at": "2026-10-17T09:35:20Z",
+          "completion_incomplete": false,
+          "continuation_completions": 0,
+          "head_sha": "1dbaba5b57f6b72dc4d45afde9c0fc2052170183",
+          "key": "a9f753ae6bb77ebd96347e8682dadeca5ac4f8bc5adb0ea93709543265587648",
+          "observed_head_sha": "c3b5f81040ca4fb9daf48ea1f57c97d722383698",
+          "pr_number": 663,
+          "productive": true,
+          "provider": "codex",
+          "reservation_id": "084423d6b5a1437e9b8e95b237f46da5",
+          "result": {
+            "error": "",
+            "final_message_chars": 494,
+            "final_message_sha256": "a33ee9d32c4e3c82dc48e7b463d9f90d8fdf5e7d4a7d82bc76380e200e15e1bb",
+            "provider": "codex",
+            "schema": "runner-result-summary/v1",
+            "success": true,
+            "summary": "Fixed SQLite path encoding so special characters cannot select the wrong database. Added regression tests; publication integration tests and the isolated exporter self-test pass. Acceptance remains unchecked. Pytest and Black are unavailable, installation failed, and full verification remains incomplete. Changes are uncommitted because the mandatory Black gate could not run. Automatic approval review blocked the PR comment and `needs-human` label because this run forbids approval requests.",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T09:27:14Z",
+          "status": "completed",
+          "task_progress_reason": "head-changed",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "tasks_completed_after": 9,
+          "tasks_completed_before": 9,
+          "tasks_total_after": 11,
+          "tasks_total_before": 11,
+          "unproductive_completions": 0,
+          "workflow_attempt_id": "stranske/Orchestrator:39021153531:1"
+        },
+        "reservation_id": "084423d6b5a1437e9b8e95b237f46da5",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117363237358,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-10-17T09:34:47Z",
+        "implementation_steps": [
+          {
+            "name": "Run Codex",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 26,
+            "started_at": "2026-10-17T09:28:30Z",
+            "completed_at": "2026-10-17T09:34:33Z"
+          },
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 32,
+            "started_at": "2026-10-17T09:34:34Z",
+            "completed_at": "2026-10-17T09:34:36Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "head_sha": "c3b5f81040ca4fb9daf48ea1f57c97d722383698",
+      "key": "ba823e8885a5ab69cf08aa8da4d532737a606d9f063adb493430caee0820cfdd",
+      "pr_number": 663,
+      "provider": "codex",
+      "reservation_id": "77318de79c084e6985fea9fcfb673f2c",
+      "started_at": "2026-10-17T09:39:13Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+      "tasks_completed_before": 9,
+      "tasks_total_before": 11,
+      "workflow_attempt_id": "stranske/Orchestrator:39021918656:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "codex",
+        "record": {
+          "completed_at": "2026-10-17T09:46:54Z",
+          "completion_incomplete": false,
+          "continuation_completions": 0,
+          "head_sha": "c3b5f81040ca4fb9daf48ea1f57c97d722383698",
+          "key": "ba823e8885a5ab69cf08aa8da4d532737a606d9f063adb493430caee0820cfdd",
+          "observed_head_sha": "f7df271d3d4173cb92e4315428f5045bdb65391f",
+          "pr_number": 663,
+          "productive": true,
+          "provider": "codex",
+          "reservation_id": "77318de79c084e6985fea9fcfb673f2c",
+          "result": {
+            "error": "",
+            "final_message_chars": 500,
+            "final_message_sha256": "e0d351affbd8ee695857c5c3cec60aca5a5d9c5ec5be6a3020f2c0fc330f5337",
+            "provider": "codex",
+            "schema": "runner-result-summary/v1",
+            "success": true,
+            "summary": "Added [8 CLI regression tests](/home/runner/work/Orchestrator/Orchestrator/tests/test_route_weights_export_cli.js); all pass. Disabling the guard makes all eight fail. Two existing publication tests also pass. Acceptance remains incomplete: pytest and Black are unavailable, full verification has not finished, and committing was blocked by read-only `.git`. Saved the [reconciled PR body and evidence](/home/runner/work/Orchestrator/Orchestrator/docs/verification/663-reconciled-pr-body.md). The cur",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T09:39:13Z",
+          "status": "completed",
+          "task_progress_reason": "head-changed",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "tasks_completed_after": 11,
+          "tasks_completed_before": 9,
+          "tasks_total_after": 11,
+          "tasks_total_before": 11,
+          "unproductive_completions": 0,
+          "workflow_attempt_id": "stranske/Orchestrator:39021918656:1"
+        },
+        "reservation_id": "77318de79c084e6985fea9fcfb673f2c",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117365423433,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-10-17T09:46:19Z",
+        "implementation_steps": [
+          {
+            "name": "Run Codex",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 26,
+            "started_at": "2026-10-17T09:40:19Z",
+            "completed_at": "2026-10-17T09:46:08Z"
+          },
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 32,
+            "started_at": "2026-10-17T09:46:10Z",
+            "completed_at": "2026-10-17T09:46:12Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "head_sha": "f7df271d3d4173cb92e4315428f5045bdb65391f",
+      "key": "ddfe89f62c0c4875bdefa4f01e6e94d50bd5b62d3fb52f3df307a2fbc27f4121",
+      "pr_number": 663,
+      "provider": "claude",
+      "reservation_id": "2e26e166d79148e99d7ea53596725daf",
+      "started_at": "2026-10-17T09:51:18Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+      "tasks_completed_before": 11,
+      "tasks_total_before": 11,
+      "workflow_attempt_id": "stranske/Orchestrator:39022671540:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "claude",
+        "record": {
+          "completed_at": "2026-10-17T09:53:11Z",
+          "head_sha": "f7df271d3d4173cb92e4315428f5045bdb65391f",
+          "key": "ddfe89f62c0c4875bdefa4f01e6e94d50bd5b62d3fb52f3df307a2fbc27f4121",
+          "observed_head_sha": "f7df271d3d4173cb92e4315428f5045bdb65391f",
+          "pr_number": 663,
+          "provider": "claude",
+          "reservation_id": "2e26e166d79148e99d7ea53596725daf",
+          "result": {
+            "error": "Failed to authenticate. API Error: 401 OAuth access token is invalid.",
+            "final_message_chars": 69,
+            "final_message_sha256": "680badbb9ddf20a36456b398f1dc73212f7630190c61f0a5f21af7927effdde7",
+            "provider": "claude",
+            "schema": "runner-result-summary/v1",
+            "success": false,
+            "summary": "Failed to authenticate. API Error: 401 OAuth access token is invalid.",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T09:51:18Z",
+          "status": "error",
+          "task_progress_reason": "measured",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "tasks_completed_after": 11,
+          "tasks_completed_before": 11,
+          "tasks_completed_delta": 0,
+          "tasks_total_after": 11,
+          "tasks_total_before": 11,
+          "workflow_attempt_id": "stranske/Orchestrator:39022671540:1"
+        },
+        "reservation_id": "2e26e166d79148e99d7ea53596725daf",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117367597446,
+        "name": "Keepalive next task (Claude) / Claude (keepalive)",
+        "status": "completed",
+        "conclusion": "failure",
+        "completed_at": "2026-10-17T09:52:41Z",
+        "implementation_steps": [
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 26,
+            "started_at": "2026-10-17T09:52:33Z",
+            "completed_at": "2026-10-17T09:52:33Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "head_sha": "f7df271d3d4173cb92e4315428f5045bdb65391f",
+      "key": "68480651a50091438e9bd32824dc83b50c738830b69c9325bf25691b8f98e9eb",
+      "pr_number": 663,
+      "provider": "codex",
+      "reservation_id": "f1d4276d98f24e4e9307f0bab4171d5c",
+      "started_at": "2026-10-17T09:53:39Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+      "tasks_completed_before": 11,
+      "tasks_total_before": 11,
+      "workflow_attempt_id": "stranske/Orchestrator:39022800487:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "codex",
+        "record": {
+          "completed_at": "2026-10-17T09:57:12Z",
+          "completion_incomplete": false,
+          "continuation_completions": 0,
+          "head_sha": "f7df271d3d4173cb92e4315428f5045bdb65391f",
+          "key": "68480651a50091438e9bd32824dc83b50c738830b69c9325bf25691b8f98e9eb",
+          "observed_head_sha": "f7df271d3d4173cb92e4315428f5045bdb65391f",
+          "pr_number": 663,
+          "productive": false,
+          "provider": "codex",
+          "reservation_id": "f1d4276d98f24e4e9307f0bab4171d5c",
+          "result": {
+            "error": "",
+            "final_message_chars": 18,
+            "final_message_sha256": "72ff13afd367d05175e0fef9ad217e8161cc43d8bfee187b7cb05442d621f972",
+            "provider": "codex",
+            "schema": "runner-result-summary/v1",
+            "success": true,
+            "summary": "No output captured",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T09:53:39Z",
+          "status": "completed",
+          "task_progress_reason": "measured",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "tasks_completed_after": 11,
+          "tasks_completed_before": 11,
+          "tasks_completed_delta": 0,
+          "tasks_total_after": 11,
+          "tasks_total_before": 11,
+          "unproductive_completions": 1,
+          "workflow_attempt_id": "stranske/Orchestrator:39022800487:1"
+        },
+        "reservation_id": "f1d4276d98f24e4e9307f0bab4171d5c",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117367994295,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-10-17T09:56:40Z",
+        "implementation_steps": [
+          {
+            "name": "Run Codex",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 26,
+            "started_at": "2026-10-17T09:54:38Z",
+            "completed_at": "2026-10-17T09:56:34Z"
+          },
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 32,
+            "started_at": "2026-10-17T09:56:36Z",
+            "completed_at": "2026-10-17T09:56:36Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "head_sha": "f7df271d3d4173cb92e4315428f5045bdb65391f",
+      "key": "68480651a50091438e9bd32824dc83b50c738830b69c9325bf25691b8f98e9eb",
+      "pr_number": 663,
+      "productive": false,
+      "provider": "codex",
+      "reservation_id": "5625b08bd1a94cdea19c5e8a927f8923",
+      "started_at": "2026-10-17T10:08:04Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+      "tasks_completed_before": 11,
+      "tasks_total_before": 11,
+      "unproductive_completions": 1,
+      "workflow_attempt_id": "stranske/Orchestrator:39023656990:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "codex",
+        "record": {
+          "completed_at": "2026-10-17T10:12:23Z",
+          "completion_incomplete": false,
+          "continuation_completions": 0,
+          "head_sha": "f7df271d3d4173cb92e4315428f5045bdb65391f",
+          "key": "68480651a50091438e9bd32824dc83b50c738830b69c9325bf25691b8f98e9eb",
+          "observed_head_sha": "f7df271d3d4173cb92e4315428f5045bdb65391f",
+          "pr_number": 663,
+          "productive": false,
+          "provider": "codex",
+          "reservation_id": "5625b08bd1a94cdea19c5e8a927f8923",
+          "result": {
+            "error": "",
+            "final_message_chars": 439,
+            "final_message_sha256": "29ca2e31e308aed8aa65343b4c8bdff49f5eaad2bac74d770d0e191081ab89fd",
+            "provider": "codex",
+            "schema": "runner-result-summary/v1",
+            "success": true,
+            "summary": "No failing checks found for `f7df271`. - [Hosted CI](https://github.com/stranske/Orchestrator/actions/runs/39022385555) and [completed Gate](https://github.com/stranske/Orchestrator/actions/runs/39022385796) passed, including tests, Black, Ruff, and mypy. - All 8 local exporter CLI tests passed. - The newer Gate rerun passed its test steps but remains in cleanup. No files changed or commit created. PR #663 is open and ready for review.",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T10:08:04Z",
+          "status": "completed",
+          "task_progress_reason": "measured",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "tasks_completed_after": 11,
+          "tasks_completed_before": 11,
+          "tasks_completed_delta": 0,
+          "tasks_total_after": 11,
+          "tasks_total_before": 11,
+          "unproductive_completions": 2,
+          "workflow_attempt_id": "stranske/Orchestrator:39023656990:1"
+        },
+        "reservation_id": "5625b08bd1a94cdea19c5e8a927f8923",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117370586647,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-10-17T10:11:41Z",
+        "implementation_steps": [
+          {
+            "name": "Run Codex",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 26,
+            "started_at": "2026-10-17T10:09:09Z",
+            "completed_at": "2026-10-17T10:11:35Z"
+          },
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 32,
+            "started_at": "2026-10-17T10:11:36Z",
+            "completed_at": "2026-10-17T10:11:37Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "head_sha": "f7df271d3d4173cb92e4315428f5045bdb65391f",
+      "key": "949bedead423f19700451b2a90f08e2cf1424b22da954b8e93b4d4995e242644",
+      "pr_number": 663,
+      "provider": "cursor",
+      "reservation_id": "59a2eda9cd844187a442f579d6faaad8",
+      "started_at": "2026-10-17T10:12:49Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+      "tasks_completed_before": 11,
+      "tasks_total_before": 11,
+      "workflow_attempt_id": "stranske/Orchestrator:39023965763:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "cursor",
+        "record": {
+          "completed_at": "2026-10-17T10:17:30Z",
+          "completion_incomplete": false,
+          "continuation_completions": 0,
+          "head_sha": "f7df271d3d4173cb92e4315428f5045bdb65391f",
+          "key": "949bedead423f19700451b2a90f08e2cf1424b22da954b8e93b4d4995e242644",
+          "observed_head_sha": "e028e609a1994e90baac1903060b903dab5b91ae",
+          "pr_number": 663,
+          "productive": true,
+          "provider": "cursor",
+          "reservation_id": "59a2eda9cd844187a442f579d6faaad8",
+          "result": {
+            "error": "",
+            "final_message_chars": 500,
+            "final_message_sha256": "1aa03275d37084dd9bb0fe98388f4288dcf8c1c814f6190d7dc06c5efaeca432",
+            "provider": "cursor",
+            "schema": "runner-result-summary/v1",
+            "success": true,
+            "summary": "```json {\"verdict\":\"FAIL\",\"reason\":\"post-merge live-DB publish not done; ranking metrics not recorded from this PR's guarded exporter\"} ``` ## Scope Check - Files in diff: 13 - Files matching scope: 10 - Out-of-scope files: `docs/verification/663-reconciled-pr-body.md`, `README.md`, `tests/test_route_weights_export_cli.js` Issue #660 scope covers `src/route_weights_export.py`, shared `feedback.py` DB resolution, `tests/test_route_weights_export.py`, `docs/ROUTE_WEIGHTS_EXPORT.md`, `ARCHITECTURE.",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T10:12:49Z",
+          "status": "completed",
+          "task_progress_reason": "head-changed",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "tasks_completed_after": 10,
+          "tasks_completed_before": 11,
+          "tasks_total_after": 11,
+          "tasks_total_before": 11,
+          "unproductive_completions": 0,
+          "workflow_attempt_id": "stranske/Orchestrator:39023965763:1"
+        },
+        "reservation_id": "59a2eda9cd844187a442f579d6faaad8",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117371460463,
+        "name": "Keepalive next task (Cursor) / Cursor (keepalive)",
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-10-17T10:16:48Z",
+        "implementation_steps": [
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 28,
+            "started_at": "2026-10-17T10:16:41Z",
+            "completed_at": "2026-10-17T10:16:41Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "head_sha": "e028e609a1994e90baac1903060b903dab5b91ae",
+      "key": "96b475ee17ed437d8f8793e8c4c965bae3e8cd5fb18632f84f2c0320caee11ea",
+      "pr_number": 663,
+      "provider": "cursor",
+      "reservation_id": "36e0d53a2d714ff88c961d53db94cac9",
+      "started_at": "2026-10-17T10:20:54Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+      "tasks_completed_before": 10,
+      "tasks_total_before": 11,
+      "workflow_attempt_id": "stranske/Orchestrator:39024523874:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "cursor",
+        "record": {
+          "completed_at": "2026-10-17T10:36:03Z",
+          "completion_incomplete": false,
+          "continuation_completions": 0,
+          "head_sha": "e028e609a1994e90baac1903060b903dab5b91ae",
+          "key": "96b475ee17ed437d8f8793e8c4c965bae3e8cd5fb18632f84f2c0320caee11ea",
+          "observed_head_sha": "f051c3cb44eadf30262a4d5da3fd84184a2abd9b",
+          "pr_number": 663,
+          "productive": true,
+          "provider": "cursor",
+          "reservation_id": "36e0d53a2d714ff88c961d53db94cac9",
+          "result": {
+            "error": "",
+            "final_message_chars": 500,
+            "final_message_sha256": "d3ba5cf5f40603cdcdb5d56b3789236305fdde8864690c59e2d80419ba23f22c",
+            "provider": "cursor",
+            "schema": "runner-result-summary/v1",
+            "success": true,
+            "summary": "`python3 src/verify.py` is green; the last acceptance criterion is complete. **Verify result (CI-shaped empty state):** 3931 collected, 3906 passed, 0 failed, 25 skipped \u2014 exit 0. Matches CI\u2019s verify job (3905 + 26 skipped). **Changes in `f051c3c`:** - Extended `_selftest` so `--allow-evidence-regression` only bypasses partial regressions; empty/all-false still refuse with `drainable_in=infiniteh` - Updated `.verify-floor.json` to **3931 / 3931** (passed stores passed+skipped) - Marked `- [x] py",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T10:20:54Z",
+          "status": "completed",
+          "task_progress_reason": "head-changed",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "tasks_completed_after": 11,
+          "tasks_completed_before": 10,
+          "tasks_total_after": 11,
+          "tasks_total_before": 11,
+          "unproductive_completions": 0,
+          "workflow_attempt_id": "stranske/Orchestrator:39024523874:1"
+        },
+        "reservation_id": "36e0d53a2d714ff88c961d53db94cac9",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117372948646,
+        "name": "Keepalive next task (Cursor) / Cursor (keepalive)",
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-10-17T10:35:29Z",
+        "implementation_steps": [
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 28,
+            "started_at": "2026-10-17T10:35:21Z",
+            "completed_at": "2026-10-17T10:35:22Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "head_sha": "f051c3cb44eadf30262a4d5da3fd84184a2abd9b",
+      "key": "101e6adbc465cba57f12685ed9a86d2456db163db1db54f112d7a293026588db",
+      "pr_number": 663,
+      "provider": "cursor",
+      "reservation_id": "e6eaeb880d7543a2af742840bc6ddff3",
+      "started_at": "2026-10-17T10:39:50Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+      "tasks_completed_before": 11,
+      "tasks_total_before": 11,
+      "workflow_attempt_id": "stranske/Orchestrator:39025719815:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "cursor",
+        "record": {
+          "completed_at": "2026-10-17T10:43:35Z",
+          "completion_incomplete": false,
+          "continuation_completions": 0,
+          "head_sha": "f051c3cb44eadf30262a4d5da3fd84184a2abd9b",
+          "key": "101e6adbc465cba57f12685ed9a86d2456db163db1db54f112d7a293026588db",
+          "observed_head_sha": "f051c3cb44eadf30262a4d5da3fd84184a2abd9b",
+          "pr_number": 663,
+          "productive": false,
+          "provider": "cursor",
+          "reservation_id": "e6eaeb880d7543a2af742840bc6ddff3",
+          "result": {
+            "error": "",
+            "final_message_chars": 500,
+            "final_message_sha256": "e9dee54fd508d6782840f13bcbd14473b575c24087ca4e4fe5481733a0805bef",
+            "provider": "cursor",
+            "schema": "runner-result-summary/v1",
+            "success": true,
+            "summary": "```json {\"verdict\":\"FAIL\",\"reason\":\"post-merge live publish via guarded exporter not done; AC on published export after merge unmet\"} ``` ## Scope Check - Files in diff: 12 - Files matching scope: 12 - Out-of-scope files: none Issue #660 scope covers `src/route_weights_export.py`, shared DB resolver (`src/feedback.py`), export tests, export README / `ARCHITECTURE.md`, and `orchestrate.sh`. Companion edits (`.verify-floor.json`, `README.md`, related publication/cadence/firing test kwargs) stay wi",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T10:39:50Z",
+          "status": "completed",
+          "task_progress_reason": "measured",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "tasks_completed_after": 11,
+          "tasks_completed_before": 11,
+          "tasks_completed_delta": 0,
+          "tasks_total_after": 11,
+          "tasks_total_before": 11,
+          "unproductive_completions": 1,
+          "workflow_attempt_id": "stranske/Orchestrator:39025719815:1"
+        },
+        "reservation_id": "e6eaeb880d7543a2af742840bc6ddff3",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117376374104,
+        "name": "Keepalive next task (Cursor) / Cursor (keepalive)",
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-10-17T10:43:08Z",
+        "implementation_steps": [
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 28,
+            "started_at": "2026-10-17T10:42:58Z",
+            "completed_at": "2026-10-17T10:42:59Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "head_sha": "f051c3cb44eadf30262a4d5da3fd84184a2abd9b",
+      "key": "101e6adbc465cba57f12685ed9a86d2456db163db1db54f112d7a293026588db",
+      "pr_number": 663,
+      "productive": false,
+      "provider": "cursor",
+      "reservation_id": "5d7ac6aa645c438ab050a719566527e4",
+      "started_at": "2026-10-17T11:29:13Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+      "tasks_completed_before": 11,
+      "tasks_total_before": 11,
+      "unproductive_completions": 1,
+      "workflow_attempt_id": "stranske/Orchestrator:39028850122:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "cursor",
+        "record": {
+          "completed_at": "2026-10-17T11:38:40Z",
+          "completion_incomplete": false,
+          "continuation_completions": 0,
+          "head_sha": "f051c3cb44eadf30262a4d5da3fd84184a2abd9b",
+          "key": "101e6adbc465cba57f12685ed9a86d2456db163db1db54f112d7a293026588db",
+          "observed_head_sha": "1e05486c21d56fbcbc64dd397461837c0eeb6a9e",
+          "pr_number": 663,
+          "productive": true,
+          "provider": "cursor",
+          "reservation_id": "5d7ac6aa645c438ab050a719566527e4",
+          "result": {
+            "error": "",
+            "final_message_chars": 500,
+            "final_message_sha256": "b9726738449cf8a34a531fc1ed6be63ab4f540b1cd1a9c0509d55256205709be",
+            "provider": "cursor",
+            "schema": "runner-result-summary/v1",
+            "success": true,
+            "summary": "All PR tasks were already checked; the remaining gap was an unresolved CodeRabbit case: a present but unusable remote artifact could still crash the exporter. **Landed in `1e05486`:** refuse invalid / non-object remote `config/route-weights.json` with `PublicationRefused` (no traceback), plus two tests. Export suite: **74 passed**. Floor bumped to **3933**. **Verified live export** (`exports/route-weights`): `source_version=68`, `implement` ranking length **4**. Recorded in [PR comment](https://",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T11:29:13Z",
+          "status": "completed",
+          "task_progress_reason": "head-changed",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "tasks_completed_after": 11,
+          "tasks_completed_before": 11,
+          "tasks_total_after": 11,
+          "tasks_total_before": 11,
+          "unproductive_completions": 0,
+          "workflow_attempt_id": "stranske/Orchestrator:39028850122:1"
+        },
+        "reservation_id": "5d7ac6aa645c438ab050a719566527e4",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117385255907,
+        "name": "Keepalive next task (Cursor) / Cursor (keepalive)",
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-10-17T11:38:11Z",
+        "implementation_steps": [
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 28,
+            "started_at": "2026-10-17T11:38:01Z",
+            "completed_at": "2026-10-17T11:38:01Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "head_sha": "1e05486c21d56fbcbc64dd397461837c0eeb6a9e",
+      "key": "fdb321879d041c440a5a3f4618ac2bd19ccc5946b0c20604f3baeab9a572039f",
+      "pr_number": 663,
+      "provider": "cursor",
+      "reservation_id": "2feebdd008044ad3bc8432237882c250",
+      "started_at": "2026-10-17T11:39:07Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+      "tasks_completed_before": 11,
+      "tasks_total_before": 11,
+      "workflow_attempt_id": "stranske/Orchestrator:39029375444:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "cursor",
+        "record": {
+          "completed_at": "2026-10-17T11:45:34Z",
+          "completion_incomplete": false,
+          "continuation_completions": 0,
+          "head_sha": "1e05486c21d56fbcbc64dd397461837c0eeb6a9e",
+          "key": "fdb321879d041c440a5a3f4618ac2bd19ccc5946b0c20604f3baeab9a572039f",
+          "observed_head_sha": "68db0c8de59fa0076f2b55e8a624c8bf5376f456",
+          "pr_number": 663,
+          "productive": true,
+          "provider": "cursor",
+          "reservation_id": "2feebdd008044ad3bc8432237882c250",
+          "result": {
+            "error": "",
+            "final_message_chars": 500,
+            "final_message_sha256": "ce63fbf65510247f318d2c74ca8ac56df81bcdb71a2e43bcca20901395d311fa",
+            "provider": "cursor",
+            "schema": "runner-result-summary/v1",
+            "success": true,
+            "summary": "All listed acceptance tasks were already done; live export is healthy (`source_version=68`, implement ranking length **4**). This round closed the two remaining CodeRabbit findings on [PR #663](https://github.com/stranske/Orchestrator/pull/663). **Changes in `68db0c8`:** - Refuse remote artifacts with malformed `task_types` (must be a mapping of mappings) before `publish_guard` reads them - Add `feedback._selftest_resolve_db_path()` for the full DB precedence chain - Floor bumped to **3935**; ex",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T11:39:07Z",
+          "status": "completed",
+          "task_progress_reason": "head-changed",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "tasks_completed_after": 11,
+          "tasks_completed_before": 11,
+          "tasks_total_after": 11,
+          "tasks_total_before": 11,
+          "unproductive_completions": 0,
+          "workflow_attempt_id": "stranske/Orchestrator:39029375444:1"
+        },
+        "reservation_id": "2feebdd008044ad3bc8432237882c250",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117387051675,
+        "name": "Keepalive next task (Cursor) / Cursor (keepalive)",
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-10-17T11:45:02Z",
+        "implementation_steps": [
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 28,
+            "started_at": "2026-10-17T11:44:56Z",
+            "completed_at": "2026-10-17T11:44:56Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "head_sha": "68db0c8de59fa0076f2b55e8a624c8bf5376f456",
+      "key": "2002f6db54b2116a414522528339f55c17c06bd27cec2976eb3d707d1a683754",
+      "pr_number": 663,
+      "provider": "cursor",
+      "reservation_id": "faa34b19780b4c988bd2151e7192e291",
+      "started_at": "2026-10-17T11:49:46Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+      "tasks_completed_before": 11,
+      "tasks_total_before": 11,
+      "workflow_attempt_id": "stranske/Orchestrator:39030151071:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "cursor",
+        "record": {
+          "completed_at": "2026-10-17T11:51:30Z",
+          "head_sha": "68db0c8de59fa0076f2b55e8a624c8bf5376f456",
+          "key": "2002f6db54b2116a414522528339f55c17c06bd27cec2976eb3d707d1a683754",
+          "observed_head_sha": "68db0c8de59fa0076f2b55e8a624c8bf5376f456",
+          "pr_number": 663,
+          "provider": "cursor",
+          "reservation_id": "faa34b19780b4c988bd2151e7192e291",
+          "result": {
+            "error": "/home/runner/work/_temp/d1a07979-1719-42a4-8a82-ecb2a8c37445.sh: line 122: cursor-agent: command not found",
+            "final_message_chars": 106,
+            "final_message_sha256": "2d5b11b73405f5d762fcac88ab9ece8d05a0d5ada29c1358a2987cd68791c84a",
+            "provider": "cursor",
+            "schema": "runner-result-summary/v1",
+            "success": false,
+            "summary": "/home/runner/work/_temp/d1a07979-1719-42a4-8a82-ecb2a8c37445.sh: line 122: cursor-agent: command not found",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T11:49:46Z",
+          "status": "error",
+          "task_progress_reason": "measured",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "tasks_completed_after": 11,
+          "tasks_completed_before": 11,
+          "tasks_completed_delta": 0,
+          "tasks_total_after": 11,
+          "tasks_total_before": 11,
+          "workflow_attempt_id": "stranske/Orchestrator:39030151071:1"
+        },
+        "reservation_id": "faa34b19780b4c988bd2151e7192e291",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117388976786,
+        "name": "Keepalive next task (Cursor) / Cursor (keepalive)",
+        "status": "completed",
+        "conclusion": "failure",
+        "completed_at": "2026-10-17T11:51:05Z",
+        "implementation_steps": [
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 28,
+            "started_at": "2026-10-17T11:50:56Z",
+            "completed_at": "2026-10-17T11:50:56Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "head_sha": "3439483f60151bfefbdb7d2c41bc99807f305516",
+      "key": "76ef11e9de15fd295dd6dfd5a5822206cbdaaaf57b8edd502ac0be494c38c6ae",
+      "pr_number": 663,
+      "provider": "cursor",
+      "reservation_id": "4124fbdb587b4ca881584919e1844acf",
+      "started_at": "2026-10-17T12:17:54Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+      "tasks_completed_before": 11,
+      "tasks_total_before": 11,
+      "workflow_attempt_id": "stranske/Orchestrator:39031932594:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "cursor",
+        "record": {
+          "completed_at": "2026-10-17T12:22:45Z",
+          "completion_incomplete": false,
+          "continuation_completions": 0,
+          "head_sha": "3439483f60151bfefbdb7d2c41bc99807f305516",
+          "key": "76ef11e9de15fd295dd6dfd5a5822206cbdaaaf57b8edd502ac0be494c38c6ae",
+          "observed_head_sha": "3439483f60151bfefbdb7d2c41bc99807f305516",
+          "pr_number": 663,
+          "productive": false,
+          "provider": "cursor",
+          "reservation_id": "4124fbdb587b4ca881584919e1844acf",
+          "result": {
+            "error": "",
+            "final_message_chars": 500,
+            "final_message_sha256": "d298ef5e42c66550140b742360f8c02e51ef08c58082e2288e2f40da4a75ac01",
+            "provider": "cursor",
+            "schema": "runner-result-summary/v1",
+            "success": true,
+            "summary": "**PR #663 is already at 11/11 \u2014 no incomplete task to implement.** Inventing more code would be churn, not progress. Verified this round: - Export suite: **76 passed** - Live export: `source_version=68`, `implement` ranking length **4**, `evidence_ok=true` - Gate/CI green on `3439483`; mergeable / CLEAN; all review threads resolved - #661 is a strict subset of this branch (nothing left to port) Updated the PR body with a current-acceptance stamp (clears stale \u201cverify RED / pending\u201d notes) and le",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T12:17:54Z",
+          "status": "completed",
+          "task_progress_reason": "measured",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "task_set_fingerprint_before": "60107593bb7d9b2345d19e501ebf8b3142e0fde88797b086413a503054bb3680",
+          "tasks_completed_after": 11,
+          "tasks_completed_before": 11,
+          "tasks_completed_delta": 0,
+          "tasks_total_after": 11,
+          "tasks_total_before": 11,
+          "unproductive_completions": 1,
+          "workflow_attempt_id": "stranske/Orchestrator:39031932594:1"
+        },
+        "reservation_id": "4124fbdb587b4ca881584919e1844acf",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117394163857,
+        "name": "Keepalive next task (Cursor) / Cursor (keepalive)",
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-10-17T12:22:14Z",
+        "implementation_steps": [
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 28,
+            "started_at": "2026-10-17T12:22:09Z",
+            "completed_at": "2026-10-17T12:22:10Z"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr": 663,
+    "reservation": {
+      "head_sha": "16d3b77463b6e823855724906a625d69338256c2",
+      "key": "b476dbfaf3121944a09e5c74241b25a251ccc2194612999897d8996064f7ef88",
+      "pr_number": 663,
+      "provider": "codex",
+      "reservation_id": "a377c5f31273412aa278eeb0082ee0f7",
+      "started_at": "2026-10-17T13:08:31Z",
+      "status": "pending",
+      "task_progress_schema": 1,
+      "task_set_fingerprint_before": "08d884d3c19b28270d410fd9ee5ba363d859475d3b478bcba889bdcd9c9a9e3f",
+      "tasks_completed_before": 12,
+      "tasks_total_before": 16,
+      "workflow_attempt_id": "stranske/Orchestrator:39035257159:1"
+    },
+    "matching_completions": [
+      {
+        "provider": "codex",
+        "record": {
+          "completed_at": "2026-10-17T13:18:04Z",
+          "completion_incomplete": false,
+          "continuation_completions": 0,
+          "head_sha": "16d3b77463b6e823855724906a625d69338256c2",
+          "key": "b476dbfaf3121944a09e5c74241b25a251ccc2194612999897d8996064f7ef88",
+          "observed_head_sha": "43c2b4c5e551e05f4d10e27388991709ce35fffa",
+          "pr_number": 663,
+          "productive": true,
+          "provider": "codex",
+          "reservation_id": "a377c5f31273412aa278eeb0082ee0f7",
+          "result": {
+            "error": "",
+            "final_message_chars": 426,
+            "final_message_sha256": "75a9189373ce7e531c0fc824450fca091b955d2273988ffb0dee199be8d28d6d",
+            "provider": "codex",
+            "schema": "runner-result-summary/v1",
+            "success": true,
+            "summary": "Fixed pre-sync Brain selection and prevented fallback to an unrelated DB when the selected source is missing. Added seven regression cases. Validation: 17 tests pass, plus ShellCheck and syntax checks. Full pytest/verifier acceptance remains unverified. Commit and PR updates were blocked: `.git` is read-only, and GitHub writes require approval while approvals are disabled. Changes remain local; checkboxes remain unchecked.",
+            "truncated": false
+          },
+          "started_at": "2026-10-17T13:08:31Z",
+          "status": "completed",
+          "task_progress_reason": "head-changed",
+          "task_progress_schema": 1,
+          "task_set_fingerprint_after": "08d884d3c19b28270d410fd9ee5ba363d859475d3b478bcba889bdcd9c9a9e3f",
+          "task_set_fingerprint_before": "08d884d3c19b28270d410fd9ee5ba363d859475d3b478bcba889bdcd9c9a9e3f",
+          "tasks_completed_after": 14,
+          "tasks_completed_before": 12,
+          "tasks_total_after": 16,
+          "tasks_total_before": 16,
+          "unproductive_completions": 0,
+          "workflow_attempt_id": "stranske/Orchestrator:39035257159:1"
+        },
+        "reservation_id": "a377c5f31273412aa278eeb0082ee0f7",
+        "schema": "runner-completion-receipt/v1"
+      }
+    ],
+    "actual_jobs": [
+      {
+        "id": 117403980542,
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-10-17T13:17:31Z",
+        "implementation_steps": [
+          {
+            "name": "Run Codex",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 26,
+            "started_at": "2026-10-17T13:09:41Z",
+            "completed_at": "2026-10-17T13:17:17Z"
+          },
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 32,
+            "started_at": "2026-10-17T13:17:19Z",
+            "completed_at": "2026-10-17T13:17:21Z"
+          }
+        ]
+      }
+    ]
+  }
+]

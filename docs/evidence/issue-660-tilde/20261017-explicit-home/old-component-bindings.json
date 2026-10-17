@@ -1,0 +1,185 @@
+{
+  "original_52_bindings": {
+    "heads": {
+      "661": "4411533b2e1394544d187eafe37ce3e24ef243c3",
+      "663-frozen": "68db0c8de59fa0076f2b55e8a624c8bf5376f456",
+      "663-admitted": "3439483f60151bfefbdb7d2c41bc99807f305516"
+    },
+    "sha256_by_path": {
+      ".verify-floor.json": {
+        "661": "1edfe282f6eb59bcf9722574b3ca57698b5f98a74dc6249daee5a8eb1b2e8a09",
+        "663-frozen": "9d1cf258ff51c654651c0559c41cff93c192869a052966fff13a7bdc7c91aa07",
+        "663-admitted": "5be879ecd9895af30ce3daeac575aa7051029701ae9febf723bebc8bf9aceb93",
+        "reconciled-source": "60ad999d9ada0d43848cac8d0bdfd13a19a4fcae452695e64e264fc6ef6d72ac"
+      },
+      "ARCHITECTURE.md": {
+        "661": "c9c75124241383abf7de9dad6deaa4a4f9e51bf141192e0c0a02c07681646800",
+        "663-frozen": "93e81ed83f7979056a43789f24c44540e07cd41023b671fa4c25acc0972716df",
+        "663-admitted": "93e81ed83f7979056a43789f24c44540e07cd41023b671fa4c25acc0972716df",
+        "reconciled-source": "02f146ce8aad51228920451cae089cd940a3d3c87e70ef89e8103dc66dd4779a"
+      },
+      "README.md": {
+        "661": "02a7bdb483ddc9f8674bae96e0e601fa8a89fd121fc0edd1e49087b179fb3be2",
+        "663-frozen": "7ec1a6d17c621558089f04f01074f06baab3935c6abab460de237bbf3a6831aa",
+        "663-admitted": "7ec1a6d17c621558089f04f01074f06baab3935c6abab460de237bbf3a6831aa",
+        "reconciled-source": "5c0aa9cbe9843ce1fff7d441570b6e9c3f240084d2cff82b65215b6957dc728b"
+      },
+      "agents/codex-660.md": {
+        "661": "fd513c24cb8db3cce3645c5cce4eb5d1f31e2678fee23519ce8a7edd9ef6bfef",
+        "663-frozen": null,
+        "663-admitted": null,
+        "reconciled-source": null
+      },
+      "docs/ROUTE_WEIGHTS_EXPORT.md": {
+        "661": "6f6af423afd7f6cb6ddf65c001ff1fd5338b90324e175870ecaa1e88d7f5e5fa",
+        "663-frozen": "970c4ff5b69a48e8e0ec8b001b7b685c786ec5858cdeff4a844a9dec318192d0",
+        "663-admitted": "970c4ff5b69a48e8e0ec8b001b7b685c786ec5858cdeff4a844a9dec318192d0",
+        "reconciled-source": "26d214af64f382b26652f4a7d89cb3739152784d6b542557d78ded9a2bb07de1"
+      },
+      "orchestrate.sh": {
+        "661": "45a55b010ef5021765ff06f542e482b447cd4e32ddcf257208271289bc4edf3a",
+        "663-frozen": "8ecd1b62db3c3f0f11814c0251db5c907851c15e657902788564f264e15ce823",
+        "663-admitted": "8ecd1b62db3c3f0f11814c0251db5c907851c15e657902788564f264e15ce823",
+        "reconciled-source": "8ecd1b62db3c3f0f11814c0251db5c907851c15e657902788564f264e15ce823"
+      },
+      "src/feedback.py": {
+        "661": "4258cb2c1e733690df0ea56738385cd9005016dffc1733485e8d3a3ca90e2be5",
+        "663-frozen": "3b6535a9435e7e57c7f3ca03a096572ae053a9a5175a8797345433dc8385aa76",
+        "663-admitted": "3b6535a9435e7e57c7f3ca03a096572ae053a9a5175a8797345433dc8385aa76",
+        "reconciled-source": "69d1bbeaa12393c94cdb55917986430524ca7383ad506ba465fbdce9a280b7c9"
+      },
+      "src/route_weights_export.py": {
+        "661": "9a59c330fa496f49120c2a815603db770864621a4122f89c7a7cdcaa9b74793c",
+        "663-frozen": "0ea1d69106ce9261f786e43e97ea7847b9f9e9cdc49c07eb6fa6df86dcae2a7e",
+        "663-admitted": "0ea1d69106ce9261f786e43e97ea7847b9f9e9cdc49c07eb6fa6df86dcae2a7e",
+        "reconciled-source": "4174926a72c906649c4dcd4971d36c63f267d9147cf9c1336a530cbef28193cc"
+      },
+      "tests/test_firing_regressions_section.py": {
+        "661": "920c1de6e18d981ac913086b810f35197829835626efc623194b7573e26a51ca",
+        "663-frozen": "03bd778aa6976e652a5f30652e309ba8e7d361208de50ab747c211f3be88d0dc",
+        "663-admitted": "03bd778aa6976e652a5f30652e309ba8e7d361208de50ab747c211f3be88d0dc",
+        "reconciled-source": "03bd778aa6976e652a5f30652e309ba8e7d361208de50ab747c211f3be88d0dc"
+      },
+      "tests/test_route_weights_export.py": {
+        "661": "49ef2679e3ce98d269a799acaa07b935ce7e1058aaf07d4283fd0caaa0ca4dc8",
+        "663-frozen": "9622b5cbfa08fc5e689ba642a4b7d9145602adb0dd9c4e5347c49be962d7aae0",
+        "663-admitted": "9622b5cbfa08fc5e689ba642a4b7d9145602adb0dd9c4e5347c49be962d7aae0",
+        "reconciled-source": "c72cb9c97e3b425c96b10ec0fe7b38ca5d48ea6b0a73f31e94ab87df99bbcba0"
+      },
+      "tests/test_route_weights_export_cli.js": {
+        "661": null,
+        "663-frozen": "076cae94c98654a49e940a40b501831899915d60fbbbe9fba97defc7579781c7",
+        "663-admitted": "076cae94c98654a49e940a40b501831899915d60fbbbe9fba97defc7579781c7",
+        "reconciled-source": "076cae94c98654a49e940a40b501831899915d60fbbbe9fba97defc7579781c7"
+      },
+      "tests/test_route_weights_publication.py": {
+        "661": "78314133ed40295d98fdc78a40c797c328428517c4350174ef2dbde9d05ea63f",
+        "663-frozen": "9f538aa7283045c4c936d15dcbb54c08a3d3ad51de5fc661ddad74639045d4f8",
+        "663-admitted": "9f538aa7283045c4c936d15dcbb54c08a3d3ad51de5fc661ddad74639045d4f8",
+        "reconciled-source": "9f538aa7283045c4c936d15dcbb54c08a3d3ad51de5fc661ddad74639045d4f8"
+      },
+      "tests/test_route_weights_publish_cadence.py": {
+        "661": "3efb5d2a08c072494d2391fe1a8c45e39b6189887b879508da99720438a638c3",
+        "663-frozen": "22f2b37fc97b0ad560737b30d1f4a8354053bcfde4fa08457d4ae671b8b8520f",
+        "663-admitted": "22f2b37fc97b0ad560737b30d1f4a8354053bcfde4fa08457d4ae671b8b8520f",
+        "reconciled-source": "22f2b37fc97b0ad560737b30d1f4a8354053bcfde4fa08457d4ae671b8b8520f"
+      }
+    }
+  },
+  "verified_count": 52,
+  "verified_against_git": {
+    "661": "4411533b2e1394544d187eafe37ce3e24ef243c3",
+    "663-frozen": "68db0c8de59fa0076f2b55e8a624c8bf5376f456",
+    "663-admitted": "3439483f60151bfefbdb7d2c41bc99807f305516",
+    "reconciled-source": "16d3b77463b6e823855724906a625d69338256c2"
+  },
+  "immutable_archive": "docs/evidence/issue-660-reconciliation/20261017-source-contract",
+  "archive_files_sha256": {
+    "path-bindings.json": "831a3186ab3e05dff9167a7bfd4b96ddc495e4b1a186b871e36301fbab27f369",
+    "final-admission.json": "01c189dd0af9011faccaf1f839b0e7c4d86ee4f52a245e2fcf53e2d4d9f9197b",
+    "README.md": "52225e819a375ecbd14a04f5b807a52ff2d6c6c6fbde0b011d169b538c5b1e1a",
+    "manifest.json": "aa4518bdc190037d54e4f8fa11d5596a83f5381ca58755353210b4c09f7c49aa",
+    "parent-assessment.md": "c036ef952f3b5d4841348ce2a1d39f00661cf470afba24115e65c1ff0e9ebb51",
+    "executed-mutation-driver.py.txt": "bd9bb19c600d197e1a3bee201a7dfa22276d0d465e038a1118b67e71a1ce0ea4",
+    "raw/admitted-capability_propensity-selftest.log": "40c6dbfcd524c50ed4ce077e75cd2f22ae2738f7e4116a25e60876b6e13b3cd0",
+    "raw/verify.exit": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "raw/unmatched-worker-terminal.json": "34fd4642800ac3c97da223ff351c773c1e493645f1a90e6de07a0f8b76b54613",
+    "raw/final-db-restored-green.log": "d12f41cd7fc1280707e5afc4146c13b5a4c03360b24bb86e50e13793f44cfb38",
+    "raw/mutation-final-driver.log": "a5cac29512ce4bcd9e7604ca2930ed2ed0d4852828594570868d0999b21e5cd8",
+    "raw/admitted-adapters-selftest.exit": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "raw/feedback-selftest.log": "3fc507a62110bca72d9eea3d5810abbdae33d87d7f4b4fa221a1280161160833",
+    "raw/black-check.log": "b835c05d0fec20c3d6e2c3465f07edd4ead2566fe247370d05c5d6487b4e5f0f",
+    "raw/verify.log": "f168674433ebe8cd8afd1ea2c17ab723fe48996bd5e9f91e8ed42206499f5dea",
+    "raw/black-final.log": "b835c05d0fec20c3d6e2c3465f07edd4ead2566fe247370d05c5d6487b4e5f0f",
+    "raw/compatibility-final.xml": "de12731fbeadf2a5d1bf98bbf041dde8a96f84dead444e5e85488d3f339e2a94",
+    "raw/db-green-before.xml": "61fcca8e9f1cb9671b7a72fa862038ad4019a6514d1c2506c044eb79569bd770",
+    "raw/baseline-failure-bindings.json": "ec7ccae9d0a5daf2f967bd1f434a8cd788758b39a7838cda2c1db147b41f60bf",
+    "raw/advisor.json": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw/targeted-final.log": "24b2d8a4accc1414fddb20448638b9db782b1b26e76c4c2b6fd7a8870a9a6759",
+    "raw/guard-green-before.xml": "de3f23b7179b82426fd0be4149561091c7ebacbe0208ccd2c74e894f75b4c14c",
+    "raw/final-guard-green-before.log": "b6108ede446e8ca45a5367084fb061610252657b5b6266c7ff57da3ca5074b2e",
+    "raw/final-guard-red.log": "0c1249110eca3e6630065c65b447956ba4bd09d953c0e7a5b1aa4225327bd83e",
+    "raw/baseline.xml": "9db09c7cf511f194ce65c113aaed29f1cf1faedb075a1bd5514dc9973094d569",
+    "raw/node-cli.log": "91071dee5d647432a59b65e6ef38e697374ee54f99a2b4f81eebbacc7786bc0a",
+    "raw/db-red.log": "bd7e20d98183696487d0d39f23996d3dda4a8df4430ecdb44c8c08f566852ab9",
+    "raw/ownership-admission.json": "8815b5fc5e343621c0f7a6e33c07f8e9e4781c43504f85b6eb0f865e2c7bb197",
+    "raw/guard-red.xml": "bedafa201ce3a52ca12a35cd00c11f51298ca8fc131615537c1268c6bc8d4b20",
+    "raw/admitted-tick_watchdog-selftest.log": "7b3d28de59f5154c981fdba59f3d3b41c77a311ea441084f2e1be956e5ad1063",
+    "raw/targeted-complete.xml": "59f90395b0c1e6376224a569dde03bfd4b1bfa145ddfdb815c3f75d4927de9ee",
+    "raw/guard-restored-green.log": "5dc36ee13c27010a126c62fe07f3fb2084707264ecee53f47c47dd2a3e575f89",
+    "raw/final-db-red.xml": "b2fef94f6d527ba7b7bce23dde028b51a07adeb1e0b53c3b9b591d488a9e4e49",
+    "raw/verify-initial.exit": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "raw/mutation-bindings.json": "43e029ee49bbc52cb80965dac74405e58b0247408f8546ca219862659f68aca0",
+    "raw/final-db-green-before.log": "0100efb47e46d79367cee4cf5387135e31a5b61be1a1cedf906ce38bb30e60cd",
+    "raw/db-restored-green.xml": "603547f11b75b559f69cf4833a215ba65d8f394dfbb52749c99aaaf3f7c88595",
+    "raw/mutation-final-bindings.json": "a5cac29512ce4bcd9e7604ca2930ed2ed0d4852828594570868d0999b21e5cd8",
+    "raw/targeted-green.xml": "9efd313bb1ce11553ecfc59d81709d1f815eb14e314ff78955763daee2a9617f",
+    "raw/admitted-selftest-bindings.json": "bcf6e16247ab145791414855004eef3e6887b1a9546cba6a3758de53984f476c",
+    "raw/feedback-final-selftest.log": "3fc507a62110bca72d9eea3d5810abbdae33d87d7f4b4fa221a1280161160833",
+    "raw/final-guard-restored-green.xml": "569bfabbf3d191cfd9f155a382894de93cd946fa1526813329156e189935a57b",
+    "raw/black-final2.log": "b835c05d0fec20c3d6e2c3465f07edd4ead2566fe247370d05c5d6487b4e5f0f",
+    "raw/validation-bindings.json": "f8053a503dc273c6140dd271cee0ecba9f6bc4519e508e33f994c2d837b1724b",
+    "raw/admitted-baseline-failures.log": "654e28d16c28c19ed662505925beb175e11821c25dae2a3337369d5c11f37039",
+    "raw/admitted-dispatcher-selftest.log": "0ba9b70af8eced451348b330907a1e566bd428da37ca46189a95cd120880c24e",
+    "raw/regression-before.xml": "e9b81195f0bd1647b36138e8a31a9cfd574dd665b1909c80790227dc7042bc67",
+    "raw/integration.log": "d9dad52ecd2e28f2f2aed61d04dbc48bd62b9bf0b4d267588542198ae5ed8107",
+    "raw/final-guard-red.xml": "c1eca041596ce32bef1431642499c99ed65c00200a1b900067ca389009569ed7",
+    "raw/verify-initial.log": "555225e0d16e5669c06a12a7606f22195b261d4409de65db86ac077a003e13d9",
+    "raw/complexity-reconciled.json": "c4881c9b90a513c651ef23f1b3a1d4243ca8980ebb01ed1a1a774492675982b1",
+    "raw/validation-before-compatibility.json": "607bad3e09ed5568eca5b0ba7b722e317af8ee51052ecb4c10dbf83e5606d3f6",
+    "raw/baseline.log": "71e8d45337499f972c66780c181dda104b5907f8eb917d7a5be5641bd08837ad",
+    "raw/main-dispatch-admission.json": "cf3f41247a2a0f0fbe3be72afd51a413afa177cd5b9ee52ebfd5aa4a2ed8da1f",
+    "raw/db-red.xml": "5572aa81a823c45576935651828b35f5af57f416997fa34b8d931697c2d0db84",
+    "raw/targeted-complete.log": "3dbff4bcdf534380548945f9a5ba92218545364411d678ac06d0a919b5b45847",
+    "raw/guard-red.log": "22d738a74a5bb0146f4fe06ca423ab41928f5ab62f3a9a496c6b328453af8f88",
+    "raw/guard-restored-green.xml": "d6e9b54bade98d65b10fa5a69c8a6aa3ceffab6a93cd86dd645cb1236b721843",
+    "raw/mypy.log": "6c36b9c159419f132e545e2634de70c7f2e7650d635ad29868c4f9b88a25296f",
+    "raw/ruff.log": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+    "raw/final-db-red.log": "278fd6d6f24bb68f87337d8ec18aff47ac08a8b4d940c8138840e7f5a23c6ce3",
+    "raw/complexity-current.log": "e72efa91f13daa4b891b6a822f034f2f10fbf5bfaffac1faeb40e58188fde3c3",
+    "raw/targeted-green.log": "fcfea6d9cb7c77ff2f1e56eb0ef7a89605039ba3a5a7c71cce396104c64e89ab",
+    "raw/final-db-green-before.xml": "0ed51d8161a8aa874a82b8469de446ea3e54eda7a8ed95b9c4e1d621acabf56f",
+    "raw/db-restored-green.log": "342ac9254738b7c079c78bfc2c9cbc35f9d9266f9ba05684f631a7e89cb18cad",
+    "raw/final-guard-restored-green.log": "10e9ec7fc30542f61ffe9097ebd007e57d4278531ebb4dcd734272b1a4709b82",
+    "raw/export-final-selftest.log": "e321c910b0d8221d93e9daf66bc28c1948b5dcfbfb1522b612e1f89b4dd26b3d",
+    "raw/admitted-adapters-selftest.log": "449e5eab02f89e45b746d0ea9d0bf87c41099bf0e8313eae30b6b88066c2d948",
+    "raw/probe-isolation.log": "7b85ddf9eb7da2dd46134882c2c2f5b0151f355f82a61e251f79bd326c2c3aed",
+    "raw/admitted-baseline-failures.xml": "698deeba6bf7362e6b71eb1a7c73399a8756360bb87f569727c9a26e181a877e",
+    "raw/advisor.stderr": "85c0efeb2015112987349ee5e53021ebf88052ae1ec8a6241c3f1ab2f041a53a",
+    "raw/regression-before.log": "398eeb7672f8fda763baf31bbb9eab6811c82f88059caa74b096ed5a704a1cb4",
+    "raw/ruff-final.log": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+    "raw/integration.xml": "edc59700d1d3e89d376791d8d8755a19bc25941d37cad24cf2625e97936c94ee",
+    "raw/baseline-reproduction-summary.json": "3c8ed5a331f19e9e4360a0834b90150374213b66f099a919002a620ff55cb474",
+    "raw/final-db-restored-green.xml": "f2e913939fe15f64d238ee38ed4de19392dfe928c7982eb3ce93a6f5ead5a121",
+    "raw/final-validation-summary.json": "5555a20f506b68a3e593338b9e712bcb88d0f9c76ad4e99b2347cea253dff560",
+    "raw/verify-initial-pytest.xml": "2250a7b13fbd1cbd0503ab8e90123e01afc2d43aa0af7592db38c79109114847",
+    "raw/verify-pytest.xml": "298b4778219f738a0625724cf9fef8b8ae7212f738cf6ad71d49fb7507ee203d",
+    "raw/compatibility-final.log": "f7d5972d2ec691f90e5aae218fefaccc82963f44a5fe7de76ef472366184d844",
+    "raw/targeted-final.xml": "b469cbad0e376cf142ee8d13b00a0d7d7d8e1fb269fa180e515f39976be18925",
+    "raw/db-green-before.log": "ccac2cfda12bd47880550ec1781e75a58537fdd2c7c4bb5d95b617640da3f137",
+    "raw/complexity-baseline.json": "321abb40e0e67b301e52eb60b351f402d413c7bb364d35deaae363408ae0ada2",
+    "raw/guard-green-before.log": "cadba5909313991cf770d428bc5f953fde96fe13fc50137dcc8280162c5fc849",
+    "raw/final-guard-green-before.xml": "46f3e4b383fb6827ec80bee3aa49207a3712e3f7c56da79feb719c8332dc2e20",
+    "raw/export-selftest.log": "1428568bff7b114dfef13b526a07cdad39a15b1c71a73e7b5c3e06076918f3b6"
+  }
+}

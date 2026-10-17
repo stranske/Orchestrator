@@ -1,0 +1,819 @@
+{
+  "reservations": [
+    {
+      "pr": 661,
+      "reservation_id": "3eb96caa37b844f5a9437bd4ab662570",
+      "reserved_head": "b3c93f0947c116b7f4d366fa1abeeb35f8cd3898",
+      "workflow_attempt_id": "stranske/Orchestrator:39001134190:1",
+      "native_status": "completed",
+      "native_conclusion": "success",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [
+        6229521969
+      ],
+      "worker_steps": [
+        {
+          "job_id": 117304753030,
+          "name": "Keepalive next task (Codex) / Codex (keepalive)",
+          "steps": [
+            {
+              "name": "Run Codex",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 661,
+      "reservation_id": "e8827ef445e64525bedd7e84026d4557",
+      "reserved_head": "38f0ac9a387eaf5237be12b521f1c20b43a1d3bb",
+      "workflow_attempt_id": "stranske/Orchestrator:39002149760:1",
+      "native_status": "completed",
+      "native_conclusion": "success",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [],
+      "worker_steps": [
+        {
+          "job_id": 117307219570,
+          "name": "Run Codex autofix / Codex (autofix)",
+          "steps": [
+            {
+              "name": "Run Codex",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 661,
+      "reservation_id": "980337bb0b9640c3921ec7652b444a34",
+      "reserved_head": "4411533b2e1394544d187eafe37ce3e24ef243c3",
+      "workflow_attempt_id": "stranske/Orchestrator:39002744795:1",
+      "native_status": "completed",
+      "native_conclusion": "success",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [],
+      "worker_steps": [
+        {
+          "job_id": 117308974553,
+          "name": "Run Codex autofix / Codex (autofix)",
+          "steps": [
+            {
+              "name": "Run Codex",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 663,
+      "reservation_id": "1fdafdec25844b5da95c5a4fbf9a909b",
+      "reserved_head": "5208b0f3c37f7f2b8ec1b07298782cfcd88a1816",
+      "workflow_attempt_id": "stranske/Orchestrator:39002286335:1",
+      "native_status": "completed",
+      "native_conclusion": "success",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [
+        6229638019
+      ],
+      "worker_steps": [
+        {
+          "job_id": 117307900809,
+          "name": "Keepalive next task (Codex) / Codex (keepalive)",
+          "steps": [
+            {
+              "name": "Run Codex",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 663,
+      "reservation_id": "78e607bf4f254becb8143996232cd89a",
+      "reserved_head": "a1bf566d011365cdde46c383f6355e328a662866",
+      "workflow_attempt_id": "stranske/Orchestrator:39002997338:1",
+      "native_status": "completed",
+      "native_conclusion": "failure",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [
+        6229693560
+      ],
+      "worker_steps": [
+        {
+          "job_id": 117309820575,
+          "name": "Keepalive next task (Codex) / Codex (keepalive)",
+          "steps": [
+            {
+              "name": "Run Codex",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 663,
+      "reservation_id": "d3661cd4b00d42dda4aa03b284a60b83",
+      "reserved_head": "a1bf566d011365cdde46c383f6355e328a662866",
+      "workflow_attempt_id": "stranske/Orchestrator:39006528777:1",
+      "native_status": "completed",
+      "native_conclusion": "failure",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [
+        6230227075
+      ],
+      "worker_steps": [
+        {
+          "job_id": 117320177634,
+          "name": "Keepalive next task (Codex) / Codex (keepalive)",
+          "steps": [
+            {
+              "name": "Run Codex",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 663,
+      "reservation_id": "3661ceeb35674d04b539a4cac0146e5e",
+      "reserved_head": "a1bf566d011365cdde46c383f6355e328a662866",
+      "workflow_attempt_id": "stranske/Orchestrator:39010949343:1",
+      "native_status": "completed",
+      "native_conclusion": "failure",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [
+        6230833084
+      ],
+      "worker_steps": [
+        {
+          "job_id": 117333340877,
+          "name": "Keepalive next task (Codex) / Codex (keepalive)",
+          "steps": [
+            {
+              "name": "Run Codex",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 663,
+      "reservation_id": "3b68f034b98b4bd9b71a0c3df0ada7de",
+      "reserved_head": "a1bf566d011365cdde46c383f6355e328a662866",
+      "workflow_attempt_id": "stranske/Orchestrator:39013922391:1",
+      "native_status": "completed",
+      "native_conclusion": "failure",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [
+        6231252769
+      ],
+      "worker_steps": [
+        {
+          "job_id": 117342136706,
+          "name": "Keepalive next task (Codex) / Codex (keepalive)",
+          "steps": [
+            {
+              "name": "Run Codex",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 663,
+      "reservation_id": "d7db9af7e0fb4e68aeba091339f1472c",
+      "reserved_head": "4f9f397cff613bdd3c1a8e3489c381bc4dcd9979",
+      "workflow_attempt_id": "stranske/Orchestrator:39017864057:1",
+      "native_status": "completed",
+      "native_conclusion": "success",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [
+        6231852916
+      ],
+      "worker_steps": [
+        {
+          "job_id": 117353788463,
+          "name": "Keepalive next task (Codex) / Codex (keepalive)",
+          "steps": [
+            {
+              "name": "Run Codex",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 663,
+      "reservation_id": "e795ffc3f2114120ba19f3bf272b5ffb",
+      "reserved_head": "372170a8531a5450813154abbe8f433d1ad78446",
+      "workflow_attempt_id": "stranske/Orchestrator:39018511077:1",
+      "native_status": "completed",
+      "native_conclusion": "success",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [
+        6231993525
+      ],
+      "worker_steps": [
+        {
+          "job_id": 117355593991,
+          "name": "Keepalive next task (Codex) / Codex (keepalive)",
+          "steps": [
+            {
+              "name": "Run Codex",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 663,
+      "reservation_id": "cb3e64195aa24e78a35783f9ee2c54e2",
+      "reserved_head": "754ae331e9d1dde11c39462f539238bec0b80e3e",
+      "workflow_attempt_id": "stranske/Orchestrator:39019393738:1",
+      "native_status": "completed",
+      "native_conclusion": "success",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [],
+      "worker_steps": [
+        {
+          "job_id": 117358053401,
+          "name": "Run Codex autofix / Codex (autofix)",
+          "steps": [
+            {
+              "name": "Run Codex",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 663,
+      "reservation_id": "07ec81bc31bd42b0901153c36952c526",
+      "reserved_head": "eb27fbdac95fb7d845a4e0ab83d82a4b424a7ccc",
+      "workflow_attempt_id": "stranske/Orchestrator:39019922545:1",
+      "native_status": "completed",
+      "native_conclusion": "success",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [],
+      "worker_steps": [
+        {
+          "job_id": 117359581755,
+          "name": "Run Codex autofix / Codex (autofix)",
+          "steps": [
+            {
+              "name": "Run Codex",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 663,
+      "reservation_id": "6859ab725d1646e896f9f4a04aa7f6f7",
+      "reserved_head": "240c20950831494df94c4de94f13ca18a8386e6d",
+      "workflow_attempt_id": "stranske/Orchestrator:39020485345:1",
+      "native_status": "completed",
+      "native_conclusion": "success",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [],
+      "worker_steps": [
+        {
+          "job_id": 117361182936,
+          "name": "Run Codex autofix / Codex (autofix)",
+          "steps": [
+            {
+              "name": "Run Codex",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 663,
+      "reservation_id": "084423d6b5a1437e9b8e95b237f46da5",
+      "reserved_head": "1dbaba5b57f6b72dc4d45afde9c0fc2052170183",
+      "workflow_attempt_id": "stranske/Orchestrator:39021153531:1",
+      "native_status": "completed",
+      "native_conclusion": "success",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [
+        6232354366
+      ],
+      "worker_steps": [
+        {
+          "job_id": 117363237358,
+          "name": "Keepalive next task (Codex) / Codex (keepalive)",
+          "steps": [
+            {
+              "name": "Run Codex",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 663,
+      "reservation_id": "77318de79c084e6985fea9fcfb673f2c",
+      "reserved_head": "c3b5f81040ca4fb9daf48ea1f57c97d722383698",
+      "workflow_attempt_id": "stranske/Orchestrator:39021918656:1",
+      "native_status": "completed",
+      "native_conclusion": "success",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [
+        6232451898
+      ],
+      "worker_steps": [
+        {
+          "job_id": 117365423433,
+          "name": "Keepalive next task (Codex) / Codex (keepalive)",
+          "steps": [
+            {
+              "name": "Run Codex",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 663,
+      "reservation_id": "2e26e166d79148e99d7ea53596725daf",
+      "reserved_head": "f7df271d3d4173cb92e4315428f5045bdb65391f",
+      "workflow_attempt_id": "stranske/Orchestrator:39022671540:1",
+      "native_status": "completed",
+      "native_conclusion": "failure",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [
+        6232503961
+      ],
+      "worker_steps": []
+    },
+    {
+      "pr": 663,
+      "reservation_id": "f1d4276d98f24e4e9307f0bab4171d5c",
+      "reserved_head": "f7df271d3d4173cb92e4315428f5045bdb65391f",
+      "workflow_attempt_id": "stranske/Orchestrator:39022800487:1",
+      "native_status": "completed",
+      "native_conclusion": "success",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [
+        6232541812
+      ],
+      "worker_steps": [
+        {
+          "job_id": 117367994295,
+          "name": "Keepalive next task (Codex) / Codex (keepalive)",
+          "steps": [
+            {
+              "name": "Run Codex",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 663,
+      "reservation_id": "5625b08bd1a94cdea19c5e8a927f8923",
+      "reserved_head": "f7df271d3d4173cb92e4315428f5045bdb65391f",
+      "workflow_attempt_id": "stranske/Orchestrator:39023656990:1",
+      "native_status": "completed",
+      "native_conclusion": "success",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [
+        6232682714
+      ],
+      "worker_steps": [
+        {
+          "job_id": 117370586647,
+          "name": "Keepalive next task (Codex) / Codex (keepalive)",
+          "steps": [
+            {
+              "name": "Run Codex",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 663,
+      "reservation_id": "59a2eda9cd844187a442f579d6faaad8",
+      "reserved_head": "f7df271d3d4173cb92e4315428f5045bdb65391f",
+      "workflow_attempt_id": "stranske/Orchestrator:39023965763:1",
+      "native_status": "completed",
+      "native_conclusion": "success",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [
+        6232724740
+      ],
+      "worker_steps": [
+        {
+          "job_id": 117371460463,
+          "name": "Keepalive next task (Cursor) / Cursor (keepalive)",
+          "steps": [
+            {
+              "name": "Run Cursor",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 663,
+      "reservation_id": "36e0d53a2d714ff88c961d53db94cac9",
+      "reserved_head": "e028e609a1994e90baac1903060b903dab5b91ae",
+      "workflow_attempt_id": "stranske/Orchestrator:39024523874:1",
+      "native_status": "completed",
+      "native_conclusion": "success",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [
+        6232883725
+      ],
+      "worker_steps": [
+        {
+          "job_id": 117372948646,
+          "name": "Keepalive next task (Cursor) / Cursor (keepalive)",
+          "steps": [
+            {
+              "name": "Run Cursor",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 663,
+      "reservation_id": "e6eaeb880d7543a2af742840bc6ddff3",
+      "reserved_head": "f051c3cb44eadf30262a4d5da3fd84184a2abd9b",
+      "workflow_attempt_id": "stranske/Orchestrator:39025719815:1",
+      "native_status": "completed",
+      "native_conclusion": "success",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [
+        6232957520
+      ],
+      "worker_steps": [
+        {
+          "job_id": 117376374104,
+          "name": "Keepalive next task (Cursor) / Cursor (keepalive)",
+          "steps": [
+            {
+              "name": "Run Cursor",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 663,
+      "reservation_id": "5d7ac6aa645c438ab050a719566527e4",
+      "reserved_head": "f051c3cb44eadf30262a4d5da3fd84184a2abd9b",
+      "workflow_attempt_id": "stranske/Orchestrator:39028850122:1",
+      "native_status": "completed",
+      "native_conclusion": "success",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [
+        6233440650
+      ],
+      "worker_steps": [
+        {
+          "job_id": 117385255907,
+          "name": "Keepalive next task (Cursor) / Cursor (keepalive)",
+          "steps": [
+            {
+              "name": "Run Cursor",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 663,
+      "reservation_id": "2feebdd008044ad3bc8432237882c250",
+      "reserved_head": "1e05486c21d56fbcbc64dd397461837c0eeb6a9e",
+      "workflow_attempt_id": "stranske/Orchestrator:39029375444:1",
+      "native_status": "completed",
+      "native_conclusion": "success",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [
+        6233500481
+      ],
+      "worker_steps": [
+        {
+          "job_id": 117387051675,
+          "name": "Keepalive next task (Cursor) / Cursor (keepalive)",
+          "steps": [
+            {
+              "name": "Run Cursor",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 663,
+      "reservation_id": "faa34b19780b4c988bd2151e7192e291",
+      "reserved_head": "68db0c8de59fa0076f2b55e8a624c8bf5376f456",
+      "workflow_attempt_id": "stranske/Orchestrator:39030151071:1",
+      "native_status": "completed",
+      "native_conclusion": "failure",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [
+        6233552686
+      ],
+      "worker_steps": [
+        {
+          "job_id": 117388976786,
+          "name": "Keepalive next task (Cursor) / Cursor (keepalive)",
+          "steps": [
+            {
+              "name": "Run Cursor",
+              "status": "completed",
+              "conclusion": "failure"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pr": 663,
+      "reservation_id": "4124fbdb587b4ca881584919e1844acf",
+      "reserved_head": "3439483f60151bfefbdb7d2c41bc99807f305516",
+      "workflow_attempt_id": "stranske/Orchestrator:39031932594:1",
+      "native_status": "completed",
+      "native_conclusion": "success",
+      "all_jobs_terminal": true,
+      "job_count": 19,
+      "completion_comment_matches": [
+        6233829204
+      ],
+      "worker_steps": [
+        {
+          "job_id": 117394163857,
+          "name": "Keepalive next task (Cursor) / Cursor (keepalive)",
+          "steps": [
+            {
+              "name": "Run Cursor",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "name": "Commit and push changes",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "local_terminal_receipts": [
+    {
+      "run_id": "stranske__Orchestrator_660-codex-1792209742125867000.json",
+      "receipt": {
+        "run_id": "stranske__Orchestrator_660-codex-1792209742125867000",
+        "rc": 0,
+        "rc_of": "agent",
+        "ts": 1792210899,
+        "release_rc": 0
+      }
+    },
+    {
+      "run_id": "stranske__Orchestrator_663-codex-1792224031363562000.json",
+      "receipt": {
+        "run_id": "stranske__Orchestrator_663-codex-1792224031363562000",
+        "rc": 0,
+        "rc_of": "agent",
+        "ts": 1792225790,
+        "release_rc": 0
+      }
+    },
+    {
+      "run_id": "stranske__Orchestrator_663-codex-1792231228453723000.json",
+      "receipt": {
+        "run_id": "stranske__Orchestrator_663-codex-1792231228453723000",
+        "rc": 0,
+        "rc_of": "agent",
+        "ts": 1792232175,
+        "release_rc": 0
+      }
+    },
+    {
+      "run_id": "stranske__Orchestrator_663-codex-1792238194135991000.json",
+      "receipt": {
+        "run_id": "stranske__Orchestrator_663-codex-1792238194135991000",
+        "rc": 0,
+        "rc_of": "agent",
+        "ts": 1792239119,
+        "release_rc": 0
+      }
+    }
+  ],
+  "claims": {
+    "660": {
+      "target": "stranske/Orchestrator#660",
+      "agent": "opener1155-source660-guardian",
+      "pid": 53791,
+      "ts": 1792240085.175081
+    },
+    "663": {
+      "target": "stranske/Orchestrator#663",
+      "agent": "codex",
+      "pid": 54683,
+      "ts": 1792240106.549237,
+      "log": "LOCAL_HOME/.codex/handoff/dispatch-logs/stranske__Orchestrator_663.codex.log",
+      "worktree": "REPOSITORY_ROOT",
+      "lane": "opener",
+      "task_type": "implement",
+      "mode": "full",
+      "run_id": "stranske__Orchestrator_663-codex-1792240106528236000",
+      "started_ts": 1792240106,
+      "updated_ts": 1792240106.549237
+    }
+  },
+  "unmatched_reservation_worker_logs": "unmatched-worker-terminal.json",
+  "main_dispatch_attempts": "direct run and jobs captures retained separately; latest main dispatch 39033240612 terminal, no worker child",
+  "all_native_terminal": true
+}

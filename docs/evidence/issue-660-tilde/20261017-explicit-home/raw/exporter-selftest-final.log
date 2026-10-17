@@ -1,0 +1,8 @@
+route_weights_export.py selftest: OK
+db=/tmp/route-weights-export-96yn_1tb/fixture.db source_version=2
+db=/tmp/route-weights-export-96yn_1tb/fixture.db source_version=2
+db=/tmp/route-weights-export-96yn_1tb/fixture.db source_version=2
+db=/tmp/route-weights-export-96yn_1tb/fixture.db source_version=2
+db=/tmp/route-weights-export-96yn_1tb/fixture.db source_version=2
+db=/tmp/route-weights-export-96yn_1tb/missing.db source_version=0
+publish_guard override --allow-evidence-regression: evidence_ok true -> false for: review

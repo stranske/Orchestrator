@@ -1,0 +1,29 @@
+[
+  {
+    "module": "capability_propensity",
+    "argv": [
+      "/opt/anaconda3/bin/python3",
+      "EVIDENCE_ROOT/admitted-baseline/src/capability_propensity.py",
+      "--selftest"
+    ],
+    "exit": 0
+  },
+  {
+    "module": "dispatcher",
+    "argv": [
+      "/opt/anaconda3/bin/python3",
+      "EVIDENCE_ROOT/admitted-baseline/src/dispatcher.py",
+      "--selftest"
+    ],
+    "exit": 1
+  },
+  {
+    "module": "tick_watchdog",
+    "argv": [
+      "/opt/anaconda3/bin/python3",
+      "EVIDENCE_ROOT/admitted-baseline/src/tick_watchdog.py",
+      "--selftest"
+    ],
+    "exit": 1
+  }
+]

@@ -423,7 +423,18 @@ Live execution is observable only after the normal manual mirror sync.
   consumers avoid shed seats. The cadence passes `--publish` (owner decision 2026-09-21)
   and the script publishes to `exports/route-weights` only when `ORCH_ROUTE_WEIGHTS_PUBLISH=1` is
   set and the remote artifact would change (including a capacity `state`/`window` flip, not
-  `observed_at` alone); unset, it stays a shadow local artifact.
+  `observed_at` alone); unset, it stays a shadow local artifact. Every run logs
+  `db=<resolved path> source_version=<n>`. DB precedence is `--feedback-db`,
+  `ORCH_FEEDBACK_DB`, `ORCH_LOCAL_RUNTIME/feedback/orchestrator.db`, then
+  `ORCH_STATE_DIR/feedback/orchestrator.db`, otherwise feedback.py's shared default
+  (`~/.codex/orchestrator/feedback/orchestrator.db`). Learner and exporter share instance selection;
+  `--state-dir` selects only shadow output and diagnostics. Export reads never create/migrate a DB.
+  Version zero/invalid and all-false evidence always refuse publication, including with
+  `--allow-evidence-regression`. Per-task evidence loss requires this explicit override regardless
+  of elapsed time. `route-weights-regression-hold.json` records refusal diagnostics; recovery or
+  an explicit partial override clears it. Capacity-only changes with identical `task_types`
+  publish with that evidence unchanged. Refusals print `regressing_tasks`, infinite `drainable_in`
+  and the required flag for partial loss. Publish commits record resolved DB, version and identity.
 - **judge_reliability.py** — leave-one-out consensus weights per judge (de-saturated so real error
   spread maps to real weight spread); **human_calibration.py** + **objective_anchor.py** supply
   machine ground-truth anchors (no owner code-review required — see CLAUDE.md).
@@ -795,8 +806,8 @@ report results retain their evidence floor, even if their fields claim qualifica
 
 Publishing requires a positive local route-weight evidence version. Missing databases,
 empty databases and databases without route weights remain usable for local shadow
-inspection but cannot publish. A positive version with no threshold-eligible routing
-or reserve rows cannot replace a populated published document. These refusals leave
-both published routing and capacity untouched; do not recover routing by restoring an
-old whole document containing stale capacity. The daily mirror cadence and one-off
-publishers use the same publication guard.
+inspection but cannot publish. All-false task evidence is also an absolute refusal.
+Capacity-only changes with identical task evidence publish immediately. Partial
+per-task regressions use the single 24-hour hold described above; do not recover
+routing by restoring an old whole document containing stale capacity. The daily
+mirror cadence and one-off publishers use the same publication guard.

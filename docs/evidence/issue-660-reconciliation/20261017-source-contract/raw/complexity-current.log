@@ -1,0 +1,100 @@
+C901 `_migrate_schema` is too complex (26 > 10)
+   --> src/feedback.py:708:5
+    |
+708 | def _migrate_schema(c: sqlite3.Connection) -> None:
+    |     ^^^^^^^^^^^^^^^
+709 |     """Guarded migrations for existing local feedback stores."""
+710 |     cols = {row[1] for row in c.execute("PRAGMA table_info(runs)").fetchall()}
+    |
+
+C901 `_sanitize_completion_payload` is too complex (24 > 10)
+    --> src/feedback.py:1646:5
+     |
+1646 | def _sanitize_completion_payload(payload: dict | None) -> tuple[dict, str, int]:
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+1647 |     raw = dict(payload or {})
+1648 |     redacted: list[str] = []
+     |
+
+C901 `bt_strengths` is too complex (15 > 10)
+    --> src/feedback.py:3586:5
+     |
+3585 | # --- item 16g: Bradley-Terry strengths from the A/B/C duel data ----------------------------------
+3586 | def bt_strengths(
+     |     ^^^^^^^^^^^^
+3587 |     task_type: str | None = None,
+3588 |     *,
+     |
+
+C901 `_propagate_outcome_lineage_in_conn` is too complex (13 > 10)
+    --> src/feedback.py:3838:5
+     |
+3838 | def _propagate_outcome_lineage_in_conn(c: sqlite3.Connection, target_run_id: str) -> int:
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+3839 |     """Back-propagate a target's current terminal state over accepted edges only."""
+3840 |     outcome = c.execute(
+     |
+
+C901 `_record_outcome_in_conn` is too complex (13 > 10)
+    --> src/feedback.py:4008:5
+     |
+4008 | def _record_outcome_in_conn(
+     |     ^^^^^^^^^^^^^^^^^^^^^^^
+4009 |     c: sqlite3.Connection,
+4010 |     run_id,
+     |
+
+C901 `role_activation_metrics` is too complex (11 > 10)
+    --> src/feedback.py:4424:5
+     |
+4424 | def role_activation_metrics(*, conn: sqlite3.Connection | None = None) -> dict:
+     |     ^^^^^^^^^^^^^^^^^^^^^^^
+4425 |     """Summarize role activation, linkage, durability, and evidence readiness."""
+4426 |     c = conn or _conn()
+     |
+
+C901 `completion_event_episodes` is too complex (23 > 10)
+    --> src/feedback.py:4739:5
+     |
+4739 | def completion_event_episodes(
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+4740 |     *,
+4741 |     limit: int = 1000,
+     |
+
+C901 `relearn_quality` is too complex (28 > 10)
+    --> src/feedback.py:6461:5
+     |
+6461 | def relearn_quality(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DAYS) -> int:
+     |     ^^^^^^^^^^^^^^^
+6462 |     """Quality-MAGNITUDE learner (fixes the binary-label + free-agent-cost flaws). Per (task_type, agent):
+6463 |     reward q is one observation per run: mean(eval_score)/QUALITY_MAX when a run has cross-eval scores,
+     |
+
+C901 `_selftest` is too complex (28 > 10)
+    --> src/feedback.py:7099:5
+     |
+7099 | def _selftest():
+     |     ^^^^^^^^^
+7100 |     import tempfile
+     |
+
+C901 `main` is too complex (16 > 10)
+    --> src/feedback.py:8340:5
+     |
+8340 | def main(argv):
+     |     ^^^^
+8341 |     if "--selftest" in argv:
+8342 |         _selftest()
+     |
+
+C901 `_selftest` is too complex (16 > 10)
+   --> src/route_weights_export.py:558:5
+    |
+558 | def _selftest() -> None:
+    |     ^^^^^^^^^
+559 |     with tempfile.TemporaryDirectory(prefix="route-weights-export-") as directory:
+560 |         root = Path(directory)
+    |
+
+Found 11 errors.

@@ -1532,6 +1532,18 @@ account fields). Semantic change detection includes capacity `state` and `window
 `observed_at` alone, so a shed or recovered seat republishes without touching posteriors or
 `exploration.policy_version`. Rail exercise records invocation without
 `--record`, which governs exercise verdicts only.
+The learner and exporter share feedback.py's instance DB selection: explicit DB, DB environment,
+runtime environment, state environment, then shared default (with private `DB_PATH` patches
+supported). CLI `--state-dir` selects output/diagnostics only. Export reads never create or migrate
+a DB, and log its absolute path and source version before later work. The publish guard rejects
+version zero/invalid and all-false task evidence absolutely. Partial per-task evidence loss requires
+explicit `--allow-evidence-regression` regardless of age, preserving source660's original contract.
+`route-weights-regression-hold.json` records diagnostics only; recovery or explicit partial override
+clears it, and changed regressing task sets restart its timestamp. Capacity-only changes with
+identical task evidence publish immediately. Refusals print task count and infinite hours to drain,
+plus the required flag for partial loss. Overrides log the reason. Commit provenance records the
+resolved DB, source version and Git identity (or `orchestrator-export`). Shadow output remains
+available for diagnosis.
 Dedup: firing history and its ledger-only silence annotation already existed; the weekly reader
 and independent cadence evidence were missing. Existing heartbeat repairs from main are retained.
 

@@ -1,0 +1,1474 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="24" skipped="0" tests="25" time="63.194" timestamp="2026-10-17T07:42:37.369652-05:00" hostname="local-host"><testcase classname="tests.test_build_exec_mirror" name="test_the_documented_copier_builds_through_the_builder" time="0.414"><failure message="AssertionError: mktemp: mkstemp failed on SYSTEM_TEMP/tmp.Vht5y5wf3I: Operation not permitted&#10;  ERR: orch-sync-mirror.sh aborted at line 33 (rc 1): EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_the_documented_copier_bui0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.&#10;  &#10;assert 1 == 0&#10; +  where 1 = CompletedProcess(args=['bash', 'EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_the_docu...the_documented_copier_bui0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.\n').returncode">source = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_the_documented_copier_bui0/source')
+tmp_path = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_the_documented_copier_bui0')
+
+    def test_the_documented_copier_builds_through_the_builder(source: Path, tmp_path: Path) -&gt; None:
+        copier = tmp_path / "orch-sync-mirror.sh"
+        copier.write_text(_documented_copier())
+        root = tmp_path / "stage"
+        (root / "home" / ".codex" / "orchestrator").mkdir(parents=True)
+        bin_dir = tmp_path / "bin"
+        _gh_stub(bin_dir, '{"repos": []}')
+        path = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
+        staged = dict(PATH=path, HOME=str(root / "home"), ORCH_MIRROR=str(root / "mirror"))
+        proc = subprocess.run(
+            ["bash", str(copier), str(source)],
+            env=_env(ORCH_PRIVATE_COPY_ROOT=str(root), **staged),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+&gt;       assert proc.returncode == 0, proc.stderr
+E       AssertionError: mktemp: mkstemp failed on SYSTEM_TEMP/tmp.Vht5y5wf3I: Operation not permitted
+E         ERR: orch-sync-mirror.sh aborted at line 33 (rc 1): EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_the_documented_copier_bui0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.
+E
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', 'EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_the_docu...the_documented_copier_bui0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.\n').returncode
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_build_exec_mirror.py:346: AssertionError</failure></testcase><testcase classname="tests.test_build_exec_mirror" name="test_the_390_guard_composes_with_the_documented_copier" time="0.371"><failure message="AssertionError: mktemp: mkstemp failed on SYSTEM_TEMP/tmp.JdWY4jb32w: Operation not permitted&#10;  ERR: orch-sync-mirror.sh aborted at line 38 (rc 1): EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_the_390_guard_composes_wi0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.&#10;  &#10;assert 1 == 0&#10; +  where 1 = CompletedProcess(args=['bash', 'EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_the_390_...the_390_guard_composes_wi0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.\n').returncode">source = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_the_390_guard_composes_wi0/source')
+tmp_path = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_the_390_guard_composes_wi0')
+
+    def test_the_390_guard_composes_with_the_documented_copier(source: Path, tmp_path: Path) -&gt; None:
+        """The documented copier leaves #390's guard out (it is #389's deployment step), so inserting
+        it where that section says must still work, and must leave the exact bytes the
+        deployment-evidence collector looks for."""
+        assert _documented_guard() not in _documented_copier(), "the guard is #389's step, not this one"
+        composed = _with_390_guard(_documented_copier())
+        assert _documented_guard() in composed
+        copier = tmp_path / "orch-sync-mirror.sh"
+        copier.write_text(composed)
+        _write(
+            source / "scripts" / "publish_unverified_snapshot.sh",
+            '#!/usr/bin/env bash\nprintf "publisher %s %s\\n" "$1" "$2" &gt; "$FAKE_RECORD"\n',
+        )
+        record, live = tmp_path / "record.txt", tmp_path / "live-mirror"
+        direct = subprocess.run(
+            ["bash", str(copier), str(source)],
+            env=_env(HOME=str(tmp_path), ORCH_MIRROR=str(live), FAKE_RECORD=str(record)),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert direct.returncode == 0, direct.stderr
+        assert record.read_text() == f"publisher {source} {live}\n"
+        assert not live.exists(), "the guard must route a direct call away from an in-place copy"
+        # A staging call (the verifier's and the publisher's own) still builds through the builder.
+        root = tmp_path / "stage"
+        (root / "home").mkdir(parents=True)
+        bin_dir = tmp_path / "bin"
+        _gh_stub(bin_dir, '{"repos": []}')
+        staged = subprocess.run(
+            ["bash", str(copier), str(source)],
+            env=_env(
+                PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                HOME=str(root / "home"),
+                ORCH_MIRROR=str(root / "mirror"),
+                ORCH_PRIVATE_COPY_ROOT=str(root),
+            ),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+&gt;       assert staged.returncode == 0, staged.stderr
+E       AssertionError: mktemp: mkstemp failed on SYSTEM_TEMP/tmp.JdWY4jb32w: Operation not permitted
+E         ERR: orch-sync-mirror.sh aborted at line 38 (rc 1): EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_the_390_guard_composes_wi0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.
+E
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', 'EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_the_390_...the_390_guard_composes_wi0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.\n').returncode
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_build_exec_mirror.py:415: AssertionError</failure></testcase><testcase classname="tests.test_build_exec_mirror" name="test_presync_says_whether_ci_verified_the_shipped_tree[documented]" time="0.533"><failure message="AssertionError: == scratch mirror of EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v0/source @ 45e1d3e (0 uncommitted) -&gt; EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v0/verify-before-sync.9W1R0K/mirror&#10;  tests/ shipped from git HEAD 45e1d3e (2 files) — uncommitted test edits are NOT shipped&#10;  scripts/ shipped from git HEAD (4 entries)&#10;  .github/ shipped from git HEAD (1 files) with .gitignore ruff.toml&#10;  docs/ shipped from git HEAD (1 files, merged beside run-time output)&#10;  built 3 .py (from EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v0/source/src) + orchestrate.sh + 1 test file(s) + 10 data/config entries -&gt; EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v0/verify-before-sync.9W1R0K/mirror&#10;  mktemp: mkstemp failed on SYSTEM_TEMP/tmp.0swt4WlLcT: Operation not permitted&#10;  ERR: orch-sync-mirror.sh aborted at line 33 (rc 1): EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v0/verify-before-sync.9W1R0K/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.&#10;  verify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched&#10;  &#10;assert 2 == 0&#10; +  where 2 = CompletedProcess(args=['bash', 'EVIDENCE_ROOT/admitted-baseline/scripts/verify_before_sync.sh'...verify.\nverify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched\n').returncode">source = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v0/source')
+tmp_path = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v0')
+copier = 'documented'
+
+    @pytest.mark.parametrize("copier", ["builder", "documented", "drifted"])
+    def test_presync_says_whether_ci_verified_the_shipped_tree(
+        source: Path, tmp_path: Path, copier: str
+    ) -&gt; None:
+        """FYI only: the verdict stays the copier's own, whatever this line says."""
+        _write(source / "src" / "verify.py", FAKE_VERIFY)
+        _git(source, "add", "-A")
+        _git(source, "commit", "-q", "-m", "fake verify")
+        bin_dir = tmp_path / "bin"
+        _gh_stub(bin_dir, '{"repos": []}')
+        if copier == "builder":
+            script = source / "scripts" / "build_exec_mirror.sh"
+        else:
+            script = tmp_path / "copier.sh"
+            body = _documented_copier()
+            if copier == "drifted":
+                body += 'printf "only here\\n" &gt; "$MIRROR/extra.txt"\n'
+            script.write_text(body)
+        home, runtime = tmp_path / "home", tmp_path / "runtime"
+        home.mkdir()
+        runtime.mkdir()
+        proc = subprocess.run(
+            ["bash", str(PRESYNC), str(source)],
+            env=_env(
+                PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                HOME=str(home),
+                TMPDIR=str(tmp_path),
+                ORCH_SYNC_SCRIPT=str(script),
+                ORCH_LOCAL_RUNTIME=str(runtime),
+                ORCH_STATE_DIR=str(runtime),
+            ),
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+&gt;       assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
+E       AssertionError: == scratch mirror of EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v0/source @ 45e1d3e (0 uncommitted) -&gt; EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v0/verify-before-sync.9W1R0K/mirror
+E         tests/ shipped from git HEAD 45e1d3e (2 files) — uncommitted test edits are NOT shipped
+E         scripts/ shipped from git HEAD (4 entries)
+E         .github/ shipped from git HEAD (1 files) with .gitignore ruff.toml
+E         docs/ shipped from git HEAD (1 files, merged beside run-time output)
+E         built 3 .py (from EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v0/source/src) + orchestrate.sh + 1 test file(s) + 10 data/config entries -&gt; EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v0/verify-before-sync.9W1R0K/mirror
+E         mktemp: mkstemp failed on SYSTEM_TEMP/tmp.0swt4WlLcT: Operation not permitted
+E         ERR: orch-sync-mirror.sh aborted at line 33 (rc 1): EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v0/verify-before-sync.9W1R0K/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.
+E         verify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched
+E
+E       assert 2 == 0
+E        +  where 2 = CompletedProcess(args=['bash', 'EVIDENCE_ROOT/admitted-baseline/scripts/verify_before_sync.sh'...verify.\nverify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched\n').returncode
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_build_exec_mirror.py:486: AssertionError</failure></testcase><testcase classname="tests.test_build_exec_mirror" name="test_presync_says_whether_ci_verified_the_shipped_tree[drifted]" time="0.535"><failure message="AssertionError: == scratch mirror of EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v1/source @ 4c7ebf0 (0 uncommitted) -&gt; EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v1/verify-before-sync.rpZ5Jj/mirror&#10;  tests/ shipped from git HEAD 4c7ebf0 (2 files) — uncommitted test edits are NOT shipped&#10;  scripts/ shipped from git HEAD (4 entries)&#10;  .github/ shipped from git HEAD (1 files) with .gitignore ruff.toml&#10;  docs/ shipped from git HEAD (1 files, merged beside run-time output)&#10;  built 3 .py (from EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v1/source/src) + orchestrate.sh + 1 test file(s) + 10 data/config entries -&gt; EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v1/verify-before-sync.rpZ5Jj/mirror&#10;  mktemp: mkstemp failed on SYSTEM_TEMP/tmp.UcQDtoxXsJ: Operation not permitted&#10;  ERR: orch-sync-mirror.sh aborted at line 33 (rc 1): EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v1/verify-before-sync.rpZ5Jj/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.&#10;  verify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched&#10;  &#10;assert 2 == 0&#10; +  where 2 = CompletedProcess(args=['bash', 'EVIDENCE_ROOT/admitted-baseline/scripts/verify_before_sync.sh'...verify.\nverify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched\n').returncode">source = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v1/source')
+tmp_path = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v1')
+copier = 'drifted'
+
+    @pytest.mark.parametrize("copier", ["builder", "documented", "drifted"])
+    def test_presync_says_whether_ci_verified_the_shipped_tree(
+        source: Path, tmp_path: Path, copier: str
+    ) -&gt; None:
+        """FYI only: the verdict stays the copier's own, whatever this line says."""
+        _write(source / "src" / "verify.py", FAKE_VERIFY)
+        _git(source, "add", "-A")
+        _git(source, "commit", "-q", "-m", "fake verify")
+        bin_dir = tmp_path / "bin"
+        _gh_stub(bin_dir, '{"repos": []}')
+        if copier == "builder":
+            script = source / "scripts" / "build_exec_mirror.sh"
+        else:
+            script = tmp_path / "copier.sh"
+            body = _documented_copier()
+            if copier == "drifted":
+                body += 'printf "only here\\n" &gt; "$MIRROR/extra.txt"\n'
+            script.write_text(body)
+        home, runtime = tmp_path / "home", tmp_path / "runtime"
+        home.mkdir()
+        runtime.mkdir()
+        proc = subprocess.run(
+            ["bash", str(PRESYNC), str(source)],
+            env=_env(
+                PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                HOME=str(home),
+                TMPDIR=str(tmp_path),
+                ORCH_SYNC_SCRIPT=str(script),
+                ORCH_LOCAL_RUNTIME=str(runtime),
+                ORCH_STATE_DIR=str(runtime),
+            ),
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+&gt;       assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
+E       AssertionError: == scratch mirror of EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v1/source @ 4c7ebf0 (0 uncommitted) -&gt; EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v1/verify-before-sync.rpZ5Jj/mirror
+E         tests/ shipped from git HEAD 4c7ebf0 (2 files) — uncommitted test edits are NOT shipped
+E         scripts/ shipped from git HEAD (4 entries)
+E         .github/ shipped from git HEAD (1 files) with .gitignore ruff.toml
+E         docs/ shipped from git HEAD (1 files, merged beside run-time output)
+E         built 3 .py (from EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v1/source/src) + orchestrate.sh + 1 test file(s) + 10 data/config entries -&gt; EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v1/verify-before-sync.rpZ5Jj/mirror
+E         mktemp: mkstemp failed on SYSTEM_TEMP/tmp.UcQDtoxXsJ: Operation not permitted
+E         ERR: orch-sync-mirror.sh aborted at line 33 (rc 1): EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_presync_says_whether_ci_v1/verify-before-sync.rpZ5Jj/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.
+E         verify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched
+E
+E       assert 2 == 0
+E        +  where 2 = CompletedProcess(args=['bash', 'EVIDENCE_ROOT/admitted-baseline/scripts/verify_before_sync.sh'...verify.\nverify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched\n').returncode
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_build_exec_mirror.py:486: AssertionError</failure></testcase><testcase classname="tests.test_model_tier_resolution" name="test_auth_failure_is_detected" time="0.001"><failure message="AssertionError: {'agent': 'cursor', 'authenticated': True, 'checked': False, 'strength': None, ...}&#10;assert (False)">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x1063137d0&gt;
+
+    def test_auth_failure_is_detected(monkeypatch):
+        monkeypatch.setattr(adapters, "_AUTH_MEMO", {})
+        monkeypatch.setattr(
+            adapters.subprocess,
+            "run",
+            lambda *a, **k: _Proc(
+                1, "", "Error: Authentication required. Please run 'agent login' first"
+            ),
+        )
+        health = adapters.auth_health("cursor", refresh=True)
+&gt;       assert health["checked"] and not health["authenticated"], health
+E       AssertionError: {'agent': 'cursor', 'authenticated': True, 'checked': False, 'strength': None, ...}
+E       assert (False)
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_model_tier_resolution.py:621: AssertionError</failure></testcase><testcase classname="tests.test_model_tier_resolution" name="test_auth_ok_when_probe_succeeds" time="0.000"><failure message="AssertionError: {'agent': 'cursor', 'authenticated': True, 'checked': False, 'strength': None, ...}&#10;assert (True and False)">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x10629cdd0&gt;
+
+    def test_auth_ok_when_probe_succeeds(monkeypatch):
+        monkeypatch.setattr(adapters, "_AUTH_MEMO", {})
+        monkeypatch.setattr(
+            adapters.subprocess, "run", lambda *a, **k: _Proc(0, "✓ Logged in as someone@example.com")
+        )
+        health = adapters.auth_health("cursor", refresh=True)
+&gt;       assert health["authenticated"] and health["checked"], health
+E       AssertionError: {'agent': 'cursor', 'authenticated': True, 'checked': False, 'strength': None, ...}
+E       assert (True and False)
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_model_tier_resolution.py:630: AssertionError</failure></testcase><testcase classname="tests.test_model_tier_resolution" name="test_exit_zero_but_failed_is_still_a_failure" time="0.000"><failure message="AssertionError: {'agent': 'cursor', 'authenticated': True, 'checked': False, 'strength': None, ...}&#10;assert (False)">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x10629c050&gt;
+
+    def test_exit_zero_but_failed_is_still_a_failure(monkeypatch):
+        """THE defect this probe was rewritten for: cursor-agent exits 0 while printing
+        'Not logged in' / an invalid-key warning. Returncode-driven logic read that as healthy."""
+        monkeypatch.setattr(adapters, "_AUTH_MEMO", {})
+        monkeypatch.setattr(
+            adapters.subprocess,
+            "run",
+            lambda *a, **k: _Proc(0, "\x1b[33m⚠ Warning: The provided API key is invalid.\x1b[0m"),
+        )
+        health = adapters.auth_health("cursor", refresh=True)
+&gt;       assert health["checked"] and not health["authenticated"], health
+E       AssertionError: {'agent': 'cursor', 'authenticated': True, 'checked': False, 'strength': None, ...}
+E       assert (False)
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_model_tier_resolution.py:643: AssertionError</failure></testcase><testcase classname="tests.test_model_tier_resolution" name="test_status_style_not_logged_in_is_caught" time="0.000"><failure message="assert not True">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x10629cfe0&gt;
+
+    def test_status_style_not_logged_in_is_caught(monkeypatch):
+        monkeypatch.setattr(adapters, "_AUTH_MEMO", {})
+        monkeypatch.setattr(adapters.subprocess, "run", lambda *a, **k: _Proc(0, "Not logged in"))
+&gt;       assert not adapters.auth_health("cursor", refresh=True)["authenticated"]
+E       assert not True
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_model_tier_resolution.py:650: AssertionError</failure></testcase><testcase classname="tests.test_model_tier_resolution" name="test_presence_probe_still_detects_a_missing_credential" time="0.000"><failure message="AssertionError: {'agent': 'claude', 'authenticated': True, 'checked': False, 'strength': None, ...}&#10;assert (False)">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x10629e150&gt;
+
+    def test_presence_probe_still_detects_a_missing_credential(monkeypatch):
+        """A weak probe is still worth having: absence is detectable even if validity isn't."""
+        monkeypatch.setattr(adapters, "_AUTH_MEMO", {})
+        monkeypatch.setattr(adapters.subprocess, "run", lambda *a, **k: _Proc(1, "", "Not logged in"))
+        health = adapters.auth_health("claude", refresh=True)
+&gt;       assert health["checked"] and not health["authenticated"], health
+E       AssertionError: {'agent': 'claude', 'authenticated': True, 'checked': False, 'strength': None, ...}
+E       assert (False)
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_model_tier_resolution.py:698: AssertionError</failure></testcase><testcase classname="tests.test_model_tier_resolution" name="test_presence_pass_is_not_reported_as_verified" time="0.003"><failure message="AssertionError: assert 'BROKEN' == 'PRESENT'&#10;  &#10;  - PRESENT&#10;  + BROKEN">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x1062adcd0&gt;
+
+    def test_presence_pass_is_not_reported_as_verified(monkeypatch):
+        """agent_auth_check must show PRESENT, not OK, for a presence-only pass."""
+        monkeypatch.setattr(adapters, "_AUTH_MEMO", {})
+        monkeypatch.setattr(adapters.subprocess, "run", lambda *a, **k: _Proc(0, '{"loggedIn": true}'))
+        import agent_auth_check
+
+&gt;       assert agent_auth_check.check("claude")["verdict"] == "PRESENT"
+E       AssertionError: assert 'BROKEN' == 'PRESENT'
+E
+E         - PRESENT
+E         + BROKEN
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_model_tier_resolution.py:753: AssertionError</failure></testcase><testcase classname="tests.test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests" name="test_backslash" time="0.036"><failure message="AssertionError: stdout: &#10;  stderr: sandbox-exec: sandbox_apply: Operation not permitted&#10;  &#10;assert 71 == 0&#10; +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath &quot;/private/.../.git/hooks/pre-commit&quot;]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\n').returncode">self = &lt;test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests testMethod=test_backslash&gt;
+
+    def test_backslash(self):
+&gt;       self.check_root(r"back\slash")
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_seatbelt_regex_quoting.py:39:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+EVIDENCE_ROOT/admitted-baseline/tests/test_seatbelt_regex_quoting.py:28: in check_root
+    _assert_native_profile_enforces_unusual_allowed_roots(root, name)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+tmp_path = PosixPath('EVIDENCE_ROOT/fulltmp/seatbelt-regression-rv6jb1hj')
+name = 'back\\slash'
+
+    def _assert_native_profile_enforces_unusual_allowed_roots(tmp_path, name):
+        protected = tmp_path.resolve() / ("protected-" + name)
+        root = protected / name
+        allowed = [
+            root / "source.py",
+            root / "nested" / "source.py",
+            root / ".gitignore",
+            root / ".git-other" / "config",
+            # Outside the protected tree: an overbroad/underescaped root regex must not deny this.
+            tmp_path.resolve() / ("protected-" + name + "-sibling") / name / ".git" / "config",
+        ]
+        denied = [
+            protected / "driver.py",
+            protected / (name + "-sibling") / "source.py",
+            root / ".git" / "config",
+            root / "nested" / ".git" / "hooks" / "pre-commit",
+        ]
+        for path in [*allowed, *denied]:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("original")
+        protect, allow = adapters.write_boundary_roots([protected], [], root, agent="vibe")
+        profile = adapters.seatbelt_write_profile(protect, allow)
+        # Execute the production profile, not a hand-written equivalent. All attempts stay in tmp_path.
+        probe = r"""
+    import json, pathlib, sys
+    allowed, denied = json.loads(sys.argv[1])
+    for name in allowed:
+        path = pathlib.Path(name)
+        path.write_text("changed")
+        path.with_name(path.name + ".new").write_text("created")
+        moved = path.with_name(path.name + ".moved")
+        path.rename(moved)
+        moved.rename(path)
+    for name in denied:
+        path = pathlib.Path(name)
+        for target in (path, path.with_name(path.name + ".new")):
+            try:
+                target.write_text("forbidden")
+            except PermissionError:
+                continue
+            raise AssertionError("write allowed: " + str(target))
+        try:
+            path.rename(path.with_name(path.name + ".moved"))
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("rename allowed: " + str(path))
+        try:
+            path.unlink()
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("unlink allowed: " + str(path))
+    print("native Seatbelt probe: OK")
+    """
+        proc = subprocess.run(
+            [
+                adapters.SANDBOX_EXEC,
+                "-p",
+                profile,
+                sys.executable,
+                "-I",
+                "-c",
+                probe,
+                json.dumps([[str(p) for p in allowed], [str(p) for p in denied]]),
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+&gt;       assert proc.returncode == 0, f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+E       AssertionError: stdout:
+E         stderr: sandbox-exec: sandbox_apply: Operation not permitted
+E
+E       assert 71 == 0
+E        +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath "/private/.../.git/hooks/pre-commit"]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\n').returncode
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_seatbelt_regex_quoting.py:151: AssertionError</failure></testcase><testcase classname="tests.test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests" name="test_combined" time="0.033"><failure message="AssertionError: stdout: &#10;  stderr: sandbox-exec: sandbox_apply: Operation not permitted&#10;  &#10;assert 71 == 0&#10; +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath &quot;/private/.../.git/hooks/pre-commit&quot;]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\n').returncode">self = &lt;test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests testMethod=test_combined&gt;
+
+    def test_combined(self):
+&gt;       self.check_root('mixed"back\\slash.[x]+(a){2}^$|?* space')
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_seatbelt_regex_quoting.py:45:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+EVIDENCE_ROOT/admitted-baseline/tests/test_seatbelt_regex_quoting.py:28: in check_root
+    _assert_native_profile_enforces_unusual_allowed_roots(root, name)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+tmp_path = PosixPath('EVIDENCE_ROOT/fulltmp/seatbelt-regression-xyiaynbr')
+name = 'mixed"back\\slash.[x]+(a){2}^$|?* space'
+
+    def _assert_native_profile_enforces_unusual_allowed_roots(tmp_path, name):
+        protected = tmp_path.resolve() / ("protected-" + name)
+        root = protected / name
+        allowed = [
+            root / "source.py",
+            root / "nested" / "source.py",
+            root / ".gitignore",
+            root / ".git-other" / "config",
+            # Outside the protected tree: an overbroad/underescaped root regex must not deny this.
+            tmp_path.resolve() / ("protected-" + name + "-sibling") / name / ".git" / "config",
+        ]
+        denied = [
+            protected / "driver.py",
+            protected / (name + "-sibling") / "source.py",
+            root / ".git" / "config",
+            root / "nested" / ".git" / "hooks" / "pre-commit",
+        ]
+        for path in [*allowed, *denied]:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("original")
+        protect, allow = adapters.write_boundary_roots([protected], [], root, agent="vibe")
+        profile = adapters.seatbelt_write_profile(protect, allow)
+        # Execute the production profile, not a hand-written equivalent. All attempts stay in tmp_path.
+        probe = r"""
+    import json, pathlib, sys
+    allowed, denied = json.loads(sys.argv[1])
+    for name in allowed:
+        path = pathlib.Path(name)
+        path.write_text("changed")
+        path.with_name(path.name + ".new").write_text("created")
+        moved = path.with_name(path.name + ".moved")
+        path.rename(moved)
+        moved.rename(path)
+    for name in denied:
+        path = pathlib.Path(name)
+        for target in (path, path.with_name(path.name + ".new")):
+            try:
+                target.write_text("forbidden")
+            except PermissionError:
+                continue
+            raise AssertionError("write allowed: " + str(target))
+        try:
+            path.rename(path.with_name(path.name + ".moved"))
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("rename allowed: " + str(path))
+        try:
+            path.unlink()
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("unlink allowed: " + str(path))
+    print("native Seatbelt probe: OK")
+    """
+        proc = subprocess.run(
+            [
+                adapters.SANDBOX_EXEC,
+                "-p",
+                profile,
+                sys.executable,
+                "-I",
+                "-c",
+                probe,
+                json.dumps([[str(p) for p in allowed], [str(p) for p in denied]]),
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+&gt;       assert proc.returncode == 0, f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+E       AssertionError: stdout:
+E         stderr: sandbox-exec: sandbox_apply: Operation not permitted
+E
+E       assert 71 == 0
+E        +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath "/private/.../.git/hooks/pre-commit"]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\n').returncode
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_seatbelt_regex_quoting.py:151: AssertionError</failure></testcase><testcase classname="tests.test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests" name="test_quote" time="0.019"><failure message="AssertionError: stdout: &#10;  stderr: sandbox-exec: sandbox_apply: Operation not permitted&#10;  &#10;assert 71 == 0&#10; +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath &quot;/private/.../.git/hooks/pre-commit&quot;]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\n').returncode">self = &lt;test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests testMethod=test_quote&gt;
+
+    def test_quote(self):
+&gt;       self.check_root('odd"root')
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_seatbelt_regex_quoting.py:36:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+EVIDENCE_ROOT/admitted-baseline/tests/test_seatbelt_regex_quoting.py:28: in check_root
+    _assert_native_profile_enforces_unusual_allowed_roots(root, name)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+tmp_path = PosixPath('EVIDENCE_ROOT/fulltmp/seatbelt-regression-5sgidaxx')
+name = 'odd"root'
+
+    def _assert_native_profile_enforces_unusual_allowed_roots(tmp_path, name):
+        protected = tmp_path.resolve() / ("protected-" + name)
+        root = protected / name
+        allowed = [
+            root / "source.py",
+            root / "nested" / "source.py",
+            root / ".gitignore",
+            root / ".git-other" / "config",
+            # Outside the protected tree: an overbroad/underescaped root regex must not deny this.
+            tmp_path.resolve() / ("protected-" + name + "-sibling") / name / ".git" / "config",
+        ]
+        denied = [
+            protected / "driver.py",
+            protected / (name + "-sibling") / "source.py",
+            root / ".git" / "config",
+            root / "nested" / ".git" / "hooks" / "pre-commit",
+        ]
+        for path in [*allowed, *denied]:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("original")
+        protect, allow = adapters.write_boundary_roots([protected], [], root, agent="vibe")
+        profile = adapters.seatbelt_write_profile(protect, allow)
+        # Execute the production profile, not a hand-written equivalent. All attempts stay in tmp_path.
+        probe = r"""
+    import json, pathlib, sys
+    allowed, denied = json.loads(sys.argv[1])
+    for name in allowed:
+        path = pathlib.Path(name)
+        path.write_text("changed")
+        path.with_name(path.name + ".new").write_text("created")
+        moved = path.with_name(path.name + ".moved")
+        path.rename(moved)
+        moved.rename(path)
+    for name in denied:
+        path = pathlib.Path(name)
+        for target in (path, path.with_name(path.name + ".new")):
+            try:
+                target.write_text("forbidden")
+            except PermissionError:
+                continue
+            raise AssertionError("write allowed: " + str(target))
+        try:
+            path.rename(path.with_name(path.name + ".moved"))
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("rename allowed: " + str(path))
+        try:
+            path.unlink()
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("unlink allowed: " + str(path))
+    print("native Seatbelt probe: OK")
+    """
+        proc = subprocess.run(
+            [
+                adapters.SANDBOX_EXEC,
+                "-p",
+                profile,
+                sys.executable,
+                "-I",
+                "-c",
+                probe,
+                json.dumps([[str(p) for p in allowed], [str(p) for p in denied]]),
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+&gt;       assert proc.returncode == 0, f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+E       AssertionError: stdout:
+E         stderr: sandbox-exec: sandbox_apply: Operation not permitted
+E
+E       assert 71 == 0
+E        +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath "/private/.../.git/hooks/pre-commit"]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\n').returncode
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_seatbelt_regex_quoting.py:151: AssertionError</failure></testcase><testcase classname="tests.test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests" name="test_regex_metacharacters" time="0.031"><failure message="AssertionError: stdout: &#10;  stderr: sandbox-exec: sandbox_apply: Operation not permitted&#10;  &#10;assert 71 == 0&#10; +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath &quot;/private/.../.git/hooks/pre-commit&quot;]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\n').returncode">self = &lt;test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests testMethod=test_regex_metacharacters&gt;
+
+    def test_regex_metacharacters(self):
+&gt;       self.check_root("meta.[x]+(a){2}^$|?*")
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_seatbelt_regex_quoting.py:42:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+EVIDENCE_ROOT/admitted-baseline/tests/test_seatbelt_regex_quoting.py:28: in check_root
+    _assert_native_profile_enforces_unusual_allowed_roots(root, name)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+tmp_path = PosixPath('EVIDENCE_ROOT/fulltmp/seatbelt-regression-00qesvhv')
+name = 'meta.[x]+(a){2}^$|?*'
+
+    def _assert_native_profile_enforces_unusual_allowed_roots(tmp_path, name):
+        protected = tmp_path.resolve() / ("protected-" + name)
+        root = protected / name
+        allowed = [
+            root / "source.py",
+            root / "nested" / "source.py",
+            root / ".gitignore",
+            root / ".git-other" / "config",
+            # Outside the protected tree: an overbroad/underescaped root regex must not deny this.
+            tmp_path.resolve() / ("protected-" + name + "-sibling") / name / ".git" / "config",
+        ]
+        denied = [
+            protected / "driver.py",
+            protected / (name + "-sibling") / "source.py",
+            root / ".git" / "config",
+            root / "nested" / ".git" / "hooks" / "pre-commit",
+        ]
+        for path in [*allowed, *denied]:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("original")
+        protect, allow = adapters.write_boundary_roots([protected], [], root, agent="vibe")
+        profile = adapters.seatbelt_write_profile(protect, allow)
+        # Execute the production profile, not a hand-written equivalent. All attempts stay in tmp_path.
+        probe = r"""
+    import json, pathlib, sys
+    allowed, denied = json.loads(sys.argv[1])
+    for name in allowed:
+        path = pathlib.Path(name)
+        path.write_text("changed")
+        path.with_name(path.name + ".new").write_text("created")
+        moved = path.with_name(path.name + ".moved")
+        path.rename(moved)
+        moved.rename(path)
+    for name in denied:
+        path = pathlib.Path(name)
+        for target in (path, path.with_name(path.name + ".new")):
+            try:
+                target.write_text("forbidden")
+            except PermissionError:
+                continue
+            raise AssertionError("write allowed: " + str(target))
+        try:
+            path.rename(path.with_name(path.name + ".moved"))
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("rename allowed: " + str(path))
+        try:
+            path.unlink()
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("unlink allowed: " + str(path))
+    print("native Seatbelt probe: OK")
+    """
+        proc = subprocess.run(
+            [
+                adapters.SANDBOX_EXEC,
+                "-p",
+                profile,
+                sys.executable,
+                "-I",
+                "-c",
+                probe,
+                json.dumps([[str(p) for p in allowed], [str(p) for p in denied]]),
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+&gt;       assert proc.returncode == 0, f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+E       AssertionError: stdout:
+E         stderr: sandbox-exec: sandbox_apply: Operation not permitted
+E
+E       assert 71 == 0
+E        +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath "/private/.../.git/hooks/pre-commit"]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\n').returncode
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_seatbelt_regex_quoting.py:151: AssertionError</failure></testcase><testcase classname="tests.test_tick_watchdog" name="test_a_stuck_tick_is_reported_with_the_kill_that_frees_it" time="60.087"><failure message="AssertionError: timed out after 60s waiting for a drain naming the stuck command; record={}; history=&lt;none&gt;">tmp_path = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_a_stuck_tick_is_reported_0')
+
+    def test_a_stuck_tick_is_reported_with_the_kill_that_frees_it(tmp_path: Path) -&gt; None:
+        state = tmp_path / "state"
+        tick = tmp_path / "tick.sh"
+        tick.write_text(
+            "set -euo pipefail\n"
+            f'{shlex.quote(sys.executable)} {shlex.quote(str(WATCHDOG))} start --state-dir "$STATE" '
+            '--tick-pid "$$"\n'
+            f"{shlex.quote(sys.executable)} -c {shlex.quote(DEADLOCKED)} "
+            '|| echo "STEP-FAILED rc=$?"\n'
+            'echo "TICK-REACHED-ITS-END"\n',
+            encoding="utf-8",
+        )
+        proc = subprocess.Popen(
+            ["bash", str(tick)],
+            env=_fast_env(STATE=str(state)),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        stuck_pid = None
+        try:
+            # The child is caught as soon as it forks; wait until it has exec'd, so the record names
+            # the command rather than the fork (same pid either way -- `kill` frees it in both cases).
+&gt;           rec = _wait_for(
+                lambda: "os.pipe()" in (_record(state).get("oldest_command") or {}).get("command", "")
+                and _record(state).get("drain")
+                and _record(state),
+                "a drain naming the stuck command",
+                state=state,
+            )
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:116:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+predicate = &lt;function test_a_stuck_tick_is_reported_with_the_kill_that_frees_it.&lt;locals&gt;.&lt;lambda&gt; at 0x106350cc0&gt;
+what = 'a drain naming the stuck command', timeout = 60.0
+state = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_a_stuck_tick_is_reported_0/state')
+
+    def _wait_for(predicate, what: str, timeout: float = WAIT_S, state: Path | None = None):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() &lt; deadline:
+            value = predicate()
+            if value:
+                return value
+            time.sleep(0.05)
+        # Say what the watcher DID record: a timeout alone told the first Linux CI failure nothing.
+        seen = ""
+        if state is not None:
+            history = state / tick_watchdog.HISTORY_NAME
+            seen = f"; record={_record(state)!r}; history=" + (
+                history.read_text(encoding="utf-8") if history.exists() else "&lt;none&gt;"
+            )
+&gt;       raise AssertionError(f"timed out after {timeout:.0f}s waiting for {what}{seen}")
+E       AssertionError: timed out after 60s waiting for a drain naming the stuck command; record={}; history=&lt;none&gt;
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:59: AssertionError</failure></testcase><testcase classname="tests.test_tick_watchdog" name="test_the_process_table_keeps_whole_command_lines" time="0.015"><failure message="PermissionError: [Errno 1] Operation not permitted: 'ps'">def test_the_process_table_keeps_whole_command_lines() -&gt; None:
+        """Linux procps cuts every line to 80 columns when its output is a pipe, which left the first
+        Linux CI run's record naming the stuck command as `/opt/hostedtoolcache/Python/3.12.1`: the
+        ALERT could not say what was stuck. A command line far wider than any terminal must survive."""
+        tail = "y" * 300
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)  # " + tail], stdin=subprocess.DEVNULL
+        )
+        try:
+&gt;           row = _wait_for(lambda: tick_watchdog.snapshot().get(child.pid), "the child in ps")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:266:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:48: in _wait_for
+    value = predicate()
+            ^^^^^^^^^^^
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:266: in &lt;lambda&gt;
+    row = _wait_for(lambda: tick_watchdog.snapshot().get(child.pid), "the child in ps")
+                            ^^^^^^^^^^^^^^^^^^^^^^^^
+source660-reconciliation/admitted-baseline/src/tick_watchdog.py:149: in snapshot
+    out = subprocess.run(
+/opt/anaconda3/lib/python3.12/subprocess.py:548: in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/subprocess.py:1026: in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;Popen: returncode: 255 args: ('ps', '-A', '-ww', '-o', 'pid=,ppid=,stat=,ls...&gt;
+args = ['ps', '-A', '-ww', '-o', 'pid=,ppid=,stat=,lstart=,command=']
+executable = b'ps', preexec_fn = None, close_fds = True, pass_fds = ()
+cwd = None
+env = {'BASH_ENV': 'LOCAL_HOME/.codex/orchestrator/agent-runtime/gh-guard/bashenv.sh', 'CODEX_CI': '1', 'CODEX_DETACHED_NET': '1', 'CODEX_SANDBOX': 'seatbelt', ...}
+startupinfo = None, creationflags = 0, shell = False, p2cread = 12
+p2cwrite = -1, c2pread = 14, c2pwrite = 15, errread = 16, errwrite = 17
+restore_signals = True, gid = None, gids = None, uid = None, umask = -1
+start_new_session = False, process_group = -1
+
+    def _execute_child(self, args, executable, preexec_fn, close_fds,
+                       pass_fds, cwd, env,
+                       startupinfo, creationflags, shell,
+                       p2cread, p2cwrite,
+                       c2pread, c2pwrite,
+                       errread, errwrite,
+                       restore_signals,
+                       gid, gids, uid, umask,
+                       start_new_session, process_group):
+        """Execute program (POSIX version)"""
+
+        if isinstance(args, (str, bytes)):
+            args = [args]
+        elif isinstance(args, os.PathLike):
+            if shell:
+                raise TypeError('path-like args is not allowed when '
+                                'shell is true')
+            args = [args]
+        else:
+            args = list(args)
+
+        if shell:
+            # On Android the default shell is at '/system/bin/sh'.
+            unix_shell = ('/system/bin/sh' if
+                      hasattr(sys, 'getandroidapilevel') else '/bin/sh')
+            args = [unix_shell, "-c"] + args
+            if executable:
+                args[0] = executable
+
+        if executable is None:
+            executable = args[0]
+
+        sys.audit("subprocess.Popen", executable, args, cwd, env)
+
+        if (_USE_POSIX_SPAWN
+                and os.path.dirname(executable)
+                and preexec_fn is None
+                and not close_fds
+                and not pass_fds
+                and cwd is None
+                and (p2cread == -1 or p2cread &gt; 2)
+                and (c2pwrite == -1 or c2pwrite &gt; 2)
+                and (errwrite == -1 or errwrite &gt; 2)
+                and not start_new_session
+                and process_group == -1
+                and gid is None
+                and gids is None
+                and uid is None
+                and umask &lt; 0):
+            self._posix_spawn(args, executable, env, restore_signals,
+                              p2cread, p2cwrite,
+                              c2pread, c2pwrite,
+                              errread, errwrite)
+            return
+
+        orig_executable = executable
+
+        # For transferring possible exec failure from child to parent.
+        # Data format: "exception name:hex errno:description"
+        # Pickle is not used; it is complex and involves memory allocation.
+        errpipe_read, errpipe_write = os.pipe()
+        # errpipe_write must not be in the standard io 0, 1, or 2 fd range.
+        low_fds_to_close = []
+        while errpipe_write &lt; 3:
+            low_fds_to_close.append(errpipe_write)
+            errpipe_write = os.dup(errpipe_write)
+        for low_fd in low_fds_to_close:
+            os.close(low_fd)
+        try:
+            try:
+                # We must avoid complex work that could involve
+                # malloc or free in the child process to avoid
+                # potential deadlocks, thus we do all this here.
+                # and pass it to fork_exec()
+
+                if env is not None:
+                    env_list = []
+                    for k, v in env.items():
+                        k = os.fsencode(k)
+                        if b'=' in k:
+                            raise ValueError("illegal environment variable name")
+                        env_list.append(k + b'=' + os.fsencode(v))
+                else:
+                    env_list = None  # Use execv instead of execve.
+                executable = os.fsencode(executable)
+                if os.path.dirname(executable):
+                    executable_list = (executable,)
+                else:
+                    # This matches the behavior of os._execvpe().
+                    executable_list = tuple(
+                        os.path.join(os.fsencode(dir), executable)
+                        for dir in os.get_exec_path(env))
+                fds_to_keep = set(pass_fds)
+                fds_to_keep.add(errpipe_write)
+                self.pid = _fork_exec(
+                        args, executable_list,
+                        close_fds, tuple(sorted(map(int, fds_to_keep))),
+                        cwd, env_list,
+                        p2cread, p2cwrite, c2pread, c2pwrite,
+                        errread, errwrite,
+                        errpipe_read, errpipe_write,
+                        restore_signals, start_new_session,
+                        process_group, gid, gids, uid, umask,
+                        preexec_fn, _USE_VFORK)
+                self._child_created = True
+            finally:
+                # be sure the FD is closed no matter what
+                os.close(errpipe_write)
+
+            self._close_pipe_fds(p2cread, p2cwrite,
+                                 c2pread, c2pwrite,
+                                 errread, errwrite)
+
+            # Wait for exec to fail or succeed; possibly raising an
+            # exception (limited in size)
+            errpipe_data = bytearray()
+            while True:
+                part = os.read(errpipe_read, 50000)
+                errpipe_data += part
+                if not part or len(errpipe_data) &gt; 50000:
+                    break
+        finally:
+            # be sure the FD is closed no matter what
+            os.close(errpipe_read)
+
+        if errpipe_data:
+            try:
+                pid, sts = os.waitpid(self.pid, 0)
+                if pid == self.pid:
+                    self._handle_exitstatus(sts)
+                else:
+                    self.returncode = sys.maxsize
+            except ChildProcessError:
+                pass
+
+            try:
+                exception_name, hex_errno, err_msg = (
+                        errpipe_data.split(b':', 2))
+                # The encoding here should match the encoding
+                # written in by the subprocess implementations
+                # like _posixsubprocess
+                err_msg = err_msg.decode()
+            except ValueError:
+                exception_name = b'SubprocessError'
+                hex_errno = b'0'
+                err_msg = 'Bad exception data from child: {!r}'.format(
+                              bytes(errpipe_data))
+            child_exception_type = getattr(
+                    builtins, exception_name.decode('ascii'),
+                    SubprocessError)
+            if issubclass(child_exception_type, OSError) and hex_errno:
+                errno_num = int(hex_errno, 16)
+                if err_msg == "noexec:chdir":
+                    err_msg = ""
+                    # The error must be from chdir(cwd).
+                    err_filename = cwd
+                elif err_msg == "noexec":
+                    err_msg = ""
+                    err_filename = None
+                else:
+                    err_filename = orig_executable
+                if errno_num != 0:
+                    err_msg = os.strerror(errno_num)
+                if err_filename is not None:
+&gt;                   raise child_exception_type(errno_num, err_msg, err_filename)
+E                   PermissionError: [Errno 1] Operation not permitted: 'ps'
+
+/opt/anaconda3/lib/python3.12/subprocess.py:1953: PermissionError</failure></testcase><testcase classname="tests.test_tick_watchdog" name="test_the_drained_line_is_reachable_and_exact" time="0.007"><failure message="AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed&#10;  &#10;assert 2 == 0">tmp_path = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_the_drained_line_is_reach0')
+
+    def test_the_drained_line_is_reachable_and_exact(tmp_path: Path) -&gt; None:
+        """Latched-gate question 4: what the watchdog prints when everything is healthy. Most ticks
+        print this line, so it is pinned whole -- a good-news branch no input reaches is a latch."""
+        state = tmp_path / "state"
+        armed = time.time() - 3600
+        tick_watchdog.write_record(
+            state,
+            {
+                "status": "exited",
+                "armed_at": tick_watchdog._iso(armed),
+                "awake_duration_s": 842,
+                "crossings": [],
+            },
+        )
+        _stamp(state, ".last-durability-sweep", 25 * 60)
+&gt;       lines = _start(state)
+                ^^^^^^^^^^^^^
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:313:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+state = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_the_drained_line_is_reach0/state')
+env = None
+
+    def _start(state: Path, env: dict[str, str] | None = None) -&gt; list[str]:
+        out = io.StringIO()
+        rc = tick_watchdog.start(
+            state_dir=state, tick_pid=os.getpid(), env=env or {}, out=out, spawn=lambda _argv: None
+        )
+&gt;       assert rc == 0, out.getvalue()
+E       AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E
+E       assert 2 == 0
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:294: AssertionError</failure></testcase><testcase classname="tests.test_tick_watchdog" name="test_a_tick_that_reaches_no_cadence_step_alerts" time="0.005"><failure message="AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed&#10;  &#10;assert 2 == 0">tmp_path = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_a_tick_that_reaches_no_ca0')
+
+    def test_a_tick_that_reaches_no_cadence_step_alerts(tmp_path: Path) -&gt; None:
+        """Every tick aborting before its first cadence step is never long-running, so the thresholds
+        cannot see it -- the newest outcome of ANY step going stale can."""
+        state = tmp_path / "state"
+        _stamp(state, ".last-durability-sweep", 3 * 86400)
+        _stamp(state, ".fail-pattern-miner", 2 * 86400)  # a failure is an outcome too
+&gt;       lines = _start(state)
+                ^^^^^^^^^^^^^
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:330:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+state = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_a_tick_that_reaches_no_ca0/state')
+env = None
+
+    def _start(state: Path, env: dict[str, str] | None = None) -&gt; list[str]:
+        out = io.StringIO()
+        rc = tick_watchdog.start(
+            state_dir=state, tick_pid=os.getpid(), env=env or {}, out=out, spawn=lambda _argv: None
+        )
+&gt;       assert rc == 0, out.getvalue()
+E       AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E
+E       assert 2 == 0
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:294: AssertionError</failure></testcase><testcase classname="tests.test_tick_watchdog" name="test_a_previous_tick_that_left_no_end_is_unknown_and_kept" time="0.006"><failure message="AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed&#10;  &#10;assert 2 == 0">tmp_path = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_a_previous_tick_that_left0')
+
+    def test_a_previous_tick_that_left_no_end_is_unknown_and_kept(tmp_path: Path) -&gt; None:
+        state = tmp_path / "state"
+        tick_watchdog.write_record(
+            state,
+            {
+                "status": "running",
+                "tick_pid": 2**22 + 12345,  # above any pid either platform hands out
+                "tick_started": "Fri Oct 2 01:36:00 2026",
+                "watchdog_pid": None,
+                "armed_at": "2026-10-02T01:36:01Z",
+            },
+        )
+&gt;       lines = _start(state)
+                ^^^^^^^^^^^^^
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:365:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+state = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_a_previous_tick_that_left0/state')
+env = None
+
+    def _start(state: Path, env: dict[str, str] | None = None) -&gt; list[str]:
+        out = io.StringIO()
+        rc = tick_watchdog.start(
+            state_dir=state, tick_pid=os.getpid(), env=env or {}, out=out, spawn=lambda _argv: None
+        )
+&gt;       assert rc == 0, out.getvalue()
+E       AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E
+E       assert 2 == 0
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:294: AssertionError</failure></testcase><testcase classname="tests.test_tick_watchdog" name="test_an_unreadable_record_is_unknown_not_clean" time="0.006"><failure message="AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed&#10;  &#10;assert 2 == 0">tmp_path = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_an_unreadable_record_is_u0')
+
+    def test_an_unreadable_record_is_unknown_not_clean(tmp_path: Path) -&gt; None:
+        state = tmp_path / "state"
+        state.mkdir()
+        (state / tick_watchdog.RECORD_NAME).write_text("{not json", encoding="utf-8")
+&gt;       assert "fate is UNKNOWN, not clean" in _start(state)[0]
+                                               ^^^^^^^^^^^^^
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:375:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+state = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_an_unreadable_record_is_u0/state')
+env = None
+
+    def _start(state: Path, env: dict[str, str] | None = None) -&gt; list[str]:
+        out = io.StringIO()
+        rc = tick_watchdog.start(
+            state_dir=state, tick_pid=os.getpid(), env=env or {}, out=out, spawn=lambda _argv: None
+        )
+&gt;       assert rc == 0, out.getvalue()
+E       AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E
+E       assert 2 == 0
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:294: AssertionError</failure></testcase><testcase classname="tests.test_tick_watchdog" name="test_the_arming_block_as_written_arms_and_records_the_tick" time="0.084"><failure message="AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed&#10;    WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)&#10;  &#10;assert False&#10; +  where False = &lt;built-in method startswith of str object at 0x105ff7960&gt;('  tick-watchdog: armed')&#10; +    where &lt;built-in method startswith of str object at 0x105ff7960&gt; = &quot;  WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed\n  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\n&quot;.startswith&#10; +      where &quot;  WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed\n  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\n&quot; = CompletedProcess(args=['bash', '-c', 'set -euo pipefail\nORCH=EVIDENCE_ROOT/admitted-baseline/...s'); not armed\n  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\n&quot;, stderr='').stdout">tmp_path = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_the_arming_block_as_writt0')
+
+    def test_the_arming_block_as_written_arms_and_records_the_tick(tmp_path: Path) -&gt; None:
+        state = tmp_path / "state"
+        proc = _run_block(state, ORCH_DISABLE_STEPS="")
+        assert proc.returncode == 0, proc.stderr
+&gt;       assert proc.stdout.startswith("  tick-watchdog: armed"), proc.stdout
+E       AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E           WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)
+E
+E       assert False
+E        +  where False = &lt;built-in method startswith of str object at 0x105ff7960&gt;('  tick-watchdog: armed')
+E        +    where &lt;built-in method startswith of str object at 0x105ff7960&gt; = "  WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed\n  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\n".startswith
+E        +      where "  WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed\n  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\n" = CompletedProcess(args=['bash', '-c', 'set -euo pipefail\nORCH=EVIDENCE_ROOT/admitted-baseline/...s'); not armed\n  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\n", stderr='').stdout
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:466: AssertionError</failure></testcase><testcase classname="tests.test_tick_watchdog" name="test_fleet_summary_carries_the_tick_record" time="0.012"><failure message="PermissionError: [Errno 1] Operation not permitted: 'ps'">tmp_path = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_fleet_summary_carries_the0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x1060e0980&gt;
+
+    def test_fleet_summary_carries_the_tick_record(tmp_path: Path, monkeypatch) -&gt; None:
+        import mcp_server
+
+&gt;       me = _me()  # a target that IS still the process the record named
+             ^^^^^
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:494:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:488: in _me
+    return _wait_for(lambda: tick_watchdog.snapshot().get(os.getpid()), "this process in ps")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:48: in _wait_for
+    value = predicate()
+            ^^^^^^^^^^^
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:488: in &lt;lambda&gt;
+    return _wait_for(lambda: tick_watchdog.snapshot().get(os.getpid()), "this process in ps")
+                             ^^^^^^^^^^^^^^^^^^^^^^^^
+source660-reconciliation/admitted-baseline/src/tick_watchdog.py:149: in snapshot
+    out = subprocess.run(
+/opt/anaconda3/lib/python3.12/subprocess.py:548: in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/subprocess.py:1026: in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;Popen: returncode: 255 args: ('ps', '-A', '-ww', '-o', 'pid=,ppid=,stat=,ls...&gt;
+args = ['ps', '-A', '-ww', '-o', 'pid=,ppid=,stat=,lstart=,command=']
+executable = b'ps', preexec_fn = None, close_fds = True, pass_fds = ()
+cwd = None
+env = {'BASH_ENV': 'LOCAL_HOME/.codex/orchestrator/agent-runtime/gh-guard/bashenv.sh', 'CODEX_CI': '1', 'CODEX_DETACHED_NET': '1', 'CODEX_SANDBOX': 'seatbelt', ...}
+startupinfo = None, creationflags = 0, shell = False, p2cread = 12
+p2cwrite = -1, c2pread = 13, c2pwrite = 14, errread = 15, errwrite = 16
+restore_signals = True, gid = None, gids = None, uid = None, umask = -1
+start_new_session = False, process_group = -1
+
+    def _execute_child(self, args, executable, preexec_fn, close_fds,
+                       pass_fds, cwd, env,
+                       startupinfo, creationflags, shell,
+                       p2cread, p2cwrite,
+                       c2pread, c2pwrite,
+                       errread, errwrite,
+                       restore_signals,
+                       gid, gids, uid, umask,
+                       start_new_session, process_group):
+        """Execute program (POSIX version)"""
+
+        if isinstance(args, (str, bytes)):
+            args = [args]
+        elif isinstance(args, os.PathLike):
+            if shell:
+                raise TypeError('path-like args is not allowed when '
+                                'shell is true')
+            args = [args]
+        else:
+            args = list(args)
+
+        if shell:
+            # On Android the default shell is at '/system/bin/sh'.
+            unix_shell = ('/system/bin/sh' if
+                      hasattr(sys, 'getandroidapilevel') else '/bin/sh')
+            args = [unix_shell, "-c"] + args
+            if executable:
+                args[0] = executable
+
+        if executable is None:
+            executable = args[0]
+
+        sys.audit("subprocess.Popen", executable, args, cwd, env)
+
+        if (_USE_POSIX_SPAWN
+                and os.path.dirname(executable)
+                and preexec_fn is None
+                and not close_fds
+                and not pass_fds
+                and cwd is None
+                and (p2cread == -1 or p2cread &gt; 2)
+                and (c2pwrite == -1 or c2pwrite &gt; 2)
+                and (errwrite == -1 or errwrite &gt; 2)
+                and not start_new_session
+                and process_group == -1
+                and gid is None
+                and gids is None
+                and uid is None
+                and umask &lt; 0):
+            self._posix_spawn(args, executable, env, restore_signals,
+                              p2cread, p2cwrite,
+                              c2pread, c2pwrite,
+                              errread, errwrite)
+            return
+
+        orig_executable = executable
+
+        # For transferring possible exec failure from child to parent.
+        # Data format: "exception name:hex errno:description"
+        # Pickle is not used; it is complex and involves memory allocation.
+        errpipe_read, errpipe_write = os.pipe()
+        # errpipe_write must not be in the standard io 0, 1, or 2 fd range.
+        low_fds_to_close = []
+        while errpipe_write &lt; 3:
+            low_fds_to_close.append(errpipe_write)
+            errpipe_write = os.dup(errpipe_write)
+        for low_fd in low_fds_to_close:
+            os.close(low_fd)
+        try:
+            try:
+                # We must avoid complex work that could involve
+                # malloc or free in the child process to avoid
+                # potential deadlocks, thus we do all this here.
+                # and pass it to fork_exec()
+
+                if env is not None:
+                    env_list = []
+                    for k, v in env.items():
+                        k = os.fsencode(k)
+                        if b'=' in k:
+                            raise ValueError("illegal environment variable name")
+                        env_list.append(k + b'=' + os.fsencode(v))
+                else:
+                    env_list = None  # Use execv instead of execve.
+                executable = os.fsencode(executable)
+                if os.path.dirname(executable):
+                    executable_list = (executable,)
+                else:
+                    # This matches the behavior of os._execvpe().
+                    executable_list = tuple(
+                        os.path.join(os.fsencode(dir), executable)
+                        for dir in os.get_exec_path(env))
+                fds_to_keep = set(pass_fds)
+                fds_to_keep.add(errpipe_write)
+                self.pid = _fork_exec(
+                        args, executable_list,
+                        close_fds, tuple(sorted(map(int, fds_to_keep))),
+                        cwd, env_list,
+                        p2cread, p2cwrite, c2pread, c2pwrite,
+                        errread, errwrite,
+                        errpipe_read, errpipe_write,
+                        restore_signals, start_new_session,
+                        process_group, gid, gids, uid, umask,
+                        preexec_fn, _USE_VFORK)
+                self._child_created = True
+            finally:
+                # be sure the FD is closed no matter what
+                os.close(errpipe_write)
+
+            self._close_pipe_fds(p2cread, p2cwrite,
+                                 c2pread, c2pwrite,
+                                 errread, errwrite)
+
+            # Wait for exec to fail or succeed; possibly raising an
+            # exception (limited in size)
+            errpipe_data = bytearray()
+            while True:
+                part = os.read(errpipe_read, 50000)
+                errpipe_data += part
+                if not part or len(errpipe_data) &gt; 50000:
+                    break
+        finally:
+            # be sure the FD is closed no matter what
+            os.close(errpipe_read)
+
+        if errpipe_data:
+            try:
+                pid, sts = os.waitpid(self.pid, 0)
+                if pid == self.pid:
+                    self._handle_exitstatus(sts)
+                else:
+                    self.returncode = sys.maxsize
+            except ChildProcessError:
+                pass
+
+            try:
+                exception_name, hex_errno, err_msg = (
+                        errpipe_data.split(b':', 2))
+                # The encoding here should match the encoding
+                # written in by the subprocess implementations
+                # like _posixsubprocess
+                err_msg = err_msg.decode()
+            except ValueError:
+                exception_name = b'SubprocessError'
+                hex_errno = b'0'
+                err_msg = 'Bad exception data from child: {!r}'.format(
+                              bytes(errpipe_data))
+            child_exception_type = getattr(
+                    builtins, exception_name.decode('ascii'),
+                    SubprocessError)
+            if issubclass(child_exception_type, OSError) and hex_errno:
+                errno_num = int(hex_errno, 16)
+                if err_msg == "noexec:chdir":
+                    err_msg = ""
+                    # The error must be from chdir(cwd).
+                    err_filename = cwd
+                elif err_msg == "noexec":
+                    err_msg = ""
+                    err_filename = None
+                else:
+                    err_filename = orig_executable
+                if errno_num != 0:
+                    err_msg = os.strerror(errno_num)
+                if err_filename is not None:
+&gt;                   raise child_exception_type(errno_num, err_msg, err_filename)
+E                   PermissionError: [Errno 1] Operation not permitted: 'ps'
+
+/opt/anaconda3/lib/python3.12/subprocess.py:1953: PermissionError</failure></testcase><testcase classname="tests.test_tick_watchdog" name="test_a_drain_whose_target_has_exited_is_never_advertised" time="0.010"><failure message="PermissionError: [Errno 1] Operation not permitted: 'ps'">tmp_path = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_a_drain_whose_target_has_0')
+
+    def test_a_drain_whose_target_has_exited_is_never_advertised(tmp_path: Path) -&gt; None:
+        """A record outlives its watcher. If the target exited and its pid was handed to an unrelated
+        process, printing the recorded `kill` would hand a reader the command that kills the wrong
+        process -- so the drain is re-checked against a fresh process table every time it is shown."""
+        tick_watchdog.write_record(tmp_path, _stuck_record(2**22 + 999, "Fri Oct 2 01:40:00 2026"))
+        report = tick_watchdog.summary(tmp_path)
+        assert report["drain"] is None, report
+        assert "kill" not in report["line"] and "no longer applies" in report["line"], report
+&gt;       me = _me()  # same pid as a live process, but NOT the start time the record named: recycled
+             ^^^^^
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:527:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:488: in _me
+    return _wait_for(lambda: tick_watchdog.snapshot().get(os.getpid()), "this process in ps")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:48: in _wait_for
+    value = predicate()
+            ^^^^^^^^^^^
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:488: in &lt;lambda&gt;
+    return _wait_for(lambda: tick_watchdog.snapshot().get(os.getpid()), "this process in ps")
+                             ^^^^^^^^^^^^^^^^^^^^^^^^
+source660-reconciliation/admitted-baseline/src/tick_watchdog.py:149: in snapshot
+    out = subprocess.run(
+/opt/anaconda3/lib/python3.12/subprocess.py:548: in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/subprocess.py:1026: in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;Popen: returncode: 255 args: ('ps', '-A', '-ww', '-o', 'pid=,ppid=,stat=,ls...&gt;
+args = ['ps', '-A', '-ww', '-o', 'pid=,ppid=,stat=,lstart=,command=']
+executable = b'ps', preexec_fn = None, close_fds = True, pass_fds = ()
+cwd = None
+env = {'BASH_ENV': 'LOCAL_HOME/.codex/orchestrator/agent-runtime/gh-guard/bashenv.sh', 'CODEX_CI': '1', 'CODEX_DETACHED_NET': '1', 'CODEX_SANDBOX': 'seatbelt', ...}
+startupinfo = None, creationflags = 0, shell = False, p2cread = 12
+p2cwrite = -1, c2pread = 13, c2pwrite = 14, errread = 15, errwrite = 16
+restore_signals = True, gid = None, gids = None, uid = None, umask = -1
+start_new_session = False, process_group = -1
+
+    def _execute_child(self, args, executable, preexec_fn, close_fds,
+                       pass_fds, cwd, env,
+                       startupinfo, creationflags, shell,
+                       p2cread, p2cwrite,
+                       c2pread, c2pwrite,
+                       errread, errwrite,
+                       restore_signals,
+                       gid, gids, uid, umask,
+                       start_new_session, process_group):
+        """Execute program (POSIX version)"""
+
+        if isinstance(args, (str, bytes)):
+            args = [args]
+        elif isinstance(args, os.PathLike):
+            if shell:
+                raise TypeError('path-like args is not allowed when '
+                                'shell is true')
+            args = [args]
+        else:
+            args = list(args)
+
+        if shell:
+            # On Android the default shell is at '/system/bin/sh'.
+            unix_shell = ('/system/bin/sh' if
+                      hasattr(sys, 'getandroidapilevel') else '/bin/sh')
+            args = [unix_shell, "-c"] + args
+            if executable:
+                args[0] = executable
+
+        if executable is None:
+            executable = args[0]
+
+        sys.audit("subprocess.Popen", executable, args, cwd, env)
+
+        if (_USE_POSIX_SPAWN
+                and os.path.dirname(executable)
+                and preexec_fn is None
+                and not close_fds
+                and not pass_fds
+                and cwd is None
+                and (p2cread == -1 or p2cread &gt; 2)
+                and (c2pwrite == -1 or c2pwrite &gt; 2)
+                and (errwrite == -1 or errwrite &gt; 2)
+                and not start_new_session
+                and process_group == -1
+                and gid is None
+                and gids is None
+                and uid is None
+                and umask &lt; 0):
+            self._posix_spawn(args, executable, env, restore_signals,
+                              p2cread, p2cwrite,
+                              c2pread, c2pwrite,
+                              errread, errwrite)
+            return
+
+        orig_executable = executable
+
+        # For transferring possible exec failure from child to parent.
+        # Data format: "exception name:hex errno:description"
+        # Pickle is not used; it is complex and involves memory allocation.
+        errpipe_read, errpipe_write = os.pipe()
+        # errpipe_write must not be in the standard io 0, 1, or 2 fd range.
+        low_fds_to_close = []
+        while errpipe_write &lt; 3:
+            low_fds_to_close.append(errpipe_write)
+            errpipe_write = os.dup(errpipe_write)
+        for low_fd in low_fds_to_close:
+            os.close(low_fd)
+        try:
+            try:
+                # We must avoid complex work that could involve
+                # malloc or free in the child process to avoid
+                # potential deadlocks, thus we do all this here.
+                # and pass it to fork_exec()
+
+                if env is not None:
+                    env_list = []
+                    for k, v in env.items():
+                        k = os.fsencode(k)
+                        if b'=' in k:
+                            raise ValueError("illegal environment variable name")
+                        env_list.append(k + b'=' + os.fsencode(v))
+                else:
+                    env_list = None  # Use execv instead of execve.
+                executable = os.fsencode(executable)
+                if os.path.dirname(executable):
+                    executable_list = (executable,)
+                else:
+                    # This matches the behavior of os._execvpe().
+                    executable_list = tuple(
+                        os.path.join(os.fsencode(dir), executable)
+                        for dir in os.get_exec_path(env))
+                fds_to_keep = set(pass_fds)
+                fds_to_keep.add(errpipe_write)
+                self.pid = _fork_exec(
+                        args, executable_list,
+                        close_fds, tuple(sorted(map(int, fds_to_keep))),
+                        cwd, env_list,
+                        p2cread, p2cwrite, c2pread, c2pwrite,
+                        errread, errwrite,
+                        errpipe_read, errpipe_write,
+                        restore_signals, start_new_session,
+                        process_group, gid, gids, uid, umask,
+                        preexec_fn, _USE_VFORK)
+                self._child_created = True
+            finally:
+                # be sure the FD is closed no matter what
+                os.close(errpipe_write)
+
+            self._close_pipe_fds(p2cread, p2cwrite,
+                                 c2pread, c2pwrite,
+                                 errread, errwrite)
+
+            # Wait for exec to fail or succeed; possibly raising an
+            # exception (limited in size)
+            errpipe_data = bytearray()
+            while True:
+                part = os.read(errpipe_read, 50000)
+                errpipe_data += part
+                if not part or len(errpipe_data) &gt; 50000:
+                    break
+        finally:
+            # be sure the FD is closed no matter what
+            os.close(errpipe_read)
+
+        if errpipe_data:
+            try:
+                pid, sts = os.waitpid(self.pid, 0)
+                if pid == self.pid:
+                    self._handle_exitstatus(sts)
+                else:
+                    self.returncode = sys.maxsize
+            except ChildProcessError:
+                pass
+
+            try:
+                exception_name, hex_errno, err_msg = (
+                        errpipe_data.split(b':', 2))
+                # The encoding here should match the encoding
+                # written in by the subprocess implementations
+                # like _posixsubprocess
+                err_msg = err_msg.decode()
+            except ValueError:
+                exception_name = b'SubprocessError'
+                hex_errno = b'0'
+                err_msg = 'Bad exception data from child: {!r}'.format(
+                              bytes(errpipe_data))
+            child_exception_type = getattr(
+                    builtins, exception_name.decode('ascii'),
+                    SubprocessError)
+            if issubclass(child_exception_type, OSError) and hex_errno:
+                errno_num = int(hex_errno, 16)
+                if err_msg == "noexec:chdir":
+                    err_msg = ""
+                    # The error must be from chdir(cwd).
+                    err_filename = cwd
+                elif err_msg == "noexec":
+                    err_msg = ""
+                    err_filename = None
+                else:
+                    err_filename = orig_executable
+                if errno_num != 0:
+                    err_msg = os.strerror(errno_num)
+                if err_filename is not None:
+&gt;                   raise child_exception_type(errno_num, err_msg, err_filename)
+E                   PermissionError: [Errno 1] Operation not permitted: 'ps'
+
+/opt/anaconda3/lib/python3.12/subprocess.py:1953: PermissionError</failure></testcase><testcase classname="tests.test_tick_watchdog" name="test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming" time="0.006"><failure message="AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed&#10;  &#10;assert 2 == 0">tmp_path = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_ticks_that_never_reach_a_0')
+
+    def test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming(tmp_path: Path) -&gt; None:
+        """A machine that has NEVER recorded a cadence outcome has no newest outcome to age, so the
+        alert needs a baseline: the first tick the watchdog armed here."""
+        state = tmp_path / "state"
+        two_days_ago = tick_watchdog._iso(time.time() - 2 * 86400)
+        tick_watchdog.write_record(
+            state, {"status": "exited", "armed_at": two_days_ago, "first_armed_at": two_days_ago}
+        )
+&gt;       lines = _start(state)
+                ^^^^^^^^^^^^^
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:540:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+state = PosixPath('EVIDENCE_ROOT/fulltmp/pytest-of-teacher/pytest-2/test_ticks_that_never_reach_a_0/state')
+env = None
+
+    def _start(state: Path, env: dict[str, str] | None = None) -&gt; list[str]:
+        out = io.StringIO()
+        rc = tick_watchdog.start(
+            state_dir=state, tick_pid=os.getpid(), env=env or {}, out=out, spawn=lambda _argv: None
+        )
+&gt;       assert rc == 0, out.getvalue()
+E       AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E
+E       assert 2 == 0
+
+EVIDENCE_ROOT/admitted-baseline/tests/test_tick_watchdog.py:294: AssertionError</failure></testcase><testcase classname="tests.test_verify_private_state" name="test_a_child_of_the_run_reads_the_copy" time="0.060" /></testsuite></testsuites>

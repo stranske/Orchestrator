@@ -1,0 +1,219 @@
+[
+  {
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 117303903644,
+        "run_id": 39001068935,
+        "workflow_name": "Agents Issue Optimizer #660",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39001068935",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAbT9uFnA",
+        "head_sha": "07c975959abdf47dfe254fea8e512bb44cae9aea",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/117303903644",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/39001068935/job/117303903644",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-10-17T04:02:36Z",
+        "started_at": "2026-10-17T04:02:38Z",
+        "completed_at": "2026-10-17T04:03:44Z",
+        "name": "optimize_issue",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1,
+            "started_at": "2026-10-17T04:02:39Z",
+            "completed_at": "2026-10-17T04:02:41Z"
+          },
+          {
+            "name": "Check trigger conditions",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2,
+            "started_at": "2026-10-17T04:02:41Z",
+            "completed_at": "2026-10-17T04:02:42Z"
+          },
+          {
+            "name": "Generate App Token",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3,
+            "started_at": "2026-10-17T04:02:42Z",
+            "completed_at": "2026-10-17T04:02:43Z"
+          },
+          {
+            "name": "Select Token",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 4,
+            "started_at": "2026-10-17T04:02:43Z",
+            "completed_at": "2026-10-17T04:02:43Z"
+          },
+          {
+            "name": "Checkout repository",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 5,
+            "started_at": "2026-10-17T04:02:43Z",
+            "completed_at": "2026-10-17T04:02:47Z"
+          },
+          {
+            "name": "Checkout Workflows repository for scripts",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 6,
+            "started_at": "2026-10-17T04:02:47Z",
+            "completed_at": "2026-10-17T04:02:50Z"
+          },
+          {
+            "name": "Setup API client",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 7,
+            "started_at": "2026-10-17T04:02:50Z",
+            "completed_at": "2026-10-17T04:02:57Z"
+          },
+          {
+            "name": "Set up Python",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 8,
+            "started_at": "2026-10-17T04:02:57Z",
+            "completed_at": "2026-10-17T04:02:57Z"
+          },
+          {
+            "name": "Install dependencies",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 9,
+            "started_at": "2026-10-17T04:02:57Z",
+            "completed_at": "2026-10-17T04:03:19Z"
+          },
+          {
+            "name": "Check optimizer recursion guard",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 10,
+            "started_at": "2026-10-17T04:03:19Z",
+            "completed_at": "2026-10-17T04:03:23Z"
+          },
+          {
+            "name": "Get issue body",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 11,
+            "started_at": "2026-10-17T04:03:23Z",
+            "completed_at": "2026-10-17T04:03:26Z"
+          },
+          {
+            "name": "Phase 1 - Analyze Issue",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 12,
+            "started_at": "2026-10-17T04:03:26Z",
+            "completed_at": "2026-10-17T04:03:26Z"
+          },
+          {
+            "name": "Advisory issue dedup check",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 13,
+            "started_at": "2026-10-17T04:03:26Z",
+            "completed_at": "2026-10-17T04:03:26Z"
+          },
+          {
+            "name": "Phase 2 - Apply Suggestions",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 14,
+            "started_at": "2026-10-17T04:03:26Z",
+            "completed_at": "2026-10-17T04:03:26Z"
+          },
+          {
+            "name": "Phase 3 - Format Issue",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 15,
+            "started_at": "2026-10-17T04:03:26Z",
+            "completed_at": "2026-10-17T04:03:38Z"
+          },
+          {
+            "name": "Manage labels",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 16,
+            "started_at": "2026-10-17T04:03:38Z",
+            "completed_at": "2026-10-17T04:03:41Z"
+          },
+          {
+            "name": "Report workflow failure",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 17,
+            "started_at": "2026-10-17T04:03:41Z",
+            "completed_at": "2026-10-17T04:03:41Z"
+          },
+          {
+            "name": "Release failed format lease",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 18,
+            "started_at": "2026-10-17T04:03:41Z",
+            "completed_at": "2026-10-17T04:03:41Z"
+          },
+          {
+            "name": "Post Set up Python",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 33,
+            "started_at": "2026-10-17T04:03:41Z",
+            "completed_at": "2026-10-17T04:03:41Z"
+          },
+          {
+            "name": "Post Checkout Workflows repository for scripts",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 34,
+            "started_at": "2026-10-17T04:03:41Z",
+            "completed_at": "2026-10-17T04:03:41Z"
+          },
+          {
+            "name": "Post Checkout repository",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 35,
+            "started_at": "2026-10-17T04:03:41Z",
+            "completed_at": "2026-10-17T04:03:41Z"
+          },
+          {
+            "name": "Post Generate App Token",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 36,
+            "started_at": "2026-10-17T04:03:41Z",
+            "completed_at": "2026-10-17T04:03:42Z"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 37,
+            "started_at": "2026-10-17T04:03:42Z",
+            "completed_at": "2026-10-17T04:03:42Z"
+          }
+        ],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/117303903644",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_id": 1004086771,
+        "runner_name": "GitHub Actions 1004086771",
+        "runner_group_id": 0,
+        "runner_group_name": "GitHub Actions"
+      }
+    ]
+  }
+]

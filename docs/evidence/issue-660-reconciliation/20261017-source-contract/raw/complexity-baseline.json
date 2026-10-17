@@ -1,0 +1,211 @@
+[
+  {
+    "cell": null,
+    "code": "C901",
+    "end_location": {
+      "column": 20,
+      "row": 701
+    },
+    "filename": "EVIDENCE_ROOT/complexity-baseline/feedback.py",
+    "fix": null,
+    "location": {
+      "column": 5,
+      "row": 701
+    },
+    "message": "`_migrate_schema` is too complex (26 > 10)",
+    "name": "complex-structure",
+    "noqa_row": 701,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/complex-structure"
+  },
+  {
+    "cell": null,
+    "code": "C901",
+    "end_location": {
+      "column": 33,
+      "row": 1639
+    },
+    "filename": "EVIDENCE_ROOT/complexity-baseline/feedback.py",
+    "fix": null,
+    "location": {
+      "column": 5,
+      "row": 1639
+    },
+    "message": "`_sanitize_completion_payload` is too complex (24 > 10)",
+    "name": "complex-structure",
+    "noqa_row": 1639,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/complex-structure"
+  },
+  {
+    "cell": null,
+    "code": "C901",
+    "end_location": {
+      "column": 17,
+      "row": 3579
+    },
+    "filename": "EVIDENCE_ROOT/complexity-baseline/feedback.py",
+    "fix": null,
+    "location": {
+      "column": 5,
+      "row": 3579
+    },
+    "message": "`bt_strengths` is too complex (15 > 10)",
+    "name": "complex-structure",
+    "noqa_row": 3579,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/complex-structure"
+  },
+  {
+    "cell": null,
+    "code": "C901",
+    "end_location": {
+      "column": 39,
+      "row": 3831
+    },
+    "filename": "EVIDENCE_ROOT/complexity-baseline/feedback.py",
+    "fix": null,
+    "location": {
+      "column": 5,
+      "row": 3831
+    },
+    "message": "`_propagate_outcome_lineage_in_conn` is too complex (13 > 10)",
+    "name": "complex-structure",
+    "noqa_row": 3831,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/complex-structure"
+  },
+  {
+    "cell": null,
+    "code": "C901",
+    "end_location": {
+      "column": 28,
+      "row": 4001
+    },
+    "filename": "EVIDENCE_ROOT/complexity-baseline/feedback.py",
+    "fix": null,
+    "location": {
+      "column": 5,
+      "row": 4001
+    },
+    "message": "`_record_outcome_in_conn` is too complex (13 > 10)",
+    "name": "complex-structure",
+    "noqa_row": 4001,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/complex-structure"
+  },
+  {
+    "cell": null,
+    "code": "C901",
+    "end_location": {
+      "column": 28,
+      "row": 4417
+    },
+    "filename": "EVIDENCE_ROOT/complexity-baseline/feedback.py",
+    "fix": null,
+    "location": {
+      "column": 5,
+      "row": 4417
+    },
+    "message": "`role_activation_metrics` is too complex (11 > 10)",
+    "name": "complex-structure",
+    "noqa_row": 4417,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/complex-structure"
+  },
+  {
+    "cell": null,
+    "code": "C901",
+    "end_location": {
+      "column": 30,
+      "row": 4732
+    },
+    "filename": "EVIDENCE_ROOT/complexity-baseline/feedback.py",
+    "fix": null,
+    "location": {
+      "column": 5,
+      "row": 4732
+    },
+    "message": "`completion_event_episodes` is too complex (23 > 10)",
+    "name": "complex-structure",
+    "noqa_row": 4732,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/complex-structure"
+  },
+  {
+    "cell": null,
+    "code": "C901",
+    "end_location": {
+      "column": 20,
+      "row": 6454
+    },
+    "filename": "EVIDENCE_ROOT/complexity-baseline/feedback.py",
+    "fix": null,
+    "location": {
+      "column": 5,
+      "row": 6454
+    },
+    "message": "`relearn_quality` is too complex (28 > 10)",
+    "name": "complex-structure",
+    "noqa_row": 6454,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/complex-structure"
+  },
+  {
+    "cell": null,
+    "code": "C901",
+    "end_location": {
+      "column": 14,
+      "row": 7075
+    },
+    "filename": "EVIDENCE_ROOT/complexity-baseline/feedback.py",
+    "fix": null,
+    "location": {
+      "column": 5,
+      "row": 7075
+    },
+    "message": "`_selftest` is too complex (28 > 10)",
+    "name": "complex-structure",
+    "noqa_row": 7075,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/complex-structure"
+  },
+  {
+    "cell": null,
+    "code": "C901",
+    "end_location": {
+      "column": 9,
+      "row": 8316
+    },
+    "filename": "EVIDENCE_ROOT/complexity-baseline/feedback.py",
+    "fix": null,
+    "location": {
+      "column": 5,
+      "row": 8316
+    },
+    "message": "`main` is too complex (16 > 10)",
+    "name": "complex-structure",
+    "noqa_row": 8316,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/complex-structure"
+  },
+  {
+    "cell": null,
+    "code": "C901",
+    "end_location": {
+      "column": 14,
+      "row": 566
+    },
+    "filename": "EVIDENCE_ROOT/complexity-baseline/route_weights_export.py",
+    "fix": null,
+    "location": {
+      "column": 5,
+      "row": 566
+    },
+    "message": "`_selftest` is too complex (14 > 10)",
+    "name": "complex-structure",
+    "noqa_row": 566,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/complex-structure"
+  }
+]

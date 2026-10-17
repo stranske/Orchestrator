@@ -1,0 +1,38 @@
+{
+  "label": "collection",
+  "argv": [
+    "/opt/anaconda3/bin/python3",
+    "-m",
+    "pytest",
+    "--collect-only",
+    "-q"
+  ],
+  "cwd": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__663__opener",
+  "exit": 0,
+  "elapsed": 4.66713285446167,
+  "environment": {
+    "HOME": "/tmp/source660-tilde/home",
+    "TMPDIR": "/tmp",
+    "ORCH_STATE_DIR": "/tmp/source660-tilde/state",
+    "ORCH_LOCAL_RUNTIME": "/tmp/source660-tilde/runtime",
+    "ORCH_FEEDBACK_DB": "/tmp/source660-tilde/runtime/absent.db",
+    "ORCH_CAPABILITIES_PATH": "/tmp/source660-tilde/runtime/capabilities.json",
+    "ORCH_MODEL_PROBE": "0"
+  },
+  "source_sha256": {
+    "src/feedback.py": "32f6e143a8b147f99dadd2a9aa235d6405cb356f63f8ff4c24959a48462b720e",
+    "src/route_weights_export.py": "4174926a72c906649c4dcd4971d36c63f267d9147cf9c1336a530cbef28193cc",
+    "src/verify.py": "c164e1ee451a62c71740d6450fb0a2f5f90b9ed507ea473bf903827dac34822f",
+    "tests/test_source660_reconciliation.py": "5f322c38db16909714db0e99b41092c138eaddf6b71be3220779e791bbc56076",
+    "tests/test_route_weights_export.py": "c72cb9c97e3b425c96b10ec0fe7b38ca5d48ea6b0a73f31e94ab87df99bbcba0",
+    "tests/test_route_weights_publication.py": "9f538aa7283045c4c936d15dcbb54c08a3d3ad51de5fc661ddad74639045d4f8",
+    "tests/test_route_weights_publish_cadence.py": "22f2b37fc97b0ad560737b30d1f4a8354053bcfde4fa08457d4ae671b8b8520f",
+    "tests/test_firing_regressions_section.py": "03bd778aa6976e652a5f30652e309ba8e7d361208de50ab747c211f3be88d0dc",
+    "tests/test_route_weights_export_cli.js": "076cae94c98654a49e940a40b501831899915d60fbbbe9fba97defc7579781c7",
+    ".verify-floor.json": "60ad999d9ada0d43848cac8d0bdfd13a19a4fcae452695e64e264fc6ef6d72ac",
+    "scripts/verify_before_sync.sh": "56a295bcf68956495ec25f896ee3908de77a1bfe94c61e6cd74d67efcd382dd1",
+    "tests/test_route_weights_presync_source.js": "5da959cac0bffa8772b09a6e6d0fd4bf48bb90c5d58e29e9d51e561277084dec",
+    "tests/test_verify_private_state.py": "1ae958edcc11aedffeff4266af8c129012ac34a7539e038c1ddbce62758d1721"
+  },
+  "source_unchanged": true
+}
