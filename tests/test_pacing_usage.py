@@ -1,7 +1,9 @@
 """Claude source freshness, quota calibration, and report contracts (offline)."""
 
+import hashlib
 import json
 import os
+import tempfile
 
 import pytest
 
@@ -25,6 +27,7 @@ def stores(tmp_path, monkeypatch):
     monkeypatch.setattr(pacing_usage, "CALIBRATION_FILE", tmp_path / "calibration.json")
     monkeypatch.setattr(pacing_usage, "CODEX_SESSIONS", tmp_path / "no-rollouts")
     monkeypatch.setattr(capacity, "HANDOFF", tmp_path)
+    monkeypatch.setattr(pacing_usage, "CLAUDE_PROJECTS", tmp_path / "projects")
     (tmp_path / "resets.json").write_text(json.dumps(dict(claude=[], codex=[])))
     return desktop, snapshots, tmp_path
 
@@ -72,6 +75,7 @@ def test_fresh_desktop_source_preserves_observation_time(stores, age):
     assert row["used_fraction"] == 0.37
     assert row["ts"] == NOW - age
     assert row["sample_age_s"] == age
+    assert integrated(stores, row)["claude"]["pacing"]["state"] != "unknown"
 
 
 def test_stale_desktop_uses_fallback_with_computed_state(stores):
@@ -119,7 +123,7 @@ def test_old_fallback_remains_visibly_stale(stores):
     agents = integrated(stores, row)
     assert agents["claude"]["pacing"]["state"] == "unknown"
     output = pacing_usage.report(stores[2], now=NOW, current=dict(agents=agents))
-    assert "source=ccusage-fallback sample_age_s=1801" in output
+    assert "source=ccusage-fallback sample_age_s=7201" in output
 
 
 @pytest.mark.parametrize("pool,start", [("all", START), ("codex", START), ("claude", START + 2)])
@@ -141,30 +145,83 @@ def incident(identity, tokens=None, *, pool="claude", category="quota"):
     )
 
 
-def test_fallback_reuses_distinct_agent_specific_quota_calibration(stores):
-    weekly_sample(stores[1])
-    incidents = [
-        incident("a", 900),
-        incident("b"),
-        incident("a", 999999),  # duplicate
-        incident("codex", 999999, pool="codex"),
-        incident("throttle", 999999, category="rate_limit"),
-    ]
-    samples = [
-        dict(
-            agent="claude",
-            source="ccusage-fallback",
-            ts=NOW - 100,
-            weekly_tokens=1100,
-            period_start=START,
+def token_event(path, ts, tokens, identity):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as stream:
+        stream.write(
+            json.dumps(
+                dict(
+                    type="assistant",
+                    timestamp=ts,
+                    requestId=identity,
+                    message=dict(id=identity, usage=dict(input_tokens=tokens)),
+                )
+            )
+            + "\n"
         )
+
+
+@pytest.mark.parametrize(
+    "fractions,totals,expected", [([0.4], [400], 1000), ([0.2, 0.4, 0.6], [200, 600, 600], 1000)]
+)
+def test_cap_from_desktop_token_pairs(stores, fractions, totals, expected):
+    samples = []
+    path = pacing_usage.CLAUDE_PROJECTS / "seat.jsonl"
+    previous = 0
+    for i, (fraction, total) in enumerate(zip(fractions, totals)):
+        ts = NOW - 20000 + i * 1000
+        samples.append(dict(t=ts * 1000, u=dict(sd=fraction * 100)))
+        token_event(path, ts - 1, total - previous, str(i))
+        previous = total
+    stores[0].write_text(json.dumps(dict(samples=samples)))
+    row = read_usage(stores, dict(claude_weekly_token_cap=7))
+    assert row["token_cap"] == expected
+    assert row["cap_pair_count"] == len(fractions)
+    assert row["cap_source"] == "desktop-token-pairs"
+    assert row["source"] == "ccusage-fallback"
+    assert integrated(stores, row)["claude"]["pacing"]["state"] == "ok"
+    cache_key = hashlib.sha256(str(pacing_usage.CLAUDE_PROJECTS.resolve()).encode()).hexdigest()
+    cached = json.loads(
+        (
+            pacing_usage.Path(tempfile.gettempdir())
+            / f"orch-claude-ccusage-{os.getuid()}-{cache_key}.json"
+        ).read_text()
+    )
+    assert cached["ts"] == NOW
+    output = pacing_usage.report(stores[2], now=NOW, current=dict(agents=integrated(stores, row)))
+    assert f"pairs={len(fractions)}" in output
+    assert "cap: 1000" in output
+
+
+def test_producer_extracts_claude_only_exact_window():
+    rows = [
+        dict(agent=agent, ts=ts, totalTokens=tokens)
+        for agent, ts, tokens in [
+            ("claude", START - 1, 900),
+            ("codex", START + 1, 900),
+            ("claude", START + 1, 100),
+            ("claude", NOW + 1, 900),
+        ]
     ]
-    pacing_usage.append_rows(stores[2] / "rate-limit-incidents.ndjson", incidents)
-    pacing_usage.append_rows(stores[2] / "pacing-usage-samples.ndjson", samples)
-    row = read_usage(stores)
-    assert row["token_cap"] == 1000
-    assert row["cap_source"] == "rate-limit-ledger"
-    assert row["used_fraction"] == 0.4
+    sample = pacing_usage.claude_window(rows, START, START + pacing.PERIOD_SECONDS, NOW)
+    assert sample["agent"] == "claude"
+    assert sample["tokens"] == 100
+    assert sample["period_start"] == START
+    assert sample["ts"] == NOW
+
+
+def test_producer_deduplicates_and_respects_boundaries(stores):
+    path = pacing_usage.CLAUDE_PROJECTS / "seat.jsonl"
+    for ts, tokens, identity in [
+        (START - 1, 500, "outside"),
+        (START + 1, 100, "a"),
+        (START + 1, 100, "a"),
+        (NOW + 1, 500, "future"),
+    ]:
+        token_event(path, ts, tokens, identity)
+    row = read_usage(stores, dict(claude_weekly_token_cap=1000))
+    assert row["weekly_tokens"] == 100
+    assert row["used_fraction"] == 0.1
 
 
 def test_insufficient_calibration_uses_configured_published_cap_and_says_so(stores):
@@ -183,17 +240,7 @@ def test_no_cap_is_unknown_with_reason_in_report(stores):
     agents = integrated(stores, row)
     assert agents["claude"]["pacing"]["state"] == "unknown"
     output = pacing_usage.report(stores[2], now=NOW, current=dict(agents=agents))
-    assert "need 2 matched Claude quota incidents or a published cap" in output
-
-
-def test_calibration_miss_reduction_is_not_overwritten_by_ledger(stores):
-    weekly_sample(stores[1])
-    pacing_usage.append_rows(
-        stores[2] / "rate-limit-incidents.ndjson", [incident("a", 900), incident("b", 1100)]
-    )
-    row = read_usage(stores, dict(claude_weekly_token_cap=800))
-    assert row["token_cap"] == 800
-    assert row["used_fraction"] == 0.5
+    assert "cap: unavailable (0 pairs)" in output
 
 
 @pytest.mark.parametrize("payload", [[], {"samples": None}, {"samples": "invalid"}])
@@ -222,3 +269,45 @@ def test_aging_unchanged_observation_does_not_republish_capacity(stores):
     assert results[0] == results[1], "age must be derived at reporting time, not exported as state"
     output = pacing_usage.report(stores[2], now=NOW + 10, current=dict(agents=agents))
     assert "desktop_sample_age_s=7211" in output
+
+
+def test_historical_pair_survives_weekly_rollover(stores):
+    ts = START - 10000
+    stores[0].write_text(json.dumps(dict(samples=[dict(t=ts * 1000, u=dict(sd=50))])))
+    path = pacing_usage.CLAUDE_PROJECTS / "seat.jsonl"
+    token_event(path, ts - 1, 500, "prior")
+    token_event(path, NOW - 1, 100, "current")
+    row = read_usage(stores)
+    assert row["token_cap"] == 1000
+    assert row["cap_pair_count"] == 1
+    assert row["weekly_tokens"] == 100
+    assert row["used_fraction"] == 0.1
+
+
+def test_producer_cache_reuses_timestamp_and_invalidates_on_new_usage(stores):
+    path = pacing_usage.CLAUDE_PROJECTS / "seat.jsonl"
+    token_event(path, NOW - 100, 100, "a")
+    first = read_usage(stores, dict(claude_weekly_token_cap=1000))
+    second = pacing_usage.usage(
+        "claude",
+        NOW + 10,
+        dict(claude_weekly_token_cap=1000),
+        snapshots=stores[1],
+        claude_path=stores[0],
+        handoff=stores[2],
+    )
+    assert second["ts"] == first["ts"]
+    token_event(path, NOW - 1, 100, "b")
+    assert read_usage(stores, dict(claude_weekly_token_cap=1000))["weekly_tokens"] == 200
+
+
+def test_produced_tokens_without_pair_print_unavailable(stores):
+    token_event(pacing_usage.CLAUDE_PROJECTS / "seat.jsonl", NOW - 1, 100, "a")
+    row = read_usage(stores)
+    assert row["weekly_tokens"] == 100
+    assert row["token_cap"] is None
+    agents = integrated(stores, row)
+    assert agents["claude"]["pacing"]["state"] == "unknown"
+    assert "cap: unavailable (0 pairs)" in pacing_usage.report(
+        stores[2], now=NOW, current=dict(agents=agents)
+    )
