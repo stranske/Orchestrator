@@ -30,6 +30,9 @@ report uses the same integration, source labels and staleness constants.
 The original `ts`, rollout event `timestamp`, or desktop `samples[].t` (milliseconds)
 controls freshness, never file mtime. Polls win ties. Claude's poll boundary is
 authoritative even when its textual minute jitters. No UTC minute is hard-coded.
+After an observed boundary passes, roll T1 forward by whole seven-day weeks,
+printing old T1, rolled T1 and poll age. The old period percentage becomes
+unmeasured; only a new-period poll or desktop reading can supply usage.
 A newer desktop percentage uses the observed poll boundary; without an observed
 boundary (or explicit `claude_period_end` calibration), pacing is unknown.
 Other Claude weekly buckets are printed with percentages and reset epochs but do
@@ -110,14 +113,18 @@ older events. This PR does not rewrite runtime inventory.
    counting positive-count `event=start` records.
 
 Passes 2 and 3 call **one shared coverage counter** for the same latest completed
-pool period: 600-second slots with valid actual polls for **both** providers and fresh
-capacity-state evidence for both pools.
+pool period: at each 600-second slot time, the poll in force for **each** provider
+must be no more than `STALE_AFTER_SECONDS` (1800 seconds) old. Fresh capacity-state
+evidence for both pools is also required. A pre-period poll may cover the first slot;
+a future poll cannot cover an earlier slot. Jitter and a healthy 650-second cadence
+therefore do not create artificial misses.
 History comes from `usage-poll/{codex,claude}-usage.ndjson` plus latest files;
-duplicate timestamps cannot fill missing slots, and recording capacity snapshots
+duplicate timestamps add no new evidence, and recording capacity snapshots
 cannot manufacture poll coverage. A full week needs 1008/1008 slots. Incident
 classification and dispatch-state evidence still require fresh capacity snapshots;
 poll coverage alone never establishes a pass. Reports print covered/expected ticks
-and observed counts even when incomplete. Missing ledgers and missing populations
+and longest poll gap versus the 1800-second allowance, uncovered slots, a drain
+condition, and observed counts even when incomplete. Missing ledgers and missing populations
 stay unmeasured; zero share in both populations is never a vacuous PASS.
 The first requested check is **2026-10-18 05:00Z**, using the observed poll T1.
 
@@ -131,7 +138,8 @@ handling continue while shed.
 ## Scheduled installation
 
 The repository record of truth is [`scripts/usage_poll/`](../scripts/usage_poll/).
-Install Python scripts and the shell wrapper on **local disk** at `~/.codex/bin`;
+Install **all** Python files (including `usage_history.py`) and the shell wrapper
+on **local disk** at `~/.codex/bin`;
 launchd cannot execute them from CloudStorage. Render the plist's `__HOME__`
 placeholder to the absolute home directory and install it at
 `~/Library/LaunchAgents/com.stranske.usage-poll.plist`. Its label is
@@ -145,6 +153,25 @@ non-zero for any failure. Pollers publish latest via atomic replacement only aft
 successful command, parse and history append. Errors do not echo raw provider
 responses. Codex sends only initialize, initialized notification, and
 `account/rateLimits/read`; Claude invokes the local `claude -p /usage` command.
+Claude makes up to three attempts, three seconds apart, with 40 seconds per try
+(`CLAUDE_USAGE_POLL_TIMEOUT` may explicitly override the per-try timeout). Each
+attempt uses `/tmp`, closed stdin and a new process group; timeout kills the whole
+group. A non-subscription “Total cost” view or missing/invalid weekly line retries.
+Exhaustion reports every try with sanitized diagnostics and preserves latest.
+The plist deliberately omits `ProcessType=Background` and `LowPriorityIO` to match
+the live unthrottled setup; this does not prove the launchd timeout is resolved.
+
+Primary Codex and all-models Claude fields remain strict. Invalid Codex secondary,
+Claude session or other weekly buckets become null with an output `warnings` list.
+Codex output retains only allowlisted usage and credit status/expiry fields.
+
+Each poller atomically caps its ndjson history to about seven days plus one stale
+allowance (to retain the boundary poll), at most 2048 lines and 8 MiB. It prints
+`rotated_out` and retained line counts on every append, including zero rotations.
+Routing reads only the last `POLL_HISTORY_TAIL_BYTES` (2 MiB) of Codex history and
+prints omitted byte counts when limited; completed-period coverage uses the
+retained history. A cap can remove evidence, so incomplete periods remain
+unmeasured and reports show the missing quantities.
 Parser tests use fixtures and mocked failures; they do not call either provider.
 
 This PR records the already-running pollers; it does not reload launchd or change

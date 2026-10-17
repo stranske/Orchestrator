@@ -797,7 +797,7 @@ def test_report_zero_share_and_missing_tick_are_unmeasured(
         for pool in ("codex", "claude"):
             path = pacing_usage.POLL_DIR / f"{pool}-usage.ndjson"
             polls = pacing_usage.read_rows(path)
-            polls.pop(100)
+            del polls[100:104]  # Leave a gap beyond the shared 1800-second allowance.
             path.write_text("".join(json.dumps(r) + "\n" for r in polls))
     rows += [
         dict(ts=START + 10, event="start", agent="codex", count=1),

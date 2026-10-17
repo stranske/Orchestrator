@@ -9,11 +9,15 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+from usage_history import append_history
 
 OUT = Path.home() / ".codex/orchestrator/usage-poll"
 LINE = re.compile(
@@ -55,16 +59,18 @@ def parse_reset(text, tz, now):
 
 def parse_usage(text, now):
     buckets = []
+    warnings = []
     for line in text.splitlines():
         match = LINE.fullmatch(line.strip())
         if not match:
             continue
         kind, label, percent, when, tzname = match.groups()
-        percent = int(percent)
-        if not 0 <= percent <= 100:
-            raise ValueError("invalid usage percentage")
-        buckets.append(
-            dict(
+        required = kind == "week" and (label or "").lower() == "all models"
+        try:
+            percent = int(percent)
+            if not 0 <= percent <= 100:
+                raise ValueError("invalid usage percentage")
+            bucket = dict(
                 kind=kind,
                 label=label or "",
                 used_percent=percent,
@@ -72,9 +78,16 @@ def parse_usage(text, now):
                 resets_text=when,
                 tz=tzname,
             )
-        )
-    weekly = [b for b in buckets if b["kind"] == "week" and b["label"].lower() == "all models"]
-    session = [b for b in buckets if b["kind"] == "session"]
+        except (ValueError, KeyError):
+            if required:
+                raise ValueError("invalid all-models weekly bucket") from None
+            warnings.append(f"{kind} informational bucket invalid")
+            bucket = None
+        buckets.append(bucket)
+    weekly = [
+        b for b in buckets if b and b["kind"] == "week" and b["label"].lower() == "all models"
+    ]
+    session = [b for b in buckets if b and b["kind"] == "session"]
     if len(weekly) != 1:
         raise ValueError("missing or ambiguous all-models weekly line")
     return dict(
@@ -83,14 +96,14 @@ def parse_usage(text, now):
         weekly=weekly[0],
         session=session[0] if session else None,
         buckets=buckets,
+        warnings=warnings,
     )
 
 
 def publish(row, destination=OUT):
     destination.mkdir(parents=True, exist_ok=True)
     # Write history before publishing latest: any failure keeps last-ok ts intact.
-    with (destination / "claude-usage.ndjson").open("a") as stream:
-        stream.write(json.dumps(row, allow_nan=False) + "\n")
+    append_history(destination / "claude-usage.ndjson", row)
     with tempfile.NamedTemporaryFile(mode="w", dir=destination, delete=False) as stream:
         temporary = Path(stream.name)
         json.dump(row, stream, allow_nan=False)
@@ -100,6 +113,32 @@ def publish(row, destination=OUT):
         temporary.unlink(missing_ok=True)
 
 
+def run_usage(executable):
+    """Bound one attempt and its children; diagnostics never include CLI output."""
+    per_try = int(os.environ.get("CLAUDE_USAGE_POLL_TIMEOUT", "40"))
+    process = subprocess.Popen(
+        [executable, "-p", "/usage"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd="/tmp",
+        start_new_session=True,
+    )
+    try:
+        out, _ = process.communicate(timeout=per_try)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.communicate()
+        return "", f"timeout {per_try}s"
+    if process.returncode:
+        return "", f"exit {process.returncode}"
+    return out, ""
+
+
 def main(destination=OUT):
     executable = shutil.which(
         "claude",
@@ -107,17 +146,27 @@ def main(destination=OUT):
     )
     if not executable:
         raise RuntimeError("claude executable unavailable")
-    response = subprocess.run(
-        [executable, "-p", "/usage"],
-        capture_output=True,
-        text=True,
-        stdin=subprocess.DEVNULL,
-        cwd="/tmp",
-        timeout=int(os.environ.get("CLAUDE_USAGE_POLL_TIMEOUT", "60")),
-    )
-    if response.returncode:
-        raise RuntimeError("claude /usage command failed")
-    row = parse_usage(response.stdout, dt.datetime.now(dt.timezone.utc))
+    notes = []
+    for attempt in range(1, 4):
+        try:
+            out, note = run_usage(executable)
+            if note:
+                raise ValueError(note)
+            if "Current week" not in out:
+                raise ValueError("no weekly line")
+            try:
+                row = parse_usage(out, dt.datetime.now(dt.timezone.utc))
+            except (ValueError, KeyError):
+                raise ValueError("invalid weekly usage") from None
+            break
+        except (OSError, ValueError) as exc:
+            # Only controlled diagnostics are retained, never provider content.
+            note = str(exc) if isinstance(exc, ValueError) else "command unavailable"
+            notes.append(f"try{attempt}: {note}")
+            if attempt < 3:
+                time.sleep(3)
+    else:
+        raise RuntimeError("; ".join(notes))
     publish(row, destination)
     print(
         f"claude usage: weekly={row['weekly']['used_percent']}% "
@@ -128,7 +177,9 @@ def main(destination=OUT):
 if __name__ == "__main__":
     try:
         main()
+    except RuntimeError as exc:
+        print(f"claude usage poll FAILED; latest unchanged: {exc}", file=sys.stderr)
+        sys.exit(1)
     except Exception:
-        # Provider errors may contain sensitive response fields; never echo them.
         print("claude usage poll FAILED; latest unchanged", file=sys.stderr)
         sys.exit(1)

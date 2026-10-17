@@ -18,6 +18,7 @@ import statistics
 import sys
 import tempfile
 import time
+from bisect import bisect_right
 from pathlib import Path
 
 import pacing
@@ -30,6 +31,7 @@ SNAPSHOTS = Path.home() / ".codex/usage-snapshots"
 CODEX_SESSIONS = Path.home() / ".codex/sessions"
 ROLLOUT_FILE_LIMIT = 300
 POLL_DIR = STATE_DIR / "usage-poll"
+POLL_HISTORY_TAIL_BYTES = 2 * 1024 * 1024
 
 
 def read_json(path: Path):
@@ -57,6 +59,38 @@ def read_rows(path: Path) -> list[dict]:
         return []
     if bad:
         print(f"FYI {path.name}: {bad} malformed rows omitted", file=sys.stderr)
+    return rows
+
+
+def read_poll_tail(path: Path) -> list[dict]:
+    """Bound hot-path reads independently of poller installation/rotation age."""
+    try:
+        with path.open("rb") as stream:
+            size = stream.seek(0, os.SEEK_END)
+            offset = max(0, size - POLL_HISTORY_TAIL_BYTES)
+            stream.seek(offset)
+            if offset:
+                stream.readline(POLL_HISTORY_TAIL_BYTES)  # Discard a possibly partial record.
+            payload = stream.read(POLL_HISTORY_TAIL_BYTES)
+    except OSError:
+        return []
+    if offset:
+        print(
+            f"FYI {path.name}: tail limited to {POLL_HISTORY_TAIL_BYTES} bytes; "
+            f"older_bytes_omitted={size - len(payload)}",
+            file=sys.stderr,
+        )
+    rows, bad = [], 0
+    for line in payload.splitlines():
+        try:
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise ValueError
+            rows.append(row)
+        except ValueError:
+            bad += 1
+    if bad:
+        print(f"FYI {path.name}: {bad} malformed tail rows omitted", file=sys.stderr)
     return rows
 
 
@@ -95,7 +129,7 @@ def reset_inventory(path: Path, now: float) -> tuple[dict, list[str]]:
             else:
                 messages.append(
                     f"FYI {pool}: reset expires {entry['expires']}; "
-                    "owner-supplied expiry UNKNOWN (30-day estimate)"
+                    "hand-file estimate; fresh provider expiries take precedence"
                 )
     return data, messages
 
@@ -377,8 +411,14 @@ def polled_usage(pool: str, now: float, directory: Path | None = None, *, data=N
         age=age,
         fresh=fresh,
         valid=valid,
-        ticks_missed=age / pacing.POLL_TICK_SECONDS if age is not None else None,
+        ticks_missed=max(0, int(age // pacing.POLL_TICK_SECONDS) - 1) if age is not None else None,
     )
+    if pool == "claude" and valid and end is not None and end <= now:
+        old_end = end
+        end += (int((now - end) // pacing.PERIOD_SECONDS) + 1) * pacing.PERIOD_SECONDS
+        poll.update(observed_period_end=old_end, rolled_period_end=end)
+        used = None  # An expired weekly window always describes the old period.
+        poll["fresh"] = False
     if pool == "codex":
         credits = data.get("reset_credits")
         entries = None
@@ -433,6 +473,12 @@ def poller_health(pool: str, poll: dict) -> list[str]:
         f"POLLER {pool}: last ok ts={poll.get('ts')}; age={age}; "
         f"ticks missed={ticks}; {allowance}; valid={poll.get('valid')}"
     ]
+    if poll.get("rolled_period_end") is not None:
+        lines.append(
+            f"FYI {pool}: old T1={poll['observed_period_end']}; "
+            f"rolled T1={poll['rolled_period_end']}; poll age={age}s; "
+            "new-period usage requires a new-period observation"
+        )
     if not poll.get("fresh"):
         lines.append(
             f"POLLER STALE: {pool} age={age}s — launchd com.stranske.usage-poll; "
@@ -442,27 +488,48 @@ def poller_health(pool: str, poll: dict) -> list[str]:
 
 
 def poll_coverage(
-    start: float, end: float, *, now: float, snapshots: list[dict] | None = None
+    start: float,
+    end: float,
+    *,
+    now: float,
+    snapshots: list[dict] | None = None,
+    stats: dict | None = None,
 ) -> tuple[int, int]:
-    """One population of 600-second poll slots, shared by pass numbers 2 and 3.
+    """A slot uses each provider's latest valid poll at/before its timestamp.
 
-    Both providers must have a valid actual poll in each slot. Re-reading a stale
-    latest file or recording extra capacity snapshots cannot manufacture coverage.
+    The one stale allowance applies to that poll, including a pre-period poll.
+    Snapshot freshness remains an independent requirement for passes 2 and 3.
     """
     ticks = range(int(start), int(end), pacing.POLL_TICK_SECONDS)
     present = {}
+    gaps = []
     for pool in ("codex", "claude"):
         rows = read_rows(POLL_DIR / f"{pool}-usage.ndjson")
         latest = read_json(POLL_DIR / f"{pool}-usage.json")
         if isinstance(latest, dict):
             rows.append(latest)
+        timestamps = sorted(
+            {
+                datum["ts"]
+                for row in rows
+                if (datum := polled_usage(pool, now, data=row))["poll"]["valid"]
+                and datum["ts"] is not None
+                and datum["ts"] <= end
+            }
+        )
         slots = set()
-        for row in rows:
-            datum = polled_usage(pool, now, data=row)
-            ts = datum["ts"]
-            if datum["poll"]["valid"] and ts is not None and start <= ts < end:
-                slots.add(int((ts - int(start)) // pacing.POLL_TICK_SECONDS))
+        for slot, tick in enumerate(ticks):
+            index = bisect_right(timestamps, tick) - 1
+            if index >= 0 and tick - timestamps[index] <= pacing.STALE_AFTER_SECONDS:
+                slots.add(slot)
         present[pool] = slots
+        prior = bisect_right(timestamps, start) - 1
+        points = (
+            ([timestamps[prior]] if prior >= 0 else [start])
+            + [ts for ts in timestamps if start < ts < end]
+            + [end]
+        )
+        gaps.append(max((b - a for a, b in zip(points, points[1:])), default=0))
     covered = present["codex"] & present["claude"]
     if snapshots is not None:
         covered = {
@@ -476,6 +543,8 @@ def poll_coverage(
                 for pool in ("codex", "claude")
             )
         }
+    if stats is not None:
+        stats["longest_gap"] = max(gaps, default=0)
     return len(covered), len(ticks)
 
 
@@ -495,7 +564,9 @@ def usage(
 ) -> dict:
     polled = polled_usage(pool, now, poll_dir)
     candidates = []
-    if polled["ts"] is not None and polled["used_fraction"] is not None:
+    if polled["ts"] is not None and (
+        polled["used_fraction"] is not None or polled["poll"].get("rolled_period_end") is not None
+    ):
         candidates.append(polled)
     if pool == "codex":
         observed = codex_rollout_usage(CODEX_SESSIONS if sessions is None else sessions, now)
@@ -518,7 +589,12 @@ def usage(
             if 0 <= row["u"]["sd"] <= 100 and ts <= now:
                 candidates.append(
                     dict(
-                        used_fraction=row["u"]["sd"] / 100,
+                        used_fraction=(
+                            row["u"]["sd"] / 100
+                            if not polled["poll"].get("rolled_period_end")
+                            or ts >= polled["period_end"] - pacing.PERIOD_SECONDS
+                            else None
+                        ),
                         period_end=polled.get("period_end"),
                         ts=ts,
                         short_used_fraction=(
@@ -546,7 +622,7 @@ def usage(
             directory = POLL_DIR if poll_dir is None else poll_dir
             historical = [
                 polled_usage(pool, now, directory, data=r)
-                for r in read_rows(directory / "codex-usage.ndjson")
+                for r in read_poll_tail(directory / "codex-usage.ndjson")
             ]
             observations = [
                 r
@@ -991,15 +1067,21 @@ def report(handoff: Path, *, now: float, current: dict | None = None) -> str:
                 periods.append((float(begin), float(finish)))
     if not periods:
         lines += [
-            f"2: unmeasured — would need completed-period snapshots and rate-limit ledger coverage; coverage=0/unknown ticks; observed incidents={len(incidents)} [usage store + rate-limit ledger]",
-            f"3: unmeasured — would need dispatches in both codex ok and warn/shed hours; coverage=0/unknown ticks; observed dispatches={len(starts)} [usage store + rate-limit ledger]",
+            f"2: unmeasured — would need completed-period snapshots and rate-limit ledger coverage; coverage=0/unknown ticks; longest poll gap=unknown/1800s allowance; observed incidents={len(incidents)} [usage store + rate-limit ledger]",
+            f"3: unmeasured — would need dispatches in both codex ok and warn/shed hours; coverage=0/unknown ticks; longest poll gap=unknown/1800s allowance; observed dispatches={len(starts)} [usage store + rate-limit ledger]",
         ]
         return "\n".join(lines)
     start, end = max(periods, key=lambda p: p[1])
     relevant = [r for r in incidents if start <= (pacing.timestamp(r.get("ts")) or 0) < end]
-    covered, expected = poll_coverage(start, end, now=now, snapshots=snapshots)
+    stats: dict = {}
+    covered, expected = poll_coverage(start, end, now=now, snapshots=snapshots, stats=stats)
     coverage = covered == expected
-    coverage_text = f"coverage={covered}/{expected} ticks (poll ticks={pacing.POLL_TICK_SECONDS}s)"
+    coverage_text = (
+        f"coverage={covered}/{expected} ticks (poll ticks={pacing.POLL_TICK_SECONDS}s); "
+        f"longest poll gap={stats['longest_gap']:.0f}s/"
+        f"{pacing.STALE_AFTER_SECONDS}s allowance; uncovered={expected - covered} slots; "
+        "drain: valid polls and fresh capacity snapshots throughout a completed period"
+    )
     classified = [r for r in relevant if observed(pacing.timestamp(r["ts"])) is not None]
     violations = sum(
         any(

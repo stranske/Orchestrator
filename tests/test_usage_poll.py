@@ -6,7 +6,6 @@ import importlib.util
 import json
 import subprocess
 from pathlib import Path
-from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -48,7 +47,8 @@ def load_poller(name):
 
 
 @pytest.fixture
-def pollers():
+def pollers(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts/usage_poll"))
     return {p: load_poller(p) for p in ("codex", "claude")}
 
 
@@ -159,12 +159,14 @@ def test_failure_leaves_latest_untouched(tmp_path, pollers, monkeypatch, pool, f
     if pool == "claude":
         monkeypatch.setattr(module.shutil, "which", lambda *a, **k: "/fixture/claude")
 
-        def run(*a, **k):
-            if failure == "timeout":
-                raise subprocess.TimeoutExpired("fixture", 60)
-            return SimpleNamespace(returncode=1 if failure == "command" else 0, stdout="invalid")
+        monkeypatch.setattr(module.time, "sleep", lambda _: None)
 
-        monkeypatch.setattr(module.subprocess, "run", run)
+        def run_usage(executable):
+            if failure == "timeout":
+                return "", "timeout 40s"
+            return ("", "exit 1") if failure == "command" else ("invalid", "")
+
+        monkeypatch.setattr(module, "run_usage", run_usage)
     else:
 
         def read():
@@ -405,11 +407,11 @@ def test_coverage_counts_actual_poll_slots_once_for_both_passes(evidence):
     start = NOW - 1800
     for pool in ("codex", "claude"):
         row = json.loads((pacing_usage.POLL_DIR / f"{pool}-usage.json").read_text())
-        for i in (0, 0, 1):  # Duplicate does not fill slot 2.
+        for i in (0, 0, 1):  # Poll in force covers slot 2; duplicates add no coverage.
             pacing_usage.append_rows(
                 pacing_usage.POLL_DIR / f"{pool}-usage.ndjson", [dict(row, ts=start + i * 600)]
             )
-    assert pacing_usage.poll_coverage(start, NOW, now=NOW) == (2, 3)
+    assert pacing_usage.poll_coverage(start, NOW, now=NOW) == (3, 3)
     snapshots = [
         dict(
             ts=start + i * 600,
@@ -425,7 +427,8 @@ def test_coverage_counts_actual_poll_slots_once_for_both_passes(evidence):
     text = pacing_usage.report(evidence, now=NOW)
     for n in ("2:", "3:"):
         line = next(item for item in text.splitlines() if item.startswith(n))
-        assert "coverage=2/3 ticks" in line and "unmeasured" in line
+        assert "coverage=3/3 ticks" in line
+        assert "longest poll gap=1200s/1800s allowance" in line
 
 
 def test_fresh_poll_blocks_false_hand_reset_marker_release(evidence, monkeypatch):
@@ -494,3 +497,248 @@ def test_fallback_snapshot_rotation_cannot_crash_usage(evidence, monkeypatch, ca
     row = pacing_usage.usage("codex", NOW, {}, snapshots=pacing_usage.SNAPSHOTS)
     assert row["used_fraction"] is None
     assert "unreadable_files=1" in capsys.readouterr().err
+
+
+def test_coverage_650_second_cadence_with_jitter_is_full(evidence):
+    import random
+
+    rng = random.Random(703)
+    start = NOW - pacing.PERIOD_SECONDS
+    for pool in ("codex", "claude"):
+        row = json.loads((pacing_usage.POLL_DIR / f"{pool}-usage.json").read_text())
+        times = [start - 100]
+        while times[-1] < NOW - 660:
+            times.append(times[-1] + 650 + rng.randint(-15, 15))
+        pacing_usage.append_rows(
+            pacing_usage.POLL_DIR / f"{pool}-usage.ndjson", [dict(row, ts=ts) for ts in times]
+        )
+    stats = {}
+    assert pacing_usage.poll_coverage(start, NOW, now=NOW, stats=stats) == (1008, 1008)
+    assert 635 <= stats["longest_gap"] <= 665
+
+
+def test_coverage_1900_second_gap_misses_slot(evidence):
+    start = NOW - 2400
+    for pool in ("codex", "claude"):
+        row = json.loads((pacing_usage.POLL_DIR / f"{pool}-usage.json").read_text())
+        pacing_usage.append_rows(
+            pacing_usage.POLL_DIR / f"{pool}-usage.ndjson",
+            [dict(row, ts=start - 50), dict(row, ts=start + 1850)],
+        )
+    stats = {}
+    assert pacing_usage.poll_coverage(start, NOW, now=NOW, stats=stats) == (3, 4)
+    assert stats["longest_gap"] == 1900
+
+
+@pytest.mark.parametrize("first", ["hang", "cost"])
+def test_claude_retries_with_process_group_cleanup(tmp_path, pollers, monkeypatch, first):
+    module = pollers["claude"]
+    calls, killed, sleeps = [], [], []
+
+    class Process:
+        pid = 703
+        returncode = 0
+
+        def __init__(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            self.attempt = len(calls)
+            self.communications = 0
+
+        def communicate(self, timeout=None):
+            self.communications += 1
+            if self.attempt == 1:
+                if first == "hang" and self.communications == 1:
+                    assert timeout == 40
+                    raise subprocess.TimeoutExpired("fixture", timeout)
+                return "Total cost: fixture", ""
+            return CLAUDE_TEXT, ""
+
+    monkeypatch.delenv("CLAUDE_USAGE_POLL_TIMEOUT", raising=False)
+    monkeypatch.setattr(module.shutil, "which", lambda *a, **k: "/fixture/claude")
+    monkeypatch.setattr(module.subprocess, "Popen", Process)
+    monkeypatch.setattr(module.os, "killpg", lambda *args: killed.append(args))
+    monkeypatch.setattr(module.time, "sleep", sleeps.append)
+    module.main(tmp_path)
+    assert len(calls) == 2 and sleeps == [3]
+    assert killed == ([(703, module.signal.SIGKILL)] if first == "hang" else [])
+    for args, kwargs in calls:
+        assert args == (["/fixture/claude", "-p", "/usage"],)
+        assert kwargs["start_new_session"] is True
+        assert kwargs["stdin"] == subprocess.DEVNULL and kwargs["cwd"] == "/tmp"
+    assert json.loads((tmp_path / "claude-usage.json").read_text())["weekly"]["used_percent"] == 85
+
+
+def test_claude_all_retries_fail_preserves_latest_and_lists_every_try(
+    tmp_path, pollers, monkeypatch
+):
+    module = pollers["claude"]
+    latest = tmp_path / "claude-usage.json"
+    latest.write_text('{"ts":1}')
+    before = latest.stat().st_mtime_ns
+    responses = iter(["hang", "cost", "exit"])
+    sleeps = []
+    killed = []
+
+    class Process:
+        pid = 703
+
+        def __init__(self, *args, **kwargs):
+            self.mode = next(responses)
+            self.returncode = 1 if self.mode == "exit" else 0
+
+        def communicate(self, timeout=None):
+            if self.mode == "hang" and timeout is not None:
+                raise subprocess.TimeoutExpired("fixture", timeout)
+            return "Total cost: DO_NOT_LOG", "DO_NOT_LOG"
+
+    monkeypatch.setattr(module.shutil, "which", lambda *a, **k: "/fixture/claude")
+    monkeypatch.setattr(module.subprocess, "Popen", Process)
+    monkeypatch.setattr(module.os, "killpg", lambda *a: killed.append(a))
+    monkeypatch.setattr(module.time, "sleep", sleeps.append)
+    with pytest.raises(RuntimeError) as error:
+        module.main(tmp_path)
+    assert str(error.value) == "try1: timeout 40s; try2: no weekly line; try3: exit 1"
+    assert sleeps == [3, 3] and killed == [(703, module.signal.SIGKILL)]
+    assert latest.read_text() == '{"ts":1}' and latest.stat().st_mtime_ns == before
+    assert not (tmp_path / "claude-usage.ndjson").exists()
+
+
+@pytest.mark.parametrize("field", ["secondary", "session", "model"])
+def test_informational_fields_are_best_effort(pollers, field):
+    if field == "secondary":
+        response = copy.deepcopy(CODEX_RESPONSE)
+        response["rateLimits"]["secondary"] = {"usedPercent": "invalid"}
+        row = pollers["codex"].parse_response(response, NOW)
+        assert row["secondary"] is None and row["primary"]["used_percent"] == 14
+        response["rateLimits"]["primary"] = {"usedPercent": "invalid"}
+        with pytest.raises(ValueError):
+            pollers["codex"].parse_response(response, NOW)
+    else:
+        text = CLAUDE_TEXT.replace(
+            (
+                "Oct 17 at 4:40pm"
+                if field == "session"
+                else "(Fable): 91% used · resets Oct 18 at 12am"
+            ),
+            "not a time" if field == "session" else "(Fable): 91% used · resets not a time",
+        )
+        row = pollers["claude"].parse_usage(text, dt.datetime.fromtimestamp(NOW, dt.timezone.utc))
+        assert row["weekly"]["used_percent"] == 85
+        assert (row["session"] is None) if field == "session" else (row["buckets"][2] is None)
+        with pytest.raises(ValueError):
+            pollers["claude"].parse_usage(
+                text.replace(
+                    "(all models): 85% used · resets Oct 18 at 12am",
+                    "(all models): 85% used · resets invalid",
+                ),
+                dt.datetime.fromtimestamp(NOW, dt.timezone.utc),
+            )
+    assert len(row["warnings"]) == 1
+
+
+@pytest.mark.parametrize("weeks", [0, 2])
+@pytest.mark.parametrize("desktop", ["absent", "old", "fresh"])
+def test_claude_boundary_rolls_without_reusing_old_percentage(evidence, weeks, desktop):
+    now = END + weeks * pacing.PERIOD_SECONDS + 1
+    if desktop != "absent":
+        ts = now if desktop == "fresh" else END - 1
+        pacing_usage.CLAUDE_USAGE.write_text(
+            json.dumps(dict(samples=[dict(t=ts * 1000, u=dict(sd=4, fh=2))]))
+        )
+    datum = pacing_usage.usage("claude", now, {}, claude_path=pacing_usage.CLAUDE_USAGE)
+    assert datum["period_end"] == END + (weeks + 1) * pacing.PERIOD_SECONDS
+    assert datum["used_fraction"] == (0.04 if desktop == "fresh" else None)
+    agents, text = integrate(evidence, now=now)
+    row = agents["claude"]["pacing"]
+    assert row["period_end"] == datum["period_end"]
+    assert row["measurement"] == ("measured" if desktop == "fresh" else "unknown")
+    assert f"old T1={END}" in text and f"rolled T1={datum['period_end']}" in text
+    assert f"poll age={now - NOW}s" in text
+
+
+def test_hot_usage_reads_bounded_history_tail(evidence, monkeypatch, capsys):
+    path = pacing_usage.POLL_DIR / "codex-usage.ndjson"
+    row = json.loads((pacing_usage.POLL_DIR / "codex-usage.json").read_text())
+    old = copy.deepcopy(row)
+    old["ts"] = NOW - 600
+    old["primary"].update(used_percent=80, resets_at=row["primary"]["resets_at"] - 3600)
+    path.write_text((json.dumps(dict(ts=1)) + "\n") * 1000 + json.dumps(old) + "\n")
+    monkeypatch.setattr(pacing_usage, "POLL_HISTORY_TAIL_BYTES", 1024)
+    original_open = Path.open
+    reads = []
+
+    class BoundedFile:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.stream.close()
+
+        def __getattr__(self, name):
+            return getattr(self.stream, name)
+
+        def read(self, size=-1):
+            assert 0 <= size <= 1024
+            reads.append(size)
+            return self.stream.read(size)
+
+    def opened(p, *args, **kwargs):
+        stream = original_open(p, *args, **kwargs)
+        return BoundedFile(stream) if p == path else stream
+
+    monkeypatch.setattr(Path, "open", opened)
+    datum = pacing_usage.usage("codex", NOW, {})
+    assert reads == [1024] and datum["reset_events"] == [NOW]
+    assert "older_bytes_omitted=" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("pool", ["codex", "claude"])
+def test_history_age_and_size_rotation_is_reported(tmp_path, pollers, pool, monkeypatch, capsys):
+    import usage_history
+
+    monkeypatch.setattr(usage_history, "HISTORY_MAX_LINES", 3)
+    path = tmp_path / f"{pool}-usage.ndjson"
+    path.write_text(
+        "\n".join(json.dumps(dict(ts=ts)) for ts in [1, NOW - 4, NOW - 3, NOW - 2, NOW - 1]) + "\n"
+    )
+    pollers[pool].publish(dict(ts=NOW), tmp_path)
+    assert pacing_usage.read_rows(path) == [dict(ts=NOW - 2), dict(ts=NOW - 1), dict(ts=NOW)]
+    assert "rotated_out=3 retained=3 lines" in capsys.readouterr().err
+    assert json.loads((tmp_path / f"{pool}-usage.json").read_text()) == dict(ts=NOW)
+
+
+def test_launchd_template_keeps_unthrottled_process_type():
+    import plistlib
+
+    template = (
+        Path(__file__).resolve().parents[1] / "scripts/usage_poll/com.stranske.usage-poll.plist"
+    )
+    data = plistlib.loads(template.read_bytes())
+    assert "ProcessType" not in data and "LowPriorityIO" not in data
+
+
+def test_post_boundary_poll_with_expired_window_cannot_reuse_percentage(evidence):
+    row = json.loads((pacing_usage.POLL_DIR / "claude-usage.json").read_text())
+    row["ts"] = END + 1
+    write_poll("claude", row)
+    datum = pacing_usage.usage("claude", END + 1, {})
+    assert datum["period_end"] == END + pacing.PERIOD_SECONDS
+    assert datum["used_fraction"] is None and datum["poll"]["fresh"] is False
+
+
+def test_history_byte_cap_and_seven_day_anchor(tmp_path, pollers, monkeypatch, capsys):
+    import usage_history
+
+    path = tmp_path / "codex-usage.ndjson"
+    anchor = dict(ts=NOW - pacing.PERIOD_SECONDS - 600)
+    path.write_text(json.dumps(anchor) + "\n")
+    pollers["codex"].publish(dict(ts=NOW), tmp_path)
+    assert pacing_usage.read_rows(path) == [anchor, dict(ts=NOW)]
+    capsys.readouterr()
+    monkeypatch.setattr(usage_history, "HISTORY_MAX_BYTES", len(json.dumps(dict(ts=NOW))) + 1)
+    pollers["codex"].publish(dict(ts=NOW + 1), tmp_path)
+    assert pacing_usage.read_rows(path) == [dict(ts=NOW + 1)]
+    assert "rotated_out=2 retained=1 lines" in capsys.readouterr().err

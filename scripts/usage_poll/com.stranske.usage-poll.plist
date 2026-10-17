@@ -13,10 +13,6 @@
     <integer>600</integer>
     <key>RunAtLoad</key>
     <true/>
-    <key>ProcessType</key>
-    <string>Background</string>
-    <key>LowPriorityIO</key>
-    <true/>
     <key>StandardOutPath</key>
     <string>__HOME__/.codex/orchestrator/usage-poll/poll.log</string>
     <key>StandardErrorPath</key>

@@ -16,6 +16,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from usage_history import append_history
+
 OUT = Path.home() / ".codex/orchestrator/usage-poll"
 TIMEOUT = float(os.environ.get("CODEX_USAGE_POLL_TIMEOUT", "40"))
 
@@ -23,6 +25,8 @@ TIMEOUT = float(os.environ.get("CODEX_USAGE_POLL_TIMEOUT", "40"))
 def window(data):
     if data is None:
         return None
+    if not isinstance(data, dict):
+        raise ValueError("invalid rate-limit window")
     percent, minutes, end = (data.get(k) for k in ("usedPercent", "windowDurationMins", "resetsAt"))
     if (
         not isinstance(percent, (int, float))
@@ -58,11 +62,18 @@ def parse_response(response, now):
                 raise ValueError("invalid reset credit")
             # Status and expiry are sufficient; never persist IDs or balances.
             credits.append(dict(expires_at=expiry, status=credit["status"]))
+    warnings = []
+    try:
+        secondary = window(limits.get("secondary"))
+    except ValueError:
+        secondary = None
+        warnings.append("secondary window invalid")
     return dict(
         ts=int(now),
         source="codex-app-server:account/rateLimits/read",
         primary=primary,
-        secondary=window(limits.get("secondary")),
+        secondary=secondary,
+        warnings=warnings,
         rate_limit_reached_type=limits.get("rateLimitReachedType"),
         ordinary_usage_allowed=response.get("ordinaryUsageAllowed"),
         reset_credits_available=reset.get("availableCount"),
@@ -136,8 +147,7 @@ def read_response():
 
 def publish(row, destination=OUT):
     destination.mkdir(parents=True, exist_ok=True)
-    with (destination / "codex-usage.ndjson").open("a") as stream:
-        stream.write(json.dumps(row, allow_nan=False) + "\n")
+    append_history(destination / "codex-usage.ndjson", row)
     with tempfile.NamedTemporaryFile(mode="w", dir=destination, delete=False) as stream:
         temporary = Path(stream.name)
         json.dump(row, stream, allow_nan=False)
