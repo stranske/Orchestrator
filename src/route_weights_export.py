@@ -330,9 +330,7 @@ def publish_guard(
     return True, ""
 
 
-def publish_document(
-    document: dict[str, Any], *, allow_evidence_regression: bool = False
-) -> bool:
+def publish_document(document: dict[str, Any], *, allow_evidence_regression: bool = False) -> bool:
     """Commit and push the export branch only when its remote artifact changes."""
     ok, reason = publish_guard(document, None)
     if not ok and not allow_evidence_regression:
