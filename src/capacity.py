@@ -24,7 +24,19 @@ Corrections baked in:
     does NOT cover API calls (aider uses the API) — if the user's paid tier is
     the chat-only Pro, set plan_limit=0 and aider degrades to pure-credit.
 
-Read-only and safe; `--selftest` runs fully offline. Simple-first + legible by
+Pacing sources (2026-10-17): Claude desktop persists timestamped weekly percentages
+in ~/Library/Application Support/Claude/plan-usage-history.json, samples[].t (ms)
+and samples[].u.sd (%). Refresh is app-driven (observed cadence documented in
+ docs/capacity-pacing.md), not guaranteed. Sources older than two 15-minute ticks
+are stale. Codex: no usable percent record found in app support, local SQLite
+schemas/global state, Electron usage-key search, matching containers/caches/logs.
+This is a bounded search, not proof no private store exists. Fallback is
+~/.codex/usage-snapshots/weekly-*.json agent-specific tokens plus calibrated cap;
+shared Claude+Codex totals and 5h projections cannot stand in for weekly usage.
+Missing calibration/usage yields source=none, state=unknown. See pacing_usage.py.
+The normal tick appends usage samples and snapshots; build() remains read-only.
+
+Read-only build; `--selftest` runs fully offline. Simple-first + legible by
 design (PR #2350 §11 anti-over-engineering): no scoring, no learning here — this
 module only answers "does agent X have headroom right now?".
 """
@@ -953,7 +965,7 @@ def _capability_heartbeat(event_type: str, **kw) -> None:
         pass
 
 
-def build(ccusage_block=None) -> dict:
+def build(ccusage_block=None, *, record_pacing: bool = False) -> dict:
     # Infrastructure capability: exercised once per tick as a PHASE, never selected for a task, so
     # it records use here rather than through a routing matcher. Inert outside an active tick.
     _capability_heartbeat("invocation", ref="capacity.build")
@@ -975,8 +987,14 @@ def build(ccusage_block=None) -> dict:
             "auth": (_auth_health(agent) or {}),  # {} => not evaluable; never read as a failure
             **(meta or {}),
         }
+    import pacing_usage
+
+    pacing_fyi = pacing_usage.integrate(
+        agents, now=time.time(), handoff=HANDOFF, record=record_pacing
+    )
     proj = (ccusage_block or {}).get("projection") or {}
     base = {
+        "pacing_fyi": pacing_fyi,
         "generated_at": int(time.time()),
         "ccusage_active": (
             {"proj_tokens": proj.get("totalTokens"), "proj_cost": proj.get("totalCost")}
@@ -1264,9 +1282,54 @@ def main(argv):
     if "--selftest" in argv:
         _selftest()
         return 0
+    if argv and argv[0] == "calibrate-codex":
+        import pacing_usage
+
+        ok, message = pacing_usage.calibrate(
+            pacing_usage.read_rows(HANDOFF / "rate-limit-incidents.ndjson"),
+            pacing_usage.read_rows(HANDOFF / "pacing-usage-samples.ndjson"),
+            pacing_usage.CALIBRATION_FILE,
+        )
+        print(message)
+        return 0 if ok else 1
+    if argv and argv[0] == "pacing-report":
+        import pacing_usage
+
+        now = time.time()
+        current = {
+            "agents": {
+                pool: {"state": "ok", "reason": "pacing report"} for pool in ("codex", "claude")
+            }
+        }
+        current["pacing_fyi"] = pacing_usage.integrate(current["agents"], now=now, handoff=HANDOFF)
+        print(pacing_usage.report(HANDOFF, now=now, current=current))
+        return 0
+    if argv and argv[0] == "pick-agent":
+        import argparse
+
+        import router
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--candidates", required=True)
+        parser.add_argument("--task-type", default="implement")
+        args = parser.parse_args(argv[1:])
+        choice = router.select_agent(
+            args.task_type,
+            build(),
+            only=set(args.candidates.split(",")),
+            learned=(router.learned_ranks() or {}).get(args.task_type),
+        )
+        if choice is None:
+            print("unmeasured: no dispatchable candidate", file=sys.stderr)
+            return 1
+        print(choice["agent"])
+        print(json.dumps(choice.get("pacing_decision", {})), file=sys.stderr)
+        return 0
     HANDOFF.mkdir(parents=True, exist_ok=True)
-    snap = build()
+    snap = build(record_pacing=True)
     OUT.write_text(json.dumps(snap, indent=2) + "\n")
+    for message in snap.get("pacing_fyi", []):
+        print(message, file=sys.stderr)
     print(json.dumps(snap, indent=2))
     return 0
 

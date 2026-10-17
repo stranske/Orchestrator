@@ -197,7 +197,7 @@ def _current_capacity_snapshot() -> dict[str, Any]:
 
 
 def _capacity_block(snapshot: dict[str, Any] | None) -> dict[str, Any]:
-    """Per-agent capacity state for remote consumers (state and window only)."""
+    """Additive per-agent state/window/pacing contract for remote consumers."""
     if snapshot is None:
         snapshot = _current_capacity_snapshot()
     agents_raw = snapshot.get("agents")
@@ -222,6 +222,7 @@ def _capacity_block(snapshot: dict[str, Any] | None) -> dict[str, Any]:
             "state": state,
             "window": window,
             "observed_at": observed_at,
+            **({"pacing": row["pacing"]} if isinstance(row.get("pacing"), dict) else {}),
         }
     return block
 

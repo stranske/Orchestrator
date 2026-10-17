@@ -458,6 +458,62 @@ def _exploration_choice(
     return rng.choice(least_observed)
 
 
+def _pacing_shed_fallback(cap: dict, agent: str) -> bool:
+    """Only quota pacing may fail toward motion; auth/model/manual holds remain closed."""
+    row = cap.get("agents", {}).get(agent, {})
+    pace = row.get("pacing") or {}
+    return (
+        pace.get("state") == "shed"
+        and row.get("state") == "shed"
+        and row.get("policy") not in ("auth-failed", "model-unresolvable")
+        and "shed flag" not in row.get("reason", "")
+        and "manual" not in row.get("reason", "").lower()
+    )
+
+
+def _pacing_choice(scored, cap, learned, rng):
+    """Posterior × literal pacing weight; warn-zero before shed fallback."""
+    rows = []
+    for row in scored:
+        _, entry, state, idx = row
+        pace = cap.get("agents", {}).get(entry["agent"], {}).get("pacing") or {}
+        weight = pace.get("routing_weight")
+        weight = float(weight) if weight is not None else (1.0 if state == "ok" else 0.0)
+        posterior, _, _ = _learned_posterior_score(
+            learned, entry["agent"], _prior_posterior_from_rank(idx, len(scored))
+        )
+        rows.append((row, posterior, max(0.0, weight)))
+    positive = [r for r in rows if r[0][2] in ("ok", "warn") and r[2] > 0]
+    warn = [r for r in rows if r[0][2] in ("ok", "warn")]
+    tier = positive or warn or rows
+    under_cap = min(r[0][0][0] for r in tier)
+    tier = [r for r in tier if r[0][0][0] == under_cap]
+    policy = "posterior*pacing" if positive else "fallback-warn" if warn else "fail-toward-motion"
+    weights = [r[1] * (r[2] if positive else 1.0) for r in tier]
+    # Zero posterior mass is uninformative; it must not stop all-shed motion.
+    if sum(weights) <= 0:
+        weights = [1.0] * len(tier)
+    if policy == "fail-toward-motion":
+        picked = max(tier, key=lambda r: r[1])
+    else:
+        picked = rng.choices(tier, weights=weights, k=1)[0]
+    decision = {
+        "policy": policy,
+        "candidates": [
+            {
+                "agent": r[0][1]["agent"],
+                "state": r[0][2],
+                "posterior": r[1],
+                "routing_weight": r[2],
+                "pacing": cap.get("agents", {}).get(r[0][1]["agent"], {}).get("pacing"),
+                "reason": cap.get("agents", {}).get(r[0][1]["agent"], {}).get("reason"),
+            }
+            for r in rows
+        ],
+    }
+    return picked[0], decision
+
+
 def select_agent(
     task_type: str,
     cap: dict,
@@ -478,7 +534,10 @@ def select_agent(
 ):
     """Pick the best available agent entry for a task, or None if none have capacity.
 
-    Selectable: state in {ok, warn(if allow_warn)}; shed/unknown skipped. Ranked by
+    With pacing, sample positive posterior*weight, then fallback-warn, then
+    fail-toward-motion for quota-only shed pools. Preserve tick load limits;
+    retain every candidate's pacing numbers in the decision/dispatch metadata.
+    Without pacing: state in {ok, warn(if allow_warn)}; shed/unknown skipped. Ranked by
     (under-tick-cap first, then non-late, then ok-before-warn, then capacity policy, then LEARNED rank), with
     ROUTE_TABLE order as a stable tiebreak. The under-cap key SPREADS concurrent work; the
     learned key lets the feedback store REORDER agents within a capacity tier from observed
@@ -496,6 +555,7 @@ def select_agent(
         return None
     load = load or {}
     scored: list[ScoredSelection] = []
+    pacing_active = any(isinstance(r.get("pacing"), dict) for r in cap.get("agents", {}).values())
     for idx, entry in enumerate(spec["agents"]):
         if only is not None and entry["agent"] not in only:
             continue
@@ -504,7 +564,7 @@ def select_agent(
         if entry["agent"] in BACKUP_AGENTS and not (only and entry["agent"] in only):
             continue
         st = _state(cap, entry["agent"])
-        if st in ("shed", "unknown"):
+        if st == "unknown" or (st == "shed" and not _pacing_shed_fallback(cap, entry["agent"])):
             continue
         if st == "warn" and not allow_warn:
             continue
@@ -531,6 +591,7 @@ def select_agent(
             (
                 cap.get("profiles", {}).get(profile["profile_id"], {}).get("state", st)
                 not in ("shed", "unknown")
+                or (st == "shed" and _pacing_shed_fallback(cap, entry["agent"]))
             )
             for profile in agent_profiles
         ):
@@ -556,7 +617,10 @@ def select_agent(
     picked = scored[0]
     explored = False
     rng = rng or random
-    epsilon = _exploration_rate(exploration_rate)
+    pacing_decision = None
+    if pacing_active:
+        picked, pacing_decision = _pacing_choice(scored, cap, learned, rng)
+    epsilon = 0.0 if pacing_active else _exploration_rate(exploration_rate)
     if epsilon > 0 and rng.random() < epsilon:
         mode = _exploration_mode(exploration_mode)
         challenger = (
@@ -581,6 +645,7 @@ def select_agent(
         **entry,
         "state": st,
         "capacity_policy": _policy(cap, entry["agent"]),
+        **({"pacing_decision": pacing_decision} if pacing_decision else {}),
         "exploration": explored,
         "exploration_mode": _exploration_mode(exploration_mode) if explored else "",
     }
@@ -613,6 +678,7 @@ def select_agent(
                 "eligible": (
                     cap.get("profiles", {}).get(profile_id, {}).get("state", st)
                     not in ("shed", "unknown")
+                    or (st == "shed" and _pacing_shed_fallback(cap, entry["agent"]))
                 ),
                 "capacity_state": cap.get("profiles", {}).get(profile_id, {}).get("state", st),
             }
@@ -842,7 +908,10 @@ def select_remote_agent(
     weekly cap is scarce — and used ONLY when `high_leverage=True` or no cheaper keepalive agent has
     capacity (last-resort). Returns the chosen entry {agent, mode, state} or None. The caller hands the
     agent to dispatcher.delegate_remote()."""
-    pool = KEEPALIVE_AGENTS if high_leverage else (KEEPALIVE_AGENTS - RESERVE_AGENTS)
+    pacing_active = any(isinstance(r.get("pacing"), dict) for r in cap.get("agents", {}).values())
+    pool = (
+        KEEPALIVE_AGENTS if high_leverage or pacing_active else (KEEPALIVE_AGENTS - RESERVE_AGENTS)
+    )
     pick = select_agent(
         task_type,
         cap,
@@ -879,6 +948,8 @@ def _lane_cap(cap: dict, max_concurrent: int) -> int:
         for e in spec["agents"]
     }
     available = sum(1 for a in code_agents if _state(cap, a) not in ("shed", "unknown"))
+    if available == 0 and any(_pacing_shed_fallback(cap, a) for a in code_agents):
+        available = 1
     return max(1, min(max_concurrent, available)) if available else 0
 
 
@@ -1035,6 +1106,7 @@ def plan(
                     "target": tgt,
                     "task_type": b["task_type"],
                     "lane": b.get("lane"),
+                    "pacing_decision": entry.get("pacing_decision"),
                     "capacity_state": entry["state"],
                     "capacity_policy": policy,
                     "reason": f"{b['task_type']}→{entry['agent']}/{entry['mode']} ({capacity_tag})"
