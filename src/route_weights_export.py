@@ -368,20 +368,28 @@ def _add_comparative(document: dict, db_path: Path, snapshot: dict | None, now: 
     result = comparative.measure(db_path, snapshot, now=now)
     for task, section in document["task_types"].items():
         positions = {
-            row["agent"]: index for index, row in enumerate(result["ranks"].get(task, []), 1)
+            row["agent"]: index
+            for index, row in enumerate(result["ranks"].get(task, []), 1)
+            if row["comparative_score"] is not None
         }
         for row in section["ranking"]:
-            row["comparative_rank"] = (
-                positions.get(row["agent"]) if result["status"] != "inputs_unmeasured" else None
-            )
+            row["comparative_rank"] = positions.get(row["agent"])
+            if row["comparative_rank"] is None:
+                row["comparative_reason"] = result["inputs"]["cost_source_by_agent"].get(
+                    row["agent"], {}
+                ).get("reason") or "; ".join(result["reasons"])
     for task, rows in document["reserve"].items():
         positions = {
-            row["agent"]: index for index, row in enumerate(result["ranks"].get(task, []), 1)
+            row["agent"]: index
+            for index, row in enumerate(result["ranks"].get(task, []), 1)
+            if row["comparative_score"] is not None
         }
         for row in rows:
-            row["comparative_rank"] = (
-                positions.get(row["agent"]) if result["status"] != "inputs_unmeasured" else None
-            )
+            row["comparative_rank"] = positions.get(row["agent"])
+            if row["comparative_rank"] is None:
+                row["comparative_reason"] = result["inputs"]["cost_source_by_agent"].get(
+                    row["agent"], {}
+                ).get("reason") or "; ".join(result["reasons"])
     document["comparative"] = {key: value for key, value in result.items() if key != "ranks"}
 
 
@@ -408,14 +416,40 @@ def _semantic_for_compare(document: dict[str, Any]) -> dict[str, Any]:
             else:
                 compared[agent] = entry
         semantic["capacity"] = compared
-    if isinstance(semantic.get("comparative"), dict) and isinstance(
-        semantic["comparative"].get("inputs"), dict
-    ):
-        block = dict(semantic["comparative"])
-        block["inputs"] = {
-            key: value for key, value in block["inputs"].items() if key != "pacing_observed_at"
+    block = semantic.get("comparative")
+    if isinstance(block, dict) and isinstance(block.get("inputs"), dict):
+        sources = block["inputs"].get("cost_source_by_agent", {})
+        semantic["comparative"] = {
+            "status": block.get("status"),
+            "lambda": {
+                a: round(v, 3) if isinstance(v, (int, float)) else v
+                for a, v in block.get("lambda", {}).items()
+            },
+            "provenance": {
+                a: {key: row.get(key) for key in ("source", "imputed")}
+                for a, row in sources.items()
+            },
         }
-        semantic["comparative"] = block
+        # Entry ranks already participate in task_types/reserve comparisons.
+        # Diagnostic reasons can change each tick while the unknown rank is stable.
+        for key in ("task_types", "reserve"):
+            section = semantic.get(key, {})
+            semantic[key] = {
+                task: (
+                    {
+                        **entry,
+                        "ranking": [
+                            {k: v for k, v in row.items() if k != "comparative_reason"}
+                            for row in entry["ranking"]
+                        ],
+                    }
+                    if key == "task_types"
+                    else [
+                        {k: v for k, v in row.items() if k != "comparative_reason"} for row in entry
+                    ]
+                )
+                for task, entry in section.items()
+            }
     return semantic
 
 
@@ -726,6 +760,8 @@ def _selftest() -> None:
 
 
 def main() -> int:
+    import comparative
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--min-observations", type=int, default=DEFAULT_MIN_OBSERVATIONS)
     parser.add_argument(
@@ -735,9 +771,11 @@ def main() -> int:
     )
     parser.add_argument("--feedback-db", type=Path)
     parser.add_argument("--comparative-report", action="store_true")
-    parser.add_argument("--window-days", type=int, default=14)
+    parser.add_argument("--window-days", type=int, default=comparative.WINDOW_DAYS)
     parser.add_argument(
-        "--pacing-history", type=Path, help="NDJSON capacity.build() snapshots from #668"
+        "--pacing-history",
+        type=Path,
+        help="capacity-ledger.ndjson pacing_snapshot rows (or legacy pacing-history.ndjson)",
     )
     parser.add_argument(
         "--allow-evidence-regression",
@@ -754,8 +792,6 @@ def main() -> int:
         return 0
     db_path = feedback.resolve_db_path(args.feedback_db)
     if args.comparative_report:
-        import comparative
-
         if args.window_days < 1:
             parser.error("--window-days must be positive")
         print(

@@ -1935,7 +1935,7 @@ def comparative_routing_line(rep: dict) -> str:
         f"(window {result['window_days']}d), λ {prices or 'unmeasured'}, status {result['status']}"
     )
     if result["status"] == "inputs_unmeasured":
-        line += " — unmeasured — needs #668 pacing state; " + "; ".join(result["reasons"])
+        line += " — unmeasured; " + "; ".join(result["reasons"])
     return line
 
 

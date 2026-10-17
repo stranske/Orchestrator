@@ -1546,41 +1546,44 @@ resolved DB, source version and Git identity (or `orchestrator-export`). Shadow 
 available for diagnosis.
 Routing economics extends this existing export rail in shadow (`comparative.py`, #676).
 Absolute advantage orders agents by durable-PASS posterior; comparative advantage orders
-`q[a,k] - (lambda[a] + p[a]) * c[a,k]`. Lambda is the opportunity cost of pool capacity:
-price adjustment moves an over-budget agent's least-advantaged class to its runner-up,
-up to 50 iterations. Slack capacity and zero list prices give lambda zero and the absolute
-order; `max_iter` is explicitly not convergence or an optimality proof. This is an additive
-`comparative` block with schema `orchestrator.route-weights-comparative/v1` beside `capacity`;
-the enclosing export remains `/v1`, every ranking entry gains an integer `comparative_rank`
-or null, and posterior order, reserve separation, and exploration policy identity stay intact.
-Dedup: the existing export and switch-review rails already own these surfaces; no opportunity-cost
-calculation existed in the tree or improvement log. This extends them, with no new dispatch path,
-capability lifecycle, or change to the learner or hosted consumer.
+`q[a,k]*V[k] - (lambda[a] + p[a])*c[a,k]`, with V defaulting to one. Lambda is the
+capacity dual of the exact continuous LP maximizing `sum x*(q*V-p*c)` subject to
+`sum_k c*x <= B` and `sum_a x <= D`. A pure-Python dense two-phase simplex uses Bland's
+entering/leaving rule; the nonnegative <= inputs provide an immediately feasible Phase I
+slack basis. Phase II slack reduced costs give capacity lambda and demand mu. Slack pools
+have exactly zero lambda. Assignment records fractional runs per class/agent, and unmet
+demand is explicit. Tied comparative scores prefer the optimal allocation, then agent name.
+No downstream consumer or learner order changes: the additive `comparative` block has schema
+`orchestrator.route-weights-comparative/v1`, the enclosing export remains `/v1`, and every
+ranking entry gains an integer `comparative_rank` or null with a reason. Reserve separation
+and exploration policy identity stay intact. This adds no dispatch path or lifecycle.
 
-The adapter reads only #668's `capacity.build()["pools"][pool]["pacing"]` contract:
-`state`, `used_fraction`, `allowed_fraction`, `period_end`, `resets_available`, and optional
-`burn_per_day`. Budget is `allowed_fraction - used_fraction`; cost is `burn_per_day / agent's
-window run count`, multiplied by the locally measured class/agent mean-token ratio (otherwise
-1.0, explicitly `imputed`). Demand is class runs divided by all window runs, across all sources,
-over 14 days. Only latest-version quality cells with at least 20 observations count, across all
-task classes, including classes outside the hosted consumer's export. Subscription
-marginal price is zero; Muse and metered seats require whole-run ccusage list-price evidence.
-The capacity tier alone does not establish billing mode: Claude's ordinary subscription pool
-is zero-price, while a `-metered` or `-paygo` pool needs list-price evidence at the learner's
-minimum complete-cost coverage.
-Absent burn, ambiguous pool mapping, missing measurements, observations older than two hours,
-or an expired period yield `inputs_unmeasured`, null lambdas/ranks, and reasons, never zero or
-an assertion that comparative equals posterior. Inputs include pacing observation time and
-per-agent cost provenance. Reads do not create or migrate the Brain.
+The adapter prefers `agents[agent]["pacing"]` (#680), falling back to `pools[pool]["pacing"]`.
+It accepts numeric `burn_rate_per_day` or `burn_per_day`, checks explicit stale flags and
+observation timestamps, and reports the actual missing agent/key. Budget is the remaining
+period fraction `max(0, allowed_fraction-used_fraction)`; negative balances are labelled
+`over_allowance`. Cost is burn/day divided by observed runs/day, times the local class/agent
+mean-token ratio (otherwise 1.0, explicitly imputed). Demand is trailing-window class run
+count times seconds remaining divided by window seconds. The common horizon is the earliest
+period_end of fully measured agents. Only latest-version quality cells with n_obs >= 20 count,
+including classes outside the hosted export. Measured agents alone enter the LP; excluded
+agents retain null lambda/rank and reasons, with status `partial` when some are measured.
+Other statuses are `optimal`, `infeasible_inputs`, and `inputs_unmeasured`. Subscription price
+is zero; Muse or explicitly metered pools require complete list-price observations. Reads
+never create or migrate the Brain.
 
-`route_weights_export.py --comparative-report --window-days 14 --pacing-history PATH`
-reads NDJSON capacity snapshots, retaining the latest per UTC hour and counting differing hours
-per class with posterior/comparative tops and max lambda. It uses the latest quality weights
-and each snapshot's trailing run window, excluding future runs. Until #668 names its history
-transport, PATH is explicit; the configurable state-directory default is `pacing-history.ndjson`,
-not a claim that #668 already writes there. The CLI report returns before heartbeat, export write,
-or publication. Missing history prints unmeasured; measured all-zero lambdas with no differences
-print `not_testable_slack`. Switch review reads the same report and prints one summary line.
+`route_weights_export.py --comparative-report --window-days 14` reads
+`$ORCH_STATE_DIR/capacity-ledger.ndjson`, filtering event=pacing_snapshot and using ts.
+Legacy pacing-history.ndjson is also read when present. It retains the latest snapshot per
+UTC hour and compares Codex/Claude over each snapshot's trailing run window without future
+runs. A missing third agent cannot block this pass number. The window verdict requires
+`hours_measured/hours_observed >= MIN_MEASURED_HOUR_SHARE` (0.5); failed hours count only
+against that share and their reasons print separately. Measured slack prints
+`not_testable_slack`; otherwise the report prints classes_differing N. This is observed-hour
+coverage, not a claim that absent hours were measured. The CLI returns before heartbeat,
+export writes or publication. Comparative republishing compares status, entry ranks, lambda
+rounded to three decimals, and cost-source/imputed provenance, excluding diagnostic drift.
+Switch review reads the same report and prints one summary line.
 The live pass number requires at least one differing class with measured Codex and Claude prices
 over the 14-day pacing-history window, checked no earlier than 2026-11-07 and 14 days after
 the first #668 state. Fixture success does not meet that live pass number or enable consumption.

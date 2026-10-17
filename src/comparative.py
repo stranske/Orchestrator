@@ -19,108 +19,157 @@ from typing import TypeGuard
 SCHEMA = "orchestrator.route-weights-comparative/v1"
 WINDOW_DAYS = 14
 MAX_AGE_SECONDS = 2 * 3600
+MIN_MEASURED_HOUR_SHARE = 0.5
+_SIMPLEX_EPS = 1e-12
 
 
 def _number(value) -> TypeGuard[int | float]:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def comparative_ranks(q, cost, lam, price) -> dict:
-    """Order by q - (lambda + list price) * capacity cost; unknown scores sort last."""
+def comparative_ranks(q, cost, lam, price, *, value=None, assignment=None) -> dict:
+    """Order by q*V - (lambda + price)*cost; optimal allocation breaks score ties."""
+    value = value or {}
+    assignment = assignment or {}
     ranks: dict[str, list[dict]] = {}
     for agent, cells in q.items():
         for task, quality in cells.items():
             values = (quality, cost.get(agent, {}).get(task), lam.get(agent), price.get(agent))
-            measured = all(_number(value) for value in values)
-            score = values[0] - (values[2] + values[3]) * values[1] if measured else None
+            measured = all(_number(v) for v in values)
+            score = (
+                quality * value.get(task, 1.0) - (values[2] + values[3]) * values[1]
+                if measured
+                else None
+            )
             row = {"agent": agent, "comparative_score": score}
             if not measured:
                 row["reason"] = "quality, capacity cost, lambda or price unmeasured"
             ranks.setdefault(task, []).append(row)
-    for rows in ranks.values():
+    for task, rows in ranks.items():
         rows.sort(
             key=lambda row: (
                 row["comparative_score"] is None,
-                -row["comparative_score"] if row["comparative_score"] is not None else 0,
+                -round(row["comparative_score"], 12) if row["comparative_score"] is not None else 0,
+                -(assignment.get(task) or {}).get(row["agent"], 0),
                 row["agent"],
             )
         )
     return ranks
 
 
-def shadow_prices(q, demand, cost, budget, price, *, max_iter=50) -> dict:
-    """Bounded deterministic price adjustment specified by #676 (not an LP solver).
+def _dense_simplex(matrix, rhs, objective):
+    """Two-phase dense primal simplex with Bland entering AND leaving rules.
 
-    Each over-budget seat loses its cheapest-to-displace class at the next price
-    boundary. Ties move just beyond that boundary. Discrete/infeasible assignments
-    can reach max_iter; that is not a convergence claim.
+    All accepted rows are <= with nonnegative RHS. Phase I therefore has the
+    explicit feasible slack basis and zero auxiliary objective: no artificial
+    variables/pivots are needed. Phase II installs the economic objective.
+    Slack-column reduced costs are the original-row duals, never phase-I prices.
     """
-    reasons = []
-    tasks = {task for cells in q.values() for task in cells}
+    n, m = len(objective), len(rhs)
+    tableau = [
+        list(row) + [float(i == j) for j in range(m)] + [float(rhs[i])]
+        for i, row in enumerate(matrix)
+    ]
+    basis = list(range(n, n + m))
+    tableau.append([0.0] * (n + m + 1))  # Phase I: feasible origin, objective zero.
+    tableau[-1][:n] = [-float(v) for v in objective]  # Phase II.
+    iterations = 0
+    while True:
+        entering = next((j for j in range(n + m) if tableau[-1][j] < -_SIMPLEX_EPS), None)
+        if entering is None:
+            break
+        candidates = [i for i in range(m) if tableau[i][entering] > _SIMPLEX_EPS]
+        if not candidates:
+            raise ArithmeticError("unbounded LP despite finite demand bounds")
+        ratio = min(tableau[i][-1] / tableau[i][entering] for i in candidates)
+        leaving = min(
+            (
+                i
+                for i in candidates
+                if abs(tableau[i][-1] / tableau[i][entering] - ratio) <= _SIMPLEX_EPS
+            ),
+            key=lambda i: basis[i],
+        )
+        pivot = tableau[leaving][entering]
+        tableau[leaving] = [v / pivot for v in tableau[leaving]]
+        for i in range(m + 1):
+            if i == leaving:
+                continue
+            factor = tableau[i][entering]
+            tableau[i] = [v - factor * w for v, w in zip(tableau[i], tableau[leaving])]
+            tableau[i][entering] = 0.0
+        basis[leaving] = entering
+        iterations += 1
+    primal = [0.0] * n
+    for i, basic in enumerate(basis):
+        if basic < n:
+            primal[basic] = max(0.0, tableau[i][-1])
+    # A basic slack has exactly zero dual, including degenerate optima. Reading
+    # phase I here would lose capacity opportunity cost and violate dual feasibility.
+    dual = [0.0 if n + i in basis else max(0.0, tableau[-1][n + i]) for i in range(m)]
+    return primal, dual, iterations
+
+
+def shadow_prices(q, demand, cost, budget, price, *, value=None) -> dict:
+    """Solve max sum x*(q*V-p*c), capacity <= B and class volume <= D.
+
+    Assignment is task -> {agent: fractional runs}, so split/unmet demand is
+    represented honestly. V defaults to one. Negative RHS/cost/price is invalid;
+    missing/nonfinite inputs remain unmeasured, distinct from measured zero.
+    """
+    value = value or {}
+    tasks = sorted({task for cells in q.values() for task in cells})
+    reasons, invalid = [], []
     if not q or not tasks:
         reasons.append("no quality cells with n_obs >= 20")
+
+    def check(label, v, lo=0, hi=None):
+        if not _number(v):
+            reasons.append(f"{label} unmeasured")
+        elif v < lo or (hi is not None and v > hi):
+            invalid.append(f"{label} invalid")
+
     for task in tasks:
-        if not _number(demand.get(task)) or demand[task] < 0:
-            reasons.append(f"demand[{task}] unmeasured or invalid")
+        check(f"demand[{task}]", demand.get(task))
+        check(f"value[{task}]", value.get(task, 1.0))
     for agent, cells in q.items():
-        if not _number(budget.get(agent)):
-            reasons.append(f"budget[{agent}] unmeasured")
-        if not _number(price.get(agent)) or price[agent] < 0:
-            reasons.append(f"price[{agent}] unmeasured or invalid")
+        check(f"budget[{agent}]", budget.get(agent))
+        check(f"price[{agent}]", price.get(agent))
         for task, quality in cells.items():
-            unit = cost.get(agent, {}).get(task)
-            if not _number(quality) or not 0 <= quality <= 1:
-                reasons.append(f"quality[{agent},{task}] unmeasured or invalid")
-            if not _number(unit) or unit < 0:
-                reasons.append(f"cost[{agent},{task}] unmeasured or invalid")
-    if reasons:
+            check(f"quality[{agent},{task}]", quality, hi=1)
+            check(f"cost[{agent},{task}]", cost.get(agent, {}).get(task))
+    if reasons or invalid:
         return {
             "lambda": dict.fromkeys(q),
-            "assignment": dict.fromkeys(sorted(tasks)),
+            "mu": dict.fromkeys(tasks),
+            "assignment": dict.fromkeys(tasks),
             "iterations": 0,
-            "status": "inputs_unmeasured",
-            "reasons": sorted(reasons),
+            "status": "infeasible_inputs" if invalid else "inputs_unmeasured",
+            "reasons": sorted(reasons + invalid),
         }
-    lam = dict.fromkeys(q, 0.0)
-    for iteration in range(max_iter + 1):
-        ranks = comparative_ranks(q, cost, lam, price)
-        assignment = {task: rows[0]["agent"] for task, rows in ranks.items()}
-        usage = {
-            agent: sum(
-                demand[task] * cost[agent][task]
-                for task, chosen in assignment.items()
-                if chosen == agent
-            )
-            for agent in q
-        }
-        over = [agent for agent in sorted(q) if usage[agent] > budget[agent] + 1e-12]
-        status = "converged" if not over else "max_iter"
-        result = {
-            "lambda": lam.copy(),
-            "assignment": assignment,
-            "iterations": iteration,
-            "status": status,
-        }
-        if not over or iteration == max_iter:
-            return result
-        # Reassign after each single-seat adjustment; never act on stale runners-up.
-        moves = []
-        for agent in over:
-            for task, chosen in assignment.items():
-                if chosen != agent or demand[task] == 0 or cost[agent][task] == 0:
-                    continue
-                rows = ranks[task]
-                if len(rows) > 1:
-                    delta = (rows[0]["comparative_score"] - rows[1]["comparative_score"]) / cost[
-                        agent
-                    ][task]
-                    moves.append((delta, agent, task))
-        if not moves:
-            result["reasons"] = ["no alternative can relieve the over-budget assignment"]
-            return result
-        delta, agent, _ = min(moves)
-        lam[agent] += delta + max(1e-12, abs(lam[agent] + delta) * 1e-12)
-    raise AssertionError("unreachable")
+    agents = sorted(q)
+    variables = [(a, k) for a in agents for k in sorted(q[a])]
+    matrix = [[cost[a][k] if a == agent else 0.0 for a, k in variables] for agent in agents]
+    matrix += [[float(k == task) for a, k in variables] for task in tasks]
+    rhs = [budget[a] for a in agents] + [demand[k] for k in tasks]
+    objective = [q[a][k] * value.get(k, 1.0) - price[a] * cost[a][k] for a, k in variables]
+    primal, dual, iterations = _dense_simplex(matrix, rhs, objective)
+    lam = dict(zip(agents, dual[: len(agents)]))
+    assignment: dict = {k: {} for k in tasks}
+    for (a, k), x in zip(variables, primal):
+        if x > 0:
+            assignment[k][a] = x
+    return {
+        "lambda": lam,
+        "mu": dict(zip(tasks, dual[len(agents) :])),
+        "assignment": assignment,
+        "iterations": iterations,
+        "status": "optimal",
+        "reasons": [],
+        "objective": sum(x * v for x, v in zip(primal, objective)),
+        "usage": {a: sum(assignment[k].get(a, 0) * cost[a][k] for k in q[a]) for a in agents},
+        "unmet_demand": {k: max(0.0, demand[k] - sum(assignment[k].values())) for k in tasks},
+    }
 
 
 def _timestamp(value) -> float | None:
@@ -135,7 +184,7 @@ def _timestamp(value) -> float | None:
 def _window(db_path: Path, now: int, window_days: int) -> tuple[list[dict], list[dict], list[str]]:
     """Read-only, no schema migration and no accidental empty Brain creation."""
     if not db_path.exists():
-        return [], [], ["Brain unavailable"]
+        return [], [], [f"{db_path}: Brain database missing"]
     try:
         with closing(sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)) as conn:
             conn.row_factory = sqlite3.Row
@@ -157,17 +206,36 @@ def _window(db_path: Path, now: int, window_days: int) -> tuple[list[dict], list
             ]
         return weights, runs, []
     except sqlite3.Error as exc:
-        return [], [], [f"Brain inputs unavailable: {exc}"]
+        return [], [], [f"{db_path}: Brain inputs unavailable: {exc}"]
+
+
+def _pacing(snapshot, agent):
+    """Prefer the #680 agent contract, then accept the older pool contract."""
+    agents = snapshot.get("agents")
+    entry = agents.get(agent) if isinstance(agents, dict) else None
+    if isinstance(entry, dict) and isinstance(entry.get("pacing"), dict):
+        return agent, entry["pacing"], f"agents[{agent}].pacing"
+    pools = snapshot.get("pools")
+    mapped = [
+        (name, row)
+        for name, row in (pools.items() if isinstance(pools, dict) else [])
+        if isinstance(row, dict) and row.get("agent") == agent
+    ]
+    if len(mapped) == 1:
+        name, row = mapped[0]
+        if isinstance(row.get("pacing"), dict):
+            return name, row["pacing"], f"pools[{name}].pacing"
+        return name, None, f"pools[{name}].pacing missing"
+    return None, None, f"agents[{agent}].pacing missing; pools mapping absent or ambiguous"
 
 
 def measure(
     db_path: Path, snapshot: dict | None, *, now=None, window_days=WINDOW_DAYS, q=None
 ) -> dict:
-    """Adapt only #668's stated pools[p].pacing contract, with explicit provenance.
+    """D is remaining-period runs; c is period fraction/run; B is remaining fraction.
 
-    D is each class's share of window volume; c is burn_per_day / agent's window
-    run count, times the local class/agent mean-token ratio (1.0, flagged, if absent).
-    B is allowed_fraction - used_fraction. No burn estimate is invented.
+    The earliest period_end among fully measured agents is the common horizon.
+    Unmeasured agents are excluded from the LP and retain null prices/ranks.
     """
     from feedback import COMPLETE_COST_SOURCES, MIN_COST_COVERAGE, TOKEN_SOURCES
 
@@ -180,57 +248,63 @@ def measure(
         for row in weights:
             q.setdefault(row["agent"], {})[row["task_type"]] = row["posterior"]
     tasks = {task for cells in q.values() for task in cells}
-    counts = {task: sum(row["task_type"] == task for row in runs) for task in tasks}
-    total = len(runs)
-    demand = {task: count / total if total else None for task, count in counts.items()}
     snapshot = snapshot if isinstance(snapshot, dict) else {}
-    observed = _timestamp(snapshot.get("generated_at"))
-    pools = snapshot.get("pools")
-    pools = pools if isinstance(pools, dict) else {}
+    observed = _timestamp(snapshot.get("generated_at", snapshot.get("ts")))
     cost: dict = {}
     budget: dict = {}
     price: dict = {}
     sources: dict = {}
     pool_ids: dict = {}
+    ends: dict = {}
+    measured_q: dict = {}
     for agent, cells in q.items():
-        mapped = [
-            (name, pool)
-            for name, pool in pools.items()
-            if isinstance(pool, dict) and pool.get("agent") == agent
-        ]
         budget[agent], price[agent] = None, None
         cost[agent] = dict.fromkeys(cells)
         sources[agent] = {"source": None, "reason": None, "imputed": []}
-        if len(mapped) != 1:
-            sources[agent]["reason"] = "needs #668 pacing state: unique pool mapping absent"
-            continue
-        pool_id, pool = mapped[0]
+        pool_id, pacing, location = _pacing(snapshot, agent)
         pool_ids[agent] = pool_id
-        pacing = pool.get("pacing")
-        if not isinstance(pacing, dict):
-            sources[agent]["reason"] = "needs #668 pacing state: pacing block absent"
+
+        def missing(reason):
+            sources[agent]["reason"] = f"{location}: {reason}"
+
+        if pacing is None:
+            missing("pacing unmeasured")
             continue
-        stamp = _timestamp(pacing.get("observed_at", observed))
-        end = _timestamp(pacing.get("period_end"))
-        if stamp is None or not 0 <= now - stamp <= MAX_AGE_SECONDS or end is None or end <= now:
-            sources[agent][
-                "reason"
-            ] = "needs #668 pacing state: absent/stale observation or expired period"
+        if pacing.get("stale"):
+            missing("stale=true; pacing unmeasured")
             continue
-        used, allowed, burn = (
-            pacing.get(key) for key in ("used_fraction", "allowed_fraction", "burn_per_day")
+        stamp = _timestamp(
+            pacing.get("observed_at", pacing.get("source_ts", pacing.get("ts", observed)))
         )
-        if pacing.get("state") not in ("ok", "warn", "shed") or not _number(
-            pacing.get("resets_available")
-        ):
-            sources[agent]["reason"] = "needs #668 pacing state: state/resets unmeasured"
+        end = _timestamp(pacing.get("period_end"))
+        if stamp is None or not 0 <= now - stamp <= MAX_AGE_SECONDS:
+            missing("observed_at/source_ts/ts absent, stale or in the future")
             continue
-        if _number(used) and _number(allowed) and used >= 0 and allowed >= 0:
-            budget[agent] = allowed - used
+        if end is None or end <= now:
+            missing("period_end missing or expired")
+            continue
+        if pacing.get("state") not in ("ok", "warn", "shed"):
+            missing("state unmeasured or invalid")
+            continue
+        if not _number(pacing.get("resets_available")):
+            missing("resets_available unmeasured")
+            continue
+        used, allowed = pacing.get("used_fraction"), pacing.get("allowed_fraction")
+        if not all(_number(v) and v >= 0 for v in (used, allowed)):
+            missing("used_fraction or allowed_fraction unmeasured or invalid")
+            continue
+        budget[agent] = max(0.0, allowed - used)
+        sources[agent]["over_allowance"] = used > allowed
+        burn_key = next(
+            (key for key in ("burn_rate_per_day", "burn_per_day") if _number(pacing.get(key))), None
+        )
         agent_runs = [row for row in runs if row["agent"] == agent]
-        # Cost rows represent API list-price equivalents, not subscription bills.
-        # Muse / explicitly metered Claude need a measured list price; subscriptions
-        # otherwise have measured marginal price zero regardless of capacity tier.
+        if burn_key is None or pacing[burn_key] < 0:
+            missing("burn_rate_per_day/burn_per_day unmeasured or invalid")
+            continue
+        if not agent_runs:
+            missing(f"{db_path}: runs[{agent}] window run count unmeasured")
+            continue
         metered = agent == "muse" or pool_id.endswith(("paygo", "metered"))
         priced = [
             row["cost_usd"]
@@ -239,14 +313,14 @@ def measure(
             and _number(row["cost_usd"])
             and row["cost_usd"] >= 0
         ]
-        coverage = len(priced) / len(agent_runs) if agent_runs else 0.0
+        coverage = len(priced) / len(agent_runs)
         price[agent] = (
             (sum(priced) / len(priced) if priced and coverage >= MIN_COST_COVERAGE else None)
             if metered
             else 0.0
         )
-        if not _number(burn) or burn < 0 or not agent_runs:
-            sources[agent]["reason"] = "burn_per_day or window run count unmeasured"
+        if price[agent] is None:
+            missing(f"{db_path}: costs[{agent}].cost_usd complete coverage unmeasured")
             continue
         measured = [
             row
@@ -265,24 +339,47 @@ def measure(
         for task in cells:
             local = [row for row in measured if row["task_type"] == task]
             multiplier = (
-                (sum(row["tokens_in"] + row["tokens_out"] for row in local) / len(local) / mean)
+                sum(row["tokens_in"] + row["tokens_out"] for row in local) / len(local) / mean
                 if local and mean is not None
                 else 1.0
             )
             if not local:
                 sources[agent]["imputed"].append(task)
-            cost[agent][task] = burn / len(agent_runs) * multiplier
+            cost[agent][task] = pacing[burn_key] / (len(agent_runs) / window_days) * multiplier
         sources[agent][
             "source"
-        ] = "#668 burn_per_day / window_runs; local token ratio (1.0 if imputed)"
-    result = shadow_prices(q, demand, cost, budget, price)
+        ] = f"{location}.{burn_key} / runs_per_day; local token ratio (1.0 if imputed)"
+        if not cells or any(not _number(v) or not 0 <= v <= 1 for v in cells.values()):
+            missing(f"{db_path}: posterior[{agent}] unmeasured or invalid")
+            continue
+        measured_q[agent] = cells
+        ends[agent] = end
+    horizon = min(ends.values()) if ends else None
+    seconds_left = horizon - now if horizon is not None else None
+    demand = {
+        task: (
+            sum(row["task_type"] == task for row in runs) * seconds_left / (window_days * 86400)
+            if seconds_left is not None and runs
+            else None
+        )
+        for task in tasks
+    }
+    result = shadow_prices(measured_q, demand, cost, budget, price)
+    if result["status"] == "optimal" and len(measured_q) < len(q):
+        result["status"] = "partial"
+    result["lambda"] = {agent: result["lambda"].get(agent) for agent in q}
     reasons += [f"{agent}: {row['reason']}" for agent, row in sources.items() if row["reason"]]
-    if reasons:
-        result.update(status="inputs_unmeasured", **{"lambda": dict.fromkeys(q)})
     reasons += result.get("reasons", [])
+    ranks = comparative_ranks(q, cost, result["lambda"], price, assignment=result["assignment"])
+    for rows in ranks.values():
+        for row in rows:
+            if row["comparative_score"] is None:
+                row["reason"] = sources[row["agent"]]["reason"] or row.get("reason")
     result.update(
         schema=SCHEMA,
         reasons=sorted(set(reasons)),
+        window_days=window_days,
+        ranks=ranks,
         inputs={
             "pacing_observed_at": observed,
             "cost_source_by_agent": sources,
@@ -291,100 +388,108 @@ def measure(
             "cost": cost,
             "budget": budget,
             "price": price,
+            "period_end": horizon,
+            "period_end_source": "earliest fully measured agent period_end",
+            "seconds_left": seconds_left,
         },
-        window_days=window_days,
-        ranks=comparative_ranks(q, cost, result["lambda"], price),
     )
     return result
 
 
 def history_path(state_dir: Path | None = None) -> Path:
-    """Transport is configurable until #668 publishes a canonical history location."""
     base = state_dir or Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex/orchestrator"))
-    return base / "pacing-history.ndjson"
+    return base / "capacity-ledger.ndjson"
 
 
 def report(db_path: Path, path: Path, *, now=None, window_days=WINDOW_DAYS) -> dict:
-    """Replay at most one (latest) capacity snapshot per UTC hour, without look-ahead runs."""
+    """Replay latest snapshot per UTC hour; hour failures do not veto the window."""
     if window_days < 1:
         raise ValueError("window_days must be positive")
     now = int(time.time()) if now is None else now
     hours: dict = {}
     errors: list[str] = []
-    try:
-        for line in path.read_text().splitlines():
-            try:
-                snapshot = json.loads(line)
-                stamp = _timestamp(snapshot.get("generated_at"))
-                if stamp is not None and now - window_days * 86400 <= stamp <= now:
-                    hour = int(stamp // 3600)
-                    if hour not in hours or stamp > hours[hour][0]:
-                        hours[hour] = (stamp, snapshot)
-            except (ValueError, AttributeError):
-                errors.append("malformed pacing snapshot")
-    except OSError as exc:
-        errors.append(f"needs #668 pacing state: {exc}")
+    hour_reasons: dict = {}
+    paths = [path]
+    legacy = path.with_name("pacing-history.ndjson")
+    if legacy != path and legacy.exists():
+        paths.append(legacy)
+    for source in paths:
+        try:
+            for line in source.read_text().splitlines():
+                try:
+                    snapshot = json.loads(line)
+                    if (
+                        source.name != "pacing-history.ndjson"
+                        and snapshot.get("event") != "pacing_snapshot"
+                    ):
+                        continue
+                    stamp = _timestamp(snapshot.get("ts", snapshot.get("generated_at")))
+                    if stamp is not None and now - window_days * 86400 <= stamp <= now:
+                        hour = int(stamp // 3600)
+                        if hour not in hours or stamp > hours[hour][0]:
+                            hours[hour] = (stamp, snapshot)
+                except (ValueError, AttributeError):
+                    errors.append(f"{source}: malformed pacing snapshot")
+        except OSError as exc:
+            errors.append(f"{source}: pacing_snapshot input unavailable ({exc.strerror})")
     weights, _, brain_errors = _window(db_path, now, window_days)
     errors += brain_errors
     q: dict = {}
     for row in weights:
         q.setdefault(row["agent"], {})[row["task_type"]] = row["posterior"]
+    # The pass number is specifically the measured Codex/Claude comparison.
+    required_q = {a: q[a] for a in ("codex", "claude") if a in q}
     for agent in ("codex", "claude"):
-        if agent not in q:
-            errors.append(f"{agent}: no quality cells with n_obs >= 20; live lambda unmeasured")
-    posterior: dict[str, list[dict]] = {}
-    for agent, cells in q.items():
-        for task, quality in cells.items():
-            if _number(quality):
-                posterior.setdefault(task, []).append({"agent": agent, "posterior": quality})
-    for rows in posterior.values():
-        rows.sort(key=lambda row: (-row["posterior"], row["agent"]))
-    classes = {
-        task: {
-            "posterior_top": rows[0]["agent"],
+        if agent not in required_q:
+            errors.append(f"{db_path}: posterior[{agent}] missing n_obs >= 20")
+    classes: dict = {
+        k: {
+            "posterior_top": min(
+                (a for a in required_q if k in required_q[a]), key=lambda a: (-required_q[a][k], a)
+            ),
             "comparative_top": None,
             "hours_differing": None,
             "max_lambda": None,
+            "unmet_demand": None,
         }
-        for task, rows in posterior.items()
+        for k in {k for cells in required_q.values() for k in cells}
     }
     maxima: dict = {}
-    measured, statuses = 0, []
+    measured = 0
     for stamp, snapshot in sorted(hours.values()):
-        result = measure(db_path, snapshot, now=int(stamp), window_days=window_days, q=q)
-        statuses.append(result["status"])
-        if result["status"] != "inputs_unmeasured":
-            for agent, value in result["lambda"].items():
-                maxima[agent] = max(maxima.get(agent, 0.0), value)
-        if result["status"] != "converged":
-            errors += result["reasons"]
+        result = measure(db_path, snapshot, now=int(stamp), window_days=window_days, q=required_q)
+        if result["status"] != "optimal" or len(required_q) != 2:
+            hour_reasons[str(int(stamp // 3600))] = result["reasons"] or [
+                "codex/claude comparison unmeasured"
+            ]
             continue
         measured += 1
+        for agent, v in result["lambda"].items():
+            maxima[agent] = max(maxima.get(agent, 0.0), v)
         for task, rows in result["ranks"].items():
             row = classes[task]
             row["comparative_top"] = rows[0]["agent"]
+            row["unmet_demand"] = result["unmet_demand"][task]
             row["hours_differing"] = (row["hours_differing"] or 0) + int(
                 rows[0]["agent"] != row["posterior_top"]
             )
             row["max_lambda"] = max(
-                row["max_lambda"] or 0.0, *(result["lambda"][entry["agent"]] for entry in rows)
+                row["max_lambda"] or 0.0, *(result["lambda"][r["agent"]] for r in rows)
             )
+    enough = bool(hours) and measured / len(hours) >= MIN_MEASURED_HOUR_SHARE
     differing = sum(row["hours_differing"] > 0 for row in classes.values()) if measured else None
-    status = (
-        "inputs_unmeasured"
-        if not hours or errors or "inputs_unmeasured" in statuses
-        else "max_iter" if "max_iter" in statuses else "converged"
-    )
-    if status == "converged" and differing == 0 and all(value == 0 for value in maxima.values()):
+    status = "optimal" if enough else "inputs_unmeasured"
+    if enough and differing == 0 and all(v == 0 for v in maxima.values()):
         status = "not_testable_slack"
     if not hours:
-        errors.append("needs #668 pacing state: no hourly snapshots in window")
+        errors.append(f"{path}: no event=pacing_snapshot rows in window (ts required)")
     return {
         "classes": classes,
         "classes_differing": differing,
         "lambda": maxima or dict.fromkeys(q),
         "status": status,
         "reasons": sorted(set(errors)),
+        "hour_reasons": hour_reasons,
         "window_days": window_days,
         "hours_measured": measured,
         "hours_observed": len(hours),
@@ -401,4 +506,6 @@ def format_report(result: dict) -> str:
         f"status {result['status']}; hours_measured {result['hours_measured']}/{result['hours_observed']}",
     ]
     lines += result["reasons"]
+    for hour, reasons in result.get("hour_reasons", {}).items():
+        lines.append(f"hour {hour}: " + "; ".join(reasons))
     return "\n".join(lines)
