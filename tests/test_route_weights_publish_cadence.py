@@ -39,7 +39,7 @@ def _wire(monkeypatch, tmp_path, *, changed: bool):
     )
     monkeypatch.setattr(rwe, "write_document", lambda target, doc: changed)
     monkeypatch.setattr(rwe.capabilities, "daily_heartbeat", lambda *a, **k: None)
-    monkeypatch.setattr(rwe, "publish_document", lambda doc: calls.append(doc) or True)
+    monkeypatch.setattr(rwe, "publish_document", lambda doc, **kwargs: calls.append(doc) or True)
     return calls
 
 

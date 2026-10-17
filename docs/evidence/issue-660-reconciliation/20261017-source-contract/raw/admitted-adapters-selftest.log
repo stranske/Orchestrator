@@ -1,0 +1,10 @@
+launchd-exec: launchctl submit failed for com.teacher.codex.exec.job.TN0UAt-317-11418 with exit 1
+detached-net: launchd wrapper failed; retrying in current shell with detached auth
+Traceback (most recent call last):
+  File "EVIDENCE_ROOT/admitted-baseline/src/adapters.py", line 3140, in <module>
+    _selftest()
+  File "EVIDENCE_ROOT/admitted-baseline/src/adapters.py", line 2608, in _selftest
+    _selftest_inner(gaps=[])
+  File "EVIDENCE_ROOT/admitted-baseline/src/adapters.py", line 2730, in _selftest_inner
+    assert "--cd" in ccwd and ccwd[ccwd.index("--cd") + 1] == str(codex_cwd), ccwd
+AssertionError: ['codex', 'exec', '--skip-git-repo-check', '--cd', 'EVIDENCE_ROOT/home/.codex/orchestrator/worktrees/selftest', '--sandbox', 'workspace-write', '--json', 'x']

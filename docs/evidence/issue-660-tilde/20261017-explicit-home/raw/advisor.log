@@ -1,0 +1,146 @@
+{
+  "task": "Repair existing source660 explicit tilde ORCH_FEEDBACK_DB learner and CLI export binding on existing PR663; isolated actual SQLite regression and production disconnection proof only, no live publication or new capabilities",
+  "experiment_id": "advice:686ca9b8a184",
+  "useful": true,
+  "confidence": "binding_only",
+  "skill": null,
+  "surface": "opener-lane",
+  "repository": "stranske/Orchestrator",
+  "contraindicated": [],
+  "task_types": [],
+  "capabilities": [
+    {
+      "capability_id": "deliberate-break-verifier",
+      "matched_task_type": null,
+      "bound": true,
+      "bound_only": true,
+      "binding_reason": "the lane performs this exact break-then-revert proof in 271 of 2,445 rounds, instructed nowhere -- 0 hits in its TOML, its rendered prompt and ~/.codex/bin, 10 in its rolling memory",
+      "entrypoint": "local_verify.py",
+      "status": "generated",
+      "dispatch_ready": false,
+      "blocker": "matched but a gate blocked invocation",
+      "next_step": "lift the gate, or accept it is deliberately off",
+      "gate_ready": null,
+      "applies_to": null,
+      "scope_target": "self",
+      "scope_match": null,
+      "requires": null,
+      "requirement_met": null,
+      "requirement_evidence": null,
+      "requires_pr": null,
+      "pr_requirement_met": null,
+      "pr_requirement_evidence": null,
+      "precondition_met": null,
+      "precondition_note": null,
+      "transferable_concept": null,
+      "unevaluated_because": [],
+      "suggested_decline_kind": null,
+      "how_to_use": "local_verify.py --worktree . --test-cmd '<the gate>' --test-path <file> \u2014 proves a test gate actually fails when the behaviour is broken, so a vacuous gate cannot pass. Add `--transcript` for the QUOTABLE red/green block an issue or PR body needs; without it the answer is a JSON verdict and the raw console output stays escaped inside it. PRECONDITION: the fix must already be in the worktree \u2014 it grades a gate against its implementation, so pointing it at a bare finding makes step 1 fail and that failure is not a verdict on the finding",
+      "propensity": 0.8621,
+      "propensity_basis": "443 of 463 resolved trials were useful; provenance {'machine_observed': 448, 'outcome_corroborated': 8, 'self_reported': 7} across 31 independent judge arm(s) discounts that to 17.49 of 19.45 effective observations \u2014 MIXED VERDICT KINDS {'gate_coupled_to_implementation': 1, 'unstated': 462}, which \u00a72 forbids averaging: read them separately; declined with a stated reason 1541 time(s) (714 of them attributable to the binding), which is recorded but never scored \u2014 it never ran",
+      "usefulness_evidence_count": 463,
+      "fixture_passes": 0,
+      "propensity_floored": false,
+      "usefulness_evidence_weight": 19.45,
+      "usefulness_provenance_mix": {
+        "machine_observed": 448,
+        "outcome_corroborated": 8,
+        "self_reported": 7
+      },
+      "usefulness_independent_arms": 31,
+      "usefulness_self_reported_share": 0.0151,
+      "usefulness_outcome_derived": 456
+    }
+  ],
+  "dispatch_ready_count": 0,
+  "bound_count": 3,
+  "bound_capabilities": [
+    "codemod-campaign",
+    "deliberate-break-verifier",
+    "runtime-ac-checks"
+  ],
+  "bound_not_live": {},
+  "bound_unregistered": [],
+  "not_applicable": [],
+  "precondition": {
+    "repository": "stranske/Orchestrator",
+    "target": "self",
+    "repo_path": null,
+    "pr": null,
+    "declared": [
+      "codemod-campaign",
+      "runtime-ac-checks"
+    ],
+    "unmet": [],
+    "auto_declined": [],
+    "unevaluated": {
+      "codemod-campaign": [
+        "'repeated_pattern' is a fact about the PR and needs `pr` \u2014 name it (`--pr N`, or `owner/repo#N` in the task)"
+      ],
+      "runtime-ac-checks": [
+        "'nontrivial_change' is a fact about the PR and needs `pr` \u2014 name it (`--pr N`, or `owner/repo#N` in the task)"
+      ]
+    },
+    "declared_capabilities": [
+      "adversarial-review",
+      "capability-activation-audit",
+      "capability-firing-monitor",
+      "capability-propensity",
+      "codemod-campaign",
+      "cross-repo-coordination",
+      "feature-scan",
+      "frontend-verifier",
+      "offload",
+      "redirect-plan",
+      "redirect-policy",
+      "role-adjudicator",
+      "runtime-ac-checks",
+      "switch-review",
+      "testgen-lane"
+    ],
+    "missing_inputs": [
+      "pr"
+    ],
+    "how_to_evaluate": "re-ask this consult with `pr` and the declared precondition(s) above are answered for you instead of investigated; a failed one is then dismissible in one line, recorded as decline kind 'precondition_unmet', which never counts against the binding",
+    "note": "a failed precondition is REPORTED, never enforced: the capability is offered and ranked exactly as it would be without this axis, because a binding that fires where the condition holds must not be weakened by the cases where it does not",
+    "withheld_for_missing_facts": [
+      "codemod-campaign",
+      "runtime-ac-checks"
+    ],
+    "withheld": []
+  },
+  "fact_missing": [
+    {
+      "capability_id": "codemod-campaign",
+      "fact": "no title, labels or size to judge a pattern by",
+      "surface": "opener-lane"
+    },
+    {
+      "capability_id": "runtime-ac-checks",
+      "fact": "PR size unknown",
+      "surface": "opener-lane"
+    }
+  ],
+  "guidance": {
+    "offered": 1,
+    "documented": 1,
+    "undocumented": []
+  },
+  "surface_template": null,
+  "surface_status": {
+    "surface": "opener-lane",
+    "status": "declared",
+    "resolved_from": "opener-lane",
+    "did_you_mean": []
+  },
+  "coverage": {
+    "ledger_count": 49,
+    "matched": 1,
+    "not_applicable": 0,
+    "by_entry_mode": {}
+  },
+  "reason": "could not classify this task, but 3 capability(ies) are DECLARED for surface 'opener-lane' and apply regardless of classification",
+  "recorded_fact_missing": 2,
+  "recorded_matches": 1,
+  "recorded_auto_declines": 0
+}

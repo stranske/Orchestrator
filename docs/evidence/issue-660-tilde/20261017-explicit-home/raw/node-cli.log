@@ -1,0 +1,142 @@
+✖ publish_guard CLI refuses missing, override=false (273.172084ms)
+✖ publish_guard CLI refuses missing, override=true (244.791083ms)
+✖ publish_guard CLI refuses empty, override=false (248.644042ms)
+✖ publish_guard CLI refuses empty, override=true (240.052125ms)
+✖ publish_guard CLI refuses empty-table, override=false (409.750333ms)
+✖ publish_guard CLI refuses empty-table, override=true (569.535167ms)
+✖ publish_guard CLI refuses below-threshold, override=false (553.915875ms)
+✖ publish_guard CLI refuses below-threshold, override=true (463.919167ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 0
+ℹ fail 8
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3080.959083
+
+✖ failing tests:
+
+test at tests/test_route_weights_export_cli.js:29:5
+✖ publish_guard CLI refuses missing, override=false (273.172084ms)
+  AssertionError [ERR_ASSERTION]: db=/private/tmp/route-export-cli-f28ZI8/state/feedback/weights #?.db source_version=0
+  publish_guard refused: source_version == 0 or invalid: local route-weight evidence is missing or empty; refused: regressing_tasks=0, drainable_in=infiniteh
+  
+      at TestContext.<anonymous> (/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__663__opener/tests/test_route_weights_export_cli.js:85:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Test.run (node:internal/test_runner/test:1069:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:332:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '=='
+  }
+
+test at tests/test_route_weights_export_cli.js:29:5
+✖ publish_guard CLI refuses missing, override=true (244.791083ms)
+  AssertionError [ERR_ASSERTION]: db=/private/tmp/route-export-cli-cbwWxn/state/feedback/weights #?.db source_version=0
+  publish_guard refused: source_version == 0 or invalid: local route-weight evidence is missing or empty; refused: regressing_tasks=0, drainable_in=infiniteh
+  
+      at TestContext.<anonymous> (/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__663__opener/tests/test_route_weights_export_cli.js:85:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Test.run (node:internal/test_runner/test:1069:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '=='
+  }
+
+test at tests/test_route_weights_export_cli.js:29:5
+✖ publish_guard CLI refuses empty, override=false (248.644042ms)
+  AssertionError [ERR_ASSERTION]: db=/private/tmp/route-export-cli-HhzdUV/state/feedback/weights #?.db source_version=0
+  publish_guard refused: source_version == 0 or invalid: local route-weight evidence is missing or empty; refused: regressing_tasks=0, drainable_in=infiniteh
+  
+      at TestContext.<anonymous> (/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__663__opener/tests/test_route_weights_export_cli.js:85:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Test.run (node:internal/test_runner/test:1069:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '=='
+  }
+
+test at tests/test_route_weights_export_cli.js:29:5
+✖ publish_guard CLI refuses empty, override=true (240.052125ms)
+  AssertionError [ERR_ASSERTION]: db=/private/tmp/route-export-cli-gEn2mR/state/feedback/weights #?.db source_version=0
+  publish_guard refused: source_version == 0 or invalid: local route-weight evidence is missing or empty; refused: regressing_tasks=0, drainable_in=infiniteh
+  
+      at TestContext.<anonymous> (/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__663__opener/tests/test_route_weights_export_cli.js:85:14)
+      at async Test.run (node:internal/test_runner/test:1069:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '=='
+  }
+
+test at tests/test_route_weights_export_cli.js:29:5
+✖ publish_guard CLI refuses empty-table, override=false (409.750333ms)
+  AssertionError [ERR_ASSERTION]: db=/private/tmp/route-export-cli-mqS4DJ/state/feedback/weights #?.db source_version=0
+  publish_guard refused: source_version == 0 or invalid: local route-weight evidence is missing or empty; refused: regressing_tasks=0, drainable_in=infiniteh
+  
+      at TestContext.<anonymous> (/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__663__opener/tests/test_route_weights_export_cli.js:85:14)
+      at async Test.run (node:internal/test_runner/test:1069:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '=='
+  }
+
+test at tests/test_route_weights_export_cli.js:29:5
+✖ publish_guard CLI refuses empty-table, override=true (569.535167ms)
+  AssertionError [ERR_ASSERTION]: db=/private/tmp/route-export-cli-kB1ZfU/state/feedback/weights #?.db source_version=0
+  publish_guard refused: source_version == 0 or invalid: local route-weight evidence is missing or empty; refused: regressing_tasks=0, drainable_in=infiniteh
+  
+      at TestContext.<anonymous> (/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__663__opener/tests/test_route_weights_export_cli.js:85:14)
+      at async Test.run (node:internal/test_runner/test:1069:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '=='
+  }
+
+test at tests/test_route_weights_export_cli.js:29:5
+✖ publish_guard CLI refuses below-threshold, override=false (553.915875ms)
+  AssertionError [ERR_ASSERTION]: db=/private/tmp/route-export-cli-tZ2VjX/state/feedback/weights #?.db source_version=2
+  publish_guard refused: all task types have evidence_ok false; empty rankings would erase published evidence; refused: regressing_tasks=0, drainable_in=infiniteh
+  
+      at TestContext.<anonymous> (/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__663__opener/tests/test_route_weights_export_cli.js:85:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Test.run (node:internal/test_runner/test:1069:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '=='
+  }
+
+test at tests/test_route_weights_export_cli.js:29:5
+✖ publish_guard CLI refuses below-threshold, override=true (463.919167ms)
+  AssertionError [ERR_ASSERTION]: db=/private/tmp/route-export-cli-9QqLwn/state/feedback/weights #?.db source_version=2
+  publish_guard refused: all task types have evidence_ok false; empty rankings would erase published evidence; refused: regressing_tasks=0, drainable_in=infiniteh
+  
+      at TestContext.<anonymous> (/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__663__opener/tests/test_route_weights_export_cli.js:85:14)
+      at async Test.run (node:internal/test_runner/test:1069:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '=='
+  }

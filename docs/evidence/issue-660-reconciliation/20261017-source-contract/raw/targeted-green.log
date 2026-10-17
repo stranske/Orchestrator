@@ -1,0 +1,74 @@
+F....................................................................... [ 66%]
+.F..................................                             [100%]
+=================================== FAILURES ===================================
+_______________ test_state_only_learner_writer_and_cli_share_db ________________
+
+tmp_path = PosixPath('LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2450/test_state_only_learner_writer0')
+
+    def test_state_only_learner_writer_and_cli_share_db(tmp_path):
+        """A new process must write and export the same Brain, independent of shadow destination."""
+        state = tmp_path / "instance"
+        output = tmp_path / "shadow"
+        home = tmp_path / "home"
+        home.mkdir()
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ORCH_")}
+        env.update(HOME=str(home), ORCH_STATE_DIR=str(state), PYTHONPATH=str(Path(export.__file__).parent))
+        script = '''
+    import json, sys
+    import feedback
+    import route_weights_export as export
+    with feedback._conn() as connection:
+        connection.execute("INSERT INTO route_weights "
+            "(version, task_type, agent, posterior, score, n_obs, success_rate) "
+            "VALUES (73, 'implement', 'codex', 0.9, 0.9, 25, 0.9)")
+    export._current_capacity_snapshot = lambda: {"generated_at": 100, "agents": {}}
+    export.capabilities.daily_heartbeat = lambda *a, **k: None
+    sys.argv = ["route_weights_export.py", "--state-dir", sys.argv[1]]
+    assert export.main() == 0
+    print(json.dumps({"writer": str(feedback.DB_PATH), "reader": str(feedback.resolve_db_path())}))
+    '''
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(output)],
+            env=env, capture_output=True, text=True, check=True,
+        )
+        expected = state / "feedback" / "orchestrator.db"
+        binding = json.loads(result.stdout.splitlines()[-1])
+        assert binding == {"writer": str(expected), "reader": str(expected)}, "learner DB binding split"
+        document = json.loads((output / "route-weights-export.json").read_text())
+        assert document["source_version"] == 73, "CLI shadow destination redirected evidence source"
+        assert document["task_types"]["implement"]["evidence_ok"] is True
+>       assert list(tmp_path.rglob("*.db")) == [expected], "only the selected learner DB may exist"
+E       AssertionError: only the selected learner DB may exist
+E       assert [PosixPath('/...estrator.db')] == [PosixPath('/...estrator.db')]
+E
+E         At index 0 diff: PosixPath('LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2450/test_state_only_learner_writer0/home/.gemini/antigravity-cli/conversation_summaries.db') != PosixPath('LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2450/test_state_only_learner_writer0/instance/feedback/orchestrator.db')
+E         Left contains one more item: PosixPath('LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2450/test_state_only_learner_writer0/instance/feedback/orchestrator.db')
+E         Use -v to get more diff
+
+tests/test_source660_reconciliation.py:46: AssertionError
+_________ test_validation_without_state_dir_preserves_live_hold[True] __________
+
+tmp_path = PosixPath('LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2450/test_validation_without_state_1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1101ce5a0>
+regressing = True
+
+    @pytest.mark.parametrize("regressing", [False, True])
+    def test_validation_without_state_dir_preserves_live_hold(tmp_path, monkeypatch, regressing):
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        hold = tmp_path / ".codex" / "orchestrator" / "route-weights-regression-hold.json"
+        export.write_document(hold, {"first_seen": 1, "task_types": ["review"]})
+        before = hold.read_bytes(), hold.stat().st_mtime_ns
+        document = {"source_version": 2, "task_types": {"implement": {"evidence_ok": True}}}
+        previous = json.loads(json.dumps(document))
+        if regressing:
+            previous["task_types"]["review"] = {"evidence_ok": True}
+>           with pytest.raises(export.PublicationRefused, match="drainable_in=24h"):
+E           AssertionError: Regex pattern did not match.
+E             Expected regex: 'drainable_in=24h'
+E             Actual message: 'publish_guard refused: evidence_ok true -> false for: review; refused: regressing_tasks=1, drainable_in=infiniteh; explicit --allow-evidence-regression required'
+
+tests/test_route_weights_export.py:814: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_source660_reconciliation.py::test_state_only_learner_writer_and_cli_share_db
+FAILED tests/test_route_weights_export.py::test_validation_without_state_dir_preserves_live_hold[True]
+2 failed, 106 passed, 8 subtests passed in 28.66s

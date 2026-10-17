@@ -1,0 +1,267 @@
+{
+  "passed": true,
+  "heads": {
+    "661": "4411533b2e1394544d187eafe37ce3e24ef243c3",
+    "663": "43c2b4c5e551e05f4d10e27388991709ce35fffa"
+  },
+  "reservation_count": 29,
+  "direct_native_attempts": [
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39001068935:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 1
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39001134190:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39002149760:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39002206050:1",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "jobs": 0
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39002286335:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39002744795:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39002997338:1",
+      "status": "completed",
+      "conclusion": "failure",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39006528777:1",
+      "status": "completed",
+      "conclusion": "failure",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39010949343:1",
+      "status": "completed",
+      "conclusion": "failure",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39013922391:1",
+      "status": "completed",
+      "conclusion": "failure",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39017848096:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39017864057:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39018511077:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39019393738:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39019445173:1",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "jobs": 0
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39019922545:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39019976757:1",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "jobs": 0
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39020485345:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39021153531:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39021377594:1",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "jobs": 0
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39021918656:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39022671540:1",
+      "status": "completed",
+      "conclusion": "failure",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39022800487:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39023656990:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39023965763:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39024523874:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39025097095:1",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "jobs": 0
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39025719815:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39028850122:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39029375444:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39030151071:1",
+      "status": "completed",
+      "conclusion": "failure",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39031932594:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39033240612:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39035257159:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39035598641:1",
+      "status": "completed",
+      "conclusion": "failure",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39035657038:1",
+      "status": "completed",
+      "conclusion": "failure",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39036747849:1",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": 19
+    },
+    {
+      "workflow_attempt_id": "stranske/Orchestrator:39036750577:1",
+      "status": "completed",
+      "conclusion": "failure",
+      "jobs": 19
+    }
+  ],
+  "latest_summary": {
+    "id": 6229586542,
+    "updated_at": "2026-10-17T13:30:56Z",
+    "action": "skip (paused)",
+    "body_sha256": "2fe27526df6b40d2391c9ef8b66a9c0dcbffdebf6cc2fbd8a0ec4c63ade0be7b"
+  },
+  "claims": {
+    "660": {
+      "target": "stranske/Orchestrator#660",
+      "agent": "opener1155-source660-tilde-final-guardian",
+      "pid": 63199,
+      "ts": 1792243524.2054799
+    },
+    "663": {
+      "target": "stranske/Orchestrator#663",
+      "agent": "codex",
+      "pid": 64877,
+      "ts": 1792243543.678187,
+      "log": "/Users/teacher/.codex/handoff/dispatch-logs/stranske__Orchestrator_663.codex.log",
+      "worktree": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__663__opener",
+      "lane": "opener",
+      "task_type": "implement",
+      "mode": "full",
+      "run_id": "stranske__Orchestrator_663-codex-1792243543652460000",
+      "started_ts": 1792243543,
+      "updated_ts": 1792243543.678187
+    }
+  },
+  "ownership": "expected parent root guardian and this worker; no other admitted/native writer"
+}

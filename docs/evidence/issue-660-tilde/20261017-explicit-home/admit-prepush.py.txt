@@ -1,0 +1,47 @@
+import base64,concurrent.futures,hashlib,json,pathlib,re,subprocess
+root=pathlib.Path('/tmp/source660-tilde/prepush-admission');root.mkdir(exist_ok=True)
+def gh(path, pages=False):
+ args=['/Users/teacher/.codex/bin/detached-net.sh','gh','api']+(['--paginate','--slurp'] if pages else [])+[path]
+ p=subprocess.run(args,cwd='/tmp',capture_output=True,text=True,check=True);return json.loads(p.stdout)
+def save(name,d):
+ (root/name).write_text(json.dumps(d,indent=2)+'\n');return d
+save("660-comments.json",gh("repos/stranske/Orchestrator/issues/660/comments?per_page=100",True))
+save("660-issue.json",gh("repos/stranske/Orchestrator/issues/660"))
+records=[]
+for n in (661,663):
+ pr=save(f'{n}-pr.json',gh(f'repos/stranske/Orchestrator/pulls/{n}'))
+ expected={661:'4411533b2e1394544d187eafe37ce3e24ef243c3',663:'43c2b4c5e551e05f4d10e27388991709ce35fffa'}[n]
+ assert pr['head']['sha']==expected, f'HEAD CHANGED {n}: {pr["head"]["sha"]}'
+ assert pr['state']=='open' and not pr['draft']
+ if n==663:assert 'agents:paused' in {l['name'] for l in pr['labels']}, 'parent pause disappeared'
+ for label,path in [('comments',f'issues/{n}/comments'),('review-comments',f'pulls/{n}/comments'),('reviews',f'pulls/{n}/reviews')]:
+  pages=save(f'{n}-{label}.json',gh(f'repos/stranske/Orchestrator/{path}?per_page=100',True))
+  for c in sum(pages,[]):
+   for kind,b in re.findall(r'runner-(reservation|completion):[^\s]+ base64:([A-Za-z0-9+/=]+)',c.get('body') or ''):
+    records.append({'pr':n,'kind':kind,'comment_id':c['id'],'payload':json.loads(base64.b64decode(b))})
+save('all-head-decoded.json',records)
+reservations=[r for r in records if r['kind']=='reservation']
+known={x['reservation_id'] for x in json.load(open('/tmp/source660-reconciliation/raw/ownership-admission.json'))['reservations']}
+for r in reservations:
+ p=r['payload'];matches=[s for s in records if s['kind']=='completion' and s['payload'].get('reservation_id')==p['reservation_id'] and s['payload'].get('record',{}).get('workflow_attempt_id')==p['workflow_attempt_id']]
+ assert p['reservation_id'] in known or matches, f'NEW UNRESOLVED RESERVATION {p}'
+runs=save('dispatch-list.json',gh('repos/stranske/Orchestrator/actions/runs?event=workflow_dispatch&created=%3E%3D2026-10-17T04%3A00%3A00Z&per_page=100',True))
+main=[r for page in runs for r in page['workflow_runs'] if any(str(n) in r.get('display_title','') for n in (660,661,663))]
+ids={r['payload']['workflow_attempt_id'] for r in reservations}|{f"stranske/Orchestrator:{r['id']}:{r['run_attempt']}" for r in main}
+def native(i):
+ repo,run,attempt=i.split(':');d=save(f'native-{run}-{attempt}.json',gh(f'repos/{repo}/actions/runs/{run}/attempts/{attempt}'))
+ jobs=save(f'jobs-{run}-{attempt}.json',gh(f'repos/{repo}/actions/runs/{run}/attempts/{attempt}/jobs?per_page=100',True))
+ alljobs=[j for page in jobs for j in page['jobs']]
+ assert d['status']=='completed',f'INCUMBENT {i}: {d["status"]}'
+ assert all(j['status']=='completed' for j in alljobs),f'INCUMBENT CHILD {i}'
+ return {'workflow_attempt_id':i,'status':d['status'],'conclusion':d['conclusion'],'jobs':len(alljobs)}
+with concurrent.futures.ThreadPoolExecutor(max_workers=5) as e:results=list(e.map(native,sorted(ids)))
+cs=sum(json.load(open(root/'663-comments.json')),[])
+summary=next(c for c in cs if '<!-- keepalive-loop-summary -->' in c['body'])
+assert '| Action | skip (paused) |' in summary['body'],'UNKNOWN latest dispatch admission; paused summary missing'
+summary_proof={'id':summary['id'],'updated_at':summary['updated_at'],'action':'skip (paused)','body_sha256':hashlib.sha256(summary['body'].encode()).hexdigest()}
+claims={str(n):json.loads(pathlib.Path(f'/Users/teacher/.codex/handoff/claims/stranske__orchestrator_{n}/meta').read_text()) for n in (660,663)}
+assert claims['660']['agent']=='opener1155-source660-tilde-final-guardian'
+assert claims['663']['run_id']=='stranske__Orchestrator_663-codex-1792243543652460000'
+save('passed.json',{'passed':True,'heads':{661:'4411533b2e1394544d187eafe37ce3e24ef243c3',663:'43c2b4c5e551e05f4d10e27388991709ce35fffa'},'reservation_count':len(reservations),'direct_native_attempts':results,'latest_summary':summary_proof,'claims':claims,'ownership':'expected parent root guardian and this worker; no other admitted/native writer'})
+print('PASSED',len(reservations),'reservations,',len(results),'direct terminal attempts; parent pause and claims retained')

@@ -1,0 +1,47 @@
+[
+  {
+    "job_id": 117307219570,
+    "exit": 0,
+    "log_sha256": "c84f6e6140dc6bad55250e1b097f3965d5834d1dbbf06ef282e2cb894f98c58b",
+    "terminal_commit_push_evidence": [
+      "2026-10-17T04:24:34.2530044Z [codex/issue-660 4411533] chore(codex-autofix): apply updates (PR #661)",
+      "2026-10-17T04:24:35.8289467Z    38f0ac9..4411533  HEAD -> codex/issue-660"
+    ]
+  },
+  {
+    "job_id": 117308974553,
+    "exit": 0,
+    "log_sha256": "b22877f1227a91b3e475ce7190722496ec62d1ec5a61c150d2232a7ceb63df82",
+    "terminal_commit_push_evidence": [
+      "2026-10-17T04:31:48.4235205Z ##[notice]No non-artifact changes to commit after filtering.",
+      "2026-10-17T04:31:48.5259459Z ##[notice]All changes were workflow artifacts."
+    ]
+  },
+  {
+    "job_id": 117358053401,
+    "exit": 0,
+    "log_sha256": "c8ffae312b5de58dd3d629de04130c4276596692ea52654c60d9d0ecb25babc2",
+    "terminal_commit_push_evidence": [
+      "2026-10-17T09:02:33.5770806Z [codex/issue-660-route-export-guard eb27fbd] chore(codex-autofix): apply updates (PR #663)",
+      "2026-10-17T09:02:35.1911657Z    754ae33..eb27fbd  HEAD -> codex/issue-660-route-export-guard"
+    ]
+  },
+  {
+    "job_id": 117359581755,
+    "exit": 0,
+    "log_sha256": "6592afba55591b154e7fbbd82e653ec310ffcfba965b222233e6301b4c7ff855",
+    "terminal_commit_push_evidence": [
+      "2026-10-17T09:11:16.2341046Z [codex/issue-660-route-export-guard 240c209] chore(codex-autofix): apply updates (PR #663)",
+      "2026-10-17T09:11:17.7375444Z    eb27fbd..240c209  HEAD -> codex/issue-660-route-export-guard"
+    ]
+  },
+  {
+    "job_id": 117361182936,
+    "exit": 0,
+    "log_sha256": "d125d92f027e504d3a15bf18e198941278082aecca7a11368f2ba677e811cf8c",
+    "terminal_commit_push_evidence": [
+      "2026-10-17T09:20:53.7227569Z [codex/issue-660-route-export-guard 1dbaba5] chore(codex-autofix): apply updates (PR #663)",
+      "2026-10-17T09:20:54.9698123Z    240c209..1dbaba5  HEAD -> codex/issue-660-route-export-guard"
+    ]
+  }
+]

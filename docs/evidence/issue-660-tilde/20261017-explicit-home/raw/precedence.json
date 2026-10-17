@@ -1,0 +1,268 @@
+{
+  "source_sha256": "20ccfa3696bd9bc43fd1065e3f9b841a31ff75799082cf6bd86b0305c100e0aa",
+  "cases": [
+    {
+      "case": "default",
+      "argv": [
+        "/opt/anaconda3/bin/python3",
+        "-c",
+        "import json,os,sys\nfrom pathlib import Path\nimport feedback\nwriter=feedback.DB_PATH\nreader=feedback.resolve_db_path()\nassert writer.expanduser().resolve()==reader, (writer,reader)\nexpected=Path(sys.argv[1]).resolve()\nassert reader==expected,(reader,expected)\napi=feedback.resolve_db_path(state_dir=Path(sys.argv[2]))\nassert api==Path(sys.argv[3]).resolve(),(api,sys.argv[3])\nassert feedback.resolve_db_path(Path(sys.argv[4]))==Path(sys.argv[4]).resolve()\nprint(json.dumps(dict(writer=str(writer),reader=str(reader),api_fallback=str(api),explicit_winner=sys.argv[4])))",
+        "/tmp/source660-tilde/precedence/default/home/.codex/orchestrator/feedback/orchestrator.db",
+        "/tmp/source660-tilde/precedence/default/api",
+        "/tmp/source660-tilde/precedence/default/api/feedback/orchestrator.db",
+        "/tmp/source660-tilde/precedence/default/cli-explicit.db"
+      ],
+      "cwd": "/tmp/source660-tilde/precedence/default",
+      "env": {
+        "HOME": "/tmp/source660-tilde/precedence/default/home",
+        "ORCH_MODEL_PROBE": "0"
+      },
+      "exit": 0,
+      "stdout": "{\"writer\": \"/private/tmp/source660-tilde/precedence/default/home/.codex/orchestrator/feedback/orchestrator.db\", \"reader\": \"/private/tmp/source660-tilde/precedence/default/home/.codex/orchestrator/feedback/orchestrator.db\", \"api_fallback\": \"/private/tmp/source660-tilde/precedence/default/api/feedback/orchestrator.db\", \"explicit_winner\": \"/tmp/source660-tilde/precedence/default/cli-explicit.db\"}\n",
+      "stderr": ""
+    },
+    {
+      "case": "state",
+      "argv": [
+        "/opt/anaconda3/bin/python3",
+        "-c",
+        "import json,os,sys\nfrom pathlib import Path\nimport feedback\nwriter=feedback.DB_PATH\nreader=feedback.resolve_db_path()\nassert writer.expanduser().resolve()==reader, (writer,reader)\nexpected=Path(sys.argv[1]).resolve()\nassert reader==expected,(reader,expected)\napi=feedback.resolve_db_path(state_dir=Path(sys.argv[2]))\nassert api==Path(sys.argv[3]).resolve(),(api,sys.argv[3])\nassert feedback.resolve_db_path(Path(sys.argv[4]))==Path(sys.argv[4]).resolve()\nprint(json.dumps(dict(writer=str(writer),reader=str(reader),api_fallback=str(api),explicit_winner=sys.argv[4])))",
+        "/tmp/source660-tilde/precedence/state/state/feedback/orchestrator.db",
+        "/tmp/source660-tilde/precedence/state/api",
+        "/tmp/source660-tilde/precedence/state/api/feedback/orchestrator.db",
+        "/tmp/source660-tilde/precedence/state/cli-explicit.db"
+      ],
+      "cwd": "/tmp/source660-tilde/precedence/state",
+      "env": {
+        "HOME": "/tmp/source660-tilde/precedence/state/home",
+        "ORCH_MODEL_PROBE": "0",
+        "ORCH_STATE_DIR": "/tmp/source660-tilde/precedence/state/state"
+      },
+      "exit": 0,
+      "stdout": "{\"writer\": \"/private/tmp/source660-tilde/precedence/state/state/feedback/orchestrator.db\", \"reader\": \"/private/tmp/source660-tilde/precedence/state/state/feedback/orchestrator.db\", \"api_fallback\": \"/private/tmp/source660-tilde/precedence/state/api/feedback/orchestrator.db\", \"explicit_winner\": \"/tmp/source660-tilde/precedence/state/cli-explicit.db\"}\n",
+      "stderr": ""
+    },
+    {
+      "case": "runtime",
+      "argv": [
+        "/opt/anaconda3/bin/python3",
+        "-c",
+        "import json,os,sys\nfrom pathlib import Path\nimport feedback\nwriter=feedback.DB_PATH\nreader=feedback.resolve_db_path()\nassert writer.expanduser().resolve()==reader, (writer,reader)\nexpected=Path(sys.argv[1]).resolve()\nassert reader==expected,(reader,expected)\napi=feedback.resolve_db_path(state_dir=Path(sys.argv[2]))\nassert api==Path(sys.argv[3]).resolve(),(api,sys.argv[3])\nassert feedback.resolve_db_path(Path(sys.argv[4]))==Path(sys.argv[4]).resolve()\nprint(json.dumps(dict(writer=str(writer),reader=str(reader),api_fallback=str(api),explicit_winner=sys.argv[4])))",
+        "/tmp/source660-tilde/precedence/runtime/runtime/feedback/orchestrator.db",
+        "/tmp/source660-tilde/precedence/runtime/api",
+        "/tmp/source660-tilde/precedence/runtime/runtime/feedback/orchestrator.db",
+        "/tmp/source660-tilde/precedence/runtime/cli-explicit.db"
+      ],
+      "cwd": "/tmp/source660-tilde/precedence/runtime",
+      "env": {
+        "HOME": "/tmp/source660-tilde/precedence/runtime/home",
+        "ORCH_MODEL_PROBE": "0",
+        "ORCH_LOCAL_RUNTIME": "/tmp/source660-tilde/precedence/runtime/runtime"
+      },
+      "exit": 0,
+      "stdout": "{\"writer\": \"/private/tmp/source660-tilde/precedence/runtime/runtime/feedback/orchestrator.db\", \"reader\": \"/private/tmp/source660-tilde/precedence/runtime/runtime/feedback/orchestrator.db\", \"api_fallback\": \"/private/tmp/source660-tilde/precedence/runtime/runtime/feedback/orchestrator.db\", \"explicit_winner\": \"/tmp/source660-tilde/precedence/runtime/cli-explicit.db\"}\n",
+      "stderr": ""
+    },
+    {
+      "case": "runtime-and-state",
+      "argv": [
+        "/opt/anaconda3/bin/python3",
+        "-c",
+        "import json,os,sys\nfrom pathlib import Path\nimport feedback\nwriter=feedback.DB_PATH\nreader=feedback.resolve_db_path()\nassert writer.expanduser().resolve()==reader, (writer,reader)\nexpected=Path(sys.argv[1]).resolve()\nassert reader==expected,(reader,expected)\napi=feedback.resolve_db_path(state_dir=Path(sys.argv[2]))\nassert api==Path(sys.argv[3]).resolve(),(api,sys.argv[3])\nassert feedback.resolve_db_path(Path(sys.argv[4]))==Path(sys.argv[4]).resolve()\nprint(json.dumps(dict(writer=str(writer),reader=str(reader),api_fallback=str(api),explicit_winner=sys.argv[4])))",
+        "/tmp/source660-tilde/precedence/runtime-and-state/runtime/feedback/orchestrator.db",
+        "/tmp/source660-tilde/precedence/runtime-and-state/api",
+        "/tmp/source660-tilde/precedence/runtime-and-state/runtime/feedback/orchestrator.db",
+        "/tmp/source660-tilde/precedence/runtime-and-state/cli-explicit.db"
+      ],
+      "cwd": "/tmp/source660-tilde/precedence/runtime-and-state",
+      "env": {
+        "HOME": "/tmp/source660-tilde/precedence/runtime-and-state/home",
+        "ORCH_MODEL_PROBE": "0",
+        "ORCH_STATE_DIR": "/tmp/source660-tilde/precedence/runtime-and-state/state",
+        "ORCH_LOCAL_RUNTIME": "/tmp/source660-tilde/precedence/runtime-and-state/runtime"
+      },
+      "exit": 0,
+      "stdout": "{\"writer\": \"/private/tmp/source660-tilde/precedence/runtime-and-state/runtime/feedback/orchestrator.db\", \"reader\": \"/private/tmp/source660-tilde/precedence/runtime-and-state/runtime/feedback/orchestrator.db\", \"api_fallback\": \"/private/tmp/source660-tilde/precedence/runtime-and-state/runtime/feedback/orchestrator.db\", \"explicit_winner\": \"/tmp/source660-tilde/precedence/runtime-and-state/cli-explicit.db\"}\n",
+      "stderr": ""
+    },
+    {
+      "case": "tilde-state",
+      "argv": [
+        "/opt/anaconda3/bin/python3",
+        "-c",
+        "import json,os,sys\nfrom pathlib import Path\nimport feedback\nwriter=feedback.DB_PATH\nreader=feedback.resolve_db_path()\nassert writer.expanduser().resolve()==reader, (writer,reader)\nexpected=Path(sys.argv[1]).resolve()\nassert reader==expected,(reader,expected)\napi=feedback.resolve_db_path(state_dir=Path(sys.argv[2]))\nassert api==Path(sys.argv[3]).resolve(),(api,sys.argv[3])\nassert feedback.resolve_db_path(Path(sys.argv[4]))==Path(sys.argv[4]).resolve()\nprint(json.dumps(dict(writer=str(writer),reader=str(reader),api_fallback=str(api),explicit_winner=sys.argv[4])))",
+        "/tmp/source660-tilde/precedence/tilde-state/home/state/feedback/orchestrator.db",
+        "/tmp/source660-tilde/precedence/tilde-state/api",
+        "/tmp/source660-tilde/precedence/tilde-state/api/feedback/orchestrator.db",
+        "/tmp/source660-tilde/precedence/tilde-state/cli-explicit.db"
+      ],
+      "cwd": "/tmp/source660-tilde/precedence/tilde-state",
+      "env": {
+        "HOME": "/tmp/source660-tilde/precedence/tilde-state/home",
+        "ORCH_MODEL_PROBE": "0",
+        "ORCH_STATE_DIR": "~/state"
+      },
+      "exit": 0,
+      "stdout": "{\"writer\": \"/private/tmp/source660-tilde/precedence/tilde-state/home/state/feedback/orchestrator.db\", \"reader\": \"/private/tmp/source660-tilde/precedence/tilde-state/home/state/feedback/orchestrator.db\", \"api_fallback\": \"/private/tmp/source660-tilde/precedence/tilde-state/api/feedback/orchestrator.db\", \"explicit_winner\": \"/tmp/source660-tilde/precedence/tilde-state/cli-explicit.db\"}\n",
+      "stderr": ""
+    },
+    {
+      "case": "tilde-runtime",
+      "argv": [
+        "/opt/anaconda3/bin/python3",
+        "-c",
+        "import json,os,sys\nfrom pathlib import Path\nimport feedback\nwriter=feedback.DB_PATH\nreader=feedback.resolve_db_path()\nassert writer.expanduser().resolve()==reader, (writer,reader)\nexpected=Path(sys.argv[1]).resolve()\nassert reader==expected,(reader,expected)\napi=feedback.resolve_db_path(state_dir=Path(sys.argv[2]))\nassert api==Path(sys.argv[3]).resolve(),(api,sys.argv[3])\nassert feedback.resolve_db_path(Path(sys.argv[4]))==Path(sys.argv[4]).resolve()\nprint(json.dumps(dict(writer=str(writer),reader=str(reader),api_fallback=str(api),explicit_winner=sys.argv[4])))",
+        "/tmp/source660-tilde/precedence/tilde-runtime/home/runtime/feedback/orchestrator.db",
+        "/tmp/source660-tilde/precedence/tilde-runtime/api",
+        "/tmp/source660-tilde/precedence/tilde-runtime/home/runtime/feedback/orchestrator.db",
+        "/tmp/source660-tilde/precedence/tilde-runtime/cli-explicit.db"
+      ],
+      "cwd": "/tmp/source660-tilde/precedence/tilde-runtime",
+      "env": {
+        "HOME": "/tmp/source660-tilde/precedence/tilde-runtime/home",
+        "ORCH_MODEL_PROBE": "0",
+        "ORCH_LOCAL_RUNTIME": "~/runtime"
+      },
+      "exit": 0,
+      "stdout": "{\"writer\": \"/private/tmp/source660-tilde/precedence/tilde-runtime/home/runtime/feedback/orchestrator.db\", \"reader\": \"/private/tmp/source660-tilde/precedence/tilde-runtime/home/runtime/feedback/orchestrator.db\", \"api_fallback\": \"/private/tmp/source660-tilde/precedence/tilde-runtime/home/runtime/feedback/orchestrator.db\", \"explicit_winner\": \"/tmp/source660-tilde/precedence/tilde-runtime/cli-explicit.db\"}\n",
+      "stderr": ""
+    },
+    {
+      "case": "absolute-db",
+      "argv": [
+        "/opt/anaconda3/bin/python3",
+        "-c",
+        "import json,os,sys\nfrom pathlib import Path\nimport feedback\nwriter=feedback.DB_PATH\nreader=feedback.resolve_db_path()\nassert writer.expanduser().resolve()==reader, (writer,reader)\nexpected=Path(sys.argv[1]).resolve()\nassert reader==expected,(reader,expected)\napi=feedback.resolve_db_path(state_dir=Path(sys.argv[2]))\nassert api==Path(sys.argv[3]).resolve(),(api,sys.argv[3])\nassert feedback.resolve_db_path(Path(sys.argv[4]))==Path(sys.argv[4]).resolve()\nprint(json.dumps(dict(writer=str(writer),reader=str(reader),api_fallback=str(api),explicit_winner=sys.argv[4])))",
+        "/tmp/source660-tilde/precedence/absolute-db/chosen.db",
+        "/tmp/source660-tilde/precedence/absolute-db/api",
+        "/tmp/source660-tilde/precedence/absolute-db/chosen.db",
+        "/tmp/source660-tilde/precedence/absolute-db/cli-explicit.db"
+      ],
+      "cwd": "/tmp/source660-tilde/precedence/absolute-db",
+      "env": {
+        "HOME": "/tmp/source660-tilde/precedence/absolute-db/home",
+        "ORCH_MODEL_PROBE": "0",
+        "ORCH_STATE_DIR": "/tmp/source660-tilde/precedence/absolute-db/state",
+        "ORCH_LOCAL_RUNTIME": "/tmp/source660-tilde/precedence/absolute-db/runtime",
+        "ORCH_FEEDBACK_DB": "/tmp/source660-tilde/precedence/absolute-db/chosen.db"
+      },
+      "exit": 0,
+      "stdout": "{\"writer\": \"/tmp/source660-tilde/precedence/absolute-db/chosen.db\", \"reader\": \"/private/tmp/source660-tilde/precedence/absolute-db/chosen.db\", \"api_fallback\": \"/private/tmp/source660-tilde/precedence/absolute-db/chosen.db\", \"explicit_winner\": \"/tmp/source660-tilde/precedence/absolute-db/cli-explicit.db\"}\n",
+      "stderr": ""
+    },
+    {
+      "case": "tilde-db",
+      "argv": [
+        "/opt/anaconda3/bin/python3",
+        "-c",
+        "import json,os,sys\nfrom pathlib import Path\nimport feedback\nwriter=feedback.DB_PATH\nreader=feedback.resolve_db_path()\nassert writer.expanduser().resolve()==reader, (writer,reader)\nexpected=Path(sys.argv[1]).resolve()\nassert reader==expected,(reader,expected)\napi=feedback.resolve_db_path(state_dir=Path(sys.argv[2]))\nassert api==Path(sys.argv[3]).resolve(),(api,sys.argv[3])\nassert feedback.resolve_db_path(Path(sys.argv[4]))==Path(sys.argv[4]).resolve()\nprint(json.dumps(dict(writer=str(writer),reader=str(reader),api_fallback=str(api),explicit_winner=sys.argv[4])))",
+        "/tmp/source660-tilde/precedence/tilde-db/home/chosen.db",
+        "/tmp/source660-tilde/precedence/tilde-db/api",
+        "/tmp/source660-tilde/precedence/tilde-db/home/chosen.db",
+        "/tmp/source660-tilde/precedence/tilde-db/cli-explicit.db"
+      ],
+      "cwd": "/tmp/source660-tilde/precedence/tilde-db",
+      "env": {
+        "HOME": "/tmp/source660-tilde/precedence/tilde-db/home",
+        "ORCH_MODEL_PROBE": "0",
+        "ORCH_STATE_DIR": "/tmp/source660-tilde/precedence/tilde-db/state",
+        "ORCH_LOCAL_RUNTIME": "/tmp/source660-tilde/precedence/tilde-db/runtime",
+        "ORCH_FEEDBACK_DB": "~/chosen.db"
+      },
+      "exit": 0,
+      "stdout": "{\"writer\": \"/tmp/source660-tilde/precedence/tilde-db/home/chosen.db\", \"reader\": \"/private/tmp/source660-tilde/precedence/tilde-db/home/chosen.db\", \"api_fallback\": \"/private/tmp/source660-tilde/precedence/tilde-db/home/chosen.db\", \"explicit_winner\": \"/tmp/source660-tilde/precedence/tilde-db/cli-explicit.db\"}\n",
+      "stderr": ""
+    },
+    {
+      "case": "relative-db",
+      "argv": [
+        "/opt/anaconda3/bin/python3",
+        "-c",
+        "import json,os,sys\nfrom pathlib import Path\nimport feedback\nwriter=feedback.DB_PATH\nreader=feedback.resolve_db_path()\nassert writer.expanduser().resolve()==reader, (writer,reader)\nexpected=Path(sys.argv[1]).resolve()\nassert reader==expected,(reader,expected)\napi=feedback.resolve_db_path(state_dir=Path(sys.argv[2]))\nassert api==Path(sys.argv[3]).resolve(),(api,sys.argv[3])\nassert feedback.resolve_db_path(Path(sys.argv[4]))==Path(sys.argv[4]).resolve()\nprint(json.dumps(dict(writer=str(writer),reader=str(reader),api_fallback=str(api),explicit_winner=sys.argv[4])))",
+        "/tmp/source660-tilde/precedence/relative-db/chosen.db",
+        "/tmp/source660-tilde/precedence/relative-db/api",
+        "/tmp/source660-tilde/precedence/relative-db/chosen.db",
+        "/tmp/source660-tilde/precedence/relative-db/cli-explicit.db"
+      ],
+      "cwd": "/tmp/source660-tilde/precedence/relative-db",
+      "env": {
+        "HOME": "/tmp/source660-tilde/precedence/relative-db/home",
+        "ORCH_MODEL_PROBE": "0",
+        "ORCH_STATE_DIR": "/tmp/source660-tilde/precedence/relative-db/state",
+        "ORCH_LOCAL_RUNTIME": "/tmp/source660-tilde/precedence/relative-db/runtime",
+        "ORCH_FEEDBACK_DB": "chosen.db"
+      },
+      "exit": 0,
+      "stdout": "{\"writer\": \"chosen.db\", \"reader\": \"/private/tmp/source660-tilde/precedence/relative-db/chosen.db\", \"api_fallback\": \"/private/tmp/source660-tilde/precedence/relative-db/chosen.db\", \"explicit_winner\": \"/tmp/source660-tilde/precedence/relative-db/cli-explicit.db\"}\n",
+      "stderr": ""
+    },
+    {
+      "case": "tmp-alias-db",
+      "argv": [
+        "/opt/anaconda3/bin/python3",
+        "-c",
+        "import json,os,sys\nfrom pathlib import Path\nimport feedback\nwriter=feedback.DB_PATH\nreader=feedback.resolve_db_path()\nassert writer.expanduser().resolve()==reader, (writer,reader)\nexpected=Path(sys.argv[1]).resolve()\nassert reader==expected,(reader,expected)\napi=feedback.resolve_db_path(state_dir=Path(sys.argv[2]))\nassert api==Path(sys.argv[3]).resolve(),(api,sys.argv[3])\nassert feedback.resolve_db_path(Path(sys.argv[4]))==Path(sys.argv[4]).resolve()\nprint(json.dumps(dict(writer=str(writer),reader=str(reader),api_fallback=str(api),explicit_winner=sys.argv[4])))",
+        "/tmp/source660-tilde/precedence/tmp-alias-db/chosen.db",
+        "/tmp/source660-tilde/precedence/tmp-alias-db/api",
+        "/tmp/source660-tilde/precedence/tmp-alias-db/chosen.db",
+        "/tmp/source660-tilde/precedence/tmp-alias-db/cli-explicit.db"
+      ],
+      "cwd": "/tmp/source660-tilde/precedence/tmp-alias-db",
+      "env": {
+        "HOME": "/tmp/source660-tilde/precedence/tmp-alias-db/home",
+        "ORCH_MODEL_PROBE": "0",
+        "ORCH_STATE_DIR": "/tmp/source660-tilde/precedence/tmp-alias-db/state",
+        "ORCH_LOCAL_RUNTIME": "/tmp/source660-tilde/precedence/tmp-alias-db/runtime",
+        "ORCH_FEEDBACK_DB": "/tmp/source660-tilde/precedence/tmp-alias-db/chosen.db"
+      },
+      "exit": 0,
+      "stdout": "{\"writer\": \"/tmp/source660-tilde/precedence/tmp-alias-db/chosen.db\", \"reader\": \"/private/tmp/source660-tilde/precedence/tmp-alias-db/chosen.db\", \"api_fallback\": \"/private/tmp/source660-tilde/precedence/tmp-alias-db/chosen.db\", \"explicit_winner\": \"/tmp/source660-tilde/precedence/tmp-alias-db/cli-explicit.db\"}\n",
+      "stderr": ""
+    },
+    {
+      "case": "empty-db-with-runtime",
+      "argv": [
+        "/opt/anaconda3/bin/python3",
+        "-c",
+        "import json,os,sys\nfrom pathlib import Path\nimport feedback\nwriter=feedback.DB_PATH\nreader=feedback.resolve_db_path()\nassert writer.expanduser().resolve()==reader, (writer,reader)\nexpected=Path(sys.argv[1]).resolve()\nassert reader==expected,(reader,expected)\napi=feedback.resolve_db_path(state_dir=Path(sys.argv[2]))\nassert api==Path(sys.argv[3]).resolve(),(api,sys.argv[3])\nassert feedback.resolve_db_path(Path(sys.argv[4]))==Path(sys.argv[4]).resolve()\nprint(json.dumps(dict(writer=str(writer),reader=str(reader),api_fallback=str(api),explicit_winner=sys.argv[4])))",
+        "/tmp/source660-tilde/precedence/empty-db-with-runtime/runtime/feedback/orchestrator.db",
+        "/tmp/source660-tilde/precedence/empty-db-with-runtime/api",
+        "/tmp/source660-tilde/precedence/empty-db-with-runtime/runtime/feedback/orchestrator.db",
+        "/tmp/source660-tilde/precedence/empty-db-with-runtime/cli-explicit.db"
+      ],
+      "cwd": "/tmp/source660-tilde/precedence/empty-db-with-runtime",
+      "env": {
+        "HOME": "/tmp/source660-tilde/precedence/empty-db-with-runtime/home",
+        "ORCH_MODEL_PROBE": "0",
+        "ORCH_LOCAL_RUNTIME": "/tmp/source660-tilde/precedence/empty-db-with-runtime/runtime",
+        "ORCH_FEEDBACK_DB": ""
+      },
+      "exit": 0,
+      "stdout": "{\"writer\": \"/private/tmp/source660-tilde/precedence/empty-db-with-runtime/runtime/feedback/orchestrator.db\", \"reader\": \"/private/tmp/source660-tilde/precedence/empty-db-with-runtime/runtime/feedback/orchestrator.db\", \"api_fallback\": \"/private/tmp/source660-tilde/precedence/empty-db-with-runtime/runtime/feedback/orchestrator.db\", \"explicit_winner\": \"/tmp/source660-tilde/precedence/empty-db-with-runtime/cli-explicit.db\"}\n",
+      "stderr": ""
+    },
+    {
+      "case": "empty-db",
+      "argv": [
+        "/opt/anaconda3/bin/python3",
+        "-c",
+        "import json,os,sys\nfrom pathlib import Path\nimport feedback\nwriter=feedback.DB_PATH\nreader=feedback.resolve_db_path()\nassert writer.expanduser().resolve()==reader, (writer,reader)\nexpected=Path(sys.argv[1]).resolve()\nassert reader==expected,(reader,expected)\napi=feedback.resolve_db_path(state_dir=Path(sys.argv[2]))\nassert api==Path(sys.argv[3]).resolve(),(api,sys.argv[3])\nassert feedback.resolve_db_path(Path(sys.argv[4]))==Path(sys.argv[4]).resolve()\nprint(json.dumps(dict(writer=str(writer),reader=str(reader),api_fallback=str(api),explicit_winner=sys.argv[4])))",
+        "/tmp/source660-tilde/precedence/empty-db",
+        "/tmp/source660-tilde/precedence/empty-db/api",
+        "/tmp/source660-tilde/precedence/empty-db/api/feedback/orchestrator.db",
+        "/tmp/source660-tilde/precedence/empty-db/cli-explicit.db"
+      ],
+      "cwd": "/tmp/source660-tilde/precedence/empty-db",
+      "env": {
+        "HOME": "/tmp/source660-tilde/precedence/empty-db/home",
+        "ORCH_MODEL_PROBE": "0",
+        "ORCH_FEEDBACK_DB": ""
+      },
+      "exit": 0,
+      "stdout": "{\"writer\": \"/private/tmp/source660-tilde/precedence/empty-db\", \"reader\": \"/private/tmp/source660-tilde/precedence/empty-db\", \"api_fallback\": \"/private/tmp/source660-tilde/precedence/empty-db/api/feedback/orchestrator.db\", \"explicit_winner\": \"/tmp/source660-tilde/precedence/empty-db/cli-explicit.db\"}\n",
+      "stderr": "",
+      "limitation": "Existing invalid empty DB value selects cwd without other overrides; no SQLite opened. No new split; outside explicit-tilde repair."
+    }
+  ],
+  "no_database_opened": true
+}

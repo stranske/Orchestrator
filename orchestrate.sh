@@ -1094,6 +1094,7 @@ if _cadence_due route-weights-export && _attempt_ok route-weights-export; then
        > "$STAMP_DIR/route-weights-export.log" 2>&1; then
     _mark_success route-weights-export
   else
+    cat "$STAMP_DIR/route-weights-export.log"
     _mark_fail route-weights-export "see $STAMP_DIR/route-weights-export.log"
   fi
 fi

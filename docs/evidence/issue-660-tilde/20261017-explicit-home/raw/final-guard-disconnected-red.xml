@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="0.423" timestamp="2026-10-17T08:30:46.854499-05:00" hostname="server.trs.private"><testcase classname="tests.test_route_weights_export" name="test_publish_guard_refuses_empty_db[default-empty-db]" time="0.046"><failure message="Failed: publish_guard must refuse an empty DB before provisioning">tmp_path = PosixPath('/private/tmp/pytest-of-teacher/pytest-122/test_publish_guard_refuses_emp0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x1104c7140&gt;
+capsys = &lt;_pytest.capture.CaptureFixture object at 0x1104c69f0&gt;, exists = True
+allow = False
+
+    @pytest.mark.parametrize("exists", [False, True], ids=["missing-db", "empty-db"])
+    @pytest.mark.parametrize("allow", [False, True], ids=["default", "owner-override"])
+    def test_publish_guard_refuses_empty_db(tmp_path, monkeypatch, capsys, exists, allow):
+        """The real CLI must fail at the guard, before touching the publication repo."""
+        database = tmp_path / "empty.db"
+        if exists:
+            sqlite3.connect(database).close()
+        monkeypatch.setenv("ORCH_ROUTE_WEIGHTS_PUBLISH", "1")
+        monkeypatch.setattr(export, "_current_capacity_snapshot", _capacity_fixture)
+        heartbeats = []
+        monkeypatch.setattr(
+            export.capabilities,
+            "daily_heartbeat",
+            lambda capability, event, **kwargs: heartbeats.append((capability, event)),
+        )
+        monkeypatch.setattr(
+            export.provision,
+            "ensure_canonical",
+            lambda *a: pytest.fail("publish_guard must refuse an empty DB before provisioning"),
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "route_weights_export.py",
+                "--feedback-db",
+                str(database),
+                "--state-dir",
+                str(tmp_path),
+                "--publish",
+            ]
+            + (["--allow-evidence-regression"] if allow else []),
+        )
+&gt;       assert export.main() == 1, "publish_guard must refuse the empty DB"
+               ^^^^^^^^^^^^^
+
+tests/test_route_weights_export.py:486: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/route_weights_export.py:738: in main
+    published = publish_document(
+src/route_weights_export.py:419: in publish_document
+    canonical = provision.ensure_canonical("stranske/Orchestrator")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+a = ('stranske/Orchestrator',)
+
+&gt;       lambda *a: pytest.fail("publish_guard must refuse an empty DB before provisioning"),
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+E   Failed: publish_guard must refuse an empty DB before provisioning
+
+tests/test_route_weights_export.py:472: Failed</failure></testcase></testsuite></testsuites>

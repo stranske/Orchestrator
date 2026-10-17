@@ -1,0 +1,20 @@
+Traceback (most recent call last):
+  File "EVIDENCE_ROOT/admitted-baseline/src/dispatcher.py", line 4596, in <module>
+    raise SystemExit(main(sys.argv[1:]))
+                     ^^^^^^^^^^^^^^^^^^
+  File "EVIDENCE_ROOT/admitted-baseline/src/dispatcher.py", line 4478, in main
+    _selftest()
+  File "EVIDENCE_ROOT/admitted-baseline/src/dispatcher.py", line 3411, in _selftest
+    delegated = plan_dispatch(
+                ^^^^^^^^^^^^^^
+  File "EVIDENCE_ROOT/admitted-baseline/src/dispatcher.py", line 1066, in plan_dispatch
+    agent_prelude = _agent_runtime_prelude(agent)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "EVIDENCE_ROOT/admitted-baseline/src/dispatcher.py", line 797, in _agent_runtime_prelude
+    base = _ensure_agent_runtime(agent)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "EVIDENCE_ROOT/admitted-baseline/src/dispatcher.py", line 594, in _ensure_agent_runtime
+    adapters.ensure_muse_keychain_link(REAL_HOME, base)
+  File "EVIDENCE_ROOT/admitted-baseline/src/adapters.py", line 2177, in ensure_muse_keychain_link
+    raise ValueError("Muse private HOME requires the existing macOS Keychains directory")
+ValueError: Muse private HOME requires the existing macOS Keychains directory

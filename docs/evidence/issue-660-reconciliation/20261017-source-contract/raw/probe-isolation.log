@@ -1,0 +1,88 @@
+F
+=================================== FAILURES ===================================
+_______________ test_state_only_learner_writer_and_cli_share_db ________________
+
+tmp_path = PosixPath('LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2453/test_state_only_learner_writer0')
+
+    def test_state_only_learner_writer_and_cli_share_db(tmp_path):
+        """A new process must write and export the same Brain, independent of shadow destination."""
+        state = tmp_path / "instance"
+        output = tmp_path / "shadow"
+        home = tmp_path / "home"
+        home.mkdir()
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ORCH_")}
+        env.update(
+            HOME=str(home), ORCH_STATE_DIR=str(state), PYTHONPATH=str(Path(export.__file__).parent)
+        )
+        script = """
+    import json, sys
+    # This boundary needs no provider, Git, or network subprocess.
+    def deny_subprocess(event, args):
+        if event == "subprocess.Popen":
+            raise AssertionError(f"unexpected CLI subprocess: {args[:2]}")
+    sys.addaudithook(deny_subprocess)
+    import feedback
+    import route_weights_export as export
+    with feedback._conn() as connection:
+        connection.execute("INSERT INTO route_weights "
+            "(version, task_type, agent, posterior, score, n_obs, success_rate) "
+            "VALUES (73, 'implement', 'codex', 0.9, 0.9, 25, 0.9)")
+    export._current_capacity_snapshot = lambda: {"generated_at": 100, "agents": {}}
+    export.capabilities.daily_heartbeat = lambda *a, **k: None
+    sys.argv = ["route_weights_export.py", "--state-dir", sys.argv[1]]
+    assert export.main() == 0
+    print(json.dumps({"writer": str(feedback.DB_PATH), "reader": str(feedback.resolve_db_path())}))
+    """
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(output)],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+>       assert result.returncode == 0, result.stderr
+E       AssertionError: db=LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2453/test_state_only_learner_writer0/instance/feedback/orchestrator.db source_version=73
+E         Traceback (most recent call last):
+E           File "<string>", line 17, in <module>
+E           File "REPOSITORY_ROOT/src/route_weights_export.py", line 717, in main
+E             document = build_document(db_path, args.min_observations)
+E                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "REPOSITORY_ROOT/src/route_weights_export.py", line 345, in build_document
+E             "exploration": _exploration_block(version, by_task, task_types, timestamp),
+E                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "REPOSITORY_ROOT/src/route_weights_export.py", line 266, in _exploration_block
+E             pick = router.select_agent(
+E                    ^^^^^^^^^^^^^^^^^^^^
+E           File "REPOSITORY_ROOT/src/router.py", line 514, in select_agent
+E             agent_profiles = _automatic_profiles(entry, transport=profile_transport)
+E                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "REPOSITORY_ROOT/src/router.py", line 247, in _automatic_profiles
+E             health = adapters.model_health("gemini", tier)
+E                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "REPOSITORY_ROOT/src/adapters.py", line 862, in model_health
+E             advertised = advertised_models(agent, refresh=refresh)
+E                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "REPOSITORY_ROOT/src/adapters.py", line 686, in advertised_models
+E             return _advertised_catalog(agent, refresh=refresh, timeout_s=timeout_s, need_pairs=False)[
+E                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "REPOSITORY_ROOT/src/adapters.py", line 638, in _advertised_catalog
+E             proc = subprocess.run(
+E                    ^^^^^^^^^^^^^^^
+E           File "/opt/anaconda3/lib/python3.12/subprocess.py", line 548, in run
+E             with Popen(*popenargs, **kwargs) as process:
+E                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "/opt/anaconda3/lib/python3.12/subprocess.py", line 1026, in __init__
+E             self._execute_child(args, executable, preexec_fn, close_fds,
+E           File "/opt/anaconda3/lib/python3.12/subprocess.py", line 1821, in _execute_child
+E             sys.audit("subprocess.Popen", executable, args, cwd, env)
+E           File "<string>", line 6, in deny_subprocess
+E         AssertionError: unexpected CLI subprocess: ('agy', ['agy', 'models'])
+E
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['/opt/anaconda3/bin/python3', '-c', '\nimport json, sys\n# This boundary needs no provider, Git..."<string>", line 6, in deny_subprocess\nAssertionError: unexpected CLI subprocess: (\'agy\', [\'agy\', \'models\'])\n').returncode
+
+tests/test_source660_reconciliation.py:50: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_source660_reconciliation.py::test_state_only_learner_writer_and_cli_share_db
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed in 0.54s

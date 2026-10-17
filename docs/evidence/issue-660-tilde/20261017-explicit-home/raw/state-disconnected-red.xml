@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="0.577" timestamp="2026-10-17T08:29:55.826526-05:00" hostname="server.trs.private"><testcase classname="tests.test_source660_reconciliation" name="test_state_only_learner_writer_and_cli_share_db" time="0.307"><failure message="AssertionError: learner DB binding split&#10;assert {'writer': '/...hestrator.db'} == {'writer': '/...hestrator.db'}&#10;  &#10;  Omitting 1 identical items, use -vv to show&#10;  Differing items:&#10;  {'writer': '/private/tmp/pytest-of-teacher/pytest-110/test_state_only_learner_writer0/home/.codex/orchestrator/feedback/orchestrator.db'} != {'writer': '/private/tmp/pytest-of-teacher/pytest-110/test_state_only_learner_writer0/instance/feedback/orchestrator.db'}&#10;  Use -v to get more diff">tmp_path = PosixPath('/private/tmp/pytest-of-teacher/pytest-110/test_state_only_learner_writer0')
+
+    def test_state_only_learner_writer_and_cli_share_db(tmp_path):
+        """A new process must write and export the same Brain, independent of shadow destination."""
+        state = tmp_path / "instance"
+        output = tmp_path / "shadow"
+        home = tmp_path / "home"
+        home.mkdir()
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ORCH_")}
+        env.update(
+            HOME=str(home),
+            ORCH_STATE_DIR=str(state),
+            ORCH_MODEL_PROBE="0",
+            PYTHONPATH=str(Path(export.__file__).parent),
+        )
+        script = """
+    import json, sys
+    # This boundary needs no provider, Git, or network subprocess.
+    def deny_subprocess(event, args):
+        if event == "subprocess.Popen":
+            raise AssertionError(f"unexpected CLI subprocess: {args[:2]}")
+    sys.addaudithook(deny_subprocess)
+    import feedback
+    import route_weights_export as export
+    with feedback._conn() as connection:
+        connection.execute("INSERT INTO route_weights "
+            "(version, task_type, agent, posterior, score, n_obs, success_rate) "
+            "VALUES (73, 'implement', 'codex', 0.9, 0.9, 25, 0.9)")
+    export._current_capacity_snapshot = lambda: {"generated_at": 100, "agents": {}}
+    export.capabilities.daily_heartbeat = lambda *a, **k: None
+    sys.argv = ["route_weights_export.py", "--state-dir", sys.argv[1]]
+    assert export.main() == 0
+    print(json.dumps({"writer": str(feedback.DB_PATH), "reader": str(feedback.resolve_db_path())}))
+    """
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(output)],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        expected = state / "feedback" / "orchestrator.db"
+        binding = json.loads(result.stdout.splitlines()[-1])
+&gt;       assert binding == {"writer": str(expected), "reader": str(expected)}, "learner DB binding split"
+E       AssertionError: learner DB binding split
+E       assert {'writer': '/...hestrator.db'} == {'writer': '/...hestrator.db'}
+E         
+E         Omitting 1 identical items, use -vv to show
+E         Differing items:
+E         {'writer': '/private/tmp/pytest-of-teacher/pytest-110/test_state_only_learner_writer0/home/.codex/orchestrator/feedback/orchestrator.db'} != {'writer': '/private/tmp/pytest-of-teacher/pytest-110/test_state_only_learner_writer0/instance/feedback/orchestrator.db'}
+E         Use -v to get more diff
+
+tests/test_source660_reconciliation.py:119: AssertionError</failure></testcase></testsuite></testsuites>

@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__663__opener/src/feedback.py", line 8410, in <module>
+    raise SystemExit(main(sys.argv[1:]))
+                     ^^^^^^^^^^^^^^^^^^
+  File "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__663__opener/src/feedback.py", line 8349, in main
+    _selftest()
+  File "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__663__opener/src/feedback.py", line 7184, in _selftest
+    _selftest_resolve_db_path()
+  File "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__663__opener/src/feedback.py", line 7096, in _selftest_resolve_db_path
+    assert isolated["DB_PATH"] == resolve_db_path(), "tilde learner/reader split"
+AssertionError: tilde learner/reader split
