@@ -902,8 +902,8 @@ def _exploration_gate() -> dict:
     }
 
 
-def _expiry_row(cap_id: str, cap: dict, *, now: int) -> dict:
-    blocker = capabilities.renewal_blocker(cap, now=now)
+def _expiry_row(cap_id: str, cap: dict, *, now: int, acting: int | None = None) -> dict:
+    blocker = capabilities.renewal_blocker(cap, now=now, acting=acting)
     usage = capabilities.usage_rate(cap, now=now)
     last = cap.get("last_invocation")
     return {
@@ -923,8 +923,22 @@ def _expiry_row(cap_id: str, cap: dict, *, now: int) -> dict:
         ),
         "renewable": blocker is None,
         "blocker": blocker,
+        # The renewal currency, read once per report from the monitor's rolling window.
+        "acting_trailing_window": acting,
         "renew": capabilities.renew_command(cap_id),
     }
+
+
+def _acting_index(now: int, ids: list[str]) -> dict[str, int] | None:
+    """The monitor's rolling `acted_on` per row, read once; None when the Brain is unreadable."""
+    try:
+        import feedback
+        import value_chain_monitor as monitor
+
+        index, _reason = monitor.acted_on_index(feedback.DB_PATH, now, ids)
+    except Exception:  # noqa: BLE001 — unmeasured is a word, never a zero
+        return None
+    return None if index is None else {cid: int(index.get(cid, 0)) for cid in ids}
 
 
 def gate_expiry(*, now: int | None = None, path=None) -> dict:
@@ -966,7 +980,9 @@ def gate_expiry(*, now: int | None = None, path=None) -> dict:
         }
     try:
         later = []
-        for cap_id, cap in sorted(capabilities.load_declared(ledger_path).items()):
+        rows_all = capabilities.load_declared(ledger_path)
+        acting_index = _acting_index(now, list(rows_all))
+        for cap_id, cap in sorted(rows_all.items()):
             if not isinstance(cap, dict):
                 continue
             if cap.get("status") not in capabilities.NOT_LIVE_STATES:
@@ -976,14 +992,14 @@ def gate_expiry(*, now: int | None = None, path=None) -> dict:
                 if int(cap["expiry"]) - now > window:
                     later.append((int(cap["expiry"]), cap_id))
                     continue
-                row = _expiry_row(cap_id, cap, now=now)
+                row = _expiry_row(cap_id, cap, now=now, acting=(acting_index or {}).get(cap_id))
                 row["days_left"] = round((row["expiry"] - now) / 86400, 1)
                 report["expiring"].append(row)
                 continue
             retirement = capabilities.expiry_retirement(cap)
             if retirement is None or now - int(retirement.get("timestamp") or 0) > window:
                 continue
-            row = _expiry_row(cap_id, cap, now=now)
+            row = _expiry_row(cap_id, cap, now=now, acting=(acting_index or {}).get(cap_id))
             row["retired_on"] = capabilities.utc_date(int(retirement.get("timestamp") or 0))
             row["status_before"] = retirement.get("from")
             report["lapsed"].append(row)

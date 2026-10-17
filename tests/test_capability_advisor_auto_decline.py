@@ -21,7 +21,7 @@ CLOSER_BOUND = (
     "cross-repo-coordination",
     "offload",
     "redirect-policy",
-    "redirect-plan",
+    "role-redirect",
 )
 # Bound on the opener, not the closer: present in the ledger so the closer consult proves it is
 # neither offered nor declined there.
@@ -91,7 +91,7 @@ def test_small_quiet_pr_auto_declines_by_kind(tmp_path, facts):
     for cid in ("runtime-ac-checks", "offload"):
         assert e[cid]["auto_declined"]["kind"] == "scope_too_small", cid
         assert "1 file(s), 4 changed line(s)" in e[cid]["auto_declined"]["reason"]
-    for cid in ("redirect-policy", "redirect-plan"):
+    for cid in ("redirect-policy", "role-redirect"):
         assert e[cid]["auto_declined"]["kind"] == "precondition_unmet", cid
         assert "no stall signal" in e[cid]["auto_declined"]["reason"]
     assert e["cross-repo-coordination"]["auto_declined"]["kind"] == "precondition_unmet"
@@ -109,7 +109,7 @@ def test_small_quiet_pr_auto_declines_by_kind(tmp_path, facts):
         "runtime-ac-checks",
         "offload",
         "redirect-policy",
-        "redirect-plan",
+        "role-redirect",
         "cross-repo-coordination",
     }
 
@@ -121,7 +121,7 @@ def test_big_stalled_pr_is_offered_plainly(tmp_path, facts):
         "runtime-ac-checks",
         "offload",
         "redirect-policy",
-        "redirect-plan",
+        "role-redirect",
     ):
         assert "auto_declined" not in e[cid], cid
     assert e["redirect-policy"]["pr_requirement_evidence"].startswith(
