@@ -158,7 +158,7 @@ def _read_rows(db_path: Path) -> tuple[int, list[sqlite3.Row]]:
     """Return the latest legacy route-weight version without creating/migrating a DB."""
     if not db_path.exists():
         return 0, []
-    connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    connection = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
     connection.row_factory = sqlite3.Row
     try:
         exists = connection.execute(

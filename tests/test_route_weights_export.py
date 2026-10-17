@@ -641,7 +641,8 @@ def test_feedback_db_path_binding(tmp_path, monkeypatch, capsys, selection):
     monkeypatch.setattr(export, "_current_capacity_snapshot", _capacity_fixture)
     for name in ("ORCH_STATE_DIR", "ORCH_LOCAL_RUNTIME", export.feedback.DB_PATH_ENV):
         monkeypatch.delenv(name, raising=False)
-    shared_db = tmp_path / "shared.db"
+    # The resolved path must remain literal when opened through SQLite's URI API.
+    shared_db = tmp_path / "shared #?.db"
     monkeypatch.setattr(export.feedback, "DB_PATH", shared_db)
     state = tmp_path / "state"
     runtime = tmp_path / "runtime"
