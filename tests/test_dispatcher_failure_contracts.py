@@ -14,27 +14,26 @@ import research_subjects
 
 
 @pytest.fixture(autouse=True)
-def isolated(tmp_path):
-    # Independent context: a test-local monkeypatch.undo cannot lift this boundary.
-    with pytest.MonkeyPatch.context() as m:
-        for key in ("ORCH_STATE_DIR", "ORCH_LOCAL_RUNTIME"):
-            m.setenv(key, str(tmp_path / key))
-        m.setenv(d.credential_redaction.SECRET_FILES_ENV, "")
-        m.delenv(d.credential_redaction.REDACTION_DISABLED_ENV, raising=False)
-        m.delenv("ORCH_OFFLOAD_DISABLED", raising=False)
-        m.setattr(d, "REAL_HOME", tmp_path / "home")
-        m.setattr(d, "AGENT_RUNTIME_DIR", tmp_path / "runtime")
-        m.setattr(d, "DISPATCH_LOG_DIR", tmp_path / "logs")
-        m.setattr(d.feedback, "DB_PATH", tmp_path / "brain.db")
+def isolated(tmp_path, monkeypatch):
+    """One undo stack restores the true process/network functions after every case."""
+    m = monkeypatch
+    for key in ("ORCH_STATE_DIR", "ORCH_LOCAL_RUNTIME"):
+        m.setenv(key, str(tmp_path / key))
+    m.setenv(d.credential_redaction.SECRET_FILES_ENV, "")
+    m.delenv(d.credential_redaction.REDACTION_DISABLED_ENV, raising=False)
+    m.delenv("ORCH_OFFLOAD_DISABLED", raising=False)
+    m.setattr(d, "REAL_HOME", tmp_path / "home")
+    m.setattr(d, "AGENT_RUNTIME_DIR", tmp_path / "runtime")
+    m.setattr(d, "DISPATCH_LOG_DIR", tmp_path / "logs")
+    m.setattr(d.feedback, "DB_PATH", tmp_path / "brain.db")
 
-        def forbidden(*args, **kwargs):
-            pytest.fail("unexpected external process or network call")
+    def forbidden(*args, **kwargs):
+        pytest.fail("unexpected external process or network call")
 
-        m.setattr(d.subprocess, "run", forbidden)
-        m.setattr(d.subprocess, "Popen", forbidden)
-        m.setattr(socket, "create_connection", forbidden)
-        m.setattr(socket.socket, "connect", forbidden)
-        yield
+    m.setattr(d.subprocess, "run", forbidden)
+    m.setattr(d.subprocess, "Popen", forbidden)
+    m.setattr(socket, "create_connection", forbidden)
+    m.setattr(socket.socket, "connect", forbidden)
 
 
 @pytest.mark.parametrize("helper", [d._env_int, d._env_float])
