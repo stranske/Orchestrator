@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import zipfile
@@ -512,6 +513,8 @@ def test_native_manual_nonpass_requires_exact_manifest_and_source_run(tmp_path):
     assert native["content"]["proof_status"] == "resolution-only"
     assert native["content"]["input_manifest"]["raw"]["sha256"]
     assert native["provenance"]["acceptance_proof"] is False
+    assert native["provenance"]["native_manual_run"] is True
+    assert native["provenance"]["native_labeled_pr_run"] is False
     assert native["content"]["run"]["head_sha"] == "e" * 40
     assert native["content"]["run"]["path"] == ".github/workflows/agents-verifier.yml"
 
@@ -554,6 +557,22 @@ def test_native_manual_nonpass_requires_exact_manifest_and_source_run(tmp_path):
 
 def test_native_pull_request_target_empty_pr_list_matches_trusted_workflow(tmp_path):
     merge = "d" * 40
+    diff_summary = b"synthetic verifier input diff summary"
+    comparison_comment = b"synthetic generated output comment"
+    comparison_report = json.dumps(
+        {
+            "results": [
+                {
+                    "verdict": "CONCERNS",
+                    "concerns": ["Sanitized concern from provider result."],
+                    "summary": "Sanitized provider summary.",
+                    "provider_used": "provider-example",
+                    "model": "model-example",
+                }
+            ],
+            "report": "Sanitized aggregate report.",
+        }
+    ).encode()
     marker = {
         "schema": "verifier-corpus-decision/v1",
         "repo": "acme/repo",
@@ -570,12 +589,14 @@ def test_native_pull_request_target_empty_pr_list_matches_trusted_workflow(tmp_p
         "pr": 12,
         "merge_sha": merge,
         "source_run_id": "901",
+        "diff_summary_sha256": hashlib.sha256(diff_summary).hexdigest(),
     }
     stream = io.BytesIO()
     with zipfile.ZipFile(stream, "w") as archive:
         archive.writestr("input-snapshot.json", json.dumps(manifest))
-        archive.writestr("comparison.json", json.dumps({"findings": []}))
-        archive.writestr("comparison-comment.md", "No findings")
+        archive.writestr("comparison.json", comparison_report)
+        archive.writestr("comparison-comment.md", comparison_comment)
+        archive.writestr("verifier-diff-summary.md", diff_summary)
         archive.writestr("verifier-context.md", "Context")
         archive.writestr("verifier-pr-diff.patch", "diff --git a/a b/a\n")
 
@@ -612,6 +633,32 @@ def test_native_pull_request_target_empty_pr_list_matches_trusted_workflow(tmp_p
     assert native["content"]["run"]["path"] == ".github/workflows/agents-verifier.yml"
     assert native["content"]["artifacts"][0]["run_attempt"] == 1
     assert native["provenance"]["acceptance_proof"] is False
+    assert native["provenance"]["native_manual_run"] is False
+    assert native["provenance"]["native_labeled_pr_run"] is True
+    native_receipts = native["content"]["artifacts"][0]["receipts"]
+    comparison = next(item for item in native_receipts if item["kind"] == "native-comparison")
+    assert comparison["findings"] == [
+        {
+            "id": "result-0-concern-0",
+            "provider_index": 0,
+            "provider_used": "provider-example",
+            "model": "model-example",
+            "verdict": "CONCERNS",
+            "summary": "Sanitized provider summary.",
+            "text_is_untrusted": True,
+            "text": "Sanitized concern from provider result.",
+        }
+    ]
+    assert comparison["raw"]["path"] and comparison["raw"]["sha256"]
+    comment_receipt = next(
+        item for item in native_receipts if item["kind"] == "native-comparison-comment"
+    )
+    diff_summary_receipt = next(
+        item for item in native_receipts if item["kind"] == "native-verifier-diff-summary"
+    )
+    assert comment_receipt["path"] == "comparison-comment.md"
+    assert comment_receipt["manifest_hash_verified"] is False
+    assert diff_summary_receipt["manifest_hash_verified"] is True
 
     def wrong_workflow(endpoint, **kwargs):
         result = api(endpoint, **kwargs)
@@ -640,6 +687,43 @@ def test_native_pull_request_target_empty_pr_list_matches_trusted_workflow(tmp_p
         artifact_fetch=lambda _artifact, **_kw: stream.getvalue(),
     )
     assert rejected_event["sections"]["native_merge_verifier"]["status"] == "unknown"
+
+
+def test_native_comparison_concern_limit_is_explicitly_partial(tmp_path):
+    report = {
+        "results": [
+            {
+                "verdict": "CONCERNS",
+                "concerns": [f"synthetic concern {provider}-{i}" for i in range(100)],
+                "summary": "synthetic summary",
+                "provider_used": "provider-example",
+                "model": "model-example",
+            }
+            for provider in range(6)
+        ],
+        "report": "synthetic aggregate",
+    }
+    archive_stream = io.BytesIO()
+    with zipfile.ZipFile(archive_stream, "w") as archive:
+        archive.writestr(
+            "input-snapshot.json",
+            json.dumps(
+                {
+                    "schema": "workflows-verifier-input-snapshot/v1",
+                    "repository": "acme/repo",
+                    "pr": 12,
+                    "merge_sha": "d" * 40,
+                    "source_run_id": "901",
+                }
+            ),
+        )
+        archive.writestr("comparison.json", json.dumps(report))
+    rows = evidence._native_manifest_from_archive(archive_stream.getvalue(), tmp_path)
+    comparison = next(item for item in rows[0]["receipts"] if item["kind"] == "native-comparison")
+    assert len(comparison["findings"]) == evidence.MAX_NATIVE_CONCERNS
+    assert rows[0]["omissions"] == [
+        {"path": "comparison.json", "reason": "aggregate concern count cap reached"}
+    ]
 
 
 def test_assigned_issue_alias_uses_delivery_pr_for_diff_and_ci_identity(tmp_path):

@@ -33,6 +33,8 @@ MAX_UNCOMPRESSED_BYTES = 16_000_000
 MAX_ARTIFACTS = 20
 MAX_PACKET_ARCHIVES = 20
 MAX_PACKET_ARCHIVE_BYTES = 8_000_000
+MAX_NATIVE_RESULTS = 100
+MAX_NATIVE_CONCERNS = 500
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 REQUIRED_SECTIONS = {
@@ -1034,6 +1036,7 @@ def _native_manifest_from_archive(archive: bytes, root: Path) -> list[dict]:
                 if path.suffix.lower() != ".json":
                     if path.name in {
                         "comparison-comment.md",
+                        "verifier-diff-summary.md",
                         "verifier-context.md",
                         "verifier-pr-diff.patch",
                     }:
@@ -1068,48 +1071,178 @@ def _native_manifest_from_archive(archive: bytes, root: Path) -> list[dict]:
                         )
                     else:
                         report_ref = _retain_bytes(root, report, "json")
-                        raw_findings = (
-                            report_doc.get("findings", []) if isinstance(report_doc, dict) else []
-                        )
-                        findings = (
-                            [
-                                {
-                                    "id": str(item.get("id") or item.get("finding_id") or "")[:200],
-                                    "text": str(
-                                        item.get("finding")
-                                        or item.get("text")
-                                        or item.get("summary")
-                                        or ""
-                                    )[:8000],
+                        findings = []
+                        provider_results = []
+                        if isinstance(report_doc, dict) and isinstance(
+                            report_doc.get("results"), list
+                        ):
+                            raw_results = report_doc["results"]
+                            if len(raw_results) > MAX_NATIVE_RESULTS:
+                                row["omissions"].append(
+                                    {
+                                        "path": "comparison.json",
+                                        "reason": "provider result count cap reached",
+                                    }
+                                )
+                            concern_count = 0
+                            concern_cap_reached = False
+                            for result_index, result in enumerate(raw_results[:MAX_NATIVE_RESULTS]):
+                                if not isinstance(result, dict):
+                                    row["omissions"].append(
+                                        {
+                                            "path": "comparison.json",
+                                            "reason": "provider result entry is not an object",
+                                        }
+                                    )
+                                    continue
+                                summary, summary_cut = _safe_text(result.get("summary"), 8000)
+                                provider = {
+                                    "provider_index": result_index,
+                                    "provider_used": str(result.get("provider_used") or "")[:200],
+                                    "model": str(result.get("model") or "")[:200],
+                                    "verdict": str(result.get("verdict") or "")[:100],
+                                    "summary": summary,
+                                    "text_is_untrusted": True,
                                 }
-                                for item in raw_findings[:100]
-                                if isinstance(item, dict)
-                            ]
-                            if isinstance(raw_findings, list)
-                            else []
-                        )
+                                provider_results.append(provider)
+                                if summary_cut:
+                                    row["omissions"].append(
+                                        {
+                                            "path": "comparison.json",
+                                            "reason": "provider summary text truncated",
+                                        }
+                                    )
+                                concerns = result.get("concerns")
+                                if not isinstance(concerns, list):
+                                    row["omissions"].append(
+                                        {
+                                            "path": "comparison.json",
+                                            "reason": "provider concern list missing or invalid",
+                                        }
+                                    )
+                                    continue
+                                if len(concerns) > 100:
+                                    row["omissions"].append(
+                                        {
+                                            "path": "comparison.json",
+                                            "reason": "per-provider concern count cap reached",
+                                        }
+                                    )
+                                for concern_index, concern in enumerate(concerns[:100]):
+                                    if concern_count >= MAX_NATIVE_CONCERNS:
+                                        if not concern_cap_reached:
+                                            row["omissions"].append(
+                                                {
+                                                    "path": "comparison.json",
+                                                    "reason": "aggregate concern count cap reached",
+                                                }
+                                            )
+                                            concern_cap_reached = True
+                                        break
+                                    if isinstance(concern, dict):
+                                        value = concern.get("text") or concern.get("concern")
+                                        text = (
+                                            str(value)
+                                            if value is not None
+                                            else _bytes(concern).decode("utf-8", "replace")
+                                        )
+                                    else:
+                                        text = str(concern)
+                                    text, text_cut = _safe_text(text, 8000)
+                                    if text_cut:
+                                        row["omissions"].append(
+                                            {
+                                                "path": "comparison.json",
+                                                "reason": "provider concern text truncated",
+                                            }
+                                        )
+                                    if text:
+                                        concern_count += 1
+                                        findings.append(
+                                            {
+                                                "id": f"result-{result_index}-concern-{concern_index}",
+                                                **provider,
+                                                "text": text,
+                                            }
+                                        )
+                                    else:
+                                        row["omissions"].append(
+                                            {
+                                                "path": "comparison.json",
+                                                "reason": "provider concern has no text",
+                                            }
+                                        )
+                                if concern_cap_reached:
+                                    break
+                        elif isinstance(report_doc, dict) and isinstance(
+                            report_doc.get("findings"), list
+                        ):
+                            for item in report_doc["findings"][:100]:
+                                if isinstance(item, dict):
+                                    findings.append(
+                                        {
+                                            "id": str(
+                                                item.get("id") or item.get("finding_id") or ""
+                                            )[:200],
+                                            "text": str(
+                                                item.get("finding")
+                                                or item.get("text")
+                                                or item.get("summary")
+                                                or ""
+                                            )[:8000],
+                                            "text_is_untrusted": True,
+                                        }
+                                    )
                         row["receipts"].append(
                             {
                                 "kind": "native-comparison",
-                                "report": report_doc,
+                                "path": "comparison.json",
+                                "results_count": (
+                                    len(report_doc.get("results", []))
+                                    if isinstance(report_doc, dict)
+                                    and isinstance(report_doc.get("results"), list)
+                                    else None
+                                ),
+                                "aggregate_report_excerpt": _safe_text(
+                                    (
+                                        report_doc.get("report")
+                                        if isinstance(report_doc, dict)
+                                        else ""
+                                    ),
+                                    8000,
+                                )[0],
                                 "findings": findings,
+                                "provider_results": provider_results,
                                 "raw": report_ref,
                             }
                         )
+                else:
+                    row["omissions"].append(
+                        {"path": "comparison.json", "reason": "native comparison report missing"}
+                    )
                 known_files = (
-                    ("comparison-comment.md", "native-comparison-comment", "diff_summary_sha256"),
-                    ("verifier-context.md", "native-verifier-context", "context_sha256"),
-                    ("verifier-pr-diff.patch", "native-pr-diff", "diff_sha256"),
+                    ("comparison-comment.md", "native-comparison-comment", None, False),
+                    (
+                        "verifier-diff-summary.md",
+                        "native-verifier-diff-summary",
+                        "diff_summary_sha256",
+                        True,
+                    ),
+                    ("verifier-context.md", "native-verifier-context", "context_sha256", True),
+                    ("verifier-pr-diff.patch", "native-pr-diff", "diff_sha256", True),
                 )
-                for filename, kind, hash_key in known_files:
+                for filename, kind, hash_key, missing_is_omission in known_files:
                     content = files.get(filename)
                     if content is None:
-                        row["omissions"].append(
-                            {"path": filename, "reason": "native report file missing"}
-                        )
+                        if missing_is_omission and (
+                            hash_key is None or doc.get(hash_key) is not None
+                        ):
+                            row["omissions"].append(
+                                {"path": filename, "reason": "native report file missing"}
+                            )
                         continue
                     actual = hashlib.sha256(content).hexdigest()
-                    expected = doc.get(hash_key)
+                    expected = doc.get(hash_key) if hash_key else None
                     if expected is not None and expected != actual:
                         row["omissions"].append(
                             {"path": filename, "reason": f"{hash_key} mismatch"}
@@ -1118,6 +1251,7 @@ def _native_manifest_from_archive(archive: bytes, root: Path) -> list[dict]:
                     receipt: dict[str, Any] = {
                         "kind": kind,
                         "path": filename,
+                        "manifest_hash_verified": expected is not None,
                         "raw": _retain_bytes(
                             root, content, "patch" if filename.endswith(".patch") else "txt"
                         ),
@@ -1343,7 +1477,9 @@ def _native_verifier_section(
                 "run_id": int(run_id),
                 "run_attempt": int(attempt),
                 "source_run_id": source_id,
-                "native_manual_run": True,
+                "trigger_event": run.get("event"),
+                "native_manual_run": run.get("event") == "workflow_dispatch",
+                "native_labeled_pr_run": run.get("event") == "pull_request_target",
                 "acceptance_proof": False,
             },
             reason="native verifier NON_PASS evidence is resolution-only, never acceptance proof",

@@ -157,6 +157,31 @@ def bounded_run(command, *, timeout):
         return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
+class RoundDeadlineExhausted(TimeoutError):
+    """A read-only round callback reached its configured active deadline."""
+
+    def __init__(self, *, deadline: float, remaining_seconds: float):
+        self.deadline = float(deadline)
+        self.remaining_seconds = float(remaining_seconds)
+        super().__init__("round deadline exhausted during read-only GitHub access")
+
+
+class RoundCapacityDeferred(RuntimeError):
+    """A read-only GitHub call was skipped by its authoritative throttle ledger."""
+
+    def __init__(self, *, resource: str, throttle: dict, observed_at: float):
+        self.resource = str(resource)
+        self.throttle = dict(throttle)
+        self.observed_at = float(observed_at)
+        reset_in = throttle.get("reset_in_s")
+        self.reset_at_epoch = (
+            self.observed_at + float(reset_in)
+            if isinstance(reset_in, (int, float)) and not isinstance(reset_in, bool)
+            else None
+        )
+        super().__init__(f"GitHub {self.resource} capacity is deferred by the rate ledger")
+
+
 class GitHub:
     def __init__(self, *, deadline, api_fn=None):
         self.deadline = deadline
@@ -165,10 +190,15 @@ class GitHub:
     def api(self, endpoint, *, method="GET", fields=None, resource="core"):
         remaining = self.deadline - time.time()
         if remaining < 2:
-            raise RuntimeError("actual round budget exhausted")
+            raise RoundDeadlineExhausted(deadline=self.deadline, remaining_seconds=remaining)
         throttle = gh_capacity.throttle(resource, allow_wait_s=min(2, remaining))
         if throttle.get("action") == "defer":
-            raise RuntimeError(f"GitHub {resource} capacity deferred: {throttle}")
+            raise RoundCapacityDeferred(
+                resource=resource, throttle=throttle, observed_at=time.time()
+            )
+        remaining = self.deadline - time.time()
+        if remaining < 2:
+            raise RoundDeadlineExhausted(deadline=self.deadline, remaining_seconds=remaining)
         args = ["api", "--method", method, endpoint]
         for key, value in (fields or {}).items():
             args += ["-f", f"{key}={value}"]
@@ -2477,6 +2507,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         max_io_workers=4,
         max_low_workers=min(2, args.max_workers),
         max_exception_workers=1,
+        round_deadline_exception=RoundDeadlineExhausted,
+        round_capacity_exception=RoundCapacityDeferred,
     )
     return pipeline
 

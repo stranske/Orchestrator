@@ -447,6 +447,42 @@ def test_inventory_main_has_no_state_write_or_worker_launch(tmp_path, monkeypatc
     assert not state.exists()
 
 
+def test_github_api_raises_typed_deadline_exhaustion_before_transport():
+    calls = []
+    github = adapter.GitHub(deadline=time.time() + 1, api_fn=lambda *_a, **_k: calls.append(True))
+    with pytest.raises(adapter.RoundDeadlineExhausted) as caught:
+        github.api("repos/o/r/issues/1")
+    assert caught.value.deadline == github.deadline
+    assert caught.value.remaining_seconds < 2
+    assert calls == []
+
+
+def test_github_api_raises_typed_capacity_deferral_with_ledger_evidence(monkeypatch):
+    throttle = {
+        "resource": "core",
+        "state": "shed",
+        "action": "defer",
+        "slept_s": 0.0,
+        "remaining": 50,
+        "limit": 5000,
+        "reset_in_s": 1072,
+        "window_s": 3600,
+        "pace_s": 0.0,
+        "source": "call",
+        "measured_s_ago": 134,
+        "reason": "50/5000 remaining; defer to reset",
+    }
+    monkeypatch.setattr(adapter.gh_capacity, "throttle", lambda *_a, **_k: throttle)
+    calls = []
+    github = adapter.GitHub(deadline=time.time() + 60, api_fn=lambda *_a, **_k: calls.append(True))
+    with pytest.raises(adapter.RoundCapacityDeferred) as caught:
+        github.api("repos/o/r/issues/1")
+    assert caught.value.resource == "core"
+    assert caught.value.throttle == throttle
+    assert caught.value.reset_at_epoch == pytest.approx(caught.value.observed_at + 1072)
+    assert calls == []
+
+
 def test_legacy_cli_keeps_requested_90_second_active_budget(tmp_path, monkeypatch, capsys):
     assignment = tmp_path / "assignment.json"
     assignment.write_text(json.dumps({"errors": [], "targets": [{"target": TARGET}]}))

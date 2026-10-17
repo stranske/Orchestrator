@@ -76,6 +76,8 @@ capacity report and authoritative shed markers account for shared provider pools
 without reading agent sessions. Registered repair roots
 also pass the existing assessment campaign admission check; this coordinator
 cannot authorize, renew or extend their permits.
+Fresh GitHub rate-ledger SHED decisions remain a read-only continuation with the
+measured reset trigger; they do not create a human ticket or bypass the throttle.
 
 ## Action and acceptance boundaries
 
