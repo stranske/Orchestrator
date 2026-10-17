@@ -449,6 +449,9 @@ def linked_consumptions(consumed: list[dict]) -> dict[str, dict]:
     return result
 
 
+FOLLOWED_POOL = 30  # consumptions the opener followed; the pool that triggers the M4 evaluation
+
+
 def summary_line(path: Path | None = None) -> str:
     try:
         data = summary(path)
@@ -486,6 +489,7 @@ def summary_line(path: Path | None = None) -> str:
         f"consumed {len(consumed)}, followed {followed}, not followed {not_followed}, "
         f"open {len(consumed) - followed - not_followed - unresolved}; unresolved {unresolved}; "
         f"top-1 agrees with the rule pick {data['top1_agrees']} of {data['valid_cycles']} valid cycles"
+        f"; pool followed {followed} of {FOLLOWED_POOL}"
     )
 
 
