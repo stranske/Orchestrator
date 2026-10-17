@@ -210,3 +210,15 @@ def test_build_snapshot_reuses_newly_lowered_calibration(stores):
     result = integrated(stores, row)["claude"]["pacing"]
     assert result["token_cap"] == 800
     assert result["used_fraction"] == 0.5
+
+
+def test_aging_unchanged_observation_does_not_republish_capacity(stores):
+    desktop_sample(stores[0], 7201)
+    results = []
+    for now in (NOW, NOW + 10):
+        agents = {pool: dict(state="ok", reason="native") for pool in ("codex", "claude")}
+        pacing_usage.integrate(agents, now=now, handoff=stores[2])
+        results.append(agents["claude"]["pacing"])
+    assert results[0] == results[1], "age must be derived at reporting time, not exported as state"
+    output = pacing_usage.report(stores[2], now=NOW + 10, current=dict(agents=agents))
+    assert "desktop_sample_age_s=7211" in output

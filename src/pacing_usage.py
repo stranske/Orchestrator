@@ -338,6 +338,7 @@ def usage(
         if observed is not None:
             return observed
     desktop_age = None
+    desktop_ts = None
     if pool == "claude":
         data = read_json(claude_path) or {}
         rows = data.get("samples", []) if isinstance(data, dict) else []
@@ -356,6 +357,7 @@ def usage(
         if valid:
             row = max(valid, key=lambda r: r["t"])
             ts = row["t"] / 1000
+            desktop_ts = ts
             desktop_age = now - ts
             if desktop_age <= CLAUDE_USAGE_MAX_AGE_SECONDS:
                 return dict(
@@ -370,6 +372,7 @@ def usage(
                     source="claude-desktop",
                     sample_age_s=desktop_age,
                     desktop_sample_age_s=desktop_age,
+                    desktop_sample_ts=desktop_ts,
                 )
     cap = calibration.get(f"{pool}_weekly_token_cap")
     cap_source = "calibration-file"
@@ -421,6 +424,7 @@ def usage(
                 period_start=row["period_start"],
                 sample_age_s=age,
                 desktop_sample_age_s=desktop_age,
+                desktop_sample_ts=desktop_ts,
                 token_cap=cap,
                 cap_source=cap_source,
             )
@@ -450,6 +454,7 @@ def usage(
             source="ccusage-fallback",
             sample_age_s=None,
             desktop_sample_age_s=desktop_age,
+            desktop_sample_ts=desktop_ts,
             token_cap=cap,
             cap_source=cap_source,
             fallback_reason="no Claude-only snapshot aligned to the subscription week",
@@ -724,8 +729,7 @@ def integrate(
             source=datum["source"],
         )
         for key in (
-            "sample_age_s",
-            "desktop_sample_age_s",
+            "desktop_sample_ts",
             "token_cap",
             "cap_source",
             "fallback_reason",
@@ -779,9 +783,11 @@ def report(handoff: Path, *, now: float, current: dict | None = None) -> str:
         source_detail = ""
         if pool == "claude":
             age = now - row["ts"] if row.get("ts") is not None else None
+            desktop_ts = row.get("desktop_sample_ts")
+            desktop_age = int(now - desktop_ts) if desktop_ts is not None else "unknown"
             source_detail = (
                 f"sample_age_s={int(age) if age is not None else 'unknown'} "
-                f"desktop_sample_age_s={measured(row.get('desktop_sample_age_s'))} "
+                f"desktop_sample_age_s={desktop_age} "
             )
             if row.get("source") == "ccusage-fallback":
                 source_detail += (
