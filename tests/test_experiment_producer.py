@@ -1,0 +1,596 @@
+"""Offline acceptance and failure-path proofs for the producer."""
+
+import hashlib
+import json
+import random
+import subprocess
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+import exp_abcd
+import experiment_producer as producer
+import synthesis_promotion
+
+
+@pytest.fixture(autouse=True)
+def isolate(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("ORCH_EXPERIMENT_PRODUCER", "1")
+    monkeypatch.setenv("ORCH_CAPABILITIES_PATH", str(tmp_path / "capabilities.json"))
+    monkeypatch.setattr(producer, "gh_call", lambda argv: {"error": "offline"})
+
+
+def test_draw_rate_is_poisson_bounded():
+    rng = random.Random(677)
+    days = []
+    for day in range(10_000):
+        count = 0
+        for hour in range(24):
+            now = (day * 24 + hour + 1) * 3600
+            count += producer.draw(now, now - 3600, 2, count, rng)["fire"]
+        days.append(count)
+    assert 1.85 <= sum(days) / len(days) <= 2.0
+    assert max(days) <= 4
+
+
+def test_coverage_cell_older_than_21_days_is_chosen_first():
+    feed = [
+        {"target": "a/b#1", "task_type": "implement"},
+        {"target": "a/b#2", "task_type": "testgen"},
+    ]
+    cells = [
+        {"task_type": "implement", "agent": "a", "age_days": 2},
+        {"task_type": "testgen", "agent": "b", "age_days": 22},
+    ]
+    assert producer.choose_subject(feed, [], cells, random.Random(1)) == {
+        "subject": feed[1],
+        "reason": "coverage",
+    }
+
+
+def test_forum_and_stalest_challenger_keep_exact_arm_identity():
+    old = {"target": "a/b#1", "task_type": "implement", "created_at": "2026-01-01"}
+    assert producer.choose_subject([old], [old], [], random.Random(1))["reason"] == "forum"
+    cells = [
+        {"task_type": "implement", "agent": a, "age_days": age}
+        for a, age in [("codex", 2), ("claude", 22), ("vibe", 4)]
+    ]
+    arms = producer.choose_arms("implement", ["codex", "vibe", "claude"], cells, random.Random(1))
+    assert [a["agents"] for a in arms] == [["codex"], ["claude"], ["codex"]]
+    assert len({a["arm_id"] for a in arms}) == 3
+    assert "brief" in arms[2]
+
+
+def test_pacing_skip_prints_blocking_and_drainable(capsys):
+    cells = [{"age_days": 22, "pacing": "shed"}, {"age_days": 30, "pacing": "ok"}]
+    result = producer.draw(3600, 0, 2, 0, random.Random(1), pools={"codex": "shed"}, cells=cells)
+    assert result["fire"] is False
+    assert (
+        capsys.readouterr().err
+        == "skipped: pacing codex=shed; coverage debt 2 cells > 21d, drainable 1\n"
+    )
+    producer.draw(3600, 0, 2, 0, random.Random(1), pools={"codex": "shed"}, cells=[])
+    assert (
+        capsys.readouterr().err
+        == "skipped: pacing codex=shed; coverage debt 0 cells > 21d, drainable 0\n"
+    )
+
+
+def test_cadence_stamps_skips_resets_daily_cap(tmp_path):
+    rng = SimpleNamespace(random=lambda: 0)
+    producer.cadence_draw(86400, 2, rng, pools={"x": "shed"})
+    state = producer.read_state()
+    assert state["last_draw_ts"] == 86400
+    assert state["launched_today"] == 0
+    for hour in range(1, 6):
+        producer.cadence_draw(86400 + hour * 3600, 2, rng)
+    assert producer.read_state()["launched_today"] == 4
+    producer.cadence_draw(2 * 86400, 2, rng)
+    assert producer.read_state()["launched_today"] == 1
+    producer.cadence_draw(2 * 86400 + 3600, 2, rng, skip_reason="no_subject")
+    assert producer.read_state()["last_draw_ts"] == 2 * 86400 + 3600
+    assert producer.read_state()["skips"]["no_subject"] == 1
+
+
+def git(*args, cwd=None, env=None):
+    return subprocess.run(
+        ["git", *map(str, args)], cwd=cwd, env=env, capture_output=True, text=True, check=False
+    )
+
+
+def test_member_push_is_refused(tmp_path, monkeypatch):
+    """Exercise the environment passed by the actual spawn boundary against a real remote."""
+    remote, work = tmp_path / "remote.git", tmp_path / "work"
+    assert git("init", "--bare", remote).returncode == 0
+    assert git("init", work).returncode == 0
+    assert (
+        git(
+            "-C",
+            work,
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.org",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ).returncode
+        == 0
+    )
+    assert git("-C", work, "remote", "add", "origin", remote).returncode == 0
+    # Prove the remote itself accepts a push, independently of the member environment.
+    assert git("-C", work, "push", "origin", "HEAD:refs/heads/control").returncode == 0
+    monkeypatch.setattr(exp_abcd.adapters, "refuse_broad_workspace", lambda *a: None)
+    monkeypatch.setattr(exp_abcd.adapters, "build_command", lambda *a, **k: ["true"])
+    monkeypatch.setattr(exp_abcd, "_record_execution_start", lambda *a: 0)
+    monkeypatch.setattr(exp_abcd, "_completion_cmd", lambda *a: "true")
+    monkeypatch.setattr(exp_abcd, "_wrapped", lambda *a: "true")
+    observed = []
+    real_popen = subprocess.Popen
+    monkeypatch.setattr(exp_abcd, "_record_execution_complete", lambda *a: None)
+
+    def popen(argv, **kwargs):
+        if argv[0] == "git":
+            return real_popen(argv, **kwargs)
+        observed.append(
+            git(
+                "-C",
+                work,
+                "push",
+                "origin",
+                "HEAD:refs/heads/exp/probe-member",
+                env=kwargs.get("env"),
+            )
+        )
+        return SimpleNamespace(pid=123)
+
+    monkeypatch.setattr(exp_abcd.subprocess, "Popen", popen)
+    exp_abcd._spawn("codex", "full", "test", work, tmp_path / "member.log")
+    assert len(observed) == 1
+    assert observed[0].returncode != 0, observed[0].stdout
+    assert git("--git-dir", remote, "for-each-ref", "refs/heads/exp/").stdout == ""
+
+
+def test_member_remote_assertion_stops_on_pushed_ref(monkeypatch):
+    monkeypatch.setattr(exp_abcd.provision, "ensure_canonical", lambda repo: Path("/tmp/unused"))
+    assert (
+        exp_abcd.assert_no_member_push(
+            "a/b",
+            "demo",
+            run_fn=lambda *a, **k: SimpleNamespace(
+                returncode=0, stdout="sha refs/heads/exp/demo-x"
+            ),
+        )
+        == "member_pushed"
+    )
+    assert (
+        exp_abcd.assert_no_member_push(
+            "a/b", "demo", run_fn=lambda *a, **k: SimpleNamespace(returncode=0, stdout="")
+        )
+        is None
+    )
+
+
+def fixture_experiment(tmp_path, monkeypatch):
+    root = tmp_path / "experiment"
+    root.mkdir()
+    arms, members = exp_abcd._normalize_arm_members(
+        producer.choose_arms(
+            "implement",
+            ["codex", "claude"],
+            [{"task_type": "implement", "agent": a, "age_days": 30} for a in ["codex", "claude"]],
+            random.Random(2),
+        )
+    )
+    meta = {
+        "producer": "experiment_producer",
+        "repo": "a/b",
+        "subject": "a/b#3",
+        "base": "main",
+        "base_sha": "base",
+        "launched_ts": 1000,
+        "schema_version": 2,
+        "arms": arms,
+        "members": members,
+        "spec_provenance": "issue_body",
+    }
+    (root / "spec.md").write_text("Gate: `python3 -m pytest -q tests/test_fix.py::test_fix`")
+    meta["spec_sha256"] = hashlib.sha256((root / "spec.md").read_bytes()).hexdigest()
+    (root / "meta.json").write_text(json.dumps(meta))
+    monkeypatch.setattr(
+        (
+            synthesis_promotion.research_subjects
+            if hasattr(synthesis_promotion, "research_subjects")
+            else __import__("research_subjects")
+        ),
+        "mark_lifecycle",
+        lambda *a, **k: None,
+    )
+    return root, meta, {"ranking": [(m["member_id"], 9 - n) for n, m in enumerate(members)]}
+
+
+def test_all_local_verifications_fail_no_pr(tmp_path, monkeypatch):
+    root, meta, evaluation = fixture_experiment(tmp_path, monkeypatch)
+    calls = []
+    result = synthesis_promotion.deliver_producer_winner(
+        root,
+        meta,
+        evaluation,
+        verify_fn=lambda *a, **k: {"ok": False},
+        gh_fn=lambda argv: calls.append(argv) or {"stdout": ""},
+    )
+    assert result["status"] == "no_winner"
+    assert not any("push" in c or "create" in c for c in calls)
+    assert calls[-1][-2:] == ["--remove-label", "status:in-progress"]
+
+
+@pytest.mark.parametrize("failure", ["collision", "unavailable", "success"])
+def test_direct_winner_delivery_retry_and_collision(tmp_path, monkeypatch, failure):
+    root, meta, evaluation = fixture_experiment(tmp_path, monkeypatch)
+    calls, pushes = [], []
+
+    def gh(argv):
+        calls.append(argv)
+        if "create" in argv:
+            return {"stdout": "https://github.com/a/b/pull/9\n"}
+        if "edit" in argv:
+            return {"stdout": ""}
+        if "issues/3" in argv[-1]:
+            return {"stdout": json.dumps({"state": "open", "labels": []})}
+        if failure == "unavailable":
+            return {"error": "quota"}
+        return {
+            "stdout": json.dumps(
+                [{"number": 8, "body": "Closes #3"}] if failure == "collision" else []
+            )
+        }
+
+    def run(argv, **kwargs):
+        if "push" in argv:
+            pushes.append(argv)
+        return SimpleNamespace(returncode=0, stdout="" if "status" in argv else "commit", stderr="")
+
+    result = synthesis_promotion.deliver_producer_winner(
+        root, meta, evaluation, verify_fn=lambda *a, **k: {"ok": True}, gh_fn=gh, git_fn=run
+    )
+    assert (
+        result["status"]
+        == {
+            "collision": "discarded",
+            "unavailable": "github_unavailable",
+            "success": "delegated_or_pr",
+        }[failure]
+    )
+    assert len(pushes) == int(failure == "success")
+    if failure == "success":
+        assert pushes[0][-1] == "HEAD:refs/heads/orch/exp-experiment"
+        create = next(c for c in calls if "create" in c)
+        assert "--draft" not in create
+        assert "Closes a/b#3" in (root / "producer-pr.md").read_text()
+        assert "experiment:experiment" in (root / "producer-pr.md").read_text()
+        assert result["member_id"] == evaluation["ranking"][0][0]
+
+
+def test_missing_frozen_spec_never_evaluates(tmp_path, monkeypatch):
+    root, meta, _ = fixture_experiment(tmp_path, monkeypatch)
+    (root / "spec.md").unlink()
+    result = exp_abcd.producer_followup(
+        root,
+        meta,
+        now=1100,
+        min_idle_s=0,
+        eval_timeout=1,
+        collect_fn=lambda *a: pytest.fail("collected missing spec"),
+        evaluate_fn=lambda *a: pytest.fail("paid for missing spec"),
+    )
+    assert result["reason"] == "missing_spec_recovery_refused"
+
+
+def test_trial_expires_once_and_requires_six_merged_winners():
+    end, verdict = producer.trial_defaults(1000)
+    assert verdict == "pending"
+    assert producer.trial_defaults(1000 + 20 * 86400)[0] == end
+    assert (
+        producer.trial_verdict(1000 + 20 * 86400, summary_fn=lambda: {"winner_merged": 6})
+        == "pending"
+    )
+    assert (
+        producer.trial_verdict(1000 + 21 * 86400, summary_fn=lambda: {"winner_merged": 5}) == "fail"
+    )
+    assert (
+        producer.trial_verdict(1000 + 21 * 86400, summary_fn=lambda: {"winner_merged": 6}) == "pass"
+    )
+
+
+def test_report_zero_values_are_present(monkeypatch):
+    import switch_review
+
+    monkeypatch.setattr(
+        producer,
+        "producer_summary",
+        lambda: dict(
+            launched=0,
+            evaluated=0,
+            winner_prs=0,
+            winner_merged=0,
+            cells_fresh=0,
+            cells_total=0,
+            skips={},
+            unknowns=[],
+        ),
+    )
+    assert (
+        switch_review.experiment_producer_line()
+        == "  experiment producer: launched 0, evaluated 0, winner_prs 0, winner_merged 0, cells_fresh 0/0, skipped 0 (none)"
+    )
+
+
+def test_producer_judges_are_two_neutral_agents_and_delivery_bypasses_synthesis(
+    tmp_path, monkeypatch
+):
+    root, meta, ranking = fixture_experiment(tmp_path, monkeypatch)
+    meta["launched_ts"] = time.time()
+    (root / "meta.json").write_text(json.dumps(meta))
+    monkeypatch.setattr(exp_abcd, "EXP_DIR", tmp_path)
+    for member in meta["members"]:
+        log = root / exp_abcd.exp_log_path(member["agent"], member["member_id"])
+        log.write_text("done")
+    monkeypatch.setattr(
+        exp_abcd.research_usage_guard,
+        "assess_and_record_opportunity",
+        lambda **kwargs: {"eligible": True, "opportunity_id": "test"},
+    )
+    monkeypatch.setattr(
+        exp_abcd.research_usage_guard, "update_opportunity_outcome", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        exp_abcd, "synthesize", lambda *a, **k: pytest.fail("producer entered synthesis")
+    )
+    monkeypatch.setattr(exp_abcd.judge_reliability, "summarize", lambda: {"judges": {}})
+    dispatched = []
+
+    def evaluate(repo, spec, exp_id, judges, **kwargs):
+        assert Path(spec).read_text() == (root / "spec.md").read_text()
+        assert len(judges) == 2
+        assert not set(judges) & {m["agent"] for m in meta["members"]}
+        dispatched.extend(judges)
+        maps = {
+            j: {chr(65 + i): member["member_id"] for i, member in enumerate(meta["members"])}
+            for j in judges
+        }
+        (root / "eval-maps.json").write_text(json.dumps(maps))
+        for j in judges:
+            (root / f"eval-out-{j}.txt").write_text(json.dumps({"scores": {"A": 9, "B": 7}}))
+        return {"evaluators": judges}
+
+    delivered = []
+    monkeypatch.setattr(
+        exp_abcd.synthesis_promotion,
+        "deliver_producer_winner",
+        lambda *a, **k: delivered.append(a) or {"status": "delegated_or_pr"},
+    )
+    monkeypatch.setattr(exp_abcd, "assert_no_member_push", lambda *a: None)
+    monkeypatch.setattr(exp_abcd, "_collected_candidate_diffs", lambda *a: {"member": "diff"})
+    # Use the real followup driver, so the generic reconciliation loop is covered too.
+    exp_abcd.followup(min_idle_s=0, collect_fn=lambda *a: {}, evaluate_fn=evaluate)
+    assert len(dispatched) == 2
+    assert len(delivered) == 1
+    assert len(delivered[0][2]["ranking"]) == 2
+
+
+def test_followup_member_push_stops_before_judging(tmp_path, monkeypatch):
+    root, meta, _ = fixture_experiment(tmp_path, monkeypatch)
+    for member in meta["members"]:
+        (root / exp_abcd.exp_log_path(member["agent"], member["member_id"])).write_text("done")
+    meta["launched_ts"] = time.time()
+    result = exp_abcd.producer_followup(
+        root,
+        meta,
+        now=time.time(),
+        min_idle_s=0,
+        eval_timeout=1,
+        collect_fn=lambda *a: {},
+        evaluate_fn=lambda *a, **k: pytest.fail("judged pushed member"),
+        push_check_fn=lambda *a: "member_pushed",
+    )
+    assert result["status"] == "member_pushed"
+
+
+def test_producer_guard_retains_missing_spec_and_budget_checks(tmp_path, monkeypatch):
+    import sqlite3
+
+    import research_usage_guard as guard
+
+    db = sqlite3.connect(":memory:")
+    root, meta, _ = fixture_experiment(tmp_path, monkeypatch)
+    monkeypatch.setattr(exp_abcd, "exp_paths", lambda exp_id: root)
+    monkeypatch.setattr(guard.capabilities, "production_heartbeat", lambda *a, **k: None)
+    kwargs = dict(
+        exp_id="experiment",
+        repo="a/b",
+        subject="a/b#3",
+        spec_text="frozen",
+        base_sha="base",
+        conn=db,
+        evaluator_count=2,
+        evaluator_agents=["cursor", "vibe"],
+        now=1000,
+    )
+    result = guard.assess_and_record_opportunity(
+        **kwargs, env={"ORCH_RESEARCH_ARM": "0", "ORCH_EXPERIMENT_PRODUCER": "1"}
+    )
+    assert result["eligible"] is True
+    assert (
+        guard.assess_and_record_opportunity(
+            **kwargs, is_missing_spec=True, env={"ORCH_EXPERIMENT_PRODUCER": "1"}
+        )["eligible"]
+        is False
+    )
+    meta["producer"] = "other"
+    (root / "meta.json").write_text(json.dumps(meta))
+    assert (
+        guard.assess_and_record_opportunity(
+            **{**kwargs, "exp_id": "other"}, env={"ORCH_EXPERIMENT_PRODUCER": "1"}
+        )["reason"]
+        == "research_arm_disabled"
+    )
+
+
+def test_real_subject_plan_keeps_reservations_and_pacing(tmp_path, monkeypatch):
+    import research_scheduler
+
+    cap = {"agents": {a: {"state": "ok"} for a in ["codex", "claude", "cursor", "vibe"]}}
+    monkeypatch.setattr(
+        producer,
+        "route_cells",
+        lambda tasks, agents, **k: [
+            {"task_type": "implement", "agent": a, "age_days": 25} for a in agents
+        ],
+    )
+    monkeypatch.setattr(
+        research_scheduler, "spare_capacity", lambda *a: {a: 2 for a in cap["agents"]}
+    )
+    item = {"target": "a/b#1", "task_type": "implement", "labels": [], "lane": "research"}
+    kwargs = dict(
+        learned={"implement": {"codex": {"rank": 0}, "claude": {"rank": 1}}},
+        claimed_targets=set(),
+        excluded_targets=set(),
+        production_reserve={"codex": 2},
+        rng=random.Random(2),
+    )
+    plan = producer.build_plan([item], cap, **kwargs)
+    assert plan["planned"][0]["pools"]["codex"] == "production_reserve"
+    assert (
+        producer.build_plan([item], cap, **{**kwargs, "excluded_targets": {"a/b#1"}})["planned"]
+        == []
+    )
+
+
+def test_trial_shell_is_bash32_compatible_and_self_expiring(tmp_path):
+    from paths import REPO_ROOT
+
+    source = (REPO_ROOT / "orchestrate.sh").read_text()
+    start = source.index("# ORCH-ANCHOR: experiment-producer-trial")
+    end = source.index(
+        "unset _orch_exp_trial _orch_exp_end _orch_exp_verdict _orch_exp_default", start
+    ) + len("unset _orch_exp_trial _orch_exp_end _orch_exp_verdict _orch_exp_default")
+    block = source[start:end]
+    prelude = 'python3() { echo "20261020 pending"; }; date() { echo 20261021; }; '
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            prelude
+            + block
+            + '\nprintf "%s %s" "$ORCH_EXPERIMENT_PRODUCER" "$ORCH_EXPERIMENT_RATE_PER_DAY"',
+        ],
+        env={"PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert result.stdout == "0 2"
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            prelude.replace("pending", "pass")
+            + block
+            + '\nprintf "%s" "$ORCH_EXPERIMENT_PRODUCER"',
+        ],
+        env={"PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout == "1"
+
+
+def test_direct_winner_candidate_links_through_existing_discovery(tmp_path, monkeypatch):
+    import sqlite3
+
+    root, meta, evaluation = fixture_experiment(tmp_path, monkeypatch)
+    monkeypatch.setattr(synthesis_promotion, "_accepted_source_influences", lambda *a: [])
+    member = meta["members"][0]
+    receipt = {
+        "candidate_id": "experiment:experiment",
+        "local_verify": {member["member_id"]: {"ok": True, "verified_commit": "commit"}},
+    }
+    state = synthesis_promotion.compile_producer_candidate(root, meta, member, receipt, "commit")
+    assert state["delivery_phase"] == "candidate_ready"
+    assert state["synthesis"] == {}
+    db_path = tmp_path / "brain.db"
+    with sqlite3.connect(db_path) as db:
+        db.execute("CREATE TABLE runs (run_id TEXT)")
+        db.execute("INSERT INTO runs VALUES ('keepalive:a/b#9:codex')")
+
+    def gh(argv):
+        if "search/issues" in argv:
+            return {
+                "incomplete_results": False,
+                "total_count": 1,
+                "items": [
+                    {
+                        "number": 9,
+                        "url": "https://api.github.com/repos/a/b/issues/9",
+                        "pull_request": {"url": "https://api.github.com/repos/a/b/pulls/9"},
+                    }
+                ],
+            }
+        return {
+            "number": 9,
+            "url": "https://api.github.com/repos/a/b/pulls/9",
+            "body": "Candidate ID: `experiment:experiment`",
+            "base": {"repo": {"full_name": "a/b"}},
+        }
+
+    result = synthesis_promotion.default_delivery_discovery(state, gh_fn=gh, db_path=db_path)
+    assert result["status"] == "linked"
+    synthesis_promotion.link_delivery(
+        root,
+        delivery_run_id=result["run_id"],
+        delivery_ref=result["ref"],
+        pr_number=result["pr_number"],
+    )
+    assert synthesis_promotion.load_state(root)["delivery_phase"] == "delegated_or_pr"
+
+
+def test_keepalive_label_retries_and_expired_subject_is_released(tmp_path, monkeypatch):
+    root, meta, _ = fixture_experiment(tmp_path, monkeypatch)
+    receipt = {
+        "status": "delegated_or_pr",
+        "pr_url": "https://github.com/a/b/pull/9",
+        "pr_number": 9,
+        "winner": "cursor",
+        "label_result": {"error": "quota"},
+    }
+    (root / "producer-delivery.json").write_text(json.dumps(receipt))
+    calls = []
+    result = exp_abcd.producer_followup(
+        root,
+        meta,
+        now=time.time(),
+        min_idle_s=0,
+        eval_timeout=1,
+        collect_fn=None,
+        evaluate_fn=None,
+        gh_fn=lambda argv: calls.append(argv) or {"stdout": ""},
+    )
+    assert calls == [["gh", "pr", "edit", "9", "-R", "a/b", "--add-label", "agent:cursor"]]
+    assert "error" not in result["label_result"]
+    (root / "producer-delivery.json").unlink()
+    result = exp_abcd.producer_followup(
+        root,
+        meta,
+        now=meta["launched_ts"] + 72 * 3600,
+        min_idle_s=0,
+        eval_timeout=1,
+        collect_fn=None,
+        evaluate_fn=None,
+        gh_fn=lambda argv: calls.append(argv) or {"stdout": ""},
+    )
+    assert result["reason"] == "72h_without_pr"
+    assert calls[-1][-2:] == ["--remove-label", "status:in-progress"]

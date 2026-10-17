@@ -1918,6 +1918,20 @@ def strategy_completed_line(result: dict, costs: dict) -> str:
     return f"  strategy experiment: completed {result.get('exp_id')}{score_bit} {cost_bit}"
 
 
+def experiment_producer_line():
+    import experiment_producer
+
+    m = experiment_producer.producer_summary()
+    reasons = ", ".join(f"{k}={v}" for k, v in sorted(m["skips"].items())) or "none"
+    unknown = "; UNKNOWN " + ", ".join(m["unknowns"]) if m["unknowns"] else ""
+    return (
+        f"  experiment producer: launched {m['launched']}, evaluated {m['evaluated']}, "
+        f"winner_prs {m['winner_prs']}, winner_merged {m['winner_merged']}, "
+        f"cells_fresh {m['cells_fresh']}/{m['cells_total']}, "
+        f"skipped {sum(m['skips'].values())} ({reasons}){unknown}"
+    )
+
+
 def format_report(rep: dict) -> str:
     lines = [
         "# Switch review — held switches must be revisited, not forgotten",
@@ -1949,6 +1963,7 @@ def format_report(rep: dict) -> str:
             ]
     except (OSError, ValueError, TypeError):
         lines += ["  strategy experiment: UNKNOWN — no completed scored evaluation", ""]
+    lines += [experiment_producer_line(), ""]
     if rep.get("adjudicator_shadow"):
         lines += [rep["adjudicator_shadow"], ""]
     if rep.get("adjudicator_live"):
