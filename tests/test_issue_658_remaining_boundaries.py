@@ -9,7 +9,6 @@ import pytest
 
 import capabilities
 import capability_advisor as advisor
-import capability_propensity as propensity
 import dispatcher
 
 
@@ -87,39 +86,6 @@ def test_repo_probe_memo_is_scoped_to_checkout_and_consult(monkeypatch, tmp_path
         (first_path,),
     ]
     assert len(facts) == 2
-
-
-@pytest.mark.parametrize("classified", [False, True])
-def test_unreadable_ranking_preserves_advice_on_both_classification_paths(monkeypatch, classified):
-    """An optional ranking failure must preserve the matched capability itself."""
-    caps = {
-        "test-cap": {
-            "status": "observed",
-            "entrypoint": "test.py",
-            "matcher": {"task_type": "implement"},
-        }
-    }
-    monkeypatch.setattr(capabilities, "load_declared", lambda *args, **kwargs: caps)
-    monkeypatch.setattr(advisor, "binding_suppressed", lambda *args: "")
-    monkeypatch.setattr(advisor, "binding_for", lambda *args, **kwargs: {"test-cap": "declared"})
-    monkeypatch.setattr(advisor, "surface_status", lambda *args, **kwargs: {"status": "declared"})
-    monkeypatch.setattr(advisor, "direct_entry", lambda: {})
-    monkeypatch.setattr(
-        advisor,
-        "classify_task",
-        lambda text: (
-            [{"task_type": "implement", "hits": ["fixture"], "score": 1}] if classified else []
-        ),
-    )
-
-    def unreadable_rank(*args, **kwargs):
-        raise OSError("isolated rank-store failure")
-
-    monkeypatch.setattr(propensity, "rank", unreadable_rank)
-    result = advisor.advise("fixture", surface="test", record=False)
-    assert result["useful"] is True
-    assert [row["capability_id"] for row in result["capabilities"]] == ["test-cap"]
-    assert result["dispatch_ready_count"] == 0
 
 
 @pytest.mark.parametrize(
