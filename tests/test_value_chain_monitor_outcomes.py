@@ -125,8 +125,9 @@ def _edge(run: str, cap_id: str = CAP) -> tuple:
 def _section(ledger, db=None) -> dict:
     inputs = monitor._brain(db or feedback.DB_PATH, NOW - monitor.WINDOW_DAYS * 86400, NOW)
     inputs["fleet_issues"] = [OPEN_ISSUE]  # role-triage's demand: open issues
-    # offload and role-redirect declare no situation query of their own.
-    inputs["cadence_inputs"] = {"offload": 1, "role-redirect": 1}
+    inputs["stall_targets"] = {"o/r#1"}  # role-redirect's demand: the sweep's actionable stalls
+    # offload declares no situation query of its own.
+    inputs["cadence_inputs"] = {"offload": 1}
     return monitor.report(now=NOW, path=ledger, env={}, inputs=inputs)
 
 
