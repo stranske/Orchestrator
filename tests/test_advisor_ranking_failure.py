@@ -152,3 +152,145 @@ class AdvisorRankingFailureTests(unittest.TestCase):
             [call.args for call in registrations.call_args_list],
             [(signal.SIGALRM, advisor._consult_expired), (signal.SIGALRM, previous)],
         )
+
+    def test_phase_failure_and_exhausted_budget_preserve_successful_phase_counts(self):
+        phases = ["tick:broken", "tick:healthy", "tick:late"]
+        clock = self.enterContext(
+            patch.object(
+                advisor.time,
+                "monotonic",
+                side_effect=[100, 100, 101, 101 + advisor.CONSULT_BUDGET_S],
+            )
+        )
+        consult = self.enterContext(
+            patch.object(
+                advisor,
+                "advise",
+                side_effect=[
+                    OSError("unreadable phase"),
+                    {
+                        "experiment_id": "healthy-trial",
+                        "capabilities": [{"capability_id": "one"}, {"capability_id": "two"}],
+                        "bound_capabilities": ["two", "one"],
+                        "recorded_matches": 1,
+                    },
+                ],
+            )
+        )
+        suppressed = self.enterContext(patch.object(advisor, "binding_suppressed", return_value=""))
+        report = advisor.consult_phases(
+            day="2026-10-17", surfaces=phases, record=False, path=self.ledger
+        )
+        self.assertEqual(clock.call_count, 4)
+        self.assertEqual(consult.call_count, 2)
+        for call, surface in zip(consult.call_args_list, phases):
+            self.assertEqual(call.args, (advisor.consult_text(surface, "2026-10-17"),))
+            self.assertEqual(
+                call.kwargs,
+                dict(surface=surface, skill=surface, lane="tick", record=False, path=self.ledger),
+            )
+        suppressed.assert_called_once_with("tick:healthy")
+        self.assertEqual(report["day"], "2026-10-17")
+        self.assertEqual(report["phases"], 3)
+        self.assertEqual(report["offered"], 2)
+        self.assertEqual(report["recorded"], 1)
+        self.assertEqual(report["errors"], ["tick:broken", "tick:late"])
+        self.assertEqual(
+            report["rows"],
+            [
+                {
+                    "surface": "tick:broken",
+                    "error": "OSError: unreadable phase",
+                    "offered": 0,
+                    "recorded": 0,
+                },
+                {
+                    "surface": "tick:healthy",
+                    "experiment_id": "healthy-trial",
+                    "offered": 2,
+                    "bound": ["one", "two"],
+                    "recorded": 1,
+                    "suppressed": False,
+                },
+                {
+                    "surface": "tick:late",
+                    "error": f"consult budget of {advisor.CONSULT_BUDGET_S}s exhausted before this phase",
+                    "offered": 0,
+                    "recorded": 0,
+                },
+            ],
+        )
+
+    def test_guard_runs_without_alarm_support(self):
+        report = {"day": "offline", "phases": 1}
+        for error in (ValueError, AttributeError, OSError):
+            with self.subTest(error=error.__name__), patch.object(
+                signal, "signal", side_effect=error("no alarm support")
+            ), patch.object(signal, "alarm") as alarms, patch.object(
+                advisor, "consult_phases", return_value=report
+            ) as consult:
+                self.assertIs(
+                    advisor.consult_phases_guarded(day="offline", record=False, path=self.ledger),
+                    report,
+                )
+                consult.assert_called_once_with(day="offline", record=False, path=self.ledger)
+                alarms.assert_not_called()
+
+    def test_guard_reports_base_exception_when_alarm_is_unavailable(self):
+        self.enterContext(patch.object(signal, "signal", side_effect=ValueError("worker thread")))
+        alarms = self.enterContext(patch.object(signal, "alarm"))
+        consult = self.enterContext(
+            patch.object(advisor, "consult_phases", side_effect=KeyboardInterrupt("interrupted"))
+        )
+        self.assertEqual(
+            advisor.consult_phases_guarded(day="offline", path=self.ledger),
+            {
+                "day": "offline",
+                "phases": 0,
+                "rows": [],
+                "offered": 0,
+                "recorded": 0,
+                "errors": ["*"],
+                "error": "KeyboardInterrupt: interrupted",
+            },
+        )
+        consult.assert_called_once_with(day="offline", path=self.ledger)
+        alarms.assert_not_called()
+
+    def test_guard_cleanup_failure_cannot_replace_successful_report(self):
+        previous = object()
+        report = {"phases": 2, "offered": 3, "recorded": 1}
+        for failing in ("cancel", "restore"):
+            with self.subTest(failing=failing), patch.object(
+                signal,
+                "signal",
+                side_effect=[previous, OSError("cannot restore")] if failing == "restore" else None,
+                return_value=previous,
+            ) as registrations, patch.object(
+                signal,
+                "alarm",
+                side_effect=[None, OSError("cannot cancel")] if failing == "cancel" else None,
+            ) as alarms, patch.object(
+                advisor, "consult_phases", return_value=report
+            ) as consult:
+                self.assertIs(advisor.consult_phases_guarded(path=self.ledger), report)
+                consult.assert_called_once_with(path=self.ledger)
+                self.assertEqual(
+                    [call.args for call in alarms.call_args_list],
+                    [(advisor.CONSULT_BUDGET_S + 5,), (0,)],
+                )
+                self.assertEqual(
+                    registrations.call_args_list[0].args, (signal.SIGALRM, advisor._consult_expired)
+                )
+                self.assertEqual(registrations.call_count, 2 if failing == "restore" else 1)
+                if failing == "restore":
+                    self.assertEqual(registrations.call_args.args, (signal.SIGALRM, previous))
+
+    def test_unreadable_contraindications_do_not_change_candidates(self):
+        candidates = [{"capability_id": "one"}, {"capability_id": "two"}]
+        notes = self.enterContext(
+            patch.object(repo_knowledge, "contraindications_for", side_effect=OSError("unreadable"))
+        )
+        self.assertEqual(advisor._annotate_contraindications(candidates, "owner/project"), [])
+        notes.assert_called_once_with("owner/project")
+        self.assertEqual(candidates, [{"capability_id": "one"}, {"capability_id": "two"}])
