@@ -32,6 +32,7 @@ import collections
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import time
 from contextlib import contextmanager
@@ -145,6 +146,18 @@ def _load_rows(path: Path) -> list[dict]:
     return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
 
 
+MAX_ATTEMPTS = (
+    3  # a case whose provisioning or role run failed is retried on later runs, this many in all
+)
+
+
+def _final(row: dict) -> bool:
+    """A row later runs must not retry: advised, refused at certification, or out of attempts."""
+    if "proposal" in row or (row.get("certification") or {}).get("status") == "uncertified":
+        return True
+    return int(row.get("attempts") or 1) >= MAX_ATTEMPTS
+
+
 def run_live(
     *,
     limit: int | None = None,
@@ -171,7 +184,8 @@ def run_live(
     provider = provider or _exact_head_checkout
     snapshot_reader = snapshot_reader or pr_snapshot
     rows = _load_rows(path)
-    saved = {row.get("case_id"): row for row in rows}
+    saved = {row.get("case_id"): row for row in rows if _final(row)}
+    retrying = {row.get("case_id"): row for row in rows if not _final(row)}
     population = retro.disputes(db=db, now=now)
     attempted = advised = uncertified = 0
     for dispute in population:
@@ -181,12 +195,19 @@ def run_live(
         if case_id in saved:
             continue
         attempted += 1
+        earlier = retrying.pop(case_id, None)
+        if earlier is not None:
+            rows.remove(earlier)
         entry: dict[str, Any] = {
             **retro._case_identity(dispute),
             "case_id": case_id,
             "target": dispute["target"],
             "source": "live",
             "attempted_at": now,
+            "first_attempted_at": (
+                earlier.get("first_attempted_at", earlier.get("attempted_at")) if earlier else now
+            ),
+            "attempts": int(earlier.get("attempts") or 1) + 1 if earlier else 1,
             "later_truth": retro.later_truth(dispute),
             "merge_rule_verdict": (
                 ("PASS" if dispute["merged"] else "FAIL") if dispute["merged"] is not None else None
@@ -246,14 +267,19 @@ def run_live(
                         entry["cost_usd"] = retro.measured_cost(result.get("backend_run_id"), db)
                     except (OSError, ValueError, KeyError, TypeError):
                         entry["cost_usd"] = None
-        except (ValueError, OSError, KeyError, TypeError, RuntimeError) as exc:
-            if "certification" not in entry:
+        except (ValueError, KeyError, TypeError) as exc:
+            if "certification" in entry:
+                entry["error"] = str(exc)[:300]  # the role run failed after certification
+            else:
                 entry["certification"] = {"status": "uncertified", "reason": str(exc)[:300]}
                 uncertified += 1
-            else:
-                entry["error"] = str(exc)[:300]
+        except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+            # Provisioning, an evidence read or the role run failed, not the case: the row is
+            # kept with its error and retried by later runs until MAX_ATTEMPTS, then it is final.
+            entry["error"] = str(exc)[:300]
         rows.append(entry)
-        saved[case_id] = entry
+        if _final(entry):
+            saved[case_id] = entry
     # Grade every live row against later truth and write the live report. NOT the retrospective's
     # persistence: `adjudicator_retro._row_metadata_only` treats any serialized qualification as
     # metadata-only on purpose (a JSON flag cannot prove collector issuance for the retro's own
@@ -321,6 +347,7 @@ def live_summary(rows: list[dict]) -> dict:
     decided = [r for r in certified if r.get("decision") in {"uphold_blocker", "reject_blocker"}]
     graded = [r for r in decided if r.get("later_truth") in {"PASS", "FAIL"}]
     refused = [r for r in rows if (r.get("certification") or {}).get("status") == "uncertified"]
+    failed = [r for r in rows if "proposal" not in r and (r.get("error") or r.get("errors"))]
     agree = sum(retro._shadow_verdict_for_row(r) == r["later_truth"] for r in graded)
     rule = sum(r.get("merge_rule_verdict") == r["later_truth"] for r in graded)
     return {
@@ -333,6 +360,8 @@ def live_summary(rows: list[dict]) -> dict:
             ).most_common()
         ),
         "advised": len(decided),
+        "failed": len(failed),
+        "retrying": sum(1 for r in failed if not _final(r)),
         "graded": len(graded),
         "agree": agree,
         "disagree": len(graded) - agree,
@@ -357,7 +386,11 @@ def _exact_head_checkout(target: str, sha: str):
 
 
 def weekly_line(path: Path | None = None) -> str:
-    """`adjudicator live: disputes N, advised A, uncertified U (why), graded G (agree X, disagree Y)`."""
+    """`adjudicator live: disputes N, advised A, uncertified U (why), failed F, graded G (agree X, disagree Y)`.
+
+    `failed F` appears only when a certified case's provisioning or role run failed (retried up
+    to MAX_ATTEMPTS); `(why)` only when something was refused at certification.
+    """
     try:
         report = json.loads((path or report_path()).read_text())
         rows = [row for row in report.get("rows", []) if isinstance(row, dict)]
@@ -370,9 +403,10 @@ def weekly_line(path: Path | None = None) -> str:
             if summary["uncertified"] and reasons
             else ""
         )
+        failed = f", failed {summary['failed']}" if summary.get("failed") else ""
         return (
             f"adjudicator live: disputes {report.get('population', 'UNKNOWN')}, "
-            f"advised {summary['advised']}, uncertified {summary['uncertified']}{refused}, "
+            f"advised {summary['advised']}, uncertified {summary['uncertified']}{refused}{failed}, "
             f"graded {summary['graded']} (agree {summary['agree']}, disagree {summary['disagree']})"
         )
     except (OSError, ValueError, KeyError, TypeError):
@@ -522,6 +556,11 @@ def main(argv: list[str] | None = None) -> int:
         "--no-dispatch", action="store_true", help="certify and record, never ask the role"
     )
     parser.add_argument("--line", action="store_true", help="print the weekly line and exit")
+    parser.add_argument(
+        "--enabled",
+        action="store_true",
+        help="exit 0 when the kill switch is on; the tick asks this so the switch is read once",
+    )
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args(argv)
     if args.selftest:
@@ -530,6 +569,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.line:
         print(weekly_line())
         return 0
+    if args.enabled:
+        return 0 if enabled() else 1
     result = run_live(limit=args.limit, dispatch=not args.no_dispatch)
     print(json.dumps({k: v for k, v in result.items() if k != "rows"}, indent=2, default=str))
     return 0

@@ -11,6 +11,7 @@ import pytest
 
 import adjudicator_live as live
 import feedback
+import paths
 import roles
 import switch_review
 
@@ -149,3 +150,59 @@ def test_weekly_review_prints_the_live_line(world, monkeypatch):
     world["path"].write_text(json.dumps({"rows": [], "summary": {}, "population": 1}))
     again = live.run_live(**world["common"])
     assert again["attempted"] == 1 and len(world["calls"]) == 2
+
+
+def test_a_failed_role_run_is_retried_up_to_the_cap_and_counted_as_failed(world):
+    boom = {"n": 0}
+
+    def failing_runner(**kw):
+        boom["n"] += 1
+        raise RuntimeError("backend down")
+
+    common = {**world["common"], "runner": failing_runner}
+    first = live.run_live(**common)
+    assert (first["attempted"], first["advised"], first["uncertified"]) == (1, 0, 0)
+    row = first["rows"][0]
+    assert row["certification"]["status"] == "certified" and row["error"] == "backend down"
+    assert row["attempts"] == 1 and "proposal" not in row
+    assert "uncertified 0, failed 1, graded 0" in live.weekly_line(world["path"])
+    second = live.run_live(**common)
+    assert second["attempted"] == 1 and len(second["rows"]) == 1
+    assert second["rows"][0]["attempts"] == 2
+    assert second["rows"][0]["first_attempted_at"] == row["first_attempted_at"]
+    third = live.run_live(**common)
+    assert third["rows"][0]["attempts"] == live.MAX_ATTEMPTS
+    fourth = live.run_live(**common)
+    assert fourth["attempted"] == 0 and boom["n"] == live.MAX_ATTEMPTS, "out of attempts: final"
+    summary = json.loads(world["path"].read_text())["summary"]
+    assert (summary["failed"], summary["retrying"]) == (1, 0)
+    # A backend that answers on the retry gets the case advised (fresh report, one failure first).
+    world["path"].unlink()
+    live.run_live(**common)
+    recovered = live.run_live(**world["common"])
+    assert recovered["advised"] == 1 and recovered["rows"][0]["attempts"] == 2
+
+
+def test_a_provisioning_failure_is_an_error_not_a_refusal(world):
+    @contextmanager
+    def broken_provider(target, head):
+        raise OSError("no disk")
+        yield  # pragma: no cover
+
+    result = live.run_live(**{**world["common"], "provider": broken_provider})
+    row = result["rows"][0]
+    assert result["uncertified"] == 0 and row["error"] == "no disk" and "certification" not in row
+    assert world["calls"] == [] and not live._final(row)
+
+
+def test_the_tick_asks_the_module_whether_the_switch_is_on(monkeypatch):
+    monkeypatch.delenv(live.LIVE_SWITCH, raising=False)
+    assert live.main(["--enabled"]) == 0
+    monkeypatch.setenv(live.LIVE_SWITCH, "off")
+    assert live.main(["--enabled"]) == 1
+    monkeypatch.setenv(live.LIVE_SWITCH, "yes")
+    assert live.main(["--enabled"]) == 0
+    text = (paths.REPO_ROOT / "orchestrate.sh").read_text(encoding="utf-8")
+    needle = 'adjudicator_live.py" --enabled'
+    assert text.count(needle) == 1, "the tick reads the live kill switch through the module, once"
+    assert "ORCH_ADJUDICATOR_LIVE_SHADOW" not in text, "the shell never reads the switch itself"
