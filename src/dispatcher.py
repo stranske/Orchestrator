@@ -1602,11 +1602,11 @@ def _gemini_workspace_prompt(prompt: str, cwd: str | Path) -> str:
 
 
 def _align_gemini_print_timeout(argv: list[str], timeout: int) -> None:
-    """Keep agy's print wait below the outer subprocess timeout for offloads."""
+    """Round the print wait down in whole minutes; the outer subprocess is the hard cap."""
     if "--print-timeout" not in argv:
         return
     budget = max(1, timeout - 15)
-    minutes = max(1, (budget + 59) // 60)
+    minutes = max(1, budget // 60)
     argv[argv.index("--print-timeout") + 1] = f"{minutes}m"
 
 
