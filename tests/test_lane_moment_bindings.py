@@ -58,7 +58,16 @@ def test_every_role_consumer_behind_a_switch_is_declared():
 def test_stall_population_is_read_from_the_sweep_log(tmp_path):
     now = int(time.time())
     log = tmp_path / "redirect-sweep.log"
+    # The first sweep names nothing and carries nested braces: every target sits in a LATER
+    # object, so a scanner that mis-advances after the first decode (2026-10-17: 10 of 2,319 sweeps
+    # read, then a shadowed window bound) returns an empty set here instead of the two targets.
     sweeps = [
+        {
+            "generated_at": now - 60,
+            "actionable_count": 0,
+            "actionable": [],
+            "reports": [{"nested": {"deep": [1, 2, {"x": "{ not a brace"}]}}],
+        },
         {
             "generated_at": now - 3600,
             "actionable_count": 2,
@@ -70,8 +79,7 @@ def test_stall_population_is_read_from_the_sweep_log(tmp_path):
             "actionable_count": 1,
             "actionable": [{"target": "o/r#9"}],
         },
-        {"generated_at": now - 60, "actionable_count": 0, "actionable": []},
-    ]
+    ] * 3
     log.write_text("\n".join(json.dumps(s, indent=2) for s in sweeps) + "\nnot json\n")
     targets = vcm._stall_sweep_targets(log, now - vcm.WINDOW_DAYS * 86400, now)
     assert targets == {"o/r#1", "o/r#2"}, "distinct actionable targets inside the window"
