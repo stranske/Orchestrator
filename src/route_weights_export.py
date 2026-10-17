@@ -466,7 +466,17 @@ def publish_document(
             )
             published = None
         else:
-            published = json.loads(artifact.stdout)
+            try:
+                loaded = json.loads(artifact.stdout)
+            except json.JSONDecodeError as exc:
+                raise PublicationRefused(
+                    f"publish_guard refused: remote {EXPORT_PATH} is not valid JSON ({exc})"
+                ) from exc
+            if not isinstance(loaded, dict):
+                raise PublicationRefused(
+                    f"publish_guard refused: remote {EXPORT_PATH} is not a JSON object"
+                )
+            published = loaded
         _require_publishable(document, published, allow_evidence_regression, state_dir=state_dir)
         has_local = (
             subprocess.run(

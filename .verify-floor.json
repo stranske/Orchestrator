@@ -1,6 +1,6 @@
 {
-  "collected": 3931,
-  "passed": 3931,
+  "collected": 3933,
+  "passed": 3933,
   "skipped_max": 31,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 52,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "PR #663: python3 src/verify.py VERIFIED on CI-shaped runner (empty ORCH_STATE_DIR + ORCH_LOCAL_RUNTIME): 3931 collected, 3906 passed, 0 failed, 25 skipped (passed floor stores passed+skipped). CI job 117371962622: 3905 passed + 26 skipped. Prior macOS-sandbox RED (29 failures) was environment-local; ceilings unchanged."
+  "note": "PR #663: floor +2 for malformed remote export artifact refusal cases (invalid JSON + non-object). Prior CI-shaped verify: 3931 collected / 3931 passed+skipped; ceilings unchanged."
 }

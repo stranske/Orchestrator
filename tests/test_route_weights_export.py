@@ -882,3 +882,45 @@ def test_export_branch_without_artifact_can_publish_fresh(tmp_path, monkeypatch,
                 document, allow_evidence_regression=True, state_dir=tmp_path / "state"
             )
         assert git(remote, "rev-parse", export.EXPORT_BRANCH) == before
+
+
+@pytest.mark.parametrize(
+    "payload,match",
+    [
+        ("not-json\n", "is not valid JSON"),
+        ("[]\n", "is not a JSON object"),
+    ],
+    ids=["invalid-json", "non-object"],
+)
+def test_export_branch_with_malformed_artifact_refuses(tmp_path, monkeypatch, payload, match):
+    """A present but unusable remote artifact must refuse cleanly, not traceback."""
+
+    def git(repository, *args):
+        return subprocess.run(
+            ["git", "-C", str(repository), *args], check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    for key in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{key}_NAME", "Guard Test")
+        monkeypatch.setenv(f"GIT_{key}_EMAIL", "guard@example.invalid")
+    remote = tmp_path / "remote.git"
+    remote.mkdir()
+    git(remote, "init", "--bare", "--initial-branch=main")
+    checkout = tmp_path / "checkout"
+    git(tmp_path, "clone", str(remote), str(checkout))
+    target = checkout / export.EXPORT_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(payload, encoding="utf-8")
+    git(checkout, "add", ".")
+    git(checkout, "commit", "-m", "fixture malformed publication")
+    git(checkout, "push", "origin", f"HEAD:{export.EXPORT_BRANCH}")
+    before = git(remote, "rev-parse", export.EXPORT_BRANCH)
+    monkeypatch.setattr(export.provision, "ensure_canonical", lambda *a: checkout)
+    document = {
+        "source_version": 2,
+        "task_types": {"implement": {"evidence_ok": True, "ranking": [{"agent": "codex"}]}},
+    }
+    with pytest.raises(export.PublicationRefused, match=match):
+        export.publish_document(document, state_dir=tmp_path / "state")
+    assert git(remote, "rev-parse", export.EXPORT_BRANCH) == before
+    assert git(checkout, "branch", "--show-current") == "main"
