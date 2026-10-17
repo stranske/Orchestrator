@@ -298,6 +298,26 @@ TOKEN_SOURCES = COMPLETE_COST_SOURCES | frozenset({"ledger"})
 DURABILITY_DETECTION_SINCE = 1787961600  # 2026-08-29T00:00:00Z
 DURABILITY_DETECTION_SINCE_DATE = "2026-08-29"
 RELEARN_WINDOW_DAYS = 120
+
+MODEL_EPOCHS_PATH = Path(__file__).resolve().parent.parent / "config" / "model_epochs.json"
+
+
+def model_epoch_floor(agent: str, since: int, path: Path | None = None) -> int:
+    """Learning floor for `agent`: the later of the window start and its model epoch.
+
+    A major model change (e.g. gemini 3.1 Pro -> Argon) must not inherit the old model's record, and
+    runs are keyed by agent, not model. An unreadable or malformed file returns `since` unchanged
+    (the learners then behave exactly as before) and an agent without an entry is untouched.
+    """
+    try:
+        data = json.loads((path or MODEL_EPOCHS_PATH).read_text())
+        entry = (data.get("epochs") or {}).get(agent)
+        if not entry:
+            return since
+        return max(since, int(utc_epoch.from_iso(str(entry["since"]))))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return since
+
 # WHICH RUNS THE ROUTE-WEIGHT LEARNERS READ. `assignment` is 'experimental' for the tool's own
 # dispatches, 'assigned' for fleet keepalive PRs that carried an agent label, 'none' for keepalive PRs
 # with no agent, 'instrumentation' for probes. Until 2026-09-21 both learners kept only 'experimental'
@@ -6004,7 +6024,7 @@ def relearn(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DAYS) -> i
                     "AND COALESCE(o.durability_checked_ts, r.ts)>=? "  # broke-later detection floor (#293)
                     # item 9 and 2026-10-04: an excluded class says nothing about the agent
                     f"AND COALESCE(o.failure_class,'') NOT IN ({excluded_marks})",
-                    (task_type, agent, since, DURABILITY_DETECTION_SINCE, *excluded_classes),
+                    (task_type, agent, model_epoch_floor(agent, since), DURABILITY_DETECTION_SINCE, *excluded_classes),
                 ).fetchall()
                 n = len(rows)
                 succ = sum(1 for d, a, v, _cu, _src in rows if _is_success(d, a, v))
@@ -6529,7 +6549,7 @@ def relearn_quality(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DA
                     "FROM runs r WHERE r.task_type=? AND r.agent=? AND r.ts>=? "
                     f"AND {_learning_assignment_sql()} "
                     "AND r.experiment_id IS NOT NULL",
-                    (task_type, agent, since),
+                    (task_type, agent, model_epoch_floor(agent, since)),
                 ).fetchall():
                     try:
                         metadata = json.loads(raw_metadata) if raw_metadata else {}
@@ -6567,7 +6587,7 @@ def relearn_quality(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DA
                     "FROM runs r LEFT JOIN outcomes o ON r.run_id=o.run_id "
                     "WHERE r.task_type=? AND r.agent=? AND r.ts>=? "
                     f"AND {_learning_assignment_sql()}",
-                    (task_type, agent, since),
+                    (task_type, agent, model_epoch_floor(agent, since)),
                 ).fetchall():
                     if run_id in eval_q_by_run:
                         # eval scores stay usable even on infra-classified runs (judges scored
