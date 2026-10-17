@@ -316,7 +316,9 @@ def model_epoch_floor(agent: str, since: int, path: Path | None = None) -> int:
         if not entry:
             return since
         epoch = utc_epoch.from_iso(str(entry["since"]))
-        return max(since, epoch) if epoch is not None else since
+        if epoch is None:
+            return since
+        return max(since, epoch)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return since
 
