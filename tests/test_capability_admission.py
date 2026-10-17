@@ -17,6 +17,7 @@ from __future__ import annotations
 import pathlib
 import sys
 import tempfile
+from unittest.mock import patch
 
 import capabilities
 import capability_activation_audit as audit
@@ -150,6 +151,7 @@ def test_safety_guard_exemption_is_declared_and_narrow():
     # switch instead of an exemption. It must stay out of the table, and its switch must still exist
     # in the tree -- `known_controls()` reads the source, so this fails if the guard is deleted.
     assert "offload" not in capabilities.KNOWN_DECLARATIONS
+    assert "kill_switch_category" not in capabilities.KNOWN_DECLARATIONS.get("offload", {})
     assert "ORCH_OFFLOAD_DISABLED" in admission.known_controls()
     # DRIFT GUARD: nothing may carry the exemption that the code table does not declare. This is what
     # catches a category typed into a live ledger instead of into the diff.
@@ -811,6 +813,125 @@ def test_consumer_deadline_rejects_first_action_on_day_fifteen(monkeypatch, tmp_
 def test_consumer_deadline_retains_timely_action_after_monitor_window(monkeypatch, tmp_path):
     category, ok, _ = _deadline_evidence(monkeypatch, tmp_path, action_day=1, now_day=100)
     assert category == "acting" and ok
+
+
+def test_declared_consumers_resolve_in_the_tree():
+    """A reviewed binding names defined rails; an absent consumer stays explicit debt."""
+    failures = {}
+    # Inspect both sources: merging tables first could hide a broken gate behind an overlay.
+    for source, declarations in (
+        ("KNOWN_GATES", capabilities.KNOWN_GATES),
+        ("KNOWN_DECLARATIONS", capabilities.KNOWN_DECLARATIONS),
+    ):
+        for cid, declaration in declarations.items():
+            if "downstream_consumer" not in declaration:
+                continue
+            resolution = admission.consumer_resolution(declaration)
+            if declaration.get("consumer_missing") is True:
+                assert str(
+                    declaration.get("notes") or ""
+                ).strip(), f"{source}:{cid}: explain the absent consumer"
+                continue
+            if not resolution["tokens"] or resolution["unresolved"]:
+                failures[f"{source}:{cid}"] = resolution
+    assert not failures, failures
+
+
+def test_declared_consumer_check_cannot_hide_a_broken_gate_behind_an_overlay():
+    """A valid overlay must not mask prose or an unresolved symbol in the gate table."""
+    cid = "route-weights-export"
+    valid = {"downstream_consumer": "route_weights_export.py:publish_document"}
+    for broken in ("the export publisher", "route_weights_export.py:no_such_consumer"):
+        with (
+            patch.dict(capabilities.KNOWN_GATES, {cid: {"downstream_consumer": broken}}),
+            patch.dict(capabilities.KNOWN_DECLARATIONS, {cid: valid}),
+        ):
+            try:
+                test_declared_consumers_resolve_in_the_tree()
+            except AssertionError as exc:
+                assert f"KNOWN_GATES:{cid}" in str(exc), str(exc)
+            else:
+                raise AssertionError(f"the consumer check accepted a broken gate: {broken}")
+
+
+def test_feature_scan_declared_consumer_applies_the_scan_output():
+    """The binding must read the scan result and persist its proposed registry entries."""
+    import feature_scan
+    import features
+
+    declaration = capabilities.KNOWN_DECLARATIONS["feature-scan"]
+    resolution = admission.consumer_resolution(declaration)
+    assert resolution["resolved"] == ["feature_scan.py:apply_scan"], resolution
+    with tempfile.TemporaryDirectory() as td:
+        root = pathlib.Path(td)
+        registry = root / "features.json"
+        registry.write_text("{}\n")
+        (root / "sample.py").write_text('"""Reusable sample."""\ndef _selftest():\n    pass\n')
+        with patch.object(feature_scan, "_capability_heartbeat"):
+            report = feature_scan.scan(path=registry, root=root)
+        result = feature_scan.apply_scan(report, dry_run=False, path=registry)
+        assert result == {"recorded": ["sample"], "dry_run": False}, result
+        recorded = features.load(registry)["sample"]
+        assert recorded["module"] == "sample.py", recorded
+        assert recorded["maturity"] == "ad-hoc", recorded
+
+
+def test_missing_consumer_declaration_survives_reconciliation_without_acceptance():
+    """The diagnostic field must reach the ledger without granting acting or lifecycle credit."""
+    cid = "docs-drift-fix-agent"
+    before = capabilities._blank_capability(cid)
+    before.update(status="active", downstream_consumer="old prose")
+    before["event_history"] = [{"type": "invocation", "timestamp": 1}]
+    ledger = {cid: before}
+    assert capabilities._reconcile_known_declarations(ledger, 2)
+    row = ledger[cid]
+    assert row["consumer_missing"] is True
+    assert row["status"] == "active"
+    assert row["outcome_links"] == []
+    cls, ok, detail = admission.consumer_class(row, {})
+    assert cls == "prose" and not ok, detail
+    assert row["event_history"][0] == {"type": "invocation", "timestamp": 1}
+    assert not capabilities._reconcile_known_declarations(ledger, 3)
+
+    # Missing consumers are findings, not waivers. Even an exercise-bound declaration must
+    # remain visible as debt before the cutoff and block admission after it.
+    ctx = {"audit_rows": {}, "fixtures": set()}
+    for created, enforced in (
+        (admission.CONSUMER_ACTS_ENFORCED_FROM - 86400, False),
+        (admission.CONSUMER_ACTS_ENFORCED_FROM + 3600, True),
+    ):
+        dated = {
+            **row,
+            "event_history": [{"timestamp": created, "type": "registered"}],
+        }
+        dated_ledger = {cid: dated}
+        verdict = admission.admit(cid, ctx=ctx, ledger=dated_ledger)
+        assert not verdict["checks"]["consumer_acts"]["ok"], verdict
+        assert ("consumer_acts" in verdict["blocking"]) is enforced, verdict
+        assert ("consumer_acts" in verdict["deferred"]) is not enforced, verdict
+        consumers = admission.consumer_report(dated_ledger, ctx, [verdict])
+        assert consumers["by_class"]["prose"] == [cid], consumers
+        assert consumers["drainable"] == [cid] and not consumers["drained"], consumers
+        assert consumers["blocking"] == ([cid] if enforced else []), consumers
+        assert consumers["deferred"] == ([] if enforced else [cid]), consumers
+        assert consumers["by_class"]["acting"] == [], consumers
+        assert dated["status"] == "active" and dated["outcome_links"] == []
+
+
+def test_original_offload_prose_is_reconciled_without_lifecycle_or_credit_changes():
+    """The source599 offload row must not vanish outside both declaration tables."""
+    before = capabilities._blank_capability("offload")
+    before.update(status="generated", downstream_consumer="the run consuming offload output")
+    before["event_history"] = [{"type": "invocation", "timestamp": 1}]
+    ledger = {"offload": before}
+    assert capabilities._reconcile_known_declarations(ledger, 2)
+    row = ledger["offload"]
+    resolution = admission.consumer_resolution(row)
+    assert resolution["tokens"] and not resolution["unresolved"], resolution
+    assert row["status"] == "generated"
+    assert row["outcome_links"] == []
+    assert row["event_history"][0] == {"type": "invocation", "timestamp": 1}
+    assert not capabilities._reconcile_known_declarations(ledger, 3)
 
 
 if __name__ == "__main__":
