@@ -47,7 +47,27 @@ ORCH = Path(__file__).resolve().parent
 LOCAL_RUNTIME = Path(os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex" / "orchestrator"))
 # Named once, for the same two consumers as `capabilities.LEDGER_PATH_ENV`.
 DB_PATH_ENV = "ORCH_FEEDBACK_DB"
-DB_PATH = Path(os.environ.get(DB_PATH_ENV, LOCAL_RUNTIME / "feedback" / "orchestrator.db"))
+
+
+def resolve_db_path(db_path: str | Path | None = None) -> Path:
+    """Resolve the Brain path consistently for the learner and its exporters.
+
+    Explicit DB selection wins, followed by the existing local-runtime override,
+    then the instance state directory, then the default local runtime.
+    """
+    selected = db_path if db_path is not None else os.environ.get(DB_PATH_ENV)
+    if selected is None:
+        runtime = Path(
+            os.environ.get(
+                "ORCH_LOCAL_RUNTIME",
+                os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"),
+            )
+        )
+        selected = runtime / "feedback" / "orchestrator.db"
+    return Path(selected).expanduser().resolve()
+
+
+DB_PATH = resolve_db_path()
 
 # `agent_switches` holds two kinds of switch (2026-09-23): `source='label'` rows come from a PR's
 # `agent:*` label timeline, `source='policy'` rows from the keepalive state marker's delegation_log

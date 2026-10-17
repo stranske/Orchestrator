@@ -1530,7 +1530,13 @@ publication; the published JSON keeps every v1 routing key byte-identical and ad
 `state`, `window`, and `observed_at` from the capacity snapshot's own `generated_at` (no token or
 account fields). Semantic change detection includes capacity `state` and `window` but not
 `observed_at` alone, so a shed or recovered seat republishes without touching posteriors or
-`exploration.policy_version`. Rail exercise records invocation without
+`exploration.policy_version`. The exporter and learner share `feedback.resolve_db_path()`
+(`ORCH_FEEDBACK_DB` overrides the root selected by `ORCH_LOCAL_RUNTIME`, `ORCH_STATE_DIR`,
+then `~/.codex/orchestrator`) and each export logs `db=<path> source_version=<n>`.
+Before publication, `publish_guard` compares against the fetched export and refuses zero source
+version, all-false evidence, or loss of any previously evidenced task type. Refusal exits non-zero
+and appears in the cadence log; an owner-approved `--allow-evidence-regression` override logs
+the deliberate downgrade reason. Rail exercise records invocation without
 `--record`, which governs exercise verdicts only.
 Dedup: firing history and its ledger-only silence annotation already existed; the weekly reader
 and independent cadence evidence were missing. Existing heartbeat repairs from main are retained.

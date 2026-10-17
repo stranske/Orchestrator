@@ -8,13 +8,48 @@ refuses without ORCH_ROUTE_WEIGHTS_PUBLISH=1, and it pushes only when the remote
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
+import tempfile
+import unittest
 from pathlib import Path
 
 import paths
 import route_weights_export as rwe
 
 ORCHESTRATE = Path(paths.REPO_ROOT) / "orchestrate.sh"
+
+
+class CadenceRefusalTests(unittest.TestCase):
+    def test_publish_refusal_is_visible_in_tick_log_and_marked_failed(self):
+        source = ORCHESTRATE.read_text()
+        block = source.split("if _cadence_due route-weights-export", 1)[1]
+        block = "if _cadence_due route-weights-export" + block.split(
+            "if _cadence_due periodic-report", 1
+        )[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "route_weights_export.py").write_text(
+                "import sys\nprint('publish_guard refused: source_version must be > 0', "
+                "file=sys.stderr)\nsys.exit(1)\n"
+            )
+            harness = """set -euo pipefail
+_cadence_due() { return 0; }
+_attempt_ok() { return 0; }
+_mark_success() { echo SUCCESS; }
+_mark_fail() { echo "FAILED: $*"; }
+"""
+            result = subprocess.run(
+                ["bash", "-c", harness + block],
+                env={**os.environ, "ORCH": directory, "STAMP_DIR": directory},
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        self.assertIn("publish_guard refused: source_version must be > 0", result.stderr)
+        self.assertIn("FAILED: route-weights-export", result.stdout)
+        self.assertNotIn("SUCCESS", result.stdout)
 
 
 def test_the_cadence_invocation_passes_publish_exactly_once():
@@ -39,7 +74,7 @@ def _wire(monkeypatch, tmp_path, *, changed: bool):
     )
     monkeypatch.setattr(rwe, "write_document", lambda target, doc: changed)
     monkeypatch.setattr(rwe.capabilities, "daily_heartbeat", lambda *a, **k: None)
-    monkeypatch.setattr(rwe, "publish_document", lambda doc: calls.append(doc) or True)
+    monkeypatch.setattr(rwe, "publish_document", lambda doc, **kwargs: calls.append(doc) or True)
     return calls
 
 

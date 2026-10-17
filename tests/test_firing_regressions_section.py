@@ -190,7 +190,7 @@ def test_review_and_formatter_consume_the_firing_section(monkeypatch):
 def _export(tmp_path, monkeypatch, *, publish=False, published=False):
     _, beats = _private_ledger(tmp_path, monkeypatch, "route-weights-export")
     monkeypatch.setattr(export, "build_document", lambda *_a: {"source_version": 2})
-    monkeypatch.setattr(export, "publish_document", lambda *_a: published)
+    monkeypatch.setattr(export, "publish_document", lambda *_a, **_k: published)
     monkeypatch.setenv("ORCH_ROUTE_WEIGHTS_PUBLISH", "1")
     monkeypatch.setattr(
         sys,
@@ -212,10 +212,14 @@ def test_route_weights_export_heartbeats_invocation_without_a_publish(
     assert export.write_document(artifact, document)
     os.utime(artifact, (NOW - 10 * DAY, NOW - 10 * DAY))
     beats = _export(tmp_path, monkeypatch)
-    assert capsys.readouterr().out == f"unchanged {artifact}\n"
+    expected = (
+        f"route_weights_export: db={export.feedback.resolve_db_path()} source_version=2\n"
+        f"unchanged {artifact}\n"
+    )
+    assert capsys.readouterr().out == expected
     monkeypatch.setattr(capabilities, "_now", lambda: NOW + DAY)
     assert export.main() == 0
-    assert capsys.readouterr().out == f"unchanged {artifact}\n"
+    assert capsys.readouterr().out == expected
     assert [a[1] for a, _ in beats] == ["invocation", "invocation"]
     row = capabilities.load(tmp_path / "capabilities.json", create=False)["route-weights-export"]
     assert row["last_invocation"] == NOW + DAY

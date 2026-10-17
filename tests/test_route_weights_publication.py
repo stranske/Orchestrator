@@ -1,5 +1,7 @@
 """Verify capacity publication against a real, isolated Git remote."""
 
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -35,7 +37,25 @@ class CapacityPublicationTests(unittest.TestCase):
                 with patch.dict(os.environ, identity):
                     self._check_publication(Path(directory), change)
 
-    def _check_publication(self, root: Path, change: str) -> None:
+    def test_evidence_regressions_preserve_remote_unless_deliberately_allowed(self):
+        for change in ("empty", "all_false", "lost_task"):
+            for allowed in (False, True):
+                with (
+                    self.subTest(change=change, allowed=allowed),
+                    tempfile.TemporaryDirectory() as directory,
+                    patch.dict(
+                        os.environ,
+                        {
+                            "GIT_AUTHOR_NAME": "Export Test",
+                            "GIT_AUTHOR_EMAIL": "export-test@example.invalid",
+                            "GIT_COMMITTER_NAME": "Export Test",
+                            "GIT_COMMITTER_EMAIL": "export-test@example.invalid",
+                        },
+                    ),
+                ):
+                    self._check_publication(Path(directory), change, allowed=allowed)
+
+    def _check_publication(self, root: Path, change: str, *, allowed: bool = False) -> None:
         remote = root / "remote.git"
         remote.mkdir()
         _git(remote, "init", "--bare", "--initial-branch=main")
@@ -53,12 +73,19 @@ class CapacityPublicationTests(unittest.TestCase):
                 for agent, cfg in capacity.AGENTS.items()
             },
         }
+        database = root / "weights.db"
+        export._fixture_db(database)
         previous = export.build_document(
-            root / "absent.db",
+            database,
             now=100,
             capacity_snapshot=snapshot,
             include_capacity=change != "legacy",
         )
+        if change == "lost_task":
+            previous["task_types"]["review"] = {
+                "evidence_ok": True,
+                "ranking": [{"agent": "codex"}],
+            }
         _git(seed, "switch", "-c", export.EXPORT_BRANCH)
         export.write_document(seed / export.EXPORT_PATH, previous)
         _git(seed, "add", str(export.EXPORT_PATH))
@@ -75,10 +102,37 @@ class CapacityPublicationTests(unittest.TestCase):
             snapshot["agents"]["codex"]["state"] = capacity.SHED
         elif change == "window":
             snapshot["agents"]["codex"]["window"] = "1h"
-        document = export.build_document(root / "absent.db", now=101, capacity_snapshot=snapshot)
+        document = export.build_document(database, now=101, capacity_snapshot=snapshot)
+        if change == "empty":
+            document = export.build_document(
+                root / "absent.db", now=101, capacity_snapshot=snapshot
+            )
+        elif change == "all_false":
+            for entry in document["task_types"].values():
+                entry.update(evidence_ok=False, ranking=[])
         should_publish = change in {"state", "window", "legacy"}
 
         with patch.object(export.provision, "ensure_canonical", return_value=canonical):
+            if change in {"empty", "all_false", "lost_task"}:
+                if allowed:
+                    with contextlib.redirect_stderr(io.StringIO()) as errors:
+                        self.assertTrue(
+                            export.publish_document(document, allow_evidence_regression=True)
+                        )
+                    self.assertIn("deliberate evidence regression allowed", errors.getvalue())
+                    self.assertEqual(
+                        json.loads(
+                            _git(remote, "show", f"{export.EXPORT_BRANCH}:{export.EXPORT_PATH}")
+                        ),
+                        document,
+                    )
+                else:
+                    with self.assertRaisesRegex(ValueError, "publish_guard refused"):
+                        export.publish_document(document)
+                    self.assertEqual(_git(remote, "rev-parse", export.EXPORT_BRANCH), previous_head)
+                    self.assertEqual(_git(canonical, "branch", "--show-current"), "main")
+                    self.assertFalse((canonical / export.EXPORT_PATH).exists())
+                return
             self.assertIs(export.publish_document(document), should_publish)
             published_head = _git(remote, "rev-parse", export.EXPORT_BRANCH)
             self.assertIs(published_head != previous_head, should_publish)

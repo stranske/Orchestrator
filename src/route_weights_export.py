@@ -309,8 +309,34 @@ def write_document(path: Path, document: dict[str, Any]) -> bool:
     return True
 
 
-def publish_document(document: dict[str, Any]) -> bool:
+def publish_guard(
+    new_doc: dict[str, Any], published_doc: dict[str, Any] | None
+) -> tuple[bool, str]:
+    """Refuse an empty learner or loss of any previously published task evidence."""
+    if new_doc.get("source_version", 0) <= 0:
+        return False, "source_version must be > 0 (empty or wrong feedback DB)"
+    tasks = new_doc.get("task_types", {})
+    if not any(entry.get("evidence_ok") is True for entry in tasks.values()):
+        return False, "all task_types have evidence_ok=false"
+    previous_tasks = (published_doc or {}).get("task_types", {})
+    lost = sorted(
+        task
+        for task, entry in previous_tasks.items()
+        if entry.get("evidence_ok") is True
+        and tasks.get(task, {}).get("evidence_ok") is not True
+    )
+    if lost:
+        return False, f"published evidence_ok=true became false for: {', '.join(lost)}"
+    return True, ""
+
+
+def publish_document(
+    document: dict[str, Any], *, allow_evidence_regression: bool = False
+) -> bool:
     """Commit and push the export branch only when its remote artifact changes."""
+    ok, reason = publish_guard(document, None)
+    if not ok and not allow_evidence_regression:
+        raise ValueError(f"publish_guard refused: {reason}")
     canonical = provision.ensure_canonical("stranske/Orchestrator")
     subprocess.run(["git", "-C", str(canonical), "fetch", "--prune", "origin"], check=True)
     remote_ref = f"origin/{EXPORT_BRANCH}"
@@ -321,6 +347,20 @@ def publish_document(document: dict[str, Any]) -> bool:
         ).returncode
         == 0
     )
+    published = None
+    if has_remote:
+        result = subprocess.run(
+            ["git", "-C", str(canonical), "show", f"{remote_ref}:{EXPORT_PATH}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        published = json.loads(result.stdout)
+    ok, reason = publish_guard(document, published)
+    if not ok:
+        if not allow_evidence_regression:
+            raise ValueError(f"publish_guard refused: {reason}")
+        print(f"publish_guard: deliberate evidence regression allowed: {reason}", file=sys.stderr)
     if has_remote:
         has_local = (
             subprocess.run(
@@ -465,15 +505,21 @@ def main() -> int:
         type=Path,
         default=Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator")),
     )
-    parser.add_argument("--feedback-db", type=Path, default=feedback.DB_PATH)
+    parser.add_argument("--feedback-db", type=Path, help="override the shared feedback DB resolver")
     parser.add_argument(
         "--publish", action="store_true", help="publish only with ORCH_ROUTE_WEIGHTS_PUBLISH=1"
+    )
+    parser.add_argument(
+        "--allow-evidence-regression",
+        action="store_true",
+        help="deliberately allow an owner-approved evidence downgrade (logged)",
     )
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
     if args.selftest:
         _selftest()
         return 0
+    db_path = feedback.resolve_db_path(args.feedback_db)
     # The run is credited as an INVOCATION before the work, and the `success` below records its
     # result. A success alone moves `last_success` only, so this daily step exported every day from
     # 2026-09-04 while the firing monitor read it as silent since its one consult trial. Guarded: a
@@ -484,7 +530,10 @@ def main() -> int:
         )
     except Exception as exc:  # noqa: BLE001 — a swallowed heartbeat reads as dormancy later
         print(f"route_weights_export: capability heartbeat failed: {exc}", file=sys.stderr)
-    document = build_document(args.feedback_db, args.min_observations)
+    document = build_document(db_path, args.min_observations)
+    print(
+        f"route_weights_export: db={db_path} source_version={document['source_version']}", flush=True
+    )
     target = args.state_dir / "route-weights-export.json"
     changed = write_document(target, document)
     print(f"{'wrote' if changed else 'unchanged'} {target}")
@@ -492,7 +541,14 @@ def main() -> int:
         if os.environ.get("ORCH_ROUTE_WEIGHTS_PUBLISH") != "1":
             print("publish blocked: ORCH_ROUTE_WEIGHTS_PUBLISH!=1; local export retained")
         else:
-            if publish_document(document):
+            try:
+                published = publish_document(
+                    document, allow_evidence_regression=args.allow_evidence_regression
+                )
+            except ValueError as exc:
+                print(f"route_weights_export: {exc}", file=sys.stderr)
+                return 1
+            if published:
                 try:
                     capabilities.daily_heartbeat(
                         "route-weights-export",

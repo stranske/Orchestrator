@@ -3,6 +3,13 @@
 `python3 src/route_weights_export.py` writes the local shadow artifact
 `$ORCH_STATE_DIR/route-weights-export.json`. It never changes a Git branch by default.
 
+The exporter and learner share `feedback.resolve_db_path()`: `--feedback-db` overrides
+`ORCH_FEEDBACK_DB`, then the runtime root is selected from `ORCH_LOCAL_RUNTIME`,
+`ORCH_STATE_DIR`, or `~/.codex/orchestrator` (in that order), with
+`feedback/orchestrator.db` appended. `--state-dir` selects the shadow output directory only.
+Every export run logs `db=<resolved path> source_version=<n>` before writing its shadow artifact.
+Reading an absent or empty database does not create or migrate it.
+
 The intended Workflows consumer may fetch:
 
 `https://raw.githubusercontent.com/stranske/Orchestrator/exports/route-weights/config/route-weights.json`
@@ -54,6 +61,16 @@ Publishing is deliberately double-gated. `--publish` has no remote effect unless
 `stranske/Orchestrator`, commits only `config/route-weights.json` on `exports/route-weights`, and
 pushes that branch. It never modifies `main`. A semantic no-op prints `unchanged` and creates no
 commit. Disable its daily shadow cadence with `ORCH_DISABLE_STEPS=route-weights-export`.
+
+Before writing the remote artifact, `publish_guard(new_doc, published_doc)` refuses publication
+if the source version is zero, all task types have `evidence_ok: false`, or any task type with
+published `evidence_ok: true` would lose that evidence (including a missing task entry). The
+comparison uses the fetched export branch, not the local shadow artifact. A refusal exits
+non-zero and prints `publish_guard refused: <reason>`; the cadence step surfaces that reason
+in the tick log and records a failed attempt. The local shadow artifact remains available for
+diagnosis. An owner-approved downgrade can use `--allow-evidence-regression` alongside the
+existing publication switches; it logs `deliberate evidence regression allowed` with the reason.
+The flag does not enable publication on its own.
 
 The additive `exploration` block carries the weekly mode, sampled challengers, and a
 `policy_version` identifying the exported policy. `keepalive_outcomes.py` joins trusted runner

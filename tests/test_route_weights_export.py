@@ -1,10 +1,140 @@
+import contextlib
+import io
 import json
+import os
 import sqlite3
+import sys
+import tempfile
+import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import capacity
 import route_weights_export as export
+
+
+class PublishGuardTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.database = self.root / "weights.db"
+        export._fixture_db(self.database)
+        self.document = export.build_document(
+            self.database, now=100, capacity_snapshot={"agents": {}}
+        )
+
+    def test_publish_guard_refuses_empty_db(self):
+        empty = self.root / "empty.db"
+        sqlite3.connect(empty).close()
+        document = export.build_document(empty, now=100, capacity_snapshot={"agents": {}})
+        ok, reason = export.publish_guard(document, self.document)
+        self.assertFalse(ok, "publish_guard must refuse an empty DB")
+        self.assertIn("source_version", reason)
+        with patch.object(export.provision, "ensure_canonical") as canonical:
+            with self.assertRaisesRegex(ValueError, "publish_guard refused.*source_version"):
+                export.publish_document(document)
+            canonical.assert_not_called()
+
+    def test_publish_guard_refuses_all_false_evidence(self):
+        with sqlite3.connect(self.database) as connection:
+            connection.execute("UPDATE route_weights SET n_obs=0")
+        document = export.build_document(
+            self.database, now=100, capacity_snapshot={"agents": {}}
+        )
+        self.assertGreater(document["source_version"], 0)
+        ok, reason = export.publish_guard(document, None)
+        self.assertFalse(ok)
+        self.assertIn("all task_types", reason)
+        with self.assertRaisesRegex(ValueError, "publish_guard refused.*evidence_ok=false"):
+            export.publish_document(document)
+
+    def test_publish_guard_refuses_loss_of_previously_published_evidence(self):
+        previous = json.loads(json.dumps(self.document))
+        previous["task_types"]["review"] = {"evidence_ok": True, "ranking": [{"agent": "codex"}]}
+        ok, reason = export.publish_guard(self.document, previous)
+        self.assertFalse(ok)
+        self.assertIn("review", reason)
+        self.assertIn("became false", reason)
+        del self.document["task_types"]["review"]
+        self.assertFalse(export.publish_guard(self.document, previous)[0])
+
+    def test_publish_guard_accepts_bootstrap_unchanged_and_recovered_evidence(self):
+        self.assertEqual(export.publish_guard(self.document, None), (True, ""))
+        self.assertEqual(export.publish_guard(self.document, self.document), (True, ""))
+        self.assertEqual(export.publish_guard(self.document, {"source_version": 0}), (True, ""))
+
+    def _run_main(self, database, *flags):
+        argv = [
+            "route_weights_export.py",
+            "--state-dir",
+            str(self.root),
+            "--feedback-db",
+            str(database),
+            "--publish",
+            *flags,
+        ]
+        output, errors = io.StringIO(), io.StringIO()
+        with (
+            patch.object(sys, "argv", argv),
+            patch.dict(os.environ, {"ORCH_ROUTE_WEIGHTS_PUBLISH": "1"}),
+            patch.object(export.capabilities, "daily_heartbeat") as heartbeat,
+            patch.object(export.capacity, "build", return_value={"agents": {}}),
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(errors),
+        ):
+            result = export.main()
+        return result, output.getvalue(), errors.getvalue(), heartbeat
+
+    def test_empty_db_cli_exits_nonzero_and_logs_guard_refusal(self):
+        with patch.object(export.provision, "ensure_canonical") as canonical:
+            result, output, errors, heartbeat = self._run_main(self.root / "missing.db")
+        self.assertEqual(result, 1, "publish_guard refusal must fail the CLI")
+        self.assertIn(f"db={self.root / 'missing.db'} source_version=0", output)
+        self.assertIn("publish_guard refused", errors)
+        canonical.assert_not_called()
+        self.assertEqual(heartbeat.call_count, 1)  # Invocation only; no publish success.
+
+    def test_allow_evidence_regression_flag_reaches_publisher(self):
+        with patch.object(export, "publish_document", return_value=True) as publisher:
+            result, _, _, _ = self._run_main(
+                self.root / "missing.db", "--allow-evidence-regression"
+            )
+        self.assertEqual(result, 0)
+        self.assertTrue(publisher.call_args.kwargs["allow_evidence_regression"])
+
+    def test_shared_resolver_honours_state_dir_and_existing_overrides(self):
+        with patch.dict(os.environ):
+            for name in ("ORCH_FEEDBACK_DB", "ORCH_LOCAL_RUNTIME", "ORCH_STATE_DIR"):
+                os.environ.pop(name, None)
+            with patch.object(Path, "home", return_value=self.root):
+                self.assertEqual(
+                    export.feedback.resolve_db_path(),
+                    self.root / ".codex" / "orchestrator" / "feedback" / "orchestrator.db",
+                )
+            os.environ["ORCH_STATE_DIR"] = str(self.root / "instance")
+            expected = self.root / "instance" / "feedback" / "orchestrator.db"
+            self.assertEqual(export.feedback.resolve_db_path(), expected)
+            expected.parent.mkdir(parents=True)
+            export._fixture_db(expected)
+            argv = ["route_weights_export.py", "--state-dir", str(self.root / "output")]
+            with (
+                patch.object(sys, "argv", argv),
+                patch.object(export.capabilities, "daily_heartbeat"),
+                patch.object(export.capacity, "build", return_value={"agents": {}}),
+                contextlib.redirect_stdout(io.StringIO()) as output,
+            ):
+                self.assertEqual(export.main(), 0)
+            self.assertIn(f"db={expected} source_version=2", output.getvalue())
+            os.environ["ORCH_LOCAL_RUNTIME"] = str(self.root / "runtime")
+            self.assertEqual(
+                export.feedback.resolve_db_path(),
+                self.root / "runtime" / "feedback" / "orchestrator.db",
+            )
+            os.environ["ORCH_FEEDBACK_DB"] = str(self.database)
+            self.assertEqual(export.feedback.resolve_db_path(), self.database)
+            self.assertEqual(export.feedback.resolve_db_path(expected), expected)
+
 
 V1_KEYS = (
     "schema",
@@ -431,7 +561,7 @@ def test_completed_publication_survives_success_heartbeat_failure(tmp_path, monk
     )
     published = []
     monkeypatch.setattr(
-        export, "publish_document", lambda document: published.append(document) or True
+        export, "publish_document", lambda document, **kwargs: published.append(document) or True
     )
 
     def heartbeat(capability, event, **kwargs):
