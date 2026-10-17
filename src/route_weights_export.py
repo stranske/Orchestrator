@@ -646,6 +646,33 @@ def _selftest() -> None:
         assert json.loads(hold_path.read_text())["first_seen"] == hold["first_seen"]
         _require_publishable(previous, previous, state_dir=root)
         assert not hold_path.exists(), "evidence recovery must clear the hold"
+        # Override bypasses only a partial regression; absolute refusals stay refused.
+        try:
+            _require_publishable(document, previous, state_dir=root)
+        except PublicationRefused:
+            pass
+        else:
+            raise AssertionError("fresh partial regression must hold without override")
+        _require_publishable(document, previous, allow_evidence_regression=True, state_dir=root)
+        try:
+            _require_publishable(empty, previous, allow_evidence_regression=True, state_dir=root)
+        except PublicationRefused as exc:
+            assert "drainable_in=infiniteh" in str(exc), exc
+        else:
+            raise AssertionError("override must not publish empty evidence")
+        all_false = json.loads(json.dumps(document))
+        all_false["source_version"] = 1
+        for row in all_false["task_types"].values():
+            row["evidence_ok"] = False
+            row["ranking"] = []
+        try:
+            _require_publishable(
+                all_false, previous, allow_evidence_regression=True, state_dir=root
+            )
+        except PublicationRefused as exc:
+            assert "drainable_in=infiniteh" in str(exc), exc
+        else:
+            raise AssertionError("override must not publish all-false evidence")
     print("route_weights_export.py selftest: OK")
 
 
