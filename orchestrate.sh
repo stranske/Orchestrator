@@ -164,6 +164,10 @@ export ORCH_ROLE_MAX_PER_CYCLE="${ORCH_ROLE_MAX_PER_CYCLE:-1}"
 # shell=False after every shell control character has been rejected. Aligns with the owner
 # constraint: prefer machine gates over human review. Export ORCH_RUN_RUNTIME_AC=0 to pause.
 export ORCH_RUN_RUNTIME_AC="${ORCH_RUN_RUNTIME_AC:-1}"
+# Disposable exact-head executions per keepalive ingest and per post-merge sweep (one flag, read by
+# runtime_ac_gate.execution_budget). Three a day measured 9 of 166 shadow specs in a week
+# (2026-10-17); twelve covers about half a day's new specs at a few minutes each.
+export ORCH_RUNTIME_AC_SHADOW_BUDGET="${ORCH_RUNTIME_AC_SHADOW_BUDGET:-12}"
 # Range-lane LIVE dispatch — BOUNDED TRIAL started 2026-07-08 (owner: "turn it on as a bounded
 # trial"). Makes the daily range slot actively dispatch ONE range-lane task/day (testgen/epic/
 # codemod/cross_repo/runtime_ac) instead of preview-only, through range_lane_rollout's triple guard.
