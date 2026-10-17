@@ -55,6 +55,18 @@ Publishing is deliberately double-gated. `--publish` has no remote effect unless
 pushes that branch. It never modifies `main`. A semantic no-op prints `unchanged` and creates no
 commit. Disable its daily shadow cadence with `ORCH_DISABLE_STEPS=route-weights-export`.
 
+The exporter uses `feedback.resolve_db_path()` and logs `db=<absolute path> source_version=<n>`
+before writing the shadow artifact. Selection precedence is `--feedback-db`, `ORCH_FEEDBACK_DB`,
+`ORCH_LOCAL_RUNTIME/feedback/orchestrator.db`, then the state-directory fallback
+(`--state-dir` or `ORCH_STATE_DIR`), and finally `feedback.DB_PATH`.
+
+Before publication, `publish_guard()` rejects source version zero, all-false task evidence,
+or any previously evidenced task that loses its evidence. The comparison uses the fetched
+publication, so a changed local shadow cannot hide a regression. Refusals exit non-zero and
+leave the remote publication untouched; the cadence surfaces the reason in its log.
+`--allow-evidence-regression` explicitly permits a downgrade and logs the reason. The local
+shadow remains available for diagnosis even when publication is refused.
+
 The additive `exploration` block carries the weekly mode, sampled challengers, and a
 `policy_version` identifying the exported policy. `keepalive_outcomes.py` joins trusted runner
 dispatch timestamps to the export branch's commit history and records that tag, mode, weight

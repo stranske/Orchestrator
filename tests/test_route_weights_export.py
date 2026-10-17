@@ -611,7 +611,12 @@ def test_feedback_db_path_binding(tmp_path, monkeypatch, capsys, selection):
     monkeypatch.setattr("sys.argv", argv)
     monkeypatch.setattr(export.capabilities, "daily_heartbeat", lambda *a, **k: None)
     monkeypatch.setattr(export, "write_document", lambda *a: False)
-    assert export.main() == 0
+    with patch.object(
+        export.feedback, "resolve_db_path", wraps=export.feedback.resolve_db_path
+    ) as resolver:
+        assert export.main() == 0
+    resolver.assert_called_once()
+    assert export.feedback.resolve_db_path(*resolver.call_args.args) == expected.resolve()
     assert f"db={expected.resolve()} source_version=2" in capsys.readouterr().err
 
 

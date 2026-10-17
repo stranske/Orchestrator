@@ -55,26 +55,6 @@ def _now() -> str:
     )
 
 
-def resolve_feedback_db(explicit: Path | None, state_dir: Path | None) -> Path:
-    """Bind to feedback's shared DB selection, with an isolated state-dir fallback.
-
-    feedback exposes DB_PATH/DB_PATH_ENV rather than a callable resolver. Explicit
-    DB and runtime selections retain precedence; a state-only instance must not
-    silently export the default instance's Brain.
-    """
-    if explicit is not None:
-        selected = explicit
-    elif os.environ.get(feedback.DB_PATH_ENV):
-        selected = Path(os.environ[feedback.DB_PATH_ENV])
-    elif os.environ.get("ORCH_LOCAL_RUNTIME"):
-        selected = Path(os.environ["ORCH_LOCAL_RUNTIME"]) / "feedback" / "orchestrator.db"
-    elif state_dir is not None:
-        selected = state_dir / "feedback" / "orchestrator.db"
-    else:
-        selected = feedback.DB_PATH
-    return selected.expanduser().resolve()
-
-
 def publish_guard(
     new_doc: dict[str, Any], published_doc: dict[str, Any] | None
 ) -> tuple[bool, str]:
@@ -550,7 +530,7 @@ def main() -> int:
     if args.selftest:
         _selftest()
         return 0
-    db_path = resolve_feedback_db(args.feedback_db, args.state_dir)
+    db_path = feedback.resolve_db_path(args.feedback_db, args.state_dir)
     document = build_document(db_path, args.min_observations)
     print(f"db={db_path} source_version={document['source_version']}", file=sys.stderr, flush=True)
     # The run is credited as an INVOCATION before the work, and the `success` below records its

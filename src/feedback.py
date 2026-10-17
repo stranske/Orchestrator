@@ -49,6 +49,27 @@ LOCAL_RUNTIME = Path(os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex"
 DB_PATH_ENV = "ORCH_FEEDBACK_DB"
 DB_PATH = Path(os.environ.get(DB_PATH_ENV, LOCAL_RUNTIME / "feedback" / "orchestrator.db"))
 
+
+def resolve_db_path(explicit: Path | None = None, state_dir: Path | None = None) -> Path:
+    """Resolve the Brain path for readers without opening or migrating the store.
+
+    Explicit DB selection wins over the environment, then runtime selection wins
+    over a caller's state-directory fallback. With no overrides, use DB_PATH so
+    in-process callers can still select a private store.
+    """
+    if explicit is not None:
+        selected = explicit
+    elif os.environ.get(DB_PATH_ENV):
+        selected = Path(os.environ[DB_PATH_ENV])
+    elif os.environ.get("ORCH_LOCAL_RUNTIME"):
+        selected = Path(os.environ["ORCH_LOCAL_RUNTIME"]) / "feedback" / "orchestrator.db"
+    elif state_dir is not None:
+        selected = state_dir / "feedback" / "orchestrator.db"
+    else:
+        selected = DB_PATH
+    return selected.expanduser().resolve()
+
+
 # `agent_switches` holds two kinds of switch (2026-09-23): `source='label'` rows come from a PR's
 # `agent:*` label timeline, `source='policy'` rows from the keepalive state marker's delegation_log
 # (the delegation policy never relabels, so its switches are invisible to the timeline) and carry the
