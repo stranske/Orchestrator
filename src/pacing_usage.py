@@ -333,6 +333,7 @@ def integrate(agents: dict, *, now: float, handoff: Path, record: bool = False) 
                 and start <= r["ts"] <= now
                 and r.get("used_fraction") is not None
                 and r["used_fraction"] >= 1
+                and (reset_at is None or r["ts"] > reset_at)
             ]
         sample = dict(agent=pool, recorded_at=now, **datum)
         sample.setdefault("period_start", start)
@@ -405,7 +406,8 @@ def report(handoff: Path, *, now: float, current: dict | None = None) -> str:
             f"ũ={measured(row.get('projected_fraction'))} "
             f"state={row.get('state', 'unknown')} w_p={measured(row.get('routing_weight'))} "
             f"resets={row.get('resets_available') if row.get('resets_available') is not None else 'unknown'} source={row.get('source', 'none')} "
-            f"ts={row.get('ts')} stale={row.get('ts') is not None and now-row['ts'] > pacing.STALE_AFTER_SECONDS}"
+            f"ts={row.get('ts')} stale={row.get('ts') is not None and now-row['ts'] > pacing.STALE_AFTER_SECONDS}; "
+            f"{row.get('reason', 'usage unmeasured; clears on fresh usage/period sample')}"
         )
         finals = []
         for snap in snapshots:

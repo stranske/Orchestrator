@@ -81,7 +81,10 @@ To record a real consumption event, preserve its entry and add `consumed_at` as 
 ISO UTC timestamp. Codex T0 jumps to the latest consumption instant and T1=T0+7d;
 Claude keeps its anchor. Fresh usage is required in that period. Physical exhaustion
 or a ledger 429 latches shed until the period rolls or an explicit reset occurs;
-new inventory alone does not erase actual exhaustion.
+new inventory alone does not erase actual exhaustion. A consumed reset releases
+only a dated, active provider-quota marker older than the consumption event;
+ordinary auth/model checks run afterward. Manual/unreadable holds remain closed.
+For Claude, pre-consumption exhaustion samples are discarded without shifting T1.
 
 The implementation sandbox denied both the requested sibling checkpoint and the
 runtime inventory destination. Checkpoints are append-only at

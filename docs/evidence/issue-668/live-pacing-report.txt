@@ -3,9 +3,9 @@ Evidence class: usage store + rate-limit ledger (dispatch share: capacity-ledger
 FYI resets=unknown: capacity-resets.json absent or unreadable
 pool codex: resets=unknown; conservative reserve=0.15
 pool claude: resets=unknown; conservative reserve=0.15
-pool codex: u=unmeasured ũ=unmeasured state=unknown w_p=unmeasured resets=unknown source=ccusage-unscaled:weekly-agent-tokens ts=1788532078.980625 stale=True
+pool codex: u=unmeasured ũ=unmeasured state=unknown w_p=unmeasured resets=unknown source=ccusage-unscaled:weekly-agent-tokens ts=1788532078.980625 stale=True; usage or period unmeasured; clears on a fresh usage/period sample
 1 codex: unmeasured — would need a fresh usage sample at completed T1 [usage store + rate-limit ledger]
-pool claude: u=0.37 ũ=unmeasured state=unknown w_p=unmeasured resets=unknown source=claude-desktop:plan-usage-history.json:u.sd ts=1792198800.402 stale=True
+pool claude: u=0.37 ũ=unmeasured state=unknown w_p=unmeasured resets=unknown source=claude-desktop:plan-usage-history.json:u.sd ts=1792198800.402 stale=True; pool claude: usage stale; unknown; clears on fresh usage or reset at 1792299540
 1 claude: unmeasured — would need a fresh usage sample at completed T1 [usage store + rate-limit ledger]
 2: unmeasured — would need completed-period snapshots and rate-limit ledger coverage [usage store + rate-limit ledger]
 3: unmeasured — would need dispatches in both codex ok and warn/shed hours [usage store + rate-limit ledger]

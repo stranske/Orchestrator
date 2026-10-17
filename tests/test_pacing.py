@@ -462,3 +462,57 @@ def test_weighted_routing_respects_tick_load():
     cap = cap_for(codex="ok", cw=0.1, aw=1)
     result = pick(cap, load={"claude": router.PER_AGENT_TICK_CAP})
     assert result["agent"] == "codex"
+
+
+@pytest.mark.parametrize("category,cleared", [("quota", True), (None, False)])
+def test_consumed_reset_clears_only_dated_quota_marker(tmp_path, monkeypatch, category, cleared):
+    now = START + 2 * pacing.DAY_SECONDS
+    monkeypatch.setattr(capacity.time, "time", lambda: now)
+    monkeypatch.setattr(capacity, "SHED_DIR", tmp_path / "shed")
+    monkeypatch.setattr(pacing_usage, "RESETS_FILE", tmp_path / "resets.json")
+    capacity.SHED_DIR.mkdir()
+    marker = capacity.SHED_DIR / "codex"
+    marker.write_text(
+        json.dumps(
+            dict(
+                created_at=START,
+                expires_at=now + 1000,
+                category=category,
+                incident_id="quota-before-reset",
+            )
+        )
+    )
+    pacing_usage.RESETS_FILE.write_text(
+        json.dumps({"codex": [dict(expires="2026-11-16", consumed_at=now - 100)], "claude": []})
+    )
+    assert capacity._shed("codex") is (not cleared)
+    assert marker.exists() is (not cleared)
+    if cleared:
+        monkeypatch.setattr(
+            capacity,
+            "_auth_health",
+            lambda agent: dict(checked=True, authenticated=False, reason="expired credentials"),
+        )
+        state, _, meta = capacity.compute("codex", capacity.AGENTS["codex"], {})
+        assert state == "shed" and meta["policy"] == "auth-failed"
+
+
+def test_claude_reset_clears_exhaustion_without_moving_T1(tmp_path, monkeypatch):
+    now = START + 2 * pacing.DAY_SECONDS
+    monkeypatch.setattr(pacing_usage, "RESETS_FILE", tmp_path / "resets.json")
+    monkeypatch.setattr(pacing_usage, "CALIBRATION_FILE", tmp_path / "cap.json")
+    monkeypatch.setattr(
+        pacing_usage, "usage", lambda *a, **k: dict(used_fraction=0.2, ts=now, source=SOURCE)
+    )
+    pacing_usage.RESETS_FILE.write_text(
+        json.dumps({"codex": [], "claude": [dict(expires="2026-11-16", consumed_at=now - 1800)]})
+    )
+    pacing_usage.append_rows(
+        tmp_path / "pacing-usage-samples.ndjson",
+        [dict(agent="claude", ts=now - 3600, used_fraction=1, source=SOURCE)],
+    )
+    agents = {a: dict(state="ok", reason="native") for a in ("codex", "claude")}
+    pacing_usage.integrate(agents, now=now, handoff=tmp_path)
+    row = agents["claude"]["pacing"]
+    assert row["state"] == "ok"
+    assert row["period_end"] == pacing.CLAUDE_RESET_ANCHOR

@@ -488,7 +488,34 @@ def _shed(agent: str) -> bool:
     if marker is None:
         return False
     if marker["state"] != "expired":
-        return True
+        # A confirmed banked reset clears only a dated provider quota incident.
+        # Continue through ordinary auth/model checks after removal. Manual and
+        # unreadable markers are never reset by an allowance inventory change.
+        import pacing
+        import pacing_usage
+
+        inventory = pacing_usage.read_json(pacing_usage.RESETS_FILE) or {}
+        entries = inventory.get(agent, []) if isinstance(inventory, dict) else []
+        created = marker.get("created_at")
+        reset_events = (
+            [
+                stamp
+                for entry in entries
+                if isinstance(entry, dict)
+                and (stamp := pacing.timestamp(entry.get("consumed_at"))) is not None
+                and stamp <= time.time()
+            ]
+            if isinstance(entries, list)
+            else []
+        )
+        reset_clears = (
+            marker["state"] == "active"
+            and marker.get("category") in ("quota", "rate_limit", "capacity")
+            and created is not None
+            and any(stamp > created for stamp in reset_events)
+        )
+        if not reset_clears:
+            return True
     try:
         Path(marker["path"]).unlink()
     except OSError:
