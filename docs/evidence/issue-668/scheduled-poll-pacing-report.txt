@@ -1,0 +1,22 @@
+Read-only source-worktree capture: 2026-10-17T19:18:52.492165+00:00
+Weekly pacing check: python3 src/capacity.py pacing-report
+Evidence class: usage store + rate-limit ledger (dispatch share: capacity-ledger dispatch starts)
+FYI codex: reset expires 2026-10-29; owner-supplied expiry UNKNOWN (30-day estimate)
+FYI codex: reset expires 2026-11-06; owner-supplied expiry UNKNOWN (30-day estimate)
+POLLER codex: last ok ts=1792264680.0; age=50.3; ticks missed=0.08; allowance=3 ticks/1800s; valid=True
+FYI codex resets: poll=2 hand file=2; using fresh poll; expiries=[1793299636, 1794007196]
+FYI codex rollout scan: duration_seconds=0.9365, files_read=5, files_cached=295, bytes_read=641570, total_files=555, omitted=255, malformed=0, unreadable_files=0, vanished_files=0
+FYI codex: fresh poll inventory; auto-debit disabled; reset signals=51; available=2
+pool codex: would consume oldest-expiring reset expires=1793299636 (expiry source=codex-app-server)
+POLLER claude: last ok ts=1792264068.0; age=662.3; ticks missed=1.1; allowance=3 ticks/1800s; valid=True
+FYI claude weekly bucket Fable: u=0.91 T1=1792299540.0
+FYI claude: Fable weekly usage higher than all models; informational (dispatch uses Sonnet)
+pool codex: u=0.15 ũ=4.972135921546706 state=warn pacing=measured w_p=0.0 resets=2 source=codex-rollout:rate_limits.primary T1=1792853698.0 reset_expiries=[1793299636, 1794007196] ts=1792264729.406 stale=False; codex: ũ=4.97 vs 1-r_eff=1.00; warn; w_p=0.000; clears in ~134.8h at current burn or on reset
+1 codex: unmeasured — would need a fresh usage sample at completed T1 [usage store + rate-limit ledger]
+pool claude: u=0.85 ũ=unmeasured state=ok pacing=measured w_p=0.0 resets=0 source=claude-cli:/usage T1=1792299540.0 reset_expiries=[] ts=1792264068.0 stale=False; claude: u=0.85 vs g(e)+δ=0.90; ũ=unmeasured; ok; w_p=0.000; clears in fresh samples or schedule advancing or on reset
+1 claude: unmeasured — would need a fresh usage sample at completed T1 [usage store + rate-limit ledger]
+2: unmeasured — would need completed-period snapshots and rate-limit ledger coverage; coverage=0/unknown ticks; observed incidents=287 [usage store + rate-limit ledger]
+3: unmeasured — would need dispatches in both codex ok and warn/shed hours; coverage=0/unknown ticks; observed dispatches=8655 [usage store + rate-limit ledger]
+
+Scan stderr:
+FYI codex rollout scan: duration_seconds=0.9365, files_read=5, files_cached=295, bytes_read=641570, total_files=555, omitted=255, malformed=0, unreadable_files=0, vanished_files=0
