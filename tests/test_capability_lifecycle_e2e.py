@@ -469,6 +469,65 @@ def test_invocation_ineligible_refusals_write_nothing(
     assert feedback.capability_causal_evidence(cap_id, version_id) == []
 
 
+@pytest.mark.parametrize("kind", ["role", "workflow", "skill", "playbook", "gate"])
+def test_invocation_kill_switch_refuses_each_kind_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    # Each kind's ledger row declares its own switch (`_record` writes
+    # ``ORCH_CAPABILITY_<KIND>_ENABLED=0``); the unit-level helper test cannot
+    # prove a registered row of that kind refuses through the real entrypoint.
+    if kind == "skill":
+        env_prereq.require(env_prereq.skill_resource_absent())
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    now = int(time.time())
+    root = tmp_path / kind
+    root.mkdir()
+    ledger = root / "capabilities.json"
+    registry = root / "targets.json"
+    predecessor = f"baseline:{kind}"
+    capabilities.save({predecessor: _active_predecessor(predecessor, now)}, ledger)
+    fixture = _target_fixture(kind, root, now)
+    registered = capability_lifecycle.register_compiled_target(
+        kind,
+        fixture["artifact"],
+        lifecycle_policy={
+            "min_independent_durable_reuse": 2,
+            "max_failures": 0,
+            "max_rework": 0,
+            "tasks_per_day": 5,
+            "risk_level": "low_reversible",
+            "side_effect_policy": "read_only",
+        },
+        matcher=fixture["matcher"],
+        predecessor=predecessor,
+        ledger_path=ledger,
+        target_registry_path=registry,
+        target_context=fixture["context"],
+        expiry=now + 86400,
+    )
+    capability_id = registered["capability"]["capability_id"]
+    version_id = registered["capability"]["capability_version_id"]
+    declared = capabilities.load(ledger, create=False)[capability_id]["kill_switch"]
+    env_name, _, env_value = declared.partition("=")
+    assert env_name == f"ORCH_CAPABILITY_{kind.upper()}_ENABLED"
+    monkeypatch.setenv(env_name, env_value)
+    before_ledger = ledger.read_bytes()
+    result = capability_lifecycle.invoke_compiled_target(
+        capability_id,
+        trigger=fixture["trigger"],
+        target_run_id=f"{kind}:kill-switch:1",
+        ledger_path=ledger,
+        target_registry_path=registry,
+        inputs=fixture["inputs"],
+        timestamp=now,
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "kill_switch"}, (kind, result)
+    assert capability_targets.get_binding(version_id, registry_path=registry)["invocations"] == []
+    assert "causal_edge" not in result
+    assert feedback.capability_causal_evidence(capability_id, version_id) == []
+    assert ledger.read_bytes() == before_ledger
+
+
 def test_invocation_ineligible_eligible_control_still_invokes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -570,7 +629,7 @@ def test_expired_row_never_reaches_workflow_producer_or_consumer(
     )
 
 
-def test_compiled_invocation_consults_shared_capability_expired_before_binding(
+def test_compiled_invocation_ineligible_consults_shared_capability_expired_before_binding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ctx = _registered_workflow(tmp_path, monkeypatch)
