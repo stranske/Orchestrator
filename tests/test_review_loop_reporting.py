@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import feedback
 import switch_review
 
@@ -63,3 +65,29 @@ def test_missing_round_store_is_unmeasured_and_not_created(tmp_path, monkeypatch
     monkeypatch.setattr(feedback, "DB_PATH", path)
     assert switch_review.review_round_snapshot()["status"] == "unmeasured"
     assert not path.exists()
+
+
+def test_tied_review_timestamps_keep_first_twenty_recorded_deliveries(tmp_path, monkeypatch):
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "review.db")
+    monkeypatch.setattr(feedback.time, "time", lambda: 100)
+    for i in range(20):
+        feedback.record_review_round(f"z-{i:02}", f"o/r#{i}", 1, "FIX-FIRST", "vibe")
+    feedback.record_review_round("a-later", "o/r#99", 1, "MERGE-WHEN-GREEN", "vibe")
+    assert switch_review.review_loop_share_line(feedback.review_round_rows()).endswith("0/20 (0%)")
+
+
+@pytest.mark.parametrize("measured", [True, False])
+def test_format_report_renders_review_measurement_state(tmp_path, monkeypatch, measured):
+    import strategy_experiment
+
+    monkeypatch.setattr(strategy_experiment, "strategy_result_path", lambda: tmp_path / "absent")
+    from test_switch_review_strategy_line import MINIMAL_REPORT
+
+    report = dict(MINIMAL_REPORT)
+    report["review_loop"] = (
+        {"status": "measured", "rows": [("run", "o/r#1", 1, "FIX-FIRST", "vibe", 1)]}
+        if measured
+        else {"status": "unmeasured", "reason": "SQLiteError"}
+    )
+    rendered = switch_review.format_report(report)
+    assert ("0/1 (0%)" if measured else "UNMEASURED (SQLiteError)") in rendered

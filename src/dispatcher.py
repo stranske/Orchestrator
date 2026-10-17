@@ -1238,7 +1238,11 @@ def _spawn(d: dict) -> int:
         # Profile attribution is causal learning data. Persist the run before
         # the attempt or process so a DB failure cannot launch unjoinable work
         # or leave an orphan execution_attempt.
-        feedback.record_run(*run_args, **run_kwargs)
+        try:
+            feedback.record_run(*run_args, **run_kwargs)
+        except Exception:
+            claims.release(d["target"], d["agent"])
+            raise
     else:
         try:
             feedback.record_run(*run_args, **run_kwargs)
@@ -1258,6 +1262,7 @@ def _spawn(d: dict) -> int:
                 error_hash=hashlib.sha256(str(exc).encode()).hexdigest(),
             )
             if lineage_required:
+                claims.release(d["target"], d["agent"])
                 raise RuntimeError(
                     f"refusing dispatch without required completion lineage for {run_id}"
                 ) from exc

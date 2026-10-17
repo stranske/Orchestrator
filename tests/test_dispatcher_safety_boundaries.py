@@ -84,6 +84,36 @@ def test_routing_metadata_keeps_only_meaningful_assignment_provenance():
     assert dispatcher._routing_metadata({"target": "o/r#7"}) is None
 
 
+@pytest.mark.parametrize("profile", [False, True])
+def test_required_lineage_failure_releases_unlaunched_claim(tmp_path, monkeypatch, profile):
+    releases = []
+    monkeypatch.setattr(dispatcher, "DISPATCH_LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr(dispatcher.execution_profiles, "get_profile", lambda _: {"profile_id": "p"})
+    monkeypatch.setattr(dispatcher.claims, "release", lambda *args: releases.append(args))
+    monkeypatch.setattr(dispatcher.adapters, "record_ledger", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        dispatcher.feedback,
+        "record_run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("lineage unavailable")),
+    )
+    plan = {
+        "agent": "codex",
+        "target": "o/r#1",
+        "mode": "medium",
+        "lane": "opener",
+        "task_type": "implement",
+        "cwd": str(tmp_path),
+        "wrapped": "never",
+        "run_id": "run",
+        "review_loop": True,
+    }
+    if profile:
+        plan["selected_profile_id"] = "p"
+    with pytest.raises(RuntimeError):
+        dispatcher._spawn(plan)
+    assert releases == [("o/r#1", "codex")]
+
+
 @pytest.mark.parametrize(
     ("error", "log_tail", "stderr", "expected"),
     [

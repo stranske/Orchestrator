@@ -321,7 +321,9 @@ def model_epoch_floor(agent: str, since: int, path: Path | None = None) -> int:
         if not entry:
             return since
         epoch = utc_epoch.from_iso(str(entry["since"]))
-        return max(since, epoch) if epoch is not None else since
+        if epoch is None:
+            return since
+        return max(since, epoch)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return since
 
@@ -767,7 +769,7 @@ def review_round_rows() -> list[tuple[str, str, int, str, str, int]]:
     try:
         return conn.execute(
             "SELECT run_id, pr, round, verdict, reviewer_agent, first_pass FROM review_rounds "
-            "ORDER BY recorded_ts, run_id, round"
+            "ORDER BY recorded_ts, rowid"
         ).fetchall()
     finally:
         conn.close()

@@ -195,6 +195,51 @@ def test_after_writer_publishes_pending_then_exact_head_success(monkeypatch, tmp
     assert all(row[3] for row in statuses)
 
 
+def test_post_review_writer_refusal_cannot_leave_merge_authority(monkeypatch, tmp_path):
+    import claims
+
+    record_round = feedback.record_review_round
+    log = _after_writer_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "review.db")
+    # Restore the real recorder replaced by the shared helper.
+    monkeypatch.setattr(feedback, "record_review_round", record_round)
+    feedback.record_run(
+        "root",
+        "o/r#1",
+        "implement",
+        "codex",
+        routing_metadata={"review_loop": True, "review_run_id": "root"},
+    )
+    monkeypatch.setattr(claims, "holder", lambda _: None)
+    states = iter([(True, "terminal"), (False, "new native reservation")])
+    monkeypatch.setattr(review_loop, "_terminal_now", lambda *args: next(states))
+    out = review_loop.after_writer(
+        "o/r#1",
+        "codex",
+        "opener",
+        "root",
+        log,
+        1,
+        gh_json=lambda _: {},
+        write_status=lambda *args: None,
+    )
+    assert out["status"] == "waiting_for_writer_terminality"
+    assert not review_loop.merge_eligibility("o/r#9", "a" * 40, source_targets=("o/r#1",))[
+        "eligible"
+    ]
+
+
+def test_advisory_offload_isolates_writer_checkout(monkeypatch):
+    import dispatcher
+
+    seen = {}
+    monkeypatch.setattr(
+        dispatcher, "offload", lambda *args, **kwargs: seen.update(kwargs) or {"exit": 0}
+    )
+    review_loop.dispatcher_offload("vibe", "review", "o/r#1")
+    assert seen["isolate"] is True
+
+
 def test_after_writer_changed_head_stays_ineligible(monkeypatch, tmp_path):
     log = _after_writer_setup(monkeypatch, tmp_path)
     heads = iter([("o/r", 9, "a" * 40, "body"), ("o/r", 9, "b" * 40, "body")])

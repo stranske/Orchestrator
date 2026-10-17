@@ -350,7 +350,6 @@ def after_writer(
         )
     try:
         verdict = parse_verdict(str(result.get("output", "")))
-        feedback.record_review_round(run_id, pr_url, round_number, verdict, reviewer, head)
     except Exception as exc:
         return _review_failure(repo, head, write_status, "invalid reviewer verdict", str(exc))
 
@@ -374,6 +373,11 @@ def after_writer(
             }
     except Exception as exc:
         return _review_failure(repo, head, write_status, "review recheck unavailable", str(exc))
+
+    try:
+        feedback.record_review_round(run_id, pr_url, round_number, verdict, reviewer, head)
+    except Exception as exc:
+        return _review_failure(repo, head, write_status, "review recording unavailable", str(exc))
 
     if verdict == "MERGE-WHEN-GREEN":
         try:
@@ -452,7 +456,9 @@ def _review_failure(
 def dispatcher_offload(reviewer: str, prompt: str, target: str) -> dict:
     import dispatcher
 
-    return dispatcher.offload(reviewer, prompt, cwd=".", task_type="review", subject_id=target)
+    return dispatcher.offload(
+        reviewer, prompt, cwd=".", isolate=True, task_type="review", subject_id=target
+    )
 
 
 def dispatcher_delegate(
