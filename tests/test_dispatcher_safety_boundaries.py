@@ -14,6 +14,9 @@ def isolated_dispatcher_boundaries(tmp_path, monkeypatch):
     """A boundary regression may never launch a process or touch live runtime state."""
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
+    monkeypatch.setenv(dispatcher.credential_redaction.SECRET_FILES_ENV, "")
+    monkeypatch.delenv(dispatcher.credential_redaction.REDACTION_DISABLED_ENV, raising=False)
+    monkeypatch.delenv(dispatcher.credential_redaction.EXPOSURE_SCAN_ENV, raising=False)
 
     def forbid_process(*_args, **_kwargs):
         pytest.fail("dispatcher boundary test attempted a subprocess or agent launch")
@@ -195,7 +198,7 @@ def test_load_decision_preserves_valid_json_and_fails_closed_on_bad_or_missing_i
     assert dispatcher.load_decision() == {"assignments": []}
 
 
-def test_gemini_timeout_alignment_never_exceeds_outer_timeout():
+def test_gemini_timeout_alignment_reduces_wait_with_one_minute_floor():
     absent = ["agy", "--print", "prompt"]
     dispatcher._align_gemini_print_timeout(absent, 60)
     assert absent == ["agy", "--print", "prompt"]
@@ -204,6 +207,15 @@ def test_gemini_timeout_alignment_never_exceeds_outer_timeout():
     dispatcher._align_gemini_print_timeout(seconds, 75)
     assert seconds == ["agy", "--print-timeout", "1m"]
 
+    # The CLI has a one-minute minimum; the outer subprocess enforces shorter budgets.
+    non_integral = ["agy", "--print-timeout", "99m"]
+    dispatcher._align_gemini_print_timeout(non_integral, 95)
+    assert non_integral == ["agy", "--print-timeout", "1m"]
+
+    two_minutes = ["agy", "--print-timeout", "99m"]
+    dispatcher._align_gemini_print_timeout(two_minutes, 135)
+    assert two_minutes == ["agy", "--print-timeout", "2m"]
+
     near_zero = ["agy", "--print-timeout", "99m"]
     dispatcher._align_gemini_print_timeout(near_zero, 1)
     assert near_zero == ["agy", "--print-timeout", "1m"]
@@ -211,13 +223,17 @@ def test_gemini_timeout_alignment_never_exceeds_outer_timeout():
 
 def test_agent_log_tail_uses_relative_cwd_and_redacts_before_truncation(tmp_path):
     log = tmp_path / "agent.log"
-    log.write_text("secret=sk-super-secret-token\n" + "x" * 20)
+    token = "sk-" + "ant-oat01-" + "Q" * 40
+    log.write_text("diagnostic prefix\nsecret=" + token)
+    argv = ["agent", "--log-file", "agent.log"]
 
-    tail = dispatcher._agent_log_tail_from_argv(
-        ["agent", "--log-file", "agent.log"], tmp_path, max_chars=12
-    )
+    complete = dispatcher._agent_log_tail_from_argv(argv, tmp_path)
+    assert token not in complete
+    assert "[REDACTED:" in complete
 
-    assert "sk-super-secret-token" not in tail
+    tail = dispatcher._agent_log_tail_from_argv(argv, tmp_path, max_chars=12)
+    assert tail == complete[-12:]
+    assert token[-12:] not in tail
     assert len(tail) == 12
     assert dispatcher._agent_log_tail_from_argv(["agent"], tmp_path) == ""
 
@@ -229,3 +245,386 @@ def test_default_offload_timeout_honors_explicit_and_gemini_defaults(monkeypatch
     assert dispatcher._default_offload_timeout("codex", 5) == 5
     assert dispatcher._default_offload_timeout("gemini", None) == 600
     assert dispatcher._default_offload_timeout("codex", None) == 1800
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        ({"exit": 0, "output": "reviewed"}, 0),
+        ({"exit": 0, "output": "", "error": "refused"}, 1),
+        ({"exit": 2, "output": ""}, 1),
+        (KeyboardInterrupt(), 1),
+    ],
+)
+def test_main_offload_preserves_transport_arguments_and_failure_status(
+    tmp_path, monkeypatch, capsys, result, expected
+):
+    seen = {}
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("bounded review")
+
+    def offload(*args, **kwargs):
+        seen.update(args=args, kwargs=kwargs)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    monkeypatch.setattr(dispatcher, "offload", offload)
+    assert (
+        dispatcher.main(
+            [
+                "offload",
+                "--agent",
+                "cursor",
+                "--cwd",
+                str(tmp_path),
+                "--mode",
+                "review",
+                "--timeout",
+                "95",
+                "--profile-id",
+                "profile-1",
+                "--research-round",
+                "round-1",
+                "--task-type",
+                "review",
+                "--subject",
+                "o/r#1",
+                "--isolate",
+                "--prompt-file",
+                str(prompt),
+            ]
+        )
+        == expected
+    )
+    assert seen == {
+        "args": ("cursor", "bounded review"),
+        "kwargs": {
+            "cwd": str(tmp_path),
+            "mode": "review",
+            "timeout": 95,
+            "isolate": True,
+            "profile_id": "profile-1",
+            "research_round": "round-1",
+            "task_type": "review",
+            "subject_id": "o/r#1",
+        },
+    }
+    captured = capsys.readouterr()
+    if isinstance(result, KeyboardInterrupt):
+        assert "interrupted by orchestrator" in captured.err
+    elif result.get("error"):
+        assert "refused" in captured.err
+    elif result.get("output"):
+        assert captured.out.strip() == "reviewed"
+
+
+@pytest.mark.parametrize("error", [None, "claimed elsewhere"])
+def test_main_delegate_preserves_profile_lineage_and_exit_status(tmp_path, monkeypatch, error):
+    seen = {}
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("finite implementation")
+
+    def delegate(*args, **kwargs):
+        seen.update(args=args, kwargs=kwargs)
+        return {"error": error} if error else {"pid": 42}
+
+    monkeypatch.setattr(dispatcher, "delegate", delegate)
+    monkeypatch.delenv("ORCH_ROLE_SHADOW", raising=False)
+    assert dispatcher.main(
+        [
+            "delegate",
+            "--agent",
+            "cursor",
+            "--target",
+            "o/r#1",
+            "--lane",
+            "closer",
+            "--mode",
+            "composer",
+            "--profile-id",
+            "profile-1",
+            "--task-type",
+            "testgen",
+            "--influenced-by-role-run-id",
+            "role-1",
+            "--influenced-by-role-run-id",
+            "role-2",
+            "--prompt-file",
+            str(prompt),
+        ]
+    ) == (1 if error else 0)
+    assert seen == {
+        "args": ("cursor", "o/r#1", "closer", "finite implementation", "composer"),
+        "kwargs": {
+            "task_type": "testgen",
+            "profile_id": "profile-1",
+            "influenced_by_role_run_ids": ["role-1", "role-2"],
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "argv", [[], ["--dry-run"], ["--no-heartbeat"], ["--dry-run", "--no-heartbeat"]]
+)
+def test_main_routing_flags_reach_only_the_injected_runner(monkeypatch, argv):
+    decision = {"assignments": [{"target": "o/r#1"}]}
+    calls = []
+    monkeypatch.setattr(dispatcher, "load_decision", lambda: decision)
+    monkeypatch.setattr(dispatcher, "run", lambda *a, **kw: calls.append((a, kw)) or {})
+    assert dispatcher.main(argv) == 0
+    assert calls == [
+        ((decision,), {"dry_run": "--dry-run" in argv, "heartbeat": "--no-heartbeat" not in argv})
+    ]
+
+
+def test_main_prompt_and_corpus_routes_never_enter_live_dispatch(monkeypatch, capsys):
+    import partitioned_review
+
+    monkeypatch.setattr(dispatcher, "run", lambda *_a, **_kw: pytest.fail("live routing"))
+    monkeypatch.setattr(dispatcher, "_offload_prompt", lambda task, cwd, agent: f"{agent}:{task}")
+    assert dispatcher.main(["--show-prompt"]) == 2
+    assert dispatcher.main(["--show-prompt", "cursor"]) == 0
+    assert "cursor:SHOW-PROMPT TASK" in capsys.readouterr().out
+    seen = []
+    monkeypatch.setattr(partitioned_review, "main", lambda argv, **kw: seen.append((argv, kw)) or 7)
+    assert dispatcher.main(["review-corpus", "--manifest", "packet.json"]) == 7
+    assert seen == [(["--manifest", "packet.json"], {"offload_fn": dispatcher.offload})]
+
+
+@pytest.mark.parametrize(
+    ("reportable", "start_fails"), [(True, False), (True, True), (False, True)]
+)
+def test_spawn_profile_lineage_is_recorded_before_process_and_closed_on_start_failure(
+    tmp_path, monkeypatch, reportable, start_fails
+):
+    from types import SimpleNamespace
+
+    calls = []
+    profile = {"profile_id": "profile-1", "provider": "openai", "requested_model": "test-model"}
+    monkeypatch.setattr(dispatcher, "DISPATCH_LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr(dispatcher, "ORCH_DIR", tmp_path)
+    monkeypatch.setattr(dispatcher, "CLAIMS_PY", tmp_path / "claims.py")
+    monkeypatch.setattr(dispatcher.execution_profiles, "get_profile", lambda _id: profile)
+    monkeypatch.setattr(
+        dispatcher.adapters, "can_report_cli_identity", lambda _agent: (reportable, "test")
+    )
+    monkeypatch.setattr(dispatcher.adapters, "wrapper_python", lambda: "/opt/anaconda3/bin/python3")
+    monkeypatch.setattr(dispatcher.adapters, "done_marker_cmd", lambda *_a, **_kw: "marker-double")
+    monkeypatch.setattr(
+        dispatcher.adapters, "record_ledger", lambda *_a, **kw: calls.append(("ledger", kw))
+    )
+    monkeypatch.setattr(dispatcher.claims, "update_metadata", lambda *_a, **_kw: False)
+    for name in [
+        "record_run",
+        "record_influence_edge",
+        "record_profile_decision",
+        "record_execution_attempt",
+        "attach_profile_attempt_to_decision",
+        "complete_profile_attempt_unresolved",
+    ]:
+        monkeypatch.setattr(
+            dispatcher.feedback, name, lambda *a, _name=name, **kw: calls.append((_name, a, kw))
+        )
+
+    def popen(argv, **kwargs):
+        calls.append(("process", argv, kwargs))
+        assert calls[0][0] == "record_run"
+        assert any(c[0] == "record_profile_decision" for c in calls)
+        if start_fails:
+            raise OSError("synthetic process refusal")
+        return SimpleNamespace(pid=42)
+
+    monkeypatch.setattr(dispatcher.subprocess, "Popen", popen)
+    plan = {
+        "agent": "codex",
+        "target": "o/r#1",
+        "mode": "medium",
+        "task_type": "testgen",
+        "cwd": str(tmp_path),
+        "wrapped": "never-executed",
+        "run_id": "run-1",
+        "selected_profile_id": "profile-1",
+        "profile_decision": {"decision_id": "decision-1"},
+        "rejected_role_run_ids": ["role-rejected"],
+    }
+    if start_fails:
+        with pytest.raises(OSError, match="synthetic process refusal"):
+            dispatcher._spawn(plan)
+    else:
+        assert dispatcher._spawn(plan) == 42
+        assert (
+            "claim metadata update returned false"
+            in next((tmp_path / "logs").glob("*.log")).read_text()
+        )
+    assert plan["routing_metadata"]["profile_attempt_ids"] == ["attempt:profile:run-1"]
+    attempts = [c for c in calls if c[0] == "record_execution_attempt"]
+    completions = [c for c in calls if c[0] == "complete_profile_attempt_unresolved"]
+    assert len(attempts) == int(reportable)
+    assert len(completions) == int(reportable and start_fails)
+    if attempts:
+        assert attempts[0][2]["attempt_id"] == "attempt:profile:run-1"
+    if completions:
+        assert completions[0][2]["fallback_reason"] == "profile_process_start_failed"
+        assert completions[0][2]["status"] == "failed"
+
+
+@pytest.mark.parametrize(
+    ("agent", "override"), [("cursor", False), ("codex", False), ("codex", True)]
+)
+def test_delegate_preserves_explicit_profile_and_ownership_lineage(
+    tmp_path, monkeypatch, agent, override
+):
+    calls = []
+    profile = {
+        "agent": agent,
+        "profile_id": "profile-1",
+        "requested_model": "test-model",
+        "reasoning_effort": "medium",
+        "permission_mode": "workspace-write",
+    }
+    monkeypatch.setattr(dispatcher, "DISPATCH_LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr(
+        dispatcher.execution_profiles, "default_codex_delegate_profile", lambda *_a: "profile-1"
+    )
+    monkeypatch.setattr(
+        dispatcher.execution_profiles, "codex_operator_tier_override", lambda _m: override
+    )
+    monkeypatch.setattr(dispatcher.execution_profiles, "get_profile", lambda _id: profile)
+    monkeypatch.setattr(dispatcher.claims, "reap_stale", lambda: calls.append("reap"))
+    monkeypatch.setattr(dispatcher.claims, "claim", lambda *_a: calls.append("claim") or True)
+    monkeypatch.setattr(
+        dispatcher.claims, "release", lambda *_a: pytest.fail("successful claim released early")
+    )
+
+    def plan(assignment, **kwargs):
+        calls.append(("plan", dict(assignment), kwargs))
+        return {**assignment, "cwd": str(tmp_path), "run_id": "run-1"}
+
+    monkeypatch.setattr(dispatcher, "plan_dispatch", plan)
+    monkeypatch.setattr(dispatcher, "_spawn", lambda d: calls.append(("spawn", dict(d))) or 42)
+    monkeypatch.setattr(
+        dispatcher, "_delegate_lane_heartbeat", lambda d: calls.append(("heartbeat", d["run_id"]))
+    )
+    monkeypatch.setattr(
+        dispatcher.feedback, "record_run", lambda *a, **kw: calls.append(("record", a, kw))
+    )
+    result = dispatcher.delegate(
+        agent,
+        "o/r#1",
+        "closer",
+        "finite task",
+        task_type="testgen",
+        profile_id="profile-1" if agent == "cursor" else None,
+        influenced_by_role_run_ids=["role-1"],
+        influenced_by_skill_event_ids=["skill-1"],
+        influenced_by_workflow_ids=["workflow-1"],
+        capability_ids=["existing"],
+        capability_version_ids=["existing@v1"],
+        acceptance_gate_ids=["gate-1"],
+    )
+    assert result == {
+        "pid": 42,
+        "log": str(tmp_path / "logs" / f"o__r_1.{agent}.log"),
+        "worktree": str(tmp_path),
+        "agent": agent,
+        "target": "o/r#1",
+        "mode": "composer" if agent == "cursor" else "mid",
+        "run_id": "run-1",
+    }
+    assignment = next(c[1] for c in calls if isinstance(c, tuple) and c[0] == "plan")
+    assert assignment["influenced_by_role_run_ids"] == ["role-1"]
+    assert assignment["capability_version_ids"] == ["existing@v1"]
+    assert assignment["acceptance_gate_ids"] == ["gate-1"]
+    spawned = next(c[1] for c in calls if isinstance(c, tuple) and c[0] == "spawn")
+    assert spawned["capability_ids"] == [
+        "existing",
+        dispatcher.DELEGATE_LANE_CAPABILITIES["testgen"],
+    ]
+    if override:
+        assert assignment["reasoning_effort"] == "medium"
+        assert "selected_profile_id" not in assignment
+        record = next(c for c in calls if isinstance(c, tuple) and c[0] == "record")
+        assert record[2]["mode"] == "local"
+        assert record[2]["reasoning_level"] == "mid"
+    else:
+        assert assignment["selected_profile_id"] == "profile-1"
+        assert assignment["transport"] == "local"
+        assert assignment["profile_assignment_probability"] == 1.0
+        assert not any(isinstance(c, tuple) and c[0] == "record" for c in calls)
+
+
+@pytest.mark.parametrize(
+    "failure", ["unknown-profile", "wrong-agent", "claimed", "no-plan", "plan-error"]
+)
+def test_delegate_refuses_invalid_profiles_or_claims_and_releases_failed_plans(
+    monkeypatch, failure
+):
+    releases = []
+
+    def profile(_id):
+        if failure == "unknown-profile":
+            raise ValueError("unknown profile")
+        return {
+            "agent": "vibe" if failure == "wrong-agent" else "cursor",
+            "requested_model": "test-model",
+            "reasoning_effort": "medium",
+            "permission_mode": "workspace-write",
+        }
+
+    monkeypatch.setattr(dispatcher.execution_profiles, "get_profile", profile)
+    monkeypatch.setattr(dispatcher.claims, "reap_stale", lambda: None)
+    monkeypatch.setattr(dispatcher.claims, "claim", lambda *_a: failure != "claimed")
+    monkeypatch.setattr(dispatcher.claims, "holder", lambda _t: {"agent": "incumbent"})
+    monkeypatch.setattr(dispatcher.claims, "release", lambda *a: releases.append(a))
+    monkeypatch.setattr(
+        dispatcher,
+        "plan_dispatch",
+        lambda *_a, **_kw: None if failure == "no-plan" else {"error": "plan refused"},
+    )
+    monkeypatch.setattr(
+        dispatcher, "_spawn", lambda _d: pytest.fail("refused delegation reached spawn")
+    )
+    result = dispatcher.delegate("cursor", "o/r#1", "closer", "finite task", profile_id="profile-1")
+    assert "error" in result
+    expected = {
+        "unknown-profile": "unknown profile",
+        "wrong-agent": "does not belong",
+        "claimed": "incumbent",
+        "no-plan": "unknown/unbuildable",
+        "plan-error": "plan refused",
+    }
+    assert expected[failure] in result["error"]
+    assert releases == ([("o/r#1", "cursor")] if failure in {"no-plan", "plan-error"} else [])
+
+
+@pytest.mark.parametrize("failing", [False, True])
+def test_delegate_heartbeat_binds_run_identity_and_never_blocks_delivery(
+    monkeypatch, capsys, failing
+):
+    import capabilities
+
+    calls = []
+
+    def heartbeat(*a, **kw):
+        calls.append((a, kw))
+        if failing:
+            raise OSError("telemetry unavailable")
+
+    monkeypatch.setattr(capabilities, "heartbeat", heartbeat)
+    d = {"task_type": "testgen", "target": "o/r#1", "run_id": "run-1", "agent": "cursor"}
+    dispatcher._delegate_lane_heartbeat(d)
+    assert len(calls) == 1
+    assert calls[0][0] == (dispatcher.DELEGATE_LANE_CAPABILITIES["testgen"], "invocation")
+    assert calls[0][1]["metadata"] == {
+        "source": "dispatcher.delegate",
+        "run_id": "run-1",
+        "task_type": "testgen",
+        "agent": "cursor",
+    }
+    assert (
+        calls[0][1]["idempotency_key"]
+        == f"delegate:run-1:{dispatcher.DELEGATE_LANE_CAPABILITIES['testgen']}"
+    )
+    if failing:
+        assert "telemetry unavailable" in capsys.readouterr().err
