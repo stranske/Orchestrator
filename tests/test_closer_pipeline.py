@@ -222,10 +222,30 @@ def test_semantic_cache_covers_large_queue_and_only_refreshes_changed_evidence(t
     def cap():
         return {"io": 8, "low": 4, "exception": 2}
 
-    run_pipeline(path, targets, **cb, capacity_fn=cap, deadline=time.time() + 10)
+    logical_now = [1_700_000_000.0]
+    run_bounded(
+        lambda: run_pipeline(
+            path,
+            targets,
+            **cb,
+            capacity_fn=cap,
+            deadline=logical_now[0] + 300,
+            now=lambda: logical_now[0],
+        )
+    )
     assert len(interpretations) == 40
     changed["target"] = "t17"
-    run_pipeline(path, targets, **cb, capacity_fn=cap, deadline=time.time() + 10)
+    logical_now[0] += 1
+    run_bounded(
+        lambda: run_pipeline(
+            path,
+            targets,
+            **cb,
+            capacity_fn=cap,
+            deadline=logical_now[0] + 300,
+            now=lambda: logical_now[0],
+        )
+    )
     assert len(interpretations) == 41
     assert interpretations.count("t17") == 2
 
@@ -385,7 +405,7 @@ def test_io_four_slots_can_run_ready_action_while_preparations_are_active(tmp_pa
     def prepare(target, context):
         if target != "t000":
             slow_prepares.set()
-            assert action_started.wait(1)
+            assert action_started.wait(15), "ready action never used the freed IO slot"
         return {
             "revision": target,
             "identity": target,
@@ -398,34 +418,33 @@ def test_io_four_slots_can_run_ready_action_while_preparations_are_active(tmp_pa
         "status": "completed",
         "target_complete": True,
     }
-    receipts = []
-    worker = threading.Thread(
-        target=lambda: receipts.append(
-            run_pipeline(
-                tmp_path / "state.json",
-                targets,
-                **cb,
-                capacity_fn=lambda: {"io": 4, "low": 2, "exception": 1},
-                deadline=time.time() + 3,
-                max_io_workers=4,
-            )
-        )
+    logical_now = time.time()
+    receipt = run_bounded(
+        lambda: run_pipeline(
+            tmp_path / "state.json",
+            targets,
+            **cb,
+            capacity_fn=lambda: {"io": 4, "low": 2, "exception": 1},
+            deadline=logical_now + 300,
+            max_io_workers=4,
+            now=lambda: logical_now,
+        ),
+        timeout=30,
     )
-    worker.start()
-    assert slow_prepares.wait(0.5)
-    assert action_started.wait(0.75), "ready action failed to use the fourth IO slot"
-    worker.join(3)
-    assert not worker.is_alive()
-    assert all(row["status"] == "completed" for row in receipts[0]["targets"].values())
+    assert slow_prepares.is_set(), "preparations never overlapped the ready action"
+    assert action_started.is_set(), "ready action failed to use the fourth IO slot"
+    assert all(row["status"] == "completed" for row in receipt["targets"].values())
 
 
 def test_completion_drives_next_stage_without_waiting_for_slow_peer(tmp_path):
     gate = threading.Event()
+    slow_entered = threading.Event()
     fast_act = threading.Event()
 
     def prep(target, ctx):
         if target == "slow":
-            gate.wait(2)
+            slow_entered.set()
+            gate.wait(30)
         return {"revision": target}
 
     cb = callbacks(
@@ -434,22 +453,31 @@ def test_completion_drives_next_stage_without_waiting_for_slow_peer(tmp_path):
     )
     cb["prepare"] = prep
     receipts = []
+    logical_now = time.time()
     worker = threading.Thread(
         target=lambda: receipts.append(
-            run(
+            run_pipeline(
                 tmp_path / "state.json",
                 ["slow", "fast"],
-                cb,
-                seconds=1,
+                **cb,
+                capacity_fn=lambda: {"io": 2, "low": 2, "exception": 1},
+                deadline=logical_now + 300,
                 max_io_workers=2,
                 max_low_workers=2,
+                now=lambda: logical_now,
             )
-        )
+        ),
+        daemon=True,
     )
     worker.start()
-    assert fast_act.wait(0.5), "fast target stalled behind slow target"
-    gate.set()
-    worker.join()
+    try:
+        assert slow_entered.wait(15), "slow target never entered its blocked prepare"
+        assert fast_act.wait(15), "fast target stalled behind slow target"
+        assert not gate.is_set(), "slow peer was released before the fast action"
+    finally:
+        gate.set()
+        worker.join(15)
+    assert not worker.is_alive(), "pipeline did not finish within the hang guard"
     receipt = receipts[0]
     assert receipt["targets"]["fast"]["status"] == "completed"
 
@@ -663,17 +691,52 @@ def test_exception_worker_capacity_defers_before_action(tmp_path):
 
 def test_capacity_decrease_limits_refill_after_each_completion(tmp_path):
     capacity_calls, starts = [], []
+    started = threading.Event()
+    zero_capacity_seen = threading.Event()
+    release = threading.Event()
+    logical_now = [10_000.0]
+    deadline = logical_now[0] + 1
 
     def capacity():
         capacity_calls.append(1)
         amount = 1 if len(capacity_calls) == 1 else 0
+        if amount == 0:
+            zero_capacity_seen.set()
         return {"io": amount, "low": 2, "exception": 1}
 
     cb = callbacks()
-    cb["prepare"] = lambda t, c: starts.append(t) or {"revision": t}
-    receipt = run_pipeline(
-        tmp_path / "state.json", ["a", "b"], **cb, capacity_fn=capacity, deadline=time.time() + 0.08
+
+    def prepare(target, context):
+        starts.append(target)
+        started.set()
+        assert release.wait(15), "test failed to release the admitted callback"
+        return {"revision": target}
+
+    cb["prepare"] = prepare
+    receipts = []
+    worker = threading.Thread(
+        target=lambda: receipts.append(
+            run_pipeline(
+                tmp_path / "state.json",
+                ["a", "b"],
+                **cb,
+                capacity_fn=capacity,
+                deadline=deadline,
+                now=lambda: logical_now[0],
+            )
+        ),
+        daemon=True,
     )
+    worker.start()
+    try:
+        assert started.wait(15), "scheduler failed to submit the first read"
+        assert zero_capacity_seen.wait(15), "scheduler never observed fresh zero capacity"
+        logical_now[0] = deadline + 0.01
+    finally:
+        release.set()
+        worker.join(15)
+    assert not worker.is_alive(), "pipeline did not finish within the hang guard"
+    receipt = receipts[0]
     assert len(capacity_calls) > 1
     assert len(starts) == 1
     assert sum(row["status"] == "completed" for row in receipt["targets"].values()) == 0
@@ -715,84 +778,132 @@ def test_same_state_race_never_duplicates_target_work(tmp_path):
 
 def test_deadline_joins_inflight_callback_and_blocks_late_submissions(tmp_path):
     path = tmp_path / "state.json"
-    entered, release = threading.Event(), threading.Event()
-    starts = []
+    entered, release, first_finished = threading.Event(), threading.Event(), threading.Event()
+    second_invoked, second_entered = threading.Event(), threading.Event()
+    first_starts, second_starts = [], []
+    logical_now = [50_000.0]
+    deadline = logical_now[0] + 1
     cb = callbacks()
 
     def prep(target, ctx):
-        starts.append((target, time.time()))
+        first_starts.append((target, logical_now[0]))
         if target == "a":
             entered.set()
-            release.wait(2)
+            assert release.wait(15), "test failed to release the in-flight callback"
         return {"revision": target}
 
     cb["prepare"] = prep
     first_receipts = []
-    deadline = time.time() + 0.12
     first = threading.Thread(
-        target=lambda: first_receipts.append(
-            run_pipeline(
-                path,
-                ["a", "b"],
-                **cb,
-                capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
-                deadline=deadline,
-            )
-        )
+        target=lambda: _run_and_mark_finished(),
+        daemon=True,
     )
+
+    def _run_and_mark_finished():
+        try:
+            first_receipts.append(
+                run_pipeline(
+                    path,
+                    ["a", "b"],
+                    **cb,
+                    capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+                    deadline=deadline,
+                    now=lambda: logical_now[0],
+                )
+            )
+        finally:
+            first_finished.set()
+
     first.start()
-    assert entered.wait(0.5)
-    time.sleep(0.15)  # pass the first deadline while its callback is still owned
-    second_receipts = []
-    second = threading.Thread(
-        target=lambda: second_receipts.append(
-            run_pipeline(
-                path,
-                ["a", "b"],
-                **callbacks(),
-                capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
-                deadline=time.time() + 1,
+    second = None
+    try:
+        assert entered.wait(15), "first callback did not start within the hang guard"
+        logical_now[0] = deadline + 1
+        second_receipts = []
+
+        second_cb = callbacks()
+
+        def second_prepare(target, context):
+            second_starts.append(target)
+            second_entered.set()
+            assert first_finished.is_set(), "second round entered before prior callbacks drained"
+            return {"revision": target}
+
+        second_cb["prepare"] = second_prepare
+
+        def invoke_second():
+            second_invoked.set()
+            second_receipts.append(
+                run_pipeline(
+                    path,
+                    ["a", "b"],
+                    **second_cb,
+                    capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+                    deadline=logical_now[0] + 10,
+                    now=lambda: logical_now[0],
+                )
             )
-        )
-    )
-    second.start()
-    time.sleep(0.05)
-    assert second.is_alive(), "a new round bypassed the old callback's run lock"
-    release.set()
-    first.join(1)
-    second.join(1)
-    assert not first.is_alive() and not second.is_alive()
-    assert first_receipts[0]["elapsed_seconds"] > 0.12
+
+        second = threading.Thread(target=invoke_second, daemon=True)
+        second.start()
+        assert second_invoked.wait(15), "second round did not begin"
+        assert not second_entered.wait(0.25), "a new round bypassed the old callback's run lock"
+    finally:
+        release.set()
+        first.join(15)
+        if second is not None:
+            second.join(15)
+    assert not first.is_alive() and second is not None and not second.is_alive()
+    assert first_finished.is_set()
+    assert first_receipts[0]["elapsed_seconds"] >= 1
     # The first round cannot submit the queued target's callback after cutoff.
-    assert all(started_at < deadline for _, started_at in starts)
-    assert [target for target, _ in starts] == ["a"]
+    assert all(started_at < deadline for _, started_at in first_starts)
+    assert [target for target, _ in first_starts] == ["a"]
+    assert second_entered.is_set() and second_starts
 
 
 def test_typed_prepare_exhaustion_waits_for_cutoff_and_defers_unstarted_targets(tmp_path):
     path = tmp_path / "pipeline.json"
     starts = []
-    deadline = time.time() + 0.25
+    entered, release = threading.Event(), threading.Event()
+    logical_now = [70_000.0]
+    deadline = logical_now[0] + 1
     cb = callbacks()
 
     def prepare(target, context):
         starts.append(target)
-        time.sleep(max(0.0, deadline + 0.02 - time.time()))
-        remaining = deadline - time.time()
+        entered.set()
+        assert release.wait(15), "test failed to release the admitted callback"
+        remaining = deadline - logical_now[0]
         raise FakeRoundDeadlineExhausted(deadline, remaining)
 
     cb["prepare"] = prepare
-    began = time.time()
-    receipt = run_pipeline(
-        path,
-        ["a", "b", "c"],
-        **cb,
-        capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
-        deadline=deadline,
-        max_io_workers=1,
-        round_deadline_exception=FakeRoundDeadlineExhausted,
+    receipts = []
+    worker = threading.Thread(
+        target=lambda: receipts.append(
+            run_pipeline(
+                path,
+                ["a", "b", "c"],
+                **cb,
+                capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+                deadline=deadline,
+                max_io_workers=1,
+                round_deadline_exception=FakeRoundDeadlineExhausted,
+                now=lambda: logical_now[0],
+            )
+        ),
+        daemon=True,
     )
-    assert time.time() >= deadline
-    assert receipt["elapsed_seconds"] >= deadline - began
+    worker.start()
+    try:
+        assert entered.wait(15), "typed-deadline callback did not start within the hang guard"
+        logical_now[0] = deadline + 0.01
+    finally:
+        release.set()
+    worker.join(15)
+    assert not worker.is_alive(), "pipeline did not finish within the hang guard"
+    receipt = receipts[0]
+    assert receipt["elapsed_seconds"] >= 1
     assert starts == ["a"], "typed read-budget exhaustion must stop further IO submissions"
     assert all(row["status"] == "deferred" for row in receipt["targets"].values())
     for row in receipt["targets"].values():
