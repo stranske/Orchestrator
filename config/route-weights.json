@@ -1,37 +1,37 @@
 {
   "capacity": {
     "aider": {
-      "observed_at": 1792209226,
+      "observed_at": 1792209768,
       "state": "ok",
       "window": "daily"
     },
     "claude": {
-      "observed_at": 1792209226,
+      "observed_at": 1792209768,
       "state": "ok",
       "window": "5h+weekly"
     },
     "codex": {
-      "observed_at": 1792209226,
+      "observed_at": 1792209768,
       "state": "ok",
       "window": "5h"
     },
     "cursor": {
-      "observed_at": 1792209226,
+      "observed_at": 1792209768,
       "state": "ok",
       "window": "monthly"
     },
     "gemini": {
-      "observed_at": 1792209226,
+      "observed_at": 1792209768,
       "state": "ok",
       "window": "5h+weekly"
     },
     "muse": {
-      "observed_at": 1792209226,
-      "state": "shed",
+      "observed_at": 1792209768,
+      "state": "ok",
       "window": "5h+weekly"
     },
     "vibe": {
-      "observed_at": 1792209226,
+      "observed_at": 1792209768,
       "state": "ok",
       "window": "subscription"
     }
@@ -40,22 +40,39 @@
   "exploration": {
     "challengers": {
       "codemod": "gemini",
-      "cross_repo": "codex",
-      "implement": "gemini",
+      "cross_repo": "gemini",
+      "implement": "codex",
       "mechanical": "codex",
       "review": "codex",
       "testgen": "cursor"
     },
     "mode": "thompson-hybrid",
-    "policy_version": "route-exploration/v1:75ad3c9b83750eafdcc82275cd8410f246e65acffd39825ff7cb79c546e3e16c",
+    "policy_version": "route-exploration/v1:8d72a6f96911aaff17efdf7e802cc1edf8b181a226af394206f92da200c1464e",
     "rate": 0.05,
     "week_start": 1792022400
   },
-  "generated_at": "2026-10-17T03:53:44Z",
+  "generated_at": "2026-10-17T04:02:41Z",
   "min_observations": 20,
-  "reserve": {},
+  "reserve": {
+    "implement": [
+      {
+        "agent": "claude",
+        "n_obs": 450,
+        "posterior": 0.6796267425867231,
+        "success_rate": 0.6829999965362222
+      }
+    ],
+    "review": [
+      {
+        "agent": "claude",
+        "n_obs": 153,
+        "posterior": 0.5570858617136709,
+        "success_rate": 0.5710239621642845
+      }
+    ]
+  },
   "schema": "orchestrator.route-weights/v1",
-  "source_version": 0,
+  "source_version": 68,
   "task_types": {
     "codemod": {
       "evidence_ok": false,
@@ -66,20 +83,83 @@
       "ranking": []
     },
     "implement": {
-      "evidence_ok": false,
-      "ranking": []
+      "evidence_ok": true,
+      "ranking": [
+        {
+          "agent": "cursor",
+          "n_obs": 445,
+          "posterior": 0.7874157622883159,
+          "success_rate": 0.7981143555454416
+        },
+        {
+          "agent": "codex",
+          "n_obs": 1198,
+          "posterior": 0.6988501371778872,
+          "success_rate": 0.6995254135671853
+        },
+        {
+          "agent": "vibe",
+          "n_obs": 137,
+          "posterior": 0.6454057480201821,
+          "success_rate": 0.6857522900191688
+        },
+        {
+          "agent": "gemini",
+          "n_obs": 101,
+          "posterior": 0.5603003381842482,
+          "success_rate": 0.5518718781117872
+        }
+      ]
     },
     "mechanical": {
       "evidence_ok": false,
       "ranking": []
     },
     "review": {
-      "evidence_ok": false,
-      "ranking": []
+      "evidence_ok": true,
+      "ranking": [
+        {
+          "agent": "cursor",
+          "n_obs": 341,
+          "posterior": 0.7405708515660504,
+          "success_rate": 0.744345971054454
+        },
+        {
+          "agent": "codex",
+          "n_obs": 287,
+          "posterior": 0.7039713892102111,
+          "success_rate": 0.7164789332478064
+        },
+        {
+          "agent": "vibe",
+          "n_obs": 145,
+          "posterior": 0.6525393841853658,
+          "success_rate": 0.6586466268812258
+        },
+        {
+          "agent": "gemini",
+          "n_obs": 120,
+          "posterior": 0.5769665411810164,
+          "success_rate": 0.5777238752239884
+        }
+      ]
     },
     "testgen": {
-      "evidence_ok": false,
-      "ranking": []
+      "evidence_ok": true,
+      "ranking": [
+        {
+          "agent": "codex",
+          "n_obs": 61,
+          "posterior": 0.7145386034780872,
+          "success_rate": 0.753441278656061
+        },
+        {
+          "agent": "vibe",
+          "n_obs": 20,
+          "posterior": 0.6697758899642661,
+          "success_rate": 0.9783333333333334
+        }
+      ]
     }
   }
 }
