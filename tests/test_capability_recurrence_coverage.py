@@ -1,8 +1,14 @@
 """Failure-boundary coverage for the recurrence check's pure and offline paths."""
 
+import os
+import tempfile
 from types import SimpleNamespace
 
-import capability_recurrence_check as recurrence
+_hermetic_root = tempfile.mkdtemp(prefix="orch_recurrence_cov_")
+os.environ.setdefault("ORCH_STATE_DIR", _hermetic_root)
+os.environ.setdefault("ORCH_LOCAL_RUNTIME", _hermetic_root)
+
+import capability_recurrence_check as recurrence  # noqa: E402
 
 
 def test_tick_env_attempt_names_unreadable_bash_and_spawn_failures(monkeypatch, tmp_path):
@@ -121,6 +127,7 @@ def test_fetch_and_live_label_fallback_never_call_gh_when_offline(monkeypatch):
         recurrence._labels_of(fixture, offline=False)[2]
         == "frozen (live read failed) Orchestrator#1"
     )
+    assert len(calls) == 2
     assert recurrence._labels_of(fixture, offline=True) == (
         ["bug"],
         "saved",
