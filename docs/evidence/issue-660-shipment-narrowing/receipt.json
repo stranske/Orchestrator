@@ -1,0 +1,20 @@
+{
+  "schema": "shipment-narrowing-adoption/v1",
+  "adopted_native_head": "a26c12c477e1d664cae7cb10e26249558212189f",
+  "frozen_core_proof": "afb2c19c0ca1263cce7ebb6acb0a1e42dd78222a",
+  "preserved_native_extension": "43c2b4c5e551e05f4d10e27388991709ce35fffa",
+  "helper_baseline_git_blob": "79af007805bbc192d168f51df0a525aee3db2c4e",
+  "new_presync_test_absent": true,
+  "native_extension_reachable": true,
+  "core_10_paths_byte_identical": true,
+  "all_13_original_payloads_preserved": true,
+  "frozen_artifacts_restored_and_verified": 176,
+  "frozen_readme_original_sha256": "a4bae2b331986754855e062e80cf513b8b24cdf561cc80a41b2bd51b7b3ed761",
+  "native_scope_readme_sha256": "67bfeeee0d61dd553981b6f7ebbd01451ae7f944bbdaf08a64d2ab97643b2f54",
+  "runtime_source_changes_by_adoption": false,
+  "validation": "Exact native two-path narrowing adopted; all176 archive hashes restored;10 qualified core inputs/13payloads unchanged. No new tests for metadata-only adoption;112+8subtests/Node8/three causal proofs remain bound to identical core.",
+  "historical_full_local_verify": "RED24baseline failures/3selftests; not cured",
+  "scope_review": "e2559e74 NARROW-SAFE; ordinary narrowing needs no engineering permit",
+  "baseline_helper_limitation": "Literal tilde/state-only snapshot selection remains a separate component-owner disposition. Not claimed fixed, not shipped as new behavior, no engineering/new issue/permit/campaign capacity.",
+  "source_acceptance": "current-head CI/review/floor and actual postmerge mirror/live publication unverified"
+}

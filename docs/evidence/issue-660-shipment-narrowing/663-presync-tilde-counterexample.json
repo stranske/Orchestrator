@@ -1,0 +1,11 @@
+{
+  "head": "afb2c19c0ca1263cce7ebb6acb0a1e42dd78222a",
+  "actual_shell_assignment": "brain_src=\"${ORCH_FEEDBACK_DB:-${ORCH_LOCAL_RUNTIME:-$statedir_src}/feedback/orchestrator.db}\"",
+  "actual_shell_stdout": "~/private/orchestrator.db\nselected-absent\n",
+  "python_expanded_source": "/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/source660-presync-tilde-p13kqfzc/home/private/orchestrator.db",
+  "expanded_source_exists": true,
+  "bytes_unchanged": true,
+  "full_presync_script_executed": false,
+  "live_brain_or_verification_invoked": false,
+  "finding": "pre-sync shell still treats supported tilde DB env literally, so skips selected valid source"
+}

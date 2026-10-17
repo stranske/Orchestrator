@@ -1,0 +1,11 @@
+{
+  "head": "afb2c19c0ca1263cce7ebb6acb0a1e42dd78222a",
+  "actual_shell_assignment": "brain_src=\"${ORCH_FEEDBACK_DB:-${ORCH_LOCAL_RUNTIME:-$statedir_src}/feedback/orchestrator.db}\"",
+  "literal_selected": "~/private/orchestrator.db",
+  "actual_private_selected_version": 0,
+  "expanded_actual_version": 68,
+  "different_instances": true,
+  "full_presync_script_executed": false,
+  "live_Brain_or_verification_invoked": false,
+  "finding": "shell file test admits cwd literal-tilde decoy despite expanded learner source version68"
+}
