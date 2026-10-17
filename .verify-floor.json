@@ -1,6 +1,6 @@
 {
-  "collected": 3950,
-  "passed": 3950,
+  "collected": 3959,
+  "passed": 3959,
   "skipped_max": 31,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 52,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Source660 reconciliation adds seven isolated DB/CLI/explicit-override regression cases; pass expectation and all skip/selftest/gate/mypy ceilings retained. Explicit-tilde continuation adds one isolated actual learner/CLI case; 3950 collected, pass expectation 3950 (not an observed pass count); all ceilings unchanged."
+  "note": "Source660 reconciliation adds seven isolated DB/CLI/explicit-override regression cases; pass expectation and all skip/selftest/gate/mypy ceilings retained. Explicit-tilde continuation adds one isolated actual learner/CLI case; 3950 collected, pass expectation 3950 (not an observed pass count); all ceilings unchanged. 2026-10-17 #673 adds9 assess sandbox probe/fallback/accounting/report regression cases; all ceilings unchanged."
 }
