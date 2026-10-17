@@ -300,10 +300,7 @@ DURABILITY_DETECTION_SINCE = 1787961600  # 2026-08-29T00:00:00Z
 DURABILITY_DETECTION_SINCE_DATE = "2026-08-29"
 RELEARN_WINDOW_DAYS = 120
 
-# A repo-root file resolves from the checkout root, never from `parent.parent`: the exec mirror is
-# flat, so there the module's grandparent is not the tree (CLAUDE.md §1). The mirror builder ships
-# the file beside the modules (scripts/build_exec_mirror.sh).
-MODEL_EPOCHS_PATH = paths.REPO_ROOT / "config" / "model_epochs.json"
+MODEL_EPOCHS_PATH = paths.checkout_root(ORCH) / "config" / "model_epochs.json"
 
 
 def model_epoch_floor(agent: str, since: int, path: Path | None = None) -> int:
@@ -318,8 +315,8 @@ def model_epoch_floor(agent: str, since: int, path: Path | None = None) -> int:
         entry = (data.get("epochs") or {}).get(agent)
         if not entry:
             return since
-        parsed = utc_epoch.from_iso(str(entry["since"]))
-        return since if parsed is None else max(since, parsed)
+        epoch = utc_epoch.from_iso(str(entry["since"]))
+        return max(since, epoch) if epoch is not None else since
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return since
 

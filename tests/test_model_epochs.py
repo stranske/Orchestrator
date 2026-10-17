@@ -1,4 +1,8 @@
 import json
+import runpy
+from pathlib import Path
+
+import pytest
 
 import feedback
 import judge_reliability
@@ -67,3 +71,17 @@ def test_judge_reliability_drops_evaluations_before_the_epoch(tmp_path, monkeypa
     report = judge_reliability.summarize(window_days=3650)
     seen = report["judges"].get("gemini", {})
     assert seen.get("raw_score_count") == 1, seen
+
+
+@pytest.mark.parametrize("layout", ["src", "flat"])
+def test_model_epoch_config_in_both_deployment_layouts(tmp_path, layout):
+    root = tmp_path / "deployment"
+    module_dir = root / "src" if layout == "src" else root
+    module_dir.mkdir(parents=True)
+    (root / "config").mkdir()
+    config = _epochs(root / "config")
+    module = module_dir / "feedback.py"
+    module.write_text(Path(feedback.__file__).read_text())
+    namespace = runpy.run_path(str(module))
+    assert namespace["MODEL_EPOCHS_PATH"] == config
+    assert namespace["model_epoch_floor"]("gemini", 0) == 1792108800

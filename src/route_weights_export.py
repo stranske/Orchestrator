@@ -197,7 +197,7 @@ def _current_capacity_snapshot() -> dict[str, Any]:
 
 
 def _capacity_block(snapshot: dict[str, Any] | None) -> dict[str, Any]:
-    """Per-agent capacity state for remote consumers (state and window only)."""
+    """Additive per-agent state/window/pacing contract for remote consumers."""
     if snapshot is None:
         snapshot = _current_capacity_snapshot()
     agents_raw = snapshot.get("agents")
@@ -222,6 +222,16 @@ def _capacity_block(snapshot: dict[str, Any] | None) -> dict[str, Any]:
             "state": state,
             "window": window,
             "observed_at": observed_at,
+            **(
+                {
+                    "pacing": {
+                        **row["pacing"],
+                        "burn_per_day": row["pacing"].get("burn_rate_per_day"),
+                    }
+                }
+                if isinstance(row.get("pacing"), dict)
+                else {}
+            ),
         }
     return block
 
@@ -379,6 +389,23 @@ def _semantic_for_compare(document: dict[str, Any]) -> dict[str, Any]:
                 compared[agent] = {
                     key: value for key, value in entry.items() if key != "observed_at"
                 }
+                pace = entry.get("pacing")
+                if isinstance(pace, dict):
+                    compared[agent]["pacing"] = {
+                        key: value
+                        for key, value in pace.items()
+                        if key
+                        not in (
+                            "ts",
+                            "reason",
+                            "burn_rate_per_day",
+                            "burn_per_day",
+                            "fyi",
+                            "allowed_fraction",
+                            "projected_fraction",
+                            "routing_weight",
+                        )
+                    }
             else:
                 compared[agent] = entry
         semantic["capacity"] = compared
