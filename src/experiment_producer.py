@@ -24,6 +24,9 @@ from pathlib import Path
 
 COVERAGE_DAYS = 21
 DAILY_CAP = 4
+WINNER_MERGE_GRACE_DAYS = 7
+PRODUCER_FOLLOWUP_DAYS = 30
+TERMINAL_STATUSES = {"merged", "no_winner", "discarded", "expired", "member_pushed"}
 
 
 def state_path():
@@ -103,7 +106,7 @@ def cadence_draw(now, rate, rng, *, pools=None, cells=(), skip_reason=None):
         state.update(
             day=day,
             last_draw_ts=now,
-            launched_today=count + int(result["fire"]),
+            launched_today=count,
             cells_fresh=sum(c.get("age_days", math.inf) <= COVERAGE_DAYS for c in cells),
             cells_total=len(cells),
         )
@@ -112,6 +115,24 @@ def cadence_draw(now, rate, rng, *, pools=None, cells=(), skip_reason=None):
             reasons[result["reason"]] = reasons.get(result["reason"], 0) + 1
         save_state(state)
         return result
+
+
+def record_launch(now=None):
+    now = time.time() if now is None else now
+    with locked_state():
+        state = read_state()
+        day = time.strftime("%Y%m%d", time.gmtime(now))
+        count = state.get("launched_today", 0) if state.get("day") == day else 0
+        state.update(day=day, launched_today=count + 1)
+        save_state(state)
+
+
+def record_skip(reason):
+    with locked_state():
+        state = read_state()
+        skips = state.setdefault("skips", {})
+        skips[reason] = skips.get(reason, 0) + 1
+        save_state(state)
 
 
 def choose_subject(feed, forum, cells, rng):
@@ -201,6 +222,7 @@ def build_plan(
     import router
 
     spare = research_scheduler.spare_capacity(research_scheduler.capacity_state_from_snapshot(cap))
+    skipped = []
     eligible = [
         i
         for i in items
@@ -210,6 +232,10 @@ def build_plan(
         and i.get("lane", "research") in {"research", "opener"}
         and not backlog.research_ownership_skip_reason(i.get("labels") or [])
     ]
+    for item in eligible:
+        if not named_test(item.get("body", "")):
+            skipped.append({"target": item["target"], "reason": "no_named_test"})
+    eligible = [i for i in eligible if named_test(i.get("body", ""))]
     classes = set(router.ROUTE_TABLE)
     cells = route_cells(classes, cap.get("agents", {}), conn=conn)
     cells = [
@@ -224,17 +250,37 @@ def build_plan(
     pacing = capacity.experiment_pacing(cap)
     for c in cells:
         c["pacing"] = pacing.get(c["agent"], "unknown")
+    candidate_cells = [c for c in cells if c["pacing"] == "ok"]
+    debt = sum(c.get("age_days", math.inf) > COVERAGE_DAYS for c in cells)
+    drainable = sum(c.get("age_days", math.inf) > COVERAGE_DAYS for c in candidate_cells)
+    blocked = {a: p for a, p in pacing.items() if p != "ok"}
+    if blocked:
+        reason = "pacing " + ", ".join(f"{a}={p}" for a, p in sorted(blocked.items()))
+        print(f"{reason}; coverage debt {debt} cells > 21d, drainable {drainable}", file=sys.stderr)
+        if not drainable:
+            return {
+                "planned": [],
+                "skipped": skipped + [{"reason": reason}],
+                "candidates": [],
+                "producer_cells": cells,
+            }
+    viable = {
+        c["task_type"]
+        for c in candidate_cells
+        if len({r["agent"] for r in candidate_cells if r["task_type"] == c["task_type"]}) >= 2
+    }
+    eligible = [i for i in eligible if i.get("task_type", "implement") in viable]
     forum = [
         i
         for i in eligible
         if "experiment:forum" in i.get("labels", [])
         or len(re.findall(r"(?m)^\s*- \[[ xX]\]", i.get("body", ""))) >= 9
     ]
-    choice = choose_subject(eligible, forum, cells, rng)
+    choice = choose_subject(eligible, forum, candidate_cells, rng)
     if not choice:
         return {
             "planned": [],
-            "skipped": [{"reason": "no_subject"}],
+            "skipped": skipped + [{"reason": "no_subject"}],
             "candidates": [],
             "producer_cells": cells,
         }
@@ -245,7 +291,7 @@ def build_plan(
         ranks,
         key=lambda a: ((learned or {}).get(task, {}).get(a, {}).get("rank", math.inf), -ranks[a]),
     )
-    arms = choose_arms(task, order, cells, rng)
+    arms = choose_arms(task, order, candidate_cells, rng)
     selected = [a for arm in arms for a in arm["agents"]]
     pools = {}
     for agent in selected:
@@ -270,7 +316,7 @@ def build_plan(
     return {
         "planned": [job] if len(arms) >= 2 else [],
         "candidates": [],
-        "skipped": [],
+        "skipped": skipped,
         "producer_cells": cells,
     }
 
@@ -280,6 +326,8 @@ def gh_call(argv):
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=60, check=False)
         if proc.returncode:
+            if argv[2:4] == ["-X", "DELETE"] and "HTTP 404" in (proc.stderr or ""):
+                return {"stdout": ""}
             return {"error": (proc.stderr or proc.stdout)[-500:]}
         return {"stdout": proc.stdout}
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -290,18 +338,30 @@ def issue_status(target, running, *, gh_fn=None):
     if not target or "#" not in target:
         return {"error": "no subject"}
     repo, number = target.rsplit("#", 1)
-    return (gh_fn or gh_call)(
-        [
-            "gh",
-            "issue",
-            "edit",
-            number,
-            "-R",
-            repo,
-            "--add-label" if running else "--remove-label",
-            "status:in-progress",
-        ]
+    endpoint = f"repos/{repo}/issues/{number}/labels"
+    argv = (
+        ["gh", "api", "-X", "POST", endpoint, "-f", "labels[]=status:in-progress"]
+        if running
+        else ["gh", "api", "-X", "DELETE", endpoint + "/status%3Ain-progress"]
     )
+    return (gh_fn or gh_call)(argv)
+
+
+def release_lock(root, target, delivery, *, gh_fn=None, now=None):
+    """Release once, retrying only failures. Persist before returning to the caller."""
+    if delivery.get("lock_released_ts") is not None:
+        return delivery
+    delivery["issue_status"] = issue_status(target, False, gh_fn=gh_fn)
+    if "error" not in delivery["issue_status"]:
+        delivery["lock_released_ts"] = time.time() if now is None else now
+    from fleet_shapes import write_json_atomic
+
+    write_json_atomic(Path(root) / "producer-delivery.json", delivery)
+    return delivery
+
+
+def named_test_paths(command):
+    return list(dict.fromkeys(re.findall(r"tests/[\w./-]+\.py(?:::[\w\[\]-]+)*", command or "")))
 
 
 def named_test(spec):
@@ -334,7 +394,7 @@ def producer_summary(exp_dir=None, *, gh_fn=None):
     except (ValueError, OSError):
         trial_state = {}
     start = trial_state.get("trial_start", 0)
-    end = start + 21 * 86400 if start else math.inf
+    end = start + COVERAGE_DAYS * 86400 if start else math.inf
     for path in Path(exp_dir or exp_abcd.EXP_DIR).glob("*/meta.json"):
         try:
             meta = json.loads(path.read_text())
@@ -360,7 +420,8 @@ def producer_summary(exp_dir=None, *, gh_fn=None):
                     merged = json.loads(answer["stdout"]).get("merged_at")
                     if merged:
                         metrics["winner_merged"] += int(
-                            datetime.fromisoformat(merged.replace("Z", "+00:00")).timestamp() <= end
+                            datetime.fromisoformat(merged.replace("Z", "+00:00")).timestamp()
+                            <= end + WINNER_MERGE_GRACE_DAYS * 86400
                         )
         except (ValueError, OSError, KeyError):
             errors.append("unreadable_experiment")
@@ -377,28 +438,34 @@ def producer_summary(exp_dir=None, *, gh_fn=None):
     return metrics
 
 
-def trial_defaults(now=None):
-    """Persist deploy-relative trial once; shell compares YYYYMMDD as BSD integers."""
+def trial_defaults(now=None, *, active=False):
+    """Start only on an active producer tick; shadow/default queries are read-only."""
     now = time.time() if now is None else now
     with locked_state():
         state = read_state()
-        if not state.get("trial_end"):
+        if not state.get("trial_end") and active:
             state.update(
-                trial_start=now, trial_end=time.strftime("%Y%m%d", time.gmtime(now + 21 * 86400))
+                trial_start=now,
+                trial_end=time.strftime("%Y%m%d", time.gmtime(now + COVERAGE_DAYS * 86400)),
             )
             save_state(state)
             print(
                 f"[experiment producer] deployed; trial end {state['trial_end']}", file=sys.stderr
             )
-        return state["trial_end"], state.get("trial_verdict", "pending")
+        return state.get(
+            "trial_end", time.strftime("%Y%m%d", time.gmtime(now + COVERAGE_DAYS * 86400))
+        ), state.get("trial_verdict", "pending")
 
 
 def trial_verdict(now=None, *, summary_fn=None):
     now = time.time() if now is None else now
+    state = read_state()
+    if not state.get("trial_start") or now < state["trial_start"] + COVERAGE_DAYS * 86400:
+        return "pending"
     metrics = (summary_fn or producer_summary)()
     with locked_state():
         state = read_state()
-        if not state.get("trial_start") or now < state["trial_start"] + 21 * 86400:
+        if not state.get("trial_start") or now < state["trial_start"] + COVERAGE_DAYS * 86400:
             return "pending"
         verdict = (
             "pass" if metrics["winner_merged"] >= 6 and not metrics.get("unknowns") else "fail"

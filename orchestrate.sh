@@ -347,7 +347,7 @@ if [[ "$mode" == "active" ]]; then
 fi
 
 # ORCH-ANCHOR: experiment-producer-trial — independent of dispatch/research switches.
-# Python persists first-deploy +21 days once; BSD date supplies an integer UTC day.
+# Read the trial default without starting it; the first active producer tick starts the clock.
 _orch_exp_trial="$(python3 "$ORCH/experiment_producer.py" --trial-defaults)" || _orch_exp_trial="0 pending"
 _orch_exp_end="${_orch_exp_trial%% *}"
 _orch_exp_verdict="${_orch_exp_trial#* }"

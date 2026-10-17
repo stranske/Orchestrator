@@ -900,7 +900,7 @@ def deliver_producer_winner(exp_dir, meta, evaluation, *, verify_fn=None, gh_fn=
     def persist(status, **fields):
         receipt.update(status=status, **fields)
         if status in {"no_winner", "discarded"}:
-            receipt["issue_status"] = producer.issue_status(target, False, gh_fn=gh)
+            producer.release_lock(root, target, receipt, gh_fn=gh)
         _atomic_json(receipt_path, receipt)
         return receipt
 
@@ -924,17 +924,24 @@ def deliver_producer_winner(exp_dir, meta, evaluation, *, verify_fn=None, gh_fn=
         )
         try:
             head = git(["rev-parse", "HEAD"], wt)
+            status_before = git(["status", "--porcelain"], wt)
         except (RuntimeError, OSError, subprocess.TimeoutExpired):
             continue
         if receipt["local_verify"].get(member_id, {}).get("verified_commit") != head:
             receipt["local_verify"][member_id] = (verify_fn or local_verify.verify)(
-                wt, base_ref=meta.get("base_sha") or meta["base"], test_cmd=command
+                wt,
+                base_ref=meta.get("base_sha") or meta["base"],
+                test_cmd=command,
+                test_paths=producer.named_test_paths(command),
             )
             receipt["local_verify"][member_id]["verified_commit"] = head
+        if git(["status", "--porcelain"], wt) != status_before:
+            receipt["local_verify"][member_id].update(
+                ok=False, error="verification_changed_worktree"
+            )
         if receipt["local_verify"][member_id].get("ok") is True:
             verified.append((member, wt))
     if not verified:
-        producer.issue_status(target, False, gh_fn=gh)
         research_subjects.mark_lifecycle(root.name, "failed", reason="no_winner")
         return persist("no_winner", reason="no_arm_passed_named_local_verify")
     member, wt = verified[0]
@@ -952,7 +959,6 @@ def deliver_producer_winner(exp_dir, meta, evaluation, *, verify_fn=None, gh_fn=
             [label for label in labels if label != "status:in-progress"]
         )
         if issue.get("state", "").lower() != "open" or ownership:
-            producer.issue_status(target, False, gh_fn=gh)
             return persist("discarded", reason=ownership or "subject_closed")
         page = 1
         while True:
@@ -973,7 +979,6 @@ def deliver_producer_winner(exp_dir, meta, evaluation, *, verify_fn=None, gh_fn=
                         member_id=member["member_id"],
                     )
                 if re.search(rf"(?<![\w/])(?:{re.escape(repo)})?#{re.escape(number)}(?!\d)", body):
-                    producer.issue_status(target, False, gh_fn=gh)
                     return persist(
                         "discarded", reason="another_pr_names_subject", conflicting_pr=pr["number"]
                     )
@@ -1008,26 +1013,26 @@ def deliver_producer_winner(exp_dir, meta, evaluation, *, verify_fn=None, gh_fn=
     answer = gh(
         [
             "gh",
-            "pr",
-            "create",
-            "-R",
-            repo,
-            "--head",
-            branch,
-            "--base",
-            meta["base"],
-            "--title",
-            f"feat: deliver experiment {root.name}",
-            "--body-file",
-            str(body_path),
+            "api",
+            "-X",
+            "POST",
+            f"repos/{repo}/pulls",
+            "-f",
+            f"head={branch}",
+            "-f",
+            f"base={meta['base']}",
+            "-f",
+            f"title=feat: deliver experiment {root.name}",
+            "-f",
+            f"body={body_path.read_text()}",
         ]
     )
     if "error" in answer:
         return persist("publication_pending", error=answer["error"])
-    url = answer.get("stdout", "").strip()
     try:
-        pr_number = int(url.rstrip("/").rsplit("/", 1)[1])
-    except (ValueError, IndexError):
+        pr = json.loads(answer["stdout"])
+        url, pr_number = pr["html_url"], int(pr["number"])
+    except (ValueError, KeyError, TypeError):
         return persist("publication_pending", error="PR URL unavailable")
     persist(
         "delegated_or_pr",
@@ -1039,7 +1044,15 @@ def deliver_producer_winner(exp_dir, meta, evaluation, *, verify_fn=None, gh_fn=
     )
     label = member["agent"] if member["agent"] in __import__("router").KEEPALIVE_AGENTS else "codex"
     receipt["label_result"] = gh(
-        ["gh", "pr", "edit", str(pr_number), "-R", repo, "--add-label", f"agent:{label}"]
+        [
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            f"repos/{repo}/issues/{pr_number}/labels",
+            "-f",
+            f"labels[]=agent:{label}",
+        ]
     )
     _atomic_json(receipt_path, receipt)
     return receipt

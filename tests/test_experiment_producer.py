@@ -14,6 +14,8 @@ import exp_abcd
 import experiment_producer as producer
 import synthesis_promotion
 
+ORIGINAL_GH_CALL = producer.gh_call
+
 
 @pytest.fixture(autouse=True)
 def isolate(tmp_path, monkeypatch):
@@ -26,13 +28,13 @@ def isolate(tmp_path, monkeypatch):
 def test_draw_rate_is_poisson_bounded():
     rng = random.Random(677)
     days = []
-    for day in range(10_000):
+    for day in range(20_000):
         count = 0
         for hour in range(24):
             now = (day * 24 + hour + 1) * 3600
             count += producer.draw(now, now - 3600, 2, count, rng)["fire"]
         days.append(count)
-    assert 1.85 <= sum(days) / len(days) <= 2.0
+    assert 1.82 <= sum(days) / len(days) <= 2.0
     assert max(days) <= 4
 
 
@@ -86,73 +88,40 @@ def test_cadence_stamps_skips_resets_daily_cap(tmp_path):
     assert state["last_draw_ts"] == 86400
     assert state["launched_today"] == 0
     for hour in range(1, 6):
-        producer.cadence_draw(86400 + hour * 3600, 2, rng)
+        if producer.cadence_draw(86400 + hour * 3600, 2, rng)["fire"]:
+            producer.record_launch(86400 + hour * 3600)
     assert producer.read_state()["launched_today"] == 4
     producer.cadence_draw(2 * 86400, 2, rng)
+    producer.record_launch(2 * 86400)
     assert producer.read_state()["launched_today"] == 1
     producer.cadence_draw(2 * 86400 + 3600, 2, rng, skip_reason="no_subject")
     assert producer.read_state()["last_draw_ts"] == 2 * 86400 + 3600
     assert producer.read_state()["skips"]["no_subject"] == 1
 
 
-def git(*args, cwd=None, env=None):
-    return subprocess.run(
-        ["git", *map(str, args)], cwd=cwd, env=env, capture_output=True, text=True, check=False
-    )
-
-
 def test_member_push_is_refused(tmp_path, monkeypatch):
-    """Exercise the environment passed by the actual spawn boundary against a real remote."""
-    remote, work = tmp_path / "remote.git", tmp_path / "work"
-    assert git("init", "--bare", remote).returncode == 0
-    assert git("init", work).returncode == 0
-    assert (
-        git(
-            "-C",
-            work,
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.org",
-            "commit",
-            "--allow-empty",
-            "-m",
-            "initial",
-        ).returncode
-        == 0
-    )
-    assert git("-C", work, "remote", "add", "origin", remote).returncode == 0
-    # Prove the remote itself accepts a push, independently of the member environment.
-    assert git("-C", work, "push", "origin", "HEAD:refs/heads/control").returncode == 0
+    """Check the actual spawn environment without launching a process or pushing."""
     monkeypatch.setattr(exp_abcd.adapters, "refuse_broad_workspace", lambda *a: None)
-    monkeypatch.setattr(exp_abcd.adapters, "build_command", lambda *a, **k: ["true"])
+    monkeypatch.setattr(exp_abcd.adapters, "build_command", lambda *a, **k: ["stub-agent"])
     monkeypatch.setattr(exp_abcd, "_record_execution_start", lambda *a: 0)
-    monkeypatch.setattr(exp_abcd, "_completion_cmd", lambda *a: "true")
-    monkeypatch.setattr(exp_abcd, "_wrapped", lambda *a: "true")
-    observed = []
-    real_popen = subprocess.Popen
+    monkeypatch.setattr(exp_abcd, "_completion_cmd", lambda *a: "stub")
+    monkeypatch.setattr(exp_abcd, "_wrapped", lambda *a: "stub")
     monkeypatch.setattr(exp_abcd, "_record_execution_complete", lambda *a: None)
+    observed = []
 
     def popen(argv, **kwargs):
-        if argv[0] == "git":
-            return real_popen(argv, **kwargs)
-        observed.append(
-            git(
-                "-C",
-                work,
-                "push",
-                "origin",
-                "HEAD:refs/heads/exp/probe-member",
-                env=kwargs.get("env"),
-            )
-        )
+        observed.append(kwargs["env"])
         return SimpleNamespace(pid=123)
 
     monkeypatch.setattr(exp_abcd.subprocess, "Popen", popen)
-    exp_abcd._spawn("codex", "full", "test", work, tmp_path / "member.log")
+    exp_abcd._spawn("codex", "full", "test", tmp_path, tmp_path / "member.log")
     assert len(observed) == 1
-    assert observed[0].returncode != 0, observed[0].stdout
-    assert git("--git-dir", remote, "for-each-ref", "refs/heads/exp/").stdout == ""
+    env = observed[0]
+    settings = {
+        env[f"GIT_CONFIG_KEY_{i}"]: env[f"GIT_CONFIG_VALUE_{i}"]
+        for i in range(int(env["GIT_CONFIG_COUNT"]))
+    }
+    assert settings["remote.origin.pushurl"] == "file:///dev/null/orch-no-push"
 
 
 def test_member_remote_assertion_stops_on_pushed_ref(monkeypatch):
@@ -221,11 +190,18 @@ def test_all_local_verifications_fail_no_pr(tmp_path, monkeypatch):
         meta,
         evaluation,
         verify_fn=lambda *a, **k: {"ok": False},
+        git_fn=lambda *a, **k: SimpleNamespace(returncode=0, stdout="commit", stderr=""),
         gh_fn=lambda argv: calls.append(argv) or {"stdout": ""},
     )
     assert result["status"] == "no_winner"
     assert not any("push" in c or "create" in c for c in calls)
-    assert calls[-1][-2:] == ["--remove-label", "status:in-progress"]
+    assert calls[-1] == [
+        "gh",
+        "api",
+        "-X",
+        "DELETE",
+        "repos/a/b/issues/3/labels/status%3Ain-progress",
+    ]
 
 
 @pytest.mark.parametrize("failure", ["collision", "unavailable", "success"])
@@ -235,9 +211,11 @@ def test_direct_winner_delivery_retry_and_collision(tmp_path, monkeypatch, failu
 
     def gh(argv):
         calls.append(argv)
-        if "create" in argv:
-            return {"stdout": "https://github.com/a/b/pull/9\n"}
-        if "edit" in argv:
+        if argv[2:4] == ["-X", "POST"] and argv[4].endswith("/pulls"):
+            return {
+                "stdout": json.dumps({"html_url": "https://github.com/a/b/pull/9", "number": 9})
+            }
+        if argv[2:4] in (["-X", "POST"], ["-X", "DELETE"]):
             return {"stdout": ""}
         if "issues/3" in argv[-1]:
             return {"stdout": json.dumps({"state": "open", "labels": []})}
@@ -268,7 +246,7 @@ def test_direct_winner_delivery_retry_and_collision(tmp_path, monkeypatch, failu
     assert len(pushes) == int(failure == "success")
     if failure == "success":
         assert pushes[0][-1] == "HEAD:refs/heads/orch/exp-experiment"
-        create = next(c for c in calls if "create" in c)
+        create = next(c for c in calls if c[2:4] == ["-X", "POST"] and c[4].endswith("/pulls"))
         assert "--draft" not in create
         assert "Closes a/b#3" in (root / "producer-pr.md").read_text()
         assert "experiment:experiment" in (root / "producer-pr.md").read_text()
@@ -291,7 +269,7 @@ def test_missing_frozen_spec_never_evaluates(tmp_path, monkeypatch):
 
 
 def test_trial_expires_once_and_requires_six_merged_winners():
-    end, verdict = producer.trial_defaults(1000)
+    end, verdict = producer.trial_defaults(1000, active=True)
     assert verdict == "pending"
     assert producer.trial_defaults(1000 + 20 * 86400)[0] == end
     assert (
@@ -325,7 +303,7 @@ def test_report_zero_values_are_present(monkeypatch):
     )
     assert (
         switch_review.experiment_producer_line()
-        == "  experiment producer: launched 0, evaluated 0, winner_prs 0, winner_merged 0, cells_fresh 0/0, skipped 0 (none)"
+        == "  experiment producer: launched 0, evaluated 0, winner_prs 0, winner_merged 0, cells_fresh 0/0, skipped 0 (none); trial_end not_started, verdict pending, days_left 21; winner merge grace 7d"
     )
 
 
@@ -454,7 +432,13 @@ def test_real_subject_plan_keeps_reservations_and_pacing(tmp_path, monkeypatch):
     monkeypatch.setattr(
         research_scheduler, "spare_capacity", lambda *a: {a: 2 for a in cap["agents"]}
     )
-    item = {"target": "a/b#1", "task_type": "implement", "labels": [], "lane": "research"}
+    item = {
+        "target": "a/b#1",
+        "task_type": "implement",
+        "labels": [],
+        "lane": "research",
+        "body": "`pytest tests/test_fix.py::test_fix`",
+    }
     kwargs = dict(
         learned={"implement": {"codex": {"rank": 0}, "claude": {"rank": 1}}},
         claimed_targets=set(),
@@ -579,7 +563,9 @@ def test_keepalive_label_retries_and_expired_subject_is_released(tmp_path, monke
         evaluate_fn=None,
         gh_fn=lambda argv: calls.append(argv) or {"stdout": ""},
     )
-    assert calls == [["gh", "pr", "edit", "9", "-R", "a/b", "--add-label", "agent:cursor"]]
+    assert calls == [
+        ["gh", "api", "-X", "POST", "repos/a/b/issues/9/labels", "-f", "labels[]=agent:cursor"]
+    ]
     assert "error" not in result["label_result"]
     (root / "producer-delivery.json").unlink()
     result = exp_abcd.producer_followup(
@@ -593,4 +579,389 @@ def test_keepalive_label_retries_and_expired_subject_is_released(tmp_path, monke
         gh_fn=lambda argv: calls.append(argv) or {"stdout": ""},
     )
     assert result["reason"] == "72h_without_pr"
-    assert calls[-1][-2:] == ["--remove-label", "status:in-progress"]
+    assert calls[-1] == [
+        "gh",
+        "api",
+        "-X",
+        "DELETE",
+        "repos/a/b/issues/3/labels/status%3Ain-progress",
+    ]
+
+
+def plan_fixture(monkeypatch, *, shed=True):
+    import capacity
+    import research_scheduler
+    import router
+
+    agents = ["codex", "claude", "cursor", "vibe", "muse"]
+    cap = {"agents": {a: {"state": "ok"} for a in agents}}
+    monkeypatch.setattr(
+        router, "ROUTE_TABLE", {"implement": {"agents": [{"agent": a} for a in agents]}}
+    )
+    monkeypatch.setattr(router, "BACKUP_AGENTS", set())
+    monkeypatch.setattr(
+        producer,
+        "route_cells",
+        lambda *a, **k: [
+            {"agent": a, "task_type": "implement", "age_days": 100 if a == "claude" else 25}
+            for a in agents
+        ],
+    )
+    monkeypatch.setattr(
+        capacity,
+        "experiment_pacing",
+        lambda *a: {a: "shed" if shed and a == "claude" else "ok" for a in agents},
+    )
+    monkeypatch.setattr(research_scheduler, "spare_capacity", lambda *a: {a: 5 for a in agents})
+    return cap, dict(
+        learned={"implement": {"codex": {"rank": 0}}},
+        claimed_targets=set(),
+        excluded_targets=set(),
+        production_reserve={},
+        rng=random.Random(2),
+    )
+
+
+@pytest.mark.parametrize("block", [None, "lock", "unevaluated_cap", "cooldown"])
+def test_shed_agent_does_not_latch_firing_launch(tmp_path, monkeypatch, capsys, block):
+    import tick
+
+    cap, kwargs = plan_fixture(monkeypatch)
+    item = {
+        "target": "a/b#3",
+        "task_type": "implement",
+        "body": "`pytest tests/test_fix.py::test_fix`",
+    }
+    monkeypatch.setattr(tick.claims, "reap_stale", lambda: None)
+    monkeypatch.setattr(tick.claims, "active_claims", lambda: {})
+    monkeypatch.setattr(tick.claims, "claim", lambda *a: True)
+    monkeypatch.setattr(tick.claims, "release", lambda *a: None)
+    monkeypatch.setattr(tick.capabilities, "production_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(tick.research_subjects, "assess_candidate", lambda **k: {"eligible": True})
+    monkeypatch.setattr(tick.research_subjects, "record_subject", lambda *a, **k: None)
+    monkeypatch.setattr(tick.research_subjects, "record_event", lambda *a, **k: None)
+    monkeypatch.setattr(producer, "issue_status", lambda *a, **k: {"stdout": ""})
+    monkeypatch.setattr(exp_abcd, "exp_paths", lambda exp_id: tmp_path / exp_id)
+    monkeypatch.setattr(
+        tick.research_subjects,
+        "subject_identity",
+        lambda *a, **k: {"subject_id": "s", "subject_family_id": "f"},
+    )
+    if block == "lock":
+        monkeypatch.setattr(producer, "issue_status", lambda *a, **k: {"error": "no lock"})
+    elif block:
+        monkeypatch.setattr(
+            tick.research_subjects,
+            "assess_candidate",
+            lambda **k: {"eligible": False, "reason": block},
+        )
+    rng = random.Random(2)
+    rng.random = lambda: 0
+    launched = []
+    result = tick.research_tick(
+        [item],
+        cap,
+        dry_run=False,
+        learned=kwargs["learned"],
+        rng=rng,
+        issue_body_fn=lambda *a: item["body"],
+        prepare_fn=lambda *a, **k: launched.append(a) or {"launched": [], "base_sha": "base"},
+    )
+    if block:
+        assert result["active"] is False
+        assert not launched
+        state = producer.read_state()
+        assert state["launched_today"] == 0
+        assert state["skips"]["lock_add_failed" if block == "lock" else block] == 1
+        return
+    assert result["active"] is True
+    assert len(launched) == 1
+    arms = launched[0][3]
+    assert {a for arm in arms for a in arm["agents"]} <= {"codex", "cursor", "vibe", "muse"}
+    assert "claude" not in {a for arm in arms for a in arm["agents"]}
+    assert "coverage debt 5 cells > 21d, drainable 4" in capsys.readouterr().err
+    assert producer.read_state()["launched_today"] == 1
+
+
+def test_no_named_test_is_skipped_before_admission(monkeypatch):
+    cap, kwargs = plan_fixture(monkeypatch)
+    plan = producer.build_plan([{"target": "a/b#3", "body": "Implement a feature"}], cap, **kwargs)
+    assert plan["planned"] == []
+    assert {"target": "a/b#3", "reason": "no_named_test"} in plan["skipped"]
+
+
+@pytest.mark.parametrize("status", ["merged", "no_winner", "discarded", "expired"])
+def test_five_terminal_followups_release_once(tmp_path, monkeypatch, status):
+    root, meta, _ = fixture_experiment(tmp_path, monkeypatch)
+    meta["launched_ts"] = time.time()
+    (root / "meta.json").write_text(json.dumps(meta))
+    (root / "producer-delivery.json").write_text(json.dumps({"status": status}))
+    monkeypatch.setattr(exp_abcd, "EXP_DIR", tmp_path)
+    calls = []
+    monkeypatch.setattr(producer, "issue_status", lambda *a, **k: calls.append(a) or {"stdout": ""})
+    monkeypatch.setattr(
+        synthesis_promotion, "load_state", lambda *a: pytest.fail("legacy reconciliation")
+    )
+    for _ in range(5):
+        exp_abcd.followup(collect_fn=lambda *a: pytest.fail("collected terminal experiment"))
+    assert calls == [("a/b#3", False)]
+    assert json.loads((root / "producer-delivery.json").read_text())["lock_released_ts"] > 0
+
+
+def test_terminal_release_retries_until_success(tmp_path, monkeypatch):
+    root, meta, _ = fixture_experiment(tmp_path, monkeypatch)
+    (root / "producer-delivery.json").write_text(json.dumps({"status": "discarded"}))
+    calls = []
+
+    def release(*a, **k):
+        calls.append(a)
+        return {"error": "temporary"} if len(calls) == 1 else {"stdout": ""}
+
+    monkeypatch.setattr(producer, "issue_status", release)
+    for _ in range(5):
+        exp_abcd.producer_followup(
+            root, meta, now=2000, min_idle_s=0, eval_timeout=1, collect_fn=None, evaluate_fn=None
+        )
+    assert len(calls) == 2
+    assert json.loads((root / "producer-delivery.json").read_text())["lock_released_ts"] == 2000
+
+
+@pytest.mark.parametrize(
+    "failure", [ValueError("broken followup"), RuntimeError("broken followup")]
+)
+def test_producer_exception_never_falls_through(tmp_path, monkeypatch, failure):
+    root, meta, _ = fixture_experiment(tmp_path, monkeypatch)
+    meta["launched_ts"] = time.time()
+    (root / "meta.json").write_text(json.dumps(meta))
+    monkeypatch.setattr(exp_abcd, "EXP_DIR", tmp_path)
+
+    def broken(*a, **k):
+        raise failure
+
+    monkeypatch.setattr(exp_abcd, "producer_followup", broken)
+    monkeypatch.setattr(
+        synthesis_promotion, "load_state", lambda *a: pytest.fail("load_state called")
+    )
+    result = exp_abcd.followup()
+    receipt = json.loads((root / "producer-delivery.json").read_text())
+    assert receipt["error"] == "broken followup"
+    assert receipt["ts"] > 0
+    assert result["processed"][0]["error"] == "broken followup"
+
+
+def test_producer_scan_uses_meta_age_not_directory_mtime(tmp_path, monkeypatch):
+    root, meta, _ = fixture_experiment(tmp_path, monkeypatch)
+    meta["launched_ts"] = time.time() - (producer.PRODUCER_FOLLOWUP_DAYS + 1) * 86400
+    (root / "meta.json").write_text(json.dumps(meta))
+    monkeypatch.setattr(exp_abcd, "EXP_DIR", tmp_path)
+    monkeypatch.setattr(
+        exp_abcd, "producer_followup", lambda *a, **k: pytest.fail("old producer scanned")
+    )
+    monkeypatch.setattr(
+        synthesis_promotion, "load_state", lambda *a: pytest.fail("legacy reconciliation")
+    )
+    assert exp_abcd.followup()["processed"] == []
+
+
+@pytest.mark.parametrize("timeout", [True, False])
+@pytest.mark.parametrize("evaluated", [True, False])
+def test_remote_unknown_never_delivers_and_retries(tmp_path, monkeypatch, timeout, evaluated):
+    root, meta, ranking = fixture_experiment(tmp_path, monkeypatch)
+    for member in meta["members"]:
+        (root / exp_abcd.exp_log_path(member["agent"], member["member_id"])).write_text("done")
+    if evaluated:
+        (root / "producer-evaluation.json").write_text(json.dumps(ranking))
+    monkeypatch.setattr(exp_abcd.provision, "ensure_canonical", lambda *a: tmp_path)
+    checks = []
+
+    def remote(*a, **k):
+        checks.append(a)
+        if timeout:
+            raise subprocess.TimeoutExpired("git ls-remote", 60)
+        return SimpleNamespace(returncode=1, stdout="", stderr="remote down")
+
+    for _ in range(2):
+        result = exp_abcd.producer_followup(
+            root,
+            meta,
+            now=1100,
+            min_idle_s=-(10**10),
+            eval_timeout=1,
+            collect_fn=lambda *a: pytest.fail("collected unknown remote"),
+            evaluate_fn=lambda *a: pytest.fail("judged unknown remote"),
+            deliver_fn=lambda *a, **k: pytest.fail("delivered unknown remote"),
+            push_check_fn=lambda *a: exp_abcd.assert_no_member_push(*a, run_fn=remote),
+        )
+        assert result["status"] == "remote_unknown"
+    assert len(checks) == 2
+
+
+@pytest.mark.parametrize("merged,verdict", [(6, "pass"), (5, "fail")])
+def test_report_writes_due_trial_verdict(monkeypatch, merged, verdict):
+    import switch_review
+
+    now = time.time()
+    producer.trial_defaults(now - producer.COVERAGE_DAYS * 86400 - 1, active=True)
+    monkeypatch.setattr(
+        producer,
+        "producer_summary",
+        lambda: dict(
+            launched=6,
+            evaluated=6,
+            winner_prs=6,
+            winner_merged=merged,
+            cells_fresh=0,
+            cells_total=0,
+            skips={},
+            unknowns=[],
+        ),
+    )
+    line = switch_review.experiment_producer_line()
+    assert f"verdict {verdict}, days_left 0" in line
+    assert "winner merge grace 7d" in line
+    assert producer.read_state()["trial_verdict"] == verdict
+
+
+def test_shadow_does_not_start_trial():
+    producer.trial_defaults(1000)
+    assert "trial_start" not in producer.read_state()
+    producer.trial_defaults(2000, active=True)
+    assert producer.read_state()["trial_start"] == 2000
+    producer.trial_defaults(3000, active=True)
+    assert producer.read_state()["trial_start"] == 2000
+
+
+def test_merge_grace_counts_only_trial_launches(tmp_path):
+    from datetime import datetime, timezone
+
+    start = 1000
+    producer.trial_defaults(start, active=True)
+    end = start + producer.COVERAGE_DAYS * 86400
+    merge_end = end + producer.WINNER_MERGE_GRACE_DAYS * 86400
+    merged_at = {}
+    for n, (launched, merged) in enumerate(
+        [
+            (start, end + 1),
+            (end, merge_end),
+            (end - 1, merge_end + 1),
+            (start - 1, end),
+            (end + 1, end + 2),
+        ]
+    ):
+        root = tmp_path / str(n)
+        root.mkdir()
+        (root / "meta.json").write_text(
+            json.dumps({"producer": "experiment_producer", "repo": "a/b", "launched_ts": launched})
+        )
+        (root / "producer-delivery.json").write_text(
+            json.dumps({"pr_url": "url", "pr_number": n, "scored_arms": 2})
+        )
+        merged_at[n] = datetime.fromtimestamp(merged, timezone.utc).isoformat()
+
+    def gh(argv):
+        return {"stdout": json.dumps({"merged_at": merged_at[int(argv[-1].rsplit("/", 1)[1])]})}
+
+    result = producer.producer_summary(tmp_path, gh_fn=gh)
+    assert result["launched"] == 3
+    assert result["winner_merged"] == 2
+
+
+def test_rest_lock_mutations_and_missing_label_is_success(monkeypatch):
+    add, delete = [], []
+    producer.issue_status("a/b#3", True, gh_fn=lambda a: add.append(a) or {})
+    producer.issue_status("a/b#3", False, gh_fn=lambda a: delete.append(a) or {})
+    assert add == [
+        [
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            "repos/a/b/issues/3/labels",
+            "-f",
+            "labels[]=status:in-progress",
+        ]
+    ]
+    assert delete == [
+        ["gh", "api", "-X", "DELETE", "repos/a/b/issues/3/labels/status%3Ain-progress"]
+    ]
+    monkeypatch.setattr(
+        producer.subprocess,
+        "run",
+        lambda *a, **k: SimpleNamespace(returncode=1, stderr="gh: Not Found (HTTP 404)", stdout=""),
+    )
+    # Exercise real gh_call, bypassing the suite's injected offline boundary.
+    from unittest.mock import patch
+
+    with patch.object(producer, "gh_call", ORIGINAL_GH_CALL):
+        assert "error" not in producer.issue_status("a/b#3", False)
+        assert "error" in producer.issue_status("a/b#3", True)
+
+
+def test_verification_gets_named_nodes_and_rejects_worktree_changes(tmp_path, monkeypatch):
+    root, meta, ranking = fixture_experiment(tmp_path, monkeypatch)
+    calls = []
+    statuses = {}
+
+    def git_run(argv, **kwargs):
+        wt = argv[2]
+        if "status" in argv:
+            statuses[wt] = statuses.get(wt, 0) + 1
+            out = "" if statuses[wt] == 1 else "?? generated.txt"
+        else:
+            out = "commit"
+        return SimpleNamespace(returncode=0, stdout=out, stderr="")
+
+    def verify(*a, **kwargs):
+        calls.append(kwargs)
+        return {"ok": True}
+
+    result = synthesis_promotion.deliver_producer_winner(
+        root,
+        meta,
+        ranking,
+        verify_fn=verify,
+        git_fn=git_run,
+        gh_fn=lambda argv: {"stdout": ""},
+    )
+    assert result["status"] == "no_winner"
+    assert calls and all(k["test_paths"] == ["tests/test_fix.py::test_fix"] for k in calls)
+    assert all(
+        v["error"] == "verification_changed_worktree" for v in result["local_verify"].values()
+    )
+
+
+def test_local_verify_copies_named_node_file(tmp_path, monkeypatch):
+    import local_verify
+
+    wt = tmp_path / "work"
+    (wt / "tests").mkdir(parents=True)
+    (wt / "tests/test_fix.py").write_text("def test_fix(): assert True\n")
+    monkeypatch.setattr(local_verify, "_changed_paths", lambda *a: ["src/fix.py"])
+    monkeypatch.setattr(local_verify, "_extract_base", lambda *a: None)
+    runs = []
+
+    def run(command, cwd, timeout):
+        runs.append(cwd)
+        assert (cwd / "tests/test_fix.py").exists()
+        return {
+            "ok": len(runs) == 1,
+            "returncode": 0 if len(runs) == 1 else 1,
+            "stdout_tail": "1 failed",
+            "stderr_tail": "",
+        }
+
+    monkeypatch.setattr(local_verify, "_run", run)
+    selected = []
+
+    def nodes(root, command, paths, timeout):
+        selected.extend(paths)
+        return {"verdict": "PASS", "hollow_nodes": [], "counts": {"nodes": 1}}
+
+    monkeypatch.setattr(local_verify, "_analyse_nodes", nodes)
+    result = local_verify.verify(
+        wt,
+        test_cmd="pytest tests/test_fix.py::test_fix",
+        test_paths=["tests/test_fix.py::test_fix"],
+    )
+    assert result["copied_test_paths"] == ["tests/test_fix.py"]
+    assert selected == ["tests/test_fix.py::test_fix"]

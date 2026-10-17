@@ -256,7 +256,9 @@ def _analyse_nodes(base_root: Path, test_cmd: str, test_paths: list[str], timeou
     returns its own `verdict` and never touches the rolled-up one.
     """
     candidates = [
-        path for path in test_paths if path.endswith(".py") or (base_root / path).is_dir()
+        path
+        for path in test_paths
+        if path.split("::", 1)[0].endswith(".py") or (base_root / path).is_dir()
     ]
     if not candidates:
         named = ", ".join(test_paths[:5]) or "none supplied"
@@ -636,7 +638,8 @@ def verify(
     # `overlay_covers_every_change` needs the whole of it. Deriving the two from separate git calls
     # would let them disagree about what changed.
     changed = _changed_paths(wt, base_ref)
-    tests = test_paths or [path for path in changed if _looks_like_test(path)]
+    selections = test_paths or [path for path in changed if _looks_like_test(path)]
+    tests = list(dict.fromkeys(path.split("::", 1)[0] for path in selections))
     if not tests:
         return {
             "verdict": "ERROR",
@@ -703,7 +706,7 @@ def verify(
         red = _run(test_cmd, red_root, timeout)
         # Inside the temporary directory on purpose: the probe needs the SAME extracted base the
         # red run used, and that base stops existing when this block exits.
-        nodes = _analyse_nodes(red_root, test_cmd, tests, timeout)
+        nodes = _analyse_nodes(red_root, test_cmd, selections, timeout)
 
     if red["ok"]:
         verdict = "FAIL_HOLLOW"

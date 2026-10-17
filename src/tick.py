@@ -65,7 +65,7 @@ def _fetch_issue_body(target: str, *, issue_body_fn=None) -> str | None:
 
     try:
         out = subprocess.run(
-            ["gh", "issue", "view", number, "-R", repo, "--json", "title,body,state,labels"],
+            ["gh", "api", f"repos/{repo}/issues/{number}"],
             capture_output=True,
             text=True,
             timeout=60,
@@ -220,6 +220,10 @@ def research_tick(
         claims.reap_stale()
     rng = rng or __import__("random").Random()
     producer_enabled = env.get("ORCH_EXPERIMENT_PRODUCER", "0") == "1"
+    if not dry_run and producer_enabled:
+        experiment_producer.trial_defaults(active=True)
+    if not dry_run:
+        experiment_producer.trial_verdict()
     active_claims = set(claims.active_claims().keys())
     if producer_enabled:
         plan_out = experiment_producer.build_plan(
@@ -250,6 +254,8 @@ def research_tick(
     if not dry_run:
         for row in plan_out.get("skipped") or []:
             if row.get("reason"):
+                if producer_enabled:
+                    experiment_producer.record_skip(row["reason"])
                 research_subjects.record_event(
                     "rejected",
                     target=row.get("target"),
@@ -275,7 +281,7 @@ def research_tick(
                 float(env.get("ORCH_EXPERIMENT_RATE_PER_DAY", "2")),
                 rng,
                 cells=plan_out.get("producer_cells", []),
-                skip_reason="no_subject",
+                skip_reason=(plan_out.get("skipped") or [{"reason": "no_subject"}])[-1]["reason"],
             )
         return {**_public_research_plan(plan_out), "planned": [], "active": False}
 
@@ -344,6 +350,8 @@ def research_tick(
             if not admission["eligible"]:
                 plan["active_status"] = "blocked_by_subject_control"
                 plan["blocked_reason"] = admission["reason"]
+                if producer_enabled:
+                    experiment_producer.record_skip(admission["reason"])
                 research_subjects.record_event(
                     "rejected",
                     identity=subject_identity,
@@ -370,6 +378,13 @@ def research_tick(
                     conn=conn,
                 )
                 continue
+            if producer_enabled:
+                plan["issue_status"] = experiment_producer.issue_status(target, True)
+                if "error" in plan["issue_status"]:
+                    plan["active_status"] = "lock_refused"
+                    experiment_producer.record_skip("lock_add_failed")
+                    claims.release(target, "research")
+                    continue
             repo = _target_repo(target)
             exp_id = f"tick-{int(time.time())}-{target.lower().replace('/', '-').replace('#', '-')}"
             spec_dir = Path(tempfile.mkdtemp(prefix="orch-research-spec-"))
@@ -418,7 +433,7 @@ def research_tick(
                 )
                 producer_meta_path.parent.mkdir(parents=True, exist_ok=True)
                 producer_meta_path.write_text(json.dumps(producer_meta, indent=2))
-                plan["issue_status"] = experiment_producer.issue_status(target, True)
+                experiment_producer.record_launch()
             launched.append(prepare_result)
             plan["active_status"] = "launched"
             plan["exp_id"] = exp_id

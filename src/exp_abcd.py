@@ -458,19 +458,22 @@ def member_environment():
 
 def assert_no_member_push(repo, exp_id, *, run_fn=None):
     canon = provision.ensure_canonical(repo)
-    result = (run_fn or subprocess.run)(
-        [
-            "git",
-            "-C",
-            str(canon),
-            "ls-remote",
-            "origin",
-            f"refs/heads/exp/{_identity_slug(exp_id)}-*",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+    try:
+        result = (run_fn or subprocess.run)(
+            [
+                "git",
+                "-C",
+                str(canon),
+                "ls-remote",
+                "origin",
+                f"refs/heads/exp/{_identity_slug(exp_id)}-*",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return "remote_unknown"
     if result.returncode:
         return "remote_unknown"
     return "member_pushed" if result.stdout.strip() else None
@@ -1815,8 +1818,8 @@ def producer_followup(
     delivery_path = edir / "producer-delivery.json"
     delivery = json.loads(delivery_path.read_text()) if delivery_path.exists() else {}
     target = meta.get("subject")
-    if delivery.get("status") in {"no_winner", "discarded", "member_pushed"}:
-        result["issue_status"] = producer.issue_status(target, False, gh_fn=gh_fn)
+    if delivery.get("status") in producer.TERMINAL_STATUSES:
+        producer.release_lock(edir, target, delivery, gh_fn=gh_fn, now=now)
         return {**result, **delivery}
     if delivery.get("pr_url"):
         if synthesis_promotion.state_path(edir).exists():
@@ -1832,21 +1835,30 @@ def producer_followup(
             delivery["label_result"] = (gh_fn or producer.gh_call)(
                 [
                     "gh",
-                    "pr",
-                    "edit",
-                    str(delivery["pr_number"]),
-                    "-R",
-                    meta["repo"],
-                    "--add-label",
-                    f"agent:{label}",
+                    "api",
+                    "-X",
+                    "POST",
+                    f"repos/{meta['repo']}/issues/{delivery['pr_number']}/labels",
+                    "-f",
+                    f"labels[]=agent:{label}",
                 ]
             )
             fleet_shapes.write_json_atomic(delivery_path, delivery)
+        link = result.get("delivery_link") or {}
+        phase = (link.get("state") or {}).get("delivery_phase")
+        canonical = (link.get("state") or {}).get("canonical_state")
+        if phase in {"merged", "durable"} or canonical == "merged":
+            delivery["status"] = "merged"
+        elif phase in {"discarded", "expired"}:
+            delivery["status"] = phase
+        if delivery.get("status") in producer.TERMINAL_STATUSES:
+            producer.release_lock(edir, target, delivery, gh_fn=gh_fn, now=now)
+        fleet_shapes.write_json_atomic(delivery_path, delivery)
         return {**result, **delivery}
     age = now - meta.get("launched_ts", (edir / "meta.json").stat().st_mtime)
     if age >= 72 * 3600:
-        result["issue_status"] = producer.issue_status(target, False, gh_fn=gh_fn)
         delivery.update(status="discarded", reason="72h_without_pr")
+        producer.release_lock(edir, target, delivery, gh_fn=gh_fn, now=now)
         fleet_shapes.write_json_atomic(delivery_path, delivery)
         return {**result, **delivery}
     if os.environ.get("ORCH_EXPERIMENT_PRODUCER", "0") != "1":
@@ -1861,7 +1873,7 @@ def producer_followup(
     ):
         delivery.update(status="discarded", reason="missing_spec_recovery_refused")
         fleet_shapes.write_json_atomic(delivery_path, delivery)
-        producer.issue_status(target, False, gh_fn=gh_fn)
+        producer.release_lock(edir, target, delivery, gh_fn=gh_fn, now=now)
         return {**result, **delivery}
     members = experiment_members(meta)
     logs = [
@@ -1869,22 +1881,22 @@ def producer_followup(
     ]
     if not logs or any(not p.exists() or now - p.stat().st_mtime < min_idle_s for p in logs):
         return {**result, "status": "still_running"}
+    violation = (push_check_fn or assert_no_member_push)(meta["repo"], edir.name)
+    if violation:
+        delivery.update(status=violation)
+        fleet_shapes.write_json_atomic(delivery_path, delivery)
+        if violation == "member_pushed":
+            producer.release_lock(edir, target, delivery, gh_fn=gh_fn, now=now)
+        return {**result, **delivery}
     if not (edir / "producer-evaluation.json").exists():
         if not allow_evaluate:
             return {**result, "status": "per_call_cap"}
         collected = collect_fn(meta["repo"], edir.name)
-        violation = (push_check_fn or assert_no_member_push)(meta["repo"], edir.name)
-        if violation:
-            delivery.update(status=violation)
-            fleet_shapes.write_json_atomic(delivery_path, delivery)
-            if violation == "member_pushed":
-                producer.issue_status(target, False, gh_fn=gh_fn)
-            return {**result, **delivery}
         diffs = _collected_candidate_diffs(collected)
         if not any(diffs.values()):
             delivery.update(status="no_winner", reason="no_diffs")
             fleet_shapes.write_json_atomic(delivery_path, delivery)
-            producer.issue_status(target, False, gh_fn=gh_fn)
+            producer.release_lock(edir, target, delivery, gh_fn=gh_fn, now=now)
             return {**result, **delivery}
         judges = [a for a in EVALUATOR_TOPUP_ORDER if a not in {m["agent"] for m in members}][:2]
         if len(judges) < 2:
@@ -2080,10 +2092,21 @@ def followup(
     # could launch a second synthesis in the same run; the hourly re-touch of the stamp hid that
     # by never letting a launch happen at all.
     promotions = []
+    import experiment_producer as producer
+
     for edir in dirs:
         try:
             producer_meta = json.loads((edir / "meta.json").read_text())
-            if producer_meta.get("producer") == "experiment_producer":
+        except (OSError, ValueError):
+            # A producer receipt also identifies the rail if meta becomes unreadable.
+            if (edir / "producer-delivery.json").exists():
+                out["processed"].append({"exp_id": edir.name, "error": "unreadable producer meta"})
+                continue
+            producer_meta = {}
+        if producer_meta.get("producer") == "experiment_producer":
+            if now - producer_meta.get("launched_ts", 0) > producer.PRODUCER_FOLLOWUP_DAYS * 86400:
+                continue
+            try:
                 result = producer_followup(
                     edir,
                     producer_meta,
@@ -2096,9 +2119,18 @@ def followup(
                 )
                 evaluator_dispatches += int(result.get("evaluated_now", False))
                 out["processed"].append(result)
-                continue
-        except (OSError, ValueError):
-            pass
+            except Exception as exc:
+                delivery_path = edir / "producer-delivery.json"
+                try:
+                    delivery = (
+                        json.loads(delivery_path.read_text()) if delivery_path.exists() else {}
+                    )
+                except (ValueError, OSError):
+                    delivery = {}
+                delivery.update(error=str(exc)[:500], ts=now)
+                fleet_shapes.write_json_atomic(delivery_path, delivery)
+                out["processed"].append({"exp_id": edir.name, "error": str(exc)[:500]})
+            continue
         try:
             state = synthesis_promotion.load_state(edir)
         except Exception as exc:

@@ -48,6 +48,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import math
 import os
 import subprocess
 import sys
@@ -1922,13 +1923,26 @@ def experiment_producer_line():
     import experiment_producer
 
     m = experiment_producer.producer_summary()
+    verdict = experiment_producer.trial_verdict(summary_fn=lambda: m)
+    state = experiment_producer.read_state()
+    end = state.get("trial_end", "not_started")
+    seconds_left = (
+        state.get("trial_start", 0) + experiment_producer.COVERAGE_DAYS * 86400 - time.time()
+    )
+    days_left = (
+        max(0, math.ceil(seconds_left / 86400))
+        if state.get("trial_start")
+        else experiment_producer.COVERAGE_DAYS
+    )
     reasons = ", ".join(f"{k}={v}" for k, v in sorted(m["skips"].items())) or "none"
     unknown = "; UNKNOWN " + ", ".join(m["unknowns"]) if m["unknowns"] else ""
     return (
         f"  experiment producer: launched {m['launched']}, evaluated {m['evaluated']}, "
         f"winner_prs {m['winner_prs']}, winner_merged {m['winner_merged']}, "
         f"cells_fresh {m['cells_fresh']}/{m['cells_total']}, "
-        f"skipped {sum(m['skips'].values())} ({reasons}){unknown}"
+        f"skipped {sum(m['skips'].values())} ({reasons}){unknown}; "
+        f"trial_end {end}, verdict {verdict}, days_left {days_left}; "
+        f"winner merge grace {experiment_producer.WINNER_MERGE_GRACE_DAYS}d"
     )
 
 
