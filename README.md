@@ -694,6 +694,18 @@ retirement, but a row its EXPIRY retired comes back to the status the timeout in
 renews on a schedule. `switch_review.py`'s weekly sweep only names the rows within two review
 windows of their expiry, or retired by it that recently, with the command (`gate_expiry`, FYI only).
 
+**Invocation refuses at the effective deadline, read-only.** Routing and compiled invocation do
+not wait for that sweep: `capabilities.capability_expired` (the same `now >= expiry` boundary the
+timeout uses, applied without mutating the row) makes `capability_routing_decision` reject an
+expired row as `expired` with the baseline fallback, and `capability_lifecycle.invoke_compiled_target`
+refuses before any producer runs. The effective deadline for a compiled target is the stricter of
+the ledger `expiry` and the artifact `expires_at` on its binding. The same entrypoint also refuses
+when the ledger row's declared `kill_switch` env var carries its declared value (`kill_switch`),
+when the ledger marks `rollback_pending`, or while the target's `rollback.phase` is `pending`
+(both `rollback_pending`); `capability_targets.invoke_target` applies the same expiry, kill-switch
+and pending-rollback refusals to direct callers. A refusal returns `invoked: False` with that
+reason, writes no registry/binding invocation and records no consumption edge.
+
 Do not maintain a second static list of supposedly active or gated features here. Generate the
 current inventory with `python3 src/capabilities.py inventory` (or inspect
 `~/.codex/orchestrator/capability-inventory.md` after an active tick). It distinguishes deliberate

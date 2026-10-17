@@ -210,6 +210,37 @@ def register_compiled_target(
     }
 
 
+def _invocation_ineligible(
+    cap: Mapping[str, Any],
+    binding: Mapping[str, Any] | None,
+    now: int,
+    env: Mapping[str, str] | None = None,
+) -> str | None:
+    """Fail-closed eligibility for one compiled invocation, or None if eligible.
+
+    The effective deadline is the stricter (earlier) of the ledger ``expiry``
+    and the artifact ``expires_at`` carried by the binding. The kill switch is
+    the one declared in the ledger row (``kill_switch``, written by ``_record``
+    as ``ENV=value``), not a per-kind hard-coded name. Ledger
+    ``rollback_pending`` and a target ``rollback.phase == "pending"`` also
+    refuse. Read-only: it writes no ledger, registry or consumption edge.
+    """
+    if cap.get("rollback_pending"):
+        return "rollback_pending"
+    if capabilities.capability_expired(cap, int(now)):
+        return "expired"
+    if binding is not None:
+        artifact_expiry = capability_targets._binding_expires_at(binding)
+        if artifact_expiry is not None and int(now) >= artifact_expiry:
+            return "expired"
+    env_map: Mapping[str, str] = os.environ if env is None else env
+    if capability_targets._kill_switch_triggered(cap.get("kill_switch"), env_map):
+        return "kill_switch"
+    if binding is not None:
+        return capability_targets._binding_ineligible(binding, int(now), env_map)
+    return None
+
+
 def invoke_compiled_target(
     capability_id: str,
     *,
@@ -227,11 +258,17 @@ def invoke_compiled_target(
         raise ValueError(f"unknown capability: {capability_id}")
     if cap["status"] not in {"wired", "shadow", "exercised", "canary", "active"}:
         return {"matched": False, "invoked": False, "reason": f"status:{cap['status']}"}
+    ineligible = _invocation_ineligible(cap, None, now)
+    if ineligible:
+        return {"matched": True, "invoked": False, "reason": ineligible}
     binding = capability_targets.get_binding(
         cap["capability_version_id"], registry_path=Path(target_registry_path)
     )
     if not binding:
         raise ValueError("lifecycle version has no target binding")
+    ineligible = _invocation_ineligible(cap, binding, now)
+    if ineligible:
+        return {"matched": True, "invoked": False, "reason": ineligible}
     if cap["status"] == "canary":
         limit = int((cap.get("lifecycle_policy") or {}).get("tasks_per_day") or 1)
         recent = sum(
@@ -250,6 +287,7 @@ def invoke_compiled_target(
         target_run_id=target_run_id,
         inputs=inputs,
         lifecycle_stage=cap["status"],
+        timestamp=now,
     )
     if result.get("invoked") and result.get("accepted"):
         edge = feedback.record_capability_consumption(

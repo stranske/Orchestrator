@@ -365,6 +365,201 @@ def test_all_target_kinds_complete_shadow_canary_lifecycle(
             roles.reset_role_invocation_counts()
 
 
+def _registered_workflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    now = int(time.time())
+    ledger = tmp_path / "capabilities.json"
+    registry = tmp_path / "targets.json"
+    predecessor = "baseline:workflow"
+    capabilities.save({predecessor: _active_predecessor(predecessor, now)}, ledger)
+    fixture = _target_fixture("workflow", tmp_path, now)
+    registered = capability_lifecycle.register_compiled_target(
+        "workflow",
+        fixture["artifact"],
+        lifecycle_policy={
+            "min_independent_durable_reuse": 2,
+            "max_failures": 0,
+            "max_rework": 0,
+            "tasks_per_day": 5,
+            "risk_level": "low_reversible",
+            "side_effect_policy": "read_only",
+        },
+        matcher=fixture["matcher"],
+        predecessor=predecessor,
+        ledger_path=ledger,
+        target_registry_path=registry,
+        target_context=fixture["context"],
+        expiry=now + 86400,
+    )
+    return {
+        "now": now,
+        "ledger": ledger,
+        "registry": registry,
+        "fixture": fixture,
+        "capability_id": registered["capability"]["capability_id"],
+        "version_id": registered["capability"]["capability_version_id"],
+        "binding": registered["binding"],
+    }
+
+
+def _mutate_json(path: Path, *keys: str, **fields) -> None:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    row = payload
+    for key in keys:
+        row = row[key]
+    row.update(fields)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+@pytest.mark.parametrize("kind", ["role", "workflow", "skill", "playbook", "gate"])
+def test_ineligible_kill_switch_declared_per_kind(kind: str) -> None:
+    env_name = f"ORCH_CAPABILITY_{kind.upper()}_ENABLED"
+    cap = {"expiry": 9999999999, "kill_switch": f"{env_name}=0"}
+    binding = {"artifact": {}, "lifecycle_policy": {}}
+    assert capability_lifecycle._invocation_ineligible(cap, binding, 100, {env_name: "0"}) == (
+        "kill_switch"
+    )
+    assert capability_lifecycle._invocation_ineligible(cap, binding, 100, {}) is None
+    assert capability_lifecycle._invocation_ineligible(cap, binding, 100, {env_name: "1"}) is None
+
+
+@pytest.mark.parametrize(
+    ("case", "reason"),
+    [
+        ("expired_ledger", "expired"),
+        ("expired_artifact", "expired"),
+        ("kill_switch", "kill_switch"),
+        ("ledger_rollback_pending", "rollback_pending"),
+        ("target_rollback_pending", "rollback_pending"),
+    ],
+)
+def test_invocation_ineligible_refusals_write_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, reason: str
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    now, ledger, registry = ctx["now"], ctx["ledger"], ctx["registry"]
+    cap_id, version_id = ctx["capability_id"], ctx["version_id"]
+    if case == "expired_ledger":
+        _mutate_json(ledger, "capabilities", cap_id, expiry=now - 1)
+    elif case == "expired_artifact":
+        payload = json.loads(registry.read_text(encoding="utf-8"))
+        payload["targets"][version_id]["artifact"]["lifecycle"]["expires_at"] = now - 1
+        registry.write_text(json.dumps(payload), encoding="utf-8")
+    elif case == "kill_switch":
+        monkeypatch.setenv("ORCH_CAPABILITY_WORKFLOW_ENABLED", "0")
+    elif case == "ledger_rollback_pending":
+        _mutate_json(ledger, "capabilities", cap_id, rollback_pending={"reason": "regressed"})
+    else:
+        binding = capability_targets.get_binding(version_id, registry_path=registry)
+        capability_targets.prepare_rollback(binding, registry_path=registry, reason="regressed")
+    before = capability_targets.get_binding(version_id, registry_path=registry)
+    result = capability_lifecycle.invoke_compiled_target(
+        cap_id,
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id=f"workflow:{case}",
+        ledger_path=ledger,
+        target_registry_path=registry,
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=now,
+    )
+    assert result == {"matched": True, "invoked": False, "reason": reason}, result
+    after = capability_targets.get_binding(version_id, registry_path=registry)
+    assert after["invocations"] == before["invocations"] == []
+    assert "causal_edge" not in result
+    assert feedback.capability_causal_evidence(cap_id, version_id) == []
+
+
+def test_invocation_ineligible_eligible_control_still_invokes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    _record_target_run("workflow:eligible:1", "workflow:subject:eligible")
+    result = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="workflow:eligible:1",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result["invoked"] and result["accepted"] and result["causal_edge"], result
+
+
+def test_compiled_invocation_expiry_refuses_after_expiry_and_invokes_before(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    _record_target_run("workflow:expiry:1", "workflow:subject:expiry")
+    before_expiry = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="workflow:expiry:1",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert before_expiry["invoked"] and before_expiry["accepted"], before_expiry
+    invocations = capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])[
+        "invocations"
+    ]
+    assert len(invocations) == 1
+    _mutate_json(ctx["ledger"], "capabilities", ctx["capability_id"], expiry=ctx["now"] - 1)
+    refused = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="workflow:expiry:2",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert refused == {"matched": True, "invoked": False, "reason": "expired"}, refused
+    assert (
+        capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])[
+            "invocations"
+        ]
+        == invocations
+    )
+
+
+@pytest.mark.parametrize(
+    ("case", "reason"),
+    [
+        ("expired_artifact", "expired"),
+        ("kill_switch", "kill_switch"),
+        ("rollback_pending", "rollback_pending"),
+    ],
+)
+def test_direct_invoke_target_ineligible_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, reason: str
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    registry, version_id = ctx["registry"], ctx["version_id"]
+    if case == "expired_artifact":
+        payload = json.loads(registry.read_text(encoding="utf-8"))
+        payload["targets"][version_id]["artifact"]["lifecycle"]["expires_at"] = ctx["now"] - 1
+        registry.write_text(json.dumps(payload), encoding="utf-8")
+    elif case == "kill_switch":
+        monkeypatch.setenv("ORCH_REFERENCE_WORKFLOW_DISABLED", "1")
+    else:
+        binding = capability_targets.get_binding(version_id, registry_path=registry)
+        capability_targets.prepare_rollback(binding, registry_path=registry, reason="regressed")
+    binding = capability_targets.get_binding(version_id, registry_path=registry)
+    result = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=registry,
+        ledger_path=ctx["ledger"],
+        target_run_id=f"direct:{case}",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": reason}, result
+    assert capability_targets.get_binding(version_id, registry_path=registry)["invocations"] == []
+
+
 def test_high_risk_candidate_uses_bounded_brain_owner_question(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

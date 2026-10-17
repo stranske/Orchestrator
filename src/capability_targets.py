@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 import time
 from collections.abc import Mapping
@@ -238,6 +239,66 @@ def _matches(binding: Mapping[str, Any], trigger: Mapping[str, Any]) -> bool:
     ) == artifact.get("named_test_id")
 
 
+def _kill_switch_triggered(declared: Any, env: Mapping[str, str]) -> bool:
+    if isinstance(declared, Mapping):
+        name = declared.get("env")
+        value = declared.get("disabled_value", declared.get("value", "1"))
+        return bool(name) and env.get(str(name)) == str(value)
+    if isinstance(declared, str):
+        match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", declared.strip())
+        return bool(match) and env.get(match.group(1)) == match.group(2)
+    return False
+
+
+def _artifact_mapping(binding: Mapping[str, Any]) -> Mapping[str, Any]:
+    artifact = binding.get("artifact")
+    if isinstance(artifact, Mapping):
+        return artifact
+    if binding.get("kind") == "skill" and isinstance(artifact, str):
+        try:
+            return capability_compiler.validate_skill_package(Path(artifact))
+        except Exception:
+            return {}
+    return {}
+
+
+def _binding_expires_at(binding: Mapping[str, Any]) -> int | None:
+    artifact = _artifact_mapping(binding)
+    lifecycle = artifact.get("lifecycle") if isinstance(artifact.get("lifecycle"), Mapping) else {}
+    policy = binding.get("lifecycle_policy") or {}
+    deadlines: list[int] = []
+    for value in (
+        artifact.get("expires_at"),
+        lifecycle.get("expires_at"),
+        policy.get("expires_at") if isinstance(policy, Mapping) else None,
+        policy.get("expiry") if isinstance(policy, Mapping) else None,
+    ):
+        if value is not None:
+            try:
+                deadlines.append(int(value))
+            except (TypeError, ValueError):
+                continue
+    return min(deadlines) if deadlines else None
+
+
+def _binding_ineligible(
+    binding: Mapping[str, Any], now: int, env: Mapping[str, str] | None = None
+) -> str | None:
+    """Fail-closed refusal for a direct binding invocation, or None if eligible."""
+    if (binding.get("rollback") or {}).get("phase") == "pending":
+        return "rollback_pending"
+    expires_at = _binding_expires_at(binding)
+    if expires_at is not None and int(now) >= expires_at:
+        return "expired"
+    env_map: Mapping[str, str] = os.environ if env is None else env
+    artifact = _artifact_mapping(binding)
+    lifecycle = artifact.get("lifecycle") if isinstance(artifact.get("lifecycle"), Mapping) else {}
+    for declared in (artifact.get("kill_switch"), lifecycle.get("kill_switch")):
+        if _kill_switch_triggered(declared, env_map):
+            return "kill_switch"
+    return None
+
+
 def invoke_target(
     binding: Mapping[str, Any],
     *,
@@ -247,11 +308,17 @@ def invoke_target(
     target_run_id: str | None = None,
     inputs: Mapping[str, Any] | None = None,
     lifecycle_stage: str | None = None,
+    timestamp: int | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run the actual target producer and consumer and retain their receipts."""
+    now = int(timestamp or time.time())
     current = _load_registry(Path(registry_path))["targets"].get(binding["capability_version_id"])
     if not current or not current.get("enabled"):
         return {"matched": False, "invoked": False, "reason": "binding_disabled"}
+    ineligible = _binding_ineligible(current, now, env)
+    if ineligible:
+        return {"matched": True, "invoked": False, "reason": ineligible}
     if not _matches(current, trigger):
         return {"matched": False, "invoked": False, "reason": "selector_mismatch"}
     supplied = dict(inputs or {})
@@ -327,7 +394,7 @@ def invoke_target(
         "consumer_ref": consumer_ref,
         "target_run_id": target_run_id,
         "produced": produced,
-        "invoked_at": int(time.time()),
+        "invoked_at": now,
         "lifecycle_stage": lifecycle_stage,
     }
     registry = _load_registry(Path(registry_path))

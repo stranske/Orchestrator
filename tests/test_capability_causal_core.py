@@ -283,6 +283,84 @@ def test_regression_is_join_derived_and_withholds_routing(tmp_path, monkeypatch)
     assert decision["rejection_reasons"][cap["capability_id"]] == ["rollback_pending"]
 
 
+@pytest.mark.parametrize(("offset", "expired"), [(1, False), (0, True), (-1, True)])
+def test_capability_expiry_rejects_at_boundary_without_sweep(offset, expired):
+    cap = capabilities._blank_capability("expiring")
+    cap.update(
+        {
+            "status": "active",
+            "matcher": {"repository": "owner/repo", "task_types": ["implement"]},
+            "expiry": NOW + offset,
+            "capability_version_id": "capability-version:expiring",
+            "artifact_hash": "sha256:artifact",
+            "lifecycle_policy_hash": "sha256:policy",
+        }
+    )
+    assert capabilities.capability_expired(cap, NOW) is expired
+    decision = capabilities.capability_routing_decision(
+        {"repository": "owner/repo", "task_type": "implement", "lane": "opener"},
+        capabilities_by_id={"expiring": cap},
+        seed=7,
+        now=NOW,
+    )
+    if expired:
+        assert decision["selected_capability_id"] is None
+        assert decision["fallback"] == "baseline"
+        assert decision["rejection_reasons"]["expiring"] == ["expired"]
+    else:
+        assert decision["selected_capability_id"] == "expiring"
+        assert "expiring" not in decision["rejection_reasons"]
+
+
+def test_router_plan_expiry_is_read_only_and_rejects_expired_row(tmp_path):
+    import router
+
+    cap = capabilities._blank_capability("expiring")
+    cap.update(
+        {
+            "status": "active",
+            "owner": "orchestrator",
+            "matcher": {"repository": "owner/repo", "task_types": ["implement"]},
+            "entrypoint": "fixture.py:run",
+            "trigger_cadence": "per matching task",
+            "output_artifact": "fixture-result.json",
+            "downstream_consumer": "dispatcher.py",
+            "learning_sink": "feedback capability joins",
+            "last_match": NOW,
+            "last_invocation": NOW,
+            "last_success": NOW,
+            "kill_switch": "ORCH_FIXTURE=0",
+            "rollback": {"transition": "retired", "predecessor": "baseline"},
+            "outcome_links": ["outcome:baseline"],
+            "activation_evidence": {
+                probe: {"passed": True, "checked_at": NOW, "ref": f"baseline:{probe}"}
+                for probe in capabilities.ACTIVE_PROBES
+            },
+            "expiry": NOW - 1,
+            "capability_version_id": "capability-version:expiring",
+            "artifact_hash": "sha256:artifact",
+            "lifecycle_policy_hash": "sha256:policy",
+        }
+    )
+    ledger = tmp_path / "capabilities.json"
+    # Raw write: `save` validates and refuses an expired active row, which is
+    # exactly the persisted state a raw `create=False` reader must refuse.
+    ledger.write_text(json.dumps({"capabilities": {"expiring": cap}}), encoding="utf-8")
+    before = ledger.read_bytes()
+    result = router.plan(
+        [{"target": "owner/repo#23", "task_type": "implement", "lane": "opener"}],
+        {"agents": {"codex": {"state": "ok"}}},
+        dry_run=True,
+        capability_records={"expiring": cap},
+        now=NOW,
+    )
+    assert ledger.read_bytes() == before
+    assignment = result["assignments"][0]
+    assert assignment["selected_capability_id"] is None
+    assert assignment["capability_fallback"] == "baseline"
+    assert assignment["capability_rejection_reasons"]["expiring"] == ["expired"]
+
+
 def test_profile_decision_attaches_only_real_matching_attempt(tmp_path, monkeypatch):
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
     profile = execution_profiles.get_profile("codex-5.6-sol-high")

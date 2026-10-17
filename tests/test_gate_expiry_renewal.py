@@ -511,6 +511,32 @@ def test_the_notice_is_fyi_only(tmp_path, monkeypatch):
     assert ledger.read_bytes() == before, "a review renewed or retired something"
 
 
+def test_renewal_still_works_for_ledger_owned_and_refuses_artifact_owned(tmp_path):
+    now = 10_000_000
+    ledger = _ledger(
+        tmp_path,
+        {
+            "ledger-owned": _plain_row("ledger-owned", expiry=now - DAY),
+            "artifact-owned": _plain_row(
+                "artifact-owned", expiry=now - DAY, target_kind="workflow"
+            ),
+        },
+    )
+    out = capabilities.renew(
+        "ledger-owned",
+        reason="still earns its place",
+        evidence_refs=["pr#1"],
+        path=ledger,
+        timestamp=now,
+    )
+    assert out["renewed"] and _raw(ledger, "ledger-owned")["expiry"] == now + TTL
+    with pytest.raises(ValueError, match="compile and register"):
+        capabilities.renew(
+            "artifact-owned", reason="hold", evidence_refs=["pr#1"], path=ledger, timestamp=now
+        )
+    assert _raw(ledger, "artifact-owned")["expiry"] == now - DAY
+
+
 def test_the_window_covers_the_cadence_that_reads_it():
     """Measuring window vs draining window: the notice must outlast the gap between two reviews.
 
