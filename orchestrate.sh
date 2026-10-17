@@ -724,20 +724,16 @@ fi
 # Owner goals are independent of a Sunday task firing. Reconcile on recovery too:
 # limiting filing to exit 3 would leave every recovered issue open forever.
 if _cadence_due feature-goals && _attempt_ok feature-goals; then
-  echo "  [cadence] feature goals (daily; report and reconcile goal-drift issues)"
-  feature_goals_rc=0
-  python3 "$ORCH/feature_goals.py" --check > "$STAMP_DIR/feature-goals.log" 2>&1 || feature_goals_rc=$?
-  if [[ "$feature_goals_rc" == "0" || "$feature_goals_rc" == "3" ]]; then
-    if _gh_gate graphql && _gh_gate core; then
-      if python3 "$ORCH/feature_goals.py" --file-drift-issues >> "$STAMP_DIR/feature-goals.log" 2>&1; then
-        _mark_success feature-goals
-      else
-        _mark_fail feature-goals "see $STAMP_DIR/feature-goals.log"
-      fi
-    else echo "  [cadence] feature goal issue reconciliation SKIPPED — gh deferred (stamp untouched)"; fi
-  else
-    _mark_fail feature-goals "see $STAMP_DIR/feature-goals.log"
-  fi
+  if _gh_gate graphql && _gh_gate core; then
+    echo "  [cadence] feature goals (daily; report and reconcile goal-drift issues)"
+    feature_goals_rc=0
+    python3 "$ORCH/feature_goals.py" --check --file-drift-issues > "$STAMP_DIR/feature-goals.log" 2>&1 || feature_goals_rc=$?
+    if [[ "$feature_goals_rc" == "0" || "$feature_goals_rc" == "3" ]]; then
+      _mark_success feature-goals
+    else
+      _mark_fail feature-goals "see $STAMP_DIR/feature-goals.log"
+    fi
+  else echo "  [cadence] feature goals SKIPPED — gh deferred (stamp untouched)"; fi
 fi
 if _cadence_due switch-review && _attempt_ok switch-review; then
   # Held switches must be revisited, not forgotten. ORCH_RANGE_LANE_ROLLOUT was turned on

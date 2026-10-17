@@ -130,24 +130,62 @@ def multi_source_feedback(now: int) -> Measurement:
             "GROUP BY e.experiment_id, r.target HAVING COUNT(DISTINCT e.evaluator_id)>=2",
             (now - GOAL_SILENCE_DAYS * DAY, now),
         ).fetchall()
+    # Share exp_abcd's override/layout resolution; runs.target is a display string.
+    from exp_abcd import exp_paths
+
     qualifying = set()
-    for experiment, target in candidates:
-        match = re.fullmatch(r"([^/#]+/[^/#]+)#(\d+)", target or "")
-        if not match:
-            return unknown(now, "issue target for scored experiment " + experiment)
+    unattributable = set()
+    issue_failures = set()
+    seen = set()
+    for experiment, _target in candidates:
+        if any(
+            (_target or "").startswith(repo + suffix)
+            for repo in EXCLUDED_REPOS
+            for suffix in (" ", "#")
+        ):
+            continue
+        if experiment in seen:
+            continue
+        seen.add(experiment)
+        try:
+            meta = json.loads((exp_paths(experiment) / "meta.json").read_text())
+            subject = meta.get("subject") or {}
+            targets = [
+                subject.get("target") if isinstance(subject, dict) else None,
+                meta.get("target"),
+            ]
+            match = None
+            for target in targets:
+                if isinstance(target, str):
+                    match = re.search(r"(?<![\w./-])([\w.-]+/[\w.-]+)#(\d+)", target)
+                    if match:
+                        break
+            if not match:
+                raise ValueError("no issue target")
+        except (OSError, ValueError, TypeError, AttributeError):
+            unattributable.add(experiment)
+            continue
         repo, number = match.groups()
         if repo in EXCLUDED_REPOS:
             continue
-        issue = json.loads(_gh(["issue", "view", number, "-R", repo, "--json", "body,labels"]))
-        body = issue["body"]
-        labels = {label["name"] for label in issue["labels"]}
-        if len(re.findall(r"(?m)^\s*[-*] \[[ xX]\]", body)) >= 9 or "experiment:forum" in labels:
-            qualifying.add(experiment)
+        try:
+            issue = json.loads(_gh(["api", f"repos/{repo}/issues/{number}"]))
+            body = issue.get("body") or ""
+            labels = {label["name"] for label in issue["labels"]}
+            if len(re.findall(r"(?m)^\s*[-*] \[[ xX]\]", body)) >= 9:
+                qualifying.add(experiment)
+            elif "experiment:forum" in labels:
+                qualifying.add(experiment)
+        except Exception:  # an unavailable/malformed issue cannot abort other experiments
+            issue_failures.add(experiment)
     return Measurement(
         float(len(qualifying)),
-        "Brain evaluations_v2 + GitHub issues",
+        "Brain evaluations_v2 + experiment metadata + GitHub REST issues",
         now,
-        inactive_since=now - GOAL_SILENCE_DAYS * DAY if not qualifying else None,
+        reason=f"unattributable {len(unattributable)}; issue reads failed {len(issue_failures)}",
+        inactive_since=(
+            now - GOAL_SILENCE_DAYS * DAY if not qualifying and not issue_failures else None
+        ),
     )
 
 
@@ -194,7 +232,8 @@ def pacing_share(now: int) -> Measurement:
 
 def keepalive_acceptance(now: int) -> Measurement:
     return unknown(
-        now, "parse 14-day keepalive completion comments for cited passing named acceptance tests"
+        now,
+        f"parse {GOAL_SILENCE_DAYS}-day keepalive completion comments for cited passing named acceptance tests",
     )
 
 
@@ -406,7 +445,9 @@ def _persist_report(
         handle.seek(0)
         history = []
         errors = []
+        last_line = ""
         for number, line in enumerate(handle, 1):
+            last_line = line
             try:
                 row = json.loads(line)
                 if not {"feature", "goal_id", "as_of", "measurement"} <= row.keys():
@@ -429,6 +470,9 @@ def _persist_report(
                 history.append(row)
             except (ValueError, TypeError, AttributeError) as exc:
                 errors.append(f"history line {number}: {exc}")
+        # A truncated final record must not consume the first fresh append too.
+        if last_line and not last_line.endswith("\n"):
+            handle.write("\n")
         for goal in goals:
             measurement = measure_fn(goal, now)
             row = {
@@ -442,7 +486,9 @@ def _persist_report(
         handle.flush()
         os.fsync(handle.fileno())
     result = drift(history, now, goals=goals)
-    result["errors"] = errors
+    result["errors"] = []
+    result["warnings"] = errors
+    result["history_writable"] = True
     return result
 
 
@@ -469,6 +515,7 @@ def report(
             for g in goals
         ]
         result = drift(rows, now, goals=goals)
+        result["history_writable"] = False
         result["errors"] = [f"history unavailable: {exc}"]
         return result
 
@@ -500,7 +547,12 @@ def format_lines(section: dict) -> list[str]:
         lines.append(
             "| " + " | ".join(str(v).replace("|", "\\|").replace("\n", " ") for v in values) + " |"
         )
-    lines.extend(f"History warning: {error}" for error in section.get("errors", []))
+    warnings = section.get("warnings", [])
+    if warnings:
+        lines.append(
+            f"History warning: skipped {len(warnings)} unparseable rows: " + "; ".join(warnings)
+        )
+    lines.extend(f"History error: {error}" for error in section.get("errors", []))
     return lines + [""]
 
 
@@ -510,32 +562,37 @@ def reconcile_issues(section: dict, *, gh: Callable = _gh) -> dict:
     Read every state so a recurrence reopens the existing issue. Reconcile all markers
     for a feature on recovery. Unknown evidence can never close a drift issue.
     """
-    issues = json.loads(
+    # --paginate emits one JSON array per REST page. --slurp retains page boundaries.
+    pages = json.loads(
         gh(
             [
-                "issue",
-                "list",
-                "-R",
-                REPO,
-                "--state",
-                "all",
-                "--label",
-                "goal-drift",
-                "--limit",
-                "1000",
-                "--json",
-                "number,state,body",
+                "api",
+                f"repos/{REPO}/issues?labels=goal-drift&state=all&per_page=100",
+                "--paginate",
+                "--slurp",
             ]
         )
     )
-    if len(issues) >= 1000:
-        raise RuntimeError("goal-drift issue population truncated")
+    issues = [issue for page in pages for issue in page if "pull_request" not in issue]
     if any(row["drifting"] for row in section["goals"]):
-        labels = json.loads(gh(["label", "list", "-R", REPO, "--limit", "1000", "--json", "name"]))
-        names = {label["name"] for label in labels}
         for label, color in [("goal-drift", "B60205"), ("priority:high", "D93F0B")]:
-            if label not in names:
-                gh(["label", "create", label, "-R", REPO, "--color", color])
+            try:
+                gh(["api", f"repos/{REPO}/labels/{label}"])
+            except RuntimeError as exc:
+                if "404" not in str(exc):
+                    raise
+                gh(
+                    [
+                        "api",
+                        "-X",
+                        "POST",
+                        f"repos/{REPO}/labels",
+                        "-f",
+                        f"name={label}",
+                        "-f",
+                        f"color={color}",
+                    ]
+                )
     changes = []
     for feature in sorted({row["feature"] for row in section["goals"]}):
         rows = [r for r in section["goals"] if r["feature"] == feature]
@@ -544,16 +601,15 @@ def reconcile_issues(section: dict, *, gh: Callable = _gh) -> dict:
         if not bad:
             if all(r["state"] == "ok" for r in rows):
                 for issue in existing:
-                    if issue["state"] == "OPEN":
+                    if issue["state"] == "open":
                         gh(
                             [
-                                "issue",
-                                "close",
-                                str(issue["number"]),
-                                "-R",
-                                REPO,
-                                "--comment",
-                                "All feature goals measure ok again.",
+                                "api",
+                                "-X",
+                                "PATCH",
+                                f"repos/{REPO}/issues/{issue['number']}",
+                                "-f",
+                                "state=closed",
                             ]
                         )
                         changes.append("closed")
@@ -568,41 +624,41 @@ def reconcile_issues(section: dict, *, gh: Callable = _gh) -> dict:
         )
         body += "\nFYI only. Repair the measuring query or restore goal activity; no capability is blocked, paused or expired."
         if existing:
-            issue = sorted(existing, key=lambda i: (i["state"] != "OPEN", i["number"]))[0]
-            number = str(issue["number"])
-            if issue["state"] != "OPEN":
-                gh(["issue", "reopen", number, "-R", REPO])
-            gh(
-                [
-                    "issue",
-                    "edit",
-                    number,
-                    "-R",
-                    REPO,
-                    "--title",
-                    title,
-                    "--body",
-                    body,
-                    "--add-label",
-                    "goal-drift,priority:high",
-                ]
-            )
+            issue = sorted(existing, key=lambda i: (i["state"] != "open", i["number"]))[0]
+            # REST PATCH replaces labels; preserve labels added by other owners.
+            labels = {"goal-drift", "priority:high"}
+            labels.update(label["name"] for label in issue.get("labels", []))
+            args = [
+                "api",
+                "-X",
+                "PATCH",
+                f"repos/{REPO}/issues/{issue['number']}",
+                "-f",
+                "state=open",
+                "-f",
+                f"title={title}",
+                "-f",
+                f"body={body}",
+            ]
+            for label in sorted(labels):
+                args.extend(["-f", f"labels[]={label}"])
+            gh(args)
             changes.append("updated")
         else:
             gh(
                 [
-                    "issue",
-                    "create",
-                    "-R",
-                    REPO,
-                    "--title",
-                    title,
-                    "--body",
-                    body,
-                    "--label",
-                    "goal-drift",
-                    "--label",
-                    "priority:high",
+                    "api",
+                    "-X",
+                    "POST",
+                    f"repos/{REPO}/issues",
+                    "-f",
+                    f"title={title}",
+                    "-f",
+                    f"body={body}",
+                    "-f",
+                    "labels[]=goal-drift",
+                    "-f",
+                    "labels[]=priority:high",
                 ]
             )
             changes.append("created")
@@ -611,14 +667,16 @@ def reconcile_issues(section: dict, *, gh: Callable = _gh) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    group = parser.add_mutually_exclusive_group(required=True)
+    group = parser.add_argument_group("actions")
     group.add_argument("--report", action="store_true")
     group.add_argument("--check", action="store_true")
     group.add_argument("--file-drift-issues", action="store_true")
     args = parser.parse_args(argv)
+    if not any((args.report, args.check, args.file_drift_issues)):
+        parser.error("at least one action is required")
     section = report()
     print("\n".join(format_lines(section)))
-    if section.get("errors"):
+    if not section.get("history_writable", True):
         return 1
     if args.file_drift_issues:
         print(json.dumps(reconcile_issues(section)))

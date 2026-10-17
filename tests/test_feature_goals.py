@@ -11,6 +11,7 @@ import feature_goals as fg
 
 NOW = 1_800_000_000
 GOAL = fg.FEATURES[0]
+pytestmark = pytest.mark.feature_goals_real
 
 
 def observation(value, when, goal=GOAL):
@@ -87,33 +88,66 @@ def test_check_exits_3_after_14_days_silence_and_0_before(monkeypatch, capsys):
 
 
 class RecordedGh:
-    """Recorded gh issue JSON shape, retaining mutations across daily invocations."""
+    """REST pages and mutation fields, retaining state across daily invocations."""
 
     def __init__(self):
         self.issues = []
         self.calls = []
+        self.labels = {"goal-drift", "priority:high"}
 
     def __call__(self, args):
         self.calls.append(args)
-        command = args[:2]
-        if command == ["issue", "list"]:
-            return json.dumps(self.issues)
-        if command == ["issue", "create"]:
-            self.issues.append(
-                {"number": 701, "state": "OPEN", "body": args[args.index("--body") + 1]}
+        assert args[0] == "api" and "graphql" not in args
+        if args[1].startswith(f"repos/{fg.REPO}/issues?"):
+            assert args == [
+                "api",
+                f"repos/{fg.REPO}/issues?labels=goal-drift&state=all&per_page=100",
+                "--paginate",
+                "--slurp",
+            ]
+            return json.dumps([self.issues[:1], self.issues[1:]])
+        if args[1].startswith(f"repos/{fg.REPO}/labels/"):
+            if args[1].rsplit("/", 1)[1] not in self.labels:
+                raise RuntimeError("HTTP 404")
+            return "{}"
+        assert args[1] == "-X"
+        method, endpoint = args[2:4]
+        fields = args[4:]
+        values = [fields[i + 1] for i in range(0, len(fields), 2)]
+
+        def field(name):
+            return next(v.split("=", 1)[1] for v in values if v.startswith(name + "="))
+
+        if method == "POST" and endpoint.endswith("/labels"):
+            self.labels.add(field("name"))
+        elif method == "POST":
+            assert endpoint == f"repos/{fg.REPO}/issues"
+            assert field("title") == (
+                "[goal-drift] experiments: multi-source feedback on sizable features — measured_zero for 14 days"
             )
-            return "https://github.com/stranske/Orchestrator/issues/701\n"
-        if command == ["issue", "edit"]:
-            self.issues[0]["body"] = args[args.index("--body") + 1]
-        elif command == ["issue", "close"]:
-            self.issues[0]["state"] = "CLOSED"
-        elif command == ["issue", "reopen"]:
-            self.issues[0]["state"] = "OPEN"
-        elif command == ["label", "list"]:
-            return '[{"name":"goal-drift"},{"name":"priority:high"}]'
+            assert [v for v in values if v.startswith("labels[]=")] == [
+                "labels[]=goal-drift",
+                "labels[]=priority:high",
+            ]
+            assert "<!-- goal-drift:experiments:G1 -->" in field("body")
+            self.issues.append(
+                {
+                    "number": 701,
+                    "state": "open",
+                    "body": field("body"),
+                    "labels": [{"name": "goal-drift"}, {"name": "priority:high"}],
+                }
+            )
         else:
-            raise AssertionError(args)
-        return ""
+            assert method == "PATCH"
+            issue = next(i for i in self.issues if endpoint.endswith("/" + str(i["number"])))
+            issue["state"] = field("state")
+            if "state=open" in values:
+                issue["body"] = field("body")
+                issue["labels"] = [
+                    {"name": v.split("=", 1)[1]} for v in values if v.startswith("labels[]=")
+                ]
+        return "{}"
 
 
 def test_drift_issue_is_idempotent_and_closes_on_recovery():
@@ -121,16 +155,24 @@ def test_drift_issue_is_idempotent_and_closes_on_recovery():
     bad = section(0.0, 14)
     assert fg.reconcile_issues(bad, gh=gh)["changes"] == ["created"]
     assert "<!-- goal-drift:experiments:G1 -->" in gh.issues[0]["body"]
+    gh.issues[0]["labels"].append({"name": "owner:triage"})
     assert fg.reconcile_issues(bad, gh=gh)["changes"] == ["updated"]
+    assert {label["name"] for label in gh.issues[0]["labels"]} == {
+        "goal-drift",
+        "priority:high",
+        "owner:triage",
+    }
     assert len(gh.issues) == 1
     assert fg.reconcile_issues(section(None), gh=gh)["changes"] == []
-    assert gh.issues[0]["state"] == "OPEN", "unknown cannot close a drift issue"
+    assert gh.issues[0]["state"] == "open", "unknown cannot close a drift issue"
     assert fg.reconcile_issues(section(1.0), gh=gh)["changes"] == ["closed"]
-    assert gh.issues[0]["state"] == "CLOSED"
+    assert gh.issues[0]["state"] == "closed"
     fg.reconcile_issues(bad, gh=gh)
     assert len(gh.issues) == 1
-    assert gh.issues[0]["state"] == "OPEN"
-    assert sum(call[:2] == ["issue", "create"] for call in gh.calls) == 1
+    assert gh.issues[0]["state"] == "open"
+    assert (
+        sum(call[:4] == ["api", "-X", "POST", f"repos/{fg.REPO}/issues"] for call in gh.calls) == 1
+    )
 
 
 def test_feature_groups_multiple_drifting_goals_into_one_issue():
@@ -204,30 +246,70 @@ def test_measure_empty_schema_is_zero_but_missing_table_is_unknown(tmp_path, mon
     assert fg.measure(GOAL, NOW).value is None
 
 
-def test_multi_source_feedback_requires_two_judges_and_sizable_issue(tmp_path, monkeypatch):
+def test_multi_source_feedback_live_targets_and_metadata(tmp_path, monkeypatch):
+    import exp_abcd
     import feedback
 
     db = tmp_path / "brain.db"
     monkeypatch.setattr(feedback, "DB_PATH", db)
+    monkeypatch.setattr(exp_abcd, "EXP_DIR", tmp_path / "experiments")
+    fixtures = {
+        "a": {"subject": {"target": "stranske/Orchestrator#1 (feature)"}},
+        "b": {"subject": {"target": "unresolved subject"}, "target": "stranske/Orchestrator#2"},
+        "c": {"subject": {"target": "stranske/Orchestrator#3"}},
+        "missing": None,
+        "invalid": {"subject": None},
+        "bad-json": "{",
+        "excluded": {"subject": {"target": next(iter(fg.EXCLUDED_REPOS)) + "#1"}},
+    }
+    for experiment, meta in fixtures.items():
+        directory = exp_abcd.exp_paths(experiment)
+        directory.mkdir(parents=True)
+        if meta is not None:
+            (directory / "meta.json").write_text(
+                meta if isinstance(meta, str) else json.dumps(meta)
+            )
     with sqlite3.connect(db) as conn:
         conn.executescript(
             "CREATE TABLE runs(experiment_id TEXT,target TEXT);"
             "CREATE TABLE evaluations_v2(experiment_id TEXT,ts INT,score REAL,evaluator_id TEXT);"
         )
-        conn.executemany(
-            "INSERT INTO runs VALUES(?,?)",
-            [("a", "stranske/Orchestrator#1"), ("b", "stranske/Orchestrator#2")],
+        for experiment in fixtures:
+            conn.execute(
+                "INSERT INTO runs VALUES(?,?)",
+                (experiment, f"stranske/Orchestrator [exp {experiment} arm default member codex]"),
+            )
+            for judge in ("judge1", "judge2"):
+                conn.execute(
+                    "INSERT INTO evaluations_v2 VALUES(?,?,?,?)", (experiment, NOW, 1, judge)
+                )
+        conn.execute(
+            "INSERT INTO runs VALUES('a','stranske/Orchestrator [exp a arm second member y]')"
         )
-        conn.executemany(
-            "INSERT INTO evaluations_v2 VALUES(?,?,?,?)",
-            [("a", NOW, 1, "judge1"), ("a", NOW, 2, "judge2"), ("b", NOW, 1, "judge1")],
+        conn.execute(
+            "INSERT INTO runs VALUES('single','stranske/Orchestrator [exp single arm x member y]')"
         )
-    monkeypatch.setattr(
-        fg, "_gh", lambda args: json.dumps({"body": "- [ ] goal\n" * 9, "labels": []})
-    )
-    assert fg.measure(GOAL, NOW).value == 1.0
-    monkeypatch.setattr(fg, "_gh", lambda args: json.dumps({"body": "- [ ] small", "labels": []}))
-    assert fg.measure(GOAL, NOW).value == 0.0
+        conn.execute("INSERT INTO evaluations_v2 VALUES('single',?,1,'judge1')", (NOW,))
+    calls = []
+
+    def issue(args):
+        calls.append(args)
+        assert args[0] == "api"
+        if args[1].endswith("/1"):
+            return json.dumps({"body": "- [ ] goal\n" * 9, "labels": []})
+        if args[1].endswith("/2"):
+            return json.dumps({"body": None, "labels": [{"name": "experiment:forum"}]})
+        raise RuntimeError("HTTP 404")
+
+    monkeypatch.setattr(fg, "_gh", issue)
+    result = fg.multi_source_feedback(NOW)
+    assert result.value == 2.0
+    assert result.reason == "unattributable 3; issue reads failed 1"
+    assert calls == [["api", f"repos/stranske/Orchestrator/issues/{n}"] for n in (1, 2, 3)]
+    monkeypatch.setattr(fg, "_gh", lambda args: json.dumps({"body": "small", "labels": []}))
+    result = fg.multi_source_feedback(NOW)
+    assert result.value == 0.0
+    assert result.inactive_since == NOW - fg.GOAL_SILENCE_DAYS * fg.DAY
 
 
 @pytest.mark.parametrize(
@@ -298,20 +380,49 @@ def test_duplicate_population_is_paginated_and_truncation_is_unknown(monkeypatch
     assert fg.measure(goal, NOW).value is None
 
 
-def test_daily_cadence_check_files_and_reconciles_recovery():
+@pytest.mark.parametrize("shed", ["graphql", "core", "none"])
+@pytest.mark.parametrize("code", [0, 3, 1])
+def test_daily_cadence_executes_once_after_both_budget_gates(tmp_path, shed, code):
+    import subprocess
+
     import cadence_registry
     import paths
 
     row = next(r for r in cadence_registry.CADENCE_STEPS if r["key"] == "feature-goals")
     assert row["cadence_days"] == 0
     source = (paths.REPO_ROOT / "orchestrate.sh").read_text()
-    assert source.count("if _cadence_due feature-goals") == 1
-    block = source.split("if _cadence_due feature-goals", 1)[1].split(
-        "if _cadence_due switch-review", 1
-    )[0]
-    assert "--check" in block and "--file-drift-issues" in block
-    assert '"$feature_goals_rc" == "0"' in block
-    assert '"$feature_goals_rc" == "3"' in block
+    block = (
+        "if _cadence_due feature-goals"
+        + source.split("if _cadence_due feature-goals", 1)[1].split(
+            "if _cadence_due switch-review", 1
+        )[0]
+    )
+    script = r"""ORCH=fixture
+STAMP_DIR="$1"
+_cadence_due() { return 0; }
+_attempt_ok() { return 0; }
+_gh_gate() { echo "gate:$1"; [[ "$1" != "$SHED" ]]; }
+python3() { echo "measure:$*" >> "$STAMP_DIR/calls"; return "$CODE"; }
+_mark_success() { echo success; }
+_mark_fail() { echo failure; }
+"""
+    proc = subprocess.run(
+        ["bash", "-c", script + block, "cadence", str(tmp_path)],
+        env={"SHED": shed, "CODE": str(code)},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    calls = tmp_path / "calls"
+    if shed != "none":
+        assert not calls.exists()
+        assert "success" not in proc.stdout and "failure" not in proc.stdout
+    else:
+        assert calls.read_text().splitlines() == [
+            "measure:fixture/feature_goals.py --check --file-drift-issues"
+        ]
+        assert "gate:graphql\ngate:core" in proc.stdout
+        assert ("failure" if code == 1 else "success") in proc.stdout
 
 
 def test_retrospective_zero_window_can_raise_on_first_report(tmp_path):
@@ -344,13 +455,27 @@ def test_history_write_failure_remains_visible_and_fails_machine_check(
     assert "history unavailable" in capsys.readouterr().out
 
 
-def test_invalid_history_does_not_crash_or_fabricate_zero(tmp_path):
+def test_invalid_history_warns_and_truncated_last_line_still_reconciles(
+    tmp_path, monkeypatch, capsys
+):
     path = tmp_path / "history.jsonl"
-    path.write_text('{"feature":"experiments","goal_id":"G1","as_of":0,"measurement":null}\n')
+    path.write_text('{"measurement":null}\n{"truncated":')
     rep = fg.report(NOW, path=path, goals=[GOAL], measure_fn=lambda g, n: fg.unknown(n, "query"))
-    assert rep["errors"]
+    assert not rep["errors"]
+    assert len(rep["warnings"]) == 2
     assert rep["goals"][0]["state"] == "unmeasured"
     assert rep["drifting"] == 0
+    # The next append is a separate valid line even after a truncated record.
+    rep2 = fg.report(NOW, path=path, goals=[GOAL], measure_fn=lambda g, n: fg.unknown(n, "query"))
+    assert len(rep2["warnings"]) == 2
+    calls = []
+    monkeypatch.setattr(fg, "report", lambda: rep2)
+    monkeypatch.setattr(fg, "reconcile_issues", lambda report: calls.append(report))
+    assert fg.main(["--check", "--file-drift-issues"]) == 0
+    assert calls == [rep2]
+    output = capsys.readouterr().out
+    assert "skipped 2 unparseable rows" in output
+    assert "history line 1" in output and "history line 2" in output
 
 
 def test_empty_roster_is_unknown(monkeypatch):
@@ -370,7 +495,7 @@ def test_issue_read_failure_never_creates_or_closes():
     with pytest.raises(RuntimeError, match="rate limit"):
         fg.reconcile_issues(section(0, 14), gh=failed)
     assert len(calls) == 1
-    assert calls[0][:2] == ["issue", "list"]
+    assert calls[0][0] == "api" and "issues?labels=goal-drift" in calls[0][1]
 
 
 def test_stale_measurement_cannot_close_issue(monkeypatch):
@@ -401,3 +526,42 @@ def test_drift_suppresses_nothing_due(monkeypatch):
 
     rep["feature_goals"] = {**section(1), "errors": ["history unavailable"]}
     assert "Nothing due" not in switch_review.format_report(rep)
+
+
+def test_combined_check_and_filer_measures_and_appends_once(tmp_path, monkeypatch):
+    real_report = fg.report
+    path = tmp_path / "history.jsonl"
+    calls = []
+
+    def measure(goal, now):
+        calls.append(goal)
+        return fg.Measurement(1, "fixture", now)
+
+    monkeypatch.setattr(
+        fg, "report", lambda: real_report(NOW, path=path, goals=[GOAL], measure_fn=measure)
+    )
+    monkeypatch.setattr(fg, "reconcile_issues", lambda report: {"changes": []})
+    assert fg.main(["--check", "--file-drift-issues"]) == 0
+    assert calls == [GOAL]
+    assert len(path.read_text().splitlines()) == 1
+
+
+def test_filer_ignores_pull_requests_and_creates_missing_labels():
+    gh = RecordedGh()
+    gh.labels.clear()
+    gh.issues.append(
+        {
+            "number": 700,
+            "state": "open",
+            "body": "<!-- goal-drift:experiments:G1 -->",
+            "pull_request": {},
+        }
+    )
+    fg.reconcile_issues(section(0, 14), gh=gh)
+    assert len(gh.issues) == 2
+    assert gh.labels == {"goal-drift", "priority:high"}
+
+
+def test_keepalive_reason_uses_configured_horizon(monkeypatch):
+    monkeypatch.setattr(fg, "GOAL_SILENCE_DAYS", 19)
+    assert "19-day" in fg.keepalive_acceptance(NOW).reason
