@@ -390,6 +390,44 @@ _AUTH_USAGE_PATTERNS = (
 )
 
 
+ASSESS_NO_WRITE_PREAMBLE = "Do not create, modify or delete any file; print your answer to stdout"
+ASSESS_SANDBOX_FALLBACK_LOG = (
+    "offload: assess sandbox has no network; running read-only brief in workspace-write sandbox"
+)
+
+
+def _sandbox_has_network(
+    mode: str, *, codex_binary: str = "codex", cwd: Path | None = None
+) -> bool:
+    """Bounded DNS probe INSIDE the same Codex sandbox policy, without an LLM call.
+
+    Extends the existing offload rail, not a new capability. A failed/unsupported
+    sandbox launch is also unusable for network reads, so it takes the same fallback.
+    """
+    sandbox = "read-only" if mode == "assess" else "workspace-write"
+    try:
+        probe = subprocess.run(
+            [
+                codex_binary,
+                "sandbox",
+                "-c",
+                f'sandbox_mode="{sandbox}"',
+                "--",
+                sys.executable,
+                "-c",
+                "import socket; socket.getaddrinfo('api.github.com', 443)",
+            ],
+            capture_output=True,
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return probe.returncode == 0
+
+
 def _is_transient_network_failure(
     error: str | None, agent_log_tail: str | None, stderr: str | None
 ) -> bool:
@@ -1826,7 +1864,8 @@ def offload(
     and reads their exit codes, iterates until something passes, debugs, refactors, reviews,
     researches. Big-context reading (summarize 200 pages -> gemini) is ONE use, and naming only
     that use in this docstring is part of how callers came to believe it was the only one.
-    `mode="assess"` narrows to a no-write sandbox when that is what you want; the default does not.
+    `mode="assess"` prefers a no-write sandbox. If its network probe fails, the
+    default sandbox runs the brief with an explicit no-write instruction instead.
 
     Exactly two things do not transfer, and neither is about how big or code-shaped the task is:
     FLEET ACTIONS (claim/PR/label — that is `delegate`, below), and FIRST-PERSON OBSERVATION,
@@ -1962,6 +2001,17 @@ def offload(
         # Agents with no profile registered for this transport are UNCHANGED: the selection is
         # skipped entirely, so nothing that worked before starts behaving differently.
         profile = _select_offload_profile(agent, mode)
+    sandbox_fallback = (
+        agent == "codex"
+        and mode == "assess"
+        and not _sandbox_has_network(
+            mode, codex_binary=adapters.profile_codex_binary() if profile else "codex", cwd=run_cwd
+        )
+    )
+    command_mode = "mid" if sandbox_fallback else mode
+    if sandbox_fallback:
+        print(ASSESS_SANDBOX_FALLBACK_LOG, file=sys.stderr)
+        prepared_prompt = f"{ASSESS_NO_WRITE_PREAMBLE}\n\n{prepared_prompt}"
     # One name for the profile that is ACTUALLY in force, so the ledger, the routing metadata and
     # the worker attempt cannot disagree about which profile ran.
     effective_profile_id = profile["profile_id"] if profile else None
@@ -2004,7 +2054,7 @@ def offload(
         adapters.build_command(
             agent,
             command_prompt,
-            mode,
+            command_mode,
             cwd=run_cwd,
             profile=profile,
             transport="offload",
@@ -2016,7 +2066,7 @@ def offload(
         else adapters.build_command(
             agent,
             command_prompt,
-            mode,
+            command_mode,
             cwd=run_cwd,
             transport="offload",
             reasoning_effort=(
@@ -2031,6 +2081,9 @@ def offload(
             write_roots=boundary[1][1:] if boundary and agent == "codex" else None,
         )
     )  # raises ValueError on unknown agent
+    if sandbox_fallback:
+        # Change the sandbox, preserving assess's plain stdout response contract.
+        argv.remove("--json")
     if agent == "gemini" and "--add-dir" in argv:
         argv[argv.index("--add-dir") + 1] = str(run_cwd)
         _align_gemini_print_timeout(argv, timeout)
@@ -2094,6 +2147,7 @@ def offload(
         propensity=1.0 if profile else None,
         # Present only on a relocated run, so relocations are countable from the ledger alone.
         workspace_relocated_from=relocated["requested"] if relocated else None,
+        sandbox_fallback=sandbox_fallback,
     )
 
     def _record_offload_run() -> None:
@@ -2192,6 +2246,8 @@ def offload(
                 f"[orchestrator] WORKSPACE RELOCATED: {relocated['reason']}; this run writes only "
                 f"in its own scratch workspace {relocated['workspace']}\n"
             )
+        if sandbox_fallback:
+            fh.write(f"[orchestrator] {ASSESS_SANDBOX_FALLBACK_LOG}\n")
     max_network_retries = (
         max(0, _env_int("ORCH_OFFLOAD_NETWORK_RETRIES", 1))
         if max_network_retries is None
@@ -2239,6 +2295,7 @@ def offload(
             policy_version=execution_profiles.PROFILE_POLICY_VERSION if profile else None,
             propensity=1.0 if profile else None,
             credentials_redacted=sum(redaction_counts.values()) or None,
+            sandbox_fallback=sandbox_fallback,
         )
         # Only close what was opened -- reaching for a row deliberately not created is how a
         # "stop recording this" change quietly becomes a crash.

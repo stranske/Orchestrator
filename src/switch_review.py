@@ -1616,6 +1616,116 @@ def adversarial_shape_line(section: dict) -> str:
     return line
 
 
+def offload_sandbox_network(*, now: float | None = None, ledger_path: Path | None = None) -> dict:
+    """Seven-day assess offloads, deduplicated by run_id; missing evidence stays unknown."""
+    import adapters
+    import dispatcher
+
+    now = time.time() if now is None else now
+    ledger = Path(ledger_path) if ledger_path is not None else adapters.LEDGER
+    result: dict = {
+        "window_days": REVIEW_DAYS,
+        "assess_runs": 0,
+        "sandbox_fallbacks": 0,
+        "network_incomplete": 0,
+        "unknown_runs": 0,
+        "status": "measured",
+    }
+    runs: dict[str, dict] = {}
+    try:
+        with ledger.open() as source:
+            for line in source:
+                try:
+                    row = json.loads(line)
+                    if not isinstance(row, dict):
+                        raise ValueError("not an object")
+                    ts = float(row.get("ts", 0))
+                except (ValueError, TypeError):
+                    result["status"] = "partial"
+                    continue
+                run_id = row.get("run_id")
+                if (
+                    row.get("agent") != "codex"
+                    or row.get("mode") != "assess"
+                    or not isinstance(run_id, str)
+                    or not run_id.startswith("offload:")
+                    or not now - REVIEW_DAYS * 86400 <= ts <= now
+                ):
+                    continue
+                run = runs.setdefault(run_id, {})
+                run["sandbox_fallback"] = (
+                    run.get("sandbox_fallback", False) or row.get("sandbox_fallback") is True
+                )
+                if row.get("event") == "complete":
+                    run["complete"] = row
+    except OSError as exc:
+        return {
+            **result,
+            "status": "unmeasured",
+            "reason": str(exc),
+            "assess_runs": None,
+            "sandbox_fallbacks": None,
+            "network_incomplete": None,
+            "unknown_runs": None,
+        }
+    result["assess_runs"] = len(runs)
+    for run in runs.values():
+        result["sandbox_fallbacks"] += int(run.get("sandbox_fallback", False))
+        complete = run.get("complete")
+        if complete is None:
+            result["unknown_runs"] += 1
+            continue
+        error = str(complete.get("error") or "")
+        if "OFFLOAD_INCOMPLETE" not in error:
+            continue
+        # The completion error often contains the DNS cause itself; older errors
+        # only name the marker, in which case the dispatch log is the evidence.
+        evidence = error
+        log_readable = False
+        if complete.get("log_file"):
+            try:
+                evidence += "\n" + Path(complete["log_file"]).read_text(errors="replace")
+                log_readable = True
+            except OSError:
+                pass
+        network = dispatcher._is_transient_network_failure(evidence, "", "") or any(
+            text in evidence.lower()
+            for text in (
+                "could not resolve host",
+                "couldn't resolve host",
+                "name or service not known",
+                "temporary failure in name resolution",
+                "nodename nor servname",
+                "dns resolution",
+            )
+        )
+        if network:
+            result["network_incomplete"] += 1
+        elif not log_readable:
+            result["unknown_runs"] += 1
+    return result
+
+
+def format_offload_sandbox_network(section: dict) -> list[str]:
+    if section["status"] == "unmeasured":
+        return [
+            "## Assess offload sandbox network",
+            "",
+            f"  window={section['window_days']}d status=unmeasured; {section['reason']}",
+            "",
+        ]
+    return [
+        "## Assess offload sandbox network",
+        "",
+        f"  window={section['window_days']}d status={section['status']}; "
+        f"assess runs={section['assess_runs']}, sandbox_fallback=true={section['sandbox_fallbacks']}, "
+        f"network-caused OFFLOAD_INCOMPLETE={section['network_incomplete']}, "
+        f"unknown={section['unknown_runs']}"
+        + (f" ({section['reason']})" if section.get("reason") else ""),
+        "",
+    ]
+
+
 def review(
     *,
     now: int | None = None,
@@ -1712,6 +1822,7 @@ def review(
         "gate_expiry": gate_expiry(now=now, path=path),
         # And a seat stood down by hand is a switch held off. FYI only, on the real clock.
         "capacity_shed": capacity_shed(),
+        "offload_sandbox_network": offload_sandbox_network(now=now),
         # And a guard refusal is evidence that an agent's worktree disagreed with where the tool
         # put it. FYI only, real clock, never counted in `raise_count`.
         "worktree_git_refusals": worktree_git_refusals(),
@@ -2125,6 +2236,8 @@ def format_report(rep: dict) -> str:
     if expiry is not None:
         lines += format_gate_expiry(expiry)
     shed = rep.get("capacity_shed")
+    if rep.get("offload_sandbox_network") is not None:
+        lines += format_offload_sandbox_network(rep["offload_sandbox_network"])
     if shed is not None:
         lines += format_capacity_shed(shed)
     refusals = rep.get("worktree_git_refusals")
