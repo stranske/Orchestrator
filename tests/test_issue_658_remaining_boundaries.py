@@ -3,12 +3,14 @@
 import socket
 import subprocess
 from contextlib import nullcontext
+from unittest.mock import Mock
 
 import pytest
 
 import capabilities
 import capability_advisor as advisor
 import capability_propensity as propensity
+import dispatcher
 
 
 @pytest.fixture(autouse=True)
@@ -20,10 +22,71 @@ def isolated_runtime(monkeypatch, tmp_path):
     def forbidden(*args, **kwargs):
         pytest.fail("residual boundary test attempted an external process or network call")
 
+    external_effect = Mock(side_effect=forbidden)
     for name in ("run", "Popen"):
-        monkeypatch.setattr(subprocess, name, forbidden)
+        monkeypatch.setattr(subprocess, name, external_effect)
     for name in ("socket", "create_connection"):
-        monkeypatch.setattr(socket, name, forbidden)
+        monkeypatch.setattr(socket, name, external_effect)
+    for name in ("delegate", "delegate_remote", "offload"):
+        monkeypatch.setattr(dispatcher, name, external_effect)
+    monkeypatch.setattr(advisor.fleet_shapes, "_gh_json", external_effect)
+    monkeypatch.setattr(capabilities, "REG", tmp_path / "ledger.json")
+    yield
+    external_effect.assert_not_called()
+
+
+@pytest.mark.parametrize("observable", [None, False, True])
+def test_repo_probe_memo_preserves_unknown_and_negative_results(monkeypatch, tmp_path, observable):
+    """Candidates sharing a repo fact must reuse even an unknown or negative observation."""
+    probe = Mock(return_value={"observable": observable, "detail": "fixture result", "markers": []})
+    monkeypatch.setitem(advisor.REPO_FACT_PROBES, "fixture-surface", probe)
+    for cap_id in ("fixture-one", "fixture-two"):
+        monkeypatch.setitem(
+            advisor.CAPABILITY_PRECONDITIONS, cap_id, {"requires": "fixture-surface"}
+        )
+    facts = {}
+    first = advisor.evaluate_precondition("fixture-one", repo_path=str(tmp_path), facts=facts)
+    second = advisor.evaluate_precondition("fixture-two", repo_path=str(tmp_path), facts=facts)
+
+    probe.assert_called_once_with(str(tmp_path))
+    for result in (first, second):
+        assert result["requirement_met"] is observable
+        assert result["precondition_met"] is observable
+        assert result["requirement_evidence"] == probe.return_value
+        assert result["suggested_decline_kind"] == (
+            "precondition_unmet" if observable is False else None
+        )
+        assert bool(result["unevaluated_because"]) is (observable is None)
+
+
+def test_repo_probe_memo_is_scoped_to_checkout_and_consult(monkeypatch, tmp_path):
+    """A cached absence in one checkout cannot suppress another checkout or a later consult."""
+    probe = Mock(
+        side_effect=[
+            {"observable": False, "detail": "no surface", "markers": []},
+            {"observable": True, "detail": "has surface", "markers": ["html:index.html"]},
+            {"observable": True, "detail": "new surface", "markers": ["html:new.html"]},
+        ]
+    )
+    monkeypatch.setitem(advisor.REPO_FACT_PROBES, "fixture-surface", probe)
+    monkeypatch.setitem(
+        advisor.CAPABILITY_PRECONDITIONS, "fixture-one", {"requires": "fixture-surface"}
+    )
+    facts = {}
+    first_path, other_path = str(tmp_path / "first"), str(tmp_path / "other")
+    first = advisor.evaluate_precondition("fixture-one", repo_path=first_path, facts=facts)
+    other = advisor.evaluate_precondition("fixture-one", repo_path=other_path, facts=facts)
+    later = advisor.evaluate_precondition("fixture-one", repo_path=first_path, facts={})
+
+    assert first["precondition_met"] is False
+    assert other["precondition_met"] is True
+    assert later["precondition_met"] is True
+    assert [call.args for call in probe.call_args_list] == [
+        (first_path,),
+        (other_path,),
+        (first_path,),
+    ]
+    assert len(facts) == 2
 
 
 @pytest.mark.parametrize("classified", [False, True])
