@@ -11,8 +11,10 @@ Mixed-agent ccusage totals are never silently attributed to Codex or Claude.
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import json
+import math
 import os
 import statistics
 import sys
@@ -26,6 +28,9 @@ STATE_DIR = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex/orchestr
 RESETS_FILE = STATE_DIR / "capacity-resets.json"
 CALIBRATION_FILE = STATE_DIR / "capacity-calibration.json"
 CLAUDE_USAGE = Path.home() / "Library/Application Support/Claude/plan-usage-history.json"
+CLAUDE_USAGE_MAX_AGE_SECONDS = pacing.CLAUDE_USAGE_MAX_AGE_SECONDS
+CLAUDE_PROJECTS = Path(os.environ.get("ORCH_CLAUDE_PROJECTS", Path.home() / ".claude/projects"))
+HANDOFF = Path.home() / ".codex/handoff"
 SNAPSHOTS = Path.home() / ".codex/usage-snapshots"
 CODEX_SESSIONS = Path.home() / ".codex/sessions"
 ROLLOUT_FILE_LIMIT = 300
@@ -114,7 +119,12 @@ def weekly_tokens(path: Path, pool: str) -> list[dict]:
             continue
         start = pacing.timestamp(row.get("period"))
         tokens = row.get("totalTokens")
-        if start is not None and isinstance(tokens, (int, float)) and tokens >= 0:
+        if (
+            start is not None
+            and isinstance(tokens, (int, float))
+            and math.isfinite(tokens)
+            and tokens >= 0
+        ):
             rows.append(dict(period_start=start, tokens=tokens))
     return rows
 
@@ -316,6 +326,180 @@ def consume_detected_resets(inventory: dict, datum: dict, *, now: float, record:
     return messages
 
 
+def claude_token_events(
+    root: Path, start: float, now: float, *, stats: dict | None = None
+) -> list[dict]:
+    """Read ccusage's timestamped Claude input; cache sanitized per-file totals.
+
+    Re-read changed files in full so truncation, rotation and streaming updates
+    cannot reuse an obsolete offset. Unchanged historical files need no JSONL read.
+    Cache all timestamps so moving the observation clock never hides future rows.
+    """
+    root_key = hashlib.sha256(str(root.resolve()).encode()).hexdigest()
+    cache_path = Path(tempfile.gettempdir()) / f"orch-claude-events-{os.getuid()}-{root_key}.json"
+    cache = read_json(cache_path)
+    cached = cache.get("files", {}) if isinstance(cache, dict) and cache.get("version") == 1 else {}
+    cached = cached if isinstance(cached, dict) else {}
+    events = {}
+    updated = {}
+    files_read = files_cached = 0
+    for path in sorted(root.glob("**/*.jsonl")):
+        try:
+            stat = path.stat()
+            identity = [stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns]
+            prior = cached.get(str(path), {})
+            if prior.get("identity") == identity:
+                rows = prior["rows"]
+                files_cached += 1
+            else:
+                file_events = {}
+                files_read += 1
+                with path.open() as stream:
+                    for line in stream:
+                        if '"usage"' not in line:
+                            continue
+                        try:
+                            row = json.loads(line)
+                            ts = pacing.timestamp(row.get("timestamp"))
+                            message = row.get("message") or {}
+                            usage = message.get("usage") or {}
+                            if row.get("type") != "assistant" or ts is None:
+                                continue
+                            fields = (
+                                "input_tokens",
+                                "output_tokens",
+                                "cache_creation_input_tokens",
+                                "cache_read_input_tokens",
+                            )
+                            values = [usage.get(k, 0) for k in fields]
+                            if not usage or not all(
+                                isinstance(v, (int, float)) and math.isfinite(v) and v >= 0
+                                for v in values
+                            ):
+                                continue
+                            key = (message.get("id"), row.get("requestId"))
+                            if not key[0]:
+                                continue
+                            file_events[key] = dict(
+                                agent="claude", ts=ts, totalTokens=sum(values), message_key=key
+                            )
+                        except (ValueError, TypeError, AttributeError):
+                            continue
+                rows = list(file_events.values())
+            updated[str(path)] = dict(identity=identity, rows=rows)
+            for row in rows:
+                if start <= row["ts"] <= now:
+                    events[tuple(row["message_key"])] = {
+                        k: v for k, v in row.items() if k != "message_key"
+                    }
+        except OSError:
+            continue
+    if files_read or set(updated) != set(cached):
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", dir=cache_path.parent, delete=False
+            ) as stream:
+                temporary = Path(stream.name)
+                json.dump(dict(version=1, files=updated), stream, allow_nan=False)
+            temporary.replace(cache_path)
+        except OSError:
+            print(
+                "FYI Claude event cache unavailable; source scan remains authoritative",
+                file=sys.stderr,
+            )
+    if stats is not None:
+        stats.update(files_read=files_read, files_cached=files_cached)
+    return sorted(events.values(), key=lambda r: r["ts"])
+
+
+def claude_window(rows: list[dict], start: float, end: float, observed_at: float) -> dict:
+    """Build a Claude-only ccusage sample from timestamped, possibly mixed rows."""
+    tokens = sum(
+        r["totalTokens"]
+        for r in rows
+        if r.get("agent") == "claude"
+        and (ts := pacing.timestamp(r.get("ts"))) is not None
+        and start <= ts <= min(end, observed_at)
+    )
+    return dict(agent="claude", period_start=start, period_end=end, ts=observed_at, tokens=tokens)
+
+
+def claude_pair_cap(
+    desktop: list[dict], events: list[dict], start: float, end: float, now: float
+) -> tuple[float | None, int]:
+    # One prefix sum serves every contemporaneous observation. Historical pairs
+    # must not each rescan the entire token history on a capacity read.
+    ordered = sorted((r for r in events if r.get("agent") == "claude"), key=lambda r: r["ts"])
+    times = [r["ts"] for r in ordered]
+    prefix = [0]
+    for event in ordered:
+        prefix.append(prefix[-1] + event["totalTokens"])
+    estimates = []
+    seen = set()
+    for row in desktop:
+        ts = row["t"] / 1000
+        fraction = row["u"]["sd"] / 100
+        if ts > now or fraction <= 0 or ts in seen:
+            continue
+        seen.add(ts)
+        bounds = pacing.period("claude", ts)
+        assert bounds is not None
+        total = (
+            prefix[bisect.bisect_right(times, ts)] - prefix[bisect.bisect_left(times, bounds[0])]
+        )
+        if total > 0:
+            estimates.append(total / fraction)
+    return (statistics.median(estimates) if estimates else None, len(estimates))
+
+
+def produce_claude_sample(
+    now: float, desktop: list[dict], destination: Path, root: Path
+) -> tuple[dict | None, float | None, int]:
+    bounds = pacing.period("claude", now)
+    assert bounds is not None  # Claude has a fixed weekly anchor.
+    start, end = bounds
+    # A bounded cache keeps repeated reports stable and avoids rescanning logs on
+    # every capacity read. Source changes invalidate it immediately.
+    signature = hashlib.sha256(
+        json.dumps(
+            [
+                [
+                    (str(p), p.stat().st_mtime_ns, p.stat().st_size)
+                    for p in sorted(root.glob("**/*.jsonl"))
+                ],
+                desktop,
+            ],
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    cached = read_json(destination) or {}
+    if (
+        cached.get("signature") == signature
+        and cached.get("period_start") == start
+        and 0 <= now - cached.get("ts", 0) < pacing.TICK_SECONDS
+    ):
+        return cached, cached.get("cap_estimate"), cached.get("cap_pair_count", 0)
+    earliest = min(
+        [start] + [b[0] for r in desktop if (b := pacing.period("claude", r["t"] / 1000))]
+    )
+    events = claude_token_events(root, earliest, now)
+    if not events:
+        return None, None, 0
+    sample = claude_window(events, start, end, now)
+    cap, pairs = claude_pair_cap(desktop, events, start, end, now)
+    sample.update(signature=signature, cap_estimate=cap, cap_pair_count=pairs)
+    # Keep this producer in writable runtime state, never mutate desktop/ccusage originals.
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", dir=destination.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(sample, stream, allow_nan=False)
+        temporary.replace(destination)
+    except OSError as exc:
+        print(f"FYI Claude fallback sample could not be persisted: {exc}", file=sys.stderr)
+    return sample, cap, pairs
+
+
 def usage(
     pool: str,
     now: float,
@@ -323,14 +507,22 @@ def usage(
     snapshots: Path = SNAPSHOTS,
     claude_path: Path = CLAUDE_USAGE,
     sessions: Path | None = None,
+    handoff: Path | None = None,
+    claude_projects: Path | None = None,
 ) -> dict:
     if pool == "codex":
         observed = codex_rollout_usage(CODEX_SESSIONS if sessions is None else sessions, now)
         if observed is not None:
             return observed
+    produced = None
+    pair_cap = None
+    pair_count = 0
+    desktop_age = None
+    desktop_ts = None
     if pool == "claude":
         data = read_json(claude_path) or {}
-        rows = data.get("samples", [])
+        rows = data.get("samples", []) if isinstance(data, dict) else []
+        rows = rows if isinstance(rows, list) else []
         valid = [
             r
             for r in rows
@@ -338,11 +530,16 @@ def usage(
             and isinstance(r.get("t"), (int, float))
             and isinstance(r.get("u"), dict)
             and isinstance(r["u"].get("sd"), (int, float))
+            and math.isfinite(r["t"])
+            and 0 <= r["t"] / 1000 <= now
+            and 0 <= r["u"]["sd"] <= 100
         ]
         if valid:
             row = max(valid, key=lambda r: r["t"])
             ts = row["t"] / 1000
-            if 0 <= row["u"]["sd"] <= 100 and ts <= now:
+            desktop_ts = ts
+            desktop_age = now - ts
+            if desktop_age <= CLAUDE_USAGE_MAX_AGE_SECONDS:
                 return dict(
                     used_fraction=row["u"]["sd"] / 100,
                     ts=ts,
@@ -352,15 +549,74 @@ def usage(
                         and 0 <= row["u"]["fh"] <= 100
                         else None
                     ),
-                    source="claude-desktop:plan-usage-history.json:u.sd",
+                    source="claude-desktop",
+                    sample_age_s=desktop_age,
+                    desktop_sample_age_s=desktop_age,
+                    desktop_sample_ts=desktop_ts,
                 )
+        root = CLAUDE_PROJECTS if claude_projects is None else claude_projects
+        cache_key = hashlib.sha256(str(root.resolve()).encode()).hexdigest()
+        destination = (
+            Path(tempfile.gettempdir()) / f"orch-claude-ccusage-{os.getuid()}-{cache_key}.json"
+        )
+        produced, pair_cap, pair_count = produce_claude_sample(
+            now,
+            valid,
+            destination,
+            root,
+        )
     cap = calibration.get(f"{pool}_weekly_token_cap")
+    cap_source = "calibration-file"
+    if pool == "claude":
+        if pair_cap is not None:
+            cap = pair_cap
+            cap_source = "desktop-token-pairs"
+        elif not isinstance(cap, (int, float)) or not math.isfinite(cap) or cap <= 0:
+            cap = calibration.get("claude_published_weekly_token_cap")
+            cap_source = "plan-published"
+        if not isinstance(cap, (int, float)) or not math.isfinite(cap) or cap <= 0:
+            cap = None
+            cap_source = "unavailable (0 pairs)"
+        if produced is not None:
+            return dict(
+                used_fraction=produced["tokens"] / cap if cap else None,
+                ts=produced["ts"],
+                source="ccusage-fallback",
+                weekly_tokens=produced["tokens"],
+                period_start=produced["period_start"],
+                sample_age_s=now - produced["ts"],
+                desktop_sample_age_s=desktop_age,
+                desktop_sample_ts=desktop_ts,
+                token_cap=cap,
+                cap_source=cap_source,
+                cap_pair_count=pair_count,
+            )
     paths = sorted(snapshots.glob("weekly-*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
     for path in paths:
         rows = weekly_tokens(path, pool)
         if not rows:
             continue
         row = max(rows, key=lambda r: r["period_start"])
+        age = now - path.stat().st_mtime
+        if pool == "claude":
+            # Calendar-week buckets cannot stand in for this account's anchored
+            # subscription week, and an old snapshot cannot become fresh on read.
+            bounds = pacing.period(pool, now)
+            if bounds is None or abs(row["period_start"] - bounds[0]) > 1 or age < 0:
+                continue
+            return dict(
+                used_fraction=row["tokens"] / cap if cap else None,
+                ts=path.stat().st_mtime,
+                source="ccusage-fallback",
+                weekly_tokens=row["tokens"],
+                period_start=row["period_start"],
+                sample_age_s=age,
+                desktop_sample_age_s=desktop_age,
+                desktop_sample_ts=desktop_ts,
+                token_cap=cap,
+                cap_source=cap_source,
+                cap_pair_count=pair_count,
+            )
         if not isinstance(cap, (int, float)) or cap <= 0:
             return dict(
                 used_fraction=None,
@@ -379,6 +635,18 @@ def usage(
             source="ccusage-calibrated:weekly-agent-tokens",
             weekly_tokens=row["tokens"],
             period_start=row["period_start"],
+        )
+    if pool == "claude":
+        return dict(
+            used_fraction=None,
+            ts=None,
+            source="ccusage-fallback",
+            sample_age_s=None,
+            desktop_sample_age_s=desktop_age,
+            desktop_sample_ts=desktop_ts,
+            token_cap=cap,
+            cap_source=cap_source,
+            fallback_reason="no Claude-only snapshot aligned to the subscription week",
         )
     return dict(used_fraction=None, ts=None, source="none")
 
@@ -407,12 +675,15 @@ def usage_snapshot(now: float) -> dict:
     return result
 
 
-def calibrate(incidents: list[dict], samples: list[dict], destination: Path) -> tuple[bool, str]:
+def calibration_evidence(
+    pool: str, incidents: list[dict], samples: list[dict]
+) -> tuple[list[dict], dict]:
+    """Shared agent-specific, timestamp-matched quota calibration evidence."""
     evidence = []
     seen = set()
     counts = dict(seen=0, unmatched=0, duplicate=0, no_weekly_tokens=0)
     for incident in incidents:
-        if incident.get("agent") != "codex" or incident.get("category") != "quota":
+        if incident.get("agent") != pool or incident.get("category") != "quota":
             continue
         counts["seen"] += 1
         ts = pacing.timestamp(incident.get("ts"))
@@ -431,7 +702,7 @@ def calibrate(incidents: list[dict], samples: list[dict], destination: Path) -> 
             matches = [
                 r
                 for r in samples
-                if r.get("agent") == "codex"
+                if r.get("agent") == pool
                 and r.get("source", "").startswith("ccusage")
                 and abs(r.get("ts", 0) - ts) <= pacing.STALE_AFTER_SECONDS
                 and r.get("weekly_tokens") is not None
@@ -439,11 +710,21 @@ def calibrate(incidents: list[dict], samples: list[dict], destination: Path) -> 
             if matches:
                 sample = min(matches, key=lambda r: abs(r["ts"] - ts))
                 tokens, start = sample["weekly_tokens"], sample.get("period_start")
-        if not isinstance(tokens, (int, float)) or tokens <= 0 or start is None:
+        if (
+            not isinstance(tokens, (int, float))
+            or not math.isfinite(tokens)
+            or tokens <= 0
+            or start is None
+        ):
             counts["no_weekly_tokens"] += 1
             counts["unmatched"] += 1
             continue
         evidence.append(dict(incident_id=key, ts=ts, weekly_tokens=tokens, period_start=start))
+    return evidence, counts
+
+
+def calibrate(incidents: list[dict], samples: list[dict], destination: Path) -> tuple[bool, str]:
+    evidence, counts = calibration_evidence("codex", incidents, samples)
     if len(evidence) < 2:
         return False, (
             f"calibrate-codex: refuses to write: {len(evidence)} matched quota incidents; "
@@ -562,12 +843,29 @@ def integrate(
         datum = (
             dict(usage_data[pool])
             if usage_data is not None
-            else usage(pool, now, source_calibration, snapshots=SNAPSHOTS, claude_path=CLAUDE_USAGE)
+            else usage(
+                pool,
+                now,
+                source_calibration,
+                snapshots=SNAPSHOTS,
+                claude_path=CLAUDE_USAGE,
+                handoff=handoff,
+            )
         )
         # A recording tick can lower the calibrated cap before integration.
-        if datum.get("source", "").startswith("ccusage-calibrated"):
+        if datum.get("source", "").startswith("ccusage-calibrated") or (
+            datum.get("source") == "ccusage-fallback" and datum.get("token_cap") is not None
+        ):
             cap = source_calibration.get(f"{pool}_weekly_token_cap")
-            if isinstance(cap, (int, float)) and cap > 0:
+            if (
+                isinstance(cap, (int, float))
+                and math.isfinite(cap)
+                and cap > 0
+                and datum.get("cap_source") != "desktop-token-pairs"
+            ):
+                if datum.get("token_cap") is not None:
+                    cap = min(cap, datum["token_cap"])
+                    datum["token_cap"] = cap
                 datum["used_fraction"] = datum["weekly_tokens"] / cap
         if datum.get("scan"):
             messages.append(
@@ -604,7 +902,7 @@ def integrate(
         sample = dict(agent=pool, recorded_at=now, **datum)
         sample.setdefault("period_start", start)
         pool_samples = [r for r in samples if r.get("agent") == pool and r.get("ts") is not None]
-        if datum["ts"] is not None and now - datum["ts"] <= pacing.STALE_AFTER_SECONDS:
+        if datum["ts"] is not None and now - datum["ts"] <= pacing.usage_max_age(pool):
             # Fresh percent observations sampled on ticks measure flat spend too;
             # source_ts retains the app observation time so freshness cannot be forged.
             sample.update(source_ts=datum["ts"], ts=now)
@@ -624,6 +922,15 @@ def integrate(
             used_fraction=datum["used_fraction"],
             source=datum["source"],
         )
+        for key in (
+            "desktop_sample_ts",
+            "token_cap",
+            "cap_source",
+            "cap_pair_count",
+            "fallback_reason",
+        ):
+            if key in datum:
+                row[key] = datum[key]
         # Infrastructure/auth/explicit shed markers remain authoritative.
         agent = agents[pool]
         ranks = {"ok": 0, "warn": 1, "shed": 2}
@@ -668,12 +975,30 @@ def report(handoff: Path, *, now: float, current: dict | None = None) -> str:
 
     for pool in ("codex", "claude"):
         row = (current.get("agents", {}).get(pool) or {}).get("pacing") or {}
+        source_detail = ""
+        if pool == "claude":
+            age = now - row["ts"] if row.get("ts") is not None else None
+            desktop_ts = row.get("desktop_sample_ts")
+            desktop_age = int(now - desktop_ts) if desktop_ts is not None else "unknown"
+            source_detail = (
+                f"sample_age_s={int(age) if age is not None else 'unknown'} "
+                f"desktop_sample_age_s={desktop_age} "
+            )
+            if row.get("source") == "ccusage-fallback":
+                source_detail += (
+                    f"cap: {row.get('token_cap') if row.get('token_cap') is not None else 'unavailable (0 pairs)'} "
+                    f"pairs={row.get('cap_pair_count', 0)} "
+                    f"token_cap={measured(row.get('token_cap'))} "
+                    f"cap_source={row.get('cap_source', 'unknown')} "
+                    f"fallback_reason={row.get('fallback_reason', 'desktop missing, invalid or stale')} "
+                )
         lines.append(
             f"pool {pool}: u={measured(row.get('used_fraction'))} "
             f"ũ={measured(row.get('projected_fraction'))} "
             f"state={row.get('state', 'unknown')} w_p={measured(row.get('routing_weight'))} "
             f"resets={row.get('resets_available') if row.get('resets_available') is not None else 'unknown'} source={row.get('source', 'none')} "
-            f"ts={row.get('ts')} stale={row.get('ts') is not None and now - row['ts'] > pacing.STALE_AFTER_SECONDS}; "
+            f"{source_detail}"
+            f"ts={row.get('ts')} stale={row.get('ts') is not None and now - row['ts'] > pacing.usage_max_age(pool)}; "
             f"{row.get('reason', 'usage unmeasured; clears on fresh usage/period sample')}"
         )
         finals = []
@@ -683,7 +1008,7 @@ def report(handoff: Path, *, now: float, current: dict | None = None) -> str:
             if (
                 end is not None
                 and end <= now
-                and 0 <= end - snap["ts"] <= pacing.STALE_AFTER_SECONDS
+                and 0 <= end - snap["ts"] <= pacing.usage_max_age(pool)
             ):
                 if p.get("used_fraction") is not None and not p.get("stale"):
                     finals.append(p)

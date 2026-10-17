@@ -342,3 +342,30 @@ def _worktree_git_refusals_stay_in_the_test(_worktree_git_refusal_log, monkeypat
     each suite run would add rows to the log the weekly `switch_review` counts.
     """
     monkeypatch.setenv("ORCH_WORKTREE_GIT_REFUSAL_LOG", str(_worktree_git_refusal_log))
+
+
+@pytest.fixture(scope="session")
+def _claude_token_test_root(tmp_path_factory):
+    return tmp_path_factory.mktemp("claude-token-fixtures")
+
+
+@pytest.fixture(autouse=True)
+def isolate_claude_token_history(monkeypatch, _claude_token_test_root):
+    """Unit tests must supply Claude logs instead of reading the user's history.
+
+    Capacity builds occur throughout the suite. The new fallback otherwise makes
+    unrelated tests depend on gigabytes of changing local data. Producer tests
+    override this directory with their own explicit fixtures; live acceptance is
+    run separately through capacity.py pacing-report.
+    """
+    try:
+        import pacing_usage
+    except ModuleNotFoundError as exc:
+        # The tracked-input guard copies this conftest into tiny synthetic repos.
+        # There is no usage source to isolate when the module is absent there.
+        if exc.name != "pacing_usage":
+            raise
+        return
+
+    monkeypatch.setattr(pacing_usage, "CLAUDE_PROJECTS", _claude_token_test_root)
+    monkeypatch.setenv("ORCH_CLAUDE_PROJECTS", str(_claude_token_test_root))

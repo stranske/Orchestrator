@@ -548,7 +548,7 @@ def _shed(agent: str) -> bool:
                 and 0 <= short < 1
                 and observed is not None
                 and created < observed <= now
-                and now - observed <= pacing.STALE_AFTER_SECONDS
+                and now - observed <= pacing.usage_max_age(agent)
             )
             if not sample_clears:
                 print(
@@ -1375,6 +1375,8 @@ def main(argv):
     if argv and argv[0] == "pacing-report":
         import pacing_usage
 
+        # report() renders the selected Claude source's age and cap provenance,
+        # including an independently aged ccusage fallback when desktop is stale.
         now = time.time()
         current = {
             "agents": {
