@@ -523,3 +523,15 @@ def test_invalid_effective_reserve_is_unmeasured(main_680_pacing_fixture, reserv
     assert result["status"] == "partial"
     assert result["inputs"]["budget"]["codex"] is None
     assert any("effective_reserve unmeasured or invalid" in r for r in result["reasons"])
+
+
+def test_default_history_path_is_the_writers_ledger(monkeypatch, tmp_path):
+    """The reader must default to where #680's pacing_usage WRITES pacing_snapshot rows."""
+    import capacity
+
+    monkeypatch.setattr(capacity, "HANDOFF", tmp_path / "handoff")
+    assert comparative.history_path() == tmp_path / "handoff" / "capacity-ledger.ndjson"
+    assert (
+        comparative.history_path(tmp_path / "state")
+        == tmp_path / "state" / "capacity-ledger.ndjson"
+    )

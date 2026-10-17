@@ -825,7 +825,7 @@ def main() -> int:
             comparative.format_report(
                 comparative.report(
                     db_path,
-                    args.pacing_history or comparative.history_path(args.state_dir),
+                    args.pacing_history or comparative.history_path(),
                     window_days=args.window_days,
                 )
             )

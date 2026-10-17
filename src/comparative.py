@@ -10,7 +10,6 @@ from __future__ import annotations
 import datetime as dt
 import json
 import math
-import os
 import sqlite3
 import time
 from contextlib import closing
@@ -408,9 +407,20 @@ def measure(
     return result
 
 
+LEDGER_NAME = "capacity-ledger.ndjson"
+
+
 def history_path(state_dir: Path | None = None) -> Path:
-    base = state_dir or Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex/orchestrator"))
-    return base / "capacity-ledger.ndjson"
+    """The pacing ledger the WRITER appends to: `capacity.HANDOFF/capacity-ledger.ndjson`.
+
+    #680's `pacing_usage` writes `pacing_snapshot` rows under the handoff dir, not the state dir; a
+    reader defaulting to `$ORCH_STATE_DIR` never saw a live row. `state_dir` stays an explicit override.
+    """
+    if state_dir is not None:
+        return state_dir / LEDGER_NAME
+    import capacity  # lazy: capacity is heavy and must not load at module import
+
+    return capacity.HANDOFF / LEDGER_NAME
 
 
 def report(db_path: Path, path: Path, *, now=None, window_days=WINDOW_DAYS) -> dict:
@@ -515,7 +525,7 @@ def format_report(result: dict) -> str:
     ]
     lines += [
         f"classes_differing {result['classes_differing']}",
-        f"status {result['status']}; hours_measured {result['hours_measured']}/{result['hours_observed']}",
+        f"status {result['status']}; hours_measured {result['hours_measured']}/{result['hours_observed']} (needs share ≥ {MIN_MEASURED_HOUR_SHARE})",
     ]
     lines += result["reasons"]
     for hour, reasons in result.get("hour_reasons", {}).items():
