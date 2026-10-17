@@ -1,14 +1,19 @@
 """Failure-boundary coverage for the recurrence check's pure and offline paths."""
 
-import os
-import tempfile
 from types import SimpleNamespace
 
-_hermetic_root = tempfile.mkdtemp(prefix="orch_recurrence_cov_")
-os.environ.setdefault("ORCH_STATE_DIR", _hermetic_root)
-os.environ.setdefault("ORCH_LOCAL_RUNTIME", _hermetic_root)
+import pytest
 
 import capability_recurrence_check as recurrence  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_paths(tmp_path):
+    with pytest.MonkeyPatch.context() as scoped:
+        scoped.setenv("ORCH_STATE_DIR", str(tmp_path))
+        scoped.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path))
+        scoped.setattr(recurrence.capabilities, "REG", tmp_path / "capabilities.json")
+        yield
 
 
 def test_tick_env_attempt_names_unreadable_bash_and_spawn_failures(monkeypatch, tmp_path):
