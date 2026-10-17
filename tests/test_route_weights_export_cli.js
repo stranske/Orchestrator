@@ -78,6 +78,7 @@ with sqlite3.connect(database) as connection:
       const before = source === 'missing' ? null : fs.readFileSync(database);
       const args = [path.join(modules, 'route_weights_export.py'), '--publish'];
       if (override) args.push('--allow-evidence-regression');
+      const shadowPath = path.join(state, 'route-weights-export.json');
       const result = await run(python, args, { cwd: repo, env });
 
       assert.equal(result.status, 1, `publish_guard must refuse: ${result.stderr}`);
@@ -94,9 +95,31 @@ with sqlite3.connect(database) as connection:
       } else {
         assert.deepEqual(fs.readFileSync(database), before, 'the source DB must stay read-only');
       }
-      const shadow = JSON.parse(fs.readFileSync(path.join(state, 'route-weights-export.json')));
+      const shadowBytes = fs.readFileSync(shadowPath);
+      const shadow = JSON.parse(shadowBytes);
       assert.equal(shadow.source_version, version);
       assert.deepEqual(shadow.task_types.implement.ranking, []);
+
+      // An earlier refused run already wrote this local shadow. Its semantic
+      // equality must never short-circuit the next publication guard.
+      const repeated = await run(python, args, { cwd: repo, env });
+      assert.equal(repeated.status, 1,
+        `publish_guard must also refuse an unchanged local export: ${repeated.stderr}`);
+      assert.ok(repeated.stdout.includes(`unchanged ${shadowPath}`), repeated.stdout);
+      assert.match(repeated.stderr, /publish_guard refused:/);
+      assert.match(repeated.stderr, source === 'below-threshold'
+        ? /all task types have evidence_ok false/ : /source_version == 0/);
+      assert.ok(repeated.stderr.includes(`db=${database} source_version=${version}`),
+        repeated.stderr);
+      assert.deepEqual(fs.readFileSync(shadowPath), shadowBytes,
+        'an unchanged refused export must retain the earlier shadow bytes');
+      assert.equal(fs.existsSync(gitLog), false,
+        'an unchanged refused export must still stop before Git');
+      if (before === null) {
+        assert.equal(fs.existsSync(database), false);
+      } else {
+        assert.deepEqual(fs.readFileSync(database), before);
+      }
     });
   }
 }
