@@ -4,13 +4,13 @@ ________________ test_banked_resets_relieve_reserve_RESET_BOOST ________________
 
     def test_banked_resets_relieve_reserve_RESET_BOOST():
         row = evaluate(n=2)
->       assert row["effective_reserve"] == 0, (
-            "RESET_BOOST must consume resets_available in reserve math"
-        )
+>       assert (
+            row["effective_reserve"] == 0
+        ), "RESET_BOOST must consume resets_available in reserve math"
 E       AssertionError: RESET_BOOST must consume resets_available in reserve math
 E       assert 0.15 == 0
 
 tests/test_pacing.py:58: AssertionError
 =========================== short test summary info ============================
 FAILED tests/test_pacing.py::test_banked_resets_relieve_reserve_RESET_BOOST
-1 failed in 0.61s
+1 failed in 4.41s

@@ -55,9 +55,9 @@ def test_early_heavy_spend_sheds_without_resets():
 
 def test_banked_resets_relieve_reserve_RESET_BOOST():
     row = evaluate(n=2)
-    assert row["effective_reserve"] == 0, (
-        "RESET_BOOST must consume resets_available in reserve math"
-    )
+    assert (
+        row["effective_reserve"] == 0
+    ), "RESET_BOOST must consume resets_available in reserve math"
     assert row["state"] == "warn", "RESET_BOOST banked resets must keep projected exhaustion warn"
     assert "bank-0" in row["fyi"][0]
     # Also exercise an actual state difference induced by the reserve formula.
@@ -82,9 +82,9 @@ def test_undefined_burn_schedule(u, state):
 
 @pytest.mark.parametrize("n,expected", [(0, 0.15), (1, 0.075), (2, 0)])
 def test_literal_reserve_formula(n, expected):
-    assert pacing.effective_reserve(n) == pytest.approx(expected), (
-        "RESET_BOOST literal revised formula"
-    )
+    assert pacing.effective_reserve(n) == pytest.approx(
+        expected
+    ), "RESET_BOOST literal revised formula"
 
 
 def test_expired_and_consumed_resets_drop_out():

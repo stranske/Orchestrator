@@ -170,3 +170,12 @@ PR; only `autofix` label, no agent label, no source-workflow delegation.
 Merge, mirror sync, runtime inventory installation, source freshness (calibration only for the fallback),
 relay consumption, and reset-time pass measurements are separate acceptance
 boundaries. None is established by local green tests alone.
+
+
+Round-2 hosted mirror verification exposed a compatibility gap inherited from main:
+model-epoch config was missing from the builder, installer ownership and source
+identity, and the reader hardcoded the checkout parent. This PR also ships
+`config/model_epochs.json` through that existing deployment contract, resolves
+its path with `paths.checkout_root`, and preserves optional timestamp parsing
+without a type error. Both layout cases, named-file retirement and the existing
+source-identity/ownership contracts exercise the repair; no mirror test is skipped.
