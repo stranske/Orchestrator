@@ -425,8 +425,17 @@ def assess_and_record_opportunity(
             db.close()
         return result
 
+    producer_followup = False
+    if environ.get("ORCH_EXPERIMENT_PRODUCER", "0") == "1":
+        try:
+            import exp_abcd
+
+            meta = json.loads((exp_abcd.exp_paths(exp_id) / "meta.json").read_text())
+            producer_followup = meta.get("producer") == "experiment_producer"
+        except (OSError, ValueError):
+            pass
     # The shell default is defensive, but this in-process check is the actual dispatch invariant.
-    if not _truthy(environ.get("ORCH_RESEARCH_ARM", "0")):
+    if not (_truthy(environ.get("ORCH_RESEARCH_ARM", "0")) or producer_followup):
         result = _save_opportunity(
             db,
             current_ts,
