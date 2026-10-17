@@ -24,7 +24,7 @@ function run(command, args, options = {}) {
 
 // Exercise argument parsing, the real process exit, and stderr without pytest
 // fixtures. A Git tripwire proves that refusal precedes publication activity.
-for (const source of ['missing', 'empty', 'empty-table', 'below-threshold']) {
+for (const source of ['missing', 'empty', 'wrong-db', 'empty-table', 'below-threshold']) {
   for (const override of [false, true]) {
     test(`publish_guard CLI refuses ${source}, override=${override}`, async (t) => {
       const interpreter = await run(process.env.PYTHON || 'python3', ['-c',
@@ -37,6 +37,7 @@ for (const source of ['missing', 'empty', 'empty-table', 'below-threshold']) {
       const home = path.join(root, 'home');
       const state = path.join(root, 'state');
       const database = path.join(state, 'feedback', 'weights #?.db');
+      const fallbackDatabase = path.join(state, 'feedback', 'orchestrator.db');
       const gitLog = path.join(root, 'git.log');
       for (const directory of [bin, home, path.dirname(database)]) {
         fs.mkdirSync(directory, { recursive: true });
@@ -66,6 +67,13 @@ import sys
 from pathlib import Path
 import route_weights_export as export
 database = Path(sys.argv[1])
+if sys.argv[2] == "wrong-db":
+    # A valid default Brain must not hide an explicitly selected unrelated DB.
+    export._fixture_db(database.with_name("orchestrator.db"))
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE unrelated (value INTEGER)")
+        connection.execute("INSERT INTO unrelated VALUES (68)")
+    sys.exit(0)
 export._fixture_db(database)
 with sqlite3.connect(database) as connection:
     if sys.argv[2] == "empty-table":
@@ -76,6 +84,7 @@ with sqlite3.connect(database) as connection:
         assert.equal(initialized.status, 0, initialized.stderr);
       }
       const before = source === 'missing' ? null : fs.readFileSync(database);
+      const fallbackBefore = source === 'wrong-db' ? fs.readFileSync(fallbackDatabase) : null;
       const args = [path.join(modules, 'route_weights_export.py'), '--publish'];
       if (override) args.push('--allow-evidence-regression');
       const shadowPath = path.join(state, 'route-weights-export.json');
@@ -119,6 +128,10 @@ with sqlite3.connect(database) as connection:
         assert.equal(fs.existsSync(database), false);
       } else {
         assert.deepEqual(fs.readFileSync(database), before);
+      }
+      if (fallbackBefore !== null) {
+        assert.deepEqual(fs.readFileSync(fallbackDatabase), fallbackBefore,
+          'refusal must preserve the neighboring evidenced Brain');
       }
     });
   }
