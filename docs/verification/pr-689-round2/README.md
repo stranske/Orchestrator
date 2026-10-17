@@ -49,3 +49,7 @@ The initial full-gate attempt was interrupted after diagnosing pytest session cl
 of the shared temporary-directory root. The retained traceback records that interruption.
 The final full-gate attempt uses a private `TMPDIR` under `/private/tmp`; this changes
 only temporary-file placement, and excludes no tests.
+
+`focused.log.gz` and `persisted-verdict-red.log.gz` retain the raw console bytes
+losslessly, including pytest trailing whitespace. The reproduction script emits
+plain `.log` files before this archival compression.
