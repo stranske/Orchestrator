@@ -2158,6 +2158,25 @@ backlog rail also represents this exact campaign input.
 
 Research intake recovery (#569) reuses dispatcher ownership policy at discovery, scheduler selection and launch. Full issue/PR pages are incomplete and fail closed; feed timestamps must be finite, nonnegative and not future dated. Shadow intake and both existing launch gates remain unchanged.
 
+### Delegated PR review loop (#671)
+
+The delegate persists its opt-in and stable root run identity before launching a writer; a failed
+write refuses launch. `merge_guard.guarded_merge` reads that same Brain evidence before review
+hooks and again immediately before merging. A pending loop, wrong PR, changed head, newer refusal
+or live local claim blocks only that target, including when GitHub status publication failed.
+Ordinary runs without the opt-in retain the existing gates; no lifecycle state or model pin changes.
+
+`dispatcher.py delegate --review-loop` adds an exact-head advisory checkpoint after the original
+writer has terminal evidence and its claim is released. The checkpoint reads the current GitHub
+head and all-head native reservations before each re-dispatch; a queued or absent child is still an
+incumbent until its recorded attempt has terminal evidence. A reviewer must be from a configured,
+available provider family different from the implementer; an unknown family or unavailable seat
+fails closed. `FIX-FIRST` carries the review text verbatim as untrusted evidence to the same
+implementer and permits three review rounds, therefore no more than two re-dispatches, checking
+writer terminality again before each review. Pending, unavailable, failed, or exhausted reviews are
+not merge-eligible; only the advisory `MERGE-WHEN-GREEN` result returns the PR to ordinary checks.
+The loop never merges, changes claims, or treats an after-merge delegate smoke as this evidence.
+
 
 Consumer admission deadlines use the first invocation's fixed 14-day interval. The value-chain
 monitor supplies the same accepted, non-counterfactual edge classifier through

@@ -126,6 +126,19 @@ offered at `tick` and `rail-exercise:audit`. Source deployment remains manual.
 
 ## Important functionality (what actually runs, grouped by job)
 
+Local `dispatcher.py delegate --review-loop` adds an independent review after the
+implementation writer exits. It checks local claims and every native reservation
+across PR heads, reviews the issue's Tasks/Acceptance Criteria and gate-clearing
+paths, and publishes the verdict as an exact-head GitHub status. `FIX-FIRST`
+returns verbatim findings to the same implementer for at most three reviews and
+two repair dispatches. The loop never merges; ordinary checks and review gates
+still apply. Brain `review_rounds` feed the first-pass share in `switch_review.py`.
+An unavailable review or unknown writer remains ineligible, with an explicit
+status and reason. The existing merge guard also reads the launch's opt-in and
+exact PR/head evidence from the Brain, so a missing PR marker or failed status
+publication cannot turn into approval. Omit `--review-loop` for future launches
+to disable this optional step; it does not waive a previously opted-in PR's gate.
+
 The **rail exercise cadence** runs the committed fixture-backed read-only/dry-run rail contracts weekly in shadow mode, reports every pass, failed counterexample, and named skip in `rail-exercise-report.json`, and records zero-weight `fixture_observed` verdicts separately from production usefulness only when `ORCH_RAIL_EXERCISE_RECORD=1` explicitly arms it.
 
 Historical rail-exercise verdicts can be reclassified with

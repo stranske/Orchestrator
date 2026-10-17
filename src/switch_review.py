@@ -1918,6 +1918,16 @@ def strategy_completed_line(result: dict, costs: dict) -> str:
     return f"  strategy experiment: completed {result.get('exp_id')}{score_bit} {cost_bit}"
 
 
+def review_loop_share_line(rows) -> str:
+    """Report first-pass advisory acceptance without treating it as merge authority."""
+    # The issue's evaluation cohort is the first twenty opted-in deliveries.
+    first = [row for row in rows if int(row[5]) == 1][:20]
+    if not first:
+        return "  review loop first-pass MERGE-WHEN-GREEN: n/a (0 rounds)"
+    accepted = sum(1 for row in first if row[3] == "MERGE-WHEN-GREEN")
+    return f"  review loop first-pass MERGE-WHEN-GREEN: {accepted}/{len(first)} ({accepted / len(first):.0%})"
+
+
 def format_report(rep: dict) -> str:
     lines = [
         "# Switch review — held switches must be revisited, not forgotten",
@@ -1926,6 +1936,12 @@ def format_report(rep: dict) -> str:
         f"  due for a decision: {rep['raise_count']}",
         "",
     ]
+    try:
+        import feedback
+
+        lines += [review_loop_share_line(feedback.review_round_rows()), ""]
+    except (OSError, ValueError, TypeError):
+        lines += ["  review loop first-pass MERGE-WHEN-GREEN: n/a (no readable rounds)", ""]
     try:
         import strategy_experiment
 

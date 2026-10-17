@@ -185,6 +185,11 @@ CREATE TABLE IF NOT EXISTS evaluations (
   score REAL, rank INTEGER, verdict TEXT, ts INTEGER,
   PRIMARY KEY (experiment_id, implementer, evaluator)
 );
+CREATE TABLE IF NOT EXISTS review_rounds (
+  run_id TEXT NOT NULL, pr TEXT NOT NULL, round INTEGER NOT NULL,
+  verdict TEXT NOT NULL, reviewer_agent TEXT NOT NULL, first_pass INTEGER NOT NULL DEFAULT 0,
+  recorded_ts INTEGER NOT NULL, head_sha TEXT, PRIMARY KEY (run_id, round)
+);
 -- Additive causal evaluation identity.  The legacy table remains the agent-level
 -- compatibility/learning projection; v2 retains the exact arm, member, profile,
 -- and evaluator attempt that produced the observation.
@@ -314,9 +319,11 @@ def model_epoch_floor(agent: str, since: int, path: Path | None = None) -> int:
         entry = (data.get("epochs") or {}).get(agent)
         if not entry:
             return since
-        return max(since, int(utc_epoch.from_iso(str(entry["since"]))))
+        epoch = utc_epoch.from_iso(str(entry["since"]))
+        return since if epoch is None else max(since, epoch)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return since
+
 
 # WHICH RUNS THE ROUTE-WEIGHT LEARNERS READ. `assignment` is 'experimental' for the tool's own
 # dispatches, 'assigned' for fleet keepalive PRs that carried an agent label, 'none' for keepalive PRs
@@ -726,8 +733,47 @@ def _conn() -> sqlite3.Connection:
     return c
 
 
+def record_review_round(
+    run_id: str,
+    pr: str,
+    round_number: int,
+    verdict: str,
+    reviewer_agent: str,
+    head_sha: str | None = None,
+) -> None:
+    """Persist one exact-head advisory review result for the delivery loop."""
+    with _conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO review_rounds "
+            "(run_id, pr, round, verdict, reviewer_agent, first_pass, recorded_ts, head_sha) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                run_id,
+                pr,
+                round_number,
+                verdict,
+                reviewer_agent,
+                int(round_number == 1),
+                int(time.time()),
+                head_sha,
+            ),
+        )
+
+
+def review_round_rows() -> list[tuple[str, str, int, str, str, int]]:
+    """Read advisory review evidence for switch-review reporting."""
+    with _conn() as conn:
+        return conn.execute(
+            "SELECT run_id, pr, round, verdict, reviewer_agent, first_pass FROM review_rounds "
+            "ORDER BY recorded_ts, run_id, round"
+        ).fetchall()
+
+
 def _migrate_schema(c: sqlite3.Connection) -> None:
     """Guarded migrations for existing local feedback stores."""
+    review_cols = {row[1] for row in c.execute("PRAGMA table_info(review_rounds)").fetchall()}
+    if "head_sha" not in review_cols:
+        c.execute("ALTER TABLE review_rounds ADD COLUMN head_sha TEXT")
     cols = {row[1] for row in c.execute("PRAGMA table_info(runs)").fetchall()}
     if "model" not in cols:
         c.execute("ALTER TABLE runs ADD COLUMN model TEXT")
@@ -6024,7 +6070,13 @@ def relearn(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DAYS) -> i
                     "AND COALESCE(o.durability_checked_ts, r.ts)>=? "  # broke-later detection floor (#293)
                     # item 9 and 2026-10-04: an excluded class says nothing about the agent
                     f"AND COALESCE(o.failure_class,'') NOT IN ({excluded_marks})",
-                    (task_type, agent, model_epoch_floor(agent, since), DURABILITY_DETECTION_SINCE, *excluded_classes),
+                    (
+                        task_type,
+                        agent,
+                        model_epoch_floor(agent, since),
+                        DURABILITY_DETECTION_SINCE,
+                        *excluded_classes,
+                    ),
                 ).fetchall()
                 n = len(rows)
                 succ = sum(1 for d, a, v, _cu, _src in rows if _is_success(d, a, v))
