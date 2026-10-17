@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 import execution_profiles
+import paths
 import utc_epoch
 
 ORCH = Path(__file__).resolve().parent
@@ -299,7 +300,10 @@ DURABILITY_DETECTION_SINCE = 1787961600  # 2026-08-29T00:00:00Z
 DURABILITY_DETECTION_SINCE_DATE = "2026-08-29"
 RELEARN_WINDOW_DAYS = 120
 
-MODEL_EPOCHS_PATH = Path(__file__).resolve().parent.parent / "config" / "model_epochs.json"
+# A repo-root file resolves from the checkout root, never from `parent.parent`: the exec mirror is
+# flat, so there the module's grandparent is not the tree (CLAUDE.md §1). The mirror builder ships
+# the file beside the modules (scripts/build_exec_mirror.sh).
+MODEL_EPOCHS_PATH = paths.REPO_ROOT / "config" / "model_epochs.json"
 
 
 def model_epoch_floor(agent: str, since: int, path: Path | None = None) -> int:
@@ -314,9 +318,11 @@ def model_epoch_floor(agent: str, since: int, path: Path | None = None) -> int:
         entry = (data.get("epochs") or {}).get(agent)
         if not entry:
             return since
-        return max(since, int(utc_epoch.from_iso(str(entry["since"]))))
+        parsed = utc_epoch.from_iso(str(entry["since"]))
+        return since if parsed is None else max(since, parsed)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return since
+
 
 # WHICH RUNS THE ROUTE-WEIGHT LEARNERS READ. `assignment` is 'experimental' for the tool's own
 # dispatches, 'assigned' for fleet keepalive PRs that carried an agent label, 'none' for keepalive PRs
@@ -6024,7 +6030,13 @@ def relearn(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DAYS) -> i
                     "AND COALESCE(o.durability_checked_ts, r.ts)>=? "  # broke-later detection floor (#293)
                     # item 9 and 2026-10-04: an excluded class says nothing about the agent
                     f"AND COALESCE(o.failure_class,'') NOT IN ({excluded_marks})",
-                    (task_type, agent, model_epoch_floor(agent, since), DURABILITY_DETECTION_SINCE, *excluded_classes),
+                    (
+                        task_type,
+                        agent,
+                        model_epoch_floor(agent, since),
+                        DURABILITY_DETECTION_SINCE,
+                        *excluded_classes,
+                    ),
                 ).fetchall()
                 n = len(rows)
                 succ = sum(1 for d, a, v, _cu, _src in rows if _is_success(d, a, v))
