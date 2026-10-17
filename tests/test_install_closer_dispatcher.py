@@ -19,7 +19,7 @@ installer = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(installer)
 
 
-def fake_home(tmp_path):
+def fake_home(tmp_path, *, label_repair=False):
     home = tmp_path / "home"
     prompt = home / ".codex/automations/imi-merge-verify-closer/automation.toml"
     prompt.parent.mkdir(parents=True)
@@ -33,10 +33,21 @@ def fake_home(tmp_path):
     opener.write_text('prompt = "opener HANDOFF_AGENT=codex"\n')
     postrun = home / ".codex/bin/handoff-postrun.sh"
     postrun.parent.mkdir(parents=True)
+    trap = (
+        'trap \'rm -rf "$LANE_MUTEX_DIR" 2>/dev/null || true; '
+        "launch_keepalive_label_repair' EXIT"
+        if label_repair
+        else installer.TRAP_ANCHOR
+    )
     postrun.write_text(
         '#!/bin/bash\nset -euo pipefail\nlane="${1:-closer}"\n'
         'LANE_MUTEX_DIR="$HOME/mutex"\n'
-        + installer.TRAP_ANCHOR
+        + (
+            'launch_keepalive_label_repair() { echo repaired >> "$HOME/repair-actions"; }\n'
+            if label_repair
+            else ""
+        )
+        + trap
         + "\n"
         + 'echo end-round >> "$HOME/actions"\necho relay >> "$HOME/actions"\n'
     )
@@ -106,8 +117,11 @@ def test_default_reinstallation_never_downgrades_enforced_gate(tmp_path):
 
 
 @pytest.mark.parametrize("validation_exit", [0, 1])
-def test_gate_precedes_round_and_relay_but_failure_releases_mutex(tmp_path, validation_exit):
-    home, _, postrun, _ = fake_home(tmp_path)
+@pytest.mark.parametrize("label_repair", [False, True])
+def test_gate_precedes_round_and_relay_but_failure_runs_exit_cleanup(
+    tmp_path, validation_exit, label_repair
+):
+    home, _, postrun, _ = fake_home(tmp_path, label_repair=label_repair)
     installer.install(home, apply=True, enforce=True)
     (home / "mutex").mkdir()
     result = subprocess.run(
@@ -121,6 +135,9 @@ def test_gate_precedes_round_and_relay_but_failure_releases_mutex(tmp_path, vali
         capture_output=True,
     )
     assert not (home / "mutex").exists()
+    assert (home / "repair-actions").exists() is label_repair
+    if label_repair:
+        assert (home / "repair-actions").read_text() == "repaired\n"
     assert (home / "actions").exists() == (validation_exit == 0)
     assert result.returncode == (0 if validation_exit == 0 else 65)
     assert "--assignment" in (home / "validation-args").read_text()
@@ -188,6 +205,18 @@ def test_rollback_never_overwrites_concurrent_source_change(tmp_path, monkeypatc
 def test_unknown_postrun_anchor_refuses_install_before_mutation(tmp_path):
     home, prompt, postrun, _ = fake_home(tmp_path)
     postrun.write_text("#!/bin/bash\necho changed architecture\n")
+    before = prompt.read_bytes()
+    with pytest.raises(ValueError, match="anchor changed"):
+        installer.install(home, apply=True)
+    assert prompt.read_bytes() == before
+
+
+def test_ambiguous_postrun_anchors_refuse_install_before_mutation(tmp_path):
+    home, prompt, postrun, _ = fake_home(tmp_path)
+    postrun.write_text(
+        postrun.read_text() + 'trap \'rm -rf "$LANE_MUTEX_DIR" 2>/dev/null || true; '
+        "launch_keepalive_label_repair' EXIT\n"
+    )
     before = prompt.read_bytes()
     with pytest.raises(ValueError, match="anchor changed"):
         installer.install(home, apply=True)
