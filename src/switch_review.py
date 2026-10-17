@@ -810,14 +810,32 @@ def _exploration_window() -> dict:
     """Read the hosted rate and policy-switch population, never equating unreadable with zero."""
     import feedback
 
-    start = "2026-10-17"
     window: dict = {
-        "start": start,
+        "start": "unmeasured",
+        "end": "unmeasured",
+        "extended": "unmeasured",
+        "n_by_policy": {},
         "rate": "UNKNOWN",
         "env": os.environ.get("ORCH_EXPLORATION_RATE", "unset"),
         "switches": "UNKNOWN",
         "errors": [],
     }
+    state_dir = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
+    try:
+        state = json.loads((state_dir / "exploration-window.json").read_text(encoding="utf-8"))
+        start = datetime.strptime(state["start"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        end = datetime.strptime(state["end"], "%Y%m%d").strftime("%Y-%m-%d")
+        if not isinstance(state["extended"], bool) or not isinstance(state["n_by_policy"], dict):
+            raise ValueError("invalid exploration-window state")
+        window.update(
+            start=start.strftime("%Y-%m-%d"),
+            end=end,
+            extended="yes" if state["extended"] else "no",
+            n_by_policy=state["n_by_policy"],
+        )
+        window["errors"].extend(state.get("errors", []))
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        window["errors"].append(f"exploration window unmeasured: {exc}")
     ok, out, reason = _gh_call(
         [
             "api",
@@ -836,14 +854,15 @@ def _exploration_window() -> dict:
     except (ValueError, KeyError, TypeError) as exc:
         window["errors"].append(f"published rate: {exc}")
     try:
+        if window["start"] == "unmeasured":
+            raise ValueError("window start unmeasured")
         with closing(
             sqlite3.connect(f"{feedback.DB_PATH.resolve().as_uri()}?mode=ro", uri=True)
         ) as conn:
             window["switches"] = conn.execute(
                 "SELECT count(*) FROM agent_switches WHERE source='policy' "
-                "AND delegation_source='route_weights_exploration' AND switched_ts>=? "
-                "AND pr_ref NOT LIKE 'stranske/Collab-Admin#%'",
-                (int(datetime.fromisoformat(start).replace(tzinfo=timezone.utc).timestamp()),),
+                "AND delegation_source='route_weights_exploration' AND switched_ts>=?",
+                (int(start.timestamp()),),
             ).fetchone()[0]
     except (sqlite3.Error, ValueError) as exc:
         window["errors"].append(f"exploration switches: {exc}")
@@ -2147,9 +2166,16 @@ def format_report(rep: dict) -> str:
     if window or show_arms:
         lines += ["## Exploration arms", ""]
     if window:
+        counts = window.get("n_by_policy") or {}
+        epsilon_n = counts.get("epsilon-greedy")
+        thompson_n = counts.get("thompson-hybrid")
         lines += [
             f"  exploration window: rate {window['rate']} (env {window['env']}), "
             f"exploration switches since {window['start']} {window['switches']}",
+            f"  exploration window: end {window.get('end', 'unmeasured')} "
+            f"(extended: {window.get('extended', 'unmeasured')}, per-policy n "
+            f"epsilon-greedy {epsilon_n if epsilon_n is not None else 'unmeasured'} / "
+            f"thompson-hybrid {thompson_n if thompson_n is not None else 'unmeasured'})",
             *[f"  UNKNOWN — {error}" for error in window.get("errors", [])],
             "",
         ]

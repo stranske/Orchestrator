@@ -1,0 +1,81 @@
+{
+  "base_main": "8c53ae1ae3cec9c67a2fa12b3ad56cec14d1dec5",
+  "prior_pr_head": "1794ce13c78a6ba3cd6a4aea9a8ea3031b8c5ec2",
+  "runtime": "/opt/anaconda3/bin/python3",
+  "env": {
+    "TMPDIR": "/private/tmp",
+    "ORCH_MODEL_PROBE": "0"
+  },
+  "targeted_result": {
+    "passed": 143,
+    "exit_code": 0
+  },
+  "collected": 4074,
+  "source_sha256": {
+    "src/route_weights_export.py": "e502bcad1a21d95a018976632887be97bf92745b3af8118190d9c566c0fe5f82",
+    "src/agent_switches.py": "9c222243b78ea869dac8f4ee4fdffa1c5a64bd6d862eae47ae205448ddcf2c8d",
+    "src/switch_review.py": "3871d7d453fd58ddbfdb6167c3da84a49d308ef73a9c2d244e5bce3ed2cc13ef",
+    "orchestrate.sh": "eb5e61679ef3fb8010dd96d4381a7a2869ffd6a2820f797c341725c435c25508"
+  },
+  "deliberate_breaks": [
+    {
+      "mutation": "replace persisted extended check with False",
+      "red_exit_code": 1,
+      "restored_exit_code": 0,
+      "logs": [
+        "sticky-red.log",
+        "sticky-green.log"
+      ]
+    },
+    {
+      "mutation": "remove policy_route_weights_exploration count key",
+      "red_exit_code": 1,
+      "restored_exit_code": 0,
+      "logs": [
+        "count-identity-red.log",
+        "count-identity-green.log"
+      ]
+    }
+  ],
+  "full_verifier": {
+    "exit_code": 1,
+    "collected": 4074,
+    "passed": 4038,
+    "failed": 35,
+    "skipped": 1,
+    "selftests_passed": 102,
+    "selftests_failed": [
+      "adapters",
+      "capability_propensity",
+      "exp_abcd",
+      "tick_watchdog"
+    ],
+    "gates": "all five passed",
+    "baseline_status": "UNKNOWN; no clean-main control",
+    "scope_note": "Full run began before final shell trailing-newline hardening; complete targeted set rerun after it."
+  },
+  "auth_control": {
+    "env_change": "unset ORCH_MODEL_PROBE",
+    "passed": 6,
+    "exit_code": 0,
+    "log": "auth-control.log"
+  },
+  "selftest_reruns": {
+    "adapters": {
+      "exit_code": 1,
+      "log": "selftest-adapters.log"
+    },
+    "capability_propensity": {
+      "exit_code": 1,
+      "log": "selftest-capability_propensity.log"
+    },
+    "exp_abcd": {
+      "exit_code": 1,
+      "log": "selftest-exp_abcd.log"
+    },
+    "tick_watchdog": {
+      "exit_code": 1,
+      "log": "selftest-tick_watchdog.log"
+    }
+  }
+}

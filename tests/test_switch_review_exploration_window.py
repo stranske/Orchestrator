@@ -13,6 +13,17 @@ def test_window_reports_published_rate_and_brain_count(tmp_path, monkeypatch):
     database = tmp_path / "brain.db"
     monkeypatch.setattr(feedback, "DB_PATH", database)
     monkeypatch.setenv("ORCH_EXPLORATION_RATE", "0.20")
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    (tmp_path / "exploration-window.json").write_text(
+        json.dumps(
+            {
+                "start": "2026-10-17",
+                "end": "20261215",
+                "extended": True,
+                "n_by_policy": {"epsilon-greedy": 29, "thompson-hybrid": 40},
+            }
+        )
+    )
     calls = []
 
     def gh(args, **kwargs):
@@ -61,6 +72,10 @@ def test_window_reports_published_rate_and_brain_count(tmp_path, monkeypatch):
                     "'route_weights_exploration')",
                     (start, start),
                 )
+    assert (
+        "exploration window: end 2026-12-15 (extended: yes, per-policy n epsilon-greedy 29 / thompson-hybrid 40)"
+        in rendered
+    )
     assert "ref=exports/route-weights" in calls[0][1]
 
 
@@ -69,8 +84,48 @@ def test_window_unreadable_is_unknown_without_creating_brain(tmp_path, monkeypat
     monkeypatch.setattr(feedback, "DB_PATH", database)
     monkeypatch.delenv("ORCH_EXPLORATION_RATE", raising=False)
     monkeypatch.setattr(switch_review, "_gh_call", lambda *a, **kw: (False, "", "offline"))
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     window = switch_review._exploration_window()
     assert window["rate"] == window["switches"] == "UNKNOWN"
     assert window["env"] == "unset"
-    assert len(window["errors"]) == 2
+    assert len(window["errors"]) == 3
+    assert window["end"] == window["start"] == "unmeasured"
     assert not database.exists()
+
+
+def test_review_reads_window_dates_from_state(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setattr(switch_review, "_gh_call", lambda *a, **kw: (False, "", "offline"))
+    (tmp_path / "exploration-window.json").write_text(
+        json.dumps(
+            {
+                "start": "2026-10-24",
+                "end": "20261117",
+                "extended": False,
+                "n_by_policy": {"epsilon-greedy": 0, "thompson-hybrid": None},
+            }
+        )
+    )
+    with sqlite3.connect(feedback.DB_PATH) as conn:
+        conn.execute(
+            "CREATE TABLE agent_switches (source TEXT, delegation_source TEXT, switched_ts INTEGER)"
+        )
+        conn.execute(
+            "INSERT INTO agent_switches VALUES ('policy', 'route_weights_exploration', ?)",
+            (int(datetime(2026, 10, 18, tzinfo=timezone.utc).timestamp()),),
+        )
+    window = switch_review._exploration_window()
+    assert window["start"] == "2026-10-24"
+    assert window["end"] == "2026-11-17"
+    assert window["extended"] == "no"
+    assert window["switches"] == 0
+    report = {
+        "review_days": 7,
+        "raise_count": 0,
+        "exploration_gate": {"window": window},
+        "held_off": [],
+        "on_but_idle": [],
+        "unconditioned": [],
+    }
+    assert "epsilon-greedy 0 / thompson-hybrid unmeasured" in switch_review.format_report(report)

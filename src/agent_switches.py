@@ -788,6 +788,7 @@ def aggregate(
             "policy_switched_prs": policy_switched_prs,
             "policy_switches": sum(by_source.values()),
             "policy_route_weights": by_source["route_weights"],
+            "policy_route_weights_exploration": by_source["route_weights_exploration"],
             "policy_static": by_source["static"],
             "policy_source_unknown": by_source["unknown"],
             "policy_entries_malformed": policy_malformed,
@@ -957,6 +958,7 @@ def summary_for_report(state_dir: Path | None = None) -> dict[str, Any]:
                 "merged": v.get("merged"),
                 "bad": v.get("bad"),
                 "route_weights": v.get("route_weights", 0),
+                "route_weights_exploration": v.get("route_weights_exploration", 0),
             }
             for k, v in (payload.get("policy_transitions") or {}).items()
         },
@@ -989,7 +991,9 @@ def policy_phrase(summary: dict[str, Any]) -> str:
     ]
     return (
         f"policy switches {c.get('policy_switches')} on {c.get('policy_switched_prs')} PRs, "
-        f"{c.get('policy_route_weights')} via route_weights ({c.get('policy_static')} static, "
+        f"{c.get('policy_route_weights')} via route_weights "
+        f"({c.get('policy_route_weights_exploration', 'unmeasured')} exploration, "
+        f"{c.get('policy_static')} static, "
         f"{c.get('policy_source_unknown')} unknown), from the keepalive state of "
         f"{c.get('state_read')} PRs ({c.get('state_unread')} unread"
         f"{': ' + reasons if reasons else ''})" + "".join(f"; {caveat}" for caveat in caveats)
@@ -1017,6 +1021,7 @@ def render_report_lines(summary: dict[str, Any]) -> list[str]:
     for key, cell in (summary.get("policy_transitions") or {}).items():
         lines.append(
             f"  policy {key}: {cell.get('n')} ({cell.get('route_weights')} via route_weights, "
+            f"{cell.get('route_weights_exploration', 'unmeasured')} exploration, "
             f"merged {cell.get('merged')}, bad {cell.get('bad')})"
         )
     return lines
