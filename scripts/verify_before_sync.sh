@@ -164,6 +164,7 @@ for label, path in (
     ("mirror/experiments/repo_knowledge.json", src / "experiments/repo_knowledge.json"),
     ("mirror/data/feedback-snapshot.json", src / "data/feedback-snapshot.json"),
     ("mirror/config/coverage-baseline.json", src / "config/coverage-baseline.json"),
+    ("mirror/config/model_epochs.json", src / "config/model_epochs.json"),
     ("mirror/.verify-floor.json", src / ".verify-floor.json"),
     ("mirror/CLAUDE.md", src / "CLAUDE.md"),
     ("mirror/AGENTS.md", src / "AGENTS.md"),

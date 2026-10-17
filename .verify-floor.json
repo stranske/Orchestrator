@@ -1,6 +1,6 @@
 {
-  "collected": 3960,
-  "passed": 3960,
+  "collected": 4058,
+  "passed": 4058,
   "skipped_max": 31,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 52,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Source660 reconciliation adds seven isolated DB/CLI/explicit-override regression cases; pass expectation and all skip/selftest/gate/mypy ceilings retained. Explicit-tilde continuation adds one isolated actual learner/CLI case; 3950 collected, pass expectation 3950 (not an observed pass count); all ceilings unchanged. FLOOR RECORDED by verify.py --update-floor on 2026-10-17: collected=3955, passed=3955. Ceilings preserved, never re-measured \u2014 they are edited by hand. 2026-10-17 acting as the renewal currency (M1 restated): adds 5 collected tests; collected 3960; every skip, selftest, gate and mypy ceiling unchanged."
+  "note": "Source660 reconciliation adds seven isolated DB/CLI/explicit-override regression cases; pass expectation and all skip/selftest/gate/mypy ceilings retained. Explicit-tilde continuation adds one isolated actual learner/CLI case; 3950 collected, pass expectation 3950 (not an observed pass count); all ceilings unchanged. FLOOR RECORDED by verify.py --update-floor on 2026-10-17: collected=3955, passed=3955. Ceilings preserved, never re-measured \u2014 they are edited by hand. Issue668 FIX round2 adds 95 pacing and 3 mirror compatibility cases: independently collected 4053 = main3955 +98; all ceilings and allowlists unchanged. 2026-10-17 M1 merged with main: collected 4058 (branch adds 5); ceilings unchanged."
 }
