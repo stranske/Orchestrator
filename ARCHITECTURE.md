@@ -1532,6 +1532,13 @@ account fields). Semantic change detection includes capacity `state` and `window
 `observed_at` alone, so a shed or recovered seat republishes without touching posteriors or
 `exploration.policy_version`. Rail exercise records invocation without
 `--record`, which governs exercise verdicts only.
+The exporter explicitly resolves feedback.py's shared DB selection (honouring a
+state-dir fallback when no DB/runtime override is set) and logs the absolute DB
+path and source version before work. Its publish guard rejects version zero,
+all-false task evidence, and any loss of a fetched publication's true task evidence
+before changing that publication. Refusals exit non-zero and the cadence copies
+the reason into the tick log; `--allow-evidence-regression` is a logged, explicit
+owner override. Local shadow output remains available for diagnosis.
 Dedup: firing history and its ledger-only silence annotation already existed; the weekly reader
 and independent cadence evidence were missing. Existing heartbeat repairs from main are retained.
 

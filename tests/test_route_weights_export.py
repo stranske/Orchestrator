@@ -1,7 +1,11 @@
 import json
+import os
 import sqlite3
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 import capacity
 import route_weights_export as export
@@ -417,13 +421,15 @@ def test_export_includes_capacity_block(tmp_path: Path) -> None:
 
 
 def test_completed_publication_survives_success_heartbeat_failure(tmp_path, monkeypatch, capsys):
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
     monkeypatch.setenv("ORCH_ROUTE_WEIGHTS_PUBLISH", "1")
     monkeypatch.setattr(
         "sys.argv",
         [
             "route_weights_export.py",
             "--feedback-db",
-            str(tmp_path / "absent.db"),
+            str(database),
             "--state-dir",
             str(tmp_path),
             "--publish",
@@ -443,3 +449,195 @@ def test_completed_publication_survives_success_heartbeat_failure(tmp_path, monk
     assert len(published) == 1
     assert (tmp_path / "route-weights-export.json").exists()
     assert "capability heartbeat failed: fixture ledger unavailable" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("exists", [False, True], ids=["missing-db", "empty-db"])
+def test_publish_guard_refuses_empty_db(tmp_path, monkeypatch, capsys, exists):
+    """The real CLI must fail at the guard, before touching the publication repo."""
+    database = tmp_path / "empty.db"
+    if exists:
+        sqlite3.connect(database).close()
+    monkeypatch.setenv("ORCH_ROUTE_WEIGHTS_PUBLISH", "1")
+    monkeypatch.setattr(export, "_current_capacity_snapshot", _capacity_fixture)
+    monkeypatch.setattr(export.capabilities, "daily_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(
+        export.provision,
+        "ensure_canonical",
+        lambda *a: pytest.fail("publish_guard must refuse an empty DB before provisioning"),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "route_weights_export.py",
+            "--feedback-db",
+            str(database),
+            "--state-dir",
+            str(tmp_path),
+            "--publish",
+        ],
+    )
+    assert export.main() == 1, "publish_guard must refuse the empty DB"
+    output = capsys.readouterr()
+    assert f"db={database} source_version=0" in output.err
+    assert "publish_guard refused: source_version == 0" in output.err
+    assert database.exists() is exists, "read-only export must not create a missing DB"
+
+
+def test_publish_guard_refuses_all_false_evidence(tmp_path):
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE route_weights SET n_obs=0")
+    document = export.build_document(database, capacity_snapshot=_capacity_fixture())
+    assert document["source_version"] == 2
+    ok, reason = export.publish_guard(document, None)
+    assert not ok, "publish_guard must refuse all-false evidence even with a nonzero version"
+    assert "all task types have evidence_ok false" in reason
+
+
+@pytest.mark.parametrize("omit_task", [False, True], ids=["false", "missing-task"])
+def test_publish_guard_refuses_loss_of_published_task_evidence(omit_task):
+    previous = {"task_types": {"review": {"evidence_ok": True}}}
+    current = {"source_version": 2, "task_types": {"implement": {"evidence_ok": True}}}
+    if not omit_task:
+        current["task_types"]["review"] = {"evidence_ok": False}
+    ok, reason = export.publish_guard(current, previous)
+    assert not ok, "publish_guard must preserve each published task's evidence"
+    assert "review" in reason
+
+
+@pytest.mark.parametrize("previous", [None, {"task_types": {"implement": {"evidence_ok": True}}}])
+def test_publish_guard_allows_evidenced_publication(previous):
+    assert export.publish_guard(
+        {"source_version": 2, "task_types": {"implement": {"evidence_ok": True}}}, previous
+    ) == (True, "")
+
+
+@pytest.mark.parametrize("allow", [False, True], ids=["refused", "owner-override"])
+@pytest.mark.parametrize("regression", ["zero-version", "all-false", "lost-review"])
+def test_publish_guard_preserves_remote_until_explicit_override(
+    tmp_path, monkeypatch, capsys, allow, regression
+):
+    """Use real fetch/show/commit/push against an isolated local bare remote."""
+
+    def git(repository, *args):
+        return subprocess.run(
+            ["git", "-C", str(repository), *args], check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    for key in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{key}_NAME", "Guard Test")
+        monkeypatch.setenv(f"GIT_{key}_EMAIL", "guard@example.invalid")
+    remote = tmp_path / "remote.git"
+    remote.mkdir()
+    git(remote, "init", "--bare", "--initial-branch=main")
+    checkout = tmp_path / "checkout"
+    git(tmp_path, "clone", str(remote), str(checkout))
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    previous = export.build_document(database, now=100, capacity_snapshot=_capacity_fixture())
+    previous["task_types"]["review"] = dict(previous["task_types"]["implement"])
+    target = checkout / export.EXPORT_PATH
+    export.write_document(target, previous)
+    git(checkout, "add", ".")
+    git(checkout, "commit", "-m", "fixture publication")
+    git(checkout, "push", "origin", f"HEAD:{export.EXPORT_BRANCH}")
+    before_head = git(remote, "rev-parse", export.EXPORT_BRANCH)
+    before_bytes = target.read_bytes()
+    document = export.build_document(database, now=101, capacity_snapshot=_capacity_fixture())
+    if regression == "zero-version":
+        document["source_version"] = 0
+    elif regression == "all-false":
+        for row in document["task_types"].values():
+            row.update(evidence_ok=False, ranking=[])
+    monkeypatch.setattr(export.provision, "ensure_canonical", lambda *a: checkout)
+    monkeypatch.setenv("ORCH_ROUTE_WEIGHTS_PUBLISH", "1")
+    monkeypatch.setattr(export.capabilities, "daily_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(export, "build_document", lambda *a: document)
+    argv = [
+        "route_weights_export.py",
+        "--publish",
+        "--feedback-db",
+        str(database),
+        "--state-dir",
+        str(tmp_path / "state"),
+    ]
+    monkeypatch.setattr("sys.argv", argv + (["--allow-evidence-regression"] if allow else []))
+    assert export.main() == (0 if allow else 1)
+    after_head = git(remote, "rev-parse", export.EXPORT_BRANCH)
+    output = capsys.readouterr()
+    if allow:
+        assert after_head != before_head
+        published = json.loads(git(remote, "show", f"{export.EXPORT_BRANCH}:{export.EXPORT_PATH}"))
+        assert published == document
+        assert "override --allow-evidence-regression" in output.err
+    else:
+        assert after_head == before_head, "publish_guard must leave the remote untouched"
+        assert target.read_bytes() == before_bytes, "publish_guard must preserve publication bytes"
+        assert git(checkout, "branch", "--show-current") == "main"
+        assert "publish_guard refused:" in output.err
+
+
+@pytest.mark.parametrize(
+    "selection", ["default", "state", "cli-state", "runtime", "env-db", "cli-db"]
+)
+def test_feedback_db_path_binding(tmp_path, monkeypatch, capsys, selection):
+    monkeypatch.setattr(export, "_current_capacity_snapshot", _capacity_fixture)
+    for name in ("ORCH_STATE_DIR", "ORCH_LOCAL_RUNTIME", export.feedback.DB_PATH_ENV):
+        monkeypatch.delenv(name, raising=False)
+    shared_db = tmp_path / "shared.db"
+    monkeypatch.setattr(export.feedback, "DB_PATH", shared_db)
+    state = tmp_path / "state"
+    runtime = tmp_path / "runtime"
+    expected = shared_db
+    argv = ["route_weights_export.py"]
+    if selection != "default":
+        monkeypatch.setenv("ORCH_STATE_DIR", str(state))
+        expected = state / "feedback" / "orchestrator.db"
+    if selection == "cli-state":
+        argv += ["--state-dir", str(tmp_path / "cli-state")]
+        expected = tmp_path / "cli-state" / "feedback" / "orchestrator.db"
+    if selection in ("runtime", "env-db", "cli-db"):
+        monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(runtime))
+        expected = runtime / "feedback" / "orchestrator.db"
+    if selection in ("env-db", "cli-db"):
+        expected = tmp_path / "env.db"
+        monkeypatch.setenv(export.feedback.DB_PATH_ENV, str(expected))
+    if selection == "cli-db":
+        expected = tmp_path / "explicit.db"
+        argv += ["--feedback-db", str(expected)]
+    expected.parent.mkdir(parents=True, exist_ok=True)
+    export._fixture_db(expected)
+    monkeypatch.setattr("sys.argv", argv)
+    monkeypatch.setattr(export.capabilities, "daily_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(export, "write_document", lambda *a: False)
+    assert export.main() == 0
+    assert f"db={expected.resolve()} source_version=2" in capsys.readouterr().err
+
+
+def test_cadence_surfaces_export_refusal(tmp_path):
+    script = (Path(__file__).resolve().parents[1] / "orchestrate.sh").read_text()
+    start = script.index("if _cadence_due route-weights-export ")
+    block = script[start : script.index("if _cadence_due periodic-report ", start)]
+    stubs = """
+_cadence_due() { return 0; }
+_attempt_ok() { return 0; }
+_mark_success() { echo SUCCESS; }
+_mark_fail() { echo "FAIL:$1"; }
+python3() { echo 'publish_guard refused: source_version == 0' >&2; return 1; }
+"""
+    result = subprocess.run(
+        ["bash", "-c", stubs + block],
+        env={
+            **os.environ,
+            "STAMP_DIR": str(tmp_path),
+            "ORCH": str(tmp_path),
+            "ORCH_ROUTE_WEIGHTS_PUBLISH": "1",
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "publish_guard refused: source_version == 0" in result.stdout
+    assert "FAIL:route-weights-export" in result.stdout
+    assert "SUCCESS" not in result.stdout

@@ -423,7 +423,15 @@ Live execution is observable only after the normal manual mirror sync.
   consumers avoid shed seats. The cadence passes `--publish` (owner decision 2026-09-21)
   and the script publishes to `exports/route-weights` only when `ORCH_ROUTE_WEIGHTS_PUBLISH=1` is
   set and the remote artifact would change (including a capacity `state`/`window` flip, not
-  `observed_at` alone); unset, it stays a shadow local artifact.
+  `observed_at` alone); unset, it stays a shadow local artifact. Every run logs
+  `db=<resolved path> source_version=<n>`. DB precedence is `--feedback-db`,
+  `ORCH_FEEDBACK_DB`, `ORCH_LOCAL_RUNTIME/feedback/orchestrator.db`, then
+  `--state-dir` / `ORCH_STATE_DIR` plus `feedback/orchestrator.db`, otherwise
+  feedback.py's shared default (`~/.codex/orchestrator/feedback/orchestrator.db`).
+  Publication refuses version zero, all-false evidence, or any task losing its
+  published `evidence_ok: true`, before writing the publication. Refusals exit
+  non-zero and appear in the tick log; `--allow-evidence-regression` explicitly
+  overrides these checks for an owner-approved downgrade and logs the reason.
 - **judge_reliability.py** — leave-one-out consensus weights per judge (de-saturated so real error
   spread maps to real weight spread); **human_calibration.py** + **objective_anchor.py** supply
   machine ground-truth anchors (no owner code-review required — see CLAUDE.md).

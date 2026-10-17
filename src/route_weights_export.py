@@ -55,6 +55,62 @@ def _now() -> str:
     )
 
 
+def resolve_feedback_db(explicit: Path | None, state_dir: Path | None) -> Path:
+    """Bind to feedback's shared DB selection, with an isolated state-dir fallback.
+
+    feedback exposes DB_PATH/DB_PATH_ENV rather than a callable resolver. Explicit
+    DB and runtime selections retain precedence; a state-only instance must not
+    silently export the default instance's Brain.
+    """
+    if explicit is not None:
+        selected = explicit
+    elif os.environ.get(feedback.DB_PATH_ENV):
+        selected = Path(os.environ[feedback.DB_PATH_ENV])
+    elif os.environ.get("ORCH_LOCAL_RUNTIME"):
+        selected = Path(os.environ["ORCH_LOCAL_RUNTIME"]) / "feedback" / "orchestrator.db"
+    elif state_dir is not None:
+        selected = state_dir / "feedback" / "orchestrator.db"
+    else:
+        selected = feedback.DB_PATH
+    return selected.expanduser().resolve()
+
+
+def publish_guard(
+    new_doc: dict[str, Any], published_doc: dict[str, Any] | None
+) -> tuple[bool, str]:
+    """Refuse evidence loss independently of semantic change detection."""
+    if new_doc.get("source_version", 0) == 0:
+        return False, "source_version == 0 (empty or wrong feedback DB)"
+    tasks = new_doc.get("task_types", {})
+    if not any(row.get("evidence_ok") is True for row in tasks.values()):
+        return False, "all task types have evidence_ok false"
+    previous = (published_doc or {}).get("task_types", {})
+    lost = sorted(
+        name
+        for name, row in previous.items()
+        if row.get("evidence_ok") is True and tasks.get(name, {}).get("evidence_ok") is not True
+    )
+    if lost:
+        return False, f"evidence_ok true -> false for: {', '.join(lost)}"
+    return True, ""
+
+
+class PublicationRefused(RuntimeError):
+    """A proposed publication would erase learned routing evidence."""
+
+
+def _require_publishable(
+    document: dict[str, Any],
+    published: dict[str, Any] | None,
+    allow_evidence_regression: bool,
+) -> None:
+    ok, reason = publish_guard(document, published)
+    if not ok:
+        if not allow_evidence_regression:
+            raise PublicationRefused(f"publish_guard refused: {reason}")
+        print(f"publish_guard override --allow-evidence-regression: {reason}", file=sys.stderr)
+
+
 def _read_rows(db_path: Path) -> tuple[int, list[sqlite3.Row]]:
     """Return the latest legacy route-weight version without creating/migrating a DB."""
     if not db_path.exists():
@@ -309,8 +365,12 @@ def write_document(path: Path, document: dict[str, Any]) -> bool:
     return True
 
 
-def publish_document(document: dict[str, Any]) -> bool:
+def publish_document(document: dict[str, Any], *, allow_evidence_regression: bool = False) -> bool:
     """Commit and push the export branch only when its remote artifact changes."""
+    # Reject an empty source even before provisioning/fetching a publication checkout.
+    _require_publishable(document, None, allow_evidence_regression)
+    if allow_evidence_regression:
+        print("publish_guard: --allow-evidence-regression requested", file=sys.stderr)
     canonical = provision.ensure_canonical("stranske/Orchestrator")
     subprocess.run(["git", "-C", str(canonical), "fetch", "--prune", "origin"], check=True)
     remote_ref = f"origin/{EXPORT_BRANCH}"
@@ -322,6 +382,17 @@ def publish_document(document: dict[str, Any]) -> bool:
         == 0
     )
     if has_remote:
+        # Compare the fetched publication, never the local shadow export (which
+        # this run may already have replaced). Read before switching or writing.
+        published = json.loads(
+            subprocess.run(
+                ["git", "-C", str(canonical), "show", f"{remote_ref}:{EXPORT_PATH}"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+        )
+        _require_publishable(document, published, allow_evidence_regression)
         has_local = (
             subprocess.run(
                 [
@@ -463,9 +534,14 @@ def main() -> int:
     parser.add_argument(
         "--state-dir",
         type=Path,
-        default=Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator")),
+        default=Path(os.environ["ORCH_STATE_DIR"]) if os.environ.get("ORCH_STATE_DIR") else None,
     )
-    parser.add_argument("--feedback-db", type=Path, default=feedback.DB_PATH)
+    parser.add_argument("--feedback-db", type=Path)
+    parser.add_argument(
+        "--allow-evidence-regression",
+        action="store_true",
+        help="explicit owner override for an evidence downgrade (logged)",
+    )
     parser.add_argument(
         "--publish", action="store_true", help="publish only with ORCH_ROUTE_WEIGHTS_PUBLISH=1"
     )
@@ -474,6 +550,9 @@ def main() -> int:
     if args.selftest:
         _selftest()
         return 0
+    db_path = resolve_feedback_db(args.feedback_db, args.state_dir)
+    document = build_document(db_path, args.min_observations)
+    print(f"db={db_path} source_version={document['source_version']}", file=sys.stderr, flush=True)
     # The run is credited as an INVOCATION before the work, and the `success` below records its
     # result. A success alone moves `last_success` only, so this daily step exported every day from
     # 2026-09-04 while the firing monitor read it as silent since its one consult trial. Guarded: a
@@ -484,15 +563,23 @@ def main() -> int:
         )
     except Exception as exc:  # noqa: BLE001 — a swallowed heartbeat reads as dormancy later
         print(f"route_weights_export: capability heartbeat failed: {exc}", file=sys.stderr)
-    document = build_document(args.feedback_db, args.min_observations)
-    target = args.state_dir / "route-weights-export.json"
+    state_dir = args.state_dir or Path.home() / ".codex" / "orchestrator"
+    target = state_dir / "route-weights-export.json"
     changed = write_document(target, document)
     print(f"{'wrote' if changed else 'unchanged'} {target}")
     if args.publish:
         if os.environ.get("ORCH_ROUTE_WEIGHTS_PUBLISH") != "1":
             print("publish blocked: ORCH_ROUTE_WEIGHTS_PUBLISH!=1; local export retained")
         else:
-            if publish_document(document):
+            try:
+                if args.allow_evidence_regression:
+                    published = publish_document(document, allow_evidence_regression=True)
+                else:
+                    published = publish_document(document)
+            except PublicationRefused as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+            if published:
                 try:
                     capabilities.daily_heartbeat(
                         "route-weights-export",
