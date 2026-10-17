@@ -235,11 +235,22 @@ def _close_verified_issue(
         ):
             row["reason"] = "evidence changed before closure"
             return row
-        # Comment on the PR rather than editing the source issue before the final
-        # compare. Its identity marker permits recovery after a partial API failure.
+        # After the final compare, put the identity/rule on both delivery surfaces.
+        # Markers avoid repeating already-posted comments after a partial API failure.
         if not prior:
             body = f"{marker}\nSupervisor closes {issue_target}: {rule}; exact merge `{sha}`."
             gh(["api", f"repos/{repo}/issues/{number}/comments", "-f", "body=" + body])
+        source_comments = gh(
+            [
+                "api",
+                f"repos/{repo}/issues/{edge['number']}/comments",
+                "--paginate",
+                "--slurp",
+            ]
+        )
+        if not any(marker in comment["body"] for page in source_comments for comment in page):
+            body = f"{marker}\nClosing after {target} merged at `{sha}`. Rule: {rule}."
+            gh(["api", f"repos/{repo}/issues/{edge['number']}/comments", "-f", "body=" + body])
         gh(
             [
                 "api",
@@ -400,6 +411,10 @@ def close_verified_issues(
                 rows = [{"target": target, "closed": False, "reason": "error: " + str(exc)}]
             summary["items"].extend(rows)
         summary["closed"] = sum(bool(row.get("closed")) for row in summary["items"])
+        summary["errors"] = sum(
+            bool(row.get("outcome_error")) or row.get("reason", "").startswith("error:")
+            for row in summary["items"]
+        )
         for row in summary["items"]:
             if not row.get("closed"):
                 reason = row["reason"]
@@ -977,6 +992,8 @@ def _selftest_close() -> None:
 
     def gh(args):
         calls.append(args)
+        if "--paginate" in args:
+            return [[]]
         return copy.deepcopy(issue)
 
     with tempfile.TemporaryDirectory(prefix="supervisor-close-selftest-") as tmp:
@@ -1386,7 +1403,7 @@ def main(argv: list[str]) -> int:
         closure = result.get("issue_closure", result if args.close_verified else None)
         if closure is not None:
             print(
-                f"supervisor closures: {closure['closed']}; skips={json.dumps(closure['skips'], sort_keys=True)}"
+                f"supervisor closures: {closure['closed']}; errors={closure.get('errors', 0)}; skips={json.dumps(closure['skips'], sort_keys=True)}"
             )
         if "plans" in result:
             if result.get("stage") == "stage2_proposal_corpus":
@@ -1424,7 +1441,8 @@ def main(argv: list[str]) -> int:
                     "outcome_link_command_template="
                     + " ".join(result["outcome_link_command_template"])
                 )
-    return 0
+    closure = result.get("issue_closure", result if args.close_verified else {})
+    return 1 if closure.get("errors") else 0
 
 
 if __name__ == "__main__":

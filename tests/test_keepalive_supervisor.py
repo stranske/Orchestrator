@@ -63,6 +63,8 @@ def closure_fixture(tmp_path, verdict="PASS"):
         if args[0] == "search":
             return [{"repository": {"nameWithOwner": REPO}, "number": 21}]
         if args[1].endswith("/comments"):
+            if "-f" not in args:
+                return [[]]
             pr["comments"]["nodes"].append(
                 {"body": args[-1].removeprefix("body="), "author": {"login": "stranske"}}
             )
@@ -92,6 +94,7 @@ def test_close_verifier_pass_confirms_action_and_records_outcome(tmp_path):
     assert result["closed"] == 1 and issue["state"] == "closed"
     assert recorded == [(REPO + "#7", SHA, "verifier PASS")]
     assert sum("PATCH" in call for call in calls) == 1
+    assert any(call[1] == f"repos/{REPO}/issues/7/comments" and "-f" in call for call in calls)
     # A second run reconciles the same identity, without another external action.
     supervisor.close_verified_issues(**options)
     assert sum("PATCH" in call for call in calls) == 1
@@ -316,7 +319,7 @@ def test_close_limits_actual_closures_across_many_source_edges(tmp_path):
     def gh(args):
         calls.append(args)
         if args[1].endswith("/comments"):
-            return {}
+            return {} if "-f" in args else [[]]
         number = int(args[1].rsplit("/", 1)[1])
         if "PATCH" in args:
             states[number] = "closed"
