@@ -21,6 +21,9 @@ def test_floor_raises_the_window_start_for_a_listed_agent_only(tmp_path):
 def test_unreadable_or_malformed_file_leaves_learning_unchanged(tmp_path):
     assert feedback.model_epoch_floor("gemini", 1000, tmp_path / "missing.json") == 1000
     assert feedback.model_epoch_floor("gemini", 1000, _epochs(tmp_path, since="garbage")) == 1000
+    # A value `from_iso` cannot parse (returns None) must also leave the floor unchanged,
+    # rather than raising through `int(None)`.
+    assert feedback.model_epoch_floor("gemini", 1000, _epochs(tmp_path, since="1792108800")) == 1000
 
 
 def test_shipped_config_names_argon_and_parses():
@@ -45,9 +48,12 @@ def test_relearn_ignores_runs_before_the_model_epoch(tmp_path, monkeypatch):
     monkeypatch.setattr(feedback, "MODEL_EPOCHS_PATH", tmp_path / "none.json")
     version = feedback.relearn({"implement": {"gemini": 0.5}}, window_days=3650)
     with feedback._conn() as c:
-        assert c.execute(
-            "SELECT n_obs FROM route_weights WHERE version=? AND agent='gemini'", (version,)
-        ).fetchone()[0] == 3
+        assert (
+            c.execute(
+                "SELECT n_obs FROM route_weights WHERE version=? AND agent='gemini'", (version,)
+            ).fetchone()[0]
+            == 3
+        )
 
 
 def test_judge_reliability_drops_evaluations_before_the_epoch(tmp_path, monkeypatch):
