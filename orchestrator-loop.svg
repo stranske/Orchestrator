@@ -65,6 +65,7 @@
 <rect class="rail" x="348" y="276" width="148" height="24" rx="4"/><text class="ct" x="422" y="292" text-anchor="middle">dispatcher + provision</text>
 
 <!-- stage 5 -->
+<g><title>Post-merge supervisor closure rail</title><desc>The existing keepalive-supervisor cadence calls a default-OFF ORCH_SUPERVISOR_CLOSE actor. At most three explicitly linked source issues close per pass, against trusted merge-bound verifier PASS or exact-merge acceptance gates and green CI. Non-PASS or unknown evidence, source holds and changed evidence veto closure. Confirmed closure actions write idempotent runs and outcomes in the existing Brain; redirect apply remains disabled.</desc></g>
 <rect class="stage" x="56" y="328" width="584" height="52" rx="8"/>
 <text class="th" x="68" y="359">Monitor + verify</text>
 <rect class="rail" x="250" y="342" width="46" height="24" rx="4"/><text class="ct" x="273" y="358" text-anchor="middle">watch</text>

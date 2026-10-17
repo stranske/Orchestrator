@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """keepalive_supervisor.py - staged, single-authority keepalive supervisor planner.
 
-This is the first actionable step after the shadow corpus trigger arms. It does
-not kill processes, release claims, relabel PRs, delegate, or apply redirect
-plans. It only identifies keepalive PRs that have already escalated to human
-attention and builds the report artifact a supervised RedirectAgent proposal can
-use next.
+The planner identifies already-escalated keepalive PRs for supervised recovery.
+The separate ORCH_SUPERVISOR_CLOSE=1 path can close post-merge source issues
+against trusted verifier PASS or exact-merge acceptance gates plus green CI.
+It never kills processes, releases claims, relabels PRs or applies redirect plans.
 
 Single-authority rule: eligible targets must be open keepalive PRs that already
 carry human-escalation evidence: a `needs-human` or `agent:needs-attention` label,
@@ -17,7 +16,11 @@ keepalive is still actively controlling the PR, this module refuses live action.
 from __future__ import annotations
 
 import argparse
+import fcntl
+import hashlib
 import json
+import os
+import re
 import subprocess
 import sys
 import time
@@ -37,6 +40,371 @@ DEFAULT_AC = (
 )
 DEFAULT_STAGE2_REPORT_DIR = Path.home() / ".codex" / "orchestrator" / "keepalive-supervisor-stage2"
 DEFAULT_HISTORICAL_LIMIT = 10
+CLOSE_FLAG = "ORCH_SUPERVISOR_CLOSE"
+CLOSE_LIMIT = 3
+DISCOVERY_LIMIT = 30
+
+
+def _closure_gh(args: list[str], *, pages: bool = False) -> Any:
+    command = ["gh", *args]
+    if pages:
+        command += ["--paginate", "--slurp"]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=120, check=False)
+    if result.returncode:
+        raise RuntimeError((result.stderr or "GitHub read failed")[-500:])
+    return json.loads(result.stdout)
+
+
+def _closure_pr(target: str) -> dict:
+    """Read the complete comment history and explicit same-repository closing edges."""
+    repo, number = _repo_num(target)
+    owner, name = repo.split("/")
+    query = (
+        'query {repository(owner:"' + owner + '",name:"' + name + '") {'
+        "pullRequest(number:" + str(int(number)) + ") {number state headRefOid headRefName "
+        "mergeCommit{oid} labels(first:100){nodes{name} pageInfo{hasNextPage}} "
+        "closingIssuesReferences(first:100){nodes{number repository{nameWithOwner}} "
+        "pageInfo{hasNextPage}}}}}"
+    )
+    pr = _closure_gh(["api", "graphql", "-f", "query=" + query])["data"]["repository"][
+        "pullRequest"
+    ]
+    if not isinstance(pr, dict) or any(
+        pr[key]["pageInfo"]["hasNextPage"] for key in ("labels", "closingIssuesReferences")
+    ):
+        raise ValueError("incomplete PR identity or closing references")
+    comments = _closure_gh(
+        ["api", f"repos/{repo}/issues/{number}/comments?per_page=100"], pages=True
+    )
+    pr["comments"] = {
+        "nodes": [
+            {"body": row["body"], "url": row["html_url"], "author": {"login": row["user"]["login"]}}
+            for page in comments
+            for row in page
+        ]
+    }
+    return pr
+
+
+def _closure_verdict(repo: str, pr: dict) -> str:
+    import verifier_evidence
+
+    # Incomplete/malformed verifier evidence is never converted into absence. Legacy
+    # verifier concerns also veto closure; ordinary code-review comments do not.
+    for row in reversed(pr["comments"]["nodes"]):
+        if row["author"]["login"] not in verifier_evidence.TRUSTED_AUTHORS:
+            continue
+        body = row["body"]
+        decision = verifier_evidence.decision_from_pr(repo, {**pr, "comments": {"nodes": [row]}})
+        if decision:
+            return decision["verdict"]
+        if verifier_evidence.MARKER in body:
+            return "UNKNOWN"
+        if re.search(r"verif(?:ier|ication)", body, re.I) and re.search(
+            r"\b(?:CONCERNS|FAIL|ERROR|NON_PASS)\b", body
+        ):
+            return "NON_PASS"
+    return "MISSING"
+
+
+def _closure_ci_green(repo: str, sha: str) -> bool:
+    status = _closure_gh(["api", f"repos/{repo}/commits/{sha}/status"])
+    pages = _closure_gh(
+        ["api", f"repos/{repo}/commits/{sha}/check-runs?per_page=100&filter=latest"], pages=True
+    )
+    checks = [row for page in pages for row in page["check_runs"]]
+    return (
+        bool(status.get("total_count") or checks)
+        and (not status.get("total_count") or status.get("state") == "success")
+        and all(
+            row["status"] == "completed" and row["conclusion"] in {"success", "neutral", "skipped"}
+            for row in checks
+        )
+    )
+
+
+def _closure_gate(target: str, issue: dict, sha: str) -> dict:
+    import provision
+    import runtime_ac
+    import runtime_ac_gate
+
+    # Author only the Acceptance Criteria, not incidental test references in Tasks.
+    body = issue.get("body") or ""
+    match = re.search(r"(?ims)^#{1,6}\s+Acceptance Criteria\s*\n(.*?)(?=^#{1,6}\s|\Z)", body)
+    if not match:
+        return {"result": "UNRUNNABLE", "reason": "no gate commands"}
+    spec = runtime_ac.author_issue_spec(
+        issue["target"], "## Acceptance Criteria\n" + match[1], target=target
+    )
+    checks = [check for ac in spec["acceptance_criteria"] for check in ac["checks"]]
+    if not any(check.get("type") == "command" for check in checks):
+        return {"result": "UNRUNNABLE", "reason": "no gate commands"}
+    with provision.temporary_exact_head_worktree(target, sha) as worktree:
+        actual = subprocess.run(
+            ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if actual.returncode or actual.stdout.strip() != sha:
+            raise RuntimeError("acceptance checkout does not match merge commit")
+        return runtime_ac_gate.recheck_merged(spec, worktree)
+
+
+def _closure_holds() -> set[str]:
+    import backlog
+
+    if backlog.scoped_blocker_source() not in {"ok", "absent"}:
+        raise RuntimeError("scoped hold state unavailable")
+    return {value.lower() for value in backlog.load_scoped_blockers()}
+
+
+def _closure_record(issue: str, sha: str, rule: str) -> None:
+    import feedback
+
+    run_id = "supervisor-close:" + hashlib.sha256(f"{issue.lower()}@{sha}".encode()).hexdigest()
+    feedback.record_run(
+        run_id,
+        issue,
+        "issue_closure",
+        "orchestrator",
+        mode="deterministic",
+        source="orchestrator_local",
+        capability_ids=["live-keepalive-supervisor"],
+        rationale=f"Confirmed source issue closed by {rule} at merge {sha}",
+    )
+    feedback.record_outcome(
+        run_id,
+        adjudicated_verdict="PASS",
+        durability="durable",
+        notes=f"Supervisor closure action confirmed; rule={rule}; merge={sha}. Not a new implementation verdict.",
+    )
+
+
+def _close_verified_issue(
+    target, repo, number, pr, sha, verdict, edge, *, gh, pr_read, ci_green, gate, record, holds
+) -> dict:
+    issue_target = f"{repo}#{edge['number']}"
+    row = {"target": issue_target, "pr": target, "merge_sha": sha, "closed": False}
+    issue = gh(["api", f"repos/{repo}/issues/{edge['number']}"])
+    if issue.get("number") != edge["number"] or not issue.get("updated_at") or "body" not in issue:
+        raise ValueError("incomplete source issue identity")
+    issue["target"] = issue_target
+    marker = f"<!-- supervisor-close/v1 {issue_target.lower()}@{sha} -->"
+    prior = any(marker in c["body"] for c in pr["comments"]["nodes"])
+    if issue.get("state") != "open":
+        row["reason"] = "issue already closed"
+    elif (
+        repo.lower() in holds()
+        or issue_target.lower() in holds()
+        or any(
+            label["name"] in {"needs-human", "agents:paused", "tracker:durable"}
+            for label in issue.get("labels", [])
+        )
+    ):
+        row["reason"] = "source issue held"
+    elif verdict in {"NON_PASS", "UNKNOWN"}:
+        row["reason"] = "verdict=CONCERNS/FAIL/ERROR or unknown verifier evidence"
+    else:
+        rule = "verifier PASS" if verdict == "PASS" else "merge-SHA acceptance gates and green CI"
+        if verdict != "PASS":
+            if not ci_green(repo, sha):
+                row["reason"] = "ci not green"
+                return row
+            observation = gate(target, issue, sha)
+            if observation.get("result") != "PASS":
+                row["reason"] = observation.get("reason") or "acceptance gate not PASS"
+                return row
+        # Tests can take minutes. Recheck identities, findings and holds immediately
+        # before mutation; any issue edit requires a fresh evaluation next tick.
+        fresh = pr_read(target)
+        current = gh(["api", f"repos/{repo}/issues/{edge['number']}"])
+        fresh_verdict = _closure_verdict(repo, fresh)
+        if (
+            fresh.get("state") != "MERGED"
+            or fresh.get("headRefOid") != pr.get("headRefOid")
+            or fresh.get("mergeCommit") != pr.get("mergeCommit")
+            or edge not in fresh["closingIssuesReferences"]["nodes"]
+            or current.get("state") != "open"
+            or current.get("updated_at") != issue.get("updated_at")
+            or fresh_verdict in {"NON_PASS", "UNKNOWN"}
+            or (verdict == "PASS" and fresh_verdict != "PASS")
+            or repo.lower() in holds()
+            or issue_target.lower() in holds()
+            or (verdict != "PASS" and not ci_green(repo, sha))
+        ):
+            row["reason"] = "evidence changed before closure"
+            return row
+        # Comment on the PR rather than editing the source issue before the final
+        # compare. Its identity marker permits recovery after a partial API failure.
+        if not prior:
+            body = f"{marker}\nSupervisor closes {issue_target}: {rule}; exact merge `{sha}`."
+            gh(["api", f"repos/{repo}/issues/{number}/comments", "-f", "body=" + body])
+        gh(
+            [
+                "api",
+                f"repos/{repo}/issues/{edge['number']}",
+                "--method",
+                "PATCH",
+                "-f",
+                "state=closed",
+            ]
+        )
+        confirmed = gh(["api", f"repos/{repo}/issues/{edge['number']}"])
+        if confirmed.get("state") != "closed":
+            raise RuntimeError("issue closure not confirmed")
+        row.update(closed=True, reason=rule)
+        try:
+            record(issue_target, sha, rule)
+        except Exception as exc:
+            # The external action happened. Preserve its count/budget even if the
+            # Brain is unavailable; never fabricate a replacement learning receipt.
+            row["outcome_error"] = str(exc)
+    return row
+
+
+def _close_verified_target(
+    target: str, *, gh, pr_read, ci_green, gate, record, holds, budget: int
+) -> list[dict]:
+    repo, number = _repo_num(target)
+    pr = pr_read(target)
+    sha = (pr.get("mergeCommit") or {}).get("oid", "")
+    labels = {row["name"] for row in pr["labels"]["nodes"]}
+    agent_pr = bool(
+        labels
+        & {"agent:" + name for name in ("codex", "claude", "cursor", "gemini", "aider", "muse")}
+    ) or bool(
+        re.match(
+            r"(?:codex|claude|claude-code|cursor|gemini|aider|muse|orch|orchestrator)/issue-\d",
+            pr["headRefName"],
+        )
+    )
+    if pr["state"] != "MERGED" or not re.fullmatch(r"[0-9a-f]{40}", sha) or not agent_pr:
+        return [{"target": target, "reason": "not a merged agent PR"}]
+    verdict = _closure_verdict(repo, pr)
+    results: list[dict] = []
+    for edge in pr["closingIssuesReferences"]["nodes"]:
+        if sum(bool(row.get("closed")) for row in results) >= budget:
+            break
+        if edge["repository"]["nameWithOwner"].lower() != repo.lower():
+            continue
+        try:
+            row = _close_verified_issue(
+                target,
+                repo,
+                number,
+                pr,
+                sha,
+                verdict,
+                edge,
+                gh=gh,
+                pr_read=pr_read,
+                ci_green=ci_green,
+                gate=gate,
+                record=record,
+                holds=holds,
+            )
+        except Exception as exc:
+            row = {
+                "target": f"{repo}#{edge['number']}",
+                "closed": False,
+                "reason": "error: " + str(exc),
+            }
+        results.append(row)
+    return results
+
+
+def close_verified_issues(
+    *,
+    owner: str = "stranske",
+    limit: int = CLOSE_LIMIT,
+    targets: list[str] | None = None,
+    env=None,
+    gh=None,
+    pr_read=None,
+    ci_green=None,
+    gate=None,
+    record=None,
+    holds=None,
+) -> dict:
+    """Bounded opt-in post-merge action on the supervisor's existing cadence."""
+    resolved = os.environ if env is None else env
+    summary: dict[str, Any] = {
+        "enabled": resolved.get(CLOSE_FLAG) == "1",
+        "closed": 0,
+        "skips": {},
+        "items": [],
+    }
+    if not summary["enabled"]:
+        return summary
+    import backlog
+
+    supported = {
+        repo.lower() for repo in backlog.SUPPORTED_REPOS if repo.lower() != "stranske/collab-admin"
+    }
+    gh = gh or _closure_gh
+    root = Path(resolved.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / ".supervisor-close.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return {**summary, "reason": "another supervisor closure is active"}
+        if targets is None:
+            args = [
+                "search",
+                "prs",
+                "--merged",
+                "--sort",
+                "updated",
+                "--order",
+                "desc",
+                "--limit",
+                str(min(limit, DISCOVERY_LIMIT)),
+                "--json",
+                "repository,number",
+            ]
+            repos = [repo for repo in sorted(supported) if repo.split("/")[0] == owner.lower()]
+            if not repos:
+                return {**summary, "reason": "no supported repositories for owner"}
+            for repo in repos:
+                args += ["--repo", repo]
+            targets = [f"{row['repository']['nameWithOwner']}#{row['number']}" for row in gh(args)]
+        gate_fn = gate or _closure_gate
+        summary["gate_executions"] = 0
+
+        def bounded_gate(*args):
+            if summary["gate_executions"] >= CLOSE_LIMIT:
+                return {"result": "UNRUNNABLE", "reason": "acceptance execution budget"}
+            summary["gate_executions"] += 1
+            return gate_fn(*args)
+
+        for target in targets[: max(0, min(limit, DISCOVERY_LIMIT))]:
+            remaining = CLOSE_LIMIT - sum(bool(row.get("closed")) for row in summary["items"])
+            if remaining <= 0:
+                break
+            if target.split("#")[0].lower() not in supported:
+                continue
+            try:
+                rows = _close_verified_target(
+                    target,
+                    gh=gh,
+                    pr_read=pr_read or _closure_pr,
+                    ci_green=ci_green or _closure_ci_green,
+                    gate=bounded_gate,
+                    record=record or _closure_record,
+                    holds=holds or _closure_holds,
+                    budget=remaining,
+                )
+            except Exception as exc:
+                rows = [{"target": target, "closed": False, "reason": "error: " + str(exc)}]
+            summary["items"].extend(rows)
+        summary["closed"] = sum(bool(row.get("closed")) for row in summary["items"])
+        for row in summary["items"]:
+            if not row.get("closed"):
+                reason = row["reason"]
+                summary["skips"][reason] = summary["skips"].get(reason, 0) + 1
+    return summary
 
 
 def _label_set(signals: dict) -> set[str]:
@@ -572,7 +940,64 @@ def stage2_acquisition_plan(
     }
 
 
+def _selftest_close() -> None:
+    """Keep the closure veto in the module's own executable contract too."""
+    import copy
+    import tempfile
+
+    repo, target, sha = "stranske/Inv-Man-Intake", "stranske/Inv-Man-Intake#21", "a" * 40
+    pr = {
+        "number": 21,
+        "state": "MERGED",
+        "headRefOid": "b" * 40,
+        "headRefName": "codex/issue-7-close",
+        "mergeCommit": {"oid": sha},
+        "labels": {"nodes": []},
+        "closingIssuesReferences": {
+            "nodes": [{"number": 7, "repository": {"nameWithOwner": repo}}]
+        },
+        "comments": {
+            "nodes": [
+                {
+                    "author": {"login": "github-actions[bot]"},
+                    "body": "Verification verdict: CONCERNS",
+                    "url": "unused",
+                }
+            ]
+        },
+    }
+    issue = {
+        "number": 7,
+        "state": "open",
+        "updated_at": "2026-10-17T10:00:00Z",
+        "body": "",
+        "labels": [],
+    }
+    calls = []
+
+    def gh(args):
+        calls.append(args)
+        return copy.deepcopy(issue)
+
+    with tempfile.TemporaryDirectory(prefix="supervisor-close-selftest-") as tmp:
+        result = close_verified_issues(
+            targets=[target],
+            env={CLOSE_FLAG: "1", "ORCH_STATE_DIR": tmp},
+            gh=gh,
+            pr_read=lambda _: copy.deepcopy(pr),
+            holds=lambda: set(),
+            ci_green=lambda *_: True,
+            gate=lambda *_: {"result": "PASS"},
+            record=lambda *_: None,
+        )
+        assert result["closed"] == 0, result
+        assert not any("PATCH" in call for call in calls), calls
+        assert "verdict=CONCERNS" in result["items"][0]["reason"], result
+    print("keepalive_supervisor.py closure selftest: OK (CONCERNS veto; flag-off inert)")
+
+
 def _selftest() -> None:
+    _selftest_close()
     import tempfile
 
     eligible_signals = keepalive_shadow.normalize_signals(
@@ -835,7 +1260,7 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
 def main(argv: list[str]) -> int:
     _capability_heartbeat()
     parser = argparse.ArgumentParser(
-        description="Plan supervised post-escalation keepalive recovery; no live action."
+        description="Plan post-escalation recovery and opt-in verified post-merge closure."
     )
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--target", help="owner/repo#N to inspect and plan")
@@ -851,6 +1276,11 @@ def main(argv: list[str]) -> int:
         "--stage2-plan",
         action="store_true",
         help="plan the next Stage 2 proposal-corpus acquisition step",
+    )
+    group.add_argument(
+        "--close-verified",
+        action="store_true",
+        help="bounded post-merge closure with ORCH_SUPERVISOR_CLOSE=1",
     )
     parser.add_argument("--owner", default="stranske", help="owner/org used by --list-live")
     parser.add_argument("--limit", type=int, default=20)
@@ -942,14 +1372,22 @@ def main(argv: list[str]) -> int:
             redirect_corpus_path=args.redirect_corpus,
             keepalive_corpus_path=args.keepalive_corpus,
         )
+        result["issue_closure"] = close_verified_issues(owner=args.owner, limit=args.limit)
+    elif args.close_verified:
+        result = close_verified_issues(owner=args.owner, limit=args.limit)
     else:
         parser.error(
-            "one of --target, --signals-json, --list-live, --stage2-plan, or --selftest is required"
+            "one of --target, --signals-json, --list-live, --stage2-plan, --close-verified, or --selftest is required"
         )
 
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
+        closure = result.get("issue_closure", result if args.close_verified else None)
+        if closure is not None:
+            print(
+                f"supervisor closures: {closure['closed']}; skips={json.dumps(closure['skips'], sort_keys=True)}"
+            )
         if "plans" in result:
             if result.get("stage") == "stage2_proposal_corpus":
                 print(f"stage2_status={result['status']}")
