@@ -1,0 +1,8 @@
+db=LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/route-weights-export-vm9c14de/fixture.db source_version=2
+db=LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/route-weights-export-vm9c14de/fixture.db source_version=2
+db=LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/route-weights-export-vm9c14de/fixture.db source_version=2
+db=LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/route-weights-export-vm9c14de/fixture.db source_version=2
+db=LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/route-weights-export-vm9c14de/fixture.db source_version=2
+db=LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/route-weights-export-vm9c14de/missing.db source_version=0
+publish_guard override --allow-evidence-regression: evidence_ok true -> false for: review
+route_weights_export.py selftest: OK

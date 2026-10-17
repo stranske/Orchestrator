@@ -1,0 +1,99 @@
+launchd-exec: launchctl submit failed for com.teacher.codex.exec.job.M9v2Ts-93887-14226 with exit 1
+detached-net: launchd wrapper failed; retrying in current shell with detached auth
+# verify.py
+
+  tree:       checkout
+  state:      private copy, deleted after the run — ledger absent at the source, so it bootstraps privately; Brain absent at the source, so it bootstraps privately
+  time:       pytest 6m37s, selftests 19s (8 at a time), gates 13s
+  pytest:     3901 passed, 24 failed, 24/31 max skipped (3949 collected; floor 3949)
+  selftests:  99 of 106 modules ran, 4/7 max skipped
+  activation audit   ok  CAN FIRE:   30 of 35 live  (86%)
+  recurrence replay  ok  WOULD FIRE:  32 of 53
+  set coverage       SKIP 9 of 10 capability-set coverage checks passed over 35 ledger capabilities, 1 skipped: test_no_fixtur
+  admission          SKIP 21 of 24 admission checks passed, 3 skipped: test_legacy_debt_is_reported_not_forgiven (capability l
+  ledger validate    ok  "valid": true
+  gates:      2/2 max skipped
+  declared:   no ledger when the run began, so none of the 18 rows this tree declares was registered; the first writing load creates it holding all of them
+  mypy ratchet: 0/0 max of 124 module(s) exempt, 124 checked — fully drained
+
+  SKIPPED (prerequisite absent on this machine — nothing here was checked):
+    pytest   SKIPPED [1] ../../../../../../opt/anaconda3/lib/python3.12/site-packages/_pytest/unittest.py:523: capability ledger has no row for issue-readiness — the ledger is machine-local state (EVIDENCE_ROOT/fulltmp/verify-state-q25tilms/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree; range-lane-rollout, role-triage, thompson-hybrid-routing is declared by this tree too, but registering it alone would not clear this
+    pytest   SKIPPED [1] ../../../../../../opt/anaconda3/lib/python3.12/site-packages/_pytest/unittest.py:523: capability ledger has no row for live-keepalive-supervisor, redirect-apply-bootstrap: declared by this tree, not yet registered here — the ledger is machine-local state (EVIDENCE_ROOT/fulltmp/verify-state-q25tilms/capabilities.json); it holds 0 row(s) here, and the deployed code registers these on its first writing load (`capabilities.py --json validate`, an active tick's first command; `capabilities.py seed-declared` makes the same load on a copy)
+    pytest   SKIPPED [2] ../../../../../../opt/anaconda3/lib/python3.12/site-packages/_pytest/unittest.py:523: capability ledger holds no pre-admission-gate (legacy) capability — legacy debt accrues from this instance's registration history, and a ledger bootstrapped from the committed tree has none
+    pytest   SKIPPED [1] ../../../../../../opt/anaconda3/lib/python3.12/site-packages/_pytest/unittest.py:523: capability ledger has no row for capability-admission-gate — the ledger is machine-local state (EVIDENCE_ROOT/fulltmp/verify-state-q25tilms/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree
+    pytest   SKIPPED [1] ../../../../../../opt/anaconda3/lib/python3.12/site-packages/_pytest/unittest.py:523: reference skill resource not installed: EVIDENCE_ROOT/home/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+    pytest   SKIPPED [1] ../../../../../../opt/anaconda3/lib/python3.12/site-packages/_pytest/unittest.py:523: capability ledger has no row for abcd-experiment, adversarial-review, agy-runtime-isolation, capability-activation-audit, capability-admission-gate, capability-firing-monitor, capability-propensity, capability:reference-sync-hygiene-test-gate, codemod-campaign, coverage-testgen-trigger, cross-repo-coordination, deliberate-break-verifier, docs-drift-fix-agent, epic-decomposition, evidence-acquisition, feature-reflection-cli, feature-scan, feedback-store, frontend-verifier, issue-readiness, offload, partitioned-review, redirect-plan, redirect-policy, repo-playbook, research-scheduler, stall-watcher, switch-review, testgen-lane, windowed-capacity-policy — the ledger is machine-local state (EVIDENCE_ROOT/fulltmp/verify-state-q25tilms/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree; completion-event-lineage, live-keepalive-supervisor, local-model-profile-trial, rail-exercise-cadence, range-lane-rollout, redirect-apply-bootstrap, research-usage-guard, role-adjudicator, role-decomposer, role-prompt, role-redirect, role-triage, route-weights-export, runtime-ac-checks, strategy-experiments, synthesis-promotion, thompson-hybrid-routing, value-chain-monitor is declared by this tree too, but registering it alone would not clear this
+    pytest   SKIPPED [1] ../../../../../../opt/anaconda3/lib/python3.12/site-packages/_pytest/unittest.py:523: vibe config absent: EVIDENCE_ROOT/home/.vibe/config.toml — active_model cannot be read to check for drift
+    pytest   SKIPPED [1] ../../../../../../opt/anaconda3/lib/python3.12/site-packages/_pytest/unittest.py:523: agy advertised-models cache absent: EVIDENCE_ROOT/verify-runtime/agent-runtime/gemini/advertised-models.json
+    pytest   SKIPPED [1] ../../../../../../opt/anaconda3/lib/python3.12/site-packages/_pytest/unittest.py:523: capability ledger has no row for adversarial-review, testgen-lane — the ledger is machine-local state (EVIDENCE_ROOT/fulltmp/verify-state-q25tilms/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree
+    pytest   SKIPPED [1] ../../../../../../opt/anaconda3/lib/python3.12/site-packages/_pytest/unittest.py:523: capability ledger has no row for role-triage: declared by this tree, not yet registered here — the ledger is machine-local state (EVIDENCE_ROOT/fulltmp/verify-state-q25tilms/capabilities.json); it holds 0 row(s) here, and the deployed code registers these on its first writing load (`capabilities.py --json validate`, an active tick's first command; `capabilities.py seed-declared` makes the same load on a copy)
+    pytest   SKIPPED [3] tests/test_model_tier_resolution.py:79: agy CLI not installed on this box
+    pytest   SKIPPED [1] tests/test_model_tier_resolution.py:97: cursor-agent CLI not installed on this box
+    pytest   SKIPPED [1] ../../../../../../opt/anaconda3/lib/python3.12/site-packages/_pytest/unittest.py:523: no free auth signal on this machine for aider, claude, cursor, gemini, muse, vibe: neither an installed CLI probe nor a credential file — agent_auth_check's documented UNKNOWN case
+    pytest   SKIPPED [1] ../../../../../../opt/anaconda3/lib/python3.12/site-packages/_pytest/unittest.py:523: credential file absent for vibe (EVIDENCE_ROOT/home/.vibe/.env), aider (EVIDENCE_ROOT/home/.codex/handoff/aider.env) — the fleet authenticates by sourcing that file, so without it the seat's verdict is BROKEN by design
+    pytest   SKIPPED [1] tests/test_skill_compiler.py:46: reference skill resource not installed: EVIDENCE_ROOT/home/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+    pytest   SKIPPED [1] tests/test_skill_compiler.py:88: reference skill resource not installed: EVIDENCE_ROOT/home/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+    pytest   SKIPPED [1] tests/test_skill_compiler.py:113: reference skill resource not installed: EVIDENCE_ROOT/home/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+    pytest   SKIPPED [2] tests/test_skill_compiler.py:134: reference skill resource not installed: EVIDENCE_ROOT/home/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+    pytest   SKIPPED [1] tests/test_skill_compiler.py:158: reference skill resource not installed: EVIDENCE_ROOT/home/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+    pytest   SKIPPED [1] tests/test_skill_compiler.py:229: reference skill resource not installed: EVIDENCE_ROOT/home/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+    selftest capability_admission: section skipped — capability ledger holds no pre-admission-gate (legacy) capability — legacy debt accrues from this instance's registration history, and a ledger bootstrapped from the committed tree has none
+    selftest capability_outcome_bridge: section skipped — capability ledger carries no version lineage for agy-runtime-isolation, offload (capability_version_id is unset) — lineage is established by real registration on the running instance, so a fresh bootstrap has none
+    selftest capability_recurrence_check: section skipped — capability ledger has no row for docs-drift-fix-agent — the ledger is machine-local state (EVIDENCE_ROOT/fulltmp/verify-state-q25tilms/capabilities.json); it holds 35 row(s) here, and these are registered by running the system, not by checking out the tree
+    selftest feedback: section skipped — capability ledger carries no version lineage for offload, role-redirect (capability_version_id is unset) — lineage is established by real registration on the running instance, so a fresh bootstrap has none
+    selftest feedback: section skipped — capability ledger carries no version lineage for role-triage (capability_version_id is unset) — lineage is established by real registration on the running instance, so a fresh bootstrap has none
+    gate     set coverage: capability ledger has no row for abcd-experiment, adversarial-review, agy-runtime-isolation, capability-activation-audit, capability-admission-gate, capability-firing-monitor, capability-propensity, capability:reference-sync-hygiene-test-gate, codemod-campaign, coverage-testgen-trigger, cross-repo-coordination, deliberate-break-verifier, docs-drift-fix-agent, epic-decomposition, evidence-acquisiti
+    gate     admission: capability ledger holds no pre-admission-gate (legacy) capability — legacy debt accrues from this instance's registration history, and a ledger bootstrapped from the committed tree has none
+    gate     admission: capability ledger holds no pre-admission-gate (legacy) capability — legacy debt accrues from this instance's registration history, and a ledger bootstrapped from the committed tree has none
+    gate     admission: capability ledger has no row for capability-admission-gate — the ledger is machine-local state (EVIDENCE_ROOT/fulltmp/verify-state-q25tilms/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree
+
+  PROBLEMS:
+    - 24 pytest failure(s)/error(s)
+    - executed-or-skipped count dropped: 3901 passed + 24 skipped < floor 3949 — a test stopped being run without becoming a named skip
+    - 3 module selftest(s) failed: adapters, dispatcher, tick_watchdog
+    selftest adapters: d
+AssertionError: ['codex', 'exec', '--skip-git-repo-check', '--cd', 'EVIDENCE_ROOT/home/.codex/
+    selftest dispatcher: 77, in ensure_muse_keychain_link
+    raise ValueError("Muse private HOME requires the existing macOS Keychains directory
+    selftest tick_watchdog: le "/opt/anaconda3/lib/python3.12/subprocess.py", line 1953, in _execute_child
+    raise child_exception_type(errno_num,
+
+  pytest failures (24):
+    FAILED tests/test_build_exec_mirror.py::test_the_documented_copier_builds_through_the_builder
+    FAILED tests/test_build_exec_mirror.py::test_the_390_guard_composes_with_the_documented_copier
+    FAILED tests/test_build_exec_mirror.py::test_presync_says_whether_ci_verified_the_shipped_tree[documented]
+    FAILED tests/test_build_exec_mirror.py::test_presync_says_whether_ci_verified_the_shipped_tree[drifted]
+    FAILED tests/test_model_tier_resolution.py::test_auth_failure_is_detected - A...
+    FAILED tests/test_model_tier_resolution.py::test_auth_ok_when_probe_succeeds
+    FAILED tests/test_model_tier_resolution.py::test_exit_zero_but_failed_is_still_a_failure
+    FAILED tests/test_model_tier_resolution.py::test_status_style_not_logged_in_is_caught
+    FAILED tests/test_model_tier_resolution.py::test_presence_probe_still_detects_a_missing_credential
+    FAILED tests/test_model_tier_resolution.py::test_presence_pass_is_not_reported_as_verified
+    FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_backslash
+    FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_combined
+    FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_quote
+    FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_regex_metacharacters
+    FAILED tests/test_tick_watchdog.py::test_a_stuck_tick_is_reported_with_the_kill_that_frees_it
+    FAILED tests/test_tick_watchdog.py::test_the_process_table_keeps_whole_command_lines
+    FAILED tests/test_tick_watchdog.py::test_the_drained_line_is_reachable_and_exact
+    FAILED tests/test_tick_watchdog.py::test_a_tick_that_reaches_no_cadence_step_alerts
+    FAILED tests/test_tick_watchdog.py::test_a_previous_tick_that_left_no_end_is_unknown_and_kept
+    FAILED tests/test_tick_watchdog.py::test_an_unreadable_record_is_unknown_not_clean
+    FAILED tests/test_tick_watchdog.py::test_the_arming_block_as_written_arms_and_records_the_tick
+    FAILED tests/test_tick_watchdog.py::test_fleet_summary_carries_the_tick_record
+    FAILED tests/test_tick_watchdog.py::test_a_drain_whose_target_has_exited_is_never_advertised
+    FAILED tests/test_tick_watchdog.py::test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming
+
+  pytest tail:
+    SKIPPED [1] ../../../../../../opt/anaconda3/lib/python3.12/site-packages/_pytest/unittest.py:523: capability ledger has no row for role-triage: declared by this tree, not yet registered here — the ledger is machine-local state (EVIDENCE_ROOT/fulltmp/verify-state-q25tilms/capabilities.json); it holds 0 row(s) here, and the deployed code registers these on its first writing load (`capabilities.py --json validate`, an active tick's first command; `capabilities.py seed-declared` makes the same load on a copy)
+    SKIPPED [3] tests/test_model_tier_resolution.py:79: agy CLI not installed on this box
+    SKIPPED [1] tests/test_model_tier_resolution.py:97: cursor-agent CLI not installed on this box
+    SKIPPED [1] ../../../../../../opt/anaconda3/lib/python3.12/site-packages/_pytest/unittest.py:523: no free auth signal on this machine for aider, claude, cursor, gemini, muse, vibe: neither an installed CLI probe nor a credential file — agent_auth_check's documented UNKNOWN case
+    SKIPPED [1] ../../../../../../opt/anaconda3/lib/python3.12/site-packages/_pytest/unittest.py:523: credential file absent for vibe (EVIDENCE_ROOT/home/.vibe/.env), aider (EVIDENCE_ROOT/home/.codex/handoff/aider.env) — the fleet authenticates by sourcing that file, so without it the seat's verdict is BROKEN by design
+    SKIPPED [1] tests/test_skill_compiler.py:46: reference skill resource not installed: EVIDENCE_ROOT/home/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+    SKIPPED [1] tests/test_skill_compiler.py:88: reference skill resource not installed: EVIDENCE_ROOT/home/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+    SKIPPED [1] tests/test_skill_compiler.py:113: reference skill resource not installed: EVIDENCE_ROOT/home/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+    SKIPPED [2] tests/test_skill_compiler.py:134: reference skill resource not installed: EVIDENCE_ROOT/home/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+    SKIPPED [1] tests/test_skill_compiler.py:158: reference skill resource not installed: EVIDENCE_ROOT/home/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+    SKIPPED [1] tests/test_skill_compiler.py:229: reference skill resource not installed: EVIDENCE_ROOT/home/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+    24 failed, 3901 passed, 24 skipped, 4 warnings, 314 subtests passed in 395.48s (0:06:35)

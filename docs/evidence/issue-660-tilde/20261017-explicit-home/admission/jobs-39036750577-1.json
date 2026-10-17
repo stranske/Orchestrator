@@ -1,0 +1,1500 @@
+[
+  {
+    "total_count": 19,
+    "jobs": [
+      {
+        "id": 117408056496,
+        "run_id": 39036750577,
+        "workflow_name": "keepalive-dispatch/v2 ordinary pr=661",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39036750577",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAbVhDEsA",
+        "head_sha": "dfc0a98810759260c40ec6a32d43983d1cdb03bc",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/117408056496",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/39036750577/job/117408056496",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-10-17T13:29:14Z",
+        "started_at": "2026-10-17T13:29:16Z",
+        "completed_at": "2026-10-17T13:29:28Z",
+        "name": "Prepare autofix context",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1,
+            "started_at": "2026-10-17T13:29:17Z",
+            "completed_at": "2026-10-17T13:29:18Z"
+          },
+          {
+            "name": "Checkout (for security gate + agent registry)",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2,
+            "started_at": "2026-10-17T13:29:18Z",
+            "completed_at": "2026-10-17T13:29:18Z"
+          },
+          {
+            "name": "Setup API client",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3,
+            "started_at": "2026-10-17T13:29:18Z",
+            "completed_at": "2026-10-17T13:29:23Z"
+          },
+          {
+            "name": "Security gate - prompt injection guard",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 4,
+            "started_at": "2026-10-17T13:29:23Z",
+            "completed_at": "2026-10-17T13:29:24Z"
+          },
+          {
+            "name": "Evaluate workflow_run",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 5,
+            "started_at": "2026-10-17T13:29:24Z",
+            "completed_at": "2026-10-17T13:29:26Z"
+          },
+          {
+            "name": "Check runner dispatch debounce",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 6,
+            "started_at": "2026-10-17T13:29:26Z",
+            "completed_at": "2026-10-17T13:29:26Z"
+          },
+          {
+            "name": "Post Checkout (for security gate + agent registry)",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 12,
+            "started_at": "2026-10-17T13:29:26Z",
+            "completed_at": "2026-10-17T13:29:26Z"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 13,
+            "started_at": "2026-10-17T13:29:26Z",
+            "completed_at": "2026-10-17T13:29:26Z"
+          }
+        ],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/117408056496",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_id": 1004105789,
+        "runner_name": "GitHub Actions 1004105789",
+        "runner_group_id": 0,
+        "runner_group_name": "GitHub Actions"
+      },
+      {
+        "id": 117408056599,
+        "run_id": 39036750577,
+        "workflow_name": "keepalive-dispatch/v2 ordinary pr=661",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39036750577",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAbVhDFFw",
+        "head_sha": "dfc0a98810759260c40ec6a32d43983d1cdb03bc",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/117408056599",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/39036750577/job/117408056599",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-10-17T13:29:14Z",
+        "started_at": "2026-10-17T13:29:16Z",
+        "completed_at": "2026-10-17T13:29:24Z",
+        "name": "Merge automerge-labelled agent PRs",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1,
+            "started_at": "2026-10-17T13:29:18Z",
+            "completed_at": "2026-10-17T13:29:19Z"
+          },
+          {
+            "name": "Checkout (for retry helpers)",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2,
+            "started_at": "2026-10-17T13:29:19Z",
+            "completed_at": "2026-10-17T13:29:20Z"
+          },
+          {
+            "name": "Merge labelled agent PRs (guarded)",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3,
+            "started_at": "2026-10-17T13:29:20Z",
+            "completed_at": "2026-10-17T13:29:21Z"
+          },
+          {
+            "name": "Post Checkout (for retry helpers)",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 6,
+            "started_at": "2026-10-17T13:29:21Z",
+            "completed_at": "2026-10-17T13:29:21Z"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 7,
+            "started_at": "2026-10-17T13:29:21Z",
+            "completed_at": "2026-10-17T13:29:21Z"
+          }
+        ],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/117408056599",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_id": 1004105790,
+        "runner_name": "GitHub Actions 1004105790",
+        "runner_group_id": 0,
+        "runner_group_name": "GitHub Actions"
+      },
+      {
+        "id": 117408056622,
+        "run_id": 39036750577,
+        "workflow_name": "keepalive-dispatch/v2 ordinary pr=661",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39036750577",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAbVhDFLg",
+        "head_sha": "dfc0a98810759260c40ec6a32d43983d1cdb03bc",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/117408056622",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/39036750577/job/117408056622",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-10-17T13:29:14Z",
+        "started_at": "2026-10-17T13:29:16Z",
+        "completed_at": "2026-10-17T13:29:39Z",
+        "name": "Evaluate keepalive loop",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1,
+            "started_at": "2026-10-17T13:29:17Z",
+            "completed_at": "2026-10-17T13:29:18Z"
+          },
+          {
+            "name": "Checkout",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2,
+            "started_at": "2026-10-17T13:29:18Z",
+            "completed_at": "2026-10-17T13:29:23Z"
+          },
+          {
+            "name": "Setup API client",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3,
+            "started_at": "2026-10-17T13:29:23Z",
+            "completed_at": "2026-10-17T13:29:26Z"
+          },
+          {
+            "name": "Compute state fingerprint",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 4,
+            "started_at": "2026-10-17T13:29:26Z",
+            "completed_at": "2026-10-17T13:29:26Z"
+          },
+          {
+            "name": "Report unchanged state skip",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 5,
+            "started_at": "2026-10-17T13:29:26Z",
+            "completed_at": "2026-10-17T13:29:26Z"
+          },
+          {
+            "name": "Capture timestamps",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 6,
+            "started_at": "2026-10-17T13:29:26Z",
+            "completed_at": "2026-10-17T13:29:26Z"
+          },
+          {
+            "name": "Security gate - prompt injection guard",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 7,
+            "started_at": "2026-10-17T13:29:26Z",
+            "completed_at": "2026-10-17T13:29:28Z"
+          },
+          {
+            "name": "Evaluate keepalive state",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 8,
+            "started_at": "2026-10-17T13:29:28Z",
+            "completed_at": "2026-10-17T13:29:35Z"
+          },
+          {
+            "name": "Check runner dispatch debounce",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 9,
+            "started_at": "2026-10-17T13:29:35Z",
+            "completed_at": "2026-10-17T13:29:37Z"
+          },
+          {
+            "name": "Post Checkout",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 18,
+            "started_at": "2026-10-17T13:29:37Z",
+            "completed_at": "2026-10-17T13:29:37Z"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 19,
+            "started_at": "2026-10-17T13:29:37Z",
+            "completed_at": "2026-10-17T13:29:37Z"
+          }
+        ],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/117408056622",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_id": 1004105791,
+        "runner_name": "GitHub Actions 1004105791",
+        "runner_group_id": 0,
+        "runner_group_name": "GitHub Actions"
+      },
+      {
+        "id": 117408057835,
+        "run_id": 39036750577,
+        "workflow_name": "keepalive-dispatch/v2 ordinary pr=661",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39036750577",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAbVhDJ6w",
+        "head_sha": "dfc0a98810759260c40ec6a32d43983d1cdb03bc",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/117408057835",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/39036750577/job/117408057835",
+        "status": "completed",
+        "conclusion": "skipped",
+        "created_at": "2026-10-17T13:29:14Z",
+        "started_at": "2026-10-17T13:29:14Z",
+        "completed_at": "2026-10-17T13:29:14Z",
+        "name": "Wake generated delivery reconciler",
+        "steps": [],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/117408057835",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_id": null,
+        "runner_name": null,
+        "runner_group_id": null,
+        "runner_group_name": null
+      },
+      {
+        "id": 117408100892,
+        "run_id": 39036750577,
+        "workflow_name": "keepalive-dispatch/v2 ordinary pr=661",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39036750577",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAbVhFyHA",
+        "head_sha": "dfc0a98810759260c40ec6a32d43983d1cdb03bc",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/117408100892",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/39036750577/job/117408100892",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-10-17T13:29:28Z",
+        "started_at": "2026-10-17T13:29:31Z",
+        "completed_at": "2026-10-17T13:29:45Z",
+        "name": "Record autofix metrics",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1,
+            "started_at": "2026-10-17T13:29:31Z",
+            "completed_at": "2026-10-17T13:29:36Z"
+          },
+          {
+            "name": "Checkout (for retry helpers)",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2,
+            "started_at": "2026-10-17T13:29:36Z",
+            "completed_at": "2026-10-17T13:29:41Z"
+          },
+          {
+            "name": "Collect metrics",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3,
+            "started_at": "2026-10-17T13:29:41Z",
+            "completed_at": "2026-10-17T13:29:41Z"
+          },
+          {
+            "name": "Write summary and artifact",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 4,
+            "started_at": "2026-10-17T13:29:41Z",
+            "completed_at": "2026-10-17T13:29:41Z"
+          },
+          {
+            "name": "Upload metrics artifact",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 5,
+            "started_at": "2026-10-17T13:29:41Z",
+            "completed_at": "2026-10-17T13:29:42Z"
+          },
+          {
+            "name": "Post Checkout (for retry helpers)",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 10,
+            "started_at": "2026-10-17T13:29:42Z",
+            "completed_at": "2026-10-17T13:29:42Z"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 11,
+            "started_at": "2026-10-17T13:29:42Z",
+            "completed_at": "2026-10-17T13:29:42Z"
+          }
+        ],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/117408100892",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_id": 1004105815,
+        "runner_name": "GitHub Actions 1004105815",
+        "runner_group_id": 0,
+        "runner_group_name": "GitHub Actions"
+      },
+      {
+        "id": 117408101538,
+        "run_id": 39036750577,
+        "workflow_name": "keepalive-dispatch/v2 ordinary pr=661",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39036750577",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAbVhF0og",
+        "head_sha": "dfc0a98810759260c40ec6a32d43983d1cdb03bc",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/117408101538",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/39036750577/job/117408101538",
+        "status": "completed",
+        "conclusion": "skipped",
+        "created_at": "2026-10-17T13:29:28Z",
+        "started_at": "2026-10-17T13:29:28Z",
+        "completed_at": "2026-10-17T13:29:28Z",
+        "name": "Flag for human follow-up",
+        "steps": [],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/117408101538",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_id": null,
+        "runner_name": null,
+        "runner_group_id": null,
+        "runner_group_name": null
+      },
+      {
+        "id": 117408101709,
+        "run_id": 39036750577,
+        "workflow_name": "keepalive-dispatch/v2 ordinary pr=661",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39036750577",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAbVhF1TQ",
+        "head_sha": "dfc0a98810759260c40ec6a32d43983d1cdb03bc",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/117408101709",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/39036750577/job/117408101709",
+        "status": "completed",
+        "conclusion": "skipped",
+        "created_at": "2026-10-17T13:29:28Z",
+        "started_at": "2026-10-17T13:29:28Z",
+        "completed_at": "2026-10-17T13:29:28Z",
+        "name": "Run Claude autofix",
+        "steps": [],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/117408101709",
+        "labels": [],
+        "runner_id": null,
+        "runner_name": null,
+        "runner_group_id": null,
+        "runner_group_name": null
+      },
+      {
+        "id": 117408101753,
+        "run_id": 39036750577,
+        "workflow_name": "keepalive-dispatch/v2 ordinary pr=661",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39036750577",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAbVhF1eQ",
+        "head_sha": "dfc0a98810759260c40ec6a32d43983d1cdb03bc",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/117408101753",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/39036750577/job/117408101753",
+        "status": "completed",
+        "conclusion": "skipped",
+        "created_at": "2026-10-17T13:29:28Z",
+        "started_at": "2026-10-17T13:29:28Z",
+        "completed_at": "2026-10-17T13:29:28Z",
+        "name": "Run Codex autofix",
+        "steps": [],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/117408101753",
+        "labels": [],
+        "runner_id": null,
+        "runner_name": null,
+        "runner_group_id": null,
+        "runner_group_name": null
+      },
+      {
+        "id": 117408101841,
+        "run_id": 39036750577,
+        "workflow_name": "keepalive-dispatch/v2 ordinary pr=661",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39036750577",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAbVhF10Q",
+        "head_sha": "dfc0a98810759260c40ec6a32d43983d1cdb03bc",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/117408101841",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/39036750577/job/117408101841",
+        "status": "completed",
+        "conclusion": "skipped",
+        "created_at": "2026-10-17T13:29:28Z",
+        "started_at": "2026-10-17T13:29:28Z",
+        "completed_at": "2026-10-17T13:29:28Z",
+        "name": "Run Muse autofix",
+        "steps": [],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/117408101841",
+        "labels": [],
+        "runner_id": null,
+        "runner_name": null,
+        "runner_group_id": null,
+        "runner_group_name": null
+      },
+      {
+        "id": 117408136873,
+        "run_id": 39036750577,
+        "workflow_name": "keepalive-dispatch/v2 ordinary pr=661",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39036750577",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAbVhH-qQ",
+        "head_sha": "dfc0a98810759260c40ec6a32d43983d1cdb03bc",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/117408136873",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/39036750577/job/117408136873",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-10-17T13:29:39Z",
+        "started_at": "2026-10-17T13:29:42Z",
+        "completed_at": "2026-10-17T13:29:45Z",
+        "name": "Verify secrets available",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1,
+            "started_at": "2026-10-17T13:29:43Z",
+            "completed_at": "2026-10-17T13:29:43Z"
+          },
+          {
+            "name": "Check secrets",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2,
+            "started_at": "2026-10-17T13:29:43Z",
+            "completed_at": "2026-10-17T13:29:43Z"
+          },
+          {
+            "name": "Checkout authority release helpers",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 3,
+            "started_at": "2026-10-17T13:29:43Z",
+            "completed_at": "2026-10-17T13:29:43Z"
+          },
+          {
+            "name": "Release prepared authority challenge after preflight failure",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 4,
+            "started_at": "2026-10-17T13:29:43Z",
+            "completed_at": "2026-10-17T13:29:43Z"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 5,
+            "started_at": "2026-10-17T13:29:43Z",
+            "completed_at": "2026-10-17T13:29:43Z"
+          }
+        ],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/117408136873",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_id": 1004105841,
+        "runner_name": "GitHub Actions 1004105841",
+        "runner_group_id": 0,
+        "runner_group_name": "GitHub Actions"
+      },
+      {
+        "id": 117408136913,
+        "run_id": 39036750577,
+        "workflow_name": "keepalive-dispatch/v2 ordinary pr=661",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39036750577",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAbVhH-0Q",
+        "head_sha": "dfc0a98810759260c40ec6a32d43983d1cdb03bc",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/117408136913",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/39036750577/job/117408136913",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-10-17T13:29:39Z",
+        "started_at": "2026-10-17T13:29:41Z",
+        "completed_at": "2026-10-17T13:29:43Z",
+        "name": "Test job creation",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1,
+            "started_at": "2026-10-17T13:29:41Z",
+            "completed_at": "2026-10-17T13:29:41Z"
+          },
+          {
+            "name": "Run echo \"Test job ran!\"",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2,
+            "started_at": "2026-10-17T13:29:41Z",
+            "completed_at": "2026-10-17T13:29:41Z"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3,
+            "started_at": "2026-10-17T13:29:41Z",
+            "completed_at": "2026-10-17T13:29:41Z"
+          }
+        ],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/117408136913",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_id": 1004105840,
+        "runner_name": "GitHub Actions 1004105840",
+        "runner_group_id": 0,
+        "runner_group_name": "GitHub Actions"
+      },
+      {
+        "id": 117408157551,
+        "run_id": 39036750577,
+        "workflow_name": "keepalive-dispatch/v2 ordinary pr=661",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39036750577",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAbVhJPbw",
+        "head_sha": "dfc0a98810759260c40ec6a32d43983d1cdb03bc",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/117408157551",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/39036750577/job/117408157551",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-10-17T13:29:46Z",
+        "started_at": "2026-10-17T13:29:47Z",
+        "completed_at": "2026-10-17T13:30:04Z",
+        "name": "Mark agent running",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1,
+            "started_at": "2026-10-17T13:29:48Z",
+            "completed_at": "2026-10-17T13:29:49Z"
+          },
+          {
+            "name": "Checkout",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2,
+            "started_at": "2026-10-17T13:29:49Z",
+            "completed_at": "2026-10-17T13:29:53Z"
+          },
+          {
+            "name": "Setup API client",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3,
+            "started_at": "2026-10-17T13:29:53Z",
+            "completed_at": "2026-10-17T13:29:58Z"
+          },
+          {
+            "name": "Mint KEEPALIVE_APP running token",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 4,
+            "started_at": "2026-10-17T13:29:58Z",
+            "completed_at": "2026-10-17T13:29:59Z"
+          },
+          {
+            "name": "Mint WORKFLOWS_APP running token",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 5,
+            "started_at": "2026-10-17T13:29:59Z",
+            "completed_at": "2026-10-17T13:29:59Z"
+          },
+          {
+            "name": "Select trusted keepalive running writer",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 6,
+            "started_at": "2026-10-17T13:29:59Z",
+            "completed_at": "2026-10-17T13:29:59Z"
+          },
+          {
+            "name": "Probe PAT keepalive running identity",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 7,
+            "started_at": "2026-10-17T13:29:59Z",
+            "completed_at": "2026-10-17T13:29:59Z"
+          },
+          {
+            "name": "Enforce PAT keepalive running identity",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 8,
+            "started_at": "2026-10-17T13:29:59Z",
+            "completed_at": "2026-10-17T13:29:59Z"
+          },
+          {
+            "name": "Require trusted keepalive running writer",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 9,
+            "started_at": "2026-10-17T13:29:59Z",
+            "completed_at": "2026-10-17T13:29:59Z"
+          },
+          {
+            "name": "Update summary with running status",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 10,
+            "started_at": "2026-10-17T13:29:59Z",
+            "completed_at": "2026-10-17T13:30:02Z"
+          },
+          {
+            "name": "Finalize authority challenge after mark-running",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 11,
+            "started_at": "2026-10-17T13:30:02Z",
+            "completed_at": "2026-10-17T13:30:02Z"
+          },
+          {
+            "name": "Release prepared challenge after mark-running failure",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 12,
+            "started_at": "2026-10-17T13:30:02Z",
+            "completed_at": "2026-10-17T13:30:02Z"
+          },
+          {
+            "name": "Post Mint KEEPALIVE_APP running token",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 23,
+            "started_at": "2026-10-17T13:30:02Z",
+            "completed_at": "2026-10-17T13:30:02Z"
+          },
+          {
+            "name": "Post Checkout",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 24,
+            "started_at": "2026-10-17T13:30:02Z",
+            "completed_at": "2026-10-17T13:30:03Z"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 25,
+            "started_at": "2026-10-17T13:30:03Z",
+            "completed_at": "2026-10-17T13:30:03Z"
+          }
+        ],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/117408157551",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_id": 1004105849,
+        "runner_name": "GitHub Actions 1004105849",
+        "runner_group_id": 0,
+        "runner_group_name": "GitHub Actions"
+      },
+      {
+        "id": 117408218164,
+        "run_id": 39036750577,
+        "workflow_name": "keepalive-dispatch/v2 ordinary pr=661",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39036750577",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAbVhM8NA",
+        "head_sha": "dfc0a98810759260c40ec6a32d43983d1cdb03bc",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/117408218164",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/39036750577/job/117408218164",
+        "status": "completed",
+        "conclusion": "failure",
+        "created_at": "2026-10-17T13:30:04Z",
+        "started_at": "2026-10-17T13:30:06Z",
+        "completed_at": "2026-10-17T13:30:50Z",
+        "name": "Keepalive next task (Codex) / Codex (keepalive)",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1,
+            "started_at": "2026-10-17T13:30:07Z",
+            "completed_at": "2026-10-17T13:30:10Z"
+          },
+          {
+            "name": "Mint Workflows bootstrap app token",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2,
+            "started_at": "2026-10-17T13:30:10Z",
+            "completed_at": "2026-10-17T13:30:11Z"
+          },
+          {
+            "name": "Checkout target repository",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3,
+            "started_at": "2026-10-17T13:30:11Z",
+            "completed_at": "2026-10-17T13:30:17Z"
+          },
+          {
+            "name": "Checkout Workflows run-base action",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 4,
+            "started_at": "2026-10-17T13:30:17Z",
+            "completed_at": "2026-10-17T13:30:19Z"
+          },
+          {
+            "name": "Cache workspace Octokit dependencies",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 5,
+            "started_at": "2026-10-17T13:30:19Z",
+            "completed_at": "2026-10-17T13:30:20Z"
+          },
+          {
+            "name": "Agent run base setup",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 6,
+            "started_at": "2026-10-17T13:30:20Z",
+            "completed_at": "2026-10-17T13:30:26Z"
+          },
+          {
+            "name": "Cache Workflows Octokit dependencies",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 7,
+            "started_at": "2026-10-17T13:30:26Z",
+            "completed_at": "2026-10-17T13:30:28Z"
+          },
+          {
+            "name": "Ensure Workflows script deps",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 8,
+            "started_at": "2026-10-17T13:30:28Z",
+            "completed_at": "2026-10-17T13:30:28Z"
+          },
+          {
+            "name": "Setup Workflows API client",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 9,
+            "started_at": "2026-10-17T13:30:28Z",
+            "completed_at": "2026-10-17T13:30:28Z"
+          },
+          {
+            "name": "Validate workflows tooling",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 10,
+            "started_at": "2026-10-17T13:30:28Z",
+            "completed_at": "2026-10-17T13:30:28Z"
+          },
+          {
+            "name": "Set up Python",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 11,
+            "started_at": "2026-10-17T13:30:28Z",
+            "completed_at": "2026-10-17T13:30:31Z"
+          },
+          {
+            "name": "Install Python dependencies",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 12,
+            "started_at": "2026-10-17T13:30:31Z",
+            "completed_at": "2026-10-17T13:30:32Z"
+          },
+          {
+            "name": "Install Workflows repo LLM dependencies",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 13,
+            "started_at": "2026-10-17T13:30:32Z",
+            "completed_at": "2026-10-17T13:30:39Z"
+          },
+          {
+            "name": "Validate optional capability effect evidence",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 14,
+            "started_at": "2026-10-17T13:30:39Z",
+            "completed_at": "2026-10-17T13:30:40Z"
+          },
+          {
+            "name": "Validate prompt template integrity",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 15,
+            "started_at": "2026-10-17T13:30:40Z",
+            "completed_at": "2026-10-17T13:30:40Z"
+          },
+          {
+            "name": "Download task appendix artifact",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 16,
+            "started_at": "2026-10-17T13:30:40Z",
+            "completed_at": "2026-10-17T13:30:40Z"
+          },
+          {
+            "name": "Validate and materialize reference packs",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 17,
+            "started_at": "2026-10-17T13:30:40Z",
+            "completed_at": "2026-10-17T13:30:40Z"
+          },
+          {
+            "name": "Assemble prompt",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 18,
+            "started_at": "2026-10-17T13:30:40Z",
+            "completed_at": "2026-10-17T13:30:40Z"
+          },
+          {
+            "name": "Expose cached Codex CLI",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 19,
+            "started_at": "2026-10-17T13:30:40Z",
+            "completed_at": "2026-10-17T13:30:40Z"
+          },
+          {
+            "name": "Cache Codex CLI",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 20,
+            "started_at": "2026-10-17T13:30:40Z",
+            "completed_at": "2026-10-17T13:30:43Z"
+          },
+          {
+            "name": "Install Codex CLI",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 21,
+            "started_at": "2026-10-17T13:30:43Z",
+            "completed_at": "2026-10-17T13:30:43Z"
+          },
+          {
+            "name": "Setup Codex auth",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 22,
+            "started_at": "2026-10-17T13:30:43Z",
+            "completed_at": "2026-10-17T13:30:43Z"
+          },
+          {
+            "name": "Clean workspace for Codex",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 23,
+            "started_at": "2026-10-17T13:30:43Z",
+            "completed_at": "2026-10-17T13:30:43Z"
+          },
+          {
+            "name": "Surface merge conflicts",
+            "status": "completed",
+            "conclusion": "failure",
+            "number": 24,
+            "started_at": "2026-10-17T13:30:43Z",
+            "completed_at": "2026-10-17T13:30:43Z"
+          },
+          {
+            "name": "Resolve Codex run model",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 25,
+            "started_at": "2026-10-17T13:30:43Z",
+            "completed_at": "2026-10-17T13:30:43Z"
+          },
+          {
+            "name": "Run Codex",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 26,
+            "started_at": "2026-10-17T13:30:43Z",
+            "completed_at": "2026-10-17T13:30:43Z"
+          },
+          {
+            "name": "Write worker model attempt artifact",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 27,
+            "started_at": "2026-10-17T13:30:43Z",
+            "completed_at": "2026-10-17T13:30:43Z"
+          },
+          {
+            "name": "Upload worker model attempt artifact",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 28,
+            "started_at": "2026-10-17T13:30:43Z",
+            "completed_at": "2026-10-17T13:30:44Z"
+          },
+          {
+            "name": "Analyze Codex session",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 29,
+            "started_at": "2026-10-17T13:30:44Z",
+            "completed_at": "2026-10-17T13:30:44Z"
+          },
+          {
+            "name": "Persist refreshed Codex auth secret",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 30,
+            "started_at": "2026-10-17T13:30:44Z",
+            "completed_at": "2026-10-17T13:30:44Z"
+          },
+          {
+            "name": "Analyze task completion with LLM",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 31,
+            "started_at": "2026-10-17T13:30:44Z",
+            "completed_at": "2026-10-17T13:30:44Z"
+          },
+          {
+            "name": "Commit and push changes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 32,
+            "started_at": "2026-10-17T13:30:44Z",
+            "completed_at": "2026-10-17T13:30:45Z"
+          },
+          {
+            "name": "Upload Codex output",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 33,
+            "started_at": "2026-10-17T13:30:45Z",
+            "completed_at": "2026-10-17T13:30:45Z"
+          },
+          {
+            "name": "Post completion checkpoint comment",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 34,
+            "started_at": "2026-10-17T13:30:45Z",
+            "completed_at": "2026-10-17T13:30:45Z"
+          },
+          {
+            "name": "Classify failure type",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 35,
+            "started_at": "2026-10-17T13:30:45Z",
+            "completed_at": "2026-10-17T13:30:45Z"
+          },
+          {
+            "name": "Write error summary to GITHUB_STEP_SUMMARY",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 36,
+            "started_at": "2026-10-17T13:30:45Z",
+            "completed_at": "2026-10-17T13:30:45Z"
+          },
+          {
+            "name": "Create error diagnostics artifact",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 37,
+            "started_at": "2026-10-17T13:30:45Z",
+            "completed_at": "2026-10-17T13:30:45Z"
+          },
+          {
+            "name": "Upload error diagnostics",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 38,
+            "started_at": "2026-10-17T13:30:45Z",
+            "completed_at": "2026-10-17T13:30:45Z"
+          },
+          {
+            "name": "Post PR comment on non-transient failure",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 39,
+            "started_at": "2026-10-17T13:30:45Z",
+            "completed_at": "2026-10-17T13:30:45Z"
+          },
+          {
+            "name": "Add needs-attention label on non-transient failure",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 40,
+            "started_at": "2026-10-17T13:30:45Z",
+            "completed_at": "2026-10-17T13:30:45Z"
+          },
+          {
+            "name": "Post Cache Codex CLI",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 73,
+            "started_at": "2026-10-17T13:30:45Z",
+            "completed_at": "2026-10-17T13:30:45Z"
+          },
+          {
+            "name": "Post Set up Python",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 74,
+            "started_at": "2026-10-17T13:30:45Z",
+            "completed_at": "2026-10-17T13:30:45Z"
+          },
+          {
+            "name": "Post Cache Workflows Octokit dependencies",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 75,
+            "started_at": "2026-10-17T13:30:45Z",
+            "completed_at": "2026-10-17T13:30:45Z"
+          },
+          {
+            "name": "Post Agent run base setup",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 76,
+            "started_at": "2026-10-17T13:30:45Z",
+            "completed_at": "2026-10-17T13:30:46Z"
+          },
+          {
+            "name": "Post Cache workspace Octokit dependencies",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 77,
+            "started_at": "2026-10-17T13:30:46Z",
+            "completed_at": "2026-10-17T13:30:46Z"
+          },
+          {
+            "name": "Post Checkout Workflows run-base action",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 78,
+            "started_at": "2026-10-17T13:30:46Z",
+            "completed_at": "2026-10-17T13:30:46Z"
+          },
+          {
+            "name": "Post Checkout target repository",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 79,
+            "started_at": "2026-10-17T13:30:46Z",
+            "completed_at": "2026-10-17T13:30:46Z"
+          },
+          {
+            "name": "Post Mint Workflows bootstrap app token",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 80,
+            "started_at": "2026-10-17T13:30:46Z",
+            "completed_at": "2026-10-17T13:30:46Z"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 81,
+            "started_at": "2026-10-17T13:30:46Z",
+            "completed_at": "2026-10-17T13:30:47Z"
+          }
+        ],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/117408218164",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_id": 1004105863,
+        "runner_name": "GitHub Actions 1004105863",
+        "runner_group_id": 0,
+        "runner_group_name": "GitHub Actions"
+      },
+      {
+        "id": 117408218530,
+        "run_id": 39036750577,
+        "workflow_name": "keepalive-dispatch/v2 ordinary pr=661",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39036750577",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAbVhM9og",
+        "head_sha": "dfc0a98810759260c40ec6a32d43983d1cdb03bc",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/117408218530",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/39036750577/job/117408218530",
+        "status": "completed",
+        "conclusion": "skipped",
+        "created_at": "2026-10-17T13:30:04Z",
+        "started_at": "2026-10-17T13:30:04Z",
+        "completed_at": "2026-10-17T13:30:04Z",
+        "name": "Keepalive next task (Cursor)",
+        "steps": [],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/117408218530",
+        "labels": [],
+        "runner_id": null,
+        "runner_name": null,
+        "runner_group_id": null,
+        "runner_group_name": null
+      },
+      {
+        "id": 117408219124,
+        "run_id": 39036750577,
+        "workflow_name": "keepalive-dispatch/v2 ordinary pr=661",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39036750577",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAbVhM_9A",
+        "head_sha": "dfc0a98810759260c40ec6a32d43983d1cdb03bc",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/117408219124",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/39036750577/job/117408219124",
+        "status": "completed",
+        "conclusion": "skipped",
+        "created_at": "2026-10-17T13:30:04Z",
+        "started_at": "2026-10-17T13:30:04Z",
+        "completed_at": "2026-10-17T13:30:04Z",
+        "name": "Keepalive next task (Claude)",
+        "steps": [],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/117408219124",
+        "labels": [],
+        "runner_id": null,
+        "runner_name": null,
+        "runner_group_id": null,
+        "runner_group_name": null
+      },
+      {
+        "id": 117408219193,
+        "run_id": 39036750577,
+        "workflow_name": "keepalive-dispatch/v2 ordinary pr=661",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39036750577",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAbVhNAOQ",
+        "head_sha": "dfc0a98810759260c40ec6a32d43983d1cdb03bc",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/117408219193",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/39036750577/job/117408219193",
+        "status": "completed",
+        "conclusion": "skipped",
+        "created_at": "2026-10-17T13:30:04Z",
+        "started_at": "2026-10-17T13:30:04Z",
+        "completed_at": "2026-10-17T13:30:04Z",
+        "name": "Keepalive next task (Muse)",
+        "steps": [],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/117408219193",
+        "labels": [],
+        "runner_id": null,
+        "runner_name": null,
+        "runner_group_id": null,
+        "runner_group_name": null
+      },
+      {
+        "id": 117408219218,
+        "run_id": 39036750577,
+        "workflow_name": "keepalive-dispatch/v2 ordinary pr=661",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39036750577",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAbVhNAUg",
+        "head_sha": "dfc0a98810759260c40ec6a32d43983d1cdb03bc",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/117408219218",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/39036750577/job/117408219218",
+        "status": "completed",
+        "conclusion": "skipped",
+        "created_at": "2026-10-17T13:30:04Z",
+        "started_at": "2026-10-17T13:30:04Z",
+        "completed_at": "2026-10-17T13:30:04Z",
+        "name": "Keepalive next task (Gemini)",
+        "steps": [],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/117408219218",
+        "labels": [],
+        "runner_id": null,
+        "runner_name": null,
+        "runner_group_id": null,
+        "runner_group_name": null
+      },
+      {
+        "id": 117408382948,
+        "run_id": 39036750577,
+        "workflow_name": "keepalive-dispatch/v2 ordinary pr=661",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39036750577",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAbVhW_5A",
+        "head_sha": "dfc0a98810759260c40ec6a32d43983d1cdb03bc",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/117408382948",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/39036750577/job/117408382948",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-10-17T13:30:51Z",
+        "started_at": "2026-10-17T13:30:53Z",
+        "completed_at": "2026-10-17T13:31:11Z",
+        "name": "Update keepalive summary",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1,
+            "started_at": "2026-10-17T13:30:53Z",
+            "completed_at": "2026-10-17T13:30:55Z"
+          },
+          {
+            "name": "Checkout",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2,
+            "started_at": "2026-10-17T13:30:55Z",
+            "completed_at": "2026-10-17T13:30:59Z"
+          },
+          {
+            "name": "Setup API client",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3,
+            "started_at": "2026-10-17T13:30:59Z",
+            "completed_at": "2026-10-17T13:31:03Z"
+          },
+          {
+            "name": "Emit keepalive metrics",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 4,
+            "started_at": "2026-10-17T13:31:03Z",
+            "completed_at": "2026-10-17T13:31:03Z"
+          },
+          {
+            "name": "Upload keepalive metrics artifact",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 5,
+            "started_at": "2026-10-17T13:31:03Z",
+            "completed_at": "2026-10-17T13:31:04Z"
+          },
+          {
+            "name": "Auto-reconcile task checkboxes",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 6,
+            "started_at": "2026-10-17T13:31:04Z",
+            "completed_at": "2026-10-17T13:31:04Z"
+          },
+          {
+            "name": "Mint KEEPALIVE_APP summary token",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 7,
+            "started_at": "2026-10-17T13:31:04Z",
+            "completed_at": "2026-10-17T13:31:04Z"
+          },
+          {
+            "name": "Mint WORKFLOWS_APP summary token",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 8,
+            "started_at": "2026-10-17T13:31:04Z",
+            "completed_at": "2026-10-17T13:31:04Z"
+          },
+          {
+            "name": "Require trusted keepalive summary writer",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 9,
+            "started_at": "2026-10-17T13:31:04Z",
+            "completed_at": "2026-10-17T13:31:04Z"
+          },
+          {
+            "name": "Update summary comment",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 10,
+            "started_at": "2026-10-17T13:31:04Z",
+            "completed_at": "2026-10-17T13:31:09Z"
+          },
+          {
+            "name": "Persist state fingerprint",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 11,
+            "started_at": "2026-10-17T13:31:09Z",
+            "completed_at": "2026-10-17T13:31:09Z"
+          },
+          {
+            "name": "Post Mint KEEPALIVE_APP summary token",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 21,
+            "started_at": "2026-10-17T13:31:09Z",
+            "completed_at": "2026-10-17T13:31:09Z"
+          },
+          {
+            "name": "Post Checkout",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 22,
+            "started_at": "2026-10-17T13:31:09Z",
+            "completed_at": "2026-10-17T13:31:10Z"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 23,
+            "started_at": "2026-10-17T13:31:10Z",
+            "completed_at": "2026-10-17T13:31:10Z"
+          }
+        ],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/117408382948",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_id": 1004105885,
+        "runner_name": "GitHub Actions 1004105885",
+        "runner_group_id": 0,
+        "runner_group_name": "GitHub Actions"
+      },
+      {
+        "id": 117408452355,
+        "run_id": 39036750577,
+        "workflow_name": "keepalive-dispatch/v2 ordinary pr=661",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39036750577",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAbVhbPAw",
+        "head_sha": "dfc0a98810759260c40ec6a32d43983d1cdb03bc",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/117408452355",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/39036750577/job/117408452355",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-10-17T13:31:12Z",
+        "started_at": "2026-10-17T13:31:13Z",
+        "completed_at": "2026-10-17T13:31:19Z",
+        "name": "Record keepalive dispatch completion",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1,
+            "started_at": "2026-10-17T13:31:14Z",
+            "completed_at": "2026-10-17T13:31:15Z"
+          },
+          {
+            "name": "Checkout runner library",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2,
+            "started_at": "2026-10-17T13:31:15Z",
+            "completed_at": "2026-10-17T13:31:16Z"
+          },
+          {
+            "name": "Measure runner productivity",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3,
+            "started_at": "2026-10-17T13:31:16Z",
+            "completed_at": "2026-10-17T13:31:16Z"
+          },
+          {
+            "name": "Record completion",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 4,
+            "started_at": "2026-10-17T13:31:16Z",
+            "completed_at": "2026-10-17T13:31:17Z"
+          },
+          {
+            "name": "Post Checkout runner library",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 8,
+            "started_at": "2026-10-17T13:31:17Z",
+            "completed_at": "2026-10-17T13:31:18Z"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 9,
+            "started_at": "2026-10-17T13:31:18Z",
+            "completed_at": "2026-10-17T13:31:18Z"
+          }
+        ],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/117408452355",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_id": 1004105896,
+        "runner_name": "GitHub Actions 1004105896",
+        "runner_group_id": 0,
+        "runner_group_name": "GitHub Actions"
+      }
+    ]
+  }
+]

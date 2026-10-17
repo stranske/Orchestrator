@@ -232,6 +232,12 @@ def summarize(
             (since,),
         ).fetchall()
     v2_experiments = {str(row[0]) for row in v2_rows}
+    # A judge whose model generation changed has no record yet: rows from before its model epoch
+    # (config/model_epochs.json) are not evidence about the current model.
+    legacy_rows = [
+        row for row in legacy_rows if int(row[4]) >= feedback.model_epoch_floor(str(row[2]), 0)
+    ]
+    v2_rows = [row for row in v2_rows if int(row[5]) >= feedback.model_epoch_floor(str(row[3]), 0)]
     legacy_exact = [row for row in legacy_rows if str(row[0]) not in v2_experiments]
     exact_rows = [
         *legacy_exact,

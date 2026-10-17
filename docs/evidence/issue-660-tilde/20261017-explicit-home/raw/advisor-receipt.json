@@ -1,0 +1,35 @@
+{
+  "argv": [
+    "/opt/anaconda3/bin/python3",
+    "src/capability_advisor.py",
+    "--json",
+    "--lane",
+    "opener",
+    "--surface",
+    "opener-lane",
+    "--repository",
+    "stranske/Orchestrator",
+    "Repair existing source660 explicit tilde ORCH_FEEDBACK_DB learner and CLI export binding on existing PR663; isolated actual SQLite regression and production disconnection proof only, no live publication or new capabilities"
+  ],
+  "exit": 0,
+  "disposition": "fail-open; bounded local repair; no offload required",
+  "private_ledger": true,
+  "error": null,
+  "offered": [
+    {
+      "id": "deliberate-break-verifier",
+      "status": "generated",
+      "dispatch_ready": false,
+      "disposition": "declined: generated capability gate remains; exact causal test execution performed directly without changing activation"
+    }
+  ],
+  "withheld": {
+    "codemod-campaign": [
+      "'repeated_pattern' is a fact about the PR and needs `pr` \u2014 name it (`--pr N`, or `owner/repo#N` in the task)"
+    ],
+    "runtime-ac-checks": [
+      "'nontrivial_change' is a fact about the PR and needs `pr` \u2014 name it (`--pr N`, or `owner/repo#N` in the task)"
+    ]
+  },
+  "scope": "extend existing DB selection wiring only; no new capability or live ledger write"
+}

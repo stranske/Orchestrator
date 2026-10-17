@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 import execution_profiles
+import paths
 import utc_epoch
 
 ORCH = Path(__file__).resolve().parent
@@ -48,6 +49,35 @@ LOCAL_RUNTIME = Path(os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex"
 # Named once, for the same two consumers as `capabilities.LEDGER_PATH_ENV`.
 DB_PATH_ENV = "ORCH_FEEDBACK_DB"
 DB_PATH = Path(os.environ.get(DB_PATH_ENV, LOCAL_RUNTIME / "feedback" / "orchestrator.db"))
+
+
+def resolve_db_path(explicit: Path | None = None, state_dir: Path | None = None) -> Path:
+    """Resolve the shared Brain path without opening or migrating the store.
+
+    Explicit DB selection wins over the environment, then runtime selection wins
+    over a caller's state-directory fallback and ORCH_STATE_DIR. With no overrides, use DB_PATH so
+    in-process callers can still select a private store.
+    """
+    if explicit is not None:
+        selected = explicit
+    elif os.environ.get(DB_PATH_ENV):
+        selected = Path(os.environ[DB_PATH_ENV])
+    elif os.environ.get("ORCH_LOCAL_RUNTIME"):
+        selected = Path(os.environ["ORCH_LOCAL_RUNTIME"]) / "feedback" / "orchestrator.db"
+    elif state_dir is not None:
+        selected = state_dir / "feedback" / "orchestrator.db"
+    elif os.environ.get("ORCH_STATE_DIR"):
+        selected = Path(os.environ["ORCH_STATE_DIR"]) / "feedback" / "orchestrator.db"
+    else:
+        selected = DB_PATH
+    return selected.expanduser().resolve()
+
+
+# Bind the learner at import through the same instance resolver used by readers.
+# _conn keeps DB_PATH so existing in-process private-store monkeypatches still work.
+# Preserve the legacy spelling of explicit private-copy paths (e.g. /tmp aliases).
+DB_PATH = DB_PATH.expanduser() if os.environ.get(DB_PATH_ENV) else resolve_db_path()
+
 
 # `agent_switches` holds two kinds of switch (2026-09-23): `source='label'` rows come from a PR's
 # `agent:*` label timeline, `source='policy'` rows from the keepalive state marker's delegation_log
@@ -269,6 +299,28 @@ TOKEN_SOURCES = COMPLETE_COST_SOURCES | frozenset({"ledger"})
 DURABILITY_DETECTION_SINCE = 1787961600  # 2026-08-29T00:00:00Z
 DURABILITY_DETECTION_SINCE_DATE = "2026-08-29"
 RELEARN_WINDOW_DAYS = 120
+
+MODEL_EPOCHS_PATH = paths.checkout_root(ORCH) / "config" / "model_epochs.json"
+
+
+def model_epoch_floor(agent: str, since: int, path: Path | None = None) -> int:
+    """Learning floor for `agent`: the later of the window start and its model epoch.
+
+    A major model change (e.g. gemini 3.1 Pro -> Argon) must not inherit the old model's record, and
+    runs are keyed by agent, not model. An unreadable or malformed file returns `since` unchanged
+    (the learners then behave exactly as before) and an agent without an entry is untouched.
+    """
+    try:
+        data = json.loads((path or MODEL_EPOCHS_PATH).read_text())
+        entry = (data.get("epochs") or {}).get(agent)
+        if not entry:
+            return since
+        epoch = utc_epoch.from_iso(str(entry["since"]))
+        return max(since, epoch) if epoch is not None else since
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return since
+
+
 # WHICH RUNS THE ROUTE-WEIGHT LEARNERS READ. `assignment` is 'experimental' for the tool's own
 # dispatches, 'assigned' for fleet keepalive PRs that carried an agent label, 'none' for keepalive PRs
 # with no agent, 'instrumentation' for probes. Until 2026-09-21 both learners kept only 'experimental'
@@ -5975,7 +6027,13 @@ def relearn(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DAYS) -> i
                     "AND COALESCE(o.durability_checked_ts, r.ts)>=? "  # broke-later detection floor (#293)
                     # item 9 and 2026-10-04: an excluded class says nothing about the agent
                     f"AND COALESCE(o.failure_class,'') NOT IN ({excluded_marks})",
-                    (task_type, agent, since, DURABILITY_DETECTION_SINCE, *excluded_classes),
+                    (
+                        task_type,
+                        agent,
+                        model_epoch_floor(agent, since),
+                        DURABILITY_DETECTION_SINCE,
+                        *excluded_classes,
+                    ),
                 ).fetchall()
                 n = len(rows)
                 succ = sum(1 for d, a, v, _cu, _src in rows if _is_success(d, a, v))
@@ -6500,7 +6558,7 @@ def relearn_quality(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DA
                     "FROM runs r WHERE r.task_type=? AND r.agent=? AND r.ts>=? "
                     f"AND {_learning_assignment_sql()} "
                     "AND r.experiment_id IS NOT NULL",
-                    (task_type, agent, since),
+                    (task_type, agent, model_epoch_floor(agent, since)),
                 ).fetchall():
                     try:
                         metadata = json.loads(raw_metadata) if raw_metadata else {}
@@ -6538,7 +6596,7 @@ def relearn_quality(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DA
                     "FROM runs r LEFT JOIN outcomes o ON r.run_id=o.run_id "
                     "WHERE r.task_type=? AND r.agent=? AND r.ts>=? "
                     f"AND {_learning_assignment_sql()}",
-                    (task_type, agent, since),
+                    (task_type, agent, model_epoch_floor(agent, since)),
                 ).fetchall():
                     if run_id in eval_q_by_run:
                         # eval scores stay usable even on infra-classified runs (judges scored
@@ -7008,6 +7066,73 @@ def _selftest_refusal_role_edges() -> None:
         conn.close()
 
 
+def _selftest_resolve_db_path() -> None:
+    """Explicit path, ORCH_FEEDBACK_DB, ORCH_LOCAL_RUNTIME, state_dir, then DB_PATH — in that order.
+
+    Deliberate-break→revert (2026-10-17): temporarily forcing the ORCH_FEEDBACK_DB arm ahead of an
+    explicit path fails this case with AssertionError naming the winner; restoring the real
+    precedence order makes the case pass again.
+    """
+    import tempfile
+
+    global DB_PATH
+    saved = {
+        key: os.environ.get(key)
+        for key in (DB_PATH_ENV, "ORCH_LOCAL_RUNTIME", "ORCH_STATE_DIR", "HOME")
+    }
+    previous_default = DB_PATH
+    try:
+        root = Path(tempfile.mkdtemp(prefix="feedback-resolve-db-"))
+        explicit = root / "explicit.db"
+        env_db = root / "env.db"
+        runtime = root / "runtime"
+        state = root / "state"
+        default = root / "default.db"
+        DB_PATH = default
+        for key in (DB_PATH_ENV, "ORCH_LOCAL_RUNTIME", "ORCH_STATE_DIR"):
+            os.environ.pop(key, None)
+
+        assert resolve_db_path() == default.resolve()
+        assert (
+            resolve_db_path(state_dir=state) == (state / "feedback" / "orchestrator.db").resolve()
+        )
+        os.environ["ORCH_STATE_DIR"] = str(state)
+        assert resolve_db_path() == (state / "feedback" / "orchestrator.db").resolve()
+        os.environ["ORCH_LOCAL_RUNTIME"] = str(runtime)
+        assert (
+            resolve_db_path(state_dir=state) == (runtime / "feedback" / "orchestrator.db").resolve()
+        )
+        os.environ[DB_PATH_ENV] = str(env_db)
+        assert resolve_db_path(state_dir=state) == env_db.resolve()
+        assert resolve_db_path(explicit, state) == explicit.resolve()
+        os.environ.pop(DB_PATH_ENV)
+        os.environ.pop("ORCH_LOCAL_RUNTIME")
+        import runpy
+
+        isolated = runpy.run_path(__file__)
+        writer = isolated["_conn"]()
+        try:
+            writer.execute("INSERT INTO route_weights (version) VALUES (73)")
+            writer.commit()
+            assert Path(writer.execute("PRAGMA database_list").fetchone()[2]) == resolve_db_path()
+        finally:
+            writer.close()
+        assert isolated["DB_PATH"] == resolve_db_path(), "state-only learner/reader split"
+        os.environ["HOME"] = str(root)
+        os.environ[DB_PATH_ENV] = "~/private/orchestrator.db"
+        isolated = runpy.run_path(__file__)
+        assert isolated["DB_PATH"] == root / "private" / "orchestrator.db", "literal tilde DB"
+        # Reader canonicalization may spell the same /tmp store as /private/tmp.
+        assert isolated["DB_PATH"].resolve() == resolve_db_path(), "tilde learner/reader split"
+    finally:
+        DB_PATH = previous_default
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 def _selftest():
     import tempfile
 
@@ -7086,6 +7211,7 @@ def _selftest():
             )
         finally:
             legacy.close()
+        _selftest_resolve_db_path()
         _selftest_agent_switches_utc()
         _selftest_refusal_role_edges()
         _selftest_rejected_role_capability_edges()

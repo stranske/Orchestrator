@@ -1,0 +1,69 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_publish_guard_refuses_empty_db[default-empty-db] _____________
+
+tmp_path = PosixPath('LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2457/test_publish_guard_refuses_emp0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10635b9e0>
+capsys = <_pytest.capture.CaptureFixture object at 0x10635b770>, exists = True
+allow = False
+
+    @pytest.mark.parametrize("exists", [False, True], ids=["missing-db", "empty-db"])
+    @pytest.mark.parametrize("allow", [False, True], ids=["default", "owner-override"])
+    def test_publish_guard_refuses_empty_db(tmp_path, monkeypatch, capsys, exists, allow):
+        """The real CLI must fail at the guard, before touching the publication repo."""
+        database = tmp_path / "empty.db"
+        if exists:
+            sqlite3.connect(database).close()
+        monkeypatch.setenv("ORCH_ROUTE_WEIGHTS_PUBLISH", "1")
+        monkeypatch.setattr(export, "_current_capacity_snapshot", _capacity_fixture)
+        heartbeats = []
+        monkeypatch.setattr(
+            export.capabilities,
+            "daily_heartbeat",
+            lambda capability, event, **kwargs: heartbeats.append((capability, event)),
+        )
+        monkeypatch.setattr(
+            export.provision,
+            "ensure_canonical",
+            lambda *a: pytest.fail("publish_guard must refuse an empty DB before provisioning"),
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "route_weights_export.py",
+                "--feedback-db",
+                str(database),
+                "--state-dir",
+                str(tmp_path),
+                "--publish",
+            ]
+            + (["--allow-evidence-regression"] if allow else []),
+        )
+>       assert export.main() == 1, "publish_guard must refuse the empty DB"
+               ^^^^^^^^^^^^^
+
+tests/test_route_weights_export.py:486:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src/route_weights_export.py:738: in main
+    published = publish_document(
+src/route_weights_export.py:419: in publish_document
+    canonical = provision.ensure_canonical("stranske/Orchestrator")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+a = ('stranske/Orchestrator',)
+
+>       lambda *a: pytest.fail("publish_guard must refuse an empty DB before provisioning"),
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+E   Failed: publish_guard must refuse an empty DB before provisioning
+
+tests/test_route_weights_export.py:472: Failed
+----------------------------- Captured stdout call -----------------------------
+wrote LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2457/test_publish_guard_refuses_emp0/route-weights-export.json
+----------------------------- Captured stderr call -----------------------------
+db=LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2457/test_publish_guard_refuses_emp0/empty.db source_version=0
+tracked test inputs: NOT CHECKED -- EVIDENCE_ROOT/mutation-checkout is not a git checkout. In the exec mirror that loses nothing: its tests/ IS `git archive HEAD tests`, so every file in it was tracked
+=========================== short test summary info ============================
+FAILED tests/test_route_weights_export.py::test_publish_guard_refuses_empty_db[default-empty-db]
+1 failed in 0.49s
