@@ -1,0 +1,1449 @@
+"""Durable, bounded scheduler core for closer actions.
+
+This module only schedules and records work.  An observation is a proposal, not
+authority to mutate a GitHub resource: an execution adapter must perform its own
+fresh authoritative checks (including exact-head and policy checks) immediately
+before any write.
+
+Execution callbacks run in a bounded thread pool so independent repositories can
+progress concurrently. They must honor their operation deadline; the coordinator
+waits for every launched callback before writing its final receipt. Long-running
+remote workers return ``running`` and are polled with ``reconcile``.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import fcntl
+import hashlib
+import json
+import os
+import tempfile
+import time
+import uuid
+from concurrent.futures import Future, ThreadPoolExecutor
+from pathlib import Path
+from typing import Any, Callable, Iterable, Mapping
+
+import claims
+
+SCHEMA = "closer-queue/v1"
+RECEIPT_SCHEMA = "closer-queue-receipt/v1"
+READ_ONLY_ACTIONS = frozenset({"collect_evidence", "review", "disposition"})
+TERMINAL_ACTIONS = frozenset({"wait", "complete"})
+MUTATING_ACTIONS = frozenset(
+    {
+        "respond_review",
+        "repair",
+        "initiate_verify",
+        "merge",
+        "post_merge_verify",
+        "close_source",
+    }
+)
+ACTION_NAMES = READ_ONLY_ACTIONS | TERMINAL_ACTIONS | MUTATING_ACTIONS
+PENDING_OPERATION_STATES = frozenset({"submitted", "running", "uncertain"})
+RESOURCE_DEFERRALS = frozenset(
+    {
+        "claim_held",
+        "worker_capacity",
+        "operation_running",
+        "repo_operation_running",
+        "receipt_reserve",
+        "pass_limit",
+    }
+)
+DEFAULT_RECEIPT_RESERVE_SECONDS = 15.0
+DEFAULT_MIN_ACTION_SECONDS = 1.0
+MAX_OPERATION_HISTORY = 12
+MAX_CALLBACK_JSON_BYTES = 128 * 1024
+
+
+class QueueStateError(ValueError):
+    """The durable queue is malformed or incompatible; fail closed."""
+
+
+def _canonical_bytes(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+
+
+def _json_copy(value: Any, *, limit: int = MAX_CALLBACK_JSON_BYTES) -> Any:
+    """Validate that a callback value is bounded JSON data and detach it."""
+    encoded = json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    if len(encoded.encode("utf-8")) > limit:
+        raise ValueError("callback JSON exceeds receipt size bound")
+    return json.loads(encoded)
+
+
+def _digest(value: Any) -> str:
+    return hashlib.sha256(_canonical_bytes(value)).hexdigest()
+
+
+def _assignment_list(targets: Iterable[str]) -> list[str]:
+    result = list(targets)
+    if any(not isinstance(target, str) or not target.strip() for target in result):
+        raise ValueError("assignment targets must be non-empty strings")
+    if len(set(result)) != len(result):
+        raise ValueError("assignment targets must be unique")
+    return result
+
+
+def _repo_key(target: str) -> str:
+    """Map issue/PR aliases to the same repository mutation lane."""
+    repo = target.split("#", 1)[0].strip().lower()
+    if not repo:
+        return target.strip().lower()
+    return repo
+
+
+def _observation(value: Any, target: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("observe must return an object")
+    action = value.get("action")
+    if action not in ACTION_NAMES:
+        raise ValueError(f"unsupported closer action: {action!r}")
+    eligible = value.get("eligible")
+    if not isinstance(eligible, bool):
+        raise ValueError("observation eligible must be a boolean")
+    requires_coordinator = value.get("requires_coordinator", False)
+    if not isinstance(requires_coordinator, bool):
+        raise ValueError("observation requires_coordinator must be a boolean")
+    revision = value.get("revision")
+    # A missing revision is accounted for, but cannot authorize execution.
+    if revision is not None:
+        revision = _json_copy(revision, limit=4096)
+    evidence = _json_copy(value.get("evidence", {}))
+    if not isinstance(evidence, (dict, list, str, int, float, bool, type(None))):
+        raise ValueError("evidence must be JSON data")
+    reason = value.get("reason")
+    next_trigger = value.get("next_trigger")
+    if reason is not None and not isinstance(reason, str):
+        raise ValueError("observation reason must be a string or null")
+    if next_trigger is not None and not isinstance(next_trigger, str):
+        raise ValueError("next_trigger must be a string or null")
+    aliases = value.get("claim_targets", [target])
+    if not isinstance(aliases, (list, tuple)) or any(
+        not isinstance(alias, str) or not alias.strip() for alias in aliases
+    ):
+        raise ValueError("claim_targets must be a list of non-empty strings")
+    claim_targets = list(dict.fromkeys([target, *aliases]))
+    explicit_binding = value.get("operation_binding")
+    if explicit_binding is None:
+        source = evidence if isinstance(evidence, Mapping) else {}
+        explicit_binding = {
+            key: source[key] for key in ("head", "merge", "review_revision") if key in source
+        }
+        explicit_binding["pr_target"] = target
+        explicit_binding["source_targets"] = sorted(
+            row.get("target")
+            for row in source.get("sources", [])
+            if isinstance(row, Mapping) and isinstance(row.get("target"), str)
+        )
+    if not isinstance(explicit_binding, Mapping):
+        raise ValueError("operation_binding must be an object")
+    operation_binding = _json_copy(explicit_binding, limit=8192)
+    if action in MUTATING_ACTIONS:
+        source_targets = operation_binding.get("source_targets", [])
+        if not isinstance(source_targets, list) or any(
+            not isinstance(alias, str) or not alias.strip() for alias in source_targets
+        ):
+            raise ValueError("source_targets must be a list of non-empty strings")
+        claim_targets = list(dict.fromkeys([*claim_targets, *source_targets]))
+    repo_keys = sorted({_repo_key(alias) for alias in claim_targets})
+    if action in MUTATING_ACTIONS:
+        claim_targets = sorted({*claim_targets, *(f"closer-repo:{repo}" for repo in repo_keys)})
+    return {
+        "target": target,
+        "revision": revision,
+        "action": action,
+        "eligible": eligible,
+        "requires_coordinator": requires_coordinator,
+        "reason": reason,
+        "next_trigger": next_trigger,
+        "evidence": evidence,
+        "operation_binding": operation_binding,
+        "claim_targets": claim_targets,
+        "repo_keys": repo_keys,
+    }
+
+
+def _observe_or_error(observe: Callable[[str], Mapping[str, Any]], target: str) -> dict[str, Any]:
+    return _observation(observe(target), target)
+
+
+def _execution_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    """Restore adapter-specific source fields while retaining scheduler metadata."""
+    evidence = snapshot.get("evidence")
+    payload = dict(evidence) if isinstance(evidence, Mapping) else {}
+    payload.update({key: value for key, value in snapshot.items() if key != "evidence"})
+    return payload
+
+
+def _new_state() -> dict[str, Any]:
+    return {"schema": SCHEMA, "items": {}, "round": {}}
+
+
+def _read_state(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return _new_state()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise QueueStateError(f"unable to read closer queue: {exc}") from exc
+    if not isinstance(data, dict) or data.get("schema") != SCHEMA:
+        raise QueueStateError("unsupported or malformed closer queue schema")
+    if not isinstance(data.get("items"), dict) or not isinstance(data.get("round"), dict):
+        raise QueueStateError("closer queue items and round must be objects")
+    return data
+
+
+def _atomic_write(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(
+                payload, stream, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False
+            )
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        dir_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temporary)
+
+
+@contextlib.contextmanager
+def _ledger_lock(path: Path, *, cutoff: float, now: Callable[[], float]):
+    """Acquire the process-wide ledger lock without waiting beyond the reserve."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(path.name + ".lock")
+    deadline_mono = time.monotonic() + max(0.0, cutoff - float(now()))
+    with lock_path.open("a+") as stream:
+        while True:
+            try:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                remaining = deadline_mono - time.monotonic()
+                if remaining <= 0:
+                    yield False
+                    return
+                time.sleep(min(0.025, remaining))
+        try:
+            yield True
+        finally:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+
+def _set_observation(
+    item: dict[str, Any],
+    snapshot: Mapping[str, Any],
+    *,
+    owner: str,
+    source_revisions: dict[str, Any],
+) -> bool:
+    old_revision = item.get("revision")
+    new_revision = snapshot.get("revision")
+    changed = old_revision != new_revision
+    if changed:
+        item["evidence"] = {}
+    item.update(
+        {
+            "revision": new_revision,
+            "owner": owner,
+            "action": snapshot["action"],
+            "eligible": snapshot["eligible"],
+            "requires_coordinator": snapshot["requires_coordinator"],
+            "reason": snapshot["reason"],
+            "next_trigger": snapshot["next_trigger"],
+            "evidence": snapshot["evidence"],
+            "claim_targets": snapshot["claim_targets"],
+            "repo_keys": snapshot["repo_keys"],
+            "observation_freshness": "fresh",
+        }
+    )
+    source_revisions[snapshot["target"]] = new_revision
+    return changed
+
+
+def _event(round_state: dict[str, Any], target: str, kind: str, **details: Any) -> None:
+    events = round_state.setdefault("events", [])
+    event = {"at": round_state.get("last_event_at"), "target": target, "kind": kind}
+    event.update(details)
+    events.append(event)
+    # The round is bounded, and this protects state size across noisy callbacks.
+    if len(events) > 256:
+        del events[:-256]
+
+
+def _remaining(deadline: float, reserve: float, now: Callable[[], float]) -> float:
+    return deadline - float(now()) - reserve
+
+
+def _budget_available(
+    deadline: float, reserve: float, minimum: float, now: Callable[[], float]
+) -> bool:
+    available = _remaining(deadline, reserve, now)
+    return available > 0 and available >= minimum
+
+
+def _invoke_before_cutoff(execute, target, action, snapshot, operation, now):
+    """A queued callback must recheck its deadline before entering adapter code."""
+    invoked_at = float(now())
+    if invoked_at >= float(operation["deadline"]):
+        return None, None
+    return execute(target, action, snapshot, operation), invoked_at
+
+
+def _operation_id(owner: str, target: str, action: str, revision: Any) -> str:
+    return hashlib.sha256(
+        _canonical_bytes([owner, target, action, revision, uuid.uuid4().hex])
+    ).hexdigest()[:32]
+
+
+def _active_operations(items: Mapping[str, Any]) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    running: dict[str, dict[str, Any]] = {}
+    repos: set[str] = set()
+    for target, item in items.items():
+        operation = item.get("operation") if isinstance(item, dict) else None
+        if isinstance(operation, dict) and operation.get("status") in PENDING_OPERATION_STATES:
+            running[target] = operation
+            if operation.get("action") in MUTATING_ACTIONS:
+                repos.update(operation.get("repo_keys", []))
+    return running, repos
+
+
+def _account_row(target: str, item: Mapping[str, Any]) -> dict[str, Any]:
+    raw_operation = item.get("operation")
+    operation = raw_operation if isinstance(raw_operation, dict) else {}
+    return {
+        "target": target,
+        "revision": item.get("revision"),
+        "action": item.get("action"),
+        "eligible": bool(item.get("eligible")),
+        "requires_coordinator": bool(item.get("requires_coordinator")),
+        "status": item.get("status", "observed"),
+        "reason": item.get("deferred_reason") or item.get("reason"),
+        "next_trigger": item.get("deferred_next_trigger") or item.get("next_trigger"),
+        "operation_id": operation.get("id"),
+        "operation_status": operation.get("status"),
+        "observation_freshness": item.get("observation_freshness", "fresh"),
+    }
+
+
+def _validate_data(
+    state: Mapping[str, Any],
+    receipt: Mapping[str, Any],
+    *,
+    assignment_targets: list[str] | None,
+    now_value: float,
+    holder_fn: Callable[[str], Any],
+) -> dict[str, Any]:
+    reasons: list[str] = []
+    warnings: list[str] = []
+    round_state = state.get("round", {})
+    if not isinstance(round_state, Mapping) or not isinstance(receipt, Mapping):
+        return {"valid": False, "stop_valid": False, "reasons": ["missing_round_or_receipt"]}
+    targets = round_state.get("assignment_targets")
+    if not isinstance(targets, list) or any(not isinstance(target, str) for target in targets):
+        return {"valid": False, "stop_valid": False, "reasons": ["invalid_assignment"]}
+    expected_hash = _digest(targets)
+    if (
+        round_state.get("assignment_hash") != expected_hash
+        or receipt.get("assignment_hash") != expected_hash
+    ):
+        reasons.append("assignment_hash_mismatch")
+    if assignment_targets is not None:
+        try:
+            supplied = _assignment_list(assignment_targets)
+        except ValueError:
+            supplied = []
+            reasons.append("invalid_supplied_assignment")
+        if supplied != targets:
+            reasons.append("assignment_changed")
+    source_revisions = round_state.get("source_revisions")
+    if not isinstance(source_revisions, dict):
+        reasons.append("missing_source_revisions")
+        source_revisions = {}
+    expected_source_hash = _digest({target: source_revisions.get(target) for target in targets})
+    if (
+        round_state.get("source_hash") != expected_source_hash
+        or receipt.get("source_hash") != expected_source_hash
+    ):
+        reasons.append("source_hash_mismatch")
+    accounted = receipt.get("accounted_targets")
+    if (
+        not isinstance(accounted, list)
+        or len(accounted) != len(targets)
+        or set(accounted) != set(targets)
+    ):
+        reasons.append("assignment_not_fully_accounted")
+    deadline = round_state.get("deadline")
+    reserve = round_state.get("receipt_reserve_seconds")
+    finished_at = receipt.get("finished_at")
+    if not isinstance(deadline, (int, float)) or isinstance(deadline, bool):
+        reasons.append("invalid_deadline")
+        deadline = now_value
+    if not isinstance(reserve, (int, float)) or isinstance(reserve, bool) or reserve < 0:
+        reasons.append("invalid_receipt_reserve")
+        reserve = 0.0
+    if not isinstance(finished_at, (int, float)) or isinstance(finished_at, bool):
+        reasons.append("missing_finish_time")
+        finished_at = now_value
+    overrun_seconds = max(0.0, finished_at - deadline)
+    if overrun_seconds:
+        warnings.append("deadline_overrun")
+    available_at_finish = deadline - finished_at - reserve
+    items = state.get("items", {})
+    # Expired recovery may finalize a truthful resource stop, but it may never
+    # retroactively authorize an intent or callback launched after its cutoff.
+    cutoff = deadline - reserve
+    for target, item in items.items():
+        if not isinstance(item, Mapping):
+            continue
+        operations = [item.get("operation"), *item.get("operation_history", [])]
+        for operation in operations:
+            if not isinstance(operation, Mapping) or operation.get("owner") != round_state.get(
+                "owner"
+            ):
+                continue
+            for field in ("submitted_at", "invoked_at"):
+                at = operation.get(field)
+                if isinstance(at, (int, float)) and at >= cutoff:
+                    reasons.append(f"operation_after_cutoff:{target}:{field}")
+    rows = receipt.get("accounting")
+    if not isinstance(rows, list):
+        reasons.append("missing_accounting_rows")
+        rows = []
+    by_target = {row.get("target"): row for row in rows if isinstance(row, dict)}
+    continuation_required = False
+    integration_required: list[str] = []
+    for target in targets:
+        row = by_target.get(target)
+        if row is None:
+            reasons.append(f"unaccounted:{target}")
+            continue
+        item = items.get(target, {}) if isinstance(items, Mapping) else {}
+        if not isinstance(item, Mapping) or row != _account_row(target, item):
+            reasons.append(f"accounting_state_mismatch:{target}")
+        if row.get("requires_coordinator"):
+            integration_required.append(target)
+            continuation_required = True
+            if available_at_finish > 0:
+                reasons.append(f"coordinator_integration_required:{target}")
+            elif row.get("reason") != "receipt_reserve":
+                reasons.append(f"integration_deferral_without_budget_exhaustion:{target}")
+            if not row.get("next_trigger"):
+                reasons.append(f"missing_integration_trigger:{target}")
+        if not row.get("eligible"):
+            if row.get("status") not in {"complete", "deferred", "ineligible"}:
+                reasons.append(f"invalid_accounting_status:{target}")
+            if row.get("status") != "complete" and not row.get("next_trigger"):
+                reasons.append(f"missing_next_trigger:{target}")
+            continue
+        if row.get("status") in {"complete", "completed"}:
+            continue
+        continuation_required = True
+        reason = row.get("reason")
+        trigger = row.get("next_trigger")
+        if not trigger:
+            reasons.append(f"missing_next_trigger:{target}")
+            continue
+        if reason not in RESOURCE_DEFERRALS:
+            reasons.append(f"eligible_without_resource_reason:{target}")
+            continue
+        # A scheduler cannot declare a made-up capacity or holder conflict.
+        if reason == "worker_capacity":
+            max_workers = round_state.get("max_workers", 0)
+            active, _ = _active_operations(items)
+            if not isinstance(max_workers, int) or max_workers <= 0 or len(active) < max_workers:
+                reasons.append(f"unverified_worker_capacity:{target}")
+        elif reason == "operation_running":
+            item = items.get(target, {}) if isinstance(items, dict) else {}
+            operation = item.get("operation") if isinstance(item, dict) else None
+            if (
+                not isinstance(operation, dict)
+                or operation.get("status") not in PENDING_OPERATION_STATES
+            ):
+                reasons.append(f"unverified_running_operation:{target}")
+        elif reason == "repo_operation_running":
+            active, active_repos = _active_operations(items)
+            item = items.get(target, {}) if isinstance(items, dict) else {}
+            repos = set(item.get("repo_keys", [])) if isinstance(item, dict) else set()
+            if not active or not active_repos.intersection(repos):
+                reasons.append(f"unverified_repo_operation:{target}")
+        elif reason == "claim_held":
+            item = items.get(target, {}) if isinstance(items, dict) else {}
+            aliases = item.get("claim_targets", [target]) if isinstance(item, dict) else [target]
+            holders = []
+            for alias in aliases:
+                try:
+                    holder = holder_fn(alias)
+                except Exception:
+                    holder = {"agent": "unreadable"}
+                if holder:
+                    holders.append(holder)
+            if not holders:
+                reasons.append(f"unverified_claim_conflict:{target}")
+        elif reason == "receipt_reserve":
+            if available_at_finish > 0:
+                reasons.append(f"premature_deadline_deferral:{target}")
+        elif reason == "pass_limit":
+            if not receipt.get("continuation_required"):
+                reasons.append(f"missing_continuation:{target}")
+            if round_state.get("passes", 0) < round_state.get("max_passes", 1):
+                reasons.append(f"premature_pass_limit:{target}")
+            if available_at_finish > 0:
+                reasons.append(f"pass_limit_requires_continuation:{target}")
+    if continuation_required != bool(receipt.get("continuation_required")):
+        reasons.append("continuation_flag_mismatch")
+    if receipt.get("integration_required") != integration_required:
+        reasons.append("integration_required_mismatch")
+    if available_at_finish > 0:
+        # An explicit continuation preserves the queue, but cannot justify early
+        # finalization without a verified actual resource reason above.
+        for target in targets:
+            row = by_target.get(target, {})
+            if row.get("eligible") and row.get("status") not in {"complete", "completed"}:
+                if row.get("reason") not in RESOURCE_DEFERRALS:
+                    reasons.append(f"work_left_with_time:{target}")
+    return {
+        "valid": not reasons,
+        "stop_valid": not reasons,
+        "reasons": reasons,
+        "warnings": warnings,
+        "deadline_overrun_seconds": overrun_seconds,
+        "continuation_required": continuation_required,
+        "integration_required": integration_required,
+    }
+
+
+def validate_stop(
+    state_path: str | Path,
+    assignment_targets: Iterable[str] | None = None,
+    *,
+    now: Callable[[], float] = time.time,
+    holder_fn: Callable[[str], Any] | None = None,
+    receipt: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Validate the latest durable receipt against its assignments and source hash."""
+    path = Path(state_path)
+    holder = holder_fn or claims.holder
+    with _ledger_lock(path, cutoff=float(now()) + 1.0, now=now) as locked:
+        if not locked:
+            return {"valid": False, "stop_valid": False, "reasons": ["ledger_lock_busy"]}
+        state = _read_state(path)
+        round_state = state.get("round", {})
+        stored = round_state.get("receipt") if isinstance(round_state, dict) else None
+        selected = receipt if receipt is not None else stored
+        if not isinstance(selected, Mapping):
+            return {"valid": False, "stop_valid": False, "reasons": ["missing_receipt"]}
+        supplied = _assignment_list(assignment_targets) if assignment_targets is not None else None
+        return _validate_data(
+            state,
+            selected,
+            assignment_targets=supplied,
+            now_value=float(now()),
+            holder_fn=holder,
+        )
+
+
+def _failure_observation(target: str, error: Exception) -> dict[str, Any]:
+    return {
+        "target": target,
+        "revision": None,
+        "action": "wait",
+        "eligible": True,
+        "reason": "observation_failed",
+        "next_trigger": "retry_observation",
+        "evidence": {"error_type": type(error).__name__},
+        "claim_targets": [target],
+        "repo_keys": [_repo_key(target)],
+    }
+
+
+def _cached_snapshot(target: str, item: Mapping[str, Any]) -> dict[str, Any]:
+    """Return durable last-known data for accounting without treating it as fresh."""
+    action = item.get("action")
+    if action not in ACTION_NAMES:
+        action = "wait"
+    aliases = item.get("claim_targets", [target])
+    if not isinstance(aliases, list):
+        aliases = [target]
+    repos = item.get("repo_keys", [_repo_key(target)])
+    if not isinstance(repos, list):
+        repos = [_repo_key(target)]
+    return {
+        "target": target,
+        "revision": item.get("revision"),
+        "action": action,
+        # Without a fresh read, an old terminal/ineligible assessment cannot
+        # certify that no work remains.
+        "eligible": True,
+        "requires_coordinator": bool(item.get("requires_coordinator", False)),
+        "reason": item.get("reason") or "last_known_observation_only",
+        "next_trigger": item.get("next_trigger") or "retry_observation_next_round",
+        "evidence": item.get("evidence", {}),
+        "operation_binding": item.get("operation_binding", {}),
+        "claim_targets": aliases,
+        "repo_keys": repos,
+    }
+
+
+def _defer(item: dict[str, Any], reason: str, trigger: str) -> None:
+    item["status"] = "deferred"
+    item["deferred_reason"] = reason
+    item["deferred_next_trigger"] = trigger
+
+
+def _claim_all(
+    targets: list[str],
+    owner: str,
+    claim_fn: Callable[[str, str], bool],
+    release_fn: Callable[[str, str], bool],
+    holder_fn: Callable[[str], Any],
+) -> tuple[list[str], str | None, Any]:
+    claimed: list[str] = []
+    for target in targets:
+        try:
+            acquired = bool(claim_fn(target, owner))
+        except Exception as exc:
+            acquired = False
+            failure = f"claim_error:{type(exc).__name__}"
+        else:
+            failure = "claim_held"
+        if not acquired:
+            try:
+                holder = holder_fn(target)
+            except Exception:
+                holder = {"agent": "unreadable"}
+            for prior in reversed(claimed):
+                with contextlib.suppress(Exception):
+                    release_fn(prior, owner)
+            return [], failure, holder
+        claimed.append(target)
+    return claimed, None, None
+
+
+def _release_all(
+    targets: list[str], owner: str, release_fn: Callable[[str, str], bool]
+) -> list[str]:
+    failed: list[str] = []
+    for target in reversed(targets):
+        try:
+            if not release_fn(target, owner):
+                failed.append(target)
+        except Exception:
+            failed.append(target)
+    return failed
+
+
+def run_round(
+    state_path: str | Path,
+    assignment_targets: Iterable[str],
+    observe: Callable[[str], Mapping[str, Any]],
+    execute: Callable[[str, str, Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]],
+    *,
+    reconcile: Callable[[str, Mapping[str, Any]], Mapping[str, Any]] | None = None,
+    owner: str | None = None,
+    deadline: float,
+    receipt_reserve_seconds: float = DEFAULT_RECEIPT_RESERVE_SECONDS,
+    max_workers: int = 2,
+    max_passes: int = 4,
+    max_operation_retries: int = 1,
+    min_action_seconds: float = DEFAULT_MIN_ACTION_SECONDS,
+    now: Callable[[], float] = time.time,
+    monotonic: Callable[[], float] = time.monotonic,
+    claim_fn: Callable[[str, str], bool] | None = None,
+    holder_fn: Callable[[str], Any] | None = None,
+    release_fn: Callable[[str, str], bool] | None = None,
+) -> dict[str, Any]:
+    """Run a fair, durable, deadline-bounded action round.
+
+    ``observe`` must be a bounded read. ``execute`` and ``reconcile`` must honor
+    the ``operation['deadline']`` and ``operation['timeout_seconds']`` fields.
+    Every non-read-only action is recorded before callback invocation. A pending
+    operation is reconciled before any retry; only ``confirmed_not_started`` can
+    authorize a bounded retry of the same idempotency ID.
+    """
+    path = Path(state_path)
+    targets = _assignment_list(assignment_targets)
+    if not isinstance(deadline, (int, float)) or isinstance(deadline, bool):
+        raise ValueError("deadline must be an epoch timestamp")
+    if receipt_reserve_seconds < 0 or min_action_seconds < 0:
+        raise ValueError("time reserves must be non-negative")
+    if max_workers < 1 or max_passes < 1 or max_operation_retries < 0:
+        raise ValueError("worker, pass, and retry bounds must be positive")
+    assignment_hash = _digest(targets)
+    claim_call = claim_fn or claims.claim
+    holder_call = holder_fn or claims.holder
+    release_call = release_fn or claims.release
+    cutoff = float(deadline) - float(receipt_reserve_seconds)
+
+    with _ledger_lock(path, cutoff=cutoff, now=now) as locked:
+        if not locked:
+            accounting = [
+                {
+                    "target": target,
+                    "revision": None,
+                    "action": None,
+                    "eligible": True,
+                    "status": "deferred",
+                    "reason": "receipt_reserve",
+                    "next_trigger": "retry_after_ledger_unlock",
+                    "operation_id": None,
+                    "operation_status": None,
+                }
+                for target in targets
+            ]
+            return {
+                "schema": RECEIPT_SCHEMA,
+                "assignment_hash": assignment_hash,
+                "source_hash": None,
+                "accounted_targets": targets,
+                "accounting": accounting,
+                "eligible_remaining": targets,
+                "deferred": accounting,
+                "progress": [],
+                "events": [],
+                "valid": False,
+                "stop_valid": False,
+                "continuation_required": bool(targets),
+                "reasons": ["ledger_lock_busy"],
+            }
+
+        state = _read_state(path)
+        items: dict[str, Any] = state["items"]
+        current_round = state.get("round", {})
+        timestamp = float(now())
+        # A slice ending with an invalid stop is still the same bounded round.
+        # Refreshing assignments must not purchase another wall-clock budget.
+        resume = current_round.get("status") == "running" or (
+            current_round.get("status") == "finished"
+            and not current_round.get("receipt", {}).get("stop_valid", False)
+        )
+        if resume:
+            round_state = current_round
+            round_owner = str(round_state["owner"])
+            if owner is not None and owner != round_owner:
+                raise QueueStateError("resume owner differs from durable round owner")
+            # A restarted process continues the original budget; it cannot extend
+            # an unfinished round by supplying a later wall-clock deadline.
+            deadline = float(round_state["deadline"])
+            receipt_reserve_seconds = float(round_state["receipt_reserve_seconds"])
+            max_workers = int(round_state.get("max_workers", max_workers))
+            max_passes = int(round_state.get("max_passes", max_passes))
+            max_operation_retries = int(
+                round_state.get("max_operation_retries", max_operation_retries)
+            )
+            min_action_seconds = float(round_state.get("min_action_seconds", min_action_seconds))
+            round_state["assignment_targets"] = targets
+            round_state["assignment_hash"] = assignment_hash
+            round_state["status"] = "running"
+            round_state.pop("receipt", None)
+        else:
+            round_owner = owner or f"closer-round:{uuid.uuid4().hex}"
+            if not isinstance(round_owner, str) or not round_owner.strip():
+                raise ValueError("owner must be a non-empty string")
+            round_state = {
+                "started_at": timestamp,
+                "deadline": float(deadline),
+                "receipt_reserve_seconds": float(receipt_reserve_seconds),
+                "owner": round_owner,
+                "assignment_targets": targets,
+                "assignment_hash": assignment_hash,
+                "source_revisions": {},
+                "source_hash": None,
+                "status": "running",
+                "max_workers": max_workers,
+                "max_passes": max_passes,
+                "max_operation_retries": max_operation_retries,
+                "min_action_seconds": min_action_seconds,
+                "passes": 0,
+                "events": [],
+                "progress": [],
+            }
+            state["round"] = round_state
+
+        cutoff = float(deadline) - float(receipt_reserve_seconds)
+        budget_available_at_start = _budget_available(
+            float(deadline), receipt_reserve_seconds, min_action_seconds, now
+        )
+
+        # An unfinished operation from any assignment remains a duplicate-action
+        # barrier. Reconcile all such records, not merely today's assignment set.
+        for pending_target, pending_item in list(items.items()):
+            operation = pending_item.get("operation") if isinstance(pending_item, dict) else None
+            if (
+                not isinstance(operation, dict)
+                or operation.get("status") not in PENDING_OPERATION_STATES
+            ):
+                continue
+            if not budget_available_at_start or not _budget_available(
+                float(deadline), receipt_reserve_seconds, min_action_seconds, now
+            ):
+                pending_item["deferred_reason"] = "receipt_reserve"
+                pending_item["deferred_next_trigger"] = "reconcile_next_round"
+                continue
+            if reconcile is None:
+                resolution: Mapping[str, Any] = {
+                    "status": "unknown",
+                    "next_trigger": "reconcile_operation",
+                }
+            else:
+                try:
+                    bounded = dict(operation)
+                    bounded["deadline"] = cutoff
+                    bounded["timeout_seconds"] = max(
+                        0.0, _remaining(float(deadline), receipt_reserve_seconds, now)
+                    )
+                    resolution = reconcile(pending_target, bounded)
+                except Exception as exc:
+                    resolution = {"status": "unknown", "error_type": type(exc).__name__}
+            if not isinstance(resolution, Mapping):
+                resolution = {"status": "unknown"}
+            resolution_status = resolution.get("status")
+            if resolution_status == "completed":
+                operation["status"] = "completed"
+                operation["result"] = _json_copy(resolution.get("result", {}))
+                operation["completed_at"] = float(now())
+                pending_item["status"] = "observed"
+                pending_item.pop("deferred_reason", None)
+                pending_item.pop("deferred_next_trigger", None)
+                _event(
+                    round_state,
+                    pending_target,
+                    "reconciled_completed",
+                    operation_id=operation.get("id"),
+                )
+            elif resolution_status == "confirmed_not_started":
+                operation["status"] = "confirmed_not_started"
+                operation["reconcile_next_trigger"] = resolution.get(
+                    "next_trigger", "retry_same_operation"
+                )
+            elif resolution_status == "running":
+                operation["status"] = "running"
+                pending_item["status"] = "deferred"
+                pending_item["deferred_reason"] = "operation_running"
+                pending_item["deferred_next_trigger"] = resolution.get(
+                    "next_trigger", "reconcile_operation"
+                )
+            elif resolution_status == "failed":
+                operation["status"] = "failed"
+                operation["result"] = _json_copy(resolution.get("result", {}))
+                operation["next_trigger"] = resolution.get(
+                    "next_trigger", "inspect_operation_failure"
+                )
+                pending_item["status"] = "deferred"
+                pending_item["deferred_reason"] = "operation_failed"
+                pending_item["deferred_next_trigger"] = operation["next_trigger"]
+            else:
+                operation["status"] = "uncertain"
+                operation["next_trigger"] = resolution.get("next_trigger", "reconcile_operation")
+                pending_item["status"] = "deferred"
+                pending_item["deferred_reason"] = "operation_uncertain"
+                pending_item["deferred_next_trigger"] = operation["next_trigger"]
+            _atomic_write(path, state)
+
+        # Observe every assigned target before queueing. Unexpected/invalid reads
+        # become explicit blockers, never apparent idle targets.
+        snapshots: dict[str, dict[str, Any]] = {}
+        source_revisions: dict[str, Any] = round_state.setdefault("source_revisions", {})
+        for target in targets:
+            item = items.setdefault(target, {"operation": None, "operation_history": []})
+            if not budget_available_at_start or not _budget_available(
+                float(deadline), receipt_reserve_seconds, min_action_seconds, now
+            ):
+                if "revision" in item or "evidence" in item:
+                    snapshot = _cached_snapshot(target, item)
+                    item.update(snapshot)
+                    item["owner"] = round_owner
+                    item["observation_freshness"] = "cached_budget_exhausted"
+                    source_revisions[target] = item.get("revision")
+                else:
+                    snapshot = {
+                        "target": target,
+                        "revision": None,
+                        "action": "wait",
+                        "eligible": True,
+                        "requires_coordinator": False,
+                        "reason": "unobserved_budget_exhausted",
+                        "next_trigger": "retry_observation_next_round",
+                        "evidence": {},
+                        "operation_binding": {},
+                        "claim_targets": [target],
+                        "repo_keys": [_repo_key(target)],
+                    }
+                    item.update(snapshot)
+                    item["owner"] = round_owner
+                    item["observation_freshness"] = "unobserved_budget_exhausted"
+                    source_revisions[target] = None
+                snapshots[target] = snapshot
+                _defer(item, "receipt_reserve", "retry_observation_next_round")
+                _atomic_write(path, state)
+                continue
+            try:
+                snapshot = _observe_or_error(observe, target)
+            except Exception as exc:
+                snapshot = _failure_observation(target, exc)
+                round_state.setdefault("invalid_observations", {})[target] = type(exc).__name__
+            changed = _set_observation(
+                item, snapshot, owner=round_owner, source_revisions=source_revisions
+            )
+            snapshots[target] = snapshot
+            if changed:
+                _event(round_state, target, "revision_refreshed", revision=snapshot["revision"])
+            item["status"] = "observed"
+            item.pop("deferred_reason", None)
+            item.pop("deferred_next_trigger", None)
+            _atomic_write(path, state)
+        round_state["source_hash"] = _digest(
+            {target: source_revisions.get(target) for target in targets}
+        )
+
+        progress_targets: list[str] = []
+        stalled: set[str] = set()
+        active_ops, active_mutating_repos = _active_operations(items)
+        # Reconcile-completed assigned operations and confirmed-not-started items
+        # using the current observation; stale snapshots are never executed.
+        for target in targets:
+            item = items[target]
+            operation = item.get("operation")
+            if not isinstance(operation, dict):
+                continue
+            if operation.get("status") == "completed":
+                pass
+            elif operation.get("status") in {"running", "uncertain", "submitted"}:
+                _defer(
+                    item,
+                    (
+                        "operation_running"
+                        if operation.get("status") == "running"
+                        else "operation_uncertain"
+                    ),
+                    operation.get("next_trigger", "reconcile_operation"),
+                )
+                stalled.add(target)
+            elif operation.get("status") == "failed":
+                _defer(
+                    item,
+                    "operation_failed",
+                    operation.get("next_trigger", "inspect_operation_failure"),
+                )
+                stalled.add(target)
+            elif operation.get("status") == "confirmed_not_started":
+                if operation.get("attempts", 0) > max_operation_retries:
+                    operation["status"] = "uncertain"
+                    _defer(item, "operation_uncertain", "manual_operation_reconciliation")
+                    stalled.add(target)
+                elif (
+                    operation.get("revision") != snapshots[target].get("revision")
+                    or operation.get("action") != snapshots[target].get("action")
+                    or operation.get("binding") != snapshots[target].get("operation_binding")
+                ):
+                    operation["status"] = "abandoned"
+                    operation["next_trigger"] = "reobserve_changed_revision"
+                    item["operation_history"] = (item.get("operation_history", []) + [operation])[
+                        -MAX_OPERATION_HISTORY:
+                    ]
+                    item["operation"] = None
+                    _event(round_state, target, "abandoned_stale_intent")
+            else:
+                item["operation"] = None
+        active_ops, active_mutating_repos = _active_operations(items)
+        stop_launch_reason: str | None = None
+        executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="closer-action")
+        slice_start_pass = int(round_state.get("passes", 0))
+        slice_pass_limit = slice_start_pass + max_passes
+        for pass_number in range(slice_start_pass, slice_pass_limit):
+            if not budget_available_at_start or not _budget_available(
+                float(deadline), receipt_reserve_seconds, min_action_seconds, now
+            ):
+                stop_launch_reason = "receipt_reserve"
+                break
+            round_state["passes"] = pass_number + 1
+            round_state["last_event_at"] = float(now())
+            made_progress = False
+            launched: list[
+                tuple[str, dict[str, Any], dict[str, Any], Future[Any], list[str], float]
+            ] = []
+            # Rotate start order each pass so repeated rounds don't privilege the
+            # same first assignment.
+            ordered = (
+                targets[pass_number % len(targets) :] + targets[: pass_number % len(targets)]
+                if targets
+                else []
+            )
+            for target in ordered:
+                if target in stalled:
+                    continue
+                item = items[target]
+                snapshot = snapshots[target]
+                operation = item.get("operation")
+                if (
+                    isinstance(operation, dict)
+                    and operation.get("status") in PENDING_OPERATION_STATES
+                ):
+                    _defer(
+                        item,
+                        (
+                            "operation_running"
+                            if operation.get("status") == "running"
+                            else "operation_uncertain"
+                        ),
+                        operation.get("next_trigger", "reconcile_operation"),
+                    )
+                    stalled.add(target)
+                    continue
+                if snapshot["action"] == "complete":
+                    item["status"] = "complete"
+                    item.pop("deferred_reason", None)
+                    item.pop("deferred_next_trigger", None)
+                    stalled.add(target)
+                    continue
+                if snapshot["action"] == "wait" or not snapshot["eligible"]:
+                    why = snapshot["reason"] or "not_eligible"
+                    trigger = snapshot["next_trigger"] or "wait_for_trigger"
+                    _defer(item, why, trigger)
+                    stalled.add(target)
+                    continue
+                action = snapshot["action"]
+                if action not in ACTION_NAMES:
+                    _defer(item, "invalid_action", "repair_observation")
+                    stalled.add(target)
+                    continue
+                available = _remaining(float(deadline), receipt_reserve_seconds, now)
+                if available <= 0 or available < min_action_seconds:
+                    _defer(item, "receipt_reserve", "continue_next_round")
+                    stop_launch_reason = "receipt_reserve"
+                    continue
+                active_ops, active_mutating_repos = _active_operations(items)
+                if len(active_ops) >= max_workers:
+                    _defer(item, "worker_capacity", "reconcile_running_operations")
+                    continue
+                is_mutating = action not in READ_ONLY_ACTIONS and action not in TERMINAL_ACTIONS
+                repos = set(snapshot["repo_keys"])
+                if is_mutating and repos.intersection(active_mutating_repos):
+                    _defer(item, "repo_operation_running", "reconcile_repo_operation")
+                    continue
+
+                # Read immediately before the action. A moving revision invalidates
+                # prior evidence and this pass defers rather than acting on stale data.
+                try:
+                    fresh = _observe_or_error(observe, target)
+                except Exception as exc:
+                    fresh = _failure_observation(target, exc)
+                    round_state.setdefault("invalid_observations", {})[target] = type(exc).__name__
+                if fresh["revision"] != snapshot["revision"]:
+                    _set_observation(
+                        item, fresh, owner=round_owner, source_revisions=source_revisions
+                    )
+                    snapshots[target] = fresh
+                    _defer(item, "revision_changed", "reobserve_next_pass")
+                    _event(round_state, target, "stale_snapshot_rejected", action=action)
+                    stalled.add(target)
+                    continue
+                snapshot = fresh
+                snapshots[target] = fresh
+                _set_observation(item, fresh, owner=round_owner, source_revisions=source_revisions)
+                # Eligibility and lifecycle action can change without a new head
+                # (e.g. a human hold or a check conclusion). Never execute the old
+                # action with refreshed but contradictory selection evidence.
+                if fresh["action"] != action or not fresh["eligible"]:
+                    _defer(item, "selection_changed", "reselect_current_lifecycle_action")
+                    made_progress = True
+                    continue
+                if fresh.get("revision") is None:
+                    _defer(item, "revision_unavailable", "restore_source_observation")
+                    stalled.add(target)
+                    continue
+
+                acquired: list[str] = []
+                if is_mutating:
+                    active_ops, active_mutating_repos = _active_operations(items)
+                    repos = set(fresh["repo_keys"])
+                    if repos.intersection(active_mutating_repos):
+                        _defer(item, "repo_operation_running", "reconcile_repo_operation")
+                        continue
+                    # Statefile locks are private to a round. Shared repository
+                    # claims serialize distinct targets across separate ledgers.
+                    claim_targets = sorted(
+                        {*(f"closer-repo:{repo}" for repo in repos), *fresh["claim_targets"]}
+                    )
+                    item["claim_targets"] = claim_targets
+                    acquired, claim_error, claim_holder = _claim_all(
+                        claim_targets, round_owner, claim_call, release_call, holder_call
+                    )
+                    if claim_error:
+                        item["holder"] = (
+                            _json_copy(claim_holder)
+                            if isinstance(
+                                claim_holder, (dict, list, str, int, float, bool, type(None))
+                            )
+                            else {"status": "unreadable"}
+                        )
+                        _defer(item, "claim_held", "retry_after_claim_release")
+                        _event(round_state, target, "claim_refused", holder=item["holder"])
+                        stalled.add(target)
+                        continue
+
+                if not _budget_available(
+                    float(deadline), receipt_reserve_seconds, min_action_seconds, now
+                ):
+                    _release_all(acquired, round_owner, release_call)
+                    _defer(item, "receipt_reserve", "continue_next_round")
+                    stop_launch_reason = "receipt_reserve"
+                    continue
+                previous = item.get("operation")
+                # Keep a durable completed result available to the coordinator;
+                # restarting a round must not repeat the same action at the same
+                # source revision merely because process-local worker memory reset.
+                if (
+                    isinstance(previous, dict)
+                    and previous.get("status") == "completed"
+                    and previous.get("action") == action
+                    and previous.get("revision") == fresh["revision"]
+                    and previous.get("binding") == fresh["operation_binding"]
+                ):
+                    _defer(
+                        item,
+                        "completed_result_pending_integration",
+                        "integrate_saved_operation_result",
+                    )
+                    item["saved_operation_result"] = _json_copy(previous.get("result", {}))
+                    stalled.add(target)
+                    _release_all(acquired, round_owner, release_call)
+                    continue
+                if isinstance(previous, dict) and previous.get("status") == "confirmed_not_started":
+                    op = previous
+                    if op.get("attempts", 0) > max_operation_retries:
+                        _release_all(acquired, round_owner, release_call)
+                        _defer(item, "operation_uncertain", "manual_operation_reconciliation")
+                        stalled.add(target)
+                        continue
+                    op["status"] = "submitted"
+                    op["attempts"] = int(op.get("attempts", 0)) + 1
+                    op["submitted_at"] = float(now())
+                else:
+                    history = item.get("operation_history", [])
+                    if isinstance(previous, dict):
+                        history = (history + [previous])[-MAX_OPERATION_HISTORY:]
+                    item["operation_history"] = history
+                    op = {
+                        "id": _operation_id(round_owner, target, action, fresh["revision"]),
+                        "action": action,
+                        "status": "submitted",
+                        "attempts": 1,
+                        "revision": fresh["revision"],
+                        "owner": round_owner,
+                        "repo_keys": fresh["repo_keys"],
+                        "claim_targets": claim_targets if is_mutating else fresh["claim_targets"],
+                        "binding": _json_copy(fresh["operation_binding"], limit=8192),
+                        "submitted_at": float(now()),
+                    }
+                op_deadline = float(deadline) - float(receipt_reserve_seconds)
+                op["deadline"] = op_deadline
+                op["timeout_seconds"] = max(0.0, op_deadline - float(now()))
+                item["operation"] = op
+                item["status"] = "submitted"
+                item.pop("deferred_reason", None)
+                item.pop("deferred_next_trigger", None)
+                _atomic_write(path, state)  # intent is durable before the callback
+                _event(
+                    round_state, target, "operation_submitted", operation_id=op["id"], action=action
+                )
+                _atomic_write(path, state)
+                started = monotonic()
+                callback_snapshot = _execution_snapshot(fresh)
+                future = executor.submit(
+                    _invoke_before_cutoff, execute, target, action, callback_snapshot, dict(op), now
+                )
+                launched.append((target, item, op, future, acquired, started))
+
+            # Wait for every action launched this pass before deciding whether to
+            # launch another pass. The pool bounds concurrency and no background
+            # callback survives round finalization.
+            for target, item, op, future, acquired, started in launched:
+                action = op["action"]
+                try:
+                    result, invoked_at = future.result()
+                    if invoked_at is None:
+                        op["status"] = "confirmed_not_started"
+                        op["next_trigger"] = "continue_next_round"
+                        _defer(item, "receipt_reserve", op["next_trigger"])
+                        stop_launch_reason = "receipt_reserve"
+                        stalled.add(target)
+                        continue
+                    op["invoked_at"] = invoked_at
+                    if not isinstance(result, Mapping):
+                        raise ValueError("execute must return an object")
+                    result = dict(result)
+                    result_status = result.get("status")
+                    if result_status not in {
+                        "completed",
+                        "running",
+                        "failed",
+                        "uncertain",
+                        "blocked",
+                        "deferred",
+                        "stale",
+                    }:
+                        raise ValueError("execute returned an unsupported operation status")
+                    stored_result = {
+                        key: value
+                        for key, value in result.items()
+                        if key not in {"status", "advanced", "next_trigger"}
+                    }
+                    op["result"] = _json_copy(stored_result)
+                    op["elapsed_seconds"] = max(0.0, monotonic() - started)
+                    op["status"] = result_status
+                    op["next_trigger"] = result.get("next_trigger")
+                    item["operation"] = op
+                    if result_status == "completed":
+                        op["completed_at"] = float(now())
+                        if not budget_available_at_start or not _budget_available(
+                            float(deadline), receipt_reserve_seconds, min_action_seconds, now
+                        ):
+                            item["observation_freshness"] = "cached_budget_exhausted"
+                            if result.get("advisory_only") or result.get("requires_coordinator"):
+                                item["requires_coordinator"] = True
+                                item["saved_operation_result"] = _json_copy(stored_result)
+                            _defer(item, "receipt_reserve", "retry_observation_next_round")
+                            stalled.add(target)
+                            continue
+                        after = _observe_or_error(observe, target)
+                        changed = _set_observation(
+                            item, after, owner=round_owner, source_revisions=source_revisions
+                        )
+                        snapshots[target] = after
+                        advanced = (
+                            bool(result.get("advanced")) or changed or after["action"] != action
+                        )
+                        if advanced:
+                            made_progress = True
+                            progress_targets.append(target)
+                            round_state.setdefault("progress", []).append(
+                                {"target": target, "action": action, "at": float(now())}
+                            )
+                            item["status"] = "observed"
+                            item.pop("deferred_reason", None)
+                            item.pop("deferred_next_trigger", None)
+                            _event(
+                                round_state,
+                                target,
+                                "action_advanced",
+                                action=action,
+                                revision=after["revision"],
+                            )
+                        else:
+                            _defer(
+                                item,
+                                "no_progress",
+                                result.get("next_trigger") or "inspect_action_result",
+                            )
+                            stalled.add(target)
+                    elif result_status == "running":
+                        _defer(
+                            item,
+                            "operation_running",
+                            result.get("next_trigger") or "reconcile_operation",
+                        )
+                        stalled.add(target)
+                    elif result_status == "uncertain":
+                        _defer(
+                            item,
+                            "operation_uncertain",
+                            result.get("next_trigger") or "reconcile_operation",
+                        )
+                        stalled.add(target)
+                    else:
+                        if result_status == "stale":
+                            try:
+                                latest = _observe_or_error(observe, target)
+                                _set_observation(
+                                    item,
+                                    latest,
+                                    owner=round_owner,
+                                    source_revisions=source_revisions,
+                                )
+                                snapshots[target] = latest
+                            except Exception as refresh_exc:
+                                round_state.setdefault("invalid_observations", {})[target] = type(
+                                    refresh_exc
+                                ).__name__
+                        op["status"] = "failed"
+                        op["outcome"] = result_status
+                        _defer(
+                            item,
+                            "operation_failed",
+                            result.get("next_trigger") or "inspect_operation_failure",
+                        )
+                        stalled.add(target)
+                except Exception as exc:
+                    op["status"] = "uncertain"
+                    op["next_trigger"] = "reconcile_operation_before_retry"
+                    op["error_type"] = type(exc).__name__
+                    _defer(item, "operation_uncertain", op["next_trigger"])
+                    stalled.add(target)
+                    _event(round_state, target, "execute_uncertain", error_type=type(exc).__name__)
+                finally:
+                    released = _release_all(acquired, round_owner, release_call)
+                    if released:
+                        item["claim_release_failures"] = released
+                        item["status"] = "deferred"
+                        item["deferred_reason"] = "claim_release_failed"
+                        item["deferred_next_trigger"] = "inspect_claim_state"
+                        stalled.add(target)
+                    _atomic_write(path, state)
+
+            # Check an active write/observe callback did not overrun the action
+            # cutoff. No further task is launched when only receipt reserve remains.
+            if not budget_available_at_start or not _budget_available(
+                float(deadline), receipt_reserve_seconds, min_action_seconds, now
+            ):
+                stop_launch_reason = "receipt_reserve"
+                break
+            # A full worker batch may have made no progress while untouched
+            # assignments were only deferred for temporary capacity. Fill those
+            # free slots rather than ending the whole round on the first stall.
+            runnable_deferred = any(
+                target not in stalled
+                and items[target].get("eligible")
+                and items[target].get("deferred_reason")
+                in {"worker_capacity", "repo_operation_running"}
+                for target in targets
+            )
+            if not made_progress and not runnable_deferred:
+                break
+
+        executor.shutdown(wait=True)
+        # Final fresh observations are the basis of assignment accounting. Pending
+        # operation state still prevents any second action even if the source read
+        # already reflects its external change.
+        active_ops, active_mutating_repos = _active_operations(items)
+        for target in targets:
+            item = items[target]
+            if not budget_available_at_start or not _budget_available(
+                float(deadline), receipt_reserve_seconds, min_action_seconds, now
+            ):
+                # No final read is worth crossing the cutoff. The durable item is
+                # explicitly marked cached or unobserved when the round started
+                # without budget; otherwise it retains the freshest in-round view.
+                if (
+                    item.get("observation_freshness") == "fresh"
+                    and snapshots.get(target, {}).get("action") == "complete"
+                ):
+                    item["status"] = "complete"
+                    item.pop("deferred_reason", None)
+                    item.pop("deferred_next_trigger", None)
+                elif item.get("eligible") or item.get("requires_coordinator"):
+                    _defer(item, "receipt_reserve", "retry_observation_next_round")
+                continue
+            operation = item.get("operation")
+            if isinstance(operation, dict) and operation.get("status") in PENDING_OPERATION_STATES:
+                if _remaining(float(deadline), receipt_reserve_seconds, now) <= 0:
+                    _defer(item, "receipt_reserve", "reconcile_next_round")
+                    continue
+                reason = (
+                    "operation_running"
+                    if operation.get("status") == "running"
+                    else "operation_uncertain"
+                )
+                _defer(item, reason, operation.get("next_trigger") or "reconcile_operation")
+                continue
+            try:
+                final = _observe_or_error(observe, target)
+            except Exception as exc:
+                final = _failure_observation(target, exc)
+                round_state.setdefault("invalid_observations", {})[target] = type(exc).__name__
+            _set_observation(item, final, owner=round_owner, source_revisions=source_revisions)
+            snapshots[target] = final
+            if (
+                final.get("requires_coordinator")
+                and _remaining(float(deadline), receipt_reserve_seconds, now) <= 0
+            ):
+                _defer(item, "receipt_reserve", "continue_next_round")
+            elif final["action"] == "complete":
+                item["status"] = "complete"
+                item.pop("deferred_reason", None)
+                item.pop("deferred_next_trigger", None)
+            elif not final["eligible"]:
+                reason = final["reason"] or "not_eligible"
+                trigger = final["next_trigger"] or "wait_for_trigger"
+                _defer(item, reason, trigger)
+            elif item.get("deferred_reason") in RESOURCE_DEFERRALS:
+                item["status"] = "deferred"
+            elif stop_launch_reason == "receipt_reserve":
+                _defer(item, "receipt_reserve", "continue_next_round")
+            elif item.get("deferred_reason") in {
+                "operation_failed",
+                "operation_uncertain",
+                "no_progress",
+                "revision_changed",
+                "claim_release_failed",
+                "completed_result_pending_integration",
+            }:
+                item["status"] = "deferred"
+            elif (
+                int(round_state.get("passes", 0)) >= slice_pass_limit
+                and item.get("action") not in TERMINAL_ACTIONS
+            ):
+                _defer(item, "pass_limit", "continue_next_round")
+            else:
+                _defer(item, "unresolved_eligible_work", "continue_next_round")
+
+        round_state["source_revisions"] = source_revisions
+        round_state["source_hash"] = _digest(
+            {target: source_revisions.get(target) for target in targets}
+        )
+        round_state["status"] = "finished"
+        finished_at = float(now())
+        accounting = [_account_row(target, items[target]) for target in targets]
+        accounted_targets = [row["target"] for row in accounting]
+        eligible_remaining = [
+            row["target"]
+            for row in accounting
+            if (row["eligible"] or row["requires_coordinator"]) and row["status"] != "complete"
+        ]
+        integration_required = [row["target"] for row in accounting if row["requires_coordinator"]]
+        deferred = [row for row in accounting if row["status"] == "deferred"]
+        receipt = {
+            "schema": RECEIPT_SCHEMA,
+            "started_at": round_state["started_at"],
+            "finished_at": finished_at,
+            "deadline": round_state["deadline"],
+            "receipt_reserve_seconds": round_state["receipt_reserve_seconds"],
+            "owner": round_owner,
+            "assignment_targets": targets,
+            "assignment_hash": assignment_hash,
+            "source_hash": round_state["source_hash"],
+            "accounted_targets": accounted_targets,
+            "accounting": accounting,
+            "eligible_remaining": eligible_remaining,
+            "integration_required": integration_required,
+            "deferred": deferred,
+            "progress": list(round_state.get("progress", [])),
+            "events": list(round_state.get("events", [])),
+            "continuation_required": bool(eligible_remaining),
+        }
+        validation = _validate_data(
+            state,
+            receipt,
+            assignment_targets=targets,
+            now_value=finished_at,
+            holder_fn=holder_call,
+        )
+        receipt.update(validation)
+        round_state["receipt"] = receipt
+        _atomic_write(path, state)
+        return receipt
+
+
+__all__ = ["ACTION_NAMES", "QueueStateError", "run_round", "validate_stop"]
