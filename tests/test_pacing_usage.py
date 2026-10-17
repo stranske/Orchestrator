@@ -311,3 +311,31 @@ def test_produced_tokens_without_pair_print_unavailable(stores):
     assert "cap: unavailable (0 pairs)" in pacing_usage.report(
         stores[2], now=NOW, current=dict(agents=agents)
     )
+
+
+def test_event_cache_reuses_history_and_refreshes_changed_files(stores):
+    root = pacing_usage.CLAUDE_PROJECTS
+    path = root / "seat.jsonl"
+    token_event(path, NOW - 10, 100, "a")
+    token_event(root / "history.jsonl", NOW - 20, 50, "history")
+    cold, warm, changed = {}, {}, {}
+    first = pacing_usage.claude_token_events(root, START, NOW, stats=cold)
+    assert pacing_usage.claude_token_events(root, START, NOW, stats=warm) == first
+    assert cold == dict(files_read=2, files_cached=0)
+    assert warm == dict(files_read=0, files_cached=2)
+    token_event(path, NOW - 1, 200, "b")
+    rows = pacing_usage.claude_token_events(root, START, NOW, stats=changed)
+    assert sum(r["totalTokens"] for r in rows) == 350
+    assert changed == dict(files_read=1, files_cached=1)
+
+
+def test_cached_future_events_and_replacement_keep_exact_totals(stores):
+    root = pacing_usage.CLAUDE_PROJECTS
+    path = root / "seat.jsonl"
+    token_event(path, NOW + 10, 100, "a")
+    assert pacing_usage.claude_token_events(root, START, NOW) == []
+    assert pacing_usage.claude_token_events(root, START, NOW + 10)[0]["totalTokens"] == 100
+    replacement = root / "replacement"
+    token_event(replacement, NOW - 10, 200, "b")
+    replacement.replace(path)
+    assert pacing_usage.claude_token_events(root, START, NOW)[0]["totalTokens"] == 200

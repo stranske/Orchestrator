@@ -11,6 +11,7 @@ Mixed-agent ccusage totals are never silently attributed to Codex or Claude.
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import json
 import math
@@ -325,46 +326,89 @@ def consume_detected_resets(inventory: dict, datum: dict, *, now: float, record:
     return messages
 
 
-def claude_token_events(root: Path, start: float, now: float) -> list[dict]:
-    """Read ccusage's Claude input with exact timestamps (daily buckets lose edges).
+def claude_token_events(
+    root: Path, start: float, now: float, *, stats: dict | None = None
+) -> list[dict]:
+    """Read ccusage's timestamped Claude input; cache sanitized per-file totals.
 
-    Deduplicate streaming assistant records by message/request ID, as ccusage does.
-    Only token fields are retained; prompts and responses never leave this reader.
+    Re-read changed files in full so truncation, rotation and streaming updates
+    cannot reuse an obsolete offset. Unchanged historical files need no JSONL read.
+    Cache all timestamps so moving the observation clock never hides future rows.
     """
+    root_key = hashlib.sha256(str(root.resolve()).encode()).hexdigest()
+    cache_path = Path(tempfile.gettempdir()) / f"orch-claude-events-{os.getuid()}-{root_key}.json"
+    cache = read_json(cache_path)
+    cached = cache.get("files", {}) if isinstance(cache, dict) and cache.get("version") == 1 else {}
+    cached = cached if isinstance(cached, dict) else {}
     events = {}
-    for path in root.glob("**/*.jsonl"):
+    updated = {}
+    files_read = files_cached = 0
+    for path in sorted(root.glob("**/*.jsonl")):
         try:
-            with path.open() as stream:
-                for line in stream:
-                    if '"usage"' not in line:
-                        continue
-                    try:
-                        row = json.loads(line)
-                        ts = pacing.timestamp(row.get("timestamp"))
-                        message = row.get("message") or {}
-                        usage = message.get("usage") or {}
-                        if row.get("type") != "assistant" or ts is None or not start <= ts <= now:
+            stat = path.stat()
+            identity = [stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns]
+            prior = cached.get(str(path), {})
+            if prior.get("identity") == identity:
+                rows = prior["rows"]
+                files_cached += 1
+            else:
+                file_events = {}
+                files_read += 1
+                with path.open() as stream:
+                    for line in stream:
+                        if '"usage"' not in line:
                             continue
-                        fields = (
-                            "input_tokens",
-                            "output_tokens",
-                            "cache_creation_input_tokens",
-                            "cache_read_input_tokens",
-                        )
-                        values = [usage.get(k, 0) for k in fields]
-                        if not usage or not all(
-                            isinstance(v, (int, float)) and math.isfinite(v) and v >= 0
-                            for v in values
-                        ):
+                        try:
+                            row = json.loads(line)
+                            ts = pacing.timestamp(row.get("timestamp"))
+                            message = row.get("message") or {}
+                            usage = message.get("usage") or {}
+                            if row.get("type") != "assistant" or ts is None:
+                                continue
+                            fields = (
+                                "input_tokens",
+                                "output_tokens",
+                                "cache_creation_input_tokens",
+                                "cache_read_input_tokens",
+                            )
+                            values = [usage.get(k, 0) for k in fields]
+                            if not usage or not all(
+                                isinstance(v, (int, float)) and math.isfinite(v) and v >= 0
+                                for v in values
+                            ):
+                                continue
+                            key = (message.get("id"), row.get("requestId"))
+                            if not key[0]:
+                                continue
+                            file_events[key] = dict(
+                                agent="claude", ts=ts, totalTokens=sum(values), message_key=key
+                            )
+                        except (ValueError, TypeError, AttributeError):
                             continue
-                        key = (message.get("id"), row.get("requestId"))
-                        if not key[0]:
-                            continue
-                        events[key] = dict(agent="claude", ts=ts, totalTokens=sum(values))
-                    except (ValueError, TypeError, AttributeError):
-                        continue
+                rows = list(file_events.values())
+            updated[str(path)] = dict(identity=identity, rows=rows)
+            for row in rows:
+                if start <= row["ts"] <= now:
+                    events[tuple(row["message_key"])] = {
+                        k: v for k, v in row.items() if k != "message_key"
+                    }
         except OSError:
             continue
+    if files_read or set(updated) != set(cached):
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", dir=cache_path.parent, delete=False
+            ) as stream:
+                temporary = Path(stream.name)
+                json.dump(dict(version=1, files=updated), stream, allow_nan=False)
+            temporary.replace(cache_path)
+        except OSError:
+            print(
+                "FYI Claude event cache unavailable; source scan remains authoritative",
+                file=sys.stderr,
+            )
+    if stats is not None:
+        stats.update(files_read=files_read, files_cached=files_cached)
     return sorted(events.values(), key=lambda r: r["ts"])
 
 
@@ -383,6 +427,13 @@ def claude_window(rows: list[dict], start: float, end: float, observed_at: float
 def claude_pair_cap(
     desktop: list[dict], events: list[dict], start: float, end: float, now: float
 ) -> tuple[float | None, int]:
+    # One prefix sum serves every contemporaneous observation. Historical pairs
+    # must not each rescan the entire token history on a capacity read.
+    ordered = sorted((r for r in events if r.get("agent") == "claude"), key=lambda r: r["ts"])
+    times = [r["ts"] for r in ordered]
+    prefix = [0]
+    for event in ordered:
+        prefix.append(prefix[-1] + event["totalTokens"])
     estimates = []
     seen = set()
     for row in desktop:
@@ -393,7 +444,9 @@ def claude_pair_cap(
         seen.add(ts)
         bounds = pacing.period("claude", ts)
         assert bounds is not None
-        total = claude_window(events, *bounds, ts)["tokens"]
+        total = (
+            prefix[bisect.bisect_right(times, ts)] - prefix[bisect.bisect_left(times, bounds[0])]
+        )
         if total > 0:
             estimates.append(total / fraction)
     return (statistics.median(estimates) if estimates else None, len(estimates))
