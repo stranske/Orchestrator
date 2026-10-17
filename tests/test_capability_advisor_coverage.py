@@ -6,10 +6,34 @@ failed reads never turn into offers, and a real recurring shape outranks a keywo
 
 from __future__ import annotations
 
+import socket
+import subprocess
 from pathlib import Path
+
+import pytest
 
 import capabilities
 import capability_advisor as advisor
+
+
+@pytest.fixture(autouse=True)
+def isolated_runtime_and_external_calls(tmp_path):
+    """Keep test-local monkeypatch.undo() from removing the isolation boundary."""
+    attempted = []
+
+    def forbid_external(*args, **kwargs):
+        attempted.append((args, kwargs))
+        pytest.fail("advisor coverage test attempted an external process or network connection")
+
+    with pytest.MonkeyPatch.context() as guard:
+        guard.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
+        guard.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
+        guard.setattr(subprocess, "run", forbid_external)
+        guard.setattr(subprocess, "Popen", forbid_external)
+        guard.setattr(socket, "socket", forbid_external)
+        guard.setattr(socket, "create_connection", forbid_external)
+        yield
+        assert attempted == []
 
 
 def test_dispatcher_failure_and_legacy_matcher_degrade_without_inventing_a_route(monkeypatch):
