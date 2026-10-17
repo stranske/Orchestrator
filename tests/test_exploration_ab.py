@@ -231,7 +231,7 @@ def test_export_carries_a_policy_version_and_one_sampled_challenger_per_task_typ
             for week, mode in ((2, "epsilon-greedy"), (3, "thompson-hybrid")):
                 now = week * route_weights_export.WEEK_SECONDS + 100
                 document = route_weights_export.build_document(database, now=now)
-                assert document["schema"] == "orchestrator.route-weights/v1"
+                assert document["schema"] == route_weights_export.SCHEMA
                 exploration = document["exploration"]
                 assert exploration["mode"] == mode
                 assert exploration["rate"] == router.EXPLORATION_RATE_DEFAULT
