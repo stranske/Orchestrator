@@ -500,6 +500,7 @@ def test_runtime_writer_keeps_open_files_and_new_reports_during_publication(tmp_
         "experiments/repo_knowledge.json",
         "data/feedback-snapshot.json",
         "config/coverage-baseline.json",
+        "config/model_epochs.json",
     ],
 )
 def test_retiring_named_deployment_file_preserves_concurrent_runtime_writes(
