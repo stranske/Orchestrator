@@ -563,7 +563,13 @@ def _failure_observation(target: str, error: Exception) -> dict[str, Any]:
         "eligible": True,
         "reason": "observation_failed",
         "next_trigger": "retry_observation",
-        "evidence": {"error_type": type(error).__name__},
+        "requires_coordinator": False,
+        "operation_binding": {"pr_target": target, "source_targets": []},
+        "evidence": {
+            "error_type": type(error).__name__,
+            "error": str(error)[:500],
+            "unknown": True,
+        },
         "claim_targets": [target],
         "repo_keys": [_repo_key(target)],
     }
