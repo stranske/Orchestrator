@@ -1,6 +1,6 @@
 {
-  "collected": 3999,
-  "passed": 3999,
+  "collected": 4004,
+  "passed": 4004,
   "skipped_max": 31,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 52,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Source660 reconciliation adds seven isolated DB/CLI/explicit-override regression cases; pass expectation and all skip/selftest/gate/mypy ceilings retained. Explicit-tilde continuation adds one isolated actual learner/CLI case; 3950 collected, pass expectation 3950 (not an observed pass count); all ceilings unchanged. Issue 676 adds 49 comparative-economics and export/report cases; 3999 collected, pass expectation 3999; skip and gate ceilings unchanged."
+  "note": "Source660 reconciliation adds seven isolated DB/CLI/explicit-override regression cases; pass expectation and all skip/selftest/gate/mypy ceilings retained. Explicit-tilde continuation adds one isolated actual learner/CLI case; 3950 collected, pass expectation 3950 (not an observed pass count); all ceilings unchanged. Issue 676 adds 49 comparative-economics and export/report cases; 3999 collected, pass expectation 3999; skip and gate ceilings unchanged. Synchronizing main #685 adds five model-epoch tests: 4004 collected, pass expectation 4004; ceilings unchanged."
 }
