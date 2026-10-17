@@ -980,6 +980,15 @@ if _cadence_due durability-sweep && _attempt_ok durability-sweep; then
     if python3 "$ORCH/durability_sweep.py" >> "$STAMP_DIR/durability-sweep.log" 2>&1; then _mark_success durability-sweep; else _mark_fail durability-sweep "see $STAMP_DIR/durability-sweep.log"; fi
   else echo "  [cadence] durability sweep SKIPPED — gh search budget shed or gh deferred (stamp untouched; retry next tick)"; fi
 fi
+# M2 live (#643): adjudicate the newest persisted disputes once, certified from the merged commit,
+# shadow only. Daily, after the sweep above has written the truth the earlier advice is graded on.
+if _cadence_due adjudicator-live && _attempt_ok adjudicator-live; then
+  # The kill switch is read by the module (`--enabled`), so the shell and Python agree on what counts as off.
+  if python3 "$ORCH/adjudicator_live.py" --enabled && _gh_gate search; then
+    echo "  [cadence] adjudicator live shadow (daily; new disputes, certified, at most ${ORCH_ADJUDICATOR_LIVE_LIMIT:-3})"
+    if python3 "$ORCH/adjudicator_live.py" >> "$STAMP_DIR/adjudicator-live.log" 2>&1; then _mark_success adjudicator-live; else _mark_fail adjudicator-live "see $STAMP_DIR/adjudicator-live.log"; fi
+  else echo "  [cadence] adjudicator live SKIPPED — switched off, gh budget shed or gh deferred (stamp untouched; retry next tick)"; fi
+fi
 # Refresh promotion readiness and active priors only after late outcomes and
 # durability have landed. This consumes exact capability-version joins and is
 # idempotent; target-specific rollback execution remains outside this step.
