@@ -82,13 +82,15 @@ rm -f \
   "$MIRROR/experiments/features.json" \
   "$MIRROR/experiments/repo_knowledge.json" \
   "$MIRROR/data/feedback-snapshot.json" \
-  "$MIRROR/config/coverage-baseline.json"
+  "$MIRROR/config/coverage-baseline.json" \
+  "$MIRROR/config/model_epochs.json"
 for snapshot in \
   experiments/hypotheses.json \
   experiments/features.json \
   experiments/repo_knowledge.json \
   data/feedback-snapshot.json \
-  config/coverage-baseline.json; do
+  config/coverage-baseline.json \
+  config/model_epochs.json; do
   if [[ -f "$SRC/$snapshot" ]]; then
     cp "$SRC/$snapshot" "$MIRROR/$snapshot"
     extra=$((extra + 1))
