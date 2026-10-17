@@ -51,6 +51,17 @@ OFFLOAD_DIR = Path(
     os.environ.get("ORCH_OFFLOAD_DIR", Path.home() / ".codex" / "orchestrator" / "offloads")
 )
 AGENT_RUNTIME_DIR = Path(os.environ.get("ORCH_AGENT_RUNTIME_DIR", LOCAL_RUNTIME / "agent-runtime"))
+# Infrastructure delegates must not consume the registry-prefix opener slots.
+INFRA_REPOS = {"stranske/Workflows", "stranske/Orchestrator"}
+
+
+def _dispatch_branch(target: str, lane: str, agent: str, prefix: str | None) -> str:
+    repo, num = provision.parse_target(target)
+    prefix = prefix if prefix is not None else ("orch" if repo in INFRA_REPOS else agent)
+    prefix = prefix.rstrip("/")
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_-]*(?:/[A-Za-z0-9_][A-Za-z0-9_-]*)*", prefix):
+        raise ValueError("branch prefix must contain nonempty alphanumeric, '_' or '-' segments")
+    return f"{prefix}/issue-{num}" if num is not None else f"{prefix}/{lane}"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -947,6 +958,12 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
     agent, mode = assignment["agent"], assignment.get("mode")
     target, task_type = assignment["target"], assignment["task_type"]
     lane = assignment.get("lane") or "opener"
+    branch = None
+    if lane != "closer":
+        try:
+            branch = _dispatch_branch(target, lane, agent, assignment.get("branch_prefix"))
+        except ValueError as exc:
+            return {"error": str(exc), "target": target, "agent": agent}
     # An assessing orchestrator passes its OWN crafted prompt; fall back to the template only
     # when none is given (the deterministic/router path).
     if assignment.get("prompt"):
@@ -958,6 +975,13 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
         )
     else:
         prompt = build_prompt(task_type, target, lane=lane)
+    if branch:
+        prompt += (
+            f"\n\nBRANCH POLICY: Use the provisioned branch (default `{branch}`) for this work "
+            "and its PR; retain this prefix "
+            "if adding a descriptive slug. This dispatch policy overrides branch naming in "
+            "the task brief. Do not switch to another agent prefix."
+        )
     profile_id = assignment.get("selected_profile_id")
     selected_profile = execution_profiles.get_profile(profile_id) if profile_id else None
     model = adapters.model_identity(agent, mode, selected_profile)
@@ -966,7 +990,11 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
         worktree_missing = not (cwd / ".git").exists()
     else:
         try:
-            cwd = provision.provision(target, lane)
+            cwd = (
+                provision.provision(target, lane, branch)
+                if branch
+                else provision.provision(target, lane)
+            )
             worktree_missing = False
         except Exception as exc:  # clone/worktree/gh failure — skip this assignment
             return {"error": f"provision failed: {exc}", "target": target, "agent": agent}
@@ -1073,6 +1101,7 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
         "mode": mode,
         "target": target,
         "lane": lane,
+        "branch": branch,
         "task_type": task_type,
         "model": model,
         "cwd": str(cwd),
@@ -1456,6 +1485,7 @@ def delegate(
     task_type: str = "implement",
     profile_id: str | None = None,
     *,
+    branch_prefix: str | None = None,
     influenced_by_role_run_ids=None,
     influenced_by_skill_event_ids=None,
     influenced_by_workflow_ids=None,
@@ -1505,6 +1535,7 @@ def delegate(
         "mode": mode,
         "prompt": prompt,
         "feedback_mode": "local",
+        "branch_prefix": branch_prefix,
         "influenced_by_role_run_ids": list(influenced_by_role_run_ids or []),
         "influenced_by_skill_event_ids": list(influenced_by_skill_event_ids or []),
         "influenced_by_workflow_ids": list(influenced_by_workflow_ids or []),
@@ -1542,7 +1573,8 @@ def delegate(
     _delegate_lane_heartbeat(d)
     # Close the feedback loop for LOCAL delegations: re-record the decision keyed by mode='local'
     # (so outcomes.ingest_outcomes(mode='local') discovers it and resolves the resulting PR by the
-    # deterministic orchestrator/issue-N branch) with the REAL task_type; keep the agent-mode in
+    # recorded pushed branch, with deterministic candidates as fallback) with the REAL task_type;
+    # keep the agent-mode in
     # reasoning_level. INSERT OR REPLACE overwrites the generic row _spawn just wrote. Without this,
     # local-agent delegations never get a success/failure signal — only remote ones did.
     if not profile_id:
@@ -3004,6 +3036,12 @@ def _selftest_gemini_refusal() -> None:
 def _selftest() -> None:
     import tempfile
 
+    for repo in INFRA_REPOS:
+        assert _dispatch_branch(f"{repo}#7", "opener", "codex", None) == "orch/issue-7"
+    assert _dispatch_branch("o/product#7", "opener", "gemini", None) == "gemini/issue-7"
+    assert (
+        _dispatch_branch("stranske/Workflows#7", "opener", "codex", "custom/") == "custom/issue-7"
+    )
     _selftest_gemini_refusal()
 
     tmp = tempfile.mkdtemp(prefix="dispatcher-selftest-")
@@ -4484,6 +4522,9 @@ def main(argv: list[str]) -> int:
         p.add_argument("--agent", required=True)
         p.add_argument("--target", required=True)
         p.add_argument("--lane", default="opener")
+        p.add_argument(
+            "--branch-prefix", help="override opener prefix (infra: orch/; otherwise agent/)"
+        )
         p.add_argument("--mode")
         p.add_argument("--profile-id", help="explicit immutable execution profile")
         p.add_argument("--task-type", default="implement")
@@ -4512,6 +4553,7 @@ def main(argv: list[str]) -> int:
             task_type=ns.task_type,
             profile_id=ns.profile_id,
             influenced_by_role_run_ids=ns.influenced_by_role_run_id,
+            **({"branch_prefix": ns.branch_prefix} if ns.branch_prefix is not None else {}),
         )
         print(json.dumps(out, default=str))
         return 0 if "error" not in out else 1
