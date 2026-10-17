@@ -589,6 +589,14 @@ assignment and preserve real budget limits across interrupted work. Workers neve
 supply merge or closure authority; the closer integrates source Tasks/AC evidence,
 and existing guards and native verifier remain authoritative. Source closure uses
 the independently owned supervisor actor only when normally deployed and enabled.
+The production invocation adds `--pipeline`: incremental evidence preparation
+runs before lifecycle selection even while CI is pending; current-finding
+classification uses a fresh capacity-aware low-effort route, and explicit
+exceptions reuse the existing closer allocation path. Per-target completions
+immediately re-enter the claimed queue. Pipeline receipts and action ledgers are
+sidecars, preserving any existing queue receipt; `validate-stop` checks the
+pipeline assignment when that sidecar exists. `--shadow` records preparation and
+proposals without worker dispatch or queue actions.
 
 ## Priors for *who does what* (override freely)
 

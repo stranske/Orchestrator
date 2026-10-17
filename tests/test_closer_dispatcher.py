@@ -7,12 +7,14 @@ import hashlib
 import json
 import sys
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 import claims
 import closer_dispatcher as adapter
+import closer_queue
 
 TARGET = "o/r#7"
 SOURCE = "o/r#2"
@@ -887,3 +889,771 @@ def test_generated_related_issues_are_excluded_and_invalid_explicit_sources_fail
         github, _ = _lineage_snapshot(monkeypatch, document, {"repos/o/r/issues/2": invalid})
         with pytest.raises(RuntimeError, match="not an issue"):
             github.snapshot(TARGET)
+
+
+def test_staged_prepare_runs_before_pending_ci_wait_selection(tmp_path, monkeypatch):
+    current = snapshot(checks="PENDING")
+    seen = {}
+
+    class PreparedGitHub(FakeGitHub):
+        def __init__(self, *, deadline):
+            super().__init__(current)
+            self.deadline = deadline
+
+    monkeypatch.setattr(adapter, "GitHub", PreparedGitHub)
+    packet = {
+        "schema": "closer-evidence/v1",
+        "head": HEAD,
+        "section_digests": {"source": "d"},
+        "sections": {
+            "source": {
+                "status": "complete",
+                "reason": None,
+                "content": [{"target": SOURCE}],
+                "provenance": {},
+                "truncated": False,
+            }
+        },
+        "manifest": {"packet_sha256": "e"},
+    }
+    monkeypatch.setitem(
+        sys.modules,
+        "closer_evidence",
+        SimpleNamespace(
+            collect_evidence=lambda snap, api, retained_dir, **kwargs: packet,
+            validate_packet=lambda value: False,
+            _atomic_write=lambda path, data: (
+                Path(path).parent.mkdir(parents=True, exist_ok=True),
+                Path(path).write_bytes(data),
+            ),
+        ),
+    )
+
+    def run_pipeline(path, targets, **kwargs):
+        prepared = kwargs["prepare"](TARGET, {"deadline": time.time() + 30})
+        seen["prepared"] = prepared
+        assert prepared["proposal"]["action"] == "wait"
+        assert prepared["proposal"]["next_trigger"] == "check conclusion change"
+        assert prepared["evidence_summary"]["sections"]["source"]["status"] == "complete"
+        seen["shadow"] = kwargs["interpret"](TARGET, {"prepare": prepared})
+        return {"valid": True, "targets": {TARGET: {"status": "parked"}}}
+
+    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=run_pipeline))
+    backend = closer(tmp_path, current)
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=2, shadow=True)
+    result = adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 30)
+    assert result["valid"]
+    assert seen["prepared"]["snapshot"]["checks"] == "PENDING"
+    assert seen["shadow"]["classification"] == "not_run_shadow"
+    assert seen["shadow"]["authority"] is False
+    assert not (tmp_path / "state.json").exists()
+
+
+def test_pipeline_low_route_uses_any_live_low_profile_not_luna_assumption(tmp_path, monkeypatch):
+    import execution_profiles
+    import router
+
+    report_path = tmp_path / "capacity.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "generated_at": time.time(),
+                "agents": {"gemini": {"state": "ok"}},
+                "profiles": {"gemini-flash-low": {"state": "ok"}},
+                "pools": {"gemini-api": {"state": "ok"}},
+            }
+        )
+    )
+    monkeypatch.setenv("HANDOFF_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        execution_profiles,
+        "profiles_for_agent",
+        lambda agent, **kw: [
+            {
+                "profile_id": f"{agent}-flash-low",
+                "reasoning_effort": "low",
+                "capacity_pool_ids": ["gemini-api"],
+            }
+        ],
+    )
+    selected = {}
+
+    def choose(task_type, capacity, **kwargs):
+        selected["only"] = kwargs.get("only")
+        return {"agent": "gemini", "mode": "cheap", "state": "ok"}
+
+    monkeypatch.setattr(router, "select_agent", choose)
+    route = adapter._pipeline_low_route()
+    assert route["agent"] == "gemini"
+    assert route["profile_id"] == "gemini-flash-low"
+    assert selected["only"] == {"gemini"}
+
+
+def test_queue_observation_failure_is_accounted_unknown_and_never_runs_action(tmp_path):
+    def fail_observe(_target):
+        raise RuntimeError("incomplete live read")
+
+    def forbidden_execute(*_args, **_kwargs):
+        raise AssertionError("failed observation must not execute")
+
+    receipt = closer_queue.run_round(
+        tmp_path / "queue.json",
+        ["o/r#99"],
+        fail_observe,
+        forbidden_execute,
+        deadline=time.time() + 60,
+        max_workers=1,
+    )
+    assert not receipt["stop_valid"]
+    row = receipt["accounting"][0]
+    assert row["reason"] == "unresolved_eligible_work"
+    assert row["next_trigger"] == "continue_next_round"
+    state = closer_queue._read_state(tmp_path / "queue.json")
+    assert state["items"]["o/r#99"]["evidence"]["unknown"] is True
+    assert state["items"]["o/r#99"]["evidence"]["error"] == "incomplete live read"
+
+
+def test_legacy_local_running_operation_is_not_external_async_proof(tmp_path):
+    legacy_path = tmp_path / "legacy.json"
+    legacy_path.write_text(
+        json.dumps(
+            {
+                "schema": "closer-queue/v1",
+                "round": {},
+                "items": {
+                    TARGET: {
+                        "operation": {
+                            "id": "local-ledger-hash-only",
+                            "status": "running",
+                            "revision": "head-r1",
+                            "action": "repair",
+                            "repo_keys": ["o/r"],
+                        }
+                    }
+                },
+            }
+        )
+    )
+    with pytest.raises(RuntimeError, match="lacks external-run or live-owner proof"):
+        adapter._legacy_operation_dependency(
+            legacy_path, TARGET, {"target": TARGET, "sources": [{"target": SOURCE}]}
+        )
+    # An unconfirmed legacy local write cannot become a valid external stop.
+    import closer_pipeline
+
+    state = tmp_path / "pipeline.json"
+    closer_pipeline.run_pipeline(
+        state,
+        [TARGET],
+        prepare=lambda *_: {"revision": "r", "identity": "i"},
+        interpret=lambda *_: {"substantive_needs": []},
+        exception=lambda *_: {"status": "unused"},
+        act=lambda *_: adapter._legacy_operation_dependency(
+            legacy_path, TARGET, {"target": TARGET, "sources": [{"target": SOURCE}]}
+        ),
+        capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+        deadline=time.time() + 2,
+        max_io_workers=1,
+        max_low_workers=1,
+        max_exception_workers=1,
+    )
+    assert closer_pipeline.validate_stop(state)["valid"] is False
+
+
+def test_legacy_uncertain_and_private_integration_need_original_coordinator(tmp_path):
+    legacy_path = tmp_path / "legacy.json"
+    for item in (
+        {"operation": {"id": "uncertain-5", "status": "uncertain", "repo_keys": ["o/r"]}},
+        {"operation": {"id": "completed-6", "status": "completed"}, "requires_coordinator": True},
+    ):
+        legacy_path.write_text(
+            json.dumps({"schema": "closer-queue/v1", "round": {}, "items": {TARGET: item}})
+        )
+        with pytest.raises(RuntimeError):
+            adapter._legacy_operation_dependency(legacy_path, TARGET, {"sources": []})
+
+
+def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(tmp_path, monkeypatch):
+    from subprocess import CompletedProcess
+
+    import closer_disposition
+    import closer_evidence
+    import dispatcher
+
+    current = snapshot(base="c" * 40, verifier={"verdict": "NON_PASS", "run_id": "native-run"})
+    raw = tmp_path / "receipt.xml"
+    raw.write_text("<testsuite tests='1'><testcase name='pass'/></testsuite>")
+    ref = {"path": str(raw), "sha256": hashlib.sha256(raw.read_bytes()).hexdigest()}
+    decision = {
+        "reviewer": "pipeline:real-run-1",
+        "head": HEAD,
+        "source_digest": adapter.source_digest(current["sources"]),
+        "review_revision": current["review_revision"],
+        "criteria": [
+            {
+                "source": source["target"],
+                "criterion": criterion,
+                "result": "PASS",
+                "evidence": [ref],
+            }
+            for source in current["sources"]
+            for criterion in [source["body"], *adapter.requirements(source["body"])]
+        ],
+    }
+    packet = {
+        "schema": "closer-evidence/v1",
+        "producer_sha256": "d" * 64,
+        "target": TARGET,
+        "head": HEAD,
+        "base": current["base"],
+        "section_digests": {"source": "a", "ci_artifacts": "b"},
+        "sections": {
+            "source": {
+                "status": "complete",
+                "reason": None,
+                "content": [],
+                "provenance": {},
+                "truncated": False,
+            },
+            "ci_artifacts": {
+                "status": "partial",
+                "reason": None,
+                "content": {"payload": "x" * 30000},
+                "provenance": {},
+                "truncated": False,
+            },
+            "diff_files": {
+                "status": "complete",
+                "reason": None,
+                "content": {"patch": "y" * 30000},
+                "provenance": {},
+                "truncated": False,
+            },
+        },
+        "manifest": {"packet_sha256": "packet"},
+    }
+
+    class PreparedGitHub(FakeGitHub):
+        def __init__(self, *, deadline):
+            super().__init__(current)
+            self.deadline = deadline
+
+    monkeypatch.setattr(adapter, "GitHub", PreparedGitHub)
+
+    def collect(_snap, _api, retained_dir, **_kwargs):
+        path = Path(retained_dir) / "manifests" / "packet.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(packet))
+        return packet
+
+    monkeypatch.setattr(closer_evidence, "collect_evidence", collect)
+    monkeypatch.setattr(closer_evidence, "validate_packet", lambda _p: True)
+    monkeypatch.setattr(closer_evidence, "drift_sample", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        adapter,
+        "_pipeline_low_route",
+        lambda **_kw: {"agent": "gemini", "profile_id": "gemini-low", "pools": []},
+    )
+    worker_calls = []
+    prompts = []
+
+    def low_worker(_agent, prompt, **_kwargs):
+        prompts.append(prompt)
+        return {
+            "exit": 0,
+            "run_id": "real-run-1",
+            "model": "gemini-test",
+            "profile_id": "gemini-low",
+            "output": json.dumps(
+                {
+                    "target": TARGET,
+                    "head": HEAD,
+                    "base": current["base"],
+                    "classification": "relevant",
+                    "substantive_needs": [],
+                    "findings": [],
+                    "decision": {"criteria": []},
+                }
+            ),
+        }
+
+    monkeypatch.setattr(dispatcher, "offload", low_worker)
+    monkeypatch.setattr(
+        closer_disposition,
+        "integrate_ordinary",
+        lambda *_a, **_k: {
+            "status": "accepted",
+            "reason": "validated raw receipt",
+            "disposition": decision,
+            "raw_findings": [],
+        },
+    )
+    guarded = []
+
+    def run_guard(command, *, timeout):
+        guarded.append((command, timeout))
+        return CompletedProcess(
+            command, 0, json.dumps({"merge_executed": True, "blocked": False}), ""
+        )
+
+    backend = closer(tmp_path, current, apply=True, workers=True, run_fn=run_guard)
+    monkeypatch.setattr(
+        backend, "campaign_admission", lambda *_a, **_k: {"allowed": True, "timeout": 60}
+    )
+    monkeypatch.setattr(
+        backend, "worker", lambda *a, **k: worker_calls.append(a) or {"status": "failed"}
+    )
+
+    def guarded_queue_once(_path, selected, observe, execute, *, deadline, **_kwargs):
+        target = selected[0]
+        observed = observe(target)
+        executed = execute(
+            target,
+            observed["action"],
+            observed,
+            {"deadline": deadline, "id": "fake-queue-operation"},
+        )
+        return {
+            "stop_valid": True,
+            "accounting": [
+                {
+                    "target": target,
+                    "status": "complete" if executed.get("status") == "completed" else "observed",
+                    "eligible": True,
+                    "reason": executed.get("reason"),
+                    "action": observed["action"],
+                }
+            ],
+            "events": [],
+        }
+
+    monkeypatch.setattr(closer_queue, "run_round", guarded_queue_once)
+
+    def fake_pipeline(path, targets, **kwargs):
+        prepared = kwargs["prepare"](TARGET, {"deadline": time.time() + 60})
+        interpreted = kwargs["interpret"](
+            TARGET, {"prepare": prepared, "deadline": time.time() + 60}
+        )
+        assert interpreted["actual"]["run_id"] == "real-run-1"
+        action = kwargs["act"](
+            TARGET,
+            {
+                "prepare": prepared,
+                "interpret": interpreted,
+                "deadline": time.time() + 60,
+                "revision": prepared["revision"],
+                "work_key": "work-1",
+                "action_state_path": str(tmp_path / "actions.json"),
+            },
+        )
+        return {"targets": {TARGET: action}}
+
+    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=fake_pipeline))
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+    result = adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 60)
+    assert result["targets"][TARGET]["status"] in {"completed", "pending", "deferred"}
+    assert len(prompts) == 1
+    mandatory = prompts[0].split(
+        "Bounded packet samples (optional; refs above are authoritative):", 1
+    )[0]
+    prepared_ref = tmp_path / "state.json.evidence" / "manifests" / "packet.json"
+    assert prepared_ref.is_file()
+    assert str(prepared_ref) in mandatory
+    nonpass_ids = closer_disposition.pending_nonpass_findings(current, packet)
+    assert nonpass_ids[0]["finding_id"] in mandatory
+    assert guarded and guarded[0][0][1].endswith("merge_guard.py")
+    assert not worker_calls
+
+
+def test_held_assignment_metadata_blocks_pipeline_before_worker_or_action(tmp_path, monkeypatch):
+    import closer_evidence
+
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(
+        json.dumps(
+            {
+                "errors": [],
+                "targets": [
+                    {
+                        "target": TARGET,
+                        "execution_state": "held",
+                        "fingerprint": "row-fp-1",
+                        "delivery_owner": "Workflows#4057",
+                    }
+                ],
+            }
+        )
+    )
+    current = snapshot(checks="SUCCESS", base="c" * 40)
+
+    class PreparedGitHub(FakeGitHub):
+        def __init__(self, *, deadline):
+            super().__init__(current)
+            self.deadline = deadline
+
+    monkeypatch.setattr(adapter, "GitHub", PreparedGitHub)
+    packet = {
+        "schema": "closer-evidence/v1",
+        "target": TARGET,
+        "head": HEAD,
+        "base": current["base"],
+        "producer_sha256": "d" * 64,
+        "semantic_cache_key": "closer-evidence-semantic/v1:" + "e" * 64,
+        "section_digests": {},
+        "sections": {},
+        "manifest": {"packet_sha256": "f" * 64},
+    }
+    monkeypatch.setattr(closer_evidence, "collect_evidence", lambda *_a, **_k: packet)
+    monkeypatch.setattr(closer_evidence, "validate_packet", lambda _p: False)
+    monkeypatch.setattr(closer_evidence, "drift_sample", lambda *_a, **_k: [])
+    monkeypatch.setattr(adapter, "_pipeline_capacity", lambda: {"io": 1, "low": 1, "exception": 1})
+    monkeypatch.setattr(
+        adapter,
+        "_pipeline_low_route",
+        lambda **_kw: pytest.fail("held target must not dispatch a model"),
+    )
+    monkeypatch.setattr(
+        closer_queue,
+        "run_round",
+        lambda *_a, **_k: pytest.fail("held target must not enter action queue"),
+    )
+    backend = closer(
+        tmp_path,
+        current,
+        apply=True,
+        workers=True,
+        assignment_rows={TARGET: json.loads(assignment.read_text())["targets"][0]},
+    )
+    args = SimpleNamespace(
+        state=str(tmp_path / "state.json"), assignment=str(assignment), max_workers=1, shadow=False
+    )
+    receipt = adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 30)
+    row = receipt["targets"][TARGET]
+    assert row["status"] == "pending"
+    assert row["pending_kind"] == "external_event"
+    assert row["pending_evidence"]["event_id"] == "row-fp-1"
+    assert "Workflows#4057" in row["deferred_next_trigger"]
+
+
+def test_assignment_guard_rechecks_immediately_before_action(tmp_path):
+    current = snapshot()
+    calls = []
+    backend = closer(
+        tmp_path,
+        current,
+        apply=True,
+        assignment_guard_fn=lambda target: calls.append(target)
+        or {
+            "status": "pending",
+            "pending_kind": "external_event",
+            "next_trigger": "Workflows#4057 releases assignment hold",
+            "pending_evidence": {"event_id": "row-fp-1", "target": target},
+        },
+    )
+    result = backend.execute(
+        TARGET, "merge", current, {"deadline": time.time() + 30, "id": "unused"}
+    )
+    assert calls == [TARGET]
+    assert result["status"] == "pending"
+    assert not backend.gh.reads
+
+
+def test_active_assignment_fingerprint_refresh_does_not_block_fresh_target(tmp_path):
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(
+        json.dumps(
+            {
+                "errors": [],
+                "targets": [
+                    {
+                        "target": TARGET,
+                        "execution_state": "active",
+                        "fingerprint": "new-controller-fingerprint",
+                    }
+                ],
+            }
+        )
+    )
+    assert (
+        adapter.assignment_dependency(
+            assignment, TARGET, expected_fingerprint="older-active-fingerprint"
+        )
+        is None
+    )
+
+
+def test_pipeline_deadline_preserves_45m_active_window_and_5m_receipt_reserve(
+    tmp_path, monkeypatch
+):
+    import closer_evidence
+    import closer_queue
+
+    reserve = closer_queue.DEFAULT_RECEIPT_RESERVE_SECONDS
+    start = time.time()
+    full_deadline = start + 2700 + reserve
+    current = snapshot(base="c" * 40)
+
+    class PreparedGitHub(FakeGitHub):
+        def __init__(self, *, deadline):
+            super().__init__(current)
+            self.deadline = deadline
+
+    monkeypatch.setattr(adapter, "GitHub", PreparedGitHub)
+    packet = {
+        "schema": "closer-evidence/v1",
+        "target": TARGET,
+        "head": HEAD,
+        "base": current["base"],
+        "producer_sha256": "d" * 64,
+        "semantic_cache_key": "closer-evidence-semantic/v1:" + "e" * 64,
+        "sections": {},
+        "manifest": {"packet_sha256": "f" * 64},
+    }
+    monkeypatch.setattr(closer_evidence, "collect_evidence", lambda *_a, **_k: packet)
+    monkeypatch.setattr(closer_evidence, "validate_packet", lambda _p: False)
+    monkeypatch.setattr(adapter, "_pipeline_capacity", lambda: {"io": 4, "low": 1, "exception": 1})
+    queue_calls = []
+
+    def queue_once(*_a, **kwargs):
+        queue_calls.append(kwargs)
+        return {
+            "stop_valid": True,
+            "accounting": [
+                {"target": TARGET, "status": "observed", "eligible": False, "reason": "hold"}
+            ],
+            "events": [],
+        }
+
+    monkeypatch.setattr(closer_queue, "run_round", queue_once)
+    observed = {}
+
+    def pipeline_stub(_path, _targets, **callbacks):
+        observed["outer_deadline"] = callbacks["deadline"]
+        observed["max_io_workers"] = callbacks["max_io_workers"]
+        context_deadline = callbacks["deadline"]
+        prep = callbacks["prepare"](TARGET, {"deadline": context_deadline})
+        observed["prepare_deadline"] = context_deadline
+        callbacks["act"](
+            TARGET,
+            {
+                "prepare": prep,
+                "deadline": context_deadline,
+                "action_state_path": str(tmp_path / "inner.json"),
+                "revision": prep["revision"],
+                "work_key": "test",
+            },
+        )
+        return {"targets": {TARGET: {"status": "completed"}}}
+
+    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=pipeline_stub))
+    backend = closer(tmp_path, current, apply=True, workers=True)
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [TARGET], backend, full_deadline)
+
+    active_cutoff = full_deadline - reserve
+    assert abs(observed["outer_deadline"] - active_cutoff) < 0.01
+    assert observed["prepare_deadline"] == observed["outer_deadline"]
+    assert observed["max_io_workers"] == 4
+    assert len(queue_calls) == 1
+    assert abs(queue_calls[0]["deadline"] - full_deadline) < 0.01
+    # The inner queue keeps its one default 300-second reserve; its action cutoff
+    # lands exactly on the outer active cutoff rather than subtracting reserve twice.
+    assert "receipt_reserve_seconds" not in queue_calls[0]
+    assert queue_calls[0]["deadline"] - reserve == observed["outer_deadline"]
+
+
+def test_deterministic_dispatcher_states_skip_low_provider_stage(tmp_path, monkeypatch):
+    import closer_evidence
+    import dispatcher
+
+    issue_target = "o/r#21"
+    wait_target = "o/r#22"
+    verify_target = "o/r#23"
+    snaps = {
+        issue_target: snapshot(target=issue_target, kind="issue", state="CLOSED"),
+        wait_target: snapshot(target=wait_target, checks="PENDING"),
+        verify_target: snapshot(target=verify_target, state="MERGED", merge=MERGE),
+    }
+
+    class PreparedGitHub(FakeGitHub):
+        def __init__(self, *, deadline):
+            super().__init__(None)
+            self.deadline = deadline
+
+        def snapshot(self, target):
+            self.reads += 1
+            row = copy.deepcopy(snaps[target])
+            row["target"] = target
+            row["revision"] = adapter.digest(
+                {k: v for k, v in row.items() if k not in {"revision", "observed_at"}}
+            )
+            return row
+
+    monkeypatch.setattr(adapter, "GitHub", PreparedGitHub)
+    monkeypatch.setattr(
+        closer_evidence,
+        "collect_evidence",
+        lambda snap, *_a, **_k: {
+            "schema": "closer-evidence/v1",
+            "target": snap["target"],
+            "head": snap.get("head"),
+            "base": snap.get("base"),
+            "producer_sha256": "d" * 64,
+            "sections": {},
+            "manifest": {"packet_sha256": hashlib.sha256(snap["target"].encode()).hexdigest()},
+        },
+    )
+    monkeypatch.setattr(closer_evidence, "validate_packet", lambda _p: False)
+    monkeypatch.setattr(closer_evidence, "drift_sample", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        dispatcher,
+        "offload",
+        lambda *_a, **_k: pytest.fail("deterministic state dispatched low provider"),
+    )
+    seen = {}
+
+    def pipeline_stub(_path, targets, **callbacks):
+        for target in targets:
+            prep = callbacks["prepare"](target, {"deadline": time.time() + 60})
+            seen[target] = callbacks["interpret"](
+                target, {"prepare": prep, "deadline": time.time() + 60}
+            )
+        return {"targets": {target: {"status": "pending"} for target in targets}}
+
+    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=pipeline_stub))
+    backend = closer(tmp_path, snapshot())
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(
+        args, [issue_target, wait_target, verify_target], backend, time.time() + 60
+    )
+    assert seen[issue_target]["classification"] == "deterministic_complete"
+    assert seen[wait_target]["classification"] == "deterministic_wait"
+    assert seen[verify_target]["classification"] == "deterministic_post_merge_verify"
+    assert all("actual" not in result for result in seen.values())
+
+
+def test_low_transport_failure_suppresses_profile_and_other_profile_continues(
+    tmp_path, monkeypatch
+):
+    import closer_disposition
+    import closer_evidence
+    import dispatcher
+
+    first, second = "o/r#31", "o/r#32"
+    base = "c" * 40
+    snapshots = {target: snapshot(target=target, base=base) for target in (first, second)}
+
+    class PreparedGitHub(FakeGitHub):
+        def __init__(self, *, deadline):
+            super().__init__(None)
+            self.deadline = deadline
+
+        def snapshot(self, target):
+            return copy.deepcopy(snapshots[target])
+
+    monkeypatch.setattr(adapter, "GitHub", PreparedGitHub)
+    monkeypatch.setattr(closer_evidence, "validate_packet", lambda _p: True)
+    monkeypatch.setattr(closer_evidence, "drift_sample", lambda *_a, **_k: [])
+    backend = closer(tmp_path, snapshots[first])
+    monkeypatch.setattr(
+        backend, "campaign_admission", lambda *_a, **_k: {"allowed": True, "timeout": 60}
+    )
+    route_profiles = []
+
+    def select_route(*, load, unavailable_profiles):
+        profile = "claude-low" if "gemini-low" in unavailable_profiles else "gemini-low"
+        route_profiles.append(profile)
+        return {"agent": profile.split("-")[0], "profile_id": profile, "pools": []}
+
+    monkeypatch.setattr(adapter, "_pipeline_low_route", select_route)
+    provider_profiles = []
+
+    def offload(_agent, _prompt, **kwargs):
+        profile = kwargs["profile_id"]
+        provider_profiles.append(profile)
+        if profile == "gemini-low":
+            return {"exit": 1, "run_id": "dispatch-unsupported-31", "error": "unsupported model"}
+        return {
+            "exit": 0,
+            "run_id": "dispatch-success-32",
+            "model": "claude-test",
+            "profile_id": profile,
+            "output": json.dumps(
+                {
+                    "target": second,
+                    "head": HEAD,
+                    "base": base,
+                    "classification": "relevant",
+                    "substantive_needs": [],
+                    "findings": [],
+                    "decision": {"criteria": []},
+                }
+            ),
+        }
+
+    monkeypatch.setattr(dispatcher, "offload", offload)
+    # The helper is only reached for the successful alternative provider.
+    monkeypatch.setattr(
+        closer_disposition,
+        "integrate_ordinary",
+        lambda *_a, **_k: {"status": "wait", "reason": "evidence incomplete", "raw_findings": []},
+    )
+
+    def packet_for(target):
+        packet = {
+            "schema": "closer-evidence/v1",
+            "target": target,
+            "head": HEAD,
+            "base": base,
+            "producer_sha256": "d" * 64,
+            "semantic_cache_key": "closer-evidence-semantic/v1:" + "e" * 64,
+            "sections": {},
+            "manifest": {"packet_sha256": target.replace("/", "_").replace("#", "-")},
+        }
+        path = tmp_path / (target.replace("/", "_").replace("#", "-") + ".json")
+        path.write_text(json.dumps(packet))
+        snap = snapshots[target]
+        snapshot_path = tmp_path / (target.replace("/", "_").replace("#", "-") + ".snapshot.json")
+        snapshot_path.write_text(json.dumps(snap, sort_keys=True, separators=(",", ":")))
+        return {
+            "revision": snap["revision"],
+            "identity": target,
+            "producer_sha256": packet["producer_sha256"],
+            "semantic_cache_key": packet["semantic_cache_key"],
+            "snapshot": {
+                "target": target,
+                "head": HEAD,
+                "base": base,
+                "revision": snap["revision"],
+                "checks": "SUCCESS",
+            },
+            "snapshot_ref": {
+                "path": str(snapshot_path),
+                "sha256": hashlib.sha256(snapshot_path.read_bytes()).hexdigest(),
+            },
+            "packet_ref": {
+                "path": str(path),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            },
+            "evidence_summary": {"drift_sample": [], "sections": {}},
+        }
+
+    def pipeline_stub(_path, targets, **callbacks):
+        values = {}
+        for target in targets:
+            values[target] = callbacks["interpret"](
+                target, {"prepare": packet_for(target), "deadline": time.time() + 60}
+            )
+        assert values[first]["reason"] == "provider_failure"
+        assert (
+            values[first]["resource_evidence"]["provider_failure"]["run_id"]
+            == "dispatch-unsupported-31"
+        )
+        assert values[second]["actual"]["run_id"] == "dispatch-success-32"
+        return {"targets": values}
+
+    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=pipeline_stub))
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [first, second], backend, time.time() + 60)
+    assert route_profiles == ["gemini-low", "claude-low"]
+    assert provider_profiles == route_profiles
