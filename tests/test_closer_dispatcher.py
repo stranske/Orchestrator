@@ -389,7 +389,17 @@ def _graphql_pr():
         ),
         "reviewThreads": connection([]),
         "commits": {
-            "nodes": [{"commit": {"oid": HEAD, "statusCheckRollup": {"state": "SUCCESS"}}}]
+            "nodes": [
+                {
+                    "commit": {
+                        "oid": HEAD,
+                        "statusCheckRollup": {
+                            "state": "SUCCESS",
+                            "contexts": connection([]),
+                        },
+                    }
+                }
+            ]
         },
         "comments": {"nodes": [], "pageInfo": {"hasPreviousPage": False}},
     }
@@ -430,6 +440,24 @@ def test_actual_snapshot_retains_source_hold_and_rejects_wrong_commit_checks(mon
     observed = _snapshot_from_document(monkeypatch, document)
     assert observed["sources"][0]["labels"] == ["agents:paused"]
     assert observed["checks"] is None
+
+
+def test_snapshot_binds_pending_check_run_ids_to_exact_head(monkeypatch):
+    document = _graphql_pr()
+    rollup = document["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
+    rollup["state"] = "PENDING"
+    rollup["contexts"] = {
+        "nodes": [
+            {"databaseId": 901, "status": "IN_PROGRESS", "conclusion": None},
+            {"databaseId": 902, "status": "COMPLETED", "conclusion": "SUCCESS"},
+            {"context": "legacy/status", "state": "PENDING"},
+        ],
+        "pageInfo": {"hasNextPage": False},
+    }
+    observed = _snapshot_from_document(monkeypatch, document)
+    assert observed["checks"] == "PENDING"
+    assert observed["pending_check_run_ids"] == [901]
+    assert observed["pending_check_head"] == HEAD
 
 
 def test_inventory_main_has_no_state_write_or_worker_launch(tmp_path, monkeypatch, capsys):
@@ -1018,6 +1046,75 @@ def test_staged_prepare_runs_before_pending_ci_wait_selection(tmp_path, monkeypa
     assert seen["shadow"]["classification"] == "not_run_shadow"
     assert seen["shadow"]["authority"] is False
     assert not (tmp_path / "state.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("check_run_ids", "check_head", "expected_status"),
+    [([901], HEAD, "pending"), ([], None, "blocked"), ([901], "f" * 40, "blocked")],
+)
+def test_staged_action_emits_pending_only_for_fresh_bound_check_run(
+    tmp_path, monkeypatch, check_run_ids, check_head, expected_status
+):
+    import closer_evidence
+
+    current = snapshot(
+        base="c" * 40,
+        checks="PENDING",
+        pending_check_run_ids=check_run_ids,
+        pending_check_head=check_head,
+    )
+
+    class PreparedGitHub(FakeGitHub):
+        def __init__(self, *, deadline):
+            super().__init__(current)
+            self.deadline = deadline
+
+    monkeypatch.setattr(adapter, "GitHub", PreparedGitHub)
+    packet = {
+        "schema": "closer-evidence/v1",
+        "target": TARGET,
+        "head": HEAD,
+        "base": current["base"],
+        "producer_sha256": "d" * 64,
+        "semantic_cache_key": "closer-evidence-semantic/v1:" + "e" * 64,
+        "sections": {},
+        "manifest": {"packet_sha256": "f" * 64},
+    }
+    monkeypatch.setattr(closer_evidence, "collect_evidence", lambda *_a, **_k: packet)
+    monkeypatch.setattr(closer_evidence, "validate_packet", lambda _p: False)
+    monkeypatch.setattr(closer_evidence, "drift_sample", lambda *_a, **_k: [])
+    backend = closer(tmp_path, current, apply=False, workers=False)
+    observed = {}
+
+    def run_pipeline(_path, targets, **callbacks):
+        assert targets == [TARGET]
+        deadline = time.time() + 60
+        prep = callbacks["prepare"](TARGET, {"deadline": deadline})
+        observed["result"] = callbacks["act"](
+            TARGET,
+            {
+                "prepare": prep,
+                "interpret": {"classification": "deterministic_wait"},
+                "deadline": deadline,
+                "revision": prep["revision"],
+                "work_key": "pending-ci-test",
+                "action_state_path": str(tmp_path / "actions.json"),
+            },
+        )
+        return {"targets": {TARGET: observed["result"]}}
+
+    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=run_pipeline))
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
+
+    result = observed["result"]
+    assert result["status"] == expected_status
+    if expected_status == "pending":
+        assert result["pending_kind"] == "ci"
+        assert result["pending_evidence"]["check_run_id"] == 901
+        assert result["pending_evidence"]["head"] == HEAD
+        assert "901" in result["next_trigger"]
+    assert not backend.apply
 
 
 def test_pipeline_low_route_uses_any_live_low_profile_not_luna_assumption(tmp_path, monkeypatch):

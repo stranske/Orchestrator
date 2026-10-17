@@ -261,7 +261,10 @@ class GitHub:
             pageInfo{hasNextPage}}
           reviewThreads(first:100){nodes{id isResolved isOutdated comments(last:1){nodes{body updatedAt}}}
             pageInfo{hasNextPage}}
-          commits(last:1){nodes{commit{oid statusCheckRollup{state}}}}
+          commits(last:1){nodes{commit{oid statusCheckRollup{state contexts(first:100){nodes{
+            ... on CheckRun{databaseId status conclusion}
+            ... on StatusContext{context state}
+          } pageInfo{hasNextPage}}}}}}
           comments(last:100){nodes{body url author{login}} pageInfo{hasPreviousPage}}
         }}}"""
         # Int input through --raw-field is not typed; variables are encoded in a JSON input below.
@@ -335,8 +338,27 @@ class GitHub:
         head = pr["headRefOid"]
         check_nodes = pr["commits"]["nodes"]
         checks = None
+        pending_check_run_ids = []
+        pending_check_head = None
         if check_nodes and check_nodes[0]["commit"]["oid"] == head:
-            checks = (check_nodes[0]["commit"].get("statusCheckRollup") or {}).get("state")
+            rollup = check_nodes[0]["commit"].get("statusCheckRollup") or {}
+            checks = rollup.get("state")
+            contexts = rollup.get("contexts") or {}
+            if checks == "PENDING" and isinstance(contexts.get("nodes"), list):
+                pending_check_run_ids = sorted(
+                    {
+                        row["databaseId"]
+                        for row in contexts["nodes"]
+                        if isinstance(row, dict)
+                        and type(row.get("databaseId")) is int
+                        and row["databaseId"] > 0
+                        and row.get("status")
+                        in {"QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED", "PENDING"}
+                        and row.get("conclusion") is None
+                    }
+                )
+                if pending_check_run_ids:
+                    pending_check_head = head
         marker = None
         if not pr["comments"]["pageInfo"].get("hasPreviousPage"):
             marker = verifier_evidence.decision_from_pr(repo, pr)
@@ -355,6 +377,8 @@ class GitHub:
             "active_threads": sum(not t["isResolved"] for t in threads),
             "threads": threads,
             "checks": checks,
+            "pending_check_run_ids": pending_check_run_ids,
+            "pending_check_head": pending_check_head,
             "mergeable": pr["mergeable"],
             "labels": [x["name"] for x in pr["labels"]["nodes"]],
             "verifier": marker,
@@ -2378,7 +2402,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             and row.get("eligible")
             and reason in closer_queue.RESOURCE_DEFERRALS
         ):
-            inner = closer_queue._read_state(action_state).get("items", {}).get(target, {})
+            inner = closer_queue._read_state(Path(action_state)).get("items", {}).get(target, {})
             return {
                 "status": "deferred",
                 "reason": reason,
@@ -2386,6 +2410,44 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "resource_evidence": inner.get("resource_evidence"),
                 "queue_receipt": receipt,
             }
+        if (
+            receipt.get("stop_valid")
+            and not row.get("eligible")
+            and row.get("action") == "wait"
+            and reason == "current-head checks pending or unknown"
+        ):
+            inner = closer_queue._read_state(Path(action_state)).get("items", {}).get(target, {})
+            evidence = inner.get("evidence", {}) if isinstance(inner, dict) else {}
+            check_ids = (
+                evidence.get("pending_check_run_ids") if isinstance(evidence, dict) else None
+            )
+            head = evidence.get("head") if isinstance(evidence, dict) else None
+            if (
+                inner.get("observation_freshness") == "fresh"
+                and inner.get("revision") == row.get("revision")
+                and isinstance(evidence, dict)
+                and evidence.get("target") == target
+                and evidence.get("checks") == "PENDING"
+                and evidence.get("pending_check_head") == head
+                and isinstance(head, str)
+                and bool(re.fullmatch(r"[0-9a-f]{40}", head))
+                and isinstance(check_ids, list)
+                and check_ids
+                and all(type(check_id) is int and check_id > 0 for check_id in check_ids)
+            ):
+                check_run_id = check_ids[0]
+                return {
+                    "status": "pending",
+                    "pending_kind": "ci",
+                    "next_trigger": f"GitHub check run {check_run_id} reaches a terminal conclusion for {head}",
+                    "pending_evidence": {
+                        "check_run_id": check_run_id,
+                        "head": head,
+                        "target": target,
+                        "observed_revision": row.get("revision"),
+                    },
+                    "queue_receipt": receipt,
+                }
         return {
             "status": "blocked",
             "reason": reason,
