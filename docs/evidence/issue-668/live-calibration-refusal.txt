@@ -1,0 +1,1 @@
+calibrate-codex: refuses to write: 0 matched quota incidents; seen=73, unmatched=73, duplicate=0, no_weekly_tokens=73; need at least 2 distinct incidents with agent-specific weekly token projections and period_start at each incident (shared 5h projection is insufficient)

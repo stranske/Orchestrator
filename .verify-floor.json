@@ -1,6 +1,6 @@
 {
-  "collected": 3996,
-  "passed": 3996,
+  "collected": 4094,
+  "passed": 4094,
   "skipped_max": 31,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 52,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Source660 reconciliation adds seven isolated DB/CLI/explicit-override regression cases; pass expectation and all skip/selftest/gate/mypy ceilings retained. Explicit-tilde continuation adds one isolated actual learner/CLI case; 3950 collected, pass expectation 3950 (not an observed pass count); all ceilings unchanged. 2026-10-17 #678 integrates current main and adds26 feature-goal acceptance/source/recovery tests; all ceilings unchanged. Merge current main adds five model-epoch tests; review-fix test additions will be verified by collection. Review fixes add 15 tests (3996 collected by pytest); all skip and mypy ceilings unchanged."
+  "note": "Source660 reconciliation adds seven isolated DB/CLI/explicit-override regression cases; pass expectation and all skip/selftest/gate/mypy ceilings retained. Explicit-tilde continuation adds one isolated actual learner/CLI case; 3950 collected, pass expectation 3950 (not an observed pass count); all ceilings unchanged. FLOOR RECORDED by verify.py --update-floor on 2026-10-17: collected=3955, passed=3955. Ceilings preserved, never re-measured \u2014 they are edited by hand. Issue668 FIX round2 adds 95 pacing and 3 mirror compatibility cases: independently collected 4053 = main3955 +98; all ceilings and allowlists unchanged. Merge of #678 feature goals ledger onto main 8c53ae1: independently collected 4094 = main 4053 + 41 feature-goal/switch-review isolation cases; all ceilings unchanged."
 }

@@ -24,7 +24,23 @@ Corrections baked in:
     does NOT cover API calls (aider uses the API) — if the user's paid tier is
     the chat-only Pro, set plan_limit=0 and aider degrades to pure-credit.
 
-Read-only and safe; `--selftest` runs fully offline. Simple-first + legible by
+Pacing sources (2026-10-17): Claude desktop persists timestamped weekly percentages
+in ~/Library/Application Support/Claude/plan-usage-history.json, samples[].t (ms)
+and samples[].u.sd (%) plus u.fh (five-hour %). Refresh is app-driven (observed cadence documented in
+ docs/capacity-pacing.md), not guaranteed. Sources older than two 15-minute ticks
+are stale. Codex reads ~/.codex/sessions/**/rollout-*.jsonl token_count events:
+rate_limits.primary.used_percent (window_minutes=10080) and resets_at (epoch),
+plus secondary.used_percent (window_minutes=300) for quota-marker recovery.
+The event timestamp measures freshness; T0=T1-7d. Only these usage fields are
+extracted; credits are never retained or printed. Source refresh requires an
+active session. Agent-specific ccusage weekly tokens plus calibrated cap remain
+the fallback; mixed-agent and 5h totals cannot measure weekly consumption.
+Missing/stale usage sets pacing.state=unknown while retaining the native state.
+The normal tick appends usage samples and snapshots; build() writes only a disposable
+sanitized rollout offset cache, with duration and file counts reported. One usage
+snapshot per build feeds both marker recovery and pacing integration.
+
+Read-only build; `--selftest` runs fully offline. Simple-first + legible by
 design (PR #2350 §11 anti-over-engineering): no scoring, no learning here — this
 module only answers "does agent X have headroom right now?".
 """
@@ -39,6 +55,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextvars import ContextVar
 from pathlib import Path
 
 import execution_profiles
@@ -465,6 +482,9 @@ def shed_marker(
     return {**found, "expires_at": expires_at, "state": "active" if expires_at > now else "expired"}
 
 
+_BUILD_PACING_USAGE: ContextVar[dict | None] = ContextVar("build_pacing_usage", default=None)
+
+
 def _shed(agent: str) -> bool:
     """Honor legacy empty flags; expire only well-formed JSON cooldown flags.
 
@@ -476,7 +496,70 @@ def _shed(agent: str) -> bool:
     if marker is None:
         return False
     if marker["state"] != "expired":
-        return True
+        # A confirmed banked reset clears only a dated provider quota incident.
+        # Continue through ordinary auth/model checks after removal. Manual and
+        # unreadable markers are never reset by an allowance inventory change.
+        import pacing
+        import pacing_usage
+
+        inventory = pacing_usage.read_json(pacing_usage.RESETS_FILE) or {}
+        entries = inventory.get(agent, []) if isinstance(inventory, dict) else []
+        created = marker.get("created_at")
+        reset_events = (
+            [
+                stamp
+                for entry in entries
+                if isinstance(entry, dict)
+                and (stamp := pacing.timestamp(entry.get("consumed_at"))) is not None
+                and stamp <= time.time()
+            ]
+            if isinstance(entries, list)
+            else []
+        )
+        reset_clears = (
+            marker["state"] == "active"
+            and marker.get("category") in ("quota", "rate_limit", "capacity")
+            and created is not None
+            and any(stamp > created for stamp in reset_events)
+        )
+        sample_clears = False
+        if (
+            agent in ("codex", "claude")
+            and marker["state"] == "active"
+            and marker.get("category") in ("quota", "rate_limit", "capacity")
+            and created is not None
+            and not reset_clears
+        ):
+            now = time.time()
+            snapshot = _BUILD_PACING_USAGE.get()
+            datum = (
+                snapshot[agent]
+                if snapshot is not None
+                else pacing_usage.usage(
+                    agent, now, pacing_usage.read_json(pacing_usage.CALIBRATION_FILE) or {}
+                )
+            )
+            used, observed = datum.get("used_fraction"), datum.get("ts")
+            short = datum.get("short_used_fraction")
+            sample_clears = (
+                used is not None
+                and 0 <= used < 1
+                and short is not None
+                and 0 <= short < 1
+                and observed is not None
+                and created < observed <= now
+                and now - observed <= pacing.STALE_AFTER_SECONDS
+            )
+            if not sample_clears:
+                print(
+                    f"pool {agent}: quota marker age={now - created:.0f}s; weekly u={used}; "
+                    f"short-window u={short if short is not None else 'unmeasured'}; "
+                    f"drain: fresh post-incident weekly AND short-window u<1, confirmed reset, "
+                    f"or cooldown in {marker['expires_at'] - now:.0f}s",
+                    file=sys.stderr,
+                )
+        if not (reset_clears or sample_clears):
+            return True
     try:
         Path(marker["path"]).unlink()
     except OSError:
@@ -953,30 +1036,45 @@ def _capability_heartbeat(event_type: str, **kw) -> None:
         pass
 
 
-def build(ccusage_block=None) -> dict:
+def build(ccusage_block=None, *, record_pacing: bool = False) -> dict:
     # Infrastructure capability: exercised once per tick as a PHASE, never selected for a task, so
     # it records use here rather than through a routing matcher. Inert outside an active tick.
     _capability_heartbeat("invocation", ref="capacity.build")
     if ccusage_block is None:
         ccusage_block = _ccusage_active_block()
-    agents = {}
-    for agent, cfg in AGENTS.items():
-        state, reason, meta = compute(agent, cfg, ccusage_block)
-        agents[agent] = {
-            "state": state,
-            "reason": reason,
-            "account": cfg["account"],
-            "model": cfg["model"],  # Capacity accounting model; CLI models live in tier_models.
-            "window": cfg["window"],
-            # What a dispatch would actually send, per tier — so a rotted pin is visible in the
-            # snapshot itself rather than only at dispatch time. None => CLI default applies.
-            "tier_models": _tier_models(agent),
-            "tier_ceiling": _tier_ceiling(agent),  # None => uncapped; else routine spend stops here
-            "auth": (_auth_health(agent) or {}),  # {} => not evaluable; never read as a failure
-            **(meta or {}),
-        }
+    import pacing_usage
+
+    now = time.time()
+    usage_data = pacing_usage.usage_snapshot(now)
+    # Per-build context preserves the single-argument _shed seam and isolates concurrent builds.
+    token = _BUILD_PACING_USAGE.set(usage_data)
+    try:
+        agents = {}
+        for agent, cfg in AGENTS.items():
+            state, reason, meta = compute(agent, cfg, ccusage_block)
+            agents[agent] = {
+                "state": state,
+                "reason": reason,
+                "account": cfg["account"],
+                "model": cfg["model"],  # Capacity accounting model; CLI models live in tier_models.
+                "window": cfg["window"],
+                # What a dispatch would actually send, per tier — so a rotted pin is visible in the
+                # snapshot itself rather than only at dispatch time. None => CLI default applies.
+                "tier_models": _tier_models(agent),
+                "tier_ceiling": _tier_ceiling(
+                    agent
+                ),  # None => uncapped; else routine spend stops here
+                "auth": (_auth_health(agent) or {}),  # {} => not evaluable; never read as a failure
+                **(meta or {}),
+            }
+    finally:
+        _BUILD_PACING_USAGE.reset(token)
+    pacing_fyi = pacing_usage.integrate(
+        agents, now=now, handoff=HANDOFF, record=record_pacing, usage_data=usage_data
+    )
     proj = (ccusage_block or {}).get("projection") or {}
     base = {
+        "pacing_fyi": pacing_fyi,
         "generated_at": int(time.time()),
         "ccusage_active": (
             {"proj_tokens": proj.get("totalTokens"), "proj_cost": proj.get("totalCost")}
@@ -1264,9 +1362,62 @@ def main(argv):
     if "--selftest" in argv:
         _selftest()
         return 0
+    if argv and argv[0] == "calibrate-codex":
+        import pacing_usage
+
+        ok, message = pacing_usage.calibrate(
+            pacing_usage.read_rows(HANDOFF / "rate-limit-incidents.ndjson"),
+            pacing_usage.read_rows(HANDOFF / "pacing-usage-samples.ndjson"),
+            pacing_usage.CALIBRATION_FILE,
+        )
+        print(message)
+        return 0 if ok else 1
+    if argv and argv[0] == "pacing-report":
+        import pacing_usage
+
+        now = time.time()
+        current = {
+            "agents": {
+                pool: {"state": "ok", "reason": "pacing report"} for pool in ("codex", "claude")
+            }
+        }
+        current["pacing_fyi"] = pacing_usage.integrate(current["agents"], now=now, handoff=HANDOFF)
+        print(pacing_usage.report(HANDOFF, now=now, current=current))
+        return 0
+    if argv and argv[0] == "pick-agent":
+        import argparse
+
+        import router
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--candidates", required=True)
+        parser.add_argument("--task-type", default="implement")
+        args = parser.parse_args(argv[1:])
+        snapshot = build()
+        choice = router.select_agent(
+            args.task_type,
+            snapshot,
+            only=set(args.candidates.split(",")),
+            learned=(router.learned_ranks() or {}).get(args.task_type),
+        )
+        if choice is None:
+            print("unmeasured: no dispatchable candidate", file=sys.stderr)
+            return 1
+        print(choice["agent"])
+        decision = choice.get("pacing_decision") or {
+            "policy": "legacy (pacing unmeasured in selected tier)",
+            "candidates": [
+                {"agent": agent, **snapshot.get("agents", {}).get(agent, {})}
+                for agent in args.candidates.split(",")
+            ],
+        }
+        print(json.dumps(decision), file=sys.stderr)
+        return 0
     HANDOFF.mkdir(parents=True, exist_ok=True)
-    snap = build()
+    snap = build(record_pacing=True)
     OUT.write_text(json.dumps(snap, indent=2) + "\n")
+    for message in snap.get("pacing_fyi", []):
+        print(message, file=sys.stderr)
     print(json.dumps(snap, indent=2))
     return 0
 
