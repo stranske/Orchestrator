@@ -892,6 +892,16 @@ makes the pair observable. (It is not drawn in the loop diagram, which is unchan
 
 ## The capability layer — what the tool can do, and how a surface finds it
 
+Consumer declarations in `capabilities.KNOWN_GATES` and `KNOWN_DECLARATIONS` name the
+existing acting rail as `file.py:symbol`, including the local handover for external
+workers. Resolution proves that a symbol exists, not that it acted. A declaration
+with no local consumer carries `consumer_missing: true` and an explanation; this
+diagnostic survives reconciliation and grants no admission waiver, lifecycle
+promotion, or measured action. The admission gate retains its original grace and
+enforcement rules. `test_declared_consumers_resolve_in_the_tree` guards the reviewed
+bindings against prose and unresolved symbols.
+
+
 This doc described rails and roles and never once said "capability", which let a whole session treat
 the two axes as one. They are orthogonal:
 
