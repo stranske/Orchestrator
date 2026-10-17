@@ -110,10 +110,9 @@ def _require_publishable(
     lost = _regressing_tasks(document, published)
     remaining = float(EVIDENCE_REGRESSION_HOLD_HOURS)
     elapsed = 0.0
-    hold_path = (
-        state_dir or Path.home() / ".codex" / "orchestrator"
-    ) / "route-weights-regression-hold.json"
-    if published is not None:
+    # Pure validation must never read, reset, or create the live publication latch.
+    hold_path = state_dir / "route-weights-regression-hold.json" if state_dir is not None else None
+    if published is not None and hold_path is not None:
         if lost:
             now = dt.datetime.now(dt.timezone.utc).timestamp()
             try:
@@ -437,14 +436,37 @@ def publish_document(
     if has_remote:
         # Compare the fetched publication, never the local shadow export (which
         # this run may already have replaced). Read before switching or writing.
-        published = json.loads(
-            subprocess.run(
-                ["git", "-C", str(canonical), "show", f"{remote_ref}:{EXPORT_PATH}"],
+        artifact = subprocess.run(
+            ["git", "-C", str(canonical), "show", f"{remote_ref}:{EXPORT_PATH}"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if artifact.returncode:
+            # Only an absent path is recoverable; other Git read errors stay fatal.
+            listing = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(canonical),
+                    "ls-tree",
+                    "--name-only",
+                    remote_ref,
+                    "--",
+                    str(EXPORT_PATH),
+                ],
                 check=True,
                 capture_output=True,
                 text=True,
-            ).stdout
-        )
+            )
+            if listing.stdout.strip():
+                artifact.check_returncode()
+            print(
+                "refused: published artifact missing on branch; publishing fresh", file=sys.stderr
+            )
+            published = None
+        else:
+            published = json.loads(artifact.stdout)
         _require_publishable(document, published, allow_evidence_regression, state_dir=state_dir)
         has_local = (
             subprocess.run(
@@ -598,7 +620,32 @@ def _selftest() -> None:
             pass
         else:
             raise AssertionError("missing evidence must not publish")
-        _validate_publication(document, empty)
+        _require_publishable(document, empty, state_dir=root)
+        # A partial regression holds, ages while closed, and drains at the same threshold.
+        previous = json.loads(json.dumps(document))
+        previous["task_types"]["review"]["evidence_ok"] = True
+        hold_path = root / "route-weights-regression-hold.json"
+        try:
+            _require_publishable(document, previous, state_dir=root)
+        except PublicationRefused as exc:
+            assert "regressing_tasks=1, drainable_in=24h" in str(exc), exc
+        else:
+            raise AssertionError("fresh regression must hold")
+        hold = json.loads(hold_path.read_text())
+        first_seen = hold["first_seen"]
+        try:
+            _require_publishable(document, previous, state_dir=root)
+        except PublicationRefused:
+            pass
+        else:
+            raise AssertionError("repeated regression must still hold")
+        assert json.loads(hold_path.read_text())["first_seen"] == first_seen
+        hold["first_seen"] -= EVIDENCE_REGRESSION_HOLD_HOURS * 3600
+        write_document(hold_path, hold)
+        _require_publishable(document, previous, state_dir=root)
+        assert json.loads(hold_path.read_text())["first_seen"] == hold["first_seen"]
+        _require_publishable(previous, previous, state_dir=root)
+        assert not hold_path.exists(), "evidence recovery must clear the hold"
     print("route_weights_export.py selftest: OK")
 
 
@@ -626,7 +673,7 @@ def main() -> int:
         return 0
     db_path = feedback.resolve_db_path(args.feedback_db, args.state_dir)
     document = build_document(db_path, args.min_observations)
-    # The run is credited as an INVOCATION before the work, and the `success` below records its
+    # Credit INVOCATION only after the document builds; `success` below records publication's
     # result. A success alone moves `last_success` only, so this daily step exported every day from
     # 2026-09-04 while the firing monitor read it as silent since its one consult trial. Guarded: a
     # ledger fault must not stop the export a remote consumer reads.

@@ -780,3 +780,105 @@ def test_publication_identity_falls_back_to_exporter(tmp_path, monkeypatch):
         f"chore: export route weights (db={database.resolve()} "
         "source_version=2 by=orchestrator-export)"
     )
+
+
+def test_selftest_never_touches_live_hold(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(export.capacity, "build", _capacity_fixture)
+    hold = tmp_path / ".codex" / "orchestrator" / "route-weights-regression-hold.json"
+    export.write_document(hold, {"first_seen": 123, "task_types": ["review"], "reason": "live"})
+    before = hold.read_bytes(), hold.stat().st_mtime_ns
+    # Refuse even reads/touches, including transient mutations later restored by the test.
+    original_open, original_unlink = Path.open, Path.unlink
+
+    def checked_open(path, *args, **kwargs):
+        assert path != hold, "selftest must never access the live hold"
+        return original_open(path, *args, **kwargs)
+
+    def checked_unlink(path, *args, **kwargs):
+        assert path != hold, "selftest must never delete the live hold"
+        return original_unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as guard:
+        guard.setattr(Path, "open", checked_open)
+        guard.setattr(Path, "unlink", checked_unlink)
+        export._selftest()
+    assert (hold.read_bytes(), hold.stat().st_mtime_ns) == before
+
+
+@pytest.mark.parametrize("regressing", [False, True])
+def test_validation_without_state_dir_preserves_live_hold(tmp_path, monkeypatch, regressing):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    hold = tmp_path / ".codex" / "orchestrator" / "route-weights-regression-hold.json"
+    export.write_document(hold, {"first_seen": 1, "task_types": ["review"]})
+    before = hold.read_bytes(), hold.stat().st_mtime_ns
+    document = {"source_version": 2, "task_types": {"implement": {"evidence_ok": True}}}
+    previous = json.loads(json.dumps(document))
+    if regressing:
+        previous["task_types"]["review"] = {"evidence_ok": True}
+        with pytest.raises(export.PublicationRefused, match="drainable_in=24h"):
+            export._validate_publication(document, previous)
+    else:
+        export._validate_publication(document, previous)
+    assert (hold.read_bytes(), hold.stat().st_mtime_ns) == before
+
+
+def test_failed_build_is_never_credited_as_invocation(tmp_path, monkeypatch):
+    monkeypatch.setattr("sys.argv", ["route_weights_export.py", "--state-dir", str(tmp_path)])
+    heartbeats = []
+    monkeypatch.setattr(
+        export.capabilities, "daily_heartbeat", lambda *a, **k: heartbeats.append(a)
+    )
+
+    def failed_build(*args):
+        raise RuntimeError("fixture build failed")
+
+    monkeypatch.setattr(export, "build_document", failed_build)
+    with pytest.raises(RuntimeError, match="fixture build failed"):
+        export.main()
+    assert heartbeats == []
+    assert not (tmp_path / "route-weights-export.json").exists()
+
+
+@pytest.mark.parametrize("evidenced", [False, True])
+def test_export_branch_without_artifact_can_publish_fresh(tmp_path, monkeypatch, capsys, evidenced):
+    def git(repository, *args):
+        return subprocess.run(
+            ["git", "-C", str(repository), *args], check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    for key in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{key}_NAME", "Guard Test")
+        monkeypatch.setenv(f"GIT_{key}_EMAIL", "guard@example.invalid")
+    remote = tmp_path / "remote.git"
+    remote.mkdir()
+    git(remote, "init", "--bare", "--initial-branch=main")
+    checkout = tmp_path / "checkout"
+    git(tmp_path, "clone", str(remote), str(checkout))
+    (checkout / "README.md").write_text("No export artifact yet\n")
+    git(checkout, "add", ".")
+    git(checkout, "commit", "-m", "fixture branch without artifact")
+    git(checkout, "push", "origin", f"HEAD:{export.EXPORT_BRANCH}")
+    before = git(remote, "rev-parse", export.EXPORT_BRANCH)
+    monkeypatch.setattr(export.provision, "ensure_canonical", lambda *a: checkout)
+    document = {
+        "source_version": 2 if evidenced else 0,
+        "task_types": {"implement": {"evidence_ok": evidenced, "ranking": []}},
+    }
+    if evidenced:
+        assert export.publish_document(document, state_dir=tmp_path / "state")
+        assert git(remote, "rev-parse", export.EXPORT_BRANCH) != before
+        assert (
+            json.loads(git(remote, "show", f"{export.EXPORT_BRANCH}:{export.EXPORT_PATH}"))
+            == document
+        )
+        assert (
+            "refused: published artifact missing on branch; publishing fresh"
+            in capsys.readouterr().err
+        )
+    else:
+        with pytest.raises(export.PublicationRefused, match="source_version == 0"):
+            export.publish_document(
+                document, allow_evidence_regression=True, state_dir=tmp_path / "state"
+            )
+        assert git(remote, "rev-parse", export.EXPORT_BRANCH) == before

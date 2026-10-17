@@ -1,6 +1,6 @@
 {
-  "collected": 3922,
-  "passed": 3893,
+  "collected": 3931,
+  "passed": 3902,
   "skipped_max": 31,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 52,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "PR #663 review fixes, full run: TMPDIR=/private/tmp /opt/anaconda3/bin/python3 src/verify.py exited 1; 3922 collected, 3893 passed, 29 failed, 0 skipped. Remaining pytest failures reproduced on unchanged main c6c9a21; exp_abcd and tick_watchdog selftests also fail there; capability_propensity reproduces on unchanged main under the same runtime-root topology (source imports trip the live-state audit). This is RED verification, not full acceptance. Passing floor reflects actual passes; all existing ceilings unchanged."
+  "note": "PR #663 round 4 full verification: TMPDIR=/private/tmp /opt/anaconda3/bin/python3 src/verify.py exited 1; 3931 collected, 3902 passed, 29 failed, 0 skipped. Collected count is 3925 existing plus 6 new regression cases. The 29 pytest failure names and 3 failed selftests (capability_propensity, exp_abcd, tick_watchdog) match the prior PR record; no fresh baseline run is claimed. Entrypoint audit could not acquire the live ledger lock under this sandbox. Full verification remains RED. Passing floor uses measured passes; all ceilings unchanged."
 }
