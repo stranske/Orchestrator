@@ -42,15 +42,38 @@ def callbacks(*, interpret=None, act=None, exception=None):
 
 def run(path, targets, cb=None, *, capacity=None, seconds=2, **kw):
     cb = cb or callbacks()
+    clock = kw.pop("now", time.time)
     return run_pipeline(
         path,
         targets,
         **cb,
         capacity_fn=lambda: capacity or {"io": 2, "low": 2, "exception": 1},
-        deadline=time.time() + seconds,
-        now=time.time,
+        deadline=clock() + seconds,
+        now=clock,
         **kw,
     )
+
+
+def run_bounded(call, *, timeout=60):
+    """Run a scheduler stress fixture without turning its wall budget into a benchmark."""
+    finished = threading.Event()
+    result = []
+
+    def invoke():
+        try:
+            result.append((True, call()))
+        except BaseException as exc:  # re-raise worker failures in the test thread
+            result.append((False, exc))
+        finally:
+            finished.set()
+
+    worker = threading.Thread(target=invoke, daemon=True)
+    worker.start()
+    assert finished.wait(timeout), f"scheduler stress fixture exceeded {timeout}s safety bound"
+    succeeded, value = result[0]
+    if not succeeded:
+        raise value
+    return value
 
 
 def test_cheap_reports_skip_exception_and_complete(tmp_path):
@@ -267,7 +290,15 @@ def test_semantic_cache_requires_versioned_sha256_binding(tmp_path):
 
 def test_assignment_larger_than_legacy_cap_is_serviced_whole(tmp_path):
     targets = [f"t{i:03}" for i in range(80)]
-    receipt = run(tmp_path / "state.json", targets, seconds=10)
+    logical_now = 1_000_000.0
+    receipt = run_bounded(
+        lambda: run(
+            tmp_path / "state.json",
+            targets,
+            seconds=300,
+            now=lambda: logical_now,
+        )
+    )
     assert receipt["assignment"] == targets
     assert len(receipt["targets"]) == len(targets)
     assert all(row["status"] == "completed" for row in receipt["targets"].values())
@@ -323,14 +354,18 @@ def test_io_single_slot_advances_ready_actions_before_full_queue_preparation(tmp
 
     cb = callbacks(act=act)
     cb["prepare"] = prepare
-    receipt = run_pipeline(
-        tmp_path / "state.json",
-        targets,
-        **cb,
-        capacity_fn=lambda: {"io": 1, "low": 4, "exception": 1},
-        deadline=time.time() + 10,
-        max_io_workers=1,
-        max_low_workers=4,
+    logical_now = 2_000_000.0
+    receipt = run_bounded(
+        lambda: run_pipeline(
+            tmp_path / "state.json",
+            targets,
+            **cb,
+            capacity_fn=lambda: {"io": 1, "low": 4, "exception": 1},
+            deadline=logical_now + 300,
+            max_io_workers=1,
+            max_low_workers=4,
+            now=lambda: logical_now,
+        )
     )
     assert prepared == len(targets) and acted == len(targets)
     assert early_actions, "ready actions waited for full-assignment preparation"
