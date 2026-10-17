@@ -274,7 +274,7 @@ def test_close_receipt_written_only_after_confirmed_close(tmp_path):
     ],
 )
 def test_close_records_real_private_brain_monitor_outcome_once(
-    tmp_path, monkeypatch, verdict, blocker, expected
+    tmp_path, monkeypatch, capsys, verdict, blocker, expected
 ):
     import time
 
@@ -320,11 +320,36 @@ def test_close_records_real_private_brain_monitor_outcome_once(
         return row
 
     assert monitor_row()["outcome"] == 0
+    before = monitor.supervisor_closure_acceptance(now, now=now)
+    assert before["outcome"] == 0 and before["status"] == "pending"
+    assert monitor.main(["--supervisor-enabled-at", str(now)]) == 1
+    assert json.loads(capsys.readouterr().out)["status"] == "pending"
     assert supervisor.close_verified_issues(**options)["closed"] == expected
     row = monitor_row()
     assert row["outcome"] == row["acted_on"] == expected
     # Closure credit must not claim a new successful implementation merge.
     assert row["outcome_success"] == 0
+    database_before = feedback.DB_PATH.read_bytes()
+    receipt = monitor.supervisor_closure_acceptance(now, now=now)
+    assert receipt["outcome"] == expected
+    assert receipt["status"] == ("met" if expected else "pending")
+    assert monitor.main(["--supervisor-enabled-at", str(now)]) == (0 if expected else 1)
+    assert json.loads(capsys.readouterr().out) == receipt
+    assert feedback.DB_PATH.read_bytes() == database_before
+    # Checking after the deadline retains timely evidence; an older closure does
+    # not satisfy a later enablement window, even while the rolling row is positive.
+    assert monitor.supervisor_closure_acceptance(now, now=now + 86401)["status"] == (
+        "met" if expected else "deadline_missed"
+    )
+    later = monitor.supervisor_closure_acceptance(now + 1, now=now + 86401)
+    assert later["outcome"] == 0 and later["status"] == "deadline_missed"
+    missing = tmp_path / "missing.db"
+    unread = monitor.supervisor_closure_acceptance(now, now=now, db=missing)
+    assert unread["outcome"] is None and unread["status"] == "unmeasured"
+    assert unread["errors"] and not missing.exists()
+    for invalid in (0, -1, now + 1):
+        with pytest.raises(ValueError, match="enablement time"):
+            monitor.supervisor_closure_acceptance(invalid, now=now)
     if expected:
         rule = "verifier PASS" if verdict == "PASS" else "merge-SHA acceptance gates and green CI"
         supervisor._closure_record(REPO + "#7", SHA, rule)
@@ -335,6 +360,14 @@ def test_close_records_real_private_brain_monitor_outcome_once(
         if expected:
             row = conn.execute("SELECT adjudicated_verdict,notes FROM outcomes").fetchone()
             assert row[0] == "PASS" and "Not a new implementation verdict" in row[1]
+            conn.execute("UPDATE outcomes SET durability_checked_ts=?", (now + 86400,))
+    if expected:
+        assert monitor.supervisor_closure_acceptance(now, now=now + 86400)["status"] == "met"
+        with feedback._conn() as conn:
+            # An early action edge cannot launder a receipt recorded after 24h.
+            conn.execute("UPDATE outcomes SET durability_checked_ts=?", (now + 86401,))
+        late = monitor.supervisor_closure_acceptance(now, now=now + 86401)
+        assert late["outcome"] == 0 and late["status"] == "deadline_missed"
 
 
 def test_close_gate_uses_real_exact_merge_checkout_and_existing_runner(tmp_path, monkeypatch):

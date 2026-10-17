@@ -363,6 +363,51 @@ def acted_on_window_index(
     return index, "value-chain monitor, first-invocation deadline windows"
 
 
+def supervisor_closure_acceptance(
+    enabled_at: int, *, now: int | None = None, db: Path | None = None
+) -> dict[str, Any]:
+    """Read closure credit within 24 hours of an operator-supplied enablement time.
+
+    This does not enable the actor or write evidence. A rolling monitor count alone
+    cannot establish the deadline: both the action edge and its recorded outcome
+    must fall inside the enablement window. Unread evidence remains unmeasured.
+    """
+    now = int(time.time()) if now is None else now
+    if enabled_at <= 0 or enabled_at > now:
+        raise ValueError("enablement time must be positive and no later than now")
+    deadline = enabled_at + 86400
+    end = min(now, deadline)
+    inputs = _brain(db or feedback.DB_PATH, enabled_at, end)
+    cid = "live-keepalive-supervisor"
+    own = own_edges_of(inputs["edges"], cid)
+    bounded = (
+        None
+        if own is None
+        else [
+            edge
+            for edge in own
+            if str(edge.get("target_run_id") or "").startswith("supervisor-close:")
+            and enabled_at <= (edge.get("outcome_recorded_ts") or 0) <= end
+        ]
+    )
+    count = outcome_counts(cid, bounded)["outcome"]
+    if count is None:
+        status = "unmeasured"
+    elif count >= 1:
+        status = "met"
+    else:
+        status = "pending" if now < deadline else "deadline_missed"
+    return {
+        "capability": cid,
+        "enabled_at": enabled_at,
+        "deadline": deadline,
+        "generated_at": now,
+        "outcome": count,
+        "status": status,
+        "errors": inputs["errors"],
+    }
+
+
 def _dispute_count(db: Path, now: int) -> int | None:
     """Persisted verifier disputes in the window, from the one definition of a dispute.
 
@@ -409,6 +454,7 @@ def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
                 "SELECT ie.*, o.adjudicated_verdict AS outcome_adjudicated, "
                 "o.verifier_verdict AS outcome_verifier, o.durability AS outcome_durability, "
                 "o.merged AS outcome_merged, o.failure_class AS outcome_failure_class, "
+                "o.durability_checked_ts AS outcome_recorded_ts, "
                 "r.role_name AS target_role_name, r.mode AS target_mode, "
                 "r.pr_number AS target_pr_number, "
                 "r.routing_metadata AS target_routing_metadata FROM influence_edges ie "
@@ -704,7 +750,21 @@ def recurrence_fixture() -> bool:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument(
+        "--supervisor-enabled-at",
+        type=int,
+        help="read-only closure acceptance check; enablement time as Unix seconds",
+    )
     args = ap.parse_args(argv)
+    if args.supervisor_enabled_at is not None:
+        if args.selftest:
+            ap.error("--selftest cannot be combined with --supervisor-enabled-at")
+        try:
+            acceptance = supervisor_closure_acceptance(args.supervisor_enabled_at)
+        except ValueError as exc:
+            ap.error(str(exc))
+        print(json.dumps(acceptance, indent=2))
+        return 0 if acceptance["status"] == "met" else 1
     if args.selftest:
         recurrence_fixture()
         print("value_chain_monitor selftest PASS")
