@@ -1535,10 +1535,16 @@ account fields). Semantic change detection includes capacity `state` and `window
 The exporter explicitly resolves feedback.py's shared DB selection (honouring a
 state-dir fallback when no DB/runtime override is set) and logs the absolute DB
 path and source version before work. Its publish guard rejects version zero,
-all-false task evidence, and any loss of a fetched publication's true task evidence
-before changing that publication. Refusals exit non-zero and the cadence copies
-the reason into the tick log; `--allow-evidence-regression` is a logged, explicit
-owner override. Local shadow output remains available for diagnosis.
+all-false task evidence absolutely. Partial per-task evidence loss is recorded in
+`route-weights-regression-hold.json` and held for `EVIDENCE_REGRESSION_HOLD_HOURS`
+(24 hours); time drains it while closed and recovery clears it. Changed regressing
+task sets restart the hold. Capacity-only changes with identical task evidence
+publish unchanged evidence immediately. Refusals print task count and hours to
+drain (infinite for absolute refusals). A drained hold logs the elapsed hours and
+regressing tasks before publishing. `--allow-evidence-regression` overrides only
+partial regressions, never an empty DB or all-false evidence. Commit provenance
+records the resolved DB, source version and Git identity (or `orchestrator-export`).
+Local shadow output remains available for diagnosis.
 Dedup: firing history and its ledger-only silence annotation already existed; the weekly reader
 and independent cadence evidence were missing. Existing heartbeat repairs from main are retained.
 

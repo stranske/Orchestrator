@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import capabilities
 import capability_advisor as advisor
 
 
@@ -266,3 +267,93 @@ def test_cli_tick_and_task_modes_render_their_report_without_external_calls(monk
     )
     assert advisor.main(["plain", "task"]) == 0
     assert "NO ORCHESTRATOR CAPABILITY APPLIES" in capsys.readouterr().out
+
+
+def test_reask_reports_only_meaningful_context_changes():
+    previous = {
+        "task_types": ["review"],
+        "skill": "repo-audit",
+        "repository": "owner/one",
+        "dispatch_ready_count": 0,
+    }
+    changed = advisor.should_reask(
+        previous,
+        {
+            "task": "add unit tests for the retry helper",
+            "skill": "testgen",
+            "repository": "owner/two",
+            "capabilities_ready": 1,
+        },
+    )
+    assert changed == {
+        "reask": True,
+        "reasons": [
+            "task_reclassified:testgen",
+            "skill_invoked:testgen",
+            "scope_changed",
+            "capability_became_dispatch_ready",
+        ],
+    }
+    assert advisor.should_reask(
+        previous, {"task": "audit", "skill": "repo-audit", "repository": "owner/one"}
+    ) == {
+        "reask": False,
+        "reasons": [],
+    }
+
+
+def test_surface_status_distinguishes_unspecified_declared_inherited_and_unknown(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(advisor, "SURFACE_BINDINGS", {"test-root": {"cap": "reason"}})
+    monkeypatch.setattr(advisor, "CONSULT_SITES", {})
+    monkeypatch.setattr(advisor, "KNOWN_UNCONSULTED", set())
+    ledger = tmp_path / "capabilities.json"
+    capabilities.save({}, ledger)
+
+    assert advisor.surface_status("", path=ledger)["status"] == "unspecified"
+    assert advisor.surface_status("test-root", path=ledger) == {
+        "surface": "test-root",
+        "status": "declared",
+        "resolved_from": "test-root",
+        "did_you_mean": [],
+    }
+    assert advisor.surface_status("test-root:phase-1", path=ledger)["status"] == "inherited"
+    unknown = advisor.surface_status("unknown-surface", path=ledger)
+    assert unknown["status"] == "unknown"
+    assert unknown["did_you_mean"] == ["test-root"]
+
+
+def test_consulting_surfaces_reports_verified_missing_and_drifted_callers(tmp_path, monkeypatch):
+    verified = tmp_path / "verified.py"
+    drifted = tmp_path / "drifted.py"
+    verified.write_text("surface='test:verified'\n", encoding="utf-8")
+    drifted.write_text("surface='different'\n", encoding="utf-8")
+    monkeypatch.setattr(advisor, "SURFACE_BINDINGS", {})
+    monkeypatch.setattr(
+        advisor,
+        "CONSULT_SITES",
+        {
+            "test:verified": {"caller": str(verified), "literal": "test:verified"},
+            "test:missing": {"caller": str(tmp_path / "missing.py"), "literal": "test:missing"},
+            "test:drifted": {"caller": str(drifted), "literal": "test:drifted"},
+        },
+    )
+
+    report = advisor.consulting_surfaces(ledger={})
+    assert report["verified"] == ["test:verified"]
+    assert report["unverified"] == [
+        {
+            "surface": "test:missing",
+            "caller": str(tmp_path / "missing.py"),
+            "why": "caller not present on this machine",
+        }
+    ]
+    assert report["drifted"] == [
+        {
+            "surface": "test:drifted",
+            "caller": str(drifted),
+            "why": "caller no longer names 'test:drifted'",
+        }
+    ]
+    assert report["reached"] == ["test:missing", "test:verified"]

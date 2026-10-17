@@ -35,6 +35,7 @@ CAPACITY_SCHEMA = "orchestrator.route-weights-capacity/v1"
 DEFAULT_MIN_OBSERVATIONS = 20
 EXPORT_BRANCH = "exports/route-weights"
 EXPORT_PATH = Path("config/route-weights.json")
+EVIDENCE_REGRESSION_HOLD_HOURS = 24
 WEEK_SECONDS = 7 * 86400
 # This is intentionally smaller than ROUTE_TABLE.  It is the contract that the
 # Workflows keepalive policy may act on; adding a router task type here is an
@@ -59,11 +60,21 @@ def publish_guard(
     new_doc: dict[str, Any], published_doc: dict[str, Any] | None
 ) -> tuple[bool, str]:
     """Refuse evidence loss independently of semantic change detection."""
-    if new_doc.get("source_version", 0) == 0:
-        return False, "source_version == 0 (empty or wrong feedback DB)"
+    if (
+        not isinstance(new_doc.get("source_version"), int)
+        or isinstance(new_doc.get("source_version"), bool)
+        or new_doc["source_version"] <= 0
+    ):
+        return (
+            False,
+            "source_version == 0 or invalid: local route-weight evidence is missing or empty",
+        )
     tasks = new_doc.get("task_types", {})
     if not any(row.get("evidence_ok") is True for row in tasks.values()):
-        return False, "all task types have evidence_ok false"
+        return (
+            False,
+            "all task types have evidence_ok false; empty rankings would erase published evidence",
+        )
     previous = (published_doc or {}).get("task_types", {})
     lost = sorted(
         name
@@ -75,20 +86,72 @@ def publish_guard(
     return True, ""
 
 
-class PublicationRefused(RuntimeError):
+class PublicationRefused(ValueError):
     """A proposed publication would erase learned routing evidence."""
+
+
+def _regressing_tasks(document: dict[str, Any], published: dict[str, Any] | None) -> list[str]:
+    tasks = document.get("task_types", {})
+    return sorted(
+        name
+        for name, row in (published or {}).get("task_types", {}).items()
+        if row.get("evidence_ok") is True and tasks.get(name, {}).get("evidence_ok") is not True
+    )
 
 
 def _require_publishable(
     document: dict[str, Any],
     published: dict[str, Any] | None,
-    allow_evidence_regression: bool,
+    allow_evidence_regression: bool = False,
+    *,
+    state_dir: Path | None = None,
 ) -> None:
     ok, reason = publish_guard(document, published)
-    if not ok:
-        if not allow_evidence_regression:
-            raise PublicationRefused(f"publish_guard refused: {reason}")
+    lost = _regressing_tasks(document, published)
+    remaining = float(EVIDENCE_REGRESSION_HOLD_HOURS)
+    elapsed = 0.0
+    hold_path = (
+        state_dir or Path.home() / ".codex" / "orchestrator"
+    ) / "route-weights-regression-hold.json"
+    if published is not None:
+        if lost:
+            now = dt.datetime.now(dt.timezone.utc).timestamp()
+            try:
+                hold = json.loads(hold_path.read_text())
+                first_seen = float(hold["first_seen"])
+                if hold["task_types"] != lost or not 0 <= first_seen <= now:
+                    first_seen = now
+            except (OSError, ValueError, KeyError, TypeError):
+                first_seen = now
+            elapsed = (now - first_seen) / 3600
+            remaining = max(0.0, EVIDENCE_REGRESSION_HOLD_HOURS - elapsed)
+            write_document(
+                hold_path, {"first_seen": first_seen, "task_types": lost, "reason": reason}
+            )
+        else:
+            hold_path.unlink(missing_ok=True)
+    if ok:
+        return
+    # Missing DB and wholly unevidenced output are absolute, including with override.
+    absolute = not publish_guard(document, None)[0]
+    if not absolute and allow_evidence_regression:
         print(f"publish_guard override --allow-evidence-regression: {reason}", file=sys.stderr)
+        return
+    if not absolute and lost and remaining == 0:
+        print(
+            f"evidence regression held {elapsed:g}h; publishing with evidence_ok=false for {', '.join(lost)}",
+            file=sys.stderr,
+        )
+        return
+    drain = "infinite" if absolute else f"{remaining:g}"
+    raise PublicationRefused(
+        f"publish_guard refused: {reason}; refused: regressing_tasks={len(lost)}, drainable_in={drain}h"
+    )
+
+
+def _validate_publication(document: dict[str, Any], existing: dict[str, Any] | None = None) -> None:
+    """Compatibility entry point; all callers share the absolute evidence rules."""
+    _require_publishable(document, existing)
 
 
 def _read_rows(db_path: Path) -> tuple[int, list[sqlite3.Row]]:
@@ -345,12 +408,19 @@ def write_document(path: Path, document: dict[str, Any]) -> bool:
     return True
 
 
-def publish_document(document: dict[str, Any], *, allow_evidence_regression: bool = False) -> bool:
+def publish_document(
+    document: dict[str, Any],
+    *,
+    allow_evidence_regression: bool = False,
+    state_dir: Path | None = None,
+    db_path: Path | None = None,
+) -> bool:
     """Commit and push the export branch only when its remote artifact changes."""
     # Reject an empty source even before provisioning/fetching a publication checkout.
     _require_publishable(document, None, allow_evidence_regression)
     if allow_evidence_regression:
         print("publish_guard: --allow-evidence-regression requested", file=sys.stderr)
+
     canonical = provision.ensure_canonical("stranske/Orchestrator")
     subprocess.run(["git", "-C", str(canonical), "fetch", "--prune", "origin"], check=True)
     remote_ref = f"origin/{EXPORT_BRANCH}"
@@ -372,7 +442,7 @@ def publish_document(document: dict[str, Any], *, allow_evidence_regression: boo
                 text=True,
             ).stdout
         )
-        _require_publishable(document, published, allow_evidence_regression)
+        _require_publishable(document, published, allow_evidence_regression, state_dir=state_dir)
         has_local = (
             subprocess.run(
                 [
@@ -407,9 +477,21 @@ def publish_document(document: dict[str, Any], *, allow_evidence_regression: boo
         print("unchanged")
         return False
     subprocess.run(["git", "-C", str(canonical), "add", str(EXPORT_PATH)], check=True)
-    subprocess.run(
-        ["git", "-C", str(canonical), "commit", "-m", "chore: export route weights"], check=True
+    identity = (
+        subprocess.run(
+            ["git", "-C", str(canonical), "config", "user.name"],
+            check=False,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        or "orchestrator-export"
     )
+    resolved_db = feedback.resolve_db_path(db_path, state_dir)
+    message = (
+        f"chore: export route weights (db={resolved_db} "
+        f"source_version={document['source_version']} by={identity})"
+    )
+    subprocess.run(["git", "-C", str(canonical), "commit", "-m", message], check=True)
     subprocess.run(
         ["git", "-C", str(canonical), "push", "origin", f"HEAD:{EXPORT_BRANCH}"], check=True
     )
@@ -505,6 +587,15 @@ def _selftest() -> None:
             )
             is False
         )
+        # Publication must reject a missing evidence DB even when capacity is fresh.
+        empty = build_document(root / "missing.db", capacity_snapshot=capacity_snapshot)
+        try:
+            _validate_publication(empty)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("missing evidence must not publish")
+        _validate_publication(document, empty)
     print("route_weights_export.py selftest: OK")
 
 
@@ -552,10 +643,12 @@ def main() -> int:
             print("publish blocked: ORCH_ROUTE_WEIGHTS_PUBLISH!=1; local export retained")
         else:
             try:
-                if args.allow_evidence_regression:
-                    published = publish_document(document, allow_evidence_regression=True)
-                else:
-                    published = publish_document(document)
+                published = publish_document(
+                    document,
+                    allow_evidence_regression=args.allow_evidence_regression,
+                    state_dir=state_dir,
+                    db_path=db_path,
+                )
             except PublicationRefused as exc:
                 print(str(exc), file=sys.stderr)
                 return 1

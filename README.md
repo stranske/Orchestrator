@@ -428,10 +428,15 @@ Live execution is observable only after the normal manual mirror sync.
   `ORCH_FEEDBACK_DB`, `ORCH_LOCAL_RUNTIME/feedback/orchestrator.db`, then
   `--state-dir` / `ORCH_STATE_DIR` plus `feedback/orchestrator.db`, otherwise
   feedback.py's shared default (`~/.codex/orchestrator/feedback/orchestrator.db`).
-  Publication refuses version zero, all-false evidence, or any task losing its
-  published `evidence_ok: true`, before writing the publication. Refusals exit
-  non-zero and appear in the tick log; `--allow-evidence-regression` explicitly
-  overrides these checks for an owner-approved downgrade and logs the reason.
+  Version zero and all-false evidence always refuse publication, including with
+  `--allow-evidence-regression`. Per-task evidence loss is held in local
+  `route-weights-regression-hold.json` for `EVIDENCE_REGRESSION_HOLD_HOURS` (24 hours).
+  Time advances while closed; evidence recovery clears the hold, and a changed
+  regressing task set restarts it. After the hold, a still-evidenced document can
+  publish with a logged downgrade; the flag explicitly bypasses only this hold.
+  Capacity-only changes with identical `task_types` publish with that evidence
+  unchanged. Every refusal prints `regressing_tasks` and `drainable_in` (infinite
+  for absolute refusals). Publish commits record resolved DB, version and identity.
 - **judge_reliability.py** — leave-one-out consensus weights per judge (de-saturated so real error
   spread maps to real weight spread); **human_calibration.py** + **objective_anchor.py** supply
   machine ground-truth anchors (no owner code-review required — see CLAUDE.md).
@@ -798,3 +803,13 @@ Output must be new and the saved report remains unchanged. Qualification permits
 judgment only: snapshot authenticity, external inventory exhaustiveness, native execution/cost
 and later truth remain separate UNKNOWNs. JSON input to `roles.py` and persisted retrospective
 report results retain their evidence floor, even if their fields claim qualification.
+
+### Route export publication safety
+
+Publishing requires a positive local route-weight evidence version. Missing databases,
+empty databases and databases without route weights remain usable for local shadow
+inspection but cannot publish. All-false task evidence is also an absolute refusal.
+Capacity-only changes with identical task evidence publish immediately. Partial
+per-task regressions use the single 24-hour hold described above; do not recover
+routing by restoring an old whole document containing stale capacity. The daily
+mirror cadence and one-off publishers use the same publication guard.

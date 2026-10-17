@@ -60,12 +60,22 @@ before writing the shadow artifact. Selection precedence is `--feedback-db`, `OR
 `ORCH_LOCAL_RUNTIME/feedback/orchestrator.db`, then the state-directory fallback
 (`--state-dir` or `ORCH_STATE_DIR`), and finally `feedback.DB_PATH`.
 
-Before publication, `publish_guard()` rejects source version zero, all-false task evidence,
-or any previously evidenced task that loses its evidence. The comparison uses the fetched
-publication, so a changed local shadow cannot hide a regression. Refusals exit non-zero and
-leave the remote publication untouched; the cadence surfaces the reason in its log.
-`--allow-evidence-regression` explicitly permits a downgrade and logs the reason. The local
-shadow remains available for diagnosis even when publication is refused.
+Before publication, `publish_guard()` absolutely rejects source version zero/invalid
+and all-false task evidence. No age or override permits these sources. Partial
+true-to-false/missing task regressions are compared against the fetched publication,
+so a changed local shadow cannot hide a regression. They are recorded locally in
+`route-weights-regression-hold.json` (`first_seen`, `task_types`, `reason`) and refused
+until `EVIDENCE_REGRESSION_HOLD_HOURS` (24) has elapsed. Time drains the hold while
+publication is closed; recovery clears it, and a changed regressing task set restarts it.
+Capacity-only changes with identical `task_types` publish with that evidence unchanged.
+
+Refusals exit non-zero and leave the remote untouched; cadence logs the reason plus
+`refused: regressing_tasks=<n>, drainable_in=<h>h` (absolute refusals use `infiniteh`).
+On drain, the exporter logs `evidence regression held <h>h; publishing with evidence_ok=false for <tasks>`.
+`--allow-evidence-regression` bypasses only partial regression holds and logs the reason.
+Publish commits record `db=<resolved path> source_version=<n> by=<git user.name>`,
+with `orchestrator-export` as the identity fallback. The local shadow remains available
+for diagnosis even when publication is refused.
 
 The additive `exploration` block carries the weekly mode, sampled challengers, and a
 `policy_version` identifying the exported policy. `keepalive_outcomes.py` joins trusted runner

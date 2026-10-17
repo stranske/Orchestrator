@@ -437,7 +437,7 @@ def test_completed_publication_survives_success_heartbeat_failure(tmp_path, monk
     )
     published = []
     monkeypatch.setattr(
-        export, "publish_document", lambda document: published.append(document) or True
+        export, "publish_document", lambda document, **kwargs: published.append(document) or True
     )
 
     def heartbeat(capability, event, **kwargs):
@@ -513,10 +513,13 @@ def test_publish_guard_allows_evidenced_publication(previous):
     ) == (True, "")
 
 
+@pytest.mark.parametrize("aged", [False, True], ids=["fresh", "aged"])
 @pytest.mark.parametrize("allow", [False, True], ids=["refused", "owner-override"])
-@pytest.mark.parametrize("regression", ["zero-version", "all-false", "lost-review"])
+@pytest.mark.parametrize(
+    "regression", ["zero-version", "all-false", "lost-review", "capacity-only"]
+)
 def test_publish_guard_preserves_remote_until_explicit_override(
-    tmp_path, monkeypatch, capsys, allow, regression
+    tmp_path, monkeypatch, capsys, allow, regression, aged
 ):
     """Use real fetch/show/commit/push against an isolated local bare remote."""
 
@@ -533,6 +536,7 @@ def test_publish_guard_preserves_remote_until_explicit_override(
     git(remote, "init", "--bare", "--initial-branch=main")
     checkout = tmp_path / "checkout"
     git(tmp_path, "clone", str(remote), str(checkout))
+    git(checkout, "config", "user.name", "Publication Tester")
     database = tmp_path / "weights.db"
     export._fixture_db(database)
     previous = export.build_document(database, now=100, capacity_snapshot=_capacity_fixture())
@@ -550,6 +554,26 @@ def test_publish_guard_preserves_remote_until_explicit_override(
     elif regression == "all-false":
         for row in document["task_types"].values():
             row.update(evidence_ok=False, ranking=[])
+    if regression == "capacity-only":
+        document["task_types"] = json.loads(json.dumps(previous["task_types"]))
+        document["capacity"]["muse"]["state"] = "shed"
+
+    class FixedDateTime(export.dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls.fromtimestamp(200000, tz=tz)
+
+    monkeypatch.setattr(export.dt, "datetime", FixedDateTime)
+    hold_path = tmp_path / "state" / "route-weights-regression-hold.json"
+    if aged:
+        export.write_document(
+            hold_path,
+            {
+                "first_seen": 200000 - export.EVIDENCE_REGRESSION_HOLD_HOURS * 3600,
+                "task_types": export._regressing_tasks(document, previous),
+                "reason": "fixture evidence loss",
+            },
+        )
     monkeypatch.setattr(export.provision, "ensure_canonical", lambda *a: checkout)
     monkeypatch.setenv("ORCH_ROUTE_WEIGHTS_PUBLISH", "1")
     monkeypatch.setattr(export.capabilities, "daily_heartbeat", lambda *a, **k: None)
@@ -563,19 +587,43 @@ def test_publish_guard_preserves_remote_until_explicit_override(
         str(tmp_path / "state"),
     ]
     monkeypatch.setattr("sys.argv", argv + (["--allow-evidence-regression"] if allow else []))
-    assert export.main() == (0 if allow else 1)
+    allowed = regression == "capacity-only" or ((allow or aged) and regression == "lost-review")
+    assert export.main() == (0 if allowed else 1)
     after_head = git(remote, "rev-parse", export.EXPORT_BRANCH)
     output = capsys.readouterr()
-    if allow:
+    if allowed:
         assert after_head != before_head
         published = json.loads(git(remote, "show", f"{export.EXPORT_BRANCH}:{export.EXPORT_PATH}"))
         assert published == document
-        assert "override --allow-evidence-regression" in output.err
+        message = git(remote, "log", "-1", "--format=%B", export.EXPORT_BRANCH)
+        assert message == (
+            f"chore: export route weights (db={database.resolve()} "
+            "source_version=2 by=Publication Tester)"
+        )
+        if regression == "capacity-only":
+            assert published["task_types"] == previous["task_types"]
+            assert not hold_path.exists(), "evidence recovery clears the hold"
+        elif allow:
+            assert "override --allow-evidence-regression" in output.err
+        else:
+            assert (
+                "evidence regression held 24h; publishing with evidence_ok=false for review"
+            ) in output.err
     else:
         assert after_head == before_head, "publish_guard must leave the remote untouched"
         assert target.read_bytes() == before_bytes, "publish_guard must preserve publication bytes"
         assert git(checkout, "branch", "--show-current") == "main"
         assert "publish_guard refused:" in output.err
+        assert "refused: regressing_tasks=" in output.err
+        assert "drainable_in=" in output.err
+        if regression == "lost-review":
+            assert "regressing_tasks=1, drainable_in=24h" in output.err
+            hold = json.loads(hold_path.read_text())
+            assert hold == {
+                "first_seen": 200000,
+                "task_types": ["review"],
+                "reason": "evidence_ok true -> false for: review",
+            }
 
 
 @pytest.mark.parametrize(
@@ -646,3 +694,71 @@ python3() { echo 'publish_guard refused: source_version == 0' >&2; return 1; }
     assert "publish_guard refused: source_version == 0" in result.stdout
     assert "FAIL:route-weights-export" in result.stdout
     assert "SUCCESS" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "database_kind", ["missing", "empty", "no-weights-table", "empty-weights-table"]
+)
+def test_publish_refuses_absent_evidence_before_git_or_capacity_write(tmp_path, database_kind):
+    database = tmp_path / "weights.db"
+    if database_kind != "missing":
+        with sqlite3.connect(database) as connection:
+            if database_kind == "no-weights-table":
+                connection.execute("CREATE TABLE unrelated (value INTEGER)")
+    if database_kind == "empty-weights-table":
+        export._fixture_db(database)
+        with sqlite3.connect(database) as connection:
+            connection.execute("DELETE FROM route_weights")
+    document = export.build_document(database, capacity_snapshot=_capacity_fixture())
+    before = json.dumps(document, sort_keys=True)
+    with patch.object(export.provision, "ensure_canonical") as provisioner:
+        with pytest.raises(ValueError, match="local route-weight evidence is missing or empty"):
+            export.publish_document(document)
+    provisioner.assert_not_called()
+    assert json.dumps(document, sort_keys=True) == before
+
+
+def test_publish_refuses_threshold_empty_overwrite_and_preserves_fresh_capacity(tmp_path):
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    existing = export.build_document(database, capacity_snapshot=_capacity_fixture())
+    existing["capacity"]["muse"] = {"state": "shed", "window": "5h+weekly", "observed_at": 999}
+    target = tmp_path / export.EXPORT_PATH
+    target.parent.mkdir()
+    target.write_text(json.dumps(existing))
+    before = target.read_bytes()
+    incoming = export.build_document(database, minimum=1000, capacity_snapshot=_capacity_fixture())
+    with patch.object(export.provision, "ensure_canonical", return_value=tmp_path):
+        with patch.object(export.subprocess, "run") as git:
+            git.return_value.returncode = 0
+            with pytest.raises(ValueError, match="empty rankings would erase published evidence"):
+                export.publish_document(incoming)
+    assert target.read_bytes() == before
+    assert not any(call.args[0][3] in {"add", "commit", "push"} for call in git.call_args_list)
+
+
+def test_publish_accepts_real_evidence_recovery_over_version_zero(tmp_path):
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    document = export.build_document(database, capacity_snapshot=_capacity_fixture())
+    export._validate_publication(document, {"source_version": 0, "task_types": {}, "reserve": {}})
+
+
+def test_publication_identity_falls_back_to_exporter(tmp_path, monkeypatch):
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    document = export.build_document(database, capacity_snapshot=_capacity_fixture())
+    monkeypatch.setattr(export.provision, "ensure_canonical", lambda *a: tmp_path)
+
+    def run(argv, **kwargs):
+        if "rev-parse" in argv:
+            return subprocess.CompletedProcess(argv, 1, "")
+        return subprocess.CompletedProcess(argv, 0, "")
+
+    with patch.object(export.subprocess, "run", side_effect=run) as commands:
+        assert export.publish_document(document, db_path=database)
+    commits = [call.args[0] for call in commands.call_args_list if "commit" in call.args[0]]
+    assert commits[0][-1] == (
+        f"chore: export route weights (db={database.resolve()} "
+        "source_version=2 by=orchestrator-export)"
+    )
