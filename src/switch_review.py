@@ -945,6 +945,13 @@ def gate_expiry(*, now: int | None = None, path=None) -> dict:
     return report
 
 
+def weekly_pacing_check(*, now=None) -> str:
+    import capacity
+    import pacing_usage
+
+    return pacing_usage.report(capacity.HANDOFF, now=time.time() if now is None else now)
+
+
 def capacity_shed(*, now: float | None = None, shed_dir: Path | None = None) -> dict:
     """FYI: every capacity-shed marker, what holds its seat and what clears it. Removes nothing.
 
@@ -1713,6 +1720,7 @@ def review(
         "gate_expiry": gate_expiry(now=now, path=path),
         # And a seat stood down by hand is a switch held off. FYI only, on the real clock.
         "capacity_shed": capacity_shed(),
+        "weekly_pacing": weekly_pacing_check(now=now),
         # And a guard refusal is evidence that an agent's worktree disagreed with where the tool
         # put it. FYI only, real clock, never counted in `raise_count`.
         "worktree_git_refusals": worktree_git_refusals(),
@@ -2153,6 +2161,8 @@ def format_report(rep: dict) -> str:
         lines += [runtime_ac_gate.format_post_merge_summary(rep["runtime_ac_post_merge"]), ""]
     if expiry is not None:
         lines += format_gate_expiry(expiry)
+    if rep.get("weekly_pacing") is not None:
+        lines += [rep["weekly_pacing"], ""]
     shed = rep.get("capacity_shed")
     if shed is not None:
         lines += format_capacity_shed(shed)

@@ -98,6 +98,7 @@ def source(tmp_path: Path) -> Path:
     _write(src / "IMPROVEMENT_BACKLOG.md", "pointer\n")
     _write(src / ".verify-floor.json", '{"collected": 1}\n')
     _write(src / "config" / "coverage-baseline.json", "{}\n")
+    _write(src / "config" / "model_epochs.json", '{"epochs": {}}\n')
     _git(src, "add", "-A")
     _git(src, "commit", "-q", "-m", "init")
     return src
@@ -148,6 +149,7 @@ def test_the_mirror_is_flat_and_carries_the_committed_trees(source: Path, tmp_pa
         "AGENTS.md",
         "ORCHESTRATOR.md",
         "config/coverage-baseline.json",
+        "config/model_epochs.json",
         ".verify-floor.json",
     ):
         assert (mirror / shipped).is_file(), shipped
