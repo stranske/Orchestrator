@@ -137,11 +137,14 @@ def _stall_sweep_targets(log: Path, start: int, end: int) -> set[str] | None:
         if brace < 0:
             break
         try:
-            obj, consumed = decoder.raw_decode(text, brace)
+            obj, stop = decoder.raw_decode(text, brace)
         except ValueError:
             pos = brace + 1
             continue
-        pos = brace + consumed
+        # `raw_decode` returns the ABSOLUTE end index. Adding it to `brace` skipped most of the
+        # log: the first production read decoded 10 of 2,319 sweeps and printed role-redirect's
+        # demand as 0 (`no_situation`) against 9 actionable stalls in the window (2026-10-17).
+        pos = stop  # never `end`: that name is the window's end, and shadowing it emptied every window
         if not isinstance(obj, dict):
             continue
         ts = obj.get("generated_at")
