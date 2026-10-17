@@ -530,6 +530,41 @@ def test_coverage_1900_second_gap_misses_slot(evidence):
     assert stats["longest_gap"] == 1900
 
 
+@pytest.mark.parametrize("phase", [0, 50, 300, 550])
+def test_coverage_gap_between_slot_ticks_is_uncovered(evidence, phase):
+    start = NOW - 3000
+    for pool in ("codex", "claude"):
+        row = json.loads((pacing_usage.POLL_DIR / f"{pool}-usage.json").read_text())
+        pacing_usage.append_rows(
+            pacing_usage.POLL_DIR / f"{pool}-usage.ndjson",
+            [dict(row, ts=ts) for ts in (start, start + phase, start + phase + 1900, NOW)],
+        )
+    snapshots = [
+        dict(
+            ts=start + i * 600,
+            event="pacing_snapshot",
+            agents=dict(
+                claude=dict(state="ok"),
+                codex=dict(state="ok", pacing=dict(period_start=start, period_end=NOW)),
+            ),
+        )
+        for i in range(5)
+    ]
+    stats = {}
+    assert pacing_usage.poll_coverage(start, NOW, now=NOW, snapshots=snapshots, stats=stats) == (
+        4,
+        5,
+    )
+    assert stats["longest_gap"] == 1900
+    pacing_usage.append_rows(evidence / "capacity-ledger.ndjson", snapshots)
+    (evidence / "rate-limit-incidents.ndjson").write_text("")
+    for line in pacing_usage.report(evidence, now=NOW).splitlines():
+        if line.startswith(("2:", "3:")):
+            assert "unmeasured" in line and "PASS" not in line
+            assert "coverage=4/5 ticks" in line
+            assert "longest poll gap=1900s/1800s allowance; uncovered=1 slots" in line
+
+
 @pytest.mark.parametrize("first", ["hang", "cost"])
 def test_claude_retries_with_process_group_cleanup(tmp_path, pollers, monkeypatch, first):
     module = pollers["claude"]
@@ -727,9 +762,9 @@ def test_post_boundary_poll_with_expired_window_cannot_reuse_percentage(evidence
     assert datum["used_fraction"] is None and datum["poll"]["fresh"] is False
 
 
-def test_history_byte_cap_and_seven_day_anchor(tmp_path, pollers, monkeypatch, capsys):
+def test_history_byte_cap_and_two_period_anchor(tmp_path, pollers, monkeypatch, capsys):
     path = tmp_path / "codex-usage.ndjson"
-    anchor = dict(ts=NOW - pacing.PERIOD_SECONDS - 600)
+    anchor = dict(ts=NOW - 2 * pacing.PERIOD_SECONDS - pacing.STALE_AFTER_SECONDS)
     path.write_text(json.dumps(anchor) + "\n")
     pollers["codex"].publish(dict(ts=NOW), tmp_path)
     assert pacing_usage.read_rows(path) == [anchor, dict(ts=NOW)]
@@ -742,3 +777,23 @@ def test_history_byte_cap_and_seven_day_anchor(tmp_path, pollers, monkeypatch, c
     pollers["codex"].publish(dict(ts=NOW + 1), tmp_path)
     assert pacing_usage.read_rows(path) == [dict(ts=NOW + 1)]
     assert "rotated_out=2 retained=1 lines" in capsys.readouterr().err
+
+
+def test_history_retains_two_periods_plus_stale_allowance(pollers):
+    history = pollers["codex"].append_history.__globals__
+    assert history["HISTORY_SECONDS"] >= 2 * pacing.PERIOD_SECONDS + pacing.STALE_AFTER_SECONDS
+    assert history["HISTORY_MAX_LINES"] == 4096
+    assert history["HISTORY_MAX_BYTES"] == 8 * 1024 * 1024
+
+
+def test_appended_history_covers_period_ended_one_day_earlier(evidence, pollers):
+    end = NOW - 86400
+    start = end - pacing.PERIOD_SECONDS
+    for pool in ("codex", "claude"):
+        row = json.loads((pacing_usage.POLL_DIR / f"{pool}-usage.json").read_text())
+        path = pacing_usage.POLL_DIR / f"{pool}-usage.ndjson"
+        for ts in range(int(NOW - 2 * pacing.PERIOD_SECONDS), int(NOW) + 1, 600):
+            pollers[pool].append_history(path, dict(row, ts=ts))
+    stats = {}
+    assert pacing_usage.poll_coverage(start, end, now=NOW, stats=stats) == (1008, 1008)
+    assert stats["longest_gap"] == 600

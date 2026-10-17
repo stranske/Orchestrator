@@ -117,7 +117,9 @@ pool period: at each 600-second slot time, the poll in force for **each** provid
 must be no more than `STALE_AFTER_SECONDS` (1800 seconds) old. Fresh capacity-state
 evidence for both pools is also required. A pre-period poll may cover the first slot;
 a future poll cannot cover an earlier slot. Jitter and a healthy 650-second cadence
-therefore do not create artificial misses.
+therefore do not create artificial misses. The longest poll gap must also be no
+more than 1800 seconds: an outage over that allowance leaves at least one slot
+uncovered even when it falls between the sampled ticks.
 History comes from `usage-poll/{codex,claude}-usage.ndjson` plus latest files;
 duplicate timestamps add no new evidence, and recording capacity snapshots
 cannot manufacture poll coverage. A full week needs 1008/1008 slots. Incident
@@ -165,8 +167,9 @@ Primary Codex and all-models Claude fields remain strict. Invalid Codex secondar
 Claude session or other weekly buckets become null with an output `warnings` list.
 Codex output retains only allowlisted usage and credit status/expiry fields.
 
-Each poller atomically caps its ndjson history to about seven days plus one stale
-allowance (to retain the boundary poll), at most 2048 lines and 8 MiB. It prints
+Each poller atomically caps its ndjson history to 14 days plus one stale allowance
+(to retain the latest completed seven-day period and its boundary poll throughout
+the next period), at most 4096 lines and 8 MiB. It prints
 `rotated_out` and retained line counts on every append, including zero rotations.
 Routing reads only the last `POLL_HISTORY_TAIL_BYTES` (2 MiB) of Codex history and
 prints omitted byte counts when limited; completed-period coverage uses the

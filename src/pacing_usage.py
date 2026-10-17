@@ -498,6 +498,7 @@ def poll_coverage(
     """A slot uses each provider's latest valid poll at/before its timestamp.
 
     The one stale allowance applies to that poll, including a pre-period poll.
+    A gap over the allowance leaves at least one slot uncovered even between ticks.
     Snapshot freshness remains an independent requirement for passes 2 and 3.
     """
     ticks = range(int(start), int(end), pacing.POLL_TICK_SECONDS)
@@ -543,9 +544,14 @@ def poll_coverage(
                 for pool in ("codex", "claude")
             )
         }
+    longest_gap = max(gaps, default=0)
+    covered_count = len(covered)
+    if covered_count == len(ticks) and covered_count and longest_gap > pacing.STALE_AFTER_SECONDS:
+        # Sampling can miss a stale interval that starts and ends between ticks.
+        covered_count -= 1
     if stats is not None:
-        stats["longest_gap"] = max(gaps, default=0)
-    return len(covered), len(ticks)
+        stats["longest_gap"] = longest_gap
+    return covered_count, len(ticks)
 
 
 def observed_agents(snapshots: list[dict], ts: float) -> dict | None:

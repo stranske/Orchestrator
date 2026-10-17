@@ -6,8 +6,8 @@ import tempfile
 from collections import deque
 from pathlib import Path
 
-HISTORY_SECONDS = 7 * 86400 + 1800  # Retain the poll in force at the seven-day boundary.
-HISTORY_MAX_LINES = 2048
+HISTORY_SECONDS = 14 * 86400 + 1800  # Keep the latest completed period and its boundary poll.
+HISTORY_MAX_LINES = 4096
 HISTORY_MAX_BYTES = 8 * 1024 * 1024
 
 
