@@ -551,3 +551,20 @@ def test_close_discovery_limit_is_independent_of_action_limit(tmp_path):
     options.update(targets=None, limit=20)
     supervisor.close_verified_issues(**options)
     assert calls[0][calls[0].index("--limit") + 1] == "20"
+
+
+@pytest.mark.parametrize("mode,expected_status", [("--stage2-plan", 0), ("--close-verified", 1)])
+def test_closure_error_does_not_discard_stage2_plan(monkeypatch, capsys, mode, expected_status):
+    monkeypatch.setattr(supervisor, "_capability_heartbeat", lambda *args: None)
+    closure = {"closed": 0, "errors": 1, "skips": {"error: issue not found": 1}}
+    monkeypatch.setattr(supervisor, "close_verified_issues", lambda **kwargs: closure)
+    monkeypatch.setattr(
+        supervisor, "stage2_acquisition_plan", lambda **kwargs: {"plans": ["retained"]}
+    )
+    assert supervisor.main([mode, "--json"]) == expected_status
+    result = json.loads(capsys.readouterr().out)
+    if mode == "--stage2-plan":
+        assert result["plans"] == ["retained"]
+        assert result["issue_closure"] == closure
+    else:
+        assert result == closure

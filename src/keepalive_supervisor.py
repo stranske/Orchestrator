@@ -1449,8 +1449,10 @@ def main(argv: list[str]) -> int:
                     "outcome_link_command_template="
                     + " ".join(result["outcome_link_command_template"])
                 )
-    closure = result.get("issue_closure", result if args.close_verified else {})
-    return 1 if closure.get("errors") else 0
+    if args.close_verified:
+        return 1 if result.get("errors") else 0
+    # Closure diagnostics must not discard an otherwise valid Stage 2 plan.
+    return 0
 
 
 if __name__ == "__main__":

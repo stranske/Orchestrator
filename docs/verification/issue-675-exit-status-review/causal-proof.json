@@ -1,0 +1,15 @@
+{
+  "command": [
+    "/opt/anaconda3/bin/python3",
+    "-m",
+    "pytest",
+    "tests/test_keepalive_supervisor.py",
+    "-q",
+    "-k",
+    "closure_error_does_not_discard"
+  ],
+  "red_exit": 1,
+  "green_exit": 0,
+  "source_restored": true,
+  "source_sha256": "9e23a513f82d3542892a53e1d11220c6646bb79406c43dee19d5d85bf97eb4c1"
+}
