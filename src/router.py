@@ -993,6 +993,7 @@ def plan(
     dry_run: bool = False,
     learned: dict | None = None,
     capability_records: dict | None = None,
+    now: int | None = None,
 ) -> dict:
     """Build the dispatch plan. backlog item = {target, task_type, lane}. `learned` (optional) =
     {task_type: {agent: rank}} from the feedback store; reorders within capacity tiers when present.
@@ -1130,6 +1131,7 @@ def plan(
                 },
                 capabilities_by_id=capability_records,
                 seed=capability_seed,
+                now=now,
             )
             assignments.append(
                 {

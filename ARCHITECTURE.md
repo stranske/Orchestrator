@@ -988,6 +988,8 @@ are ordered by when each starts working:
 Layer 1 is a **rail**: a declared table plus a deterministic keyword classifier, no model call. The
 committed table is the seed (tool); instance promotions live in the ledger (evidence).
 
+**Routing and invocation refuse expired rows read-only.** `capabilities.capability_expired` (the `now >= expiry` boundary, applied without mutating the row) makes `capability_routing_decision` reject an expired row as `expired` with the baseline fallback, and compiled invocation refuses at the stricter of the ledger `expiry` and the artifact `expires_at`, plus on a declared `kill_switch` or a pending rollback (`rollback_pending`), before any producer runs and with no invocation or consumption edge written.
+
 **Binding prioritises, it never conceals.** Unbound capabilities are still returned, ranked after the
 bound set and flagged `bound: false`. A concealed capability could never be selected, so it could
 never earn the evidence that would bind it — the gate would starve its own drain.

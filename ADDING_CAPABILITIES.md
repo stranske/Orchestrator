@@ -67,9 +67,9 @@ It never blocks, pauses or expires a capability. Disable with
 | 3 | **A heartbeat on the executed path** | `issue-readiness` and `switch-review` both shipped working with no heartbeat, so neither could accrue evidence of its own usefulness. |
 | 4 | **A recurrence fixture** | FM6/FM7 — makes "would it fire?" answerable without guessing, and makes the set countable. |
 | 5 | **An outcome path** (declared consumer **and** learning sink) | FM2 — `reference-sync-hygiene` had a producer, consumer, kill switch, rollback and 367 events, and its gate still read an empty table. Without this, *"let evidence accumulate"* is an instruction that can never be satisfied. |
-| 6 | **A kill switch** | An undeclared switch cannot be found in an emergency. |
+| 6 | **A kill switch** | An undeclared switch cannot be found in an emergency. The declared switch is enforced, not just recorded: compiled invocation reads the row's own `kill_switch` (`ENV=value`) and refuses as `kill_switch` while that env var carries the declared value. |
 | 7 | **A rollback path** | — |
-| 8 | **An expiry or a cadence** | Nothing may sit unexamined forever; that is how dormancy survives two audits. |
+| 8 | **An expiry or a cadence** | Nothing may sit unexamined forever; that is how dormancy survives two audits. Invocation enforces the effective deadline — the stricter of the ledger `expiry` and the artifact `expires_at` — read-only and without waiting for a sweep, refusing as `expired` (and as `rollback_pending` while a rollback is pending) with no invocation written and no consumption edge recorded. |
 | 9 | **A surface that can OFFER it** (`findable`) | FM10 — 22 of 43 capabilities were bound to no surface at all, so nothing could offer them and no amount of running could produce evidence for them. All 43 had passed admission. The rule existed — as prose, in this file. |
 | 10 | **A consumer that is shown to ACT** (`consumer_acts`) | The closing-loop failure of 2026-10-13: every chain broke after "usable". Part 5 accepted a declared consumer as prose; this part requires `file.py:symbol` that resolves in the tree and, for a capability agents select, the value-chain monitor's `acted_on > 0` within 14 days of the first invocation. Binds from 2026-10-14. |
 
