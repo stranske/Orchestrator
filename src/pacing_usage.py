@@ -891,7 +891,6 @@ def integrate(
             if datum.get("used_fraction") is not None and not row.get("stale") and bounds
             else "unknown"
         )
-        row["poller"] = poll
         row["reset_expiries"] = (
             [e["expires"] for e in pacing.active_resets(entries, now)]
             if entries is not None

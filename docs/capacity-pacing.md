@@ -123,8 +123,8 @@ The first requested check is **2026-10-18 05:00Z**, using the observed poll T1.
 
 The per-agent `pacing` contract consumed by #676 keeps `state`, `used_fraction`,
 `allowed_fraction`, `period_end`, `resets_available`, and extras including
-`burn_per_day`. `measurement=measured|unknown`, poller health and reset expiries
-are additive. State remains the existing ok/warn/shed/unknown enum. Reasons print
+`burn_per_day`. `measurement=measured|unknown` and reset expiries are additive. Poller health
+stays in tick/report FYIs so changing age cannot republish identical routing exports. State remains the existing ok/warn/shed/unknown enum. Reasons print
 blocking quantities and a drain condition/reset horizon; sampling and expiry
 handling continue while shed.
 

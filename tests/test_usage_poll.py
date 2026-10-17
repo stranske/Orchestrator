@@ -14,6 +14,7 @@ import pytest
 import capacity
 import pacing
 import pacing_usage
+import route_weights_export
 import router
 
 NOW = pacing.timestamp("2026-10-17T19:00:00Z")
@@ -186,6 +187,13 @@ def test_publish_roundtrip(tmp_path, pollers, pool):
 
 
 def test_both_polled_measured_inventory_discrepancy_and_buckets(evidence):
+    first, _ = integrate(evidence)
+    later, _ = integrate(evidence, now=NOW + 1)
+    before = dict(capacity=route_weights_export._capacity_block(dict(agents=first)))
+    after = dict(capacity=route_weights_export._capacity_block(dict(agents=later)))
+    assert route_weights_export._semantic_for_compare(
+        before
+    ) == route_weights_export._semantic_for_compare(after)
     agents, text = integrate(evidence, record=True)
     assert agents["claude"]["pacing"]["period_end"] == END
     assert agents["claude"]["pacing"]["used_fraction"] == 0.85
