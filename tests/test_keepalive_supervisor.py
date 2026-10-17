@@ -262,16 +262,79 @@ def test_close_receipt_written_only_after_confirmed_close(tmp_path):
     assert "not confirmed" in result["items"][0]["reason"]
 
 
-def test_close_records_real_private_brain_outcome_once(tmp_path, monkeypatch):
-    import feedback
+@pytest.mark.parametrize(
+    "verdict,blocker,expected",
+    [
+        ("PASS", None, 1),
+        ("MISSING", None, 1),
+        ("CONCERNS", None, 0),
+        ("MISSING", "ci not green", 0),
+        ("MISSING", "no gate commands", 0),
+        ("PASS", "unconfirmed", 0),
+    ],
+)
+def test_close_records_real_private_brain_monitor_outcome_once(
+    tmp_path, monkeypatch, verdict, blocker, expected
+):
+    import time
 
+    import capabilities
+    import feedback
+    import value_chain_monitor as monitor
+
+    now = 1_792_238_400
+    capability = "live-keepalive-supervisor"
+    ledger = tmp_path / "capabilities.json"
+    cap = capabilities._blank_capability(capability)
+    cap.update(status="wired", capability_version_id="cv:supervisor-close")
+    capabilities.save({capability: cap}, ledger)
+    monkeypatch.setattr(capabilities, "REG", ledger)
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
-    supervisor._closure_record(REPO + "#7", SHA, "verifier PASS")
-    supervisor._closure_record(REPO + "#7", SHA, "verifier PASS")
+    monkeypatch.setattr(feedback, "_capability_daily_heartbeat", lambda *args, **kwargs: None)
+    monkeypatch.setattr(time, "time", lambda: float(now))
+    # Initialize a private schema so zero outcomes is measured, not an unread Brain.
+    with feedback._conn():
+        pass
+    pr, issue, calls, recorded, options = closure_fixture(tmp_path, verdict)
+    options["record"] = supervisor._closure_record
+    options["ci_green"] = lambda *args: blocker != "ci not green"
+
+    def gate(*args):
+        if blocker:
+            return {"result": "UNRUNNABLE", "reason": blocker}
+        return {"result": "PASS"}
+
+    options["gate"] = gate
+    if blocker == "unconfirmed":
+        original = options["gh"]
+        options["gh"] = lambda args: {} if "PATCH" in args else original(args)
+
+    def monitor_row():
+        inputs = monitor._brain(feedback.DB_PATH, now - monitor.WINDOW_DAYS * 86400, now)
+        assert not inputs["errors"]
+        report = monitor.report(now=now, path=ledger, env={}, inputs=inputs)
+        row = next(row for row in report["rows"] if row["capability"] == capability)
+        lines = monitor.format_lines(report)
+        line = next(line for line in lines if line.startswith(f"  {capability}:"))
+        assert f"; outcome {row['outcome']};" in line
+        return row
+
+    assert monitor_row()["outcome"] == 0
+    assert supervisor.close_verified_issues(**options)["closed"] == expected
+    row = monitor_row()
+    assert row["outcome"] == row["acted_on"] == expected
+    # Closure credit must not claim a new successful implementation merge.
+    assert row["outcome_success"] == 0
+    if expected:
+        rule = "verifier PASS" if verdict == "PASS" else "merge-SHA acceptance gates and green CI"
+        supervisor._closure_record(REPO + "#7", SHA, rule)
+    supervisor.close_verified_issues(**options)
+    assert monitor_row()["outcome"] == expected
     with feedback._conn() as conn:
-        assert conn.execute("SELECT COUNT(*) FROM outcomes").fetchone()[0] == 1
-        row = conn.execute("SELECT adjudicated_verdict,notes FROM outcomes").fetchone()
-        assert row[0] == "PASS" and "Not a new implementation verdict" in row[1]
+        assert conn.execute("SELECT COUNT(*) FROM outcomes").fetchone()[0] == expected
+        if expected:
+            row = conn.execute("SELECT adjudicated_verdict,notes FROM outcomes").fetchone()
+            assert row[0] == "PASS" and "Not a new implementation verdict" in row[1]
 
 
 def test_close_gate_uses_real_exact_merge_checkout_and_existing_runner(tmp_path, monkeypatch):
