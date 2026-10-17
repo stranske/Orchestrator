@@ -223,6 +223,91 @@ def test_assignment_larger_than_legacy_cap_is_serviced_whole(tmp_path):
     assert all(row["status"] == "completed" for row in receipt["targets"].values())
 
 
+def test_io_single_slot_advances_ready_actions_before_full_queue_preparation(tmp_path):
+    targets = [f"t{i:03}" for i in range(80)]
+    lock = threading.Lock()
+    prepared = 0
+    acted = 0
+    early_actions = []
+    active_io = 0
+    max_io = 0
+
+    def enter_io():
+        nonlocal active_io, max_io
+        with lock:
+            active_io += 1
+            max_io = max(max_io, active_io)
+
+    def leave_io():
+        nonlocal active_io
+        with lock:
+            active_io -= 1
+
+    def prepare(target, context):
+        nonlocal prepared
+        enter_io()
+        try:
+            time.sleep(0.004)
+            with lock:
+                prepared += 1
+            return {"revision": target, "identity": target,
+                    "semantic_cache_key": "closer-evidence-semantic/v1:" + hashlib.sha256(target.encode()).hexdigest()}
+        finally:
+            leave_io()
+
+    def act(target, context):
+        nonlocal acted
+        enter_io()
+        try:
+            with lock:
+                if prepared < len(targets):
+                    early_actions.append(target)
+                acted += 1
+            return {"status": "completed", "target_complete": True}
+        finally:
+            leave_io()
+
+    cb = callbacks(act=act)
+    cb["prepare"] = prepare
+    receipt = run_pipeline(tmp_path / "state.json", targets, **cb,
+                           capacity_fn=lambda: {"io": 1, "low": 4, "exception": 1},
+                           deadline=time.time() + 10, max_io_workers=1, max_low_workers=4)
+    assert prepared == len(targets) and acted == len(targets)
+    assert early_actions, "ready actions waited for full-assignment preparation"
+    assert max_io == 1
+    assert all(row["status"] == "completed" for row in receipt["targets"].values())
+
+
+def test_io_four_slots_can_run_ready_action_while_preparations_are_active(tmp_path):
+    targets = [f"t{i:03}" for i in range(20)]
+    slow_prepares = threading.Event()
+    action_started = threading.Event()
+    cb = callbacks()
+
+    def prepare(target, context):
+        if target != "t000":
+            slow_prepares.set()
+            assert action_started.wait(1)
+        return {"revision": target, "identity": target,
+                "semantic_cache_key": "closer-evidence-semantic/v1:" + hashlib.sha256(target.encode()).hexdigest()}
+
+    cb["prepare"] = prepare
+    cb["act"] = lambda target, context: action_started.set() or {
+        "status": "completed", "target_complete": True
+    }
+    receipts = []
+    worker = threading.Thread(target=lambda: receipts.append(
+        run_pipeline(tmp_path / "state.json", targets, **cb,
+                     capacity_fn=lambda: {"io": 4, "low": 2, "exception": 1},
+                     deadline=time.time() + 3, max_io_workers=4)))
+    worker.start()
+    assert slow_prepares.wait(.5)
+    assert action_started.wait(.75), "ready action failed to use the fourth IO slot"
+    worker.join(3)
+    assert not worker.is_alive()
+    assert all(row["status"] == "completed" for row in receipts[0]["targets"].values())
+
+
 def test_completion_drives_next_stage_without_waiting_for_slow_peer(tmp_path):
     gate = threading.Event()
     fast_act = threading.Event()
@@ -334,6 +419,64 @@ def test_external_event_reruns_pending_admission_instead_of_reusing_cache(tmp_pa
     second = run(path, ["a"], cb)
     assert second["targets"]["a"]["status"] == "completed"
     assert interpretations == ["a", "a"]
+
+
+def test_provider_failure_defers_without_strong_or_action_and_requires_evidence(tmp_path):
+    path = tmp_path / "state.json"
+    calls = []
+    failure = {
+        "profile_id": "low-profile",
+        "agent": "provider-a",
+        "run_id": "dispatch-123",
+        "exit": 1,
+        "category": "transport_error",
+        "evidence_hash": "evidence-sha256",
+    }
+    cb = callbacks(
+        interpret=lambda t, c: {"status": "deferred", "reason": "provider_failure",
+                                "next_trigger": "retry_profile_later",
+                                "resource_evidence": {"provider_failure": failure}},
+        exception=lambda t, c: calls.append("exception") or {"reviewed": True},
+        act=lambda t, c: calls.append("act") or {"status": "completed", "target_complete": True},
+    )
+    receipt = run(path, ["a"], cb)
+    assert receipt["targets"]["a"]["deferred_reason"] == "provider_failure"
+    assert not calls
+    assert validate_stop(path, ["a"])["valid"]
+
+    path2 = tmp_path / "invalid.json"
+    bad = dict(failure, evidence_hash="")
+    cb["interpret"] = lambda t, c: {"status": "deferred", "reason": "provider_failure",
+                                    "next_trigger": "retry_profile_later",
+                                    "resource_evidence": {"provider_failure": bad}}
+    invalid = run(path2, ["a"], cb)
+    assert invalid["targets"]["a"]["status"] == "failed"
+    assert not validate_stop(path2, ["a"])["valid"]
+
+
+def test_exception_worker_capacity_defers_before_action(tmp_path):
+    path = tmp_path / "state.json"
+    calls = []
+    cb = callbacks(
+        interpret=lambda t, c: {"substantive_needs": ["needs strong review"]},
+        exception=lambda t, c: {"status": "deferred", "reason": "worker_capacity",
+                                "next_trigger": "codex_pool_frees",
+                                "resource_evidence": {"capacity": {
+                                    "lane": "exception", "active": 1, "limit": 1}}},
+        act=lambda t, c: calls.append(t) or {"status": "completed", "target_complete": True},
+    )
+    receipt = run(path, ["a"], cb)
+    assert receipt["targets"]["a"]["status"] == "deferred"
+    assert receipt["targets"]["a"]["deferred_reason"] == "worker_capacity"
+    assert calls == []
+    assert validate_stop(path, ["a"])["valid"]
+
+    cb["exception"] = lambda t, c: {"status": "deferred", "reason": "worker_capacity",
+                                    "next_trigger": "codex_pool_frees",
+                                    "resource_evidence": {"capacity": {"lane": "exception"}}}
+    invalid = run(tmp_path / "missing-proof.json", ["a"], cb)
+    assert invalid["targets"]["a"]["status"] == "failed"
+    assert not validate_stop(tmp_path / "missing-proof.json", ["a"])["valid"]
 
 
 def test_capacity_decrease_limits_refill_after_each_completion(tmp_path):
@@ -667,6 +810,7 @@ def test_failed_low_provider_is_audited_deferral_not_exception_or_action(tmp_pat
             "run_id": "dispatch-run-89",
             "exit": 1,
             "category": "unsupported_model",
+                "evidence_hash": "provider-failure-sha256",
         }
     }
     callbacks = {

@@ -31,6 +31,7 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 EXCLUDED = {"stranske/collab-admin", "stranske/collab-deliverables"}
 FAILURES = {"FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"}
 TERMINAL = {"completed", "cancelled", "failure", "success"}
+PIPELINE_RECEIPT_RESERVE_SECONDS = 300.0
 
 
 def digest(value):
@@ -1191,7 +1192,7 @@ def _fresh_capacity_report():
         return None
 
 
-def _pipeline_low_route(*, load=None, unavailable_profiles=None):
+def _pipeline_low_route(*, load=None, unavailable_profiles=None, with_status=False):
     """Choose a currently usable low-effort profile through the existing router."""
     load = load if load is not None else {}
     import execution_profiles
@@ -1202,10 +1203,11 @@ def _pipeline_low_route(*, load=None, unavailable_profiles=None):
         # and recheck eligibility while holding the same lock as the reservation.
         report = _fresh_capacity_report()
         if report is None:
-            return None
+            return (None, "unknown") if with_status else None
         unavailable_profiles = set(unavailable_profiles or ())
         eligible = set()
         available_profiles = {}
+        busy_unfailed_profile = False
         for agent, row in report["agents"].items():
             if row.get("state") not in {"ok", "warn"}:
                 continue
@@ -1223,6 +1225,7 @@ def _pipeline_low_route(*, load=None, unavailable_profiles=None):
                     for pool in p.get("capacity_pool_ids", [])
                 )
             ]
+            unfailed_profiles = profiles
             profiles = [
                 p
                 for p in profiles
@@ -1230,11 +1233,14 @@ def _pipeline_low_route(*, load=None, unavailable_profiles=None):
                     load.get("pool:" + pool, 0) for pool in (p.get("capacity_pool_ids") or [])
                 )
             ]
+            if unfailed_profiles and not profiles:
+                busy_unfailed_profile = True
             if profiles:
                 eligible.add(agent)
                 available_profiles[agent] = profiles
         if not eligible:
-            return None
+            status = "busy" if busy_unfailed_profile else "exhausted"
+            return (None, status) if with_status else None
         pick = router.select_agent(
             "review",
             report,
@@ -1245,24 +1251,27 @@ def _pipeline_low_route(*, load=None, unavailable_profiles=None):
             per_agent_cap=1,
         )
         if not pick:
-            return None
+            status = "busy" if any(load.get(agent, 0) for agent in eligible) else "exhausted"
+            return (None, status) if with_status else None
         candidates = available_profiles.get(pick["agent"], [])
         if not candidates:
-            return None
+            return (None, "exhausted") if with_status else None
         load[pick["agent"]] = load.get(pick["agent"], 0) + 1
         selected = candidates[0]
         pools = list(selected.get("capacity_pool_ids") or [])
         for pool in pools:
             load["pool:" + pool] = load.get("pool:" + pool, 0) + 1
-        return {
+        route = {
             "agent": pick["agent"],
             "profile_id": selected["profile_id"],
             "capacity": pick,
             "pools": pools,
         }
+        return (route, "available") if with_status else route
 
 
 _PIPELINE_ROUTE_LOCK = threading.Lock()
+_PIPELINE_ROUTE_CONDITION = threading.Condition(_PIPELINE_ROUTE_LOCK)
 
 
 def _pipeline_capacity():
@@ -1370,6 +1379,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
     import closer_queue
 
     state_path = Path(args.state)
+    receipt_reserve = PIPELINE_RECEIPT_RESERVE_SECONDS
     pipeline_path = Path(str(state_path) + ".pipeline.json")
     retained_dir = Path(str(state_path) + ".evidence")
     state_doc = {}
@@ -1377,7 +1387,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         state_doc = json.loads(pipeline_path.read_text())
     except (OSError, ValueError):
         pass
-    route_lock = _PIPELINE_ROUTE_LOCK
+    route_lock = _PIPELINE_ROUTE_CONDITION
     route_load = {}
     failed_low_profiles = set()
     low_profile_failures = {}
@@ -1775,15 +1785,35 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "substantive_needs": [],
                 "authority": False,
             }
-        route = _pipeline_low_route(load=route_load, unavailable_profiles=failed_low_profiles)
+        route, route_status = _pipeline_low_route(
+            load=route_load,
+            unavailable_profiles=failed_low_profiles,
+            with_status=True,
+        )
+        while route is None and route_status == "busy":
+            remaining = float(context["deadline"]) - time.time()
+            if remaining <= 0:
+                raise RuntimeError("low provider route remained internally busy through deadline")
+            # A concurrent callback in this invocation owns the shared pool. Wait
+            # for its release; do not report measured exhaustion or loop tightly.
+            with route_lock:
+                route_lock.wait(timeout=min(1.0, remaining))
+            route, route_status = _pipeline_low_route(
+                load=route_load,
+                unavailable_profiles=failed_low_profiles,
+                with_status=True,
+            )
         if not route:
+            if route_status == "unknown":
+                raise RuntimeError("low provider capacity snapshot is stale or unavailable")
             if low_profile_failures:
-                failure = next(reversed(low_profile_failures.values()))
+                failures = list(low_profile_failures.values())
+                failure = failures[-1]
                 return {
                     "status": "deferred",
                     "reason": "provider_failure",
-                    "next_trigger": "retry after observed low-profile failure with fresh route admission",
-                    "resource_evidence": {"provider_failure": failure},
+                    "next_trigger": "retry after a failed low profile becomes eligible again",
+                    "resource_evidence": {"provider_failure": {**failure, "attempts": failures}},
                     "classification": "provider_failure",
                     "substantive_needs": [],
                     "authority": False,
@@ -1915,31 +1945,45 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             evidence = result.get("rate_incident_evidence")
             if not isinstance(evidence, dict):
                 evidence = {}
+            evidence_hash = evidence.get("evidence_hash")
+            if not isinstance(evidence_hash, str) or not evidence_hash:
+                evidence_hash = hashlib.sha256(
+                    json.dumps(
+                        {
+                            "agent": route["agent"],
+                            "profile_id": route["profile_id"],
+                            "run_id": result.get("run_id"),
+                            "exit": result.get("exit"),
+                            "error": str(result.get("error") or "")[:1000],
+                            "stderr_tail": str(result.get("stderr_tail") or "")[-1000:],
+                            "output_excerpt": str(result.get("output") or "")[:1000],
+                        },
+                        sort_keys=True,
+                    ).encode()
+                ).hexdigest()
             failure = {
                 "profile_id": route["profile_id"],
                 "agent": route["agent"],
                 "run_id": result.get("run_id"),
                 "exit": result.get("exit"),
-                "category": evidence.get("category") or "provider_execution_failed",
+                "category": evidence.get("category") or "transport_error",
                 "subcategory": evidence.get("subcategory") or "unclassified_failure",
-                "evidence_hash": evidence.get("evidence_hash"),
+                "evidence_hash": evidence_hash,
                 "is_authoritative": evidence.get("is_authoritative") is True,
             }
             with route_lock:
                 failed_low_profiles.add(route["profile_id"])
                 low_profile_failures[route["profile_id"]] = failure
-            return {
-                "status": "deferred",
-                "reason": "provider_failure",
-                "next_trigger": "retry after observed low-profile failure with fresh route admission",
-                "resource_evidence": {"provider_failure": failure},
-                "classification": "provider_failure",
-                "substantive_needs": [],
-                "requested_agent": route["agent"],
-                "requested_profile": route["profile_id"],
-                "actual": {k: result.get(k) for k in ("exit", "model", "profile_id", "run_id")},
-                "authority": False,
-            }
+                route_lock.notify_all()
+            if run_drift:
+                with drift_lock:
+                    drift_claimed = False
+            # Re-enter preparation/route admission for this same target. The
+            # failed profile is round-suppressed, so this is bounded by the
+            # finite set of existing eligible low profiles.
+            return interpret(target, context)
+        with route_lock:
+            route_lock.notify_all()
         try:
             proposal = json.loads(output)
         except ValueError:
@@ -2009,6 +2053,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             "integration_reason": integration.get("reason"),
             "raw_findings": integration.get("raw_findings", [])[:20],
             "integration_disposition": integration.get("disposition"),
+            "prior_provider_failures": list(low_profile_failures.values()),
         }
 
     def exception(target, context):
@@ -2256,10 +2301,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             current.observe,
             current.execute,
             reconcile=current.reconcile,
-            # The outer staged coordinator owns the 300-second final-receipt
-            # reserve. Give the inner queue the original full deadline so its
-            # own default reserve places its action cutoff at this active cutoff.
-            deadline=float(context["deadline"]) + closer_queue.DEFAULT_RECEIPT_RESERVE_SECONDS,
+            # The pipeline owns a five-minute receipt reserve. Preserve the
+            # callback cutoff while giving the inner queue the same full deadline.
+            deadline=float(context["deadline"]) + receipt_reserve,
+            receipt_reserve_seconds=receipt_reserve,
             max_workers=1,
             max_passes=1,
         )
@@ -2352,7 +2397,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 current.observe,
                 current.execute,
                 reconcile=current.reconcile,
-                deadline=float(context["deadline"]) + closer_queue.DEFAULT_RECEIPT_RESERVE_SECONDS,
+                deadline=float(context["deadline"]) + receipt_reserve,
+                receipt_reserve_seconds=receipt_reserve,
                 max_workers=1,
                 max_passes=1,
             )
@@ -2427,7 +2473,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         # Keep the same active-work/final-receipt split as the existing queue:
         # the outer pipeline stops new callbacks at the action cutoff, while
         # the inner queue receives the full deadline and reserves 300 seconds.
-        deadline=deadline - closer_queue.DEFAULT_RECEIPT_RESERVE_SECONDS,
+        deadline=deadline - receipt_reserve,
         max_io_workers=4,
         max_low_workers=min(2, args.max_workers),
         max_exception_workers=1,
@@ -2554,6 +2600,7 @@ def main(argv=None):
         backend.execute,
         reconcile=backend.reconcile,
         deadline=deadline,
+        receipt_reserve_seconds=PIPELINE_RECEIPT_RESERVE_SECONDS,
         max_workers=args.max_workers,
     )
     print(json.dumps(result, sort_keys=True))

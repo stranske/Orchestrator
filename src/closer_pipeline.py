@@ -47,6 +47,41 @@ def _semantic_cache_token(prepare: Any) -> str | None:
     return value
 
 
+def _valid_worker_capacity(resource: Any, now_value: float) -> bool:
+    if not isinstance(resource, Mapping):
+        return False
+    capacity = resource.get("capacity")
+    if not isinstance(capacity, Mapping) or capacity.get("lane") not in CEILINGS:
+        return False
+    active = capacity.get("active")
+    limit = capacity.get("limit")
+    if type(active) is int and type(limit) is int and limit > 0 and active >= limit:
+        return True
+    sampled_at = capacity.get("sampled_at")
+    required = capacity.get("required")
+    return (
+        capacity.get("available") == 0
+        and type(required) is int
+        and required > 0
+        and isinstance(sampled_at, (int, float))
+        and 0 <= now_value - sampled_at <= 1800
+    )
+
+
+def _valid_provider_failure(resource: Any) -> bool:
+    if not isinstance(resource, Mapping):
+        return False
+    failure = resource.get("provider_failure")
+    if not isinstance(failure, Mapping):
+        return False
+    for field in ("profile_id", "agent", "run_id", "category", "evidence_hash"):
+        value = failure.get(field)
+        if not isinstance(value, str) or not value.strip():
+            return False
+    exit_code = failure.get("exit")
+    return type(exit_code) is int and exit_code != 0
+
+
 def _bounded(value: Any, *, limit: int = 128 * 1024) -> Any:
     encoded = json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
     if len(encoded.encode()) > limit:
@@ -355,6 +390,7 @@ def run_pipeline(
     started = now()
     capacity_samples: list[dict[str, Any]] = []
     peak_active: dict[str, int] = {lane: 0 for lane in bounds}
+    io_turn = "ready"
 
     def mutate(fn: Callable[[dict[str, Any], dict[str, Any]], Any]) -> Any:
         with _locked(path):
@@ -539,18 +575,9 @@ def run_pipeline(
                             value.get("status") == "deferred"
                             and value.get("reason") == "provider_failure"
                             and isinstance(value.get("next_trigger"), str)
-                            and isinstance(value.get("resource_evidence"), Mapping)
                         ):
-                            provider = value["resource_evidence"].get("provider_failure")
-                            if (
-                                isinstance(provider, Mapping)
-                                and isinstance(provider.get("profile_id"), str)
-                                and isinstance(provider.get("agent"), str)
-                                and isinstance(provider.get("run_id"), str)
-                                and provider.get("run_id")
-                                and isinstance(provider.get("exit"), int)
-                                and provider.get("exit") != 0
-                            ):
+                            evidence = value.get("resource_evidence")
+                            if isinstance(evidence, Mapping) and _valid_provider_failure(evidence):
                                 # This observed dispatcher run failed at transport or
                                 # provider admission. It is not substantive ambiguity;
                                 # don't invoke the strong lane and don't cache a
@@ -561,9 +588,15 @@ def run_pipeline(
                                     status="deferred",
                                     deferred_reason="provider_failure",
                                     deferred_next_trigger=value["next_trigger"],
-                                    resource_evidence=dict(value["resource_evidence"]),
+                                    resource_evidence=dict(evidence),
                                 )
-                                return
+                            else:
+                                item.update(
+                                    status="failed",
+                                    error="provider_failure_without_valid_run_evidence",
+                                    deferred_next_trigger="human_review",
+                                )
+                            return
                         needs = value.get("substantive_needs")
                         if needs is None:
                             needs = ["unknown_or_unstructured_interpretation"]
@@ -576,7 +609,29 @@ def run_pipeline(
                             item["stage"] = "act"
                     elif stage == "exception":
                         # Senior output routes work only; it cannot certify completion.
-                        item["stage"] = "act"
+                        if value.get("status") == "deferred":
+                            resource = value.get("resource_evidence")
+                            reason = value.get("reason")
+                            if (
+                                reason == "worker_capacity"
+                                and isinstance(value.get("next_trigger"), str)
+                                and isinstance(resource, Mapping)
+                                and _valid_worker_capacity(resource, now())
+                            ):
+                                item.update(
+                                    status="deferred",
+                                    deferred_reason=reason,
+                                    deferred_next_trigger=value["next_trigger"],
+                                    resource_evidence=dict(resource),
+                                )
+                            else:
+                                item.update(
+                                    status="failed",
+                                    error="exception_deferral_without_valid_capacity_evidence",
+                                    deferred_next_trigger="human_review",
+                                )
+                        else:
+                            item["stage"] = "act"
                     elif stage == "reconcile":
                         outcome = value.get("outcome")
                         if outcome == "confirmed_completed":
@@ -673,7 +728,54 @@ def run_pipeline(
                 state = _load(path)
                 current = state["runs"][run_id]
                 rows = current["targets"]
-                ordered = sorted(rows, key=lambda t: (rows[t].get("last_scheduled", 0), t))
+                base_order = sorted(
+                    rows, key=lambda t: (rows[t].get("last_scheduled", 0), t)
+                )
+                io_prepare: list[str] = []
+                io_ready: list[str] = []
+                other_lanes: list[str] = []
+                for candidate in base_order:
+                    candidate_item = rows[candidate]
+                    candidate_stage = candidate_item.get("stage")
+                    if candidate_item.get("status") != "queued" or candidate_stage not in callbacks:
+                        continue
+                    candidate_lane = callbacks[candidate_stage][1]
+                    if candidate_lane != "io":
+                        other_lanes.append(candidate)
+                    elif candidate_stage == "prepare":
+                        io_prepare.append(candidate)
+                    else:
+                        io_ready.append(candidate)
+                # IO shares capacity across preparation and guarded act/reconcile
+                # work. Alternate classes when both are ready: this lets the
+                # first prepared targets advance while the rest of the assignment
+                # is still entering the queue, without starving preparation.
+                ordered: list[str] = []
+                io_slots = max(0, min(cap["io"], bounds["io"]) - active["io"])
+                if io_slots and not io_ready:
+                    # Keep one IO slot available while eligible cheap/strong
+                    # interpretation is in flight. Its result may make an act
+                    # actionable immediately; consuming the last lane with a
+                    # new prepare would recreate a stage barrier on slow prep.
+                    advancing_work = any(
+                        item.get("status") in {"queued", "running"}
+                        and item.get("stage") in {"interpret", "exception"}
+                        and cap[callbacks[item["stage"]][1]] > 0
+                        for item in rows.values()
+                    )
+                    if advancing_work:
+                        io_slots -= 1
+                while (io_prepare or io_ready) and len(ordered) < io_slots:
+                    if io_prepare and io_ready:
+                        chosen = io_turn
+                        io_turn = "prepare" if chosen == "ready" else "ready"
+                    elif io_prepare:
+                        chosen = "prepare"
+                    else:
+                        chosen = "ready"
+                    source = io_prepare if chosen == "prepare" else io_ready
+                    ordered.append(source.pop(0))
+                ordered.extend(other_lanes)
                 for target in ordered:
                     if now() >= active_deadline:
                         break
@@ -997,28 +1099,8 @@ def validate_stop(
                 and item["resource_evidence"].get("operation_id")
             ):
                 reasons.append(f"unverified_resource_deferral:{target}")
-            elif reason == "worker_capacity" and not (
-                isinstance(item.get("resource_evidence"), Mapping)
-                and isinstance(item["resource_evidence"].get("capacity"), Mapping)
-                and item["resource_evidence"]["capacity"].get("lane") in CEILINGS
-                and (
-                    (
-                        isinstance(item["resource_evidence"]["capacity"].get("active"), int)
-                        and isinstance(item["resource_evidence"]["capacity"].get("limit"), int)
-                        and item["resource_evidence"]["capacity"]["limit"] > 0
-                        and item["resource_evidence"]["capacity"]["active"]
-                        >= item["resource_evidence"]["capacity"]["limit"]
-                    )
-                    or (
-                        item["resource_evidence"]["capacity"].get("available") == 0
-                        and isinstance(item["resource_evidence"]["capacity"].get("required"), int)
-                        and item["resource_evidence"]["capacity"]["required"] > 0
-                        and isinstance(
-                            item["resource_evidence"]["capacity"].get("sampled_at"), (int, float)
-                        )
-                        and 0 <= now() - item["resource_evidence"]["capacity"]["sampled_at"] <= 1800
-                    )
-                )
+            elif reason == "worker_capacity" and not _valid_worker_capacity(
+                item.get("resource_evidence"), now()
             ):
                 reasons.append(f"unverified_resource_deferral:{target}")
             elif reason == "pending_ci" and not (
@@ -1026,15 +1108,8 @@ def validate_stop(
                 and item["resource_evidence"].get("check_run_id")
             ):
                 reasons.append(f"unverified_resource_deferral:{target}")
-            elif reason == "provider_failure" and not (
-                isinstance(item.get("resource_evidence"), Mapping)
-                and isinstance(item["resource_evidence"].get("provider_failure"), Mapping)
-                and isinstance(item["resource_evidence"]["provider_failure"].get("profile_id"), str)
-                and isinstance(item["resource_evidence"]["provider_failure"].get("agent"), str)
-                and isinstance(item["resource_evidence"]["provider_failure"].get("run_id"), str)
-                and bool(item["resource_evidence"]["provider_failure"].get("run_id"))
-                and isinstance(item["resource_evidence"]["provider_failure"].get("exit"), int)
-                and item["resource_evidence"]["provider_failure"].get("exit") != 0
+            elif reason == "provider_failure" and not _valid_provider_failure(
+                item.get("resource_evidence")
             ):
                 reasons.append(f"unverified_provider_failure:{target}")
             continue

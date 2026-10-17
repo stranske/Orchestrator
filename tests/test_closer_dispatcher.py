@@ -447,6 +447,41 @@ def test_inventory_main_has_no_state_write_or_worker_launch(tmp_path, monkeypatc
     assert not state.exists()
 
 
+def test_legacy_cli_keeps_requested_90_second_active_budget(tmp_path, monkeypatch, capsys):
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"errors": [], "targets": [{"target": TARGET}]}))
+    start = 1_800_000_000.0
+    monkeypatch.setattr(adapter.time, "time", lambda: start)
+    monkeypatch.setattr(adapter, "GitHub", lambda **kwargs: FakeGitHub(snapshot()))
+    captured = {}
+
+    def fake_round(*_args, **kwargs):
+        captured.update(kwargs)
+        return {"stop_valid": True, "accounting": [], "events": []}
+
+    monkeypatch.setattr(closer_queue, "run_round", fake_round)
+    state = tmp_path / "state.json"
+    assert (
+        adapter.main(
+            [
+                "run",
+                "--assignment",
+                str(assignment),
+                "--state",
+                str(state),
+                "--apply",
+                "--budget-seconds",
+                "90",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert captured["deadline"] == start + 390
+    assert captured["receipt_reserve_seconds"] == 300
+    assert captured["deadline"] - captured["receipt_reserve_seconds"] == start + 90
+
+
 def test_truncated_verifier_history_is_unknown_not_authority_for_another_run(tmp_path, monkeypatch):
     document = _graphql_pr()
     document.update(state="MERGED", mergeCommit={"oid": MERGE})
@@ -941,7 +976,7 @@ def test_staged_prepare_runs_before_pending_ci_wait_selection(tmp_path, monkeypa
     monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=run_pipeline))
     backend = closer(tmp_path, current)
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=2, shadow=True)
-    result = adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 30)
+    result = adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 330)
     assert result["valid"]
     assert seen["prepared"]["snapshot"]["checks"] == "PENDING"
     assert seen["shadow"]["classification"] == "not_run_shadow"
@@ -1152,7 +1187,11 @@ def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(tmp_p
     monkeypatch.setattr(
         adapter,
         "_pipeline_low_route",
-        lambda **_kw: {"agent": "gemini", "profile_id": "gemini-low", "pools": []},
+        lambda **kw: (
+            ({"agent": "gemini", "profile_id": "gemini-low", "pools": []}, "available")
+            if kw.get("with_status")
+            else {"agent": "gemini", "profile_id": "gemini-low", "pools": []}
+        ),
     )
     worker_calls = []
     prompts = []
@@ -1250,7 +1289,7 @@ def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(tmp_p
 
     monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=fake_pipeline))
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
-    result = adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 60)
+    result = adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
     assert result["targets"][TARGET]["status"] in {"completed", "pending", "deferred"}
     assert len(prompts) == 1
     mandatory = prompts[0].split(
@@ -1327,7 +1366,7 @@ def test_held_assignment_metadata_blocks_pipeline_before_worker_or_action(tmp_pa
     args = SimpleNamespace(
         state=str(tmp_path / "state.json"), assignment=str(assignment), max_workers=1, shadow=False
     )
-    receipt = adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 30)
+    receipt = adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 330)
     row = receipt["targets"][TARGET]
     assert row["status"] == "pending"
     assert row["pending_kind"] == "external_event"
@@ -1382,15 +1421,15 @@ def test_active_assignment_fingerprint_refresh_does_not_block_fresh_target(tmp_p
     )
 
 
-def test_pipeline_deadline_preserves_45m_active_window_and_5m_receipt_reserve(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("active_seconds", [90, 240, 2700])
+def test_pipeline_deadline_preserves_active_budget_and_5m_receipt_reserve(
+    tmp_path, monkeypatch, active_seconds
 ):
     import closer_evidence
     import closer_queue
 
-    reserve = closer_queue.DEFAULT_RECEIPT_RESERVE_SECONDS
     start = time.time()
-    full_deadline = start + 2700 + reserve
+    full_deadline = start + active_seconds + 300
     current = snapshot(base="c" * 40)
 
     class PreparedGitHub(FakeGitHub):
@@ -1450,16 +1489,15 @@ def test_pipeline_deadline_preserves_45m_active_window_and_5m_receipt_reserve(
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
     adapter._run_staged_pipeline(args, [TARGET], backend, full_deadline)
 
-    active_cutoff = full_deadline - reserve
+    active_cutoff = start + active_seconds
     assert abs(observed["outer_deadline"] - active_cutoff) < 0.01
     assert observed["prepare_deadline"] == observed["outer_deadline"]
     assert observed["max_io_workers"] == 4
     assert len(queue_calls) == 1
     assert abs(queue_calls[0]["deadline"] - full_deadline) < 0.01
-    # The inner queue keeps its one default 300-second reserve; its action cutoff
-    # lands exactly on the outer active cutoff rather than subtracting reserve twice.
-    assert "receipt_reserve_seconds" not in queue_calls[0]
-    assert queue_calls[0]["deadline"] - reserve == observed["outer_deadline"]
+    assert queue_calls[0]["receipt_reserve_seconds"] == 300
+    # Inner action cutoff preserves the requested active budget literally.
+    assert queue_calls[0]["deadline"] - 300 == observed["outer_deadline"]
 
 
 def test_deterministic_dispatcher_states_skip_low_provider_stage(tmp_path, monkeypatch):
@@ -1560,10 +1598,16 @@ def test_low_transport_failure_suppresses_profile_and_other_profile_continues(
     )
     route_profiles = []
 
-    def select_route(*, load, unavailable_profiles):
-        profile = "claude-low" if "gemini-low" in unavailable_profiles else "gemini-low"
+    def select_route(*, load, unavailable_profiles, with_status=False):
+        if "gemini-low" not in unavailable_profiles:
+            profile = "gemini-low"
+        elif "claude-low" not in unavailable_profiles:
+            profile = "claude-low"
+        else:
+            return (None, "exhausted") if with_status else None
         route_profiles.append(profile)
-        return {"agent": profile.split("-")[0], "profile_id": profile, "pools": []}
+        route = {"agent": profile.split("-")[0], "profile_id": profile, "pools": []}
+        return (route, "available") if with_status else route
 
     monkeypatch.setattr(adapter, "_pipeline_low_route", select_route)
     provider_profiles = []
@@ -1580,7 +1624,7 @@ def test_low_transport_failure_suppresses_profile_and_other_profile_continues(
             "profile_id": profile,
             "output": json.dumps(
                 {
-                    "target": second,
+                    "target": kwargs["subject_id"],
                     "head": HEAD,
                     "base": base,
                     "classification": "relevant",
@@ -1644,16 +1688,58 @@ def test_low_transport_failure_suppresses_profile_and_other_profile_continues(
             values[target] = callbacks["interpret"](
                 target, {"prepare": packet_for(target), "deadline": time.time() + 60}
             )
-        assert values[first]["reason"] == "provider_failure"
-        assert (
-            values[first]["resource_evidence"]["provider_failure"]["run_id"]
-            == "dispatch-unsupported-31"
-        )
+        assert values[first]["actual"]["run_id"] == "dispatch-success-32"
+        assert values[first]["prior_provider_failures"][0]["run_id"] == "dispatch-unsupported-31"
         assert values[second]["actual"]["run_id"] == "dispatch-success-32"
         return {"targets": values}
 
     monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=pipeline_stub))
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
-    adapter._run_staged_pipeline(args, [first, second], backend, time.time() + 60)
+    adapter._run_staged_pipeline(args, [first, second], backend, time.time() + 360)
+    assert route_profiles == ["gemini-low", "claude-low", "claude-low"]
+    assert provider_profiles == route_profiles
+
+    route_profiles.clear()
+    provider_profiles.clear()
+
+    def fail_all(_agent, _prompt, **kwargs):
+        profile = kwargs["profile_id"]
+        provider_profiles.append(profile)
+        return {
+            "exit": 1,
+            "run_id": f"dispatch-failed-{len(provider_profiles)}",
+            "error": "provider unavailable",
+        }
+
+    monkeypatch.setattr(dispatcher, "offload", fail_all)
+    backend = closer(tmp_path, snapshots[first])
+    monkeypatch.setattr(
+        backend, "campaign_admission", lambda *_a, **_k: {"allowed": True, "timeout": 60}
+    )
+    last = {}
+
+    def all_failed_pipeline_stub(_path, _targets, **callbacks):
+        last.update(
+            callbacks["interpret"](
+                first, {"prepare": packet_for(first), "deadline": time.time() + 60}
+            )
+        )
+        return {"targets": {first: last}}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "closer_pipeline",
+        SimpleNamespace(run_pipeline=all_failed_pipeline_stub),
+    )
+    adapter._run_staged_pipeline(args, [first], backend, time.time() + 360)
+    assert last["reason"] == "provider_failure"
+    assert [row["run_id"] for row in last["resource_evidence"]["provider_failure"]["attempts"]] == [
+        "dispatch-failed-1",
+        "dispatch-failed-2",
+    ]
+    assert all(
+        len(row["evidence_hash"]) == 64 and row["category"] == "transport_error"
+        for row in last["resource_evidence"]["provider_failure"]["attempts"]
+    )
     assert route_profiles == ["gemini-low", "claude-low"]
     assert provider_profiles == route_profiles
