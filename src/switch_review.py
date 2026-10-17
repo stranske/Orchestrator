@@ -49,10 +49,12 @@ import argparse
 import base64
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -804,6 +806,50 @@ def fleet_gates(
     }
 
 
+def _exploration_window() -> dict:
+    """Read the hosted rate and policy-switch population, never equating unreadable with zero."""
+    import feedback
+
+    start = "2026-10-17"
+    window: dict = {
+        "start": start,
+        "rate": "UNKNOWN",
+        "env": os.environ.get("ORCH_EXPLORATION_RATE", "unset"),
+        "switches": "UNKNOWN",
+        "errors": [],
+    }
+    ok, out, reason = _gh_call(
+        [
+            "api",
+            "repos/stranske/Orchestrator/contents/config/route-weights.json?ref=exports/route-weights",
+            "-H",
+            "Accept: application/vnd.github.raw+json",
+        ]
+    )
+    try:
+        if not ok:
+            raise ValueError(reason)
+        rate = json.loads(out)["exploration"]["rate"]
+        if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not 0 <= rate <= 1:
+            raise ValueError("invalid exploration.rate")
+        window["rate"] = rate
+    except (ValueError, KeyError, TypeError) as exc:
+        window["errors"].append(f"published rate: {exc}")
+    try:
+        with closing(
+            sqlite3.connect(f"{feedback.DB_PATH.resolve().as_uri()}?mode=ro", uri=True)
+        ) as conn:
+            window["switches"] = conn.execute(
+                "SELECT count(*) FROM agent_switches WHERE source='policy' "
+                "AND delegation_source='route_weights_exploration' AND switched_ts>=? "
+                "AND pr_ref NOT LIKE 'stranske/Collab-Admin#%'",
+                (int(datetime.fromisoformat(start).replace(tzinfo=timezone.utc).timestamp()),),
+            ).fetchone()[0]
+    except (sqlite3.Error, ValueError) as exc:
+        window["errors"].append(f"exploration switches: {exc}")
+    return window
+
+
 def _exploration_gate() -> dict:
     """Keep an unreadable direct-mode evidence gate visible in the recurring review."""
     try:
@@ -824,6 +870,7 @@ def _exploration_gate() -> dict:
         "evidence_error": error,
         "arms": evidence.get("mode_counts", []),
         "window_days": evidence.get("window_days"),
+        "window": _exploration_window(),
         "drainable": (
             "repair the Brain read"
             if status == "direct_mode_evidence_unreadable"
@@ -2093,11 +2140,22 @@ def format_report(rep: dict) -> str:
                 lines.append(f"      {fleet['clear_paths']}")
         lines.append("")
     exploration_gate = rep.get("exploration_gate") or {}
-    if exploration_gate.get("window_days") is not None and not exploration_gate.get("suspect"):
+    window = exploration_gate.get("window")
+    show_arms = exploration_gate.get("window_days") is not None and not exploration_gate.get(
+        "suspect"
+    )
+    if window or show_arms:
+        lines += ["## Exploration arms", ""]
+    if window:
+        lines += [
+            f"  exploration window: rate {window['rate']} (env {window['env']}), "
+            f"exploration switches since {window['start']} {window['switches']}",
+            *[f"  UNKNOWN — {error}" for error in window.get("errors", [])],
+            "",
+        ]
+    if show_arms:
         arms = {row["mode"]: row for row in exploration_gate.get("arms") or []}
         lines += [
-            "## Exploration arms",
-            "",
             f"  window={exploration_gate.get('window_days')}d; "
             "PASS denominator=graded G; durable denominator=completed durability sweeps D",
         ]
