@@ -11,6 +11,7 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import math
 import os
 import tempfile
 import time
@@ -53,19 +54,20 @@ def _valid_worker_capacity(resource: Any, now_value: float) -> bool:
     capacity = resource.get("capacity")
     if not isinstance(capacity, Mapping) or capacity.get("lane") not in CEILINGS:
         return False
+    sampled_at = capacity.get("sampled_at")
+    if (
+        not isinstance(sampled_at, (int, float))
+        or isinstance(sampled_at, bool)
+        or not math.isfinite(float(sampled_at))
+        or not 0 <= now_value - float(sampled_at) <= 1800
+    ):
+        return False
     active = capacity.get("active")
     limit = capacity.get("limit")
     if type(active) is int and type(limit) is int and limit > 0 and active >= limit:
         return True
-    sampled_at = capacity.get("sampled_at")
     required = capacity.get("required")
-    return (
-        capacity.get("available") == 0
-        and type(required) is int
-        and required > 0
-        and isinstance(sampled_at, (int, float))
-        and 0 <= now_value - sampled_at <= 1800
-    )
+    return capacity.get("available") == 0 and type(required) is int and required > 0
 
 
 def _valid_provider_failure(resource: Any) -> bool:
@@ -80,6 +82,75 @@ def _valid_provider_failure(resource: Any) -> bool:
             return False
     exit_code = failure.get("exit")
     return type(exit_code) is int and exit_code != 0
+
+
+def _valid_deadline_evidence(resource: Any, deadline: float, rows: Mapping[str, Any]) -> bool:
+    if not isinstance(resource, Mapping) or resource.get("deadline") != deadline:
+        return False
+    observed = resource.get("observed_at")
+    if not isinstance(observed, (int, float)) or isinstance(observed, bool) or observed < deadline:
+        return False
+    if resource.get("type") == "active_deadline":
+        return True
+    if resource.get("type") != "round_deadline_exhausted":
+        return False
+    reported = resource.get("reported_deadline")
+    remaining = resource.get("remaining_seconds")
+    source = resource.get("source_target")
+    return (
+        isinstance(reported, (int, float))
+        and not isinstance(reported, bool)
+        and abs(float(reported) - deadline) <= 0.01
+        and isinstance(remaining, (int, float))
+        and not isinstance(remaining, bool)
+        and math.isfinite(float(remaining))
+        and float(remaining) < 2
+        and isinstance(source, str)
+        and source in rows
+    )
+
+
+def _valid_github_capacity_evidence(resource: Any, now_value: float) -> bool:
+    if not isinstance(resource, Mapping):
+        return False
+    capacity = resource.get("github_capacity")
+    if not isinstance(capacity, Mapping):
+        return False
+    throttle = capacity.get("throttle")
+    if not isinstance(throttle, Mapping):
+        return False
+    observed = capacity.get("observed_at")
+    reset_at = capacity.get("reset_at_epoch")
+    resource_name = capacity.get("resource")
+    reset_in = throttle.get("reset_in_s")
+    remaining = throttle.get("remaining")
+    limit = throttle.get("limit")
+    return (
+        throttle.get("state") == "shed"
+        and throttle.get("action") == "defer"
+        and isinstance(throttle.get("resource"), str)
+        and bool(throttle.get("resource"))
+        and resource_name == throttle.get("resource")
+        and isinstance(throttle.get("reason"), str)
+        and bool(throttle.get("reason"))
+        and isinstance(throttle.get("source"), str)
+        and bool(throttle.get("source"))
+        and type(remaining) is int
+        and remaining >= 0
+        and type(limit) is int
+        and limit > 0
+        and type(reset_in) is int
+        and reset_in > 0
+        and isinstance(observed, (int, float))
+        and not isinstance(observed, bool)
+        and math.isfinite(float(observed))
+        and 0 <= now_value - float(observed) <= 1800
+        and isinstance(reset_at, (int, float))
+        and not isinstance(reset_at, bool)
+        and math.isfinite(float(reset_at))
+        and abs(float(reset_at) - (float(observed) + reset_in)) <= 1
+        and float(reset_at) > now_value
+    )
 
 
 def _bounded(value: Any, *, limit: int = 128 * 1024) -> Any:
@@ -196,6 +267,8 @@ def run_pipeline(
     max_io_workers: int = 4,
     max_low_workers: int = 2,
     max_exception_workers: int = 1,
+    round_deadline_exception: type[BaseException] | None = None,
+    round_capacity_exception: type[BaseException] | None = None,
     now: Callable[[], float] = time.time,
 ) -> dict[str, Any]:
     """Run independent targets with per-stage bounded pools and durable receipts.
@@ -296,7 +369,22 @@ def run_pipeline(
                                     deferred_next_trigger="next_round",
                                 )
                     _save(path, state)
-                prior_stop = validate_stop(path, previous_assignment, now=now)
+                # Resource proofs authorize stopping only as of the completed prior
+                # round. A later cadence may arrive after their freshness window; use
+                # the recorded receipt time to validate that historical stop, then
+                # carry deferred targets into a new prepare stage for fresh admission.
+                summary = previous.get("receipt_summary")
+                prior_finished_at = (
+                    summary.get("finished_at") if isinstance(summary, Mapping) else None
+                )
+                prior_stop_now = (
+                    (lambda finished=float(prior_finished_at): finished)
+                    if isinstance(prior_finished_at, (int, float))
+                    and not isinstance(prior_finished_at, bool)
+                    and math.isfinite(float(prior_finished_at))
+                    else now
+                )
+                prior_stop = validate_stop(path, previous_assignment, now=prior_stop_now)
                 if not prior_stop.get("valid"):
                     fcntl.flock(run_lock.fileno(), fcntl.LOCK_UN)
                     run_lock.close()
@@ -391,6 +479,7 @@ def run_pipeline(
     capacity_samples: list[dict[str, Any]] = []
     peak_active: dict[str, int] = {lane: 0 for lane in bounds}
     io_turn = "ready"
+    round_budget_event: dict[str, Any] | None = None
 
     def mutate(fn: Callable[[dict[str, Any], dict[str, Any]], Any]) -> Any:
         with _locked(path):
@@ -453,7 +542,43 @@ def run_pipeline(
                         raise ValueError("callback must return an object")
                     error = None
                 except Exception as exc:  # recorded as evidence, never acceptance
-                    value, error = {}, f"{type(exc).__name__}: {str(exc)[:500]}"
+                    if (
+                        stage == "prepare"
+                        and round_deadline_exception is not None
+                        and isinstance(exc, round_deadline_exception)
+                    ):
+                        event = {
+                            "type": "round_deadline_exhausted",
+                            "reported_deadline": getattr(exc, "deadline", None),
+                            "remaining_seconds": getattr(exc, "remaining_seconds", None),
+                            "source_target": target,
+                        }
+                        if round_budget_event is None:
+                            round_budget_event = event
+                        value, error = {"_round_deadline_exhausted": event}, None
+                    elif (
+                        stage == "prepare"
+                        and round_capacity_exception is not None
+                        and isinstance(exc, round_capacity_exception)
+                    ):
+                        throttle = getattr(exc, "throttle", None)
+                        resource_name = getattr(exc, "resource", None)
+                        observed_at = getattr(exc, "observed_at", None)
+                        reset_at = getattr(exc, "reset_at_epoch", None)
+                        evidence = {
+                            "github_capacity": {
+                                "throttle": throttle,
+                                "resource": resource_name,
+                                "observed_at": observed_at,
+                                "reset_at_epoch": reset_at,
+                            }
+                        }
+                        if _valid_github_capacity_evidence(evidence, now()):
+                            value, error = {"_round_capacity_deferred": evidence}, None
+                        else:
+                            value, error = {}, "RoundCapacityDeferred without valid SHED proof"
+                    else:
+                        value, error = {}, f"{type(exc).__name__}: {str(exc)[:500]}"
 
                 def finish(current: dict[str, Any], doc: dict[str, Any]) -> None:
                     item = current["targets"][target]
@@ -470,6 +595,33 @@ def run_pipeline(
                             status="deferred",
                             deferred_reason="deadline_exhausted",
                             deferred_next_trigger="next_round",
+                            resource_evidence={
+                                "type": "active_deadline",
+                                "deadline": float(run["deadline"]),
+                                "observed_at": now(),
+                            },
+                        )
+                        return
+                    if value.get("_round_deadline_exhausted"):
+                        item.update(
+                            status="queued",
+                            stage="prepare",
+                            error="typed_round_deadline_exhausted",
+                            round_budget_event=value["_round_deadline_exhausted"],
+                        )
+                        item["metrics"]["round_budget_exhaustions"] = (
+                            item["metrics"].get("round_budget_exhaustions", 0) + 1
+                        )
+                        return
+                    if value.get("_round_capacity_deferred"):
+                        evidence = value["_round_capacity_deferred"]
+                        capacity = evidence["github_capacity"]
+                        reset_at = float(capacity["reset_at_epoch"])
+                        item.update(
+                            status="deferred",
+                            deferred_reason="github_capacity",
+                            deferred_next_trigger=f"retry_after_github_reset:{reset_at:.3f}",
+                            resource_evidence=evidence,
                         )
                         return
                     if error:
@@ -722,15 +874,26 @@ def run_pipeline(
                     wait(tuple(futures), timeout=0.05, return_when=FIRST_COMPLETED)
                     continue
                 break
+            if round_budget_event is not None:
+                if futures:
+                    timeout = max(0.0, active_deadline - now())
+                    wait(
+                        tuple(futures),
+                        timeout=None if timeout == 0 else timeout,
+                        return_when=FIRST_COMPLETED,
+                    )
+                    continue
+                remaining = active_deadline - now()
+                if remaining > 0:
+                    time.sleep(remaining)
+                break
             # A target can have only one stage in flight. Fair round-robin order
             # rotates by target and stage age so slow early items do not block others.
             with _locked(path):
                 state = _load(path)
                 current = state["runs"][run_id]
                 rows = current["targets"]
-                base_order = sorted(
-                    rows, key=lambda t: (rows[t].get("last_scheduled", 0), t)
-                )
+                base_order = sorted(rows, key=lambda t: (rows[t].get("last_scheduled", 0), t))
                 io_prepare: list[str] = []
                 io_ready: list[str] = []
                 other_lanes: list[str] = []
@@ -915,10 +1078,39 @@ def run_pipeline(
         def exhaust(current: dict[str, Any], doc: dict[str, Any]) -> None:
             for item in current["targets"].values():
                 if item.get("status") == "queued":
-                    item["status"] = "deferred"
-                    item["deferred_reason"] = "deadline_exhausted"
+                    observed_at = now()
+                    event = item.pop("round_budget_event", None) or round_budget_event
+                    evidence: dict[str, Any] = {
+                        "type": "active_deadline",
+                        "deadline": float(run["deadline"]),
+                        "observed_at": observed_at,
+                    }
+                    if isinstance(event, Mapping):
+                        evidence = {
+                            "type": "round_deadline_exhausted",
+                            "deadline": float(run["deadline"]),
+                            "reported_deadline": event.get("reported_deadline"),
+                            "remaining_seconds": event.get("remaining_seconds"),
+                            "source_target": event.get("source_target"),
+                            "observed_at": observed_at,
+                        }
+                    item.update(
+                        status="deferred",
+                        deferred_reason="deadline_exhausted",
+                        deferred_next_trigger="next_round",
+                        resource_evidence=evidence,
+                    )
                 elif item.get("status") == "running":
-                    item["status"] = "uncertain" if item.get("stage") == "act" else "pending"
+                    if item.get("stage") in {"act", "reconcile"}:
+                        item.update(
+                            status="uncertain",
+                            deferred_next_trigger="reconcile_before_retry",
+                        )
+                    else:
+                        item.update(
+                            status="pending",
+                            deferred_next_trigger="next_round",
+                        )
 
         mutate(exhaust)
     finally:
@@ -1039,6 +1231,8 @@ def validate_stop(
         if status == "deferred" and item.get("deferred_reason") == "deadline_exhausted":
             if now() < float(deadline):
                 reasons.append(f"premature_deadline_deferral:{target}")
+            if not _valid_deadline_evidence(item.get("resource_evidence"), float(deadline), rows):
+                reasons.append(f"unverified_deadline_boundary:{target}")
             continue
         if status == "pending":
             pending_kind = item.get("pending_kind")
@@ -1084,11 +1278,16 @@ def validate_stop(
                 "repo_operation_running",
                 "receipt_reserve",
                 "pending_ci",
+                "github_capacity",
             }
             if reason not in allowed or not isinstance(trigger, str) or not trigger:
                 reasons.append(f"unverified_deferral:{target}")
             elif reason == "deadline_exhausted" and now() < float(deadline):
                 reasons.append(f"premature_deadline_deferral:{target}")
+            elif reason == "deadline_exhausted" and not _valid_deadline_evidence(
+                item.get("resource_evidence"), float(deadline), rows
+            ):
+                reasons.append(f"unverified_deadline_boundary:{target}")
             elif reason in {"claim_held"} and not (
                 isinstance(item.get("resource_evidence"), Mapping)
                 and item["resource_evidence"].get("holder")
@@ -1112,6 +1311,25 @@ def validate_stop(
                 item.get("resource_evidence")
             ):
                 reasons.append(f"unverified_provider_failure:{target}")
+            elif reason == "github_capacity" and not _valid_github_capacity_evidence(
+                item.get("resource_evidence"), now()
+            ):
+                reasons.append(f"unverified_github_capacity_deferral:{target}")
+            elif reason == "github_capacity":
+                evidence = item.get("resource_evidence")
+                capacity = (
+                    evidence.get("github_capacity") if isinstance(evidence, Mapping) else None
+                )
+                throttle = capacity.get("throttle") if isinstance(capacity, Mapping) else None
+                expected = (
+                    f"retry_after_github_reset:{float(capacity['reset_at_epoch']):.3f}"
+                    if isinstance(capacity, Mapping)
+                    and isinstance(capacity.get("reset_at_epoch"), (int, float))
+                    and isinstance(throttle, Mapping)
+                    else None
+                )
+                if trigger != expected:
+                    reasons.append(f"unmatched_github_capacity_trigger:{target}")
             continue
         reasons.append(f"invalid_target_status:{target}:{status}")
     if pending_targets and any(

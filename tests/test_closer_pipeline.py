@@ -8,6 +8,22 @@ import time
 from closer_pipeline import run_pipeline, validate_stop
 
 
+class FakeRoundDeadlineExhausted(TimeoutError):
+    def __init__(self, deadline: float, remaining_seconds: float):
+        super().__init__("round budget too close to launch read")
+        self.deadline = deadline
+        self.remaining_seconds = remaining_seconds
+
+
+class FakeRoundCapacityDeferred(RuntimeError):
+    def __init__(self, *, resource: str, throttle: dict, observed_at: float, reset_at_epoch: float):
+        super().__init__("GitHub capacity is shed")
+        self.resource = resource
+        self.throttle = throttle
+        self.observed_at = observed_at
+        self.reset_at_epoch = reset_at_epoch
+
+
 def callbacks(*, interpret=None, act=None, exception=None):
     def semantic_key(target):
         return "closer-evidence-semantic/v1:" + hashlib.sha256(target.encode()).hexdigest()
@@ -112,6 +128,40 @@ def test_changed_assignment_carries_unknown_action_for_reconciliation(tmp_path):
     assert receipt["assignment"] == ["b"]
     assert "a" in receipt["carry_targets"]
     assert reconciled == ["a"] and acts == ["b"]
+
+
+def test_expired_uncertain_run_allows_new_round_read_only_reconciliation(tmp_path):
+    path = tmp_path / "state.json"
+    acts = []
+    first = run(
+        path,
+        ["a"],
+        callbacks(
+            act=lambda target, _ctx: acts.append(target)
+            or (_ for _ in ()).throw(RuntimeError("action response was lost"))
+        ),
+    )
+    assert first["targets"]["a"]["status"] == "uncertain"
+    doc = json.loads(path.read_text())
+    doc["runs"][first["run_id"]]["deadline"] = time.time() - 1
+    path.write_text(json.dumps(doc))
+
+    reconciled = []
+    resumed = run_pipeline(
+        path,
+        ["a"],
+        **callbacks(
+            act=lambda target, _ctx: acts.append(target)
+            or {"status": "completed", "target_complete": True}
+        ),
+        reconcile=lambda target, _ctx: reconciled.append(target)
+        or {"outcome": "confirmed_not_started"},
+        capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+        deadline=time.time() + 2,
+    )
+    assert reconciled == ["a"]
+    assert acts == ["a", "a"]
+    assert resumed["targets"]["a"]["status"] == "completed"
 
 
 def test_completed_generation_reuses_revision_bound_interpretation(tmp_path):
@@ -250,8 +300,12 @@ def test_io_single_slot_advances_ready_actions_before_full_queue_preparation(tmp
             time.sleep(0.004)
             with lock:
                 prepared += 1
-            return {"revision": target, "identity": target,
-                    "semantic_cache_key": "closer-evidence-semantic/v1:" + hashlib.sha256(target.encode()).hexdigest()}
+            return {
+                "revision": target,
+                "identity": target,
+                "semantic_cache_key": "closer-evidence-semantic/v1:"
+                + hashlib.sha256(target.encode()).hexdigest(),
+            }
         finally:
             leave_io()
 
@@ -269,9 +323,15 @@ def test_io_single_slot_advances_ready_actions_before_full_queue_preparation(tmp
 
     cb = callbacks(act=act)
     cb["prepare"] = prepare
-    receipt = run_pipeline(tmp_path / "state.json", targets, **cb,
-                           capacity_fn=lambda: {"io": 1, "low": 4, "exception": 1},
-                           deadline=time.time() + 10, max_io_workers=1, max_low_workers=4)
+    receipt = run_pipeline(
+        tmp_path / "state.json",
+        targets,
+        **cb,
+        capacity_fn=lambda: {"io": 1, "low": 4, "exception": 1},
+        deadline=time.time() + 10,
+        max_io_workers=1,
+        max_low_workers=4,
+    )
     assert prepared == len(targets) and acted == len(targets)
     assert early_actions, "ready actions waited for full-assignment preparation"
     assert max_io == 1
@@ -288,21 +348,34 @@ def test_io_four_slots_can_run_ready_action_while_preparations_are_active(tmp_pa
         if target != "t000":
             slow_prepares.set()
             assert action_started.wait(1)
-        return {"revision": target, "identity": target,
-                "semantic_cache_key": "closer-evidence-semantic/v1:" + hashlib.sha256(target.encode()).hexdigest()}
+        return {
+            "revision": target,
+            "identity": target,
+            "semantic_cache_key": "closer-evidence-semantic/v1:"
+            + hashlib.sha256(target.encode()).hexdigest(),
+        }
 
     cb["prepare"] = prepare
     cb["act"] = lambda target, context: action_started.set() or {
-        "status": "completed", "target_complete": True
+        "status": "completed",
+        "target_complete": True,
     }
     receipts = []
-    worker = threading.Thread(target=lambda: receipts.append(
-        run_pipeline(tmp_path / "state.json", targets, **cb,
-                     capacity_fn=lambda: {"io": 4, "low": 2, "exception": 1},
-                     deadline=time.time() + 3, max_io_workers=4)))
+    worker = threading.Thread(
+        target=lambda: receipts.append(
+            run_pipeline(
+                tmp_path / "state.json",
+                targets,
+                **cb,
+                capacity_fn=lambda: {"io": 4, "low": 2, "exception": 1},
+                deadline=time.time() + 3,
+                max_io_workers=4,
+            )
+        )
+    )
     worker.start()
-    assert slow_prepares.wait(.5)
-    assert action_started.wait(.75), "ready action failed to use the fourth IO slot"
+    assert slow_prepares.wait(0.5)
+    assert action_started.wait(0.75), "ready action failed to use the fourth IO slot"
     worker.join(3)
     assert not worker.is_alive()
     assert all(row["status"] == "completed" for row in receipts[0]["targets"].values())
@@ -433,9 +506,12 @@ def test_provider_failure_defers_without_strong_or_action_and_requires_evidence(
         "evidence_hash": "evidence-sha256",
     }
     cb = callbacks(
-        interpret=lambda t, c: {"status": "deferred", "reason": "provider_failure",
-                                "next_trigger": "retry_profile_later",
-                                "resource_evidence": {"provider_failure": failure}},
+        interpret=lambda t, c: {
+            "status": "deferred",
+            "reason": "provider_failure",
+            "next_trigger": "retry_profile_later",
+            "resource_evidence": {"provider_failure": failure},
+        },
         exception=lambda t, c: calls.append("exception") or {"reviewed": True},
         act=lambda t, c: calls.append("act") or {"status": "completed", "target_complete": True},
     )
@@ -446,9 +522,12 @@ def test_provider_failure_defers_without_strong_or_action_and_requires_evidence(
 
     path2 = tmp_path / "invalid.json"
     bad = dict(failure, evidence_hash="")
-    cb["interpret"] = lambda t, c: {"status": "deferred", "reason": "provider_failure",
-                                    "next_trigger": "retry_profile_later",
-                                    "resource_evidence": {"provider_failure": bad}}
+    cb["interpret"] = lambda t, c: {
+        "status": "deferred",
+        "reason": "provider_failure",
+        "next_trigger": "retry_profile_later",
+        "resource_evidence": {"provider_failure": bad},
+    }
     invalid = run(path2, ["a"], cb)
     assert invalid["targets"]["a"]["status"] == "failed"
     assert not validate_stop(path2, ["a"])["valid"]
@@ -457,12 +536,22 @@ def test_provider_failure_defers_without_strong_or_action_and_requires_evidence(
 def test_exception_worker_capacity_defers_before_action(tmp_path):
     path = tmp_path / "state.json"
     calls = []
+    sampled_at = time.time()
     cb = callbacks(
         interpret=lambda t, c: {"substantive_needs": ["needs strong review"]},
-        exception=lambda t, c: {"status": "deferred", "reason": "worker_capacity",
-                                "next_trigger": "codex_pool_frees",
-                                "resource_evidence": {"capacity": {
-                                    "lane": "exception", "active": 1, "limit": 1}}},
+        exception=lambda t, c: {
+            "status": "deferred",
+            "reason": "worker_capacity",
+            "next_trigger": "codex_pool_frees",
+            "resource_evidence": {
+                "capacity": {
+                    "lane": "exception",
+                    "active": 1,
+                    "limit": 1,
+                    "sampled_at": sampled_at,
+                }
+            },
+        },
         act=lambda t, c: calls.append(t) or {"status": "completed", "target_complete": True},
     )
     receipt = run(path, ["a"], cb)
@@ -470,10 +559,14 @@ def test_exception_worker_capacity_defers_before_action(tmp_path):
     assert receipt["targets"]["a"]["deferred_reason"] == "worker_capacity"
     assert calls == []
     assert validate_stop(path, ["a"])["valid"]
+    assert not validate_stop(path, ["a"], now=lambda: sampled_at + 1801)["valid"]
 
-    cb["exception"] = lambda t, c: {"status": "deferred", "reason": "worker_capacity",
-                                    "next_trigger": "codex_pool_frees",
-                                    "resource_evidence": {"capacity": {"lane": "exception"}}}
+    cb["exception"] = lambda t, c: {
+        "status": "deferred",
+        "reason": "worker_capacity",
+        "next_trigger": "codex_pool_frees",
+        "resource_evidence": {"capacity": {"lane": "exception"}},
+    }
     invalid = run(tmp_path / "missing-proof.json", ["a"], cb)
     assert invalid["targets"]["a"]["status"] == "failed"
     assert not validate_stop(tmp_path / "missing-proof.json", ["a"])["valid"]
@@ -584,6 +677,215 @@ def test_deadline_joins_inflight_callback_and_blocks_late_submissions(tmp_path):
     # The first round cannot submit the queued target's callback after cutoff.
     assert all(started_at < deadline for _, started_at in starts)
     assert [target for target, _ in starts] == ["a"]
+
+
+def test_typed_prepare_exhaustion_waits_for_cutoff_and_defers_unstarted_targets(tmp_path):
+    path = tmp_path / "pipeline.json"
+    starts = []
+    deadline = time.time() + 0.25
+    cb = callbacks()
+
+    def prepare(target, context):
+        starts.append(target)
+        time.sleep(max(0.0, deadline + 0.02 - time.time()))
+        remaining = deadline - time.time()
+        raise FakeRoundDeadlineExhausted(deadline, remaining)
+
+    cb["prepare"] = prepare
+    began = time.time()
+    receipt = run_pipeline(
+        path,
+        ["a", "b", "c"],
+        **cb,
+        capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+        deadline=deadline,
+        max_io_workers=1,
+        round_deadline_exception=FakeRoundDeadlineExhausted,
+    )
+    assert time.time() >= deadline
+    assert receipt["elapsed_seconds"] >= deadline - began
+    assert starts == ["a"], "typed read-budget exhaustion must stop further IO submissions"
+    assert all(row["status"] == "deferred" for row in receipt["targets"].values())
+    for row in receipt["targets"].values():
+        assert row["deferred_reason"] == "deadline_exhausted"
+        evidence = row["resource_evidence"]
+        assert evidence["type"] == "round_deadline_exhausted"
+        assert evidence["source_target"] == "a"
+        assert evidence["reported_deadline"] == deadline
+        assert evidence["remaining_seconds"] < 0
+    result = validate_stop(path, ["a", "b", "c"], now=lambda: deadline + 0.001)
+    assert result["valid"]
+
+
+def test_typed_deadline_error_from_act_remains_uncertain(tmp_path):
+    path = tmp_path / "pipeline.json"
+    deadline = time.time() + 3
+    cb = callbacks(
+        act=lambda _target, _context: (_ for _ in ()).throw(
+            FakeRoundDeadlineExhausted(deadline, 0.5)
+        )
+    )
+    receipt = run_pipeline(
+        path,
+        ["a"],
+        **cb,
+        capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+        deadline=deadline,
+        round_deadline_exception=FakeRoundDeadlineExhausted,
+    )
+    assert receipt["targets"]["a"]["status"] == "uncertain"
+    assert receipt["targets"]["a"]["deferred_next_trigger"] == "reconcile_before_retry"
+    assert not validate_stop(path, ["a"])["valid"]
+
+
+def test_typed_github_capacity_deferral_is_validated_read_only_prepare_boundary(tmp_path):
+    path = tmp_path / "pipeline.json"
+    observed_at = time.time()
+    reset_in = 4200
+    reset_at = observed_at + reset_in
+    throttle = {
+        "resource": "core",
+        "state": "shed",
+        "action": "defer",
+        "remaining": 50,
+        "limit": 5000,
+        "reset_in_s": reset_in,
+        "source": "call",
+        "reason": "50/5000 remaining; defer to reset",
+    }
+    calls = []
+    cb = callbacks()
+
+    def prepare(target, _context):
+        calls.append(target)
+        raise FakeRoundCapacityDeferred(
+            resource="core",
+            throttle=throttle,
+            observed_at=observed_at,
+            reset_at_epoch=reset_at,
+        )
+
+    cb["prepare"] = prepare
+    receipt = run_pipeline(
+        path,
+        ["a"],
+        **cb,
+        capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+        deadline=time.time() + 3,
+        round_capacity_exception=FakeRoundCapacityDeferred,
+    )
+    row = receipt["targets"]["a"]
+    assert calls == ["a"]
+    assert row["status"] == "deferred"
+    assert row["deferred_reason"] == "github_capacity"
+    assert row["resource_evidence"]["github_capacity"]["throttle"] == throttle
+    assert row["deferred_next_trigger"] == f"retry_after_github_reset:{reset_at:.3f}"
+    assert validate_stop(path, ["a"])["valid"]
+
+
+def test_typed_github_capacity_error_from_act_is_uncertain(tmp_path):
+    path = tmp_path / "pipeline.json"
+    observed_at = time.time()
+    throttle = {
+        "resource": "core",
+        "state": "shed",
+        "action": "defer",
+        "remaining": 50,
+        "limit": 5000,
+        "reset_in_s": 4200,
+        "source": "call",
+        "reason": "reserve reached",
+    }
+    cb = callbacks(
+        act=lambda _target, _context: (_ for _ in ()).throw(
+            FakeRoundCapacityDeferred(
+                resource="core",
+                throttle=throttle,
+                observed_at=observed_at,
+                reset_at_epoch=observed_at + 4200,
+            )
+        )
+    )
+    receipt = run_pipeline(
+        path,
+        ["a"],
+        **cb,
+        capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+        deadline=time.time() + 2,
+        round_capacity_exception=FakeRoundCapacityDeferred,
+    )
+    assert receipt["targets"]["a"]["status"] == "uncertain"
+    assert receipt["targets"]["a"]["deferred_next_trigger"] == "reconcile_before_retry"
+    assert not validate_stop(path, ["a"])["valid"]
+
+
+def test_stale_capacity_proof_validates_historical_stop_then_rechecks(tmp_path):
+    path = tmp_path / "pipeline.json"
+    observed_at = time.time()
+    reset_in = 4200
+    reset_at = observed_at + reset_in
+    throttle = {
+        "resource": "core",
+        "state": "shed",
+        "action": "defer",
+        "remaining": 50,
+        "limit": 5000,
+        "reset_in_s": reset_in,
+        "source": "call",
+        "reason": "reserve reached",
+    }
+    first_callbacks = callbacks()
+    first_callbacks["prepare"] = lambda *_: (_ for _ in ()).throw(
+        FakeRoundCapacityDeferred(
+            resource="core",
+            throttle=throttle,
+            observed_at=observed_at,
+            reset_at_epoch=reset_at,
+        )
+    )
+    first = run_pipeline(
+        path,
+        ["a"],
+        **first_callbacks,
+        capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+        deadline=time.time() + 3,
+        round_capacity_exception=FakeRoundCapacityDeferred,
+    )
+
+    # Simulate a cadence after one hour. The reset proof was valid when the
+    # first receipt completed, but is deliberately too old for current admission.
+    old_observed_at = time.time() - 3600
+    old_reset_at = old_observed_at + reset_in
+    doc = json.loads(path.read_text())
+    prior = doc["runs"][first["run_id"]]
+    prior["deadline"] = old_observed_at + 60
+    prior["receipt_summary"]["finished_at"] = old_observed_at + 5
+    row = prior["targets"]["a"]
+    capacity = row["resource_evidence"]["github_capacity"]
+    capacity["observed_at"] = old_observed_at
+    capacity["reset_at_epoch"] = old_reset_at
+    capacity["throttle"]["reset_in_s"] = reset_in
+    row["deferred_next_trigger"] = f"retry_after_github_reset:{old_reset_at:.3f}"
+    doc["carry"]["a"]["resource_evidence"] = row["resource_evidence"]
+    doc["carry"]["a"]["deferred_next_trigger"] = row["deferred_next_trigger"]
+    path.write_text(json.dumps(doc))
+    assert not validate_stop(path, ["a"])["valid"], "stale proof cannot authorize current stop"
+
+    prepared = []
+    next_callbacks = callbacks()
+    next_callbacks["prepare"] = lambda target, _ctx: prepared.append(target) or {
+        "revision": "fresh-revision",
+        "identity": target,
+    }
+    resumed = run_pipeline(
+        path,
+        ["a"],
+        **next_callbacks,
+        capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+        deadline=time.time() + 3,
+    )
+    assert prepared == ["a"]
+    assert resumed["targets"]["a"]["status"] == "completed"
 
 
 def test_ambiguous_action_is_uncertain_and_never_replayed(tmp_path):
@@ -810,7 +1112,7 @@ def test_failed_low_provider_is_audited_deferral_not_exception_or_action(tmp_pat
             "run_id": "dispatch-run-89",
             "exit": 1,
             "category": "unsupported_model",
-                "evidence_hash": "provider-failure-sha256",
+            "evidence_hash": "provider-failure-sha256",
         }
     }
     callbacks = {
