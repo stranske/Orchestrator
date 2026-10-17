@@ -299,7 +299,16 @@ DURABILITY_DETECTION_SINCE = 1787961600  # 2026-08-29T00:00:00Z
 DURABILITY_DETECTION_SINCE_DATE = "2026-08-29"
 RELEARN_WINDOW_DAYS = 120
 
-MODEL_EPOCHS_PATH = Path(__file__).resolve().parent.parent / "config" / "model_epochs.json"
+def _model_epochs_path() -> Path:
+    """The repository layout keeps config/ beside src/; the flat exec mirror keeps it beside the modules."""
+    here = Path(__file__).resolve().parent
+    for candidate in (here / "config" / "model_epochs.json", here.parent / "config" / "model_epochs.json"):
+        if candidate.exists():
+            return candidate
+    return here.parent / "config" / "model_epochs.json"
+
+
+MODEL_EPOCHS_PATH = _model_epochs_path()
 
 
 def model_epoch_floor(agent: str, since: int, path: Path | None = None) -> int:
