@@ -12,14 +12,18 @@
 ## Status-driven local closer
 
 `closer_dispatcher.py` composes existing rails for the local closer lifecycle;
-`closer_queue.py` persists the assigned items and operation receipts. It inventories
-status, schedules bounded independent private work, collects results and continues
-other items while checks, review or verification wait. It is a deterministic
-coordinator, not a new agent role or a second demand scheduler. Existing claims
-serialize target/source/repository mutations across ledgers. Workers use existing
-`dispatcher.offload`; Luna extracts evidence and proposes findings, while the senior
-closer integrates original Tasks/AC evidence. Exact-head merge authority remains in
-`merge_guard`; native post-merge evidence remains in `verifier_evidence`.
+`closer_queue.py` persists guarded target actions. The staged production path adds
+`closer_evidence.py` incremental preparation and `closer_pipeline.py` durable
+completion-driven pools: fresh evidence preparation runs independently of CI
+status, router-selected low-effort workers classify current findings, and only
+explicit ambiguity or substantive/security/conflicting evidence enters the
+existing closer exception path. Per-target act callbacks immediately re-enter the
+existing queue with separate durable action ledgers. The pipeline is a deterministic
+coordinator, not a new agent role or demand scheduler. Claims serialize mutations;
+`acceptance_ok`, exact-head `merge_guard`, native `verifier_evidence`, verifier
+deduplication and the existing source-closure actor retain authority. Cheap output
+is advisory and cannot become a trusted disposition. A separate pipeline receipt
+preserves any legacy queue state during migration.
 
 Postrun validates assignment accounting and actual remaining budget before end-round
 or relay. No pass quota or one-complex-repository limit can authorize early stop.
