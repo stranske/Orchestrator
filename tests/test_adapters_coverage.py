@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import socket
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -12,8 +14,20 @@ import adapters
 def isolated_runtime(monkeypatch, tmp_path):
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
+    attempted = []
+
+    def forbid_external(*args, **kwargs):
+        attempted.append((args, kwargs))
+        pytest.fail("coverage test attempted an external process or network connection")
+
+    monkeypatch.setattr(subprocess, "run", forbid_external)
+    monkeypatch.setattr(subprocess, "Popen", forbid_external)
+    monkeypatch.setattr(socket, "socket", forbid_external)
+    monkeypatch.setattr(socket, "create_connection", forbid_external)
     monkeypatch.setattr(adapters, "AGENT_RUNTIME", tmp_path / "agent-runtime")
     monkeypatch.setattr(adapters, "_ADVERTISED_MEMO", {})
+    yield
+    assert attempted == []
 
 
 def test_env_int_and_codex_sandbox_override(monkeypatch):

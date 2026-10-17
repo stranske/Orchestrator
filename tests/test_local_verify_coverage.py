@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 import subprocess
 
 import pytest
@@ -11,6 +12,18 @@ import local_verify
 def isolated_runtime(monkeypatch, tmp_path):
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
+    attempted = []
+
+    def forbid_external(*args, **kwargs):
+        attempted.append((args, kwargs))
+        pytest.fail("coverage test attempted an external process or network connection")
+
+    monkeypatch.setattr(subprocess, "run", forbid_external)
+    monkeypatch.setattr(subprocess, "Popen", forbid_external)
+    monkeypatch.setattr(socket, "socket", forbid_external)
+    monkeypatch.setattr(socket, "create_connection", forbid_external)
+    yield
+    assert attempted == []
 
 
 def test_capture_evidence_contract_requires_the_local_hook(monkeypatch):
@@ -195,3 +208,7 @@ def test_changed_paths_and_candidate_copy_handle_rename_and_directories(monkeypa
         worktree, destination, ["tests/new.py", "missing.py"]
     ) == ["tests/new.py"]
     assert (destination / "tests" / "new.py").read_text() == "x = 1\n"
+    (worktree / "tests" / "nested").mkdir()
+    (worktree / "tests" / "nested" / "extra.py").write_text("nested = True\n")
+    assert local_verify._copy_candidate_paths(worktree, destination, ["tests"]) == ["tests"]
+    assert (destination / "tests" / "nested" / "extra.py").read_text() == "nested = True\n"
