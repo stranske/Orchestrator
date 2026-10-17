@@ -488,9 +488,9 @@ def test_publish_guard_refuses_empty_db(tmp_path, monkeypatch, capsys, exists, a
     assert f"db={database} source_version=0" in output.err
     assert "publish_guard refused: source_version == 0" in output.err
     assert database.exists() is exists, "read-only export must not create a missing DB"
-    assert heartbeats == [("route-weights-export", "invocation")], (
-        "publish_guard refusal must not record a successful publication"
-    )
+    assert (
+        heartbeats == [("route-weights-export", "invocation")]
+    ), "publish_guard refusal must not record a successful publication"
 
 
 def test_publish_guard_refuses_all_false_evidence(tmp_path):
