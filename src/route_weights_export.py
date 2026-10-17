@@ -309,8 +309,31 @@ def write_document(path: Path, document: dict[str, Any]) -> bool:
     return True
 
 
+def _validate_publication(document: dict[str, Any], existing: dict[str, Any] | None = None) -> None:
+    """A publisher needs local evidence; an empty runner must not erase the learner."""
+    version = document.get("source_version")
+    if not isinstance(version, int) or isinstance(version, bool) or version <= 0:
+        raise ValueError(
+            "refusing route publication: local route-weight evidence is missing or empty"
+        )
+
+    def populated(value: dict[str, Any]) -> bool:
+        tasks = value.get("task_types", {})
+        reserve = value.get("reserve", {})
+        return (
+            isinstance(tasks, dict)
+            and any(isinstance(row, dict) and row.get("ranking") for row in tasks.values())
+        ) or (isinstance(reserve, dict) and any(reserve.values()))
+
+    if existing is not None and populated(existing) and not populated(document):
+        raise ValueError(
+            "refusing route publication: empty rankings would erase published evidence"
+        )
+
+
 def publish_document(document: dict[str, Any]) -> bool:
     """Commit and push the export branch only when its remote artifact changes."""
+    _validate_publication(document)
     canonical = provision.ensure_canonical("stranske/Orchestrator")
     subprocess.run(["git", "-C", str(canonical), "fetch", "--prune", "origin"], check=True)
     remote_ref = f"origin/{EXPORT_BRANCH}"
@@ -352,6 +375,9 @@ def publish_document(document: dict[str, Any]) -> bool:
             ["git", "-C", str(canonical), "switch", "-c", EXPORT_BRANCH, "origin/main"], check=True
         )
     target = canonical / EXPORT_PATH
+    if target.exists():
+        existing = json.loads(target.read_text(encoding="utf-8"))
+        _validate_publication(document, existing if isinstance(existing, dict) else None)
     if not write_document(target, document):
         print("unchanged")
         return False
@@ -454,6 +480,15 @@ def _selftest() -> None:
             )
             is False
         )
+        # Publication must reject a missing evidence DB even when capacity is fresh.
+        empty = build_document(root / "missing.db", capacity_snapshot=capacity_snapshot)
+        try:
+            _validate_publication(empty)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("missing evidence must not publish")
+        _validate_publication(document, empty)
     print("route_weights_export.py selftest: OK")
 
 
