@@ -1,0 +1,138 @@
+FFFFF                                                                    [100%]
+=================================== FAILURES ===================================
+_______________ test_state_only_learner_writer_and_cli_share_db ________________
+
+tmp_path = PosixPath('LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2449/test_state_only_learner_writer0')
+
+    def test_state_only_learner_writer_and_cli_share_db(tmp_path):
+        """A new process must write and export the same Brain, independent of shadow destination."""
+        state = tmp_path / "instance"
+        output = tmp_path / "shadow"
+        home = tmp_path / "home"
+        home.mkdir()
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ORCH_")}
+        env.update(HOME=str(home), ORCH_STATE_DIR=str(state), PYTHONPATH=str(Path(export.__file__).parent))
+        script = '''
+    import json, sys
+    import feedback
+    import route_weights_export as export
+    with feedback._conn() as connection:
+        connection.execute("INSERT INTO route_weights "
+            "(version, task_type, agent, posterior, score, n_obs, success_rate) "
+            "VALUES (73, 'implement', 'codex', 0.9, 0.9, 25, 0.9)")
+    export._current_capacity_snapshot = lambda: {"generated_at": 100, "agents": {}}
+    export.capabilities.daily_heartbeat = lambda *a, **k: None
+    sys.argv = ["route_weights_export.py", "--state-dir", sys.argv[1]]
+    assert export.main() == 0
+    print(json.dumps({"writer": str(feedback.DB_PATH), "reader": str(feedback.resolve_db_path())}))
+    '''
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(output)],
+            env=env, capture_output=True, text=True, check=True,
+        )
+        expected = state / "feedback" / "orchestrator.db"
+        binding = json.loads(result.stdout.splitlines()[-1])
+>       assert binding == {"writer": str(expected), "reader": str(expected)}, "learner DB binding split"
+E       AssertionError: learner DB binding split
+E       assert {'writer': '/...hestrator.db'} == {'writer': '/...hestrator.db'}
+E
+E         Differing items:
+E         {'reader': 'LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2449/test_state_only_learner_writer0/home/.codex/orchestrator/feedback/orchestrator.db'} != {'reader': 'LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2449/test_state_only_learner_writer0/instance/feedback/orchestrator.db'}
+E         {'writer': 'LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2449/test_state_only_learner_writer0/home/.codex/orchestrator/feedback/orchestrator.db'} != {'writer': '/Use...
+E
+E         ...Full output truncated (2 lines hidden), use '-vv' to show
+
+tests/test_source660_reconciliation.py:42: AssertionError
+____________ test_partial_regression_never_ages_into_permission[0] _____________
+
+tmp_path = PosixPath('LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2449/test_partial_regression_never_0')
+age_hours = 0
+
+    @pytest.mark.parametrize("age_hours", [0, 24, 240])
+    def test_partial_regression_never_ages_into_permission(tmp_path, age_hours):
+        current = {"source_version": 73, "task_types": {"implement": {"evidence_ok": True}}}
+        previous = {"task_types": {"review": {"evidence_ok": True}}}
+        hold = tmp_path / "route-weights-regression-hold.json"
+        export.write_document(hold, {
+            "first_seen": export.dt.datetime.now(export.dt.timezone.utc).timestamp() - age_hours * 3600,
+            "task_types": ["review"], "reason": "fixture",
+        })
+>       with pytest.raises(export.PublicationRefused, match="--allow-evidence-regression"):
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: '--allow-evidence-regression'
+E         Actual message: 'publish_guard refused: evidence_ok true -> false for: review; refused: regressing_tasks=1, drainable_in=24h'
+
+tests/test_source660_reconciliation.py:59: AssertionError
+____________ test_partial_regression_never_ages_into_permission[24] ____________
+
+tmp_path = PosixPath('LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2449/test_partial_regression_never_1')
+age_hours = 24
+
+    @pytest.mark.parametrize("age_hours", [0, 24, 240])
+    def test_partial_regression_never_ages_into_permission(tmp_path, age_hours):
+        current = {"source_version": 73, "task_types": {"implement": {"evidence_ok": True}}}
+        previous = {"task_types": {"review": {"evidence_ok": True}}}
+        hold = tmp_path / "route-weights-regression-hold.json"
+        export.write_document(hold, {
+            "first_seen": export.dt.datetime.now(export.dt.timezone.utc).timestamp() - age_hours * 3600,
+            "task_types": ["review"], "reason": "fixture",
+        })
+>       with pytest.raises(export.PublicationRefused, match="--allow-evidence-regression"):
+E       Failed: DID NOT RAISE PublicationRefused
+
+tests/test_source660_reconciliation.py:59: Failed
+----------------------------- Captured stderr call -----------------------------
+evidence regression held 24h; publishing with evidence_ok=false for review
+___________ test_partial_regression_never_ages_into_permission[240] ____________
+
+tmp_path = PosixPath('LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2449/test_partial_regression_never_2')
+age_hours = 240
+
+    @pytest.mark.parametrize("age_hours", [0, 24, 240])
+    def test_partial_regression_never_ages_into_permission(tmp_path, age_hours):
+        current = {"source_version": 73, "task_types": {"implement": {"evidence_ok": True}}}
+        previous = {"task_types": {"review": {"evidence_ok": True}}}
+        hold = tmp_path / "route-weights-regression-hold.json"
+        export.write_document(hold, {
+            "first_seen": export.dt.datetime.now(export.dt.timezone.utc).timestamp() - age_hours * 3600,
+            "task_types": ["review"], "reason": "fixture",
+        })
+>       with pytest.raises(export.PublicationRefused, match="--allow-evidence-regression"):
+E       Failed: DID NOT RAISE PublicationRefused
+
+tests/test_source660_reconciliation.py:59: Failed
+----------------------------- Captured stderr call -----------------------------
+evidence regression held 240h; publishing with evidence_ok=false for review
+________________ test_cli_shadow_destination_does_not_select_db ________________
+
+tmp_path = PosixPath('LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2449/test_cli_shadow_destination_do0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1122d3800>
+capsys = <_pytest.capture.CaptureFixture object at 0x1122d3ec0>
+
+    def test_cli_shadow_destination_does_not_select_db(tmp_path, monkeypatch, capsys):
+        for name in ("ORCH_STATE_DIR", "ORCH_LOCAL_RUNTIME", export.feedback.DB_PATH_ENV):
+            monkeypatch.delenv(name, raising=False)
+        source = tmp_path / "selected.db"
+        export._fixture_db(source)
+        before = source.read_bytes()
+        output = tmp_path / "output"
+        monkeypatch.setattr(export.feedback, "DB_PATH", source)
+        monkeypatch.setattr(export, "_current_capacity_snapshot", lambda: {"generated_at": 100, "agents": {}})
+        monkeypatch.setattr(export.capabilities, "daily_heartbeat", lambda *a, **k: None)
+        monkeypatch.setattr(sys, "argv", ["export", "--state-dir", str(output)])
+        assert export.main() == 0
+>       assert json.loads((output / "route-weights-export.json").read_text())["source_version"] == 2
+E       assert 0 == 2
+
+tests/test_source660_reconciliation.py:77: AssertionError
+----------------------------- Captured stdout call -----------------------------
+wrote LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2449/test_cli_shadow_destination_do0/output/route-weights-export.json
+----------------------------- Captured stderr call -----------------------------
+db=LOCAL_HOME/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2449/test_cli_shadow_destination_do0/output/feedback/orchestrator.db source_version=0
+=========================== short test summary info ============================
+FAILED tests/test_source660_reconciliation.py::test_state_only_learner_writer_and_cli_share_db
+FAILED tests/test_source660_reconciliation.py::test_partial_regression_never_ages_into_permission[0]
+FAILED tests/test_source660_reconciliation.py::test_partial_regression_never_ages_into_permission[24]
+FAILED tests/test_source660_reconciliation.py::test_partial_regression_never_ages_into_permission[240]
+FAILED tests/test_source660_reconciliation.py::test_cli_shadow_destination_does_not_select_db
+5 failed in 4.11s

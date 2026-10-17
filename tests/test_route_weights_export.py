@@ -577,7 +577,7 @@ def test_publish_guard_preserves_remote_until_explicit_override(
         export.write_document(
             hold_path,
             {
-                "first_seen": 200000 - export.EVIDENCE_REGRESSION_HOLD_HOURS * 3600,
+                "first_seen": 200000 - 24 * 3600,
                 "task_types": export._regressing_tasks(document, previous),
                 "reason": "fixture evidence loss",
             },
@@ -595,7 +595,7 @@ def test_publish_guard_preserves_remote_until_explicit_override(
         str(tmp_path / "state"),
     ]
     monkeypatch.setattr("sys.argv", argv + (["--allow-evidence-regression"] if allow else []))
-    allowed = regression == "capacity-only" or ((allow or aged) and regression == "lost-review")
+    allowed = regression == "capacity-only" or (allow and regression == "lost-review")
     assert export.main() == (0 if allowed else 1)
     after_head = git(remote, "rev-parse", export.EXPORT_BRANCH)
     output = capsys.readouterr()
@@ -613,10 +613,6 @@ def test_publish_guard_preserves_remote_until_explicit_override(
             assert not hold_path.exists(), "evidence recovery clears the hold"
         elif allow:
             assert "override --allow-evidence-regression" in output.err
-        else:
-            assert (
-                "evidence regression held 24h; publishing with evidence_ok=false for review"
-            ) in output.err
     else:
         assert after_head == before_head, "publish_guard must leave the remote untouched"
         assert target.read_bytes() == before_bytes, "publish_guard must preserve publication bytes"
@@ -625,10 +621,10 @@ def test_publish_guard_preserves_remote_until_explicit_override(
         assert "refused: regressing_tasks=" in output.err
         assert "drainable_in=" in output.err
         if regression == "lost-review":
-            assert "regressing_tasks=1, drainable_in=24h" in output.err
+            assert "regressing_tasks=1, drainable_in=infiniteh" in output.err
             hold = json.loads(hold_path.read_text())
             assert hold == {
-                "first_seen": 200000,
+                "first_seen": 200000 - (24 * 3600 if aged else 0),
                 "task_types": ["review"],
                 "reason": "evidence_ok true -> false for: review",
             }
@@ -653,7 +649,6 @@ def test_feedback_db_path_binding(tmp_path, monkeypatch, capsys, selection):
         expected = state / "feedback" / "orchestrator.db"
     if selection == "cli-state":
         argv += ["--state-dir", str(tmp_path / "cli-state")]
-        expected = tmp_path / "cli-state" / "feedback" / "orchestrator.db"
     if selection in ("runtime", "env-db", "cli-db"):
         monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(runtime))
         expected = runtime / "feedback" / "orchestrator.db"
@@ -816,7 +811,7 @@ def test_validation_without_state_dir_preserves_live_hold(tmp_path, monkeypatch,
     previous = json.loads(json.dumps(document))
     if regressing:
         previous["task_types"]["review"] = {"evidence_ok": True}
-        with pytest.raises(export.PublicationRefused, match="drainable_in=24h"):
+        with pytest.raises(export.PublicationRefused, match="drainable_in=infiniteh"):
             export._validate_publication(document, previous)
     else:
         export._validate_publication(document, previous)

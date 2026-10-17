@@ -35,7 +35,6 @@ CAPACITY_SCHEMA = "orchestrator.route-weights-capacity/v1"
 DEFAULT_MIN_OBSERVATIONS = 20
 EXPORT_BRANCH = "exports/route-weights"
 EXPORT_PATH = Path("config/route-weights.json")
-EVIDENCE_REGRESSION_HOLD_HOURS = 24
 WEEK_SECONDS = 7 * 86400
 # This is intentionally smaller than ROUTE_TABLE.  It is the contract that the
 # Workflows keepalive policy may act on; adding a router task type here is an
@@ -108,8 +107,6 @@ def _require_publishable(
 ) -> None:
     ok, reason = publish_guard(document, published)
     lost = _regressing_tasks(document, published)
-    remaining = float(EVIDENCE_REGRESSION_HOLD_HOURS)
-    elapsed = 0.0
     # Pure validation must never read, reset, or create the live publication latch.
     hold_path = state_dir / "route-weights-regression-hold.json" if state_dir is not None else None
     if published is not None and hold_path is not None:
@@ -122,8 +119,6 @@ def _require_publishable(
                     first_seen = now
             except (OSError, ValueError, KeyError, TypeError):
                 first_seen = now
-            elapsed = (now - first_seen) / 3600
-            remaining = max(0.0, EVIDENCE_REGRESSION_HOLD_HOURS - elapsed)
             write_document(
                 hold_path, {"first_seen": first_seen, "task_types": lost, "reason": reason}
             )
@@ -135,16 +130,13 @@ def _require_publishable(
     absolute = not publish_guard(document, None)[0]
     if not absolute and allow_evidence_regression:
         print(f"publish_guard override --allow-evidence-regression: {reason}", file=sys.stderr)
+        if hold_path is not None:
+            hold_path.unlink(missing_ok=True)
         return
-    if not absolute and lost and remaining == 0:
-        print(
-            f"evidence regression held {elapsed:g}h; publishing with evidence_ok=false for {', '.join(lost)}",
-            file=sys.stderr,
-        )
-        return
-    drain = "infinite" if absolute else f"{remaining:g}"
+    override = "" if absolute else "; explicit --allow-evidence-regression required"
     raise PublicationRefused(
-        f"publish_guard refused: {reason}; refused: regressing_tasks={len(lost)}, drainable_in={drain}h"
+        f"publish_guard refused: {reason}; refused: regressing_tasks={len(lost)}, "
+        f"drainable_in=infiniteh{override}"
     )
 
 
@@ -528,7 +520,7 @@ def publish_document(
         ).stdout.strip()
         or "orchestrator-export"
     )
-    resolved_db = feedback.resolve_db_path(db_path, state_dir)
+    resolved_db = feedback.resolve_db_path(db_path)
     message = (
         f"chore: export route weights (db={resolved_db} "
         f"source_version={document['source_version']} by={identity})"
@@ -638,14 +630,14 @@ def _selftest() -> None:
         else:
             raise AssertionError("missing evidence must not publish")
         _require_publishable(document, empty, state_dir=root)
-        # A partial regression holds, ages while closed, and drains at the same threshold.
+        # A partial regression never ages into permission; only explicit override releases it.
         previous = json.loads(json.dumps(document))
         previous["task_types"]["review"]["evidence_ok"] = True
         hold_path = root / "route-weights-regression-hold.json"
         try:
             _require_publishable(document, previous, state_dir=root)
         except PublicationRefused as exc:
-            assert "regressing_tasks=1, drainable_in=24h" in str(exc), exc
+            assert "regressing_tasks=1, drainable_in=infiniteh" in str(exc), exc
         else:
             raise AssertionError("fresh regression must hold")
         hold = json.loads(hold_path.read_text())
@@ -657,9 +649,14 @@ def _selftest() -> None:
         else:
             raise AssertionError("repeated regression must still hold")
         assert json.loads(hold_path.read_text())["first_seen"] == first_seen
-        hold["first_seen"] -= EVIDENCE_REGRESSION_HOLD_HOURS * 3600
+        hold["first_seen"] -= 240 * 3600
         write_document(hold_path, hold)
-        _require_publishable(document, previous, state_dir=root)
+        try:
+            _require_publishable(document, previous, state_dir=root)
+        except PublicationRefused as exc:
+            assert "--allow-evidence-regression required" in str(exc), exc
+        else:
+            raise AssertionError("aged partial regression requires explicit override")
         assert json.loads(hold_path.read_text())["first_seen"] == hold["first_seen"]
         _require_publishable(previous, previous, state_dir=root)
         assert not hold_path.exists(), "evidence recovery must clear the hold"
@@ -671,6 +668,7 @@ def _selftest() -> None:
         else:
             raise AssertionError("fresh partial regression must hold without override")
         _require_publishable(document, previous, allow_evidence_regression=True, state_dir=root)
+        assert not hold_path.exists(), "explicit override clears the hold"
         try:
             _require_publishable(empty, previous, allow_evidence_regression=True, state_dir=root)
         except PublicationRefused as exc:
@@ -715,7 +713,7 @@ def main() -> int:
     if args.selftest:
         _selftest()
         return 0
-    db_path = feedback.resolve_db_path(args.feedback_db, args.state_dir)
+    db_path = feedback.resolve_db_path(args.feedback_db)
     document = build_document(db_path, args.min_observations)
     # Credit INVOCATION only after the document builds; `success` below records publication's
     # result. A success alone moves `last_success` only, so this daily step exported every day from

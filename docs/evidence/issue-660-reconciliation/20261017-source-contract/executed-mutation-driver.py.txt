@@ -1,0 +1,33 @@
+import ast,hashlib,json,os,pathlib,shutil,subprocess,sys
+repo=pathlib.Path('REPOSITORY_ROOT')
+root=pathlib.Path('EVIDENCE_ROOT');mirror=root/'mutation-final-checkout';mirror.mkdir()
+shutil.copytree(repo/'src',mirror/'src',ignore=shutil.ignore_patterns('__pycache__'))
+shutil.copytree(repo/'tests',mirror/'tests',ignore=shutil.ignore_patterns('__pycache__'))
+shutil.copy2(repo/'pyproject.toml',mirror/'pyproject.toml')
+env=dict(os.environ,ORCH_STATE_DIR=str(root/'proof-state'),ORCH_LOCAL_RUNTIME=str(root/'proof-runtime'),ORCH_MODEL_PROBE='0',HOME=str(root/'home'))
+records=[]
+def run(label,node):
+ label='final-'+label
+ argv=[sys.executable,'-m','pytest','-q',node,f'--junitxml={root}/raw/{label}.xml']
+ p=subprocess.run(argv,cwd=mirror,env=env,capture_output=True,text=True)
+ (root/'raw'/f'{label}.log').write_text(p.stdout+p.stderr)
+ records.append({'label':label,'argv':argv,'cwd':str(mirror),'exit':p.returncode,'source_sha256':{str(q.relative_to(mirror)):hashlib.sha256(q.read_bytes()).hexdigest() for q in [mirror/'src/feedback.py',mirror/'src/route_weights_export.py']}})
+ return p.returncode
+nodes={'guard':'tests/test_route_weights_export.py::test_publish_guard_refuses_empty_db[default-empty-db]','db':'tests/test_source660_reconciliation.py::test_state_only_learner_writer_and_cli_share_db'}
+for key,node in nodes.items():
+ p=mirror/('src/route_weights_export.py' if key=='guard' else 'src/feedback.py');original=p.read_bytes();assert original==(repo/p.relative_to(mirror)).read_bytes()
+ assert run(f'{key}-green-before',node)==0
+ try:
+  text=original.decode()
+  if key=='guard':
+   fn=next(x for x in ast.parse(text).body if isinstance(x,ast.FunctionDef) and x.name=='publish_guard');lines=text.splitlines(keepends=True);lines.insert(fn.body[0].lineno-1,'    return True, ""  # deliberate production guard bypass\n');p.write_text(''.join(lines))
+  else:
+   assert text.count('DB_PATH = DB_PATH if os.environ.get(DB_PATH_ENV) else resolve_db_path()')==1
+   p.write_text(text.replace('DB_PATH = DB_PATH if os.environ.get(DB_PATH_ENV) else resolve_db_path()','# deliberate learner DB binding disconnection'))
+  assert run(f'{key}-red',node)!=0
+ finally:p.write_bytes(original)
+ assert p.read_bytes()==original
+ assert run(f'{key}-restored-green',node)==0
+records.append({'restoration':'byte-identical to working production sources','guard_and_db':'both named regressions fail on production disconnection and pass restored'})
+(root/'raw/mutation-final-bindings.json').write_text(json.dumps(records,indent=2)+'\n')
+print(json.dumps(records,indent=2))

@@ -426,17 +426,15 @@ Live execution is observable only after the normal manual mirror sync.
   `observed_at` alone); unset, it stays a shadow local artifact. Every run logs
   `db=<resolved path> source_version=<n>`. DB precedence is `--feedback-db`,
   `ORCH_FEEDBACK_DB`, `ORCH_LOCAL_RUNTIME/feedback/orchestrator.db`, then
-  `--state-dir` / `ORCH_STATE_DIR` plus `feedback/orchestrator.db`, otherwise
-  feedback.py's shared default (`~/.codex/orchestrator/feedback/orchestrator.db`).
-  Version zero and all-false evidence always refuse publication, including with
-  `--allow-evidence-regression`. Per-task evidence loss is held in local
-  `route-weights-regression-hold.json` for `EVIDENCE_REGRESSION_HOLD_HOURS` (24 hours).
-  Time advances while closed; evidence recovery clears the hold, and a changed
-  regressing task set restarts it. After the hold, a still-evidenced document can
-  publish with a logged downgrade; the flag explicitly bypasses only this hold.
-  Capacity-only changes with identical `task_types` publish with that evidence
-  unchanged. Every refusal prints `regressing_tasks` and `drainable_in` (infinite
-  for absolute refusals). Publish commits record resolved DB, version and identity.
+  `ORCH_STATE_DIR/feedback/orchestrator.db`, otherwise feedback.py's shared default
+  (`~/.codex/orchestrator/feedback/orchestrator.db`). Learner and exporter share instance selection;
+  `--state-dir` selects only shadow output and diagnostics. Export reads never create/migrate a DB.
+  Version zero/invalid and all-false evidence always refuse publication, including with
+  `--allow-evidence-regression`. Per-task evidence loss requires this explicit override regardless
+  of elapsed time. `route-weights-regression-hold.json` records refusal diagnostics; recovery or
+  an explicit partial override clears it. Capacity-only changes with identical `task_types`
+  publish with that evidence unchanged. Refusals print `regressing_tasks`, infinite `drainable_in`
+  and the required flag for partial loss. Publish commits record resolved DB, version and identity.
 - **judge_reliability.py** — leave-one-out consensus weights per judge (de-saturated so real error
   spread maps to real weight spread); **human_calibration.py** + **objective_anchor.py** supply
   machine ground-truth anchors (no owner code-review required — see CLAUDE.md).

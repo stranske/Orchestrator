@@ -1,0 +1,40 @@
+{
+  "admitted_head": "3439483f60151bfefbdb7d2c41bc99807f305516",
+  "failed": [
+    "tests.test_build_exec_mirror::test_the_documented_copier_builds_through_the_builder",
+    "tests.test_build_exec_mirror::test_the_390_guard_composes_with_the_documented_copier",
+    "tests.test_build_exec_mirror::test_presync_says_whether_ci_verified_the_shipped_tree[documented]",
+    "tests.test_build_exec_mirror::test_presync_says_whether_ci_verified_the_shipped_tree[drifted]",
+    "tests.test_model_tier_resolution::test_auth_failure_is_detected",
+    "tests.test_model_tier_resolution::test_auth_ok_when_probe_succeeds",
+    "tests.test_model_tier_resolution::test_exit_zero_but_failed_is_still_a_failure",
+    "tests.test_model_tier_resolution::test_status_style_not_logged_in_is_caught",
+    "tests.test_model_tier_resolution::test_presence_probe_still_detects_a_missing_credential",
+    "tests.test_model_tier_resolution::test_presence_pass_is_not_reported_as_verified",
+    "tests.test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests::test_backslash",
+    "tests.test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests::test_combined",
+    "tests.test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests::test_quote",
+    "tests.test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests::test_regex_metacharacters",
+    "tests.test_tick_watchdog::test_a_stuck_tick_is_reported_with_the_kill_that_frees_it",
+    "tests.test_tick_watchdog::test_the_process_table_keeps_whole_command_lines",
+    "tests.test_tick_watchdog::test_the_drained_line_is_reachable_and_exact",
+    "tests.test_tick_watchdog::test_a_tick_that_reaches_no_cadence_step_alerts",
+    "tests.test_tick_watchdog::test_a_previous_tick_that_left_no_end_is_unknown_and_kept",
+    "tests.test_tick_watchdog::test_an_unreadable_record_is_unknown_not_clean",
+    "tests.test_tick_watchdog::test_the_arming_block_as_written_arms_and_records_the_tick",
+    "tests.test_tick_watchdog::test_fleet_summary_carries_the_tick_record",
+    "tests.test_tick_watchdog::test_a_drain_whose_target_has_exited_is_never_advertised",
+    "tests.test_tick_watchdog::test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming"
+  ],
+  "passed": [
+    "tests.test_verify_private_state::test_a_child_of_the_run_reads_the_copy"
+  ],
+  "failed_count": 24,
+  "passed_count": 1,
+  "scope": "only failures from first full run replayed; not a baseline full-suite claim",
+  "selftest_baselines": {
+    "adapters": 1,
+    "dispatcher": 1,
+    "tick_watchdog": 1
+  }
+}

@@ -57,25 +57,26 @@ commit. Disable its daily shadow cadence with `ORCH_DISABLE_STEPS=route-weights-
 
 The exporter uses `feedback.resolve_db_path()` and logs `db=<absolute path> source_version=<n>`
 before writing the shadow artifact. Selection precedence is `--feedback-db`, `ORCH_FEEDBACK_DB`,
-`ORCH_LOCAL_RUNTIME/feedback/orchestrator.db`, then the state-directory fallback
-(`--state-dir` or `ORCH_STATE_DIR`), and finally `feedback.DB_PATH`.
+`ORCH_LOCAL_RUNTIME/feedback/orchestrator.db`, `ORCH_STATE_DIR/feedback/orchestrator.db`, then
+`feedback.DB_PATH` (normally `~/.codex/orchestrator/feedback/orchestrator.db`). The learner binds
+its `DB_PATH` through that same resolver at import; in-process private-store patches remain supported.
+CLI `--state-dir` controls only the shadow output and local refusal diagnostics, never the evidence
+source. Readers never create databases or migrate schema.
 
-Before publication, `publish_guard()` absolutely rejects source version zero/invalid
-and all-false task evidence. No age or override permits these sources. Partial
-true-to-false/missing task regressions are compared against the fetched publication,
-so a changed local shadow cannot hide a regression. They are recorded locally in
-`route-weights-regression-hold.json` (`first_seen`, `task_types`, `reason`) and refused
-until `EVIDENCE_REGRESSION_HOLD_HOURS` (24) has elapsed. Time drains the hold while
-publication is closed; recovery clears it, and a changed regressing task set restarts it.
+Before publication, `publish_guard()` absolutely rejects source version zero/invalid and all-false
+task evidence, even with the override. Partial true-to-false/missing task regressions are compared
+against the fetched publication, so a changed local shadow cannot hide a regression. They require
+an explicit `--allow-evidence-regression`, regardless of elapsed time. No timed release is authorized
+by source660. The local `route-weights-regression-hold.json` retains `first_seen`, `task_types` and
+`reason` for diagnostics only; recovery or an explicit partial override clears it. A changed task
+set restarts its timestamp. Pure validation without a state directory never touches a hold file.
 Capacity-only changes with identical `task_types` publish with that evidence unchanged.
 
 Refusals exit non-zero and leave the remote untouched; cadence logs the reason plus
-`refused: regressing_tasks=<n>, drainable_in=<h>h` (absolute refusals use `infiniteh`).
-On drain, the exporter logs `evidence regression held <h>h; publishing with evidence_ok=false for <tasks>`.
-`--allow-evidence-regression` bypasses only partial regression holds and logs the reason.
-Publish commits record `db=<resolved path> source_version=<n> by=<git user.name>`,
-with `orchestrator-export` as the identity fallback. The local shadow remains available
-for diagnosis even when publication is refused.
+`refused: regressing_tasks=<n>, drainable_in=infiniteh`. Partial refusals name the required override.
+`--allow-evidence-regression` logs the deliberate partial downgrade and never bypasses absolute
+refusals. Publish commits record `db=<resolved path> source_version=<n> by=<git user.name>`,
+with `orchestrator-export` as the identity fallback. The local shadow remains available for diagnosis.
 
 The additive `exploration` block carries the weekly mode, sampled challengers, and a
 `policy_version` identifying the exported policy. `keepalive_outcomes.py` joins trusted runner
