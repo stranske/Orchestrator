@@ -72,6 +72,15 @@ def test_worktree_git_roots_accepts_only_a_real_linked_worktree(monkeypatch, tmp
     ]
     monkeypatch.setenv(adapters.CODEX_GIT_GRANT_DISABLED_ENV, "1")
     assert adapters.codex_worktree_git_roots(workspace) == []
+    monkeypatch.delenv(adapters.CODEX_GIT_GRANT_DISABLED_ENV)
+    regular = tmp_path / "regular"
+    (regular / ".git").mkdir(parents=True)
+    assert adapters.codex_worktree_git_roots(regular) == []
+    outside = common / "outside" / "name"
+    outside.mkdir(parents=True)
+    (outside / "commondir").write_text("../..\n")
+    (workspace / ".git").write_text(f"gitdir: {outside}\n")
+    assert adapters.codex_worktree_git_roots(workspace) == []
 
 
 def test_catalog_parsers_drop_prose_and_preserve_labels():
