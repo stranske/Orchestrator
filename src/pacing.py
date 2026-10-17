@@ -20,7 +20,13 @@ DAY_SECONDS = 86400
 PERIOD_SECONDS = 7 * DAY_SECONDS
 TICK_SECONDS = 900
 CLAUDE_USAGE_MAX_AGE_SECONDS = 7200
-STALE_AFTER_SECONDS = CLAUDE_USAGE_MAX_AGE_SECONDS
+STALE_AFTER_SECONDS = 2 * TICK_SECONDS
+
+
+def usage_max_age(pool: str) -> int:
+    return CLAUDE_USAGE_MAX_AGE_SECONDS if pool == "claude" else STALE_AFTER_SECONDS
+
+
 CLAUDE_RESET_ANCHOR = datetime(2026, 10, 18, 4, 59, tzinfo=timezone.utc).timestamp()
 
 
@@ -153,7 +159,7 @@ def evaluate(
         source=source,
         ts=source_ts,
         effective_reserve=reserve,
-        stale=source_ts is not None and now - source_ts > STALE_AFTER_SECONDS,
+        stale=source_ts is not None and now - source_ts > usage_max_age(pool),
         fyi=[],
         reason="usage or period unmeasured; clears on a fresh usage/period sample",
     )

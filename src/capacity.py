@@ -548,7 +548,7 @@ def _shed(agent: str) -> bool:
                 and 0 <= short < 1
                 and observed is not None
                 and created < observed <= now
-                and now - observed <= pacing.STALE_AFTER_SECONDS
+                and now - observed <= pacing.usage_max_age(agent)
             )
             if not sample_clears:
                 print(

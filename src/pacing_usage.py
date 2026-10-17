@@ -336,6 +336,8 @@ def claude_token_events(root: Path, start: float, now: float) -> list[dict]:
         try:
             with path.open() as stream:
                 for line in stream:
+                    if '"usage"' not in line:
+                        continue
                     try:
                         row = json.loads(line)
                         ts = pacing.timestamp(row.get("timestamp"))
@@ -479,17 +481,6 @@ def usage(
             and 0 <= r["t"] / 1000 <= now
             and 0 <= r["u"]["sd"] <= 100
         ]
-        root = CLAUDE_PROJECTS if claude_projects is None else claude_projects
-        cache_key = hashlib.sha256(str(root.resolve()).encode()).hexdigest()
-        destination = (
-            Path(tempfile.gettempdir()) / f"orch-claude-ccusage-{os.getuid()}-{cache_key}.json"
-        )
-        produced, pair_cap, pair_count = produce_claude_sample(
-            now,
-            valid,
-            destination,
-            root,
-        )
         if valid:
             row = max(valid, key=lambda r: r["t"])
             ts = row["t"] / 1000
@@ -510,6 +501,17 @@ def usage(
                     desktop_sample_age_s=desktop_age,
                     desktop_sample_ts=desktop_ts,
                 )
+        root = CLAUDE_PROJECTS if claude_projects is None else claude_projects
+        cache_key = hashlib.sha256(str(root.resolve()).encode()).hexdigest()
+        destination = (
+            Path(tempfile.gettempdir()) / f"orch-claude-ccusage-{os.getuid()}-{cache_key}.json"
+        )
+        produced, pair_cap, pair_count = produce_claude_sample(
+            now,
+            valid,
+            destination,
+            root,
+        )
     cap = calibration.get(f"{pool}_weekly_token_cap")
     cap_source = "calibration-file"
     if pool == "claude":
@@ -847,7 +849,7 @@ def integrate(
         sample = dict(agent=pool, recorded_at=now, **datum)
         sample.setdefault("period_start", start)
         pool_samples = [r for r in samples if r.get("agent") == pool and r.get("ts") is not None]
-        if datum["ts"] is not None and now - datum["ts"] <= pacing.STALE_AFTER_SECONDS:
+        if datum["ts"] is not None and now - datum["ts"] <= pacing.usage_max_age(pool):
             # Fresh percent observations sampled on ticks measure flat spend too;
             # source_ts retains the app observation time so freshness cannot be forged.
             sample.update(source_ts=datum["ts"], ts=now)
@@ -943,7 +945,7 @@ def report(handoff: Path, *, now: float, current: dict | None = None) -> str:
             f"state={row.get('state', 'unknown')} w_p={measured(row.get('routing_weight'))} "
             f"resets={row.get('resets_available') if row.get('resets_available') is not None else 'unknown'} source={row.get('source', 'none')} "
             f"{source_detail}"
-            f"ts={row.get('ts')} stale={row.get('ts') is not None and now - row['ts'] > pacing.STALE_AFTER_SECONDS}; "
+            f"ts={row.get('ts')} stale={row.get('ts') is not None and now - row['ts'] > pacing.usage_max_age(pool)}; "
             f"{row.get('reason', 'usage unmeasured; clears on fresh usage/period sample')}"
         )
         finals = []
@@ -953,7 +955,7 @@ def report(handoff: Path, *, now: float, current: dict | None = None) -> str:
             if (
                 end is not None
                 and end <= now
-                and 0 <= end - snap["ts"] <= pacing.STALE_AFTER_SECONDS
+                and 0 <= end - snap["ts"] <= pacing.usage_max_age(pool)
             ):
                 if p.get("used_fraction") is not None and not p.get("stale"):
                     finals.append(p)

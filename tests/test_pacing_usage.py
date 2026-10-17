@@ -118,7 +118,7 @@ def test_capacity_report_prints_source_and_selected_sample_age(
 
 
 def test_old_fallback_remains_visibly_stale(stores):
-    weekly_sample(stores[1], age=pacing.STALE_AFTER_SECONDS + 1)
+    weekly_sample(stores[1], age=pacing_usage.CLAUDE_USAGE_MAX_AGE_SECONDS + 1)
     row = read_usage(stores, dict(claude_weekly_token_cap=1000))
     agents = integrated(stores, row)
     assert agents["claude"]["pacing"]["state"] == "unknown"
