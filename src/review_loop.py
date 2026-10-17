@@ -415,7 +415,10 @@ def after_writer(
         )
     except Exception as exc:
         return {"status": "review_redispatch_failed", "merge_eligible": False, "reason": str(exc)}
-    if dispatch.get("error"):
+    # A repair round advances only when delegate actually started a writer.
+    # Refusals and malformed responses must not look like a successful handoff.
+    pid = dispatch.get("pid") if isinstance(dispatch, dict) else None
+    if not isinstance(dispatch, dict) or dispatch.get("error") or type(pid) is not int or pid <= 0:
         return {
             "status": "review_redispatch_failed",
             "merge_eligible": False,

@@ -434,3 +434,114 @@ def test_pr_marker_is_limited_to_the_current_writer_run(tmp_path):
     )
     assert review_loop._pr_from_log(log, "new") == "https://github.com/o/r/pull/2"
     assert review_loop._pr_from_log(log, "missing") is None
+
+
+@pytest.mark.parametrize("final_verdict", ["FIX-FIRST", "MERGE-WHEN-GREEN", "REVIEW-EXHAUSTED"])
+def test_production_repair_chain_preserves_agent_findings_and_round_budget(
+    monkeypatch, tmp_path, final_verdict
+):
+    import sqlite3
+
+    import dispatcher
+
+    db = tmp_path / "review-rounds.db"
+    monkeypatch.setattr(feedback, "DB_PATH", db)
+    log = tmp_path / "writer.log"
+    pr_url = "https://github.com/o/r/pull/9"
+    outputs = [
+        "VERDICT: FIX-FIRST\n  Repair the first assertion.\n\nKeep this spacing.  \n",
+        "VERDICT: FIX-FIRST\nRepair the second assertion: ≥ 3.\n",
+        f"VERDICT: {final_verdict}\nThird review findings.\n",
+    ]
+    reviews, dispatches, statuses = [], [], []
+    head = ["a" * 40]
+    monkeypatch.setattr(review_loop, "_pr_facts", lambda *args: ("o/r", 9, head[0], "Scope"))
+    monkeypatch.setattr(review_loop, "_terminal_now", lambda *args: (True, "terminal"))
+    monkeypatch.setattr(review_loop, "_available_reviewer", lambda agent: agent == "vibe")
+
+    def reviewer(agent, prompt, target):
+        reviews.append((agent, prompt, target))
+        return {"exit": 0, "output": outputs[len(reviews) - 1]}
+
+    def delegate(*args, **kwargs):
+        dispatches.append((args, kwargs))
+        return {"pid": 100 + len(dispatches)}
+
+    monkeypatch.setattr(review_loop, "dispatcher_offload", reviewer)
+    # Exercise the real dispatcher_delegate adapter, including its review-loop opt-in.
+    monkeypatch.setattr(dispatcher, "delegate", delegate)
+    for number in range(1, review_loop.REVIEW_LOOP_MAX_ROUNDS + 1):
+        head[0] = "abc"[number - 1] * 40
+        writer_run_id = f"writer-{number}"
+        with log.open("a") as stream:
+            stream.write(f"=== dispatch codex run_id={writer_run_id} ===\nPR_URL={pr_url}\n")
+        result = review_loop.after_writer(
+            "o/r#1",
+            "codex",
+            "opener",
+            "root-run",
+            log,
+            number,
+            writer_run_id=writer_run_id,
+            gh_json=lambda _: {},
+            write_status=lambda *args: statuses.append(args),
+        )
+        if number < review_loop.REVIEW_LOOP_MAX_ROUNDS:
+            assert result["status"] == "fix_first_redispatched"
+            assert result["merge_eligible"] is False
+            args, kwargs = dispatches[-1]
+            assert args[:3] == ("codex", "o/r#1", "opener")
+            assert args[3].endswith(outputs[number - 1])
+            assert f"PR_URL={pr_url}" in args[3]
+            assert kwargs == {
+                "task_type": "implement",
+                "review_loop": True,
+                "review_round": number + 1,
+                "review_run_id": "root-run",
+            }
+
+    accepted = final_verdict == "MERGE-WHEN-GREEN"
+    assert result["status"] == ("merge_when_green" if accepted else "review_exhausted")
+    assert result["merge_eligible"] is accepted
+    assert len(dispatches) == 2
+    assert [row[0] for row in reviews] == ["vibe"] * 3
+    assert [row[2] for row in statuses] == [
+        "pending",
+        "failure",
+        "pending",
+        "failure",
+        "pending",
+        "success" if accepted else "failure",
+    ]
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute(
+            "SELECT run_id,pr,round,verdict,reviewer_agent,head_sha FROM review_rounds ORDER BY round"
+        ).fetchall()
+    assert rows == [
+        ("root-run", pr_url, 1, "FIX-FIRST", "vibe", "a" * 40),
+        ("root-run", pr_url, 2, "FIX-FIRST", "vibe", "b" * 40),
+        ("root-run", pr_url, 3, final_verdict, "vibe", "c" * 40),
+    ]
+
+
+@pytest.mark.parametrize(
+    "dispatch", [None, {}, {"pid": None}, {"pid": 0}, {"pid": True}, {"error": "claim held"}]
+)
+def test_fix_first_requires_a_started_repair_writer(monkeypatch, tmp_path, dispatch):
+    log = _after_writer_setup(monkeypatch, tmp_path, "VERDICT: FIX-FIRST\nrepair")
+    monkeypatch.setattr(review_loop, "dispatcher_delegate", lambda *args: dispatch)
+    statuses = []
+    result = review_loop.after_writer(
+        "o/r#1",
+        "codex",
+        "opener",
+        "root",
+        log,
+        1,
+        gh_json=lambda _: {},
+        write_status=lambda *args: statuses.append(args),
+    )
+    assert result["status"] == "review_redispatch_failed"
+    assert result["merge_eligible"] is False
+    assert result["dispatch"] == dispatch
+    assert [row[2] for row in statuses] == ["pending", "failure"]
