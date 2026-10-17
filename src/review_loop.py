@@ -31,12 +31,16 @@ _STATUS_CONTEXT = "Orchestrator review loop"
 
 
 def parse_verdict(text: str) -> str:
-    """Accept exactly one explicit verdict; conflicting verdicts fail closed."""
+    """Accept one explicit verdict; malformed or conflicting declarations fail closed."""
     found = []
     for line in text.splitlines():
-        candidate = line.strip().upper().removeprefix("VERDICT:").strip()
-        if candidate in VERDICTS:
-            found.append(candidate)
+        declaration = line.strip().upper()
+        if not declaration.startswith("VERDICT:"):
+            continue
+        candidate = declaration.removeprefix("VERDICT:").strip()
+        if candidate not in VERDICTS:
+            raise ValueError(f"unrecognized review verdict: {candidate!r}")
+        found.append(candidate)
     if len(found) != 1:
         raise ValueError(
             "review output must contain exactly one VERDICT: MERGE-WHEN-GREEN, FIX-FIRST, or REVIEW-EXHAUSTED"

@@ -8,6 +8,10 @@ def test_verdict_parsing_rejects_implicit_acceptance():
     assert review_loop.parse_verdict("VERDICT: MERGE-WHEN-GREEN") == "MERGE-WHEN-GREEN"
     assert review_loop.parse_verdict("VERDICT: FIX-FIRST") == "FIX-FIRST"
     assert review_loop.parse_verdict("VERDICT: REVIEW-EXHAUSTED") == "REVIEW-EXHAUSTED"
+    assert review_loop.parse_verdict("  verdict: fix-first  ") == "FIX-FIRST"
+    for output in ("", "looks good", "MERGE-WHEN-GREEN", "FIX-FIRST", "REVIEW-EXHAUSTED"):
+        with pytest.raises(ValueError):
+            review_loop.parse_verdict(output)
 
 
 def test_same_family_reviewer_is_refused():
@@ -132,12 +136,15 @@ def test_pending_and_exhausted_reviews_cannot_be_merge_eligible():
 
 
 def test_parse_verdict_rejects_conflicting_lines():
-    try:
-        review_loop.parse_verdict("VERDICT: FIX-FIRST\nVERDICT: MERGE-WHEN-GREEN")
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("conflicting verdicts accepted")
+    for output in (
+        "VERDICT: FIX-FIRST\nVERDICT: MERGE-WHEN-GREEN",
+        "VERDICT: MERGE-WHEN-GREEN\nVERDICT: MERGE-WHEN-GREEN",
+        "VERDICT: MERGE-WHEN-GREEN\nVERDICT: UNKNOWN",
+        "VERDICT: FIX-FIRST (missing test)\nVERDICT: MERGE-WHEN-GREEN",
+        "VERDICT:\nVERDICT: MERGE-WHEN-GREEN",
+    ):
+        with pytest.raises(ValueError):
+            review_loop.parse_verdict(output)
 
 
 def test_cursor_is_not_assumed_independent_router():
