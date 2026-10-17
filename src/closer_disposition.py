@@ -227,34 +227,59 @@ def _receipt_index(packet: dict, root: Path) -> dict[tuple[str, str], dict]:
     return index
 
 
-def _native_resolution_index(packet: dict, root: Path, verifier: Mapping[str, Any]) -> dict:
-    """Native input receipts can explain NON_PASS only; never prove acceptance."""
+def _native_section_metadata(
+    packet: Mapping[str, Any], verifier: Mapping[str, Any]
+) -> tuple | None:
+    """Bind native rows to a validated collector section before attributing findings."""
     section = packet["sections"].get("native_merge_verifier") or {}
     if not isinstance(section, dict):
-        return {}
+        return None
     content = section.get("content") or {}
     provenance = section.get("provenance") or {}
     if not isinstance(content, dict) or not isinstance(provenance, dict):
-        return {}
+        return None
     run = content.get("run") or {}
     manifest = content.get("input_manifest") or {}
     if not isinstance(run, dict) or not isinstance(manifest, dict):
-        return {}
+        return None
+    subject = packet.get("subject_pr")
+    if not isinstance(subject, str) or "#" not in subject:
+        return None
+    repo, number = subject.rsplit("#", 1)
     if (
         section.get("status") not in {"complete", "partial"}
         or content.get("evidence_type") != "evaluated-merge-verifier-non-pass"
         or content.get("verifier") != verifier
         or provenance.get("acceptance_proof") is not False
+        or str(provenance.get("repository", "")).lower() != repo.lower()
+        or str(provenance.get("pr")) != number
         or provenance.get("head_sha") != packet["head"]
         or provenance.get("evaluated_sha") != verifier.get("evaluated_sha")
+        or str(provenance.get("run_id")) != str(verifier.get("run_id"))
+        or str(provenance.get("run_attempt")) != str(verifier.get("run_attempt"))
+        or str(provenance.get("source_run_id")) != str(verifier.get("run_id"))
         or str(run.get("id")) != str(verifier.get("run_id"))
         or str(run.get("run_attempt")) != str(verifier.get("run_attempt"))
         or run.get("event") not in {"pull_request_target", "workflow_dispatch"}
         or run.get("path") != ".github/workflows/agents-verifier.yml"
         or run.get("status") != "completed"
+        or provenance.get("trigger_event") != run.get("event")
+        or str(manifest.get("repository", "")).lower() != repo.lower()
+        or str(manifest.get("pr")) != number
+        or manifest.get("schema") != "workflows-verifier-input-snapshot/v1"
         or manifest.get("merge_sha") != verifier.get("evaluated_sha")
+        or str(manifest.get("source_run_id")) != str(run.get("id"))
     ):
+        return None
+    return section, content, run, manifest
+
+
+def _native_resolution_index(packet: dict, root: Path, verifier: Mapping[str, Any]) -> dict:
+    """Native input receipts can explain NON_PASS only; never prove acceptance."""
+    metadata = _native_section_metadata(packet, verifier)
+    if metadata is None:
         return {}
+    _section, content, run, manifest = metadata
     ref = manifest.get("raw")
     data = _safe_raw(ref, root)
     if data is None:
@@ -305,6 +330,12 @@ def _native_resolution_index(packet: dict, root: Path, verifier: Mapping[str, An
                     str(receipt.get("run_id")) != str(run.get("id"))
                     or str(receipt.get("run_attempt")) != str(run.get("run_attempt"))
                     or receipt.get("evaluated_sha") != verifier.get("evaluated_sha")
+                    or receipt.get("path")
+                    != (
+                        "comparison.json"
+                        if receipt["kind"] == "native-comparison"
+                        else "comparison-comment.md"
+                    )
                 ):
                     continue
                 if receipt["kind"] == "native-comparison" and not receipt.get("findings"):
@@ -324,7 +355,7 @@ def _native_resolution_index(packet: dict, root: Path, verifier: Mapping[str, An
                     "run_attempt": run.get("run_attempt"),
                     "evaluated_sha": verifier.get("evaluated_sha"),
                     "head_sha": packet["head"],
-                    "receipt_path": receipt.get("path", "comparison.json"),
+                    "receipt_path": receipt["path"],
                 }
     return index
 
@@ -374,6 +405,56 @@ def pending_nonpass_findings(snapshot: Mapping[str, Any], packet: Mapping[str, A
         findings.append(
             {"source": "native_verifier", "verdict": verifier.get("verdict"), "raw": verifier}
         )
+        metadata = _native_section_metadata(packet, verifier)
+        if metadata is not None:
+            _section, native, _run, _manifest = metadata
+            for artifact in (
+                native.get("artifacts", []) if isinstance(native.get("artifacts"), list) else []
+            ):
+                if not isinstance(artifact, dict) or artifact.get("status") != "complete":
+                    continue
+                if (
+                    str(artifact.get("run_id")) != str(verifier.get("run_id"))
+                    or str(artifact.get("run_attempt")) != str(verifier.get("run_attempt"))
+                    or artifact.get("evaluated_sha") != verifier.get("evaluated_sha")
+                ):
+                    continue
+                receipts = artifact.get("receipts")
+                for receipt in receipts if isinstance(receipts, list) else []:
+                    if (
+                        not isinstance(receipt, dict)
+                        or receipt.get("kind") != "native-comparison"
+                        or receipt.get("path") != "comparison.json"
+                        or not isinstance(receipt.get("raw"), dict)
+                    ):
+                        continue
+                    binding = {
+                        "run_id": artifact["run_id"],
+                        "run_attempt": artifact["run_attempt"],
+                        "artifact_id": artifact.get("id"),
+                        "evaluated_sha": artifact["evaluated_sha"],
+                        "report_sha256": receipt["raw"].get("sha256"),
+                    }
+                    providers = receipt.get("provider_results")
+                    for provider in providers if isinstance(providers, list) else []:
+                        if isinstance(provider, dict):
+                            findings.append(
+                                {
+                                    "source": "native_provider_verdict",
+                                    **binding,
+                                    "raw": provider,
+                                }
+                            )
+                    concerns = receipt.get("findings")
+                    for concern in concerns if isinstance(concerns, list) else []:
+                        if isinstance(concern, dict):
+                            findings.append(
+                                {
+                                    "source": "native_provider_concern",
+                                    **binding,
+                                    "raw": concern,
+                                }
+                            )
     previous = ((packet.get("sections") or {}).get("prior_dispositions") or {}).get("content") or {}
     if isinstance(previous, dict) and isinstance(previous.get("criteria"), list):
         findings.extend(

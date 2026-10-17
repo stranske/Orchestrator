@@ -858,6 +858,7 @@ def test_stale_capacity_proof_validates_historical_stop_then_rechecks(tmp_path):
     old_reset_at = old_observed_at + reset_in
     doc = json.loads(path.read_text())
     prior = doc["runs"][first["run_id"]]
+    prior["created"] = old_observed_at - 10
     prior["deadline"] = old_observed_at + 60
     prior["receipt_summary"]["finished_at"] = old_observed_at + 5
     row = prior["targets"]["a"]

@@ -16,7 +16,9 @@ BASE = "b" * 40
 BODY = "## Tasks\n- [ ] Ship the report"
 
 
-def fixture(tmp_path, *, dispositions=None, native=False, native_report=True):
+def fixture(
+    tmp_path, *, dispositions=None, native=False, native_report=True, native_manifest_pr=12
+):
     snap = {
         "target": TARGET,
         "kind": "pr",
@@ -51,7 +53,7 @@ def fixture(tmp_path, *, dispositions=None, native=False, native_report=True):
         native_manifest = {
             "schema": "workflows-verifier-input-snapshot/v1",
             "repository": "owner/repo",
-            "pr": 12,
+            "pr": native_manifest_pr,
             "merge_sha": snap["merge"],
             "source_run_id": 34,
             "verified_input": "Ship the report",
@@ -63,12 +65,18 @@ def fixture(tmp_path, *, dispositions=None, native=False, native_report=True):
                     "comparison.json",
                     json.dumps(
                         {
-                            "findings": [
+                            "results": [
                                 {
-                                    "id": "report-mismatch",
-                                    "finding": "Ship the report output differs",
+                                    "verdict": "CONCERNS",
+                                    "provider_used": "test-provider",
+                                    "model": "test-model",
+                                    "concerns": [
+                                        "Ship the report output differs",
+                                        "Ship the report attachment differs",
+                                    ],
                                 }
-                            ]
+                            ],
+                            "report": "Ship the report output differs",
                         }
                     ),
                 )
@@ -429,12 +437,18 @@ def test_native_merge_input_is_resolution_only_and_exact_run_bound(tmp_path):
     snap, packet, _ref, _prep, interpretation = fx
     section = packet["sections"]["native_merge_verifier"]
     assert section["status"] == "complete"
+    comparison = section["content"]["artifacts"][0]["receipts"][1]
+    assert comparison["path"] == "comparison.json"
+    assert comparison["findings"]
+    assert comparison["findings"][0]["verdict"] == "CONCERNS"
     raw_ref = section["content"]["artifacts"][0]["receipts"][1]["raw"]
     marker = snap["verifier"]
-    finding = {"source": "native_verifier", "verdict": "NON_PASS", "raw": marker}
-    interpretation["proposal"]["resolutions"] = [
+    pending = d.pending_nonpass_findings(snap, packet)
+    assert sum(row["raw"]["source"] == "native_provider_concern" for row in pending) == 2
+    assert sum(row["raw"]["source"] == "native_provider_verdict" for row in pending) == 1
+    resolutions = [
         {
-            "finding_id": d._finding_id(finding),
+            "finding_id": row["finding_id"],
             "status": "resolved_nonissue",
             "next_guarded_action": "wait",
             "evidence": [raw_ref],
@@ -453,20 +467,37 @@ def test_native_merge_input_is_resolution_only_and_exact_run_bound(tmp_path):
                 }
             ],
         }
+        for row in pending
     ]
+    interpretation["proposal"]["resolutions"] = resolutions[:-1]
+    assert check(fx)["reason"] == "nonpass_findings_not_accounted"
+    interpretation["proposal"]["resolutions"] = resolutions
     result = check(fx)
     assert result["status"] == "ordinary_nonpass", result
     assert result["disposition"]["acceptance_authority"] is False
+    assert len(result["disposition"]["raw_verdicts"]) == len(pending)
+    assert any(
+        row["raw"]["source"] == "native_provider_verdict"
+        and row["raw"]["raw"]["verdict"] == "CONCERNS"
+        for row in result["disposition"]["raw_verdicts"]
+    )
     run = section["content"]["run"]
     root = Path(_ref["path"]).parent.parent
     run["event"] = "workflow_dispatch"
+    section["provenance"]["trigger_event"] = "workflow_dispatch"
     assert (raw_ref["path"], raw_ref["sha256"]) in d._native_resolution_index(packet, root, marker)
     run["event"] = "push"
     assert not d._native_resolution_index(packet, root, marker)
     run["event"] = "pull_request_target"
+    section["provenance"]["trigger_event"] = "pull_request_target"
     run["path"] = ".github/workflows/unrelated.yml"
     assert not d._native_resolution_index(packet, root, marker)
     run["path"] = ".github/workflows/agents-verifier.yml"
+    comparison["path"] = "unrelated.json"
+    assert (raw_ref["path"], raw_ref["sha256"]) not in d._native_resolution_index(
+        packet, root, marker
+    )
+    comparison["path"] = "comparison.json"
     interpretation["proposal"]["resolutions"][0]["proofs"][0]["run_attempt"] = 2
     assert check(fx)["reason"] == "nonpass_resolution_proof_missing"
     bare = fixture(tmp_path / "bare", native=True, native_report=False)
@@ -495,3 +526,15 @@ def test_native_merge_input_is_resolution_only_and_exact_run_bound(tmp_path):
         }
     ]
     assert check(bare)["reason"] == "nonpass_resolution_proof_missing"
+
+
+def test_unknown_native_manifest_cannot_attribute_provider_findings(tmp_path):
+    snap, packet, _ref, _prep, _interpretation = fixture(
+        tmp_path, native=True, native_manifest_pr=13
+    )
+    section = packet["sections"]["native_merge_verifier"]
+    assert section["status"] == "unknown"
+    assert section["content"]["artifacts"][0]["receipts"][1]["findings"]
+    pending = d.pending_nonpass_findings(snap, packet)
+    assert len(pending) == 1
+    assert pending[0]["raw"]["source"] == "native_verifier"
