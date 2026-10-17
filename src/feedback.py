@@ -314,9 +314,13 @@ def model_epoch_floor(agent: str, since: int, path: Path | None = None) -> int:
         entry = (data.get("epochs") or {}).get(agent)
         if not entry:
             return since
-        return max(since, int(utc_epoch.from_iso(str(entry["since"]))))
+        epoch = utc_epoch.from_iso(str(entry["since"]))
+        if epoch is None:
+            return since
+        return max(since, epoch)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return since
+
 
 # WHICH RUNS THE ROUTE-WEIGHT LEARNERS READ. `assignment` is 'experimental' for the tool's own
 # dispatches, 'assigned' for fleet keepalive PRs that carried an agent label, 'none' for keepalive PRs
@@ -6024,7 +6028,13 @@ def relearn(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DAYS) -> i
                     "AND COALESCE(o.durability_checked_ts, r.ts)>=? "  # broke-later detection floor (#293)
                     # item 9 and 2026-10-04: an excluded class says nothing about the agent
                     f"AND COALESCE(o.failure_class,'') NOT IN ({excluded_marks})",
-                    (task_type, agent, model_epoch_floor(agent, since), DURABILITY_DETECTION_SINCE, *excluded_classes),
+                    (
+                        task_type,
+                        agent,
+                        model_epoch_floor(agent, since),
+                        DURABILITY_DETECTION_SINCE,
+                        *excluded_classes,
+                    ),
                 ).fetchall()
                 n = len(rows)
                 succ = sum(1 for d, a, v, _cu, _src in rows if _is_success(d, a, v))
