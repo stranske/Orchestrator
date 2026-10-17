@@ -1,0 +1,29 @@
+import ast,hashlib,json,os,pathlib,shutil,subprocess,sys
+root=pathlib.Path('/tmp/source660-tilde');repo=pathlib.Path('/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__663__opener');mirror=root/'mutation-checkout';mirror.mkdir()
+for directory in ('src','tests'):shutil.copytree(repo/directory,mirror/directory,ignore=shutil.ignore_patterns('__pycache__'))
+shutil.copy2(repo/'pyproject.toml',mirror/'pyproject.toml')
+env={k:v for k,v in os.environ.items() if not k.startswith('ORCH_')};env.update(HOME=str(root/'home'),ORCH_STATE_DIR=str(root/'mutation-state'),ORCH_LOCAL_RUNTIME=str(root/'mutation-runtime'),ORCH_CAPABILITIES_PATH=str(root/'mutation-runtime/capabilities.json'),ORCH_FEEDBACK_DB=str(root/'mutation-runtime/absent.db'),ORCH_MODEL_PROBE='0',TMPDIR='/tmp',PYTHONDONTWRITEBYTECODE='1')
+paths=['src/feedback.py','src/route_weights_export.py','tests/test_source660_reconciliation.py','tests/test_route_weights_export.py']
+def hashes():return {p:hashlib.sha256((mirror/p).read_bytes()).hexdigest() for p in paths}
+records=[]
+def run(label,node):
+ argv=[sys.executable,'-m','pytest','-q',node,f'--junitxml={root}/raw/{label}.xml'];before=hashes();p=subprocess.run(argv,cwd=mirror,env=env,capture_output=True,text=True)
+ (root/'raw'/f'{label}.log').write_text(p.stdout+p.stderr);records.append({'label':label,'argv':argv,'cwd':str(mirror),'exit':p.returncode,'source_sha256':before,'source_unchanged':before==hashes()});(root/'raw/mutation-bindings.json').write_text(json.dumps(records,indent=2)+'\n');print(label,p.returncode,flush=True);return p
+nodes={'tilde':'tests/test_source660_reconciliation.py::test_explicit_tilde_learner_writer_and_cli_share_db','state':'tests/test_source660_reconciliation.py::test_state_only_learner_writer_and_cli_share_db','guard':'tests/test_route_weights_export.py::test_publish_guard_refuses_empty_db[default-empty-db]'}
+for key,node in nodes.items():
+ p=mirror/('src/route_weights_export.py' if key=='guard' else 'src/feedback.py');original=p.read_bytes();assert original==(repo/p.relative_to(mirror)).read_bytes()
+ assert run(key+'-before-green',node).returncode==0
+ try:
+  text=original.decode()
+  if key=='guard':
+   fn=next(x for x in ast.parse(text).body if isinstance(x,ast.FunctionDef) and x.name=='publish_guard');lines=text.splitlines(keepends=True);lines.insert(fn.body[0].lineno-1,'    return True, ""  # deliberate production guard bypass\n');p.write_text(''.join(lines))
+  elif key=='tilde':
+   old='DB_PATH = DB_PATH.expanduser() if os.environ.get(DB_PATH_ENV) else resolve_db_path()';assert text.count(old)==1;p.write_text(text.replace(old,'DB_PATH = DB_PATH if os.environ.get(DB_PATH_ENV) else resolve_db_path()'))
+  else:
+   old='DB_PATH = DB_PATH.expanduser() if os.environ.get(DB_PATH_ENV) else resolve_db_path()';assert text.count(old)==1;p.write_text(text.replace(old,'# deliberate learner DB binding disconnection'))
+  red=run(key+'-disconnected-red',node);assert red.returncode==1 and 'AssertionError' in red.stdout,red.stdout
+ finally:p.write_bytes(original)
+ assert p.read_bytes()==original
+ assert run(key+'-restored-green',node).returncode==0
+assert all((mirror/p).read_bytes()==(repo/p).read_bytes() for p in paths)
+print('ALL RESTORED byte-identical; unchanged controls demonstrate causal RED/GREEN',flush=True)

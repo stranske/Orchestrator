@@ -11,6 +11,69 @@ import pytest
 import route_weights_export as export
 
 
+def test_explicit_tilde_learner_writer_and_cli_share_db(tmp_path):
+    """Expand the explicit home path before the actual learner opens SQLite."""
+    home = tmp_path / "home"
+    cwd = tmp_path / "private-cwd"
+    output = tmp_path / "shadow"
+    home.mkdir()
+    cwd.mkdir()
+    env = {k: v for k, v in os.environ.items() if not k.startswith("ORCH_")}
+    env.update(
+        HOME=str(home),
+        ORCH_FEEDBACK_DB="~/private/orchestrator.db",
+        ORCH_LOCAL_RUNTIME=str(tmp_path / "other-runtime"),
+        ORCH_STATE_DIR=str(tmp_path / "other-state"),
+        ORCH_MODEL_PROBE="0",
+        PYTHONPATH=str(Path(export.__file__).parent),
+    )
+    script = """
+import json, sys
+from pathlib import Path
+def deny_subprocess(event, args):
+    if event == "subprocess.Popen":
+        raise AssertionError(f"unexpected CLI subprocess: {args[:2]}")
+sys.addaudithook(deny_subprocess)
+import feedback
+import route_weights_export as export
+with feedback._conn() as connection:
+    connection.execute("INSERT INTO route_weights "
+        "(version, task_type, agent, posterior, score, n_obs, success_rate) "
+        "VALUES (79, 'implement', 'codex', 0.9, 0.9, 25, 0.9)")
+    opened = connection.execute("PRAGMA database_list").fetchone()[2]
+source = Path(opened)
+before = source.read_bytes()
+export._current_capacity_snapshot = lambda: {"generated_at": 100, "agents": {}}
+export.capabilities.daily_heartbeat = lambda *a, **k: None
+sys.argv = ["route_weights_export.py", "--state-dir", sys.argv[1]]
+assert export.main() == 0
+assert source.read_bytes() == before, "export must not modify the learner store"
+print(json.dumps({"writer": str(feedback.DB_PATH), "opened": opened,
+                  "reader": str(feedback.resolve_db_path())}))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(output)],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    expected = home / "private" / "orchestrator.db"
+    binding = json.loads(result.stdout.splitlines()[-1])
+    assert binding == {
+        "writer": str(expected),
+        "opened": str(expected),
+        "reader": str(expected),
+    }, "explicit tilde learner DB binding split"
+    document = json.loads((output / "route-weights-export.json").read_text())
+    assert document["source_version"] == 79, "CLI must export actual learner evidence"
+    assert document["task_types"]["implement"]["evidence_ok"] is True
+    assert list(tmp_path.rglob("*.db")) == [expected], "only the selected learner DB may exist"
+    assert not (cwd / "~").exists(), "no literal tilde directory may be created"
+
+
 def test_state_only_learner_writer_and_cli_share_db(tmp_path):
     """A new process must write and export the same Brain, independent of shadow destination."""
     state = tmp_path / "instance"

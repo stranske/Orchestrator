@@ -1,0 +1,735 @@
+{
+  "admitted_head": "43c2b4c5e551e05f4d10e27388991709ce35fffa",
+  "original_branch": "codex/issue-660-route-export-guard",
+  "frozen661": "4411533b2e1394544d187eafe37ce3e24ef243c3",
+  "current_10_source_paths": {
+    "src/feedback.py": "20ccfa3696bd9bc43fd1065e3f9b841a31ff75799082cf6bd86b0305c100e0aa",
+    "src/route_weights_export.py": "4174926a72c906649c4dcd4971d36c63f267d9147cf9c1336a530cbef28193cc",
+    "src/verify.py": "c164e1ee451a62c71740d6450fb0a2f5f90b9ed507ea473bf903827dac34822f",
+    "tests/test_source660_reconciliation.py": "5f322c38db16909714db0e99b41092c138eaddf6b71be3220779e791bbc56076",
+    "tests/test_route_weights_export.py": "c72cb9c97e3b425c96b10ec0fe7b38ca5d48ea6b0a73f31e94ab87df99bbcba0",
+    "tests/test_route_weights_publication.py": "9f538aa7283045c4c936d15dcbb54c08a3d3ad51de5fc661ddad74639045d4f8",
+    "tests/test_route_weights_publish_cadence.py": "22f2b37fc97b0ad560737b30d1f4a8354053bcfde4fa08457d4ae671b8b8520f",
+    "tests/test_firing_regressions_section.py": "03bd778aa6976e652a5f30652e309ba8e7d361208de50ab747c211f3be88d0dc",
+    "tests/test_route_weights_export_cli.js": "076cae94c98654a49e940a40b501831899915d60fbbbe9fba97defc7579781c7",
+    ".verify-floor.json": "8f3be3c223d6dfa70750c0bb144f8dc13e59d857ddc8e808eef58283e0a82407"
+  },
+  "native43c_preserved_sha256": {
+    "scripts/verify_before_sync.sh": "56a295bcf68956495ec25f896ee3908de77a1bfe94c61e6cd74d67efcd382dd1",
+    "tests/test_route_weights_presync_source.js": "5da959cac0bffa8772b09a6e6d0fd4bf48bb90c5d58e29e9d51e561277084dec"
+  },
+  "all_13_payload_paths": {
+    ".verify-floor.json": {
+      "frozen661": "1edfe282f6eb59bcf9722574b3ca57698b5f98a74dc6249daee5a8eb1b2e8a09",
+      "admitted43c": "60ad999d9ada0d43848cac8d0bdfd13a19a4fcae452695e64e264fc6ef6d72ac",
+      "current": "8f3be3c223d6dfa70750c0bb144f8dc13e59d857ddc8e808eef58283e0a82407"
+    },
+    "ARCHITECTURE.md": {
+      "frozen661": "c9c75124241383abf7de9dad6deaa4a4f9e51bf141192e0c0a02c07681646800",
+      "admitted43c": "02f146ce8aad51228920451cae089cd940a3d3c87e70ef89e8103dc66dd4779a",
+      "current": "02f146ce8aad51228920451cae089cd940a3d3c87e70ef89e8103dc66dd4779a"
+    },
+    "README.md": {
+      "frozen661": "02a7bdb483ddc9f8674bae96e0e601fa8a89fd121fc0edd1e49087b179fb3be2",
+      "admitted43c": "5c0aa9cbe9843ce1fff7d441570b6e9c3f240084d2cff82b65215b6957dc728b",
+      "current": "5c0aa9cbe9843ce1fff7d441570b6e9c3f240084d2cff82b65215b6957dc728b"
+    },
+    "agents/codex-660.md": {
+      "frozen661": "fd513c24cb8db3cce3645c5cce4eb5d1f31e2678fee23519ce8a7edd9ef6bfef",
+      "admitted43c": null,
+      "current": null
+    },
+    "docs/ROUTE_WEIGHTS_EXPORT.md": {
+      "frozen661": "6f6af423afd7f6cb6ddf65c001ff1fd5338b90324e175870ecaa1e88d7f5e5fa",
+      "admitted43c": "26d214af64f382b26652f4a7d89cb3739152784d6b542557d78ded9a2bb07de1",
+      "current": "26d214af64f382b26652f4a7d89cb3739152784d6b542557d78ded9a2bb07de1"
+    },
+    "orchestrate.sh": {
+      "frozen661": "45a55b010ef5021765ff06f542e482b447cd4e32ddcf257208271289bc4edf3a",
+      "admitted43c": "8ecd1b62db3c3f0f11814c0251db5c907851c15e657902788564f264e15ce823",
+      "current": "8ecd1b62db3c3f0f11814c0251db5c907851c15e657902788564f264e15ce823"
+    },
+    "src/feedback.py": {
+      "frozen661": "4258cb2c1e733690df0ea56738385cd9005016dffc1733485e8d3a3ca90e2be5",
+      "admitted43c": "69d1bbeaa12393c94cdb55917986430524ca7383ad506ba465fbdce9a280b7c9",
+      "current": "20ccfa3696bd9bc43fd1065e3f9b841a31ff75799082cf6bd86b0305c100e0aa"
+    },
+    "src/route_weights_export.py": {
+      "frozen661": "9a59c330fa496f49120c2a815603db770864621a4122f89c7a7cdcaa9b74793c",
+      "admitted43c": "4174926a72c906649c4dcd4971d36c63f267d9147cf9c1336a530cbef28193cc",
+      "current": "4174926a72c906649c4dcd4971d36c63f267d9147cf9c1336a530cbef28193cc"
+    },
+    "tests/test_firing_regressions_section.py": {
+      "frozen661": "920c1de6e18d981ac913086b810f35197829835626efc623194b7573e26a51ca",
+      "admitted43c": "03bd778aa6976e652a5f30652e309ba8e7d361208de50ab747c211f3be88d0dc",
+      "current": "03bd778aa6976e652a5f30652e309ba8e7d361208de50ab747c211f3be88d0dc"
+    },
+    "tests/test_route_weights_export.py": {
+      "frozen661": "49ef2679e3ce98d269a799acaa07b935ce7e1058aaf07d4283fd0caaa0ca4dc8",
+      "admitted43c": "c72cb9c97e3b425c96b10ec0fe7b38ca5d48ea6b0a73f31e94ab87df99bbcba0",
+      "current": "c72cb9c97e3b425c96b10ec0fe7b38ca5d48ea6b0a73f31e94ab87df99bbcba0"
+    },
+    "tests/test_route_weights_export_cli.js": {
+      "frozen661": null,
+      "admitted43c": "076cae94c98654a49e940a40b501831899915d60fbbbe9fba97defc7579781c7",
+      "current": "076cae94c98654a49e940a40b501831899915d60fbbbe9fba97defc7579781c7"
+    },
+    "tests/test_route_weights_publication.py": {
+      "frozen661": "78314133ed40295d98fdc78a40c797c328428517c4350174ef2dbde9d05ea63f",
+      "admitted43c": "9f538aa7283045c4c936d15dcbb54c08a3d3ad51de5fc661ddad74639045d4f8",
+      "current": "9f538aa7283045c4c936d15dcbb54c08a3d3ad51de5fc661ddad74639045d4f8"
+    },
+    "tests/test_route_weights_publish_cadence.py": {
+      "frozen661": "3efb5d2a08c072494d2391fe1a8c45e39b6189887b879508da99720438a638c3",
+      "admitted43c": "22f2b37fc97b0ad560737b30d1f4a8354053bcfde4fa08457d4ae671b8b8520f",
+      "current": "22f2b37fc97b0ad560737b30d1f4a8354053bcfde4fa08457d4ae671b8b8520f"
+    }
+  },
+  "private_compatibility_test_sha256": "1ae958edcc11aedffeff4266af8c129012ac34a7539e038c1ddbce62758d1721",
+  "old_52_bindings_verified": 52,
+  "old_archive_files_unchanged": 86,
+  "old_component": "old-component-bindings.json",
+  "unchanged_preexisting_reconciliation_tests": true,
+  "xml_actual_counts": {
+    "tilde-before-green": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "tilde-disconnected-red": {
+      "tests": 1,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0
+    },
+    "final-tilde-disconnected-red": {
+      "tests": 1,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0
+    },
+    "state-disconnected-red": {
+      "tests": 1,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0
+    },
+    "admitted43c-tilde-red": {
+      "tests": 1,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0
+    },
+    "state-restored-green": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "final-guard-restored-green": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "state-before-green": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "final-state-disconnected-red": {
+      "tests": 1,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0
+    },
+    "guard-before-green": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "final-tilde-restored-green": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "tilde-green": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "tilde-restored-green": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "final-state-restored-green": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "targeted": {
+      "tests": 120,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "final-state-before-green": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "final-guard-before-green": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "final-guard-disconnected-red": {
+      "tests": 1,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0
+    },
+    "final-tilde-before-green": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "targeted-final": {
+      "tests": 120,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "guard-disconnected-red": {
+      "tests": 1,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "collection_observed": 3950,
+  "passed_floor_expectation_only": 3950,
+  "assessment": {
+    "original_file_sha256": "7ecf12ad3e8031ea3d2a04000ab3dacad758b6dade261bfdeac891e7990de436",
+    "verdict": "NEEDS-FIX on16d; prior advisory does not approve current head"
+  },
+  "full_verify": {
+    "rerun": false,
+    "reason": "CLAUDE.md local targeted/selftest rule; no capability binding, ledger, lifecycle or skipped-only change; owner prohibits redundant broad rerun",
+    "previous_archive_only": {
+      "status": "RED with reproduced admitted-source failures; not full acceptance",
+      "collected": 3949,
+      "passed": 3901,
+      "failed": 24,
+      "skipped": 24,
+      "failed_tests": [
+        "SeatbeltRegexQuotingTests::test_backslash",
+        "SeatbeltRegexQuotingTests::test_combined",
+        "SeatbeltRegexQuotingTests::test_quote",
+        "SeatbeltRegexQuotingTests::test_regex_metacharacters",
+        "test_build_exec_mirror::test_presync_says_whether_ci_verified_the_shipped_tree[documented]",
+        "test_build_exec_mirror::test_presync_says_whether_ci_verified_the_shipped_tree[drifted]",
+        "test_build_exec_mirror::test_the_390_guard_composes_with_the_documented_copier",
+        "test_build_exec_mirror::test_the_documented_copier_builds_through_the_builder",
+        "test_model_tier_resolution::test_auth_failure_is_detected",
+        "test_model_tier_resolution::test_auth_ok_when_probe_succeeds",
+        "test_model_tier_resolution::test_exit_zero_but_failed_is_still_a_failure",
+        "test_model_tier_resolution::test_presence_pass_is_not_reported_as_verified",
+        "test_model_tier_resolution::test_presence_probe_still_detects_a_missing_credential",
+        "test_model_tier_resolution::test_status_style_not_logged_in_is_caught",
+        "test_tick_watchdog::test_a_drain_whose_target_has_exited_is_never_advertised",
+        "test_tick_watchdog::test_a_previous_tick_that_left_no_end_is_unknown_and_kept",
+        "test_tick_watchdog::test_a_stuck_tick_is_reported_with_the_kill_that_frees_it",
+        "test_tick_watchdog::test_a_tick_that_reaches_no_cadence_step_alerts",
+        "test_tick_watchdog::test_an_unreadable_record_is_unknown_not_clean",
+        "test_tick_watchdog::test_fleet_summary_carries_the_tick_record",
+        "test_tick_watchdog::test_the_arming_block_as_written_arms_and_records_the_tick",
+        "test_tick_watchdog::test_the_drained_line_is_reachable_and_exact",
+        "test_tick_watchdog::test_the_process_table_keeps_whole_command_lines",
+        "test_tick_watchdog::test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming"
+      ],
+      "baseline_method": "25 failing cases from initial run replayed on unchanged admitted Git archive; 24 reproduce and the private-path assertion passes there. Final repair fixes that introduced assertion without changing the test. No baseline full-suite claim.",
+      "selftest_failures": [
+        "adapters",
+        "dispatcher",
+        "tick_watchdog"
+      ],
+      "selftest_baselines": "each same failure reproduced on admitted source",
+      "final_source_unchanged_since_validation": true,
+      "targeted": {
+        "passed": 111,
+        "subtests_passed": 8
+      },
+      "node": {
+        "passed": 8
+      },
+      "changed_module_selftests": "both pass; feedback names isolated-ledger missing prerequisite sections",
+      "formatter": "Black whole-tree pass",
+      "configured_lint": "Ruff pass",
+      "typecheck": "mypy two source files pass",
+      "complexity": "supplemental C901: 11 pre-existing diagnostics, no new violating symbols; configured Ruff excludes C901",
+      "remaining": [
+        "clean hosted current-head CI/verify result",
+        "postmerge mirror synchronization and guarded live publication from selected Brain",
+        "source acceptance; no merge or live publication performed"
+      ]
+    }
+  },
+  "artifacts_sha256": {
+    "run.py.txt": "aa0cf6cfb405065d44e7af1ee4cd831ec00a0b9911c8af075116d33da4b8043a",
+    "README.md": "a4bae2b331986754855e062e80cf513b8b24cdf561cc80a41b2bd51b7b3ed761",
+    "admit-prepush.py.txt": "80bcb55cfdf654fbaf53c37f3569d30f62a551e9e2a5713f5b720a65b1417d5f",
+    "assessment.md": "9a7f64b1996e501a6a978179181bbd693edefa6012a5a0f2bbbd5347cedd125b",
+    "old-component-bindings.json": "d88bd40e69643d47cda11a4dfc19b891bc130ee2d46d8e7ae773a9935cf8b816",
+    "mutate-final.py.txt": "1a89978d335e471b3f2e8ab7064399a23a94e92b604dbb556603673c2981de4a",
+    "precedence.py.txt": "fb524edf5ba6d40a32ae6968b661fa7d03c529b47f84d8947ea0697dc4f78428",
+    "admission/jobs-39031932594-1.json": "605723ebc128a4d93d1bddd6e3b559c795a9f9a743b823f9d595a1a89965e304",
+    "admission/661-reviews.json": "0bee8b4a2df96c9e335c0b2009f7746ce44340f3a2561445df9e32f16cc2abd6",
+    "admission/native-39028850122-1.json": "ab9f361cf82e5aa7bacf3875ddb199965442d1494d6a517bc4893dd6aa4bba85",
+    "admission/jobs-39001134190-1.json": "fc2a9e0eacb3ab0edbbb08ed095b25fe8a6e2949726d9aef38fabd40f9a2c61f",
+    "admission/native-39036747849-1.json": "93379e7b85ef39336e1c981aa5afbd27876e47d534fb5a5dc696874f13826663",
+    "admission/jobs-39033240612-1.json": "2be018e33462dcb27b1b4cd7b6ebca5bdd4f45f90f5888c8a82a25f172e95a3a",
+    "admission/jobs-39013922391-1.json": "8e2eeeaf1cb97c049abc68ade934438f163c740478d33fc7a675f7e0af87f19f",
+    "admission/passed.json": "ecf90ff2aa0788cc4362dc48e0b8ad3d6f2005039fdeef980a01ec7b1b814ea6",
+    "admission/native-39019445173-1.json": "50cf0a60ef5ef50faf7e92f4cfc9bb45e87dd321f8dea9ab53cfeaccf41563c0",
+    "admission/native-39002997338-1.json": "9a4967df0a3f3acf6fbc4095efb756d9d42af5d9b9b6014a88fe682de60b4e41",
+    "admission/native-39006528777-1.json": "9a6f4f073440acff7d3254663bd80dd8327bfa8b07d5015420ad7405ee508222",
+    "admission/native-39022800487-1.json": "ec77a130afb61ecc1b5ee4b12539b7add154fb18b13475e7c68641dabbe61908",
+    "admission/native-39002744795-1.json": "f32bde43abbab5e25942c2df75e696eb83e71e840de08d2c73c5d73f24542c16",
+    "admission/native-39035598641-1.json": "92921809ac7bd50d2deeea080fb48884f71926df17e16edc2bd30d577a51c016",
+    "admission/native-39021153531-1.json": "73eb4effd18c34c3c5a37975d8a74955a6f1bd2bcb95484c603d9de415eaad9f",
+    "admission/checkout-admission-passed.json": "6a078a01b969eb4f33be3c5af50d8ef57b94708d82f2c8d2960e8b0244b6e0e3",
+    "admission/jobs-39002206050-1.json": "2aa1e2f24c4e3d60b7ec43b3d0165b3dc66b72db686ec8a3cfa890870ca45555",
+    "admission/native-39002149760-1.json": "5d540fd93f4c97b41ac1859617dd7b63a2b414ba4e551e47031f76f3d045fc8d",
+    "admission/jobs-39024523874-1.json": "08ce268576b3a8a35b2e7042a2675bdcbd3bd36f7df05f80c18d6c143751d02e",
+    "admission/jobs-39023656990-1.json": "e5a3f0074b87901339c65da089200f797be274cd22ab7bb4fdbe8db6ed81325b",
+    "admission/jobs-39018511077-1.json": "b689874a36a5623189abec27015956d61b1eb9333e252192ce08383067cf7f91",
+    "admission/jobs-39029375444-1.json": "f6afd001d2485f1c55045d96ae08ab93d1d8e1d30f8a2500b3ce182e37106b41",
+    "admission/jobs-39035657038-1.json": "00e752a271c28846aabbb9f61954b075c3c9569c36f1ec9bd6038a9b4b5390f3",
+    "admission/native-39025719815-1.json": "1da970ce3821695d446e9308c7c449b4ee9d722ea30f906cada4e311c498f476",
+    "admission/jobs-39030151071-1.json": "d503ae62be8b030b6d91955a6f6b3d49ea0f2f14693483d87193ced9d5848b74",
+    "admission/663-comments.json": "ea00fe884a12eba2f5e9f7ab3bb87aa750eb414f0040ed100e805a3e344c69f4",
+    "admission/checkout-actual-worker-terminality.json": "5e46b81d48c8f48812fb8ea7269af1fc0fd296b618eca6c374e63e186d5fc259",
+    "admission/native-39031932594-1.json": "69c9e0d8c12ac2741e02a95b6ca6224297b53e469aedc8e905bd62683aeac342",
+    "admission/jobs-39036747849-1.json": "eb293706d9850eabae207cd9a60addfe3f63002c5455df365169d932978c2d32",
+    "admission/actual-worker-terminality.json": "197b9c17d20c96818f4ecd0b945686838acae0c05365dd04fee458808f73d9cb",
+    "admission/native-39033240612-1.json": "8a262e1a662a8725a44d506c0301619dbb859803a9893fa86a229822f9fd886e",
+    "admission/native-39013922391-1.json": "ab3a1cb4929e630370335f6981cfc3a1d2ef4403c2d92b49d61bead6748e760c",
+    "admission/native-39001134190-1.json": "0b71f228a7229065a3ea5d5f4fdd431bbcf0e06b143c20a119f8ee251ea9ab75",
+    "admission/jobs-39028850122-1.json": "ce62ce1a7f445d59f7eaeb8d4517e523465174bea0f857a2a760e9d80bc457ac",
+    "admission/661-review-comments.json": "97e9daf042ea2e713fa5f4ae3bc1bcab9b3ee281914778d2d97b264311e8d8ad",
+    "admission/jobs-39002997338-1.json": "a599bd7d34fe0e3d4b147c81a00284e5bbe9fc386d16a391cb425d292ce64740",
+    "admission/jobs-39019445173-1.json": "2aa1e2f24c4e3d60b7ec43b3d0165b3dc66b72db686ec8a3cfa890870ca45555",
+    "admission/jobs-39006528777-1.json": "f24cc446ffdb5f5ed55d520fc952d39ad9b2b45a9f713f8a8d69e1bab4bde00d",
+    "admission/jobs-39035598641-1.json": "d13d547e45d0bb4a833c9f65d744f3c49019d99ca564934b77d7028b963202d5",
+    "admission/jobs-39002744795-1.json": "94f0ea4ff6e126cd8f0cab7615df10a5cfd2a9754763543d0c82c1bd96b4488e",
+    "admission/jobs-39022800487-1.json": "5dfc8771529b1f84539acd0c54fb1f9f436628420291d77782423023b610f2d1",
+    "admission/jobs-39021153531-1.json": "2527588f228880393aff50e555f0caa5b7c6477dd3673e777cd772a0abaf4697",
+    "admission/native-39023656990-1.json": "e0220fe5268a6aa759cbfb17a985177bd38c15b5b3248445246061fbdf77efe2",
+    "admission/native-39024523874-1.json": "3829726986c648e6f6d8027afe3e4719bf3167f9feb2bb5e187c9fb94ca2b9f4",
+    "admission/660-comments.json": "336730fa9bb5f239df965e9443f33ac7e2a42d40c106432c47d7ad866150169d",
+    "admission/jobs-39002149760-1.json": "2bf02d999bcaaa4266931bff582bd37500419bd1dcf9bfb2a9d3407afcaa86eb",
+    "admission/native-39002206050-1.json": "46788b7f803062d272eb69798ed5f45e998a274cee7d583dcc2261b386ccdf91",
+    "admission/native-39030151071-1.json": "b9135cb653037bd2e11fe5104b5ee3e2c7d9358f2e94a8da57ba90aac8b3b997",
+    "admission/native-39035657038-1.json": "6e1e076099cd71c8cdd49b50f936990b0a923f98e28b2988c2abe591e7a03abf",
+    "admission/jobs-39025719815-1.json": "31cbf92676143dc367dd6b9d6b8a6d396b1ddb3b4b574c6539178b566e506a0c",
+    "admission/native-39018511077-1.json": "56e51e4df063c7018e2542dec8232168195b7207a7cb516e9c6adaf04f87e72f",
+    "admission/native-39029375444-1.json": "aeece5a5c43e121b58f7155f17f0268c3f954f65a4cec67dcbe6ba6aafd45cce",
+    "admission/native-39017864057-1.json": "0c824473e8c4c75860ece83bd37376e33f8ae91dc6b5e77c31be6015bafc663a",
+    "admission/jobs-39035257159-1.json": "8483a00164e04fcbfcfce162a7389c79dc4872f76735d49913b505647d3d0578",
+    "admission/native-39001068935-1.json": "049b6c8602e7eb503b64841e898a0bd9d7c8a5b30ed6ab8a53789fa8b2a11403",
+    "admission/jobs-39019976757-1.json": "2aa1e2f24c4e3d60b7ec43b3d0165b3dc66b72db686ec8a3cfa890870ca45555",
+    "admission/native-39010949343-1.json": "6c5d82ffcd70b88acd412ebe3ab2bbc0ffe286e131d9cc02020b74ae53426835",
+    "admission/jobs-39036750577-1.json": "b30b96934521292a2b5c855b2e47155a75ceee9dfcbe3c2338df12ccacd7a38a",
+    "admission/jobs-39022671540-1.json": "a6dd13c154c5405e90dedc1b05ef85d6300f848c4ff46fc3957ea02caa1fc04d",
+    "admission/jobs-39023965763-1.json": "e2be63d41b91201f4eed833801d3407702abe1c7b4204fa28ab23155ee7faa46",
+    "admission/661-comments.json": "6f20b9cb791e80f29b16c45ebffc18e49ca7de7dec9c33a25d2070541a424751",
+    "admission/native-39020485345-1.json": "702efbd113b2cd5498d9138bd975622c98f8574f6bae4e514eaf5fa0421b04c1",
+    "admission/all-head-decoded.json": "26952fd0afd303794445fb81e049a87c08741546fafb78dcda2562cbddd13bfb",
+    "admission/661-pr.json": "83a3495cef6ff87c4245ac11603752c1608cab806f0aa38dbbd80b2468b97bb7",
+    "admission/jobs-39019922545-1.json": "fb1555c1cf707d75a548c8b6e208b4ebcd36261173e5aeafd6acf639484c5645",
+    "admission/jobs-39017848096-1.json": "8508f8c3832750554f2ecf3263fe124da8ce65a2ed7d7ce74432b1111e59f9da",
+    "admission/native-39025097095-1.json": "ef1da42f552fe8820adbae0484e595b4331aa06d0d2311295d798601f140f4a8",
+    "admission/native-39021377594-1.json": "de82574ebfb61a7d5b50f09d9c53ce300656299b037d09aaa51ca9289c06ff6b",
+    "admission/jobs-39021918656-1.json": "c97cf5bbc540f1860357a3be2e917a2fc1b52b65807f60791fc5386f45f29750",
+    "admission/native-39019393738-1.json": "b0b59c1ab7f4657efb42210b8766dad0196f36f409d27d6bc5f096bfac53c202",
+    "admission/native-39002286335-1.json": "61a0dba542e45c2c16e81cad87b9ad26f5865668971e68381480b0592d12ccb4",
+    "admission/native-39019976757-1.json": "04245e1f6eac349c208275b53638bbd6b3ea6c5bc5fd4f0006669d51cd6048a6",
+    "admission/jobs-39001068935-1.json": "a01d5f3cc9845371f688a5adcd89d3d903a847b5d7ed778daedfb7034ec18344",
+    "admission/native-39035257159-1.json": "46b9c864e3b091851126f5f7a1daafbfcb8fc09e457394f5112dc434108a627c",
+    "admission/jobs-39017864057-1.json": "ba3db8d422cd96a86408e4622bd0a97765b649a6b7997496ff750a275d3c6d30",
+    "admission/663-pr.json": "4de629178f212e4a7879ac58157025804c75acf8979a3cac11ec7acd33720690",
+    "admission/jobs-39010949343-1.json": "a3c28d58180c0c0f790d8e79098b1b2d781a166656397c56d543e93bcb528c70",
+    "admission/native-39036750577-1.json": "96804f07376a6b1aaa3ffee51cb86f0ba158db945b39c3b68a446f736f4dd924",
+    "admission/native-39022671540-1.json": "52eee3278c74ff525317f5e648d0ceec790c005a9dbd8d965ee24be8f2b81fce",
+    "admission/jobs-39020485345-1.json": "10bf3d9276a6773909c8dea52d86ada8600677a6862869ac045fa46eea37f763",
+    "admission/native-39023965763-1.json": "d677ee5af6542bb343890397580fc1cd34aaf716b626cfaac05b5afa847b27ae",
+    "admission/native-39019922545-1.json": "59bc674a9a648727bc932f9d5058eecdfd5319acb9190fa4efb5d105b08faadc",
+    "admission/663-reviews.json": "643f7a87a7c9fe607c6ff8bd794af08e666393ee9caaf036d37f21b18d282afb",
+    "admission/dispatch-list.json": "96cc54651b36036d6fab710b4dbf5fb8085511e9c7f8d042e52b2c5d885623c3",
+    "admission/native-39017848096-1.json": "0c685c4d83806d389f8feba5a2966e88e86982840802057873b181dd5470fc72",
+    "admission/660-issue.json": "283505a949a58d909a1f97ae82439f1aaae822fd936cf6b8140f4210177b7f1d",
+    "admission/native-39021918656-1.json": "9261c9be74cc5519a3a326d05f9b2849d772eb2baedea1eef66cbfeccbaf70c9",
+    "admission/jobs-39019393738-1.json": "6f28893d361fb9d5fd0c12dedb61308ef915060eae305a0a2b2b95904b0448df",
+    "admission/jobs-39025097095-1.json": "2aa1e2f24c4e3d60b7ec43b3d0165b3dc66b72db686ec8a3cfa890870ca45555",
+    "admission/jobs-39021377594-1.json": "2aa1e2f24c4e3d60b7ec43b3d0165b3dc66b72db686ec8a3cfa890870ca45555",
+    "admission/jobs-39002286335-1.json": "496a0e53120e76bc381c8fe86982de70b2c75c19d25e42983690fda6cf246333",
+    "admission/663-review-comments.json": "8554d9620ce2f0ac0138b21bbcb6b5e169720dfcb59a6c648a5734be21bf13de",
+    "raw/collection.log": "bf6a0cd6b1a4d290f7ef5d9d6880d41a881702c58b8f9a4e8481faa8e11613d1",
+    "raw/final-guard-disconnected-red.log": "b57ee13722c2b075dfa7734f741077814c257742b4dc6f42bdb3f16588d057f7",
+    "raw/feedback-selftest-final.json": "837032de99cff3b578c167a65f4f599313495969e13127eaa628c6ce47d33fe8",
+    "raw/tilde-green.json": "19eacf8602f6480f5d8b06a56fe3a4f48601cbcd9f635bf3342a15bee1f6554e",
+    "raw/tilde-before-green.xml": "6fef2d05a7e39469a64c6a3039dc12112782f3a5af3db9c4efe3108a21e8f644",
+    "raw/final-tilde-before-green.log": "b66a7bcbb02d225e816933757858a8267b99fe1b97a16e2a6054921d25809cbe",
+    "raw/feedback-selftest.json": "9242754d32e2bb9b54a377d296cecb796f8ed5c5de379288e398828f6ad8e2af",
+    "raw/tilde-disconnected-red.xml": "86d564dd6a5dbef52027efe62c02d8a82c40dfdfe709a5340b14412a36c3f35d",
+    "raw/targeted.json": "b4cbc1dbc8e7b67188c018ddee2acc7aac8c811d5a90b3de507a4ea1ca78ec43",
+    "raw/feedback-selftest.log": "1e828ca4f633d7a6701daa5be627e3008ae946b0d60ad239fea325b07d937eb1",
+    "raw/black.json": "a63d6efaf3d541afb10717315e02222a8317816da06878ad5fab7912e012f497",
+    "raw/collection-final.log": "1b697084d15cfb4713e77156143a0b68fa97f7cebef56c4d26add63f802fe1a8",
+    "raw/ruff.json": "964901804f92cccbd23a6b0c1a0887de15a3dda0d004d10d5b613fdd00b8b35c",
+    "raw/final-tilde-disconnected-red.xml": "3795c9f4366397ad5f98cd3ab2c50a09176537ccf6494bdc60f797660f88c662",
+    "raw/first-mutation-driver.py.txt": "1dd17317e690c78825c66e33184d1257ed822c932fa15a6f83c92f08d6026587",
+    "raw/targeted-final.log": "f3b47b6548325971787927a4e7bf2997a7c9134ee432781d07b3e26d04d768c7",
+    "raw/guard-disconnected-red.log": "953b3c7c11c55e295ec653a643128700d78d8b225ddc4c0afd3d0bc4ad0feb48",
+    "raw/state-disconnected-red.xml": "cea9baeb82863a4eef586737656934eaa038ece48f6ca2230813c41f44f7be9c",
+    "raw/tilde-green.log": "718af798eb1450a812074f301573c1f498edd3575a2450f85ee649d7e03c3c72",
+    "raw/collection-final.json": "aeb90509c3f4bbccc28a4ae4326deab3378e66422cd837b07a4b797691d6163f",
+    "raw/targeted-final.json": "78557dbde3fdc099311022ead6632a382fece2011598a2e690a8032246fb5352",
+    "raw/tilde-restored-green.log": "e2cff7ec47a6d59907237c96eb5a77734fd43c8db4a4821df99c6ff223a78115",
+    "raw/node-cli.log": "e75fd6f68323273417ea76924a38fe7ebbf87c283eff31d028c4b7db6fb426bf",
+    "raw/admitted43c-tilde-red.xml": "6c571f86e3e3b64fc0e54f9708be015788e148bb70abcfdb7e4efa62a98aa5d1",
+    "raw/final-state-restored-green.log": "7915da78c28e56a493347993020eaf3c230a85e91fb1ec31ea3015f0bf2bd3f7",
+    "raw/exporter-selftest.json": "e875b0ff4a62b83405e0475c46941d986a1579f0996356e17557c3832821534a",
+    "raw/node-cli-canonical-tmp.json": "059e8e9c9d0830db78ee7e5dc30f38a6e981e36f63cc6ebd79b93779f91ad80b",
+    "raw/precedence.json": "864417014829d08ae4daa8bc79774c741f952dda998098a4b6d04fd2fc1bb971",
+    "raw/node-cli.json": "2b8f2cb08ce14f1dccbdc79f1438821650eae5a57d8032ac090f088dbf8b10dc",
+    "raw/state-restored-green.xml": "e35ea1dd6e437ae739f020f8a2fbee7c17896d6afabdb07471fe3b39f246dd78",
+    "raw/targeted.log": "fbe5d18c64ad438f87d94d6c96838e3d60bb4c0d2f53c9d8a801aa17d7e1c48e",
+    "raw/source-issue.json": "fa2ea2ee52c3259fbc042c370881b483e6c68e772afc804d5608858081f3d376",
+    "raw/mutation-bindings.json": "2071c9d4c764920c33cc2f21c920bf627cca8343380695cf0a45a7f538b9d0de",
+    "raw/mutation-final-bindings.json": "ebb2f15758a589c456b65c0734c82612b85c5401fc6d2045c29307fabf337ffa",
+    "raw/final-guard-restored-green.xml": "bb65867c9e2a0abced300e954706b820931cd548bcbaf11921ffafa0f26811bc",
+    "raw/state-before-green.xml": "1bb6b5c35eec36386efd2e2f58e978dee1317b81b2a6dc09bc425ee62323e48a",
+    "raw/final-state-before-green.log": "aa4bbf021d16cfc5eabc8ff3e1cb56c58311feff605c93a3a078a36db30d9b4e",
+    "raw/exporter-selftest-final.json": "52b25aba2f3c58cb638cf92d108759235b7ef91f5f262f9b6e4548417f5c2409",
+    "raw/final-guard-before-green.log": "ba617c01785e926ad7e6642a75b0ccd35d7056b75b4d49cfe6732d3bba09ae82",
+    "raw/final-state-disconnected-red.xml": "9aa6abd69f1e842d55eaa878628fe99d50e235dad63cc0ee38507ed8a3305f85",
+    "raw/guard-before-green.xml": "40862db58ca38b91cb882047c8b75feb611bfb0f621b6bce3d6270bf04d14d5c",
+    "raw/final-tilde-restored-green.xml": "e4c34f47ca0c650cad6fd14fabc373ccd545e2f69214440b5734217ddb8ef84b",
+    "raw/source-comments.json": "82e89d330dc08c46baf5ef8f5f91098289ef4064f320a9738fc07101ed36919e",
+    "raw/state-disconnected-red.log": "8c25efd0b3e709e7ee41ba139f8c9052fbb5c7e352556ce6036ff5aa07786660",
+    "raw/tilde-green.xml": "34a6008a0d16bf76a0e55d44ddd538f60dd28db541a503c6b335365b92a84e56",
+    "raw/mypy.json": "d81378d6b291da11db9189ac0f67b942c69508853d357438dda5d9ac5c547221",
+    "raw/tilde-restored-green.xml": "b73d15f0f8bb21e01851f5841e231446820e87f411f2d905b0b4e1378e981ff4",
+    "raw/admitted43c-tilde-red.log": "ecf06d30cfc366f57ba388de041bd9a32a3c39e294b74f894a6a9ebba4e00a17",
+    "raw/final-state-restored-green.xml": "fbc66fea03bace4810303d58b04f5b5196470a6f4abfee14dc6062fc5291737e",
+    "raw/node-cli-canonical-tmp.log": "3fbc7cea819b6ca7b69969e191fb30992098ad6bda083c9543cd129ffa118897",
+    "raw/mypy.log": "4a2be1256fd6658965a89fcaea86e349054633545f83bb86c172e35d5804836d",
+    "raw/ruff.log": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+    "raw/advisor.log": "c3e8c1b209d08e1eec7086eb2ea66059f8440645dee7c1c5f45f3f00e84d716f",
+    "raw/exporter-selftest-final.log": "fe291576c068191e4352c7793ddac6193153d48419c8e63a8e86728248702f7c",
+    "raw/state-restored-green.log": "fcdd7d0a309ef282898181ef8c3b0af217e60e9beedf6b292b2f069ad992e87e",
+    "raw/targeted.xml": "817246e01cf562aa0b18ccb1dadf2b9764eff28f7b0cb7161254da7789b79e46",
+    "raw/state-before-green.log": "af6b9a9994fc835cc8e628e6fd44a831609ccc9ea5895ef532988bf71126a551",
+    "raw/final-state-before-green.xml": "0c89c14bde69be38644fb9672ed7d7b6ef301fc6539047605c47ca86df00209c",
+    "raw/black.log": "b835c05d0fec20c3d6e2c3465f07edd4ead2566fe247370d05c5d6487b4e5f0f",
+    "raw/final-guard-restored-green.log": "5b08887ebcc465490ba9bc8260f5ddd39a757b9e2747e4d76a615c659bdce39d",
+    "raw/final-guard-before-green.xml": "33c96f61b0437e1a8ce0b0cab6bb37b6084fd20a56caae0ca1cbfe9e1930adc5",
+    "raw/final-state-disconnected-red.log": "4b22943b4298dd59f423a55dabd790ab4ce082f1c57cd3c0210c999b92f98be8",
+    "raw/guard-before-green.log": "3dcacd4128872ad5583142708bc6b16549cdd947245aa77ab8a2f534f453e56a",
+    "raw/review-threads-before.json": "c222242f21d422466cef6fa3f2ab1dfb4002c4af40c3f4ac803a7655662670b5",
+    "raw/advisor-receipt.json": "1d9ce1e1c6619c6367e51d644b01b70f02ac9bb782f7d0e6f0bd930e6194c1d1",
+    "raw/final-tilde-restored-green.log": "5989355d83ea4189bc263ff2023a17aa6f3710875198507a5f9fa47b65730a77",
+    "raw/collection.json": "ed0544068483b6247c74064222e94dd1a8dd96713181bae608592e436f4f643e",
+    "raw/final-guard-disconnected-red.xml": "4f9ec13f5ba7ed08a265b89b05e81dcfed3b5702d56fd18d17804adbaf670529",
+    "raw/exporter-selftest.log": "a147bb167b4aa98689d9a262c239cdb49aa291a8d043bfb17ef84be6709ad0c7",
+    "raw/tilde-before-green.log": "c47fcb4d77e30979603aa0519d3b85e602ad30841c373d52e7ce69e0c60d3d47",
+    "raw/final-tilde-before-green.xml": "80db3988760d4f3cdae7a17cffaf5e3f45d4ba0f81f72f13b2cdd47ab9079a23",
+    "raw/tilde-disconnected-red.log": "492f6b173333fe730af014fea25c8d14b07148f3f3427a6ba671bd79e2cd4b14",
+    "raw/final-tilde-disconnected-red.log": "c2030a206832c2a4b5fa05b42613dd0adf17f1f49b9483f25548ed7a6fb158e6",
+    "raw/admitted43c-tilde-red.json": "a01d449b357d0745068764d1d16f20d1fa4634e2214fb2f2cf9cbec1ce32815c",
+    "raw/feedback-selftest-final.log": "9d9ef1a576e1eb77135404668c6cc64f539eee0bc0a765344f95f598d68f9850",
+    "raw/targeted-final.xml": "544cae114107af3b36428ceff74c60fe32ab2e2ad7af1776bd55f431a0cd628d",
+    "raw/guard-disconnected-red.xml": "dfb081fb78a426e1c36bbd3b46afcbf32e55bfd4c0d4ee0a20fa7e6d190084b2"
+  },
+  "admission_summary": {
+    "passed": true,
+    "heads": {
+      "661": "4411533b2e1394544d187eafe37ce3e24ef243c3",
+      "663": "43c2b4c5e551e05f4d10e27388991709ce35fffa"
+    },
+    "reservation_count": 29,
+    "direct_native_attempts": [
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39001068935:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 1
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39001134190:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39002149760:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39002206050:1",
+        "status": "completed",
+        "conclusion": "cancelled",
+        "jobs": 0
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39002286335:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39002744795:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39002997338:1",
+        "status": "completed",
+        "conclusion": "failure",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39006528777:1",
+        "status": "completed",
+        "conclusion": "failure",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39010949343:1",
+        "status": "completed",
+        "conclusion": "failure",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39013922391:1",
+        "status": "completed",
+        "conclusion": "failure",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39017848096:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39017864057:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39018511077:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39019393738:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39019445173:1",
+        "status": "completed",
+        "conclusion": "cancelled",
+        "jobs": 0
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39019922545:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39019976757:1",
+        "status": "completed",
+        "conclusion": "cancelled",
+        "jobs": 0
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39020485345:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39021153531:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39021377594:1",
+        "status": "completed",
+        "conclusion": "cancelled",
+        "jobs": 0
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39021918656:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39022671540:1",
+        "status": "completed",
+        "conclusion": "failure",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39022800487:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39023656990:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39023965763:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39024523874:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39025097095:1",
+        "status": "completed",
+        "conclusion": "cancelled",
+        "jobs": 0
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39025719815:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39028850122:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39029375444:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39030151071:1",
+        "status": "completed",
+        "conclusion": "failure",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39031932594:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39033240612:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39035257159:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39035598641:1",
+        "status": "completed",
+        "conclusion": "failure",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39035657038:1",
+        "status": "completed",
+        "conclusion": "failure",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39036747849:1",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": 19
+      },
+      {
+        "workflow_attempt_id": "stranske/Orchestrator:39036750577:1",
+        "status": "completed",
+        "conclusion": "failure",
+        "jobs": 19
+      }
+    ],
+    "latest_summary": {
+      "id": 6229586542,
+      "updated_at": "2026-10-17T13:30:56Z",
+      "action": "skip (paused)",
+      "body_sha256": "2fe27526df6b40d2391c9ef8b66a9c0dcbffdebf6cc2fbd8a0ec4c63ade0be7b"
+    },
+    "claims": {
+      "660": {
+        "target": "stranske/Orchestrator#660",
+        "agent": "opener1155-source660-tilde-final-guardian",
+        "pid": 63199,
+        "ts": 1792243524.2054799
+      },
+      "663": {
+        "target": "stranske/Orchestrator#663",
+        "agent": "codex",
+        "pid": 64877,
+        "ts": 1792243543.678187,
+        "log": "/Users/teacher/.codex/handoff/dispatch-logs/stranske__Orchestrator_663.codex.log",
+        "worktree": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__663__opener",
+        "lane": "opener",
+        "task_type": "implement",
+        "mode": "full",
+        "run_id": "stranske__Orchestrator_663-codex-1792243543652460000",
+        "started_ts": 1792243543,
+        "updated_ts": 1792243543.678187
+      }
+    },
+    "ownership": "expected parent root guardian and this worker; no other admitted/native writer"
+  },
+  "admission_note": "29 reservations / 38 direct terminal attempts at prepush check. New661 attempt39036750577 completed/failure: actual child terminal, Run Codex skipped, commit/push step terminal, error completion; no implementation/delivery claimed."
+}

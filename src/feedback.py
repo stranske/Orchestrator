@@ -75,7 +75,7 @@ def resolve_db_path(explicit: Path | None = None, state_dir: Path | None = None)
 # Bind the learner at import through the same instance resolver used by readers.
 # _conn keeps DB_PATH so existing in-process private-store monkeypatches still work.
 # Preserve the legacy spelling of explicit private-copy paths (e.g. /tmp aliases).
-DB_PATH = DB_PATH if os.environ.get(DB_PATH_ENV) else resolve_db_path()
+DB_PATH = DB_PATH.expanduser() if os.environ.get(DB_PATH_ENV) else resolve_db_path()
 
 
 # `agent_switches` holds two kinds of switch (2026-09-23): `source='label'` rows come from a PR's
@@ -7048,7 +7048,8 @@ def _selftest_resolve_db_path() -> None:
 
     global DB_PATH
     saved = {
-        key: os.environ.get(key) for key in (DB_PATH_ENV, "ORCH_LOCAL_RUNTIME", "ORCH_STATE_DIR")
+        key: os.environ.get(key)
+        for key in (DB_PATH_ENV, "ORCH_LOCAL_RUNTIME", "ORCH_STATE_DIR", "HOME")
     }
     previous_default = DB_PATH
     try:
@@ -7088,6 +7089,12 @@ def _selftest_resolve_db_path() -> None:
         finally:
             writer.close()
         assert isolated["DB_PATH"] == resolve_db_path(), "state-only learner/reader split"
+        os.environ["HOME"] = str(root)
+        os.environ[DB_PATH_ENV] = "~/private/orchestrator.db"
+        isolated = runpy.run_path(__file__)
+        assert isolated["DB_PATH"] == root / "private" / "orchestrator.db", "literal tilde DB"
+        # Reader canonicalization may spell the same /tmp store as /private/tmp.
+        assert isolated["DB_PATH"].resolve() == resolve_db_path(), "tilde learner/reader split"
     finally:
         DB_PATH = previous_default
         for key, value in saved.items():

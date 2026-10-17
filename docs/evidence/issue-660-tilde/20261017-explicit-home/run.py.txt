@@ -1,0 +1,12 @@
+import hashlib,json,os,pathlib,subprocess,sys,time
+root=pathlib.Path('/tmp/source660-tilde');repo=pathlib.Path('/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__663__opener')
+label=sys.argv[1];argv=sys.argv[2:]
+for d in ('home','state','runtime','tmp'): (root/d).mkdir(exist_ok=True)
+env={k:v for k,v in os.environ.items() if not k.startswith('ORCH_')}
+env.update(HOME=str(root/'home'),ORCH_STATE_DIR=str(root/'state'),ORCH_LOCAL_RUNTIME=str(root/'runtime'),ORCH_FEEDBACK_DB=str(root/'runtime/absent.db'),ORCH_CAPABILITIES_PATH=str(root/'runtime/capabilities.json'),ORCH_MODEL_PROBE='0',TMPDIR='/tmp',PYTHONDONTWRITEBYTECODE='1',PATH='/opt/homebrew/bin:/opt/anaconda3/bin:'+env['PATH'])
+paths=['src/feedback.py','src/route_weights_export.py','src/verify.py','tests/test_source660_reconciliation.py','tests/test_route_weights_export.py','tests/test_route_weights_publication.py','tests/test_route_weights_publish_cadence.py','tests/test_firing_regressions_section.py','tests/test_route_weights_export_cli.js','.verify-floor.json','scripts/verify_before_sync.sh','tests/test_route_weights_presync_source.js','tests/test_verify_private_state.py']
+hashes=lambda:{p:hashlib.sha256((repo/p).read_bytes()).hexdigest() for p in paths}
+before=hashes();t=time.time();p=subprocess.run(argv,cwd=repo,env=env,capture_output=True,text=True)
+(root/'raw'/f'{label}.log').write_text(p.stdout+p.stderr)
+record={'label':label,'argv':argv,'cwd':str(repo),'exit':p.returncode,'elapsed':time.time()-t,'environment':{k:v for k,v in env.items() if k.startswith('ORCH_') or k in ('HOME','TMPDIR')},'source_sha256':before,'source_unchanged':before==hashes()}
+(root/'raw'/f'{label}.json').write_text(json.dumps(record,indent=2)+'\n');print(label,p.returncode);print((p.stdout+p.stderr)[-4000:]);sys.exit(p.returncode)
