@@ -382,6 +382,8 @@ def run_pipeline(
                     if isinstance(prior_finished_at, (int, float))
                     and not isinstance(prior_finished_at, bool)
                     and math.isfinite(float(prior_finished_at))
+                    and float(prior_finished_at) >= float(previous.get("created", 0))
+                    and float(prior_finished_at) <= now()
                     else now
                 )
                 prior_stop = validate_stop(path, previous_assignment, now=prior_stop_now)
