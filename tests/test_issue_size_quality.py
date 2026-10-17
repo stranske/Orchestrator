@@ -10,6 +10,7 @@ import switch_review
 
 @pytest.fixture(autouse=True)
 def isolate_unrelated_credential_scan(monkeypatch):
+    monkeypatch.setattr(switch_review, "fleet_delivery_measures", lambda: [])
     monkeypatch.setattr(
         switch_review, "credential_exposure", lambda **kwargs: {"status": "disabled"}
     )

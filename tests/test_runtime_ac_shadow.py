@@ -1098,6 +1098,7 @@ def test_ingest_runs_real_named_test_and_removes_its_checkout(private_brain, mon
     monkeypatch.setenv("ORCH_VALUE_CHAIN_MONITOR", "0")
     monkeypatch.setenv("ORCH_DISABLE_STEPS", "issue-size-quality")
     monkeypatch.setattr(switch_review, "_capability_heartbeat", lambda: None)
+    monkeypatch.setattr(switch_review, "fleet_delivery_measures", lambda: [])
     monkeypatch.setattr(
         switch_review, "switch_states", lambda **_: {"held_off": [], "on_but_idle": []}
     )
