@@ -53,8 +53,10 @@ class CapacityPublicationTests(unittest.TestCase):
                 for agent, cfg in capacity.AGENTS.items()
             },
         }
+        database = root / "weights.db"
+        export._fixture_db(database)
         previous = export.build_document(
-            root / "absent.db",
+            database,
             now=100,
             capacity_snapshot=snapshot,
             include_capacity=change != "legacy",
@@ -75,7 +77,7 @@ class CapacityPublicationTests(unittest.TestCase):
             snapshot["agents"]["codex"]["state"] = capacity.SHED
         elif change == "window":
             snapshot["agents"]["codex"]["window"] = "1h"
-        document = export.build_document(root / "absent.db", now=101, capacity_snapshot=snapshot)
+        document = export.build_document(database, now=101, capacity_snapshot=snapshot)
         should_publish = change in {"state", "window", "legacy"}
 
         with patch.object(export.provision, "ensure_canonical", return_value=canonical):

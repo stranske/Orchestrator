@@ -3,6 +3,8 @@ import sqlite3
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 import capacity
 import route_weights_export as export
 
@@ -443,3 +445,51 @@ def test_completed_publication_survives_success_heartbeat_failure(tmp_path, monk
     assert len(published) == 1
     assert (tmp_path / "route-weights-export.json").exists()
     assert "capability heartbeat failed: fixture ledger unavailable" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "database_kind", ["missing", "empty", "no-weights-table", "empty-weights-table"]
+)
+def test_publish_refuses_absent_evidence_before_git_or_capacity_write(tmp_path, database_kind):
+    database = tmp_path / "weights.db"
+    if database_kind != "missing":
+        with sqlite3.connect(database) as connection:
+            if database_kind == "no-weights-table":
+                connection.execute("CREATE TABLE unrelated (value INTEGER)")
+    if database_kind == "empty-weights-table":
+        export._fixture_db(database)
+        with sqlite3.connect(database) as connection:
+            connection.execute("DELETE FROM route_weights")
+    document = export.build_document(database, capacity_snapshot=_capacity_fixture())
+    before = json.dumps(document, sort_keys=True)
+    with patch.object(export.provision, "ensure_canonical") as provisioner:
+        with pytest.raises(ValueError, match="local route-weight evidence is missing or empty"):
+            export.publish_document(document)
+    provisioner.assert_not_called()
+    assert json.dumps(document, sort_keys=True) == before
+
+
+def test_publish_refuses_threshold_empty_overwrite_and_preserves_fresh_capacity(tmp_path):
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    existing = export.build_document(database, capacity_snapshot=_capacity_fixture())
+    existing["capacity"]["muse"] = {"state": "shed", "window": "5h+weekly", "observed_at": 999}
+    target = tmp_path / export.EXPORT_PATH
+    target.parent.mkdir()
+    target.write_text(json.dumps(existing))
+    before = target.read_bytes()
+    incoming = export.build_document(database, minimum=1000, capacity_snapshot=_capacity_fixture())
+    with patch.object(export.provision, "ensure_canonical", return_value=tmp_path):
+        with patch.object(export.subprocess, "run") as git:
+            git.return_value.returncode = 0
+            with pytest.raises(ValueError, match="empty rankings would erase published evidence"):
+                export.publish_document(incoming)
+    assert target.read_bytes() == before
+    assert not any(call.args[0][3] in {"add", "commit", "push"} for call in git.call_args_list)
+
+
+def test_publish_accepts_real_evidence_recovery_over_version_zero(tmp_path):
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    document = export.build_document(database, capacity_snapshot=_capacity_fixture())
+    export._validate_publication(document, {"source_version": 0, "task_types": {}, "reserve": {}})

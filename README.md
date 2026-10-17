@@ -790,3 +790,13 @@ Output must be new and the saved report remains unchanged. Qualification permits
 judgment only: snapshot authenticity, external inventory exhaustiveness, native execution/cost
 and later truth remain separate UNKNOWNs. JSON input to `roles.py` and persisted retrospective
 report results retain their evidence floor, even if their fields claim qualification.
+
+### Route export publication safety
+
+Publishing requires a positive local route-weight evidence version. Missing databases,
+empty databases and databases without route weights remain usable for local shadow
+inspection but cannot publish. A positive version with no threshold-eligible routing
+or reserve rows cannot replace a populated published document. These refusals leave
+both published routing and capacity untouched; do not recover routing by restoring an
+old whole document containing stale capacity. The daily mirror cadence and one-off
+publishers use the same publication guard.
