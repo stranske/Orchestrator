@@ -2146,3 +2146,110 @@ def test_low_transport_failure_suppresses_profile_and_other_profile_continues(
     )
     assert route_profiles == ["gemini-low", "claude-low"]
     assert provider_profiles == route_profiles
+
+
+def test_uncertain_provider_result_stops_before_fallback_exception_or_action(tmp_path, monkeypatch):
+    import closer_evidence
+    import dispatcher
+
+    target = "o/r#41"
+    base = "c" * 40
+    current = snapshot(target=target, base=base)
+
+    class PreparedGitHub(FakeGitHub):
+        def __init__(self, *, deadline):
+            super().__init__(None)
+            self.deadline = deadline
+
+        def snapshot(self, _target):
+            return copy.deepcopy(current)
+
+    monkeypatch.setattr(adapter, "GitHub", PreparedGitHub)
+    monkeypatch.setattr(closer_evidence, "validate_packet", lambda _packet: True)
+    monkeypatch.setattr(closer_evidence, "drift_sample", lambda *_args, **_kwargs: [])
+    backend = closer(tmp_path, current)
+    monkeypatch.setattr(
+        backend, "campaign_admission", lambda *_args, **_kwargs: {"allowed": True, "timeout": 60}
+    )
+    chosen = []
+
+    def route(*, load, unavailable_profiles, with_status=False):
+        profile = "gemini-low" if "gemini-low" not in unavailable_profiles else "claude-low"
+        chosen.append(profile)
+        value = {"agent": profile.split("-")[0], "profile_id": profile, "pools": []}
+        return (value, "available") if with_status else value
+
+    monkeypatch.setattr(adapter, "_pipeline_low_route", route)
+    calls = []
+
+    def offload(agent, _prompt, **kwargs):
+        calls.append((agent, kwargs["profile_id"]))
+        return {
+            "exit": 124,
+            "run_id": "agy-turn-still-running-41",
+            "outcome_status": "uncertain",
+            "outcome_uncertain": True,
+            "retry_safe": False,
+            "error": "remote turn still in progress",
+        }
+
+    monkeypatch.setattr(dispatcher, "offload", offload)
+    packets = {}
+
+    def prepare(target_name):
+        packet = {
+            "schema": "closer-evidence/v1",
+            "target": target_name,
+            "head": HEAD,
+            "base": base,
+            "producer_sha256": "d" * 64,
+            "semantic_cache_key": "closer-evidence-semantic/v1:" + "e" * 64,
+            "sections": {},
+            "manifest": {"packet_sha256": "f" * 64},
+        }
+        packet_path = tmp_path / "uncertain-packet.json"
+        packet_path.write_text(json.dumps(packet))
+        snap = copy.deepcopy(current)
+        snap_path = tmp_path / "uncertain-snapshot.json"
+        snap_path.write_text(json.dumps(snap, sort_keys=True, separators=(",", ":")))
+        prepared = {
+            "revision": snap["revision"],
+            "identity": target_name,
+            "semantic_cache_key": packet["semantic_cache_key"],
+            "producer_sha256": packet["producer_sha256"],
+            "snapshot": {
+                "target": target_name,
+                "head": HEAD,
+                "base": base,
+                "revision": snap["revision"],
+            },
+            "snapshot_ref": {
+                "path": str(snap_path),
+                "sha256": hashlib.sha256(snap_path.read_bytes()).hexdigest(),
+            },
+            "packet_ref": {
+                "path": str(packet_path),
+                "sha256": hashlib.sha256(packet_path.read_bytes()).hexdigest(),
+            },
+            "evidence_summary": {"drift_sample": [], "sections": {}},
+        }
+        packets[target_name] = prepared
+        return prepared
+
+    def pipeline_stub(_path, targets, **callbacks):
+        target_name = targets[0]
+        interpreted = callbacks["interpret"](
+            target_name,
+            {"prepare": prepare(target_name), "deadline": time.time() + 60},
+        )
+        assert interpreted["status"] == "uncertain"
+        assert interpreted["provider_outcome"]["actual"]["run_id"] == ("agy-turn-still-running-41")
+        assert "substantive_needs" in interpreted
+        return {"targets": {target_name: interpreted}}
+
+    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=pipeline_stub))
+    args = SimpleNamespace(state=str(tmp_path / "pipeline-state.json"), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [target], backend, time.time() + 360)
+
+    assert chosen == ["gemini-low"]
+    assert calls == [("gemini", "gemini-low")]

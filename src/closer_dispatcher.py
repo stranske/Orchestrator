@@ -2014,6 +2014,53 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 for pool in route.get("pools", []):
                     route_load["pool:" + pool] = max(0, route_load.get("pool:" + pool, 1) - 1)
         output = str(result.get("output") or "")
+        if result.get("outcome_uncertain") is True or result.get("retry_safe") is False:
+            if (
+                result.get("outcome_uncertain") is not True
+                or result.get("outcome_status") != "uncertain"
+                or result.get("retry_safe") is not False
+                or not isinstance(result.get("run_id"), str)
+                or not result.get("run_id")
+                or type(result.get("exit")) is not int
+                or result.get("exit") == 0
+            ):
+                raise RuntimeError("provider outcome uncertainty lacks a valid actual run receipt")
+            if run_drift:
+                with drift_lock:
+                    drift_claimed = False
+            with route_lock:
+                route_lock.notify_all()
+            # agy may still be processing this turn. Keep its actual dispatcher
+            # identity and evidence binding, and stop this target before profile
+            # fallback, strong interpretation, or an action can duplicate work.
+            return {
+                "status": "uncertain",
+                "classification": "provider_outcome_uncertain",
+                "substantive_needs": [],
+                "authority": False,
+                "provider_outcome": {
+                    "schema": "closer-provider-outcome-uncertain/v1",
+                    "target": target,
+                    "head": snap.get("head"),
+                    "base": (raw_packet or {}).get("base"),
+                    "revision": context.get("revision"),
+                    "identity": context.get("identity", target),
+                    "semantic_cache_key": prep.get("semantic_cache_key"),
+                    "actual": {
+                        "agent": route["agent"],
+                        "requested_profile": route["profile_id"],
+                        "run_id": result["run_id"],
+                        "exit": result["exit"],
+                        "outcome_status": result["outcome_status"],
+                        "retry_safe": result["retry_safe"],
+                        "requested_model": result.get("requested_model"),
+                        "served_model": result.get("served_model"),
+                        "served_model_status": result.get("served_model_status"),
+                        "error": str(result.get("error") or "")[:1000],
+                        "log": str(result.get("log") or "")[:1000],
+                    },
+                },
+            }
         if result.get("exit") != 0:
             if (
                 not isinstance(result.get("run_id"), str)

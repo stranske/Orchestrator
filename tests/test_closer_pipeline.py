@@ -650,6 +650,242 @@ def test_provider_failure_defers_without_strong_or_action_and_requires_evidence(
     assert not validate_stop(path2, ["a"])["valid"]
 
 
+def test_uncertain_native_interpretation_is_durable_and_never_retried(tmp_path):
+    path = tmp_path / "uncertain-provider.json"
+    clock = [1000.0]
+    semantic = "closer-evidence-semantic/v1:" + "a" * 64
+    head = "b" * 40
+    calls = []
+
+    def prepare(target, _context):
+        calls.append(("prepare", target))
+        return {
+            "revision": "head-revision-1",
+            "identity": target,
+            "semantic_cache_key": semantic,
+            "snapshot": {"head": head, "base": "c" * 40},
+        }
+
+    def interpret(target, context):
+        calls.append(("interpret", target))
+        return {
+            "status": "uncertain",
+            "classification": "provider_outcome_uncertain",
+            "substantive_needs": [],
+            "authority": False,
+            "provider_outcome": {
+                "schema": "closer-provider-outcome-uncertain/v1",
+                "target": target,
+                "head": head,
+                "base": "c" * 40,
+                "revision": context["revision"],
+                "identity": context["identity"],
+                "semantic_cache_key": semantic,
+                "actual": {
+                    "agent": "gemini",
+                    "requested_profile": "gemini-low",
+                    "run_id": "agy-turn-still-running-77",
+                    "exit": 124,
+                    "outcome_status": "uncertain",
+                    "retry_safe": False,
+                },
+            },
+        }
+
+    cb = callbacks(interpret=interpret)
+    cb["prepare"] = prepare
+    cb["exception"] = lambda *_: calls.append(("exception", "a")) or {"reviewed": True}
+    cb["act"] = lambda *_: calls.append(("act", "a")) or {
+        "status": "completed",
+        "target_complete": True,
+    }
+    receipt = run(path, ["a"], cb, seconds=60, now=lambda: clock[0])
+
+    row = receipt["targets"]["a"]
+    assert row["status"] == "uncertain"
+    assert row["stage"] == "interpret"
+    assert row["provider_outcome_uncertain"]["actual"]["run_id"] == ("agy-turn-still-running-77")
+    stop = validate_stop(path, ["a"], now=lambda: clock[0])
+    assert not stop["valid"]
+    assert stop["continuation_required"] is True
+    assert stop["reasons"] == ["unresolved_native_provider_outcome:a:agy-turn-still-running-77"]
+    assert calls == [("prepare", "a"), ("interpret", "a")]
+
+    # A later cadence with a changed assignment/head cannot treat the local
+    # transport receipt as native completion or launch another model/action.
+    clock[0] += 1
+    resumed = run(
+        path,
+        ["a"],
+        callbacks(
+            interpret=lambda *_: calls.append(("retry", "a")) or {"substantive_needs": []},
+            exception=lambda *_: calls.append(("exception-retry", "a")) or {},
+            act=lambda *_: calls.append(("act-retry", "a")) or {},
+        ),
+        seconds=60,
+        now=lambda: clock[0],
+    )
+    assert resumed["targets"]["a"]["status"] == "uncertain"
+    assert calls == [("prepare", "a"), ("interpret", "a")]
+
+    clock[0] += 61
+    malformed_path = tmp_path / "malformed-provider-outcome.json"
+    malformed_state = json.loads(path.read_text())
+    malformed_run = next(iter(malformed_state["runs"].values()))
+    malformed_run["targets"]["a"]["provider_outcome_uncertain"]["head"] = "d" * 40
+    malformed_path.write_text(json.dumps(malformed_state))
+    malformed = run(
+        malformed_path,
+        ["a", "new-head"],
+        callbacks(),
+        seconds=60,
+        now=lambda: clock[0],
+    )
+    assert malformed["status"] == "blocked"
+    assert malformed["reason"] == "prior_run_has_no_valid_stop"
+
+    unrelated_calls = []
+    next_callbacks = callbacks(
+        interpret=lambda target, _context: unrelated_calls.append(("interpret", target))
+        or {"substantive_needs": []},
+        act=lambda target, _context: unrelated_calls.append(("act", target))
+        or {"status": "completed", "target_complete": True},
+    )
+    next_callbacks["prepare"] = lambda target, _context: unrelated_calls.append(
+        ("prepare", target)
+    ) or {
+        "revision": "rev-2",
+        "identity": target,
+        "semantic_cache_key": "closer-evidence-semantic/v1:"
+        + hashlib.sha256(target.encode()).hexdigest(),
+        "snapshot": {"head": "e" * 40},
+    }
+    continued = run(
+        path,
+        ["a", "new-head"],
+        next_callbacks,
+        seconds=60,
+        now=lambda: clock[0],
+    )
+    assert continued["targets"]["a"]["status"] == "uncertain"
+    assert continued["targets"]["new-head"]["status"] == "completed"
+    assert unrelated_calls == [
+        ("prepare", "new-head"),
+        ("interpret", "new-head"),
+        ("act", "new-head"),
+    ]
+    latest_run = json.loads(path.read_text())["runs"]
+    latest = next(iter(latest_run.values()))
+    assert latest["prior_invalid_stop_evidence"] == {
+        "valid": False,
+        "reasons": ["unresolved_native_provider_outcome:a:agy-turn-still-running-77"],
+        "continuation_required": True,
+    }
+    continued_stop = validate_stop(path, ["a", "new-head"], now=lambda: clock[0])
+    assert not continued_stop["valid"]
+    assert continued_stop["continuation_required"] is True
+    assert continued_stop["reasons"] == [
+        "unresolved_native_provider_outcome:a:agy-turn-still-running-77"
+    ], continued["targets"]["a"]
+    assert calls == [("prepare", "a"), ("interpret", "a")]
+
+
+def test_mixed_native_uncertainty_and_readonly_failure_allow_only_safe_carry(tmp_path):
+    path = tmp_path / "mixed-uncertainty.json"
+    clock = [2000.0]
+    native_head = "b" * 40
+    native_semantic = "closer-evidence-semantic/v1:" + "a" * 64
+    first_calls = []
+
+    def first_prepare(target, _context):
+        first_calls.append(("prepare", target))
+        return {
+            "revision": "rev-1",
+            "identity": target,
+            "semantic_cache_key": native_semantic,
+            "snapshot": {"head": native_head, "base": "c" * 40},
+        }
+
+    def first_interpret(target, context):
+        first_calls.append(("interpret", target))
+        if target == "b":
+            raise RuntimeError("read-only provider-result parsing failed")
+        return {
+            "status": "uncertain",
+            "provider_outcome": {
+                "schema": "closer-provider-outcome-uncertain/v1",
+                "target": target,
+                "head": native_head,
+                "base": "c" * 40,
+                "revision": context["revision"],
+                "identity": context["identity"],
+                "semantic_cache_key": native_semantic,
+                "actual": {
+                    "agent": "gemini",
+                    "requested_profile": "gemini-low",
+                    "run_id": "agy-mixed-uncertain-77",
+                    "exit": 124,
+                    "outcome_status": "uncertain",
+                    "retry_safe": False,
+                },
+            },
+        }
+
+    first_callbacks = callbacks(interpret=first_interpret)
+    first_callbacks["prepare"] = first_prepare
+    first = run(path, ["a", "b"], first_callbacks, seconds=60, now=lambda: clock[0])
+    assert first["targets"]["a"]["status"] == "uncertain"
+    assert first["targets"]["b"]["status"] == "failed"
+    first_stop = validate_stop(path, ["a", "b"], now=lambda: clock[0])
+    assert not first_stop["valid"]
+    assert set(first_stop["reasons"]) == {
+        "unresolved_native_provider_outcome:a:agy-mixed-uncertain-77",
+        "unresolved_pipeline_work:b:failed",
+    }
+
+    clock[0] += 61
+    later_calls = []
+
+    def later_prepare(target, _context):
+        later_calls.append(("prepare", target))
+        return {
+            "revision": "rev-2",
+            "identity": target,
+            "semantic_cache_key": "closer-evidence-semantic/v1:"
+            + hashlib.sha256(target.encode()).hexdigest(),
+            "snapshot": {"head": "e" * 40, "base": "c" * 40},
+        }
+
+    later_callbacks = callbacks(
+        interpret=lambda target, _context: later_calls.append(("interpret", target))
+        or {"substantive_needs": []},
+        act=lambda target, _context: later_calls.append(("act", target))
+        or {"status": "completed", "target_complete": True},
+    )
+    later_callbacks["prepare"] = later_prepare
+    resumed = run(
+        path,
+        ["a", "b", "c"],
+        later_callbacks,
+        seconds=60,
+        now=lambda: clock[0],
+    )
+    assert resumed["targets"]["a"]["status"] == "uncertain"
+    assert resumed["targets"]["b"]["status"] == "completed"
+    assert resumed["targets"]["c"]["status"] == "completed"
+    assert ("prepare", "a") not in later_calls
+    assert ("interpret", "a") not in later_calls
+    assert ("act", "a") not in later_calls
+    assert {target for stage, target in later_calls if stage == "act"} == {"b", "c"}
+
+    latest = next(iter(json.loads(path.read_text())["runs"].values()))
+    assert latest["prior_invalid_stop_evidence"]["reasons"] == first_stop["reasons"]
+    final_stop = validate_stop(path, ["a", "b", "c"], now=lambda: clock[0])
+    assert not final_stop["valid"]
+    assert final_stop["continuation_required"] is True
+    assert final_stop["reasons"] == ["unresolved_native_provider_outcome:a:agy-mixed-uncertain-77"]
+
+
 def test_exception_worker_capacity_defers_before_action(tmp_path):
     path = tmp_path / "state.json"
     calls = []

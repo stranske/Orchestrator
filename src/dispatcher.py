@@ -1604,12 +1604,17 @@ def _gemini_workspace_prompt(prompt: str, cwd: str | Path) -> str:
 
 
 def _align_gemini_print_timeout(argv: list[str], timeout: int) -> None:
-    """Round the print wait down in whole minutes; the outer subprocess is the hard cap."""
+    """Keep agy's print wait inside the outer deadline, retaining a receipt margin.
+
+    agy accepts duration values in seconds (the CLI help documents ``0s`` as its
+    wait-forever default). Rounding this budget down to whole minutes made a 119s
+    dispatch self-timeout after only 60s, while the outer subprocess still had 59s
+    left to wait for a process that had already abandoned its in-progress turn.
+    """
     if "--print-timeout" not in argv:
         return
     budget = max(1, timeout - 15)
-    minutes = max(1, budget // 60)
-    argv[argv.index("--print-timeout") + 1] = f"{minutes}m"
+    argv[argv.index("--print-timeout") + 1] = f"{budget}s"
 
 
 def _argv_flag_value(argv: list[str], flag: str) -> str | None:
@@ -1633,6 +1638,46 @@ def _agent_log_tail_from_argv(argv: list[str], cwd: str | Path, *, max_chars: in
         return ""
     # Masked WHOLE and then cut: a tail cut first could split a token and keep a piece of it.
     return credential_redaction.redact(text)[-max_chars:]
+
+
+def _agy_reports_turn_in_progress(log_text: str) -> bool:
+    """Recognize agy's explicit partial-turn timeout diagnostic, not generic timeouts.
+
+    This is evidence that the CLI stopped waiting while its provider turn was still
+    active. It does not establish success, failure, cancellation, or served identity.
+    """
+    return bool(
+        re.search(
+            r"\bprint timeout after [^\r\n;]{1,48} with turn in progress; returning partial output\b",
+            log_text or "",
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _public_model_metadata(
+    agent: str,
+    requested_model: str | None,
+    observed_model: str | None,
+    observed_source: str | None,
+) -> dict[str, str | None]:
+    """Separate requested/CLI-selected labels from evidence of the served model."""
+    if agent == "gemini":
+        cli_selected = observed_model if observed_source == "agy_log_selected_override" else None
+        return {
+            "requested_model": requested_model,
+            "served_model": None,
+            "served_model_status": "unknown",
+            "cli_selected_model": cli_selected,
+            "cli_selected_model_source": (
+                "agy_log_selected_override" if cli_selected is not None else None
+            ),
+        }
+    return {
+        "requested_model": requested_model,
+        "served_model": observed_model,
+        "served_model_status": "observed" if observed_model else "unknown",
+    }
 
 
 def _capability_heartbeat(event_type: str, *, agent: str, mode: str | None) -> None:
@@ -1990,6 +2035,7 @@ def offload(
     # Set from the run's OWN stream-json output when the tool reports it; the completion path below
     # prefers it over any store probe. Declared here so both live in the same scope.
     observed_model: str | None = None
+    observed_model_source: str | None = None
     # Gemini has a documented NDJSON prompt transport. Keep a potentially megabyte-scale packet
     # out of bash's ``-lc`` argument and the provider's argv while leaving the established compact
     # print-mode transport untouched. Other adapters retain their qualified transport until their
@@ -2066,6 +2112,21 @@ def offload(
         f"{_path_prefix()}; {_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)}"
     )
     stream_prompt = adapters.gemini_stream_prompt(prepared_prompt) if prompt_via_stdin else None
+    if agent == "gemini":
+        content_bytes = prepared_prompt.encode("utf-8")
+        transport_payload = stream_prompt if stream_prompt is not None else prepared_prompt
+        transport_bytes = transport_payload.encode("utf-8")
+        request_metadata = {
+            "transport": (
+                "agy-stream-json-stdin" if stream_prompt is not None else "agy-print-argument"
+            ),
+            "content_utf8_bytes": len(content_bytes),
+            "content_sha256": hashlib.sha256(content_bytes).hexdigest(),
+            "transport_utf8_bytes": len(transport_bytes),
+            "transport_sha256": hashlib.sha256(transport_bytes).hexdigest(),
+        }
+    else:
+        request_metadata = None
     target = f"offload:{run_cwd}"
     subject, subject_source = _offload_subject(subject_id, research_round)
     task_type = task_type or "offload"
@@ -2323,7 +2384,7 @@ def offload(
         # ENCLOSING scope. Without it the assignment below made a local that the completion never
         # saw: the parse found `composer-2.5` and the attempt still closed `unresolved`, which is
         # the most deceptive possible failure -- the reader worked and the row said it had not.
-        nonlocal observed_model
+        nonlocal observed_model, observed_model_source
         nonlocal attempt_stderr
         error: str | None
         attempt_stderr = ""
@@ -2380,8 +2441,11 @@ def offload(
             hint = f" | ambient net env at dispatch: {'; '.join(suspicious)}" if suspicious else ""
             error = f"timed out after {timeout}s{hint}"
             agent_log_tail = _agent_log_tail_from_argv(argv, proc_cwd) if agent == "gemini" else ""
+            turn_uncertain = agent == "gemini" and _agy_reports_turn_in_progress(agent_log_tail)
             if agent_log_tail:
                 error = f"{error}; agy log tail captured"
+            if turn_uncertain:
+                error = "agy timed out while its provider turn was still in progress; outcome is uncertain"
             with logf.open("a") as fh:
                 fh.write(f"[orchestrator] offload marked failed: timed out after {timeout}s\n")
                 if suspicious:
@@ -2409,9 +2473,19 @@ def offload(
                 # may be a synthetic adapter tag, so it must never be read as a
                 # provider-resolved identity for a worker attempt.
                 "model": model,
+                "request_metadata": request_metadata,
                 "run_id": run_id,
                 "log": str(logf),
             }
+            out.update(_public_model_metadata(agent, model, observed_model, observed_model_source))
+            if turn_uncertain:
+                out.update(
+                    {
+                        "outcome_status": "uncertain",
+                        "outcome_uncertain": True,
+                        "retry_safe": False,
+                    }
+                )
             if agent_log_tail:
                 out["agent_log_tail"] = agent_log_tail
             return out
@@ -2483,6 +2557,8 @@ def offload(
             agy_label = adapters.model_label_from_agy_log(agy_text)
             if agy_label:
                 observed_model = adapters.model_id_for_label(agent, agy_label)
+                if observed_model:
+                    observed_model_source = "agy_log_selected_override"
         # Capture native terminal-event usage BEFORE stream reduction discards it.
         # Only CLI completion events count; JSON in an assistant deliverable does not.
         import ledger_reconcile
@@ -2559,6 +2635,8 @@ def offload(
             label = stream.get("model_label")
             if label:
                 observed_model = adapters.model_id_for_label(agent, label)
+                if observed_model:
+                    observed_model_source = "agy_stream_init_model_label"
             if stream.get("result_text") is not None:
                 proc = subprocess.CompletedProcess(
                     getattr(proc, "args", argv),
@@ -2597,11 +2675,18 @@ def offload(
             if incomplete:
                 error = incomplete
                 exit_code = 70
+        # Always inspect this invocation's own agy log before accepting a successful
+        # stdout. The CLI can return 0 and nonempty partial prose while its provider
+        # turn is still running; checking only the error path treated that as success.
         agent_log_tail = ""
-        if error and agent == "gemini":
+        if agent == "gemini":
             agent_log_tail = _agent_log_tail_from_argv(argv, proc_cwd)
             if agent_log_tail and error == "agent returned no stdout":
                 error = "agent returned no stdout; agy log tail captured"
+        turn_uncertain = agent == "gemini" and _agy_reports_turn_in_progress(agent_log_tail)
+        if turn_uncertain:
+            error = "agy stopped waiting while its provider turn was still in progress; outcome is uncertain"
+            exit_code = 70
         if error:
             with logf.open("a") as fh:
                 fh.write(f"[orchestrator] offload marked failed: {error}\n")
@@ -2615,6 +2700,7 @@ def offload(
             "exit": exit_code,
             "output": (proc.stdout or "").strip(),
             "model": model,
+            "request_metadata": request_metadata,
             "usage": reported_usage,
             "stderr_tail": (proc.stderr or "")[-800:],
             "cwd": str(run_cwd),
@@ -2623,12 +2709,21 @@ def offload(
             "run_id": run_id,
             "log": str(logf),
         }
+        out.update(_public_model_metadata(agent, model, observed_model, observed_model_source))
         if agent_log_tail:
             out["agent_log_tail"] = agent_log_tail
         if raw_exit != exit_code:
             out["raw_exit"] = raw_exit
         if error:
             out["error"] = error
+        if turn_uncertain:
+            out.update(
+                {
+                    "outcome_status": "uncertain",
+                    "outcome_uncertain": True,
+                    "retry_safe": False,
+                }
+            )
         return out
 
     out = {}
@@ -2672,6 +2767,10 @@ def offload(
         )
         out["attempts"] = attempts
         if out.get("exit") == 0:
+            break
+        if out.get("outcome_uncertain") is True:
+            # The provider turn may still be running. A retry would overlap it and can
+            # spend twice; leave reconciliation to the caller instead.
             break
         if attempt > max_network_retries:
             break
@@ -3890,7 +3989,7 @@ def _selftest() -> None:
         assert f"--add-dir {shlex.quote(gem['isolated_cwd'])}" in " ".join(
             captured["cmd"]
         ), captured["cmd"]
-        assert "--print-timeout 1m" in " ".join(captured["cmd"]), captured["cmd"]
+        assert "--print-timeout 1s" in " ".join(captured["cmd"]), captured["cmd"]
 
         captured.clear()
 

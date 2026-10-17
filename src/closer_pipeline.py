@@ -84,6 +84,46 @@ def _valid_provider_failure(resource: Any) -> bool:
     return type(exit_code) is int and exit_code != 0
 
 
+def _valid_uncertain_provider_outcome(value: Any, target: str, item: Mapping[str, Any]) -> bool:
+    if not isinstance(value, Mapping) or value.get("status") != "uncertain":
+        return False
+    outcome = value.get("provider_outcome")
+    if not isinstance(outcome, Mapping) or outcome.get("schema") != (
+        "closer-provider-outcome-uncertain/v1"
+    ):
+        return False
+    head = outcome.get("head")
+    if (
+        outcome.get("target") != target
+        or not isinstance(head, str)
+        or len(head) != 40
+        or any(char not in "0123456789abcdef" for char in head)
+        or outcome.get("revision") != item.get("revision")
+        or outcome.get("identity") != item.get("identity", target)
+    ):
+        return False
+    prepared = item.get("results", {}).get("prepare", {})
+    if not isinstance(prepared, Mapping):
+        return False
+    snapshot = prepared.get("snapshot")
+    if not isinstance(snapshot, Mapping) or snapshot.get("head") != head:
+        return False
+    semantic = _semantic_cache_token(prepared)
+    if not semantic or outcome.get("semantic_cache_key") != semantic:
+        return False
+    actual = outcome.get("actual")
+    if not isinstance(actual, Mapping):
+        return False
+    identities = [actual.get(field) for field in ("agent", "requested_profile", "run_id")]
+    return (
+        all(isinstance(value, str) and bool(value.strip()) for value in identities)
+        and type(actual.get("exit")) is int
+        and actual.get("exit") != 0
+        and actual.get("outcome_status") == "uncertain"
+        and actual.get("retry_safe") is False
+    )
+
+
 def _valid_deadline_evidence(resource: Any, deadline: float, rows: Mapping[str, Any]) -> bool:
     if not isinstance(resource, Mapping) or resource.get("deadline") != deadline:
         return False
@@ -178,43 +218,124 @@ def _carry_item(item: Mapping[str, Any]) -> dict[str, Any]:
         "pending_kind",
         "pending_evidence",
         "resource_evidence",
+        "provider_outcome_uncertain",
         "known_completed_action",
         "carried",
     )
-    return {**{key: item[key] for key in keys if key in item}, "results": {}}
+    carried = {key: item[key] for key in keys if key in item}
+    results: dict[str, Any] = {}
+    if item.get("status") == "uncertain" and item.get("stage") == "interpret":
+        outcome = item.get("provider_outcome_uncertain")
+        if isinstance(outcome, Mapping):
+            results["prepare"] = {
+                "revision": item.get("revision"),
+                "identity": item.get("identity"),
+                "semantic_cache_key": outcome.get("semantic_cache_key"),
+                "snapshot": {"head": outcome.get("head")},
+            }
+    return {**carried, "results": results}
 
 
-def _safe_prior_unresolved_only(prior_stop: Mapping[str, Any], previous: Mapping[str, Any]) -> bool:
-    """Allow a fresh cadence only for terminal rows whose effects are known safe."""
+def _safe_prior_continuation(
+    prior_stop: Mapping[str, Any], previous: Mapping[str, Any]
+) -> tuple[bool, bool]:
+    """Allow only fully accounted native uncertainty and read-only failures to continue."""
     reasons = prior_stop.get("reasons")
     rows = previous.get("targets")
-    if not isinstance(reasons, list) or not reasons or not isinstance(rows, Mapping):
-        return False
+    if prior_stop.get("valid") is not False or not isinstance(reasons, list) or not reasons:
+        return False, False
+    if not isinstance(rows, Mapping):
+        return False, False
+
+    native_targets: set[str] = set()
+    matched_reasons: set[str] = set()
+    has_pending_blocker = False
     for reason in reasons:
-        if not isinstance(reason, str) or not reason.startswith("unresolved_pipeline_work:"):
-            return False
-        matched = False
-        for target, item in rows.items():
-            if not isinstance(target, str) or not isinstance(item, Mapping):
-                continue
-            status = item.get("status")
-            if reason != f"unresolved_pipeline_work:{target}:{status}":
-                continue
-            stage = item.get("stage")
-            if status == "failed" and stage in {"prepare", "interpret", "exception"}:
-                matched = True
-            elif (
-                status == "parked"
-                and stage == "act"
-                and item.get("known_completed_action") is True
-                and isinstance(item.get("progress_key"), str)
-                and bool(item.get("progress_key"))
-            ):
-                matched = True
-            break
-        if not matched:
-            return False
-    return True
+        if reason == "pending_work_is_not_the_only_blocker":
+            has_pending_blocker = True
+            matched_reasons.add(reason)
+            continue
+        if not isinstance(reason, str):
+            return False, False
+        if reason.startswith("unresolved_native_provider_outcome:"):
+            matched = False
+            for target, item in rows.items():
+                if not isinstance(target, str) or not isinstance(item, Mapping):
+                    continue
+                if item.get("status") != "uncertain" or item.get("stage") != "interpret":
+                    continue
+                interpretation = {
+                    "status": "uncertain",
+                    "provider_outcome": item.get("provider_outcome_uncertain"),
+                }
+                if not _valid_uncertain_provider_outcome(interpretation, target, item):
+                    continue
+                run_id = item["provider_outcome_uncertain"]["actual"]["run_id"]
+                expected = f"unresolved_native_provider_outcome:{target}:{run_id}"
+                if reason == expected:
+                    native_targets.add(target)
+                    matched_reasons.add(reason)
+                    matched = True
+                    break
+            if not matched:
+                return False, False
+            continue
+        if reason.startswith("unresolved_pipeline_work:"):
+            matched = False
+            for target, item in rows.items():
+                if not isinstance(target, str) or not isinstance(item, Mapping):
+                    continue
+                status = item.get("status")
+                if reason != f"unresolved_pipeline_work:{target}:{status}":
+                    continue
+                stage = item.get("stage")
+                if status == "failed" and stage in {"prepare", "interpret", "exception"}:
+                    matched = True
+                elif (
+                    status == "parked"
+                    and stage == "act"
+                    and item.get("known_completed_action") is True
+                    and isinstance(item.get("progress_key"), str)
+                    and bool(item.get("progress_key"))
+                ):
+                    matched = True
+                if matched:
+                    matched_reasons.add(reason)
+                    break
+            if not matched:
+                return False, False
+            continue
+        return False, False
+
+    if matched_reasons != set(reasons):
+        return False, False
+    if has_pending_blocker and not any(
+        isinstance(item, Mapping) and item.get("status") == "pending" for item in rows.values()
+    ):
+        return False, False
+
+    # Verify every nonterminal target is explained by one of the exact safe
+    # categories above. This prevents a good reason from masking unknown work.
+    for target, item in rows.items():
+        if not isinstance(target, str) or not isinstance(item, Mapping):
+            return False, False
+        status = item.get("status")
+        if status in {"completed", "deferred", "pending"}:
+            continue
+        if target in native_targets and status == "uncertain" and item.get("stage") == "interpret":
+            continue
+        if status == "failed" and item.get("stage") in {"prepare", "interpret", "exception"}:
+            continue
+        if (
+            status == "parked"
+            and item.get("stage") == "act"
+            and item.get("known_completed_action") is True
+            and isinstance(item.get("progress_key"), str)
+            and bool(item.get("progress_key"))
+        ):
+            continue
+        return False, False
+    return True, bool(native_targets)
 
 
 def _empty() -> dict[str, Any]:
@@ -378,6 +499,7 @@ def _run_pipeline_impl(
             run["carry_targets"] = sorted(set(run.get("targets", {})) - set(assignment))
             run["assignment"] = assignment
         else:
+            prior_invalid_stop_evidence = None
             if state["runs"]:
                 previous = max(state["runs"].values(), key=lambda row: float(row.get("created", 0)))
                 previous_assignment = previous.get("assignment", [])
@@ -420,19 +542,29 @@ def _run_pipeline_impl(
                     else now
                 )
                 prior_stop = validate_stop(path, previous_assignment, now=prior_stop_now)
-                if not prior_stop.get("valid") and not _safe_prior_unresolved_only(
-                    prior_stop, previous
-                ):
-                    return {
-                        "schema": "closer-pipeline-receipt/v1",
-                        "authority": False,
-                        "status": "blocked",
-                        "reason": "prior_run_has_no_valid_stop",
-                        "prior_stop": prior_stop,
-                        "continuation_required": True,
-                        "finished_at": now(),
-                        "targets": {},
-                    }
+                if not prior_stop.get("valid"):
+                    safe_continuation, has_native_uncertainty = _safe_prior_continuation(
+                        prior_stop, previous
+                    )
+                    if not safe_continuation:
+                        fcntl.flock(run_lock.fileno(), fcntl.LOCK_UN)
+                        run_lock.close()
+                        return {
+                            "schema": "closer-pipeline-receipt/v1",
+                            "authority": False,
+                            "status": "blocked",
+                            "reason": "prior_run_has_no_valid_stop",
+                            "prior_stop": prior_stop,
+                            "continuation_required": True,
+                            "finished_at": now(),
+                            "targets": {},
+                        }
+                    if has_native_uncertainty:
+                        prior_invalid_stop_evidence = {
+                            "valid": False,
+                            "reasons": list(prior_stop.get("reasons", [])),
+                            "continuation_required": True,
+                        }
             run_id = _digest([assignment, now()])
             run = state["runs"].setdefault(
                 run_id,
@@ -444,6 +576,8 @@ def _run_pipeline_impl(
                     "metrics": {"capacity_samples": [], "peak_active": {}},
                 },
             )
+            if prior_invalid_stop_evidence is not None:
+                run["prior_invalid_stop_evidence"] = prior_invalid_stop_evidence
             latest: dict[str, dict[str, Any]] = {}
             for old_run in sorted(
                 state["runs"].values(), key=lambda row: float(row.get("created", 0))
@@ -495,12 +629,20 @@ def _run_pipeline_impl(
                 item["recovered_at"] = now()
                 if item["status"] == "uncertain":
                     item["deferred_next_trigger"] = "reconcile_before_retry"
-            if item.get("status") == "uncertain" and reconcile is not None:
+            if (
+                item.get("status") == "uncertain"
+                and item.get("stage") in {"act", "reconcile"}
+                and reconcile is not None
+            ):
                 item.update(status="queued", stage="reconcile")
             if item.get("status") == "pending" and not item.get("carried"):
                 item.update(status="queued", stage="prepare")
         for item in run["targets"].values():
-            if item.get("status") == "uncertain" and reconcile is not None:
+            if (
+                item.get("status") == "uncertain"
+                and item.get("stage") in {"act", "reconcile"}
+                and reconcile is not None
+            ):
                 item.update(status="queued", stage="reconcile")
             elif item.get("status") == "pending":
                 item.update(status="queued", stage="prepare")
@@ -722,6 +864,29 @@ def _run_pipeline_impl(
                             item["results"].pop("exception", None)
                         item["stage"] = "interpret"
                     elif stage == "interpret":
+                        if (
+                            value.get("status") == "uncertain"
+                            or value.get("outcome_uncertain") is True
+                        ):
+                            if cache_key:
+                                doc.get("cache", {}).pop(cache_key, None)
+                            if not _valid_uncertain_provider_outcome(value, target, item):
+                                item.update(
+                                    status="failed",
+                                    error="provider_outcome_uncertainty_without_valid_bound_run",
+                                    deferred_next_trigger="human_review",
+                                )
+                                return
+                            outcome = value["provider_outcome"]
+                            actual = outcome["actual"]
+                            run_id = actual["run_id"]
+                            item.update(
+                                status="uncertain",
+                                stage="interpret",
+                                deferred_next_trigger=f"unresolved_native_provider_outcome:{run_id}",
+                                provider_outcome_uncertain=outcome,
+                            )
+                            return
                         if value.get("classification") == "capacity_deferred":
                             # Capacity is transient operational evidence. Never
                             # retain it in the semantic cache, even for legacy
@@ -1145,6 +1310,9 @@ def _run_pipeline_impl(
                                 },
                             )
                     _save_state_locked(path, state)
+                # Deferred work is waiting on measured capacity; a terminally
+                # parked uncertainty barrier has no safe callback to retry.
+                # Both should return a truthful receipt immediately.
                 break
             else:
                 wait(
@@ -1350,6 +1518,21 @@ def validate_stop(
             continue
         status = item.get("status")
         stage = item.get("stage")
+        if status == "uncertain" and stage == "interpret":
+            continuation = True
+            outcome = item.get("provider_outcome_uncertain")
+            actual = outcome.get("actual") if isinstance(outcome, Mapping) else None
+            if (
+                isinstance(outcome, Mapping)
+                and outcome.get("schema") == "closer-provider-outcome-uncertain/v1"
+                and isinstance(actual, Mapping)
+                and isinstance(actual.get("run_id"), str)
+                and actual.get("run_id")
+            ):
+                reasons.append(f"unresolved_native_provider_outcome:{target}:{actual['run_id']}")
+            else:
+                reasons.append(f"unbound_uncertain_provider_outcome:{target}")
+            continue
         if status == "completed":
             continue
         continuation = True
