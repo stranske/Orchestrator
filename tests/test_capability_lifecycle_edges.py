@@ -278,6 +278,8 @@ def test_cli_dispatch_preserves_arguments_and_failure_status(
 
     monkeypatch.setattr(caps, function, operation)
     monkeypatch.setattr(caps, "usage_report", lambda report: {"usage": report["count"]})
+    # The renew CLI reads the row's acting from the Brain and passes it through (M1 restated).
+    monkeypatch.setattr(caps, "acting_in_trailing_window", lambda name, **_kw: 4)
     assert caps.main(["--json", command, *args]) == expected_rc
     assert len(calls) == 1
     call_args, kwargs = calls[0]
@@ -289,7 +291,11 @@ def test_cli_dispatch_preserves_arguments_and_failure_status(
             "evidence_refs": ["proof"],
         }
     elif command == "renew":
-        assert call_args == ("one",) and kwargs == {"reason": "proof", "evidence_refs": ["receipt"]}
+        assert call_args == ("one",) and kwargs == {
+            "reason": "proof",
+            "evidence_refs": ["receipt"],
+            "acting": 4,
+        }
     elif command == "probe":
         assert call_args == ("one", "producer_probe") and kwargs == {
             "passed": False,
