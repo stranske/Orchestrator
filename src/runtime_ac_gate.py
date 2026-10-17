@@ -196,6 +196,53 @@ def author_keepalive_spec(
         return {"status": "error", "spec_authored": False, "error": str(exc)}
 
 
+SHADOW_BUDGET_FLAG = "ORCH_RUNTIME_AC_SHADOW_BUDGET"
+DEFAULT_EXECUTION_BUDGET = 3  # per ingest or sweep when the flag is unset; the tick exports 12
+
+
+def execution_budget(env=None, *, default: int = DEFAULT_EXECUTION_BUDGET) -> int:
+    """Disposable exact-head executions one ingest or one sweep may run; one flag for both.
+
+    Three a day measured 9 of 166 shadow specs in a week (112 PRs refused for budget on
+    2026-10-16 alone), so orchestrate.sh exports ORCH_RUNTIME_AC_SHADOW_BUDGET=12. A caller
+    without the flag, tests included, keeps the old bound.
+    """
+    resolved = os.environ if env is None else env
+    raw = str(resolved.get(SHADOW_BUDGET_FLAG, "") or "").strip()
+    try:
+        value = int(raw) if raw else default
+    except ValueError:
+        value = default
+    return max(0, value)
+
+
+REOPEN_FLAG = "ORCH_RUNTIME_AC_REOPEN"
+REOPEN_EXECUTED_FLOOR = 10
+
+
+def reopen_policy(env=None, summary: dict | None = None) -> dict:
+    """Whether a post-merge FAIL may reopen its issue: decided by evidence, not by a date.
+
+    `ORCH_RUNTIME_AC_REOPEN=1` forces on and `=0` is the kill switch. Unset or `auto` allows
+    reopening once at least REOPEN_EXECUTED_FLOOR rechecks have EXECUTED (PASS plus FAIL): ten
+    runs that reached a verdict show the runner works, and a FAIL caused by the runner itself is
+    already classified UNRUNNABLE (commands_disabled, tool_error, ...) rather than FAIL, so the
+    FAILs that remain are about the delivery. Until 2026-10-17 this was a flag that expired on a
+    calendar date, which timed the decision instead of the evidence (owner, 2026-10-17).
+    """
+    resolved = os.environ if env is None else env
+    raw = str(resolved.get(REOPEN_FLAG, "auto") or "auto").strip().lower()
+    section = summary or {}
+    executed = int(section.get("passed") or 0) + int(section.get("failed") or 0)
+    if raw in {"1", "on", "true", "yes"}:
+        mode, allowed = "forced_on", True
+    elif raw in {"0", "off", "false", "no"}:
+        mode, allowed = "off", False
+    else:
+        mode, allowed = "auto", executed >= REOPEN_EXECUTED_FLOOR
+    return {"mode": mode, "allowed": allowed, "executed": executed, "floor": REOPEN_EXECUTED_FLOOR}
+
+
 def shadow_summary(*, now: int, events=None) -> dict:
     """Count distinct PRs; retain unknown execution/audit evidence as unknown."""
     try:
@@ -223,19 +270,30 @@ def shadow_summary(*, now: int, events=None) -> dict:
             reason = row.get("terminal_reason") or "unrecorded"
             unmeasured_reasons.setdefault(reason, set()).add(row["target"])
     failed = {target for target, row in latest.items() if row.get("verifier_verdict") == "FAIL"}
+    # The LATEST observation per unmeasured PR: a window that mixes a pre-fix cause with a
+    # later budget refusal reports what stands now beside every cause ever recorded.
+    latest_planned: dict[str, str] = {}
+    for row in sorted(rows, key=lambda row: row.get("created_ts", 0)):
+        if row["target"] not in executed and row.get("gate_status") == "planned":
+            latest_planned[row["target"]] = row.get("terminal_reason") or "unrecorded"
+    latest_counts: dict[str, int] = {}
+    for reason in latest_planned.values():
+        latest_counts[reason] = latest_counts.get(reason, 0) + 1
+    merged_unmet = {
+        row["target"]
+        for row in rows
+        if row["target"] in failed and row.get("downstream_merged") is True
+    }
     audited = [row for row in latest.values() if row.get("false_fail_audit") is not None]
     return {
         "prs": len(targets),
         "specs_authored": len(authored),
         "executed": len(executed),
         "would_fail": len(failed),
-        "merged_with_unmet": len(
-            {
-                row["target"]
-                for row in rows
-                if row["target"] in failed and row.get("downstream_merged") is True
-            }
-        ),
+        "merged_with_unmet": len(merged_unmet),
+        "would_fail_targets": sorted(failed),
+        "merged_with_unmet_targets": sorted(merged_unmet),
+        "latest_reason_per_pr": dict(sorted(latest_counts.items())),
         "false_fail_count": sum(row["false_fail_audit"] is True for row in audited),
         "audit_sample": sorted({row["target"] for row in audited}),
         "execution_unmeasured": len(targets - executed),
@@ -487,6 +545,7 @@ def post_merge_summary() -> dict:
         # deliveries" when it means the runner's own switch was off.
         "unrunnable_reasons": dict(sorted(reasons.items())),
     }
+    summary["reopen"] = reopen_policy(os.environ, summary)
     if malformed:
         summary["malformed"] = malformed
     return summary
@@ -507,6 +566,11 @@ def format_post_merge_summary(section: dict) -> str:
         f"failed {section['failed']}, reopened {section['reopened']}, "
         f"unrunnable {section['unrunnable']}{reason_bit}"
         + (f", malformed {section['malformed']}" if section.get("malformed") else "")
+        + (
+            f", reopen {policy['mode']} (executed {policy['executed']} of {policy['floor']})"
+            if (policy := section.get("reopen"))
+            else ""
+        )
     )
 
 
@@ -526,11 +590,20 @@ def format_shadow_summary(section: dict) -> str:
         if reasons
         else ""
     )
+    targets = section.get("would_fail_targets") or []
+    unmet = " (unmet ACs: " + ", ".join(targets) + ")" if targets else " (unmet ACs)"
+    latest = section.get("latest_reason_per_pr") or {}
+    latest_text = (
+        "; latest unmeasured state (PRs): "
+        + ", ".join(f"{reason} {count}" for reason, count in sorted(latest.items()))
+        if latest and latest != reasons
+        else ""
+    )
     return (
         f"runtime-AC shadow: PRs {section['prs']}, specs authored {section['specs_authored']}, "
-        f"executed {section['executed']}, would-FAIL {section['would_fail']} (unmet ACs), "
+        f"executed {section['executed']}, would-FAIL {section['would_fail']}{unmet}, "
         f"merged with unmet ACs {section['merged_with_unmet']}, false-FAIL audit {audit}; "
-        f"execution unmeasured {section['execution_unmeasured']}{reason_text}"
+        f"execution unmeasured {section['execution_unmeasured']}{reason_text}{latest_text}"
     )
 
 

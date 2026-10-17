@@ -1142,6 +1142,12 @@ def _post_merge_rechecks(*, dry_run: bool, gh, now: int, spec_dir=None) -> dict:
     root = runtime_ac_gate.spec_path("", spec_dir=spec_dir).parent
     if dry_run or os.environ.get("ORCH_RUN_RUNTIME_AC") != "1" or not root.is_dir():
         return summary
+    # One budget for disposable executions (shared with the ingest's shadow) and one reopen
+    # decision per sweep, from the evidence the event plane holds when the sweep starts.
+    budget = runtime_ac_gate.execution_budget(default=3)
+    reopen = runtime_ac_gate.reopen_policy(os.environ, runtime_ac_gate.post_merge_summary())
+    summary["budget"] = budget
+    summary["reopen_policy"] = reopen
     candidates = _merged_verifier_candidates()
     for repo, number in sorted(candidates):
         if repo.lower() not in {r.lower() for r in backlog.SUPPORTED_REPOS}:
@@ -1224,6 +1230,10 @@ def _post_merge_rechecks(*, dry_run: bool, gh, now: int, spec_dir=None) -> dict:
                     raw = transcript.read_bytes()
                     if hashlib.sha256(raw).hexdigest() != result["transcript_hash"]:
                         raise RuntimeError("post-merge transcript hash mismatch")
+                if result and result.get("result") == "UNRUNNABLE" and "reason" not in result:
+                    # Written before #641 (2026-10-16) named causes: one re-run under the same
+                    # identity classifies it, within this sweep's budget like any recheck.
+                    result = None
                 if result and result.get("delivery_complete"):
                     continue
 
@@ -1239,7 +1249,7 @@ def _post_merge_rechecks(*, dry_run: bool, gh, now: int, spec_dir=None) -> dict:
                     )
 
                 if result is None:
-                    if summary["rechecked"] >= 3:
+                    if summary["rechecked"] >= budget:
                         continue  # bound disposable executions per sweep, as ingest does
                     try:
                         with provision.temporary_exact_head_worktree(target, sha) as worktree:
@@ -1346,16 +1356,7 @@ def _post_merge_rechecks(*, dry_run: bool, gh, now: int, spec_dir=None) -> dict:
                                 raise RuntimeError(error)
                         result["commented"] = True
                         persist()
-                    if (
-                        result["result"] == "FAIL"
-                        and os.environ.get("ORCH_RUNTIME_AC_REOPEN") == "1"
-                        and now
-                        < int(
-                            _dt.datetime.fromisoformat(
-                                runtime_ac_gate.capabilities.RUNTIME_AC_REOPEN_EXPIRY
-                            ).timestamp()
-                        )
-                    ):
+                    if result["result"] == "FAIL" and reopen["allowed"]:
                         if not result.get("reopened"):
                             _, error = gh(
                                 [

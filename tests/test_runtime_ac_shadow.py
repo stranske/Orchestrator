@@ -408,6 +408,8 @@ def test_weekly_line_carries_prs_specs_executed_and_would_fail(private_brain):
     assert "false-FAIL audit 0 of 1 (owner/repo#2)" in line
     assert "merged with unmet ACs 1" in line
     assert "execution unmeasured 1" in line
+    assert "would-FAIL 1 (unmet ACs: owner/repo#2)" in line
+    assert summary["would_fail_targets"] == summary["merged_with_unmet_targets"] == ["owner/repo#2"]
     report = {
         "generated_at": now,
         "review_days": 7,
@@ -446,8 +448,16 @@ def test_weekly_line_carries_prs_specs_executed_and_would_fail(private_brain):
         "shadow_execution_disabled": 1,
         "unrecorded": 1,
     }
+    # The latest observation per PR stands beside every cause: repo#3 was refused for budget
+    # after its checkout failed, so "what stands now" is one budget refusal, not two causes.
+    assert reasons["latest_reason_per_pr"] == {
+        "shadow_execution_budget": 1,
+        "shadow_execution_disabled": 1,
+        "unrecorded": 1,
+    }
     reason_line = gate.format_shadow_summary(reasons)
     assert "recorded reasons (PRs per reason): shadow_checkout_failed 1" in reason_line
+    assert "latest unmeasured state (PRs): shadow_execution_budget 1" in reason_line
     assert "shadow_execution_budget 1, shadow_execution_disabled 1, unrecorded 1" in reason_line
     assert reason_line in switch_review.format_report({**report, "runtime_ac_shadow": reasons})
     assert "recorded reasons" not in line
@@ -882,6 +892,7 @@ def test_ingest_bounds_shadow_execution_across_repos(private_brain, monkeypatch)
         lambda *_a, **_k: {"gate": {"verdict": "PASS"}, "check_results": []},
     )
     monkeypatch.setenv("ORCH_RUN_RUNTIME_AC", "1")
+    monkeypatch.delenv(gate.SHADOW_BUDGET_FLAG, raising=False)
     keepalive_outcomes.ingest_keepalive_outcomes(
         ["owner/first", "owner/second"],
         _pr_fetch_fn=lambda *_: [_shadow_ingest_pr(n, head) for n in (20, 21)],
@@ -912,6 +923,7 @@ def test_ingest_counts_checkout_failures_and_bounds_failed_attempts(private_brai
         runtime_ac, "run_verification", lambda *_a, **_k: pytest.fail("no checkout")
     )
     monkeypatch.setenv("ORCH_RUN_RUNTIME_AC", "1")
+    monkeypatch.delenv(gate.SHADOW_BUDGET_FLAG, raising=False)
     summary = keepalive_outcomes.ingest_keepalive_outcomes(
         ["owner/repo"],
         _pr_fetch_fn=lambda *_: [_shadow_ingest_pr(n, "a" * 40) for n in range(20, 24)],
@@ -1314,6 +1326,7 @@ def test_post_merge_recheck_reopens_on_fail(post_merge_case):
     line = gate.format_post_merge_summary(gate.post_merge_summary())
     assert (
         line == "runtime-AC post-merge: rechecked 1, passed 0, failed 1, reopened 1, unrunnable 0"
+        ", reopen forced_on (executed 1 of 10)"
     )
     assert line in switch_review.format_report(
         {
@@ -1338,13 +1351,16 @@ def test_post_merge_recheck_is_idempotent(post_merge_case):
     assert len([a for a in case["calls"] if "PATCH" in a]) == 1
 
 
-def test_post_merge_recheck_never_reopens_without_the_flag(post_merge_case, monkeypatch):
+def test_post_merge_recheck_never_reopens_below_ten_executed_rechecks(post_merge_case, monkeypatch):
     monkeypatch.delenv("ORCH_RUNTIME_AC_REOPEN")
     case = post_merge_case
     case["run"]()
     assert len(case["comments"]) == 1
     assert not any("PATCH" in a or "labels[]=runtime-ac:reopened" in a for a in case["calls"])
-    assert gate.post_merge_summary()["reopened"] == 0
+    summary = gate.post_merge_summary()
+    assert summary["reopened"] == 0
+    assert summary["reopen"] == {"mode": "auto", "allowed": False, "executed": 1, "floor": 10}
+    assert "reopen auto (executed 1 of 10)" in gate.format_post_merge_summary(summary)
 
 
 def test_post_merge_recheck_commands_disabled_is_unrunnable_and_silent(
@@ -1489,19 +1505,25 @@ def test_post_merge_recheck_dry_run_and_execution_off_write_nothing(post_merge_c
     assert _post_merge_events() == []
 
 
-def test_post_merge_recheck_expired_reopen_canary_comments_only(post_merge_case, monkeypatch):
+def test_post_merge_reopen_declaration_is_evidence_gated(post_merge_case, monkeypatch):
     declaration = gate.capabilities.KNOWN_GATES["runtime-ac-checks"]
     assert declaration["flags_defaults"]["post_merge_reopen_default"] == {
-        "ORCH_RUNTIME_AC_REOPEN": "0"
+        "ORCH_RUNTIME_AC_REOPEN": "auto"
     }
-    assert gate.capabilities.RUNTIME_AC_REOPEN_EXPIRY in declaration["gate_evidence"]
-    assert "rollback: unset ORCH_RUNTIME_AC_REOPEN" in declaration["gate_evidence"]
+    assert declaration["flags_defaults"]["shadow_budget_default"] == {gate.SHADOW_BUDGET_FLAG: "12"}
+    assert "runtime_ac_gate.reopen_policy" in declaration["gate_evidence"]
+    assert "rollback: ORCH_RUNTIME_AC_REOPEN=0" in declaration["gate_evidence"]
     assert gate.capabilities.artifact_lifecycle(declaration) is None
-    monkeypatch.setattr(gate.capabilities, "RUNTIME_AC_REOPEN_EXPIRY", "2026-10-01T00:00:00+00:00")
+    # Under the default, one executed recheck is below the floor: the FAIL is commented, not
+    # reopened, and the line says how far the pool is from opening the path.
+    monkeypatch.setenv("ORCH_RUNTIME_AC_REOPEN", "auto")
     case = post_merge_case
     case["run"]()
     assert len(case["comments"]) == 1
     assert not any("PATCH" in a for a in case["calls"])
+    assert "reopen auto (executed 1 of 10)" in gate.format_post_merge_summary(
+        gate.post_merge_summary()
+    )
 
 
 def test_post_merge_recheck_reuses_named_and_deliberate_break_runner(post_merge_case, monkeypatch):
@@ -1683,3 +1705,146 @@ def test_temporary_checkout_retains_prune_failure_even_after_path_removal(
     if body_fails:
         assert isinstance(caught.value.__cause__, ValueError)
         assert str(caught.value.__cause__) == "original verifier failure"
+
+
+def _seed_executed_rechecks(count: int) -> None:
+    for i in range(count):
+        feedback.record_completion_event(
+            f"runtime-ac-post-merge:seed{i}",
+            event_type="verification",
+            phase="post_merge_recheck",
+            producer="runtime_ac_gate",
+            event_id=f"event:post-merge-recheck:seed{i}",
+            status="completed",
+            payload={
+                "runtime_ac_post_merge": {
+                    "result": "PASS",
+                    "reason": None,
+                    "issue": f"owner/repo#{100 + i}",
+                    "merge_sha": "f" * 40,
+                    "reopened": False,
+                    "commented": False,
+                    "delivery_complete": True,
+                }
+            },
+        )
+
+
+def test_execution_budget_reads_one_flag(monkeypatch):
+    monkeypatch.delenv(gate.SHADOW_BUDGET_FLAG, raising=False)
+    assert gate.execution_budget() == gate.DEFAULT_EXECUTION_BUDGET == 3
+    assert gate.execution_budget({gate.SHADOW_BUDGET_FLAG: "12"}) == 12
+    assert gate.execution_budget({gate.SHADOW_BUDGET_FLAG: "x"}) == 3
+    assert gate.execution_budget({gate.SHADOW_BUDGET_FLAG: "-4"}) == 0
+    assert gate.execution_budget({}, default=5) == 5
+
+
+def test_reopen_policy_is_evidence_not_a_date():
+    below = {"passed": 6, "failed": 3}
+    at = {"passed": 9, "failed": 1}
+    assert gate.reopen_policy({}, below) == {
+        "mode": "auto",
+        "allowed": False,
+        "executed": 9,
+        "floor": 10,
+    }
+    assert gate.reopen_policy({}, at)["allowed"] is True
+    forced = gate.reopen_policy({gate.REOPEN_FLAG: "1"}, below)
+    assert (forced["mode"], forced["allowed"]) == ("forced_on", True)
+    assert gate.reopen_policy({gate.REOPEN_FLAG: "0"}, at) == {
+        "mode": "off",
+        "allowed": False,
+        "executed": 10,
+        "floor": 10,
+    }
+    assert gate.reopen_policy({gate.REOPEN_FLAG: "auto"}, at)["allowed"] is True
+    assert not hasattr(gate.capabilities, "RUNTIME_AC_REOPEN_EXPIRY"), "the calendar expiry is gone"
+
+
+def test_ingest_budget_comes_from_the_flag_or_the_argument(private_brain, monkeypatch):
+    checkout = private_brain / "checkout"
+    head = _shadow_git_repo(checkout)
+    calls = []
+
+    @contextmanager
+    def provider(target, requested_head):
+        calls.append(target)
+        yield str(checkout)
+
+    monkeypatch.setattr(provision, "temporary_exact_head_worktree", provider, raising=False)
+    monkeypatch.setattr(keepalive_outcomes, "_gh_throttle", lambda _: None)
+    monkeypatch.setattr(
+        runtime_ac,
+        "run_verification",
+        lambda *_a, **_k: {"gate": {"verdict": "PASS"}, "check_results": []},
+    )
+    monkeypatch.setenv("ORCH_RUN_RUNTIME_AC", "1")
+    monkeypatch.setenv(gate.SHADOW_BUDGET_FLAG, "1")
+    keepalive_outcomes.ingest_keepalive_outcomes(
+        ["owner/first"],
+        _pr_fetch_fn=lambda *_: [_shadow_ingest_pr(n, head) for n in (20, 21)],
+        _issue_fetch_fn=lambda *_: BODY,
+        _spec_dir=private_brain / "specs",
+    )
+    assert len(calls) == 1, "the flag bounds the ingest"
+    keepalive_outcomes.ingest_keepalive_outcomes(
+        ["owner/second"],
+        _pr_fetch_fn=lambda *_: [_shadow_ingest_pr(n, head) for n in (30, 31, 32)],
+        _issue_fetch_fn=lambda *_: BODY,
+        _spec_dir=private_brain / "specs",
+        shadow_budget=3,
+    )
+    assert len(calls) == 4, "an explicit budget (the one-off backfill) wins over the flag"
+
+
+def test_post_merge_reopen_opens_on_ten_executed_rechecks(post_merge_case, monkeypatch):
+    monkeypatch.delenv("ORCH_RUNTIME_AC_REOPEN", raising=False)
+    _seed_executed_rechecks(gate.REOPEN_EXECUTED_FLOOR)
+    case = post_merge_case
+    case["run"]()
+    assert any("PATCH" in a for a in case["calls"]), "ten executed rechecks open the reopen path"
+    summary = gate.post_merge_summary()
+    assert summary["reopened"] == 1
+    assert summary["reopen"] == {"mode": "auto", "allowed": True, "executed": 11, "floor": 10}
+    assert "reopen auto (executed 11 of 10)" in gate.format_post_merge_summary(summary)
+    # Deliberate break, in place: the kill switch still wins over the evidence.
+    monkeypatch.setenv("ORCH_RUNTIME_AC_REOPEN", "0")
+    assert gate.post_merge_summary()["reopen"]["allowed"] is False
+
+
+def test_post_merge_legacy_row_without_a_reason_is_rechecked_once(
+    post_merge_case, private_brain, monkeypatch
+):
+    import hashlib
+
+    case = post_merge_case
+    root = private_brain / "specs"
+    identity = hashlib.sha256(f"owner/repo#1@{case['sha']}".encode()).hexdigest()
+    transcript = root / f"post-merge-{identity}.txt"
+    transcript.write_text("legacy recheck transcript\n", encoding="utf-8")
+    legacy = {
+        "result": "UNRUNNABLE",
+        "issue": "owner/repo#1",
+        "merge_sha": case["sha"],
+        "reopened": False,
+        "commented": True,
+        "delivery_complete": True,
+        "transcript_path": str(transcript),
+        "transcript_hash": hashlib.sha256(transcript.read_bytes()).hexdigest(),
+    }
+    feedback.record_completion_event(
+        f"runtime-ac-post-merge:{identity}",
+        event_type="verification",
+        phase="post_merge_recheck",
+        producer="runtime_ac_gate",
+        event_id=f"event:post-merge-recheck:{identity}",
+        status="completed",
+        payload={"runtime_ac_post_merge": legacy},
+    )
+    assert gate.post_merge_summary()["unrunnable_reasons"] == {"unclassified": 1}
+    case["run"]()
+    assert len(case["provisions"]) == 1, "a legacy row without a cause is re-run once"
+    summary = gate.post_merge_summary()
+    assert summary["rechecked"] == 1 and summary["unrunnable"] == 0 and summary["failed"] == 1
+    case["run"]()
+    assert len(case["provisions"]) == 1, "and only once"
