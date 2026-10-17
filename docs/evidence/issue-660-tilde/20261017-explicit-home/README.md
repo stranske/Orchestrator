@@ -1,5 +1,11 @@
 # Source660 explicit-home continuation on existing PR663
 
+Round 5 scope disposition: the pre-sync helper change was dropped from PR663.
+`scripts/verify_before_sync.sh` was restored to `origin/main`, and its companion
+`tests/test_route_weights_presync_source.js` was removed. The preserved manifests
+and receipts below describe the earlier snapshot, not the round 5 tree. Their
+helper bindings do not establish current-head correctness of the pre-sync selector.
+
 Admitted head: `43c2b4c5e551e05f4d10e27388991709ce35fffa`.
 Original branch: `codex/issue-660-route-export-guard`.
 Frozen sibling661: `4411533b2e1394544d187eafe37ce3e24ef243c3`.
@@ -9,8 +15,9 @@ The actual guarded Sol7314a10e attempt2 result is preserved in `assessment.md`: 
 on16d for explicit `ORCH_FEEDBACK_DB=~/private/orchestrator.db`. Its approval of other
 components is advisory and is not approval of this head. Native39035257159 completed successfully
 and delivered43c; the actual16d→43c diff contains only `scripts/verify_before_sync.sh` and
-`tests/test_route_weights_presync_source.js`. Both native files remain byte-identical and are
-bound separately in the manifest. The real pre-sync script and sync/deployment helpers were not run.
+`tests/test_route_weights_presync_source.js`. Both native files were byte-identical at
+that snapshot and are bound separately in the historical manifest. The real pre-sync script
+and sync/deployment helpers were not run for that snapshot.
 
 ## Finding, repair and causal controls
 

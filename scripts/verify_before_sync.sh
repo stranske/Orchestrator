@@ -88,9 +88,7 @@ gh_config="${GH_CONFIG_DIR:-$real_home/.config/gh}"
 runtime_src="${ORCH_LOCAL_RUNTIME:-$real_home/.codex/orchestrator}"
 statedir_src="${ORCH_STATE_DIR:-$real_home/.codex/orchestrator}"
 ledger_src="${ORCH_CAPABILITIES_PATH:-$runtime_src/capabilities.json}"
-# Match feedback.resolve_db_path: an explicit runtime wins over state, but a
-# state-only invocation must snapshot that instance's Brain rather than HOME's.
-brain_src="${ORCH_FEEDBACK_DB:-${ORCH_LOCAL_RUNTIME:-$statedir_src}/feedback/orchestrator.db}"
+brain_src="${ORCH_FEEDBACK_DB:-$runtime_src/feedback/orchestrator.db}"
 max_dir_mb="${VERIFY_BEFORE_SYNC_MAX_DIR_MB:-50}"
 skipped_dirs=""
 expected_tree="${VERIFY_BEFORE_SYNC_TREE:-EXEC MIRROR}"
@@ -298,15 +296,9 @@ if [[ -f "$ledger_src" && "$ledger_src" != "$runtime_src/capabilities.json" ]]; 
   cp -p "$ledger_src" "$ledger_copy" || { fail "NOTHING VERIFIED: could not copy $ledger_src"; exit 2; }
 fi
 brain_copy="$runtime_copy/feedback/orchestrator.db"
-say "   selected live Brain: $brain_src"
-if [[ "$brain_src" != "$runtime_src/feedback/orchestrator.db" ]]; then
-  # copy_state may have brought in a different default Brain. Clear it even when
-  # the selected source is absent, so verification cannot silently use that decoy.
-  rm -f "$brain_copy" "$brain_copy-wal" "$brain_copy-shm" || { fail "NOTHING VERIFIED: could not clear the scratch Brain"; exit 2; }
-  if [[ -f "$brain_src" ]]; then
-    mkdir -p "$runtime_copy/feedback" || { fail "NOTHING VERIFIED: could not create the scratch feedback directory"; exit 2; }
-    backup_sqlite "$brain_src" "$brain_copy" || { fail "NOTHING VERIFIED: could not copy $brain_src"; exit 2; }
-  fi
+if [[ -f "$brain_src" && "$brain_src" != "$runtime_src/feedback/orchestrator.db" ]]; then
+  mkdir -p "$runtime_copy/feedback"
+  backup_sqlite "$brain_src" "$brain_copy" || { fail "NOTHING VERIFIED: could not copy $brain_src"; exit 2; }
 fi
 if [[ -n "$skipped_dirs" ]]; then
   say "   not copied, over $max_dir_mb MB (checks that need them see nothing):$skipped_dirs"
