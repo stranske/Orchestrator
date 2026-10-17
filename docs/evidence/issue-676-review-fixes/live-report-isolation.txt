@@ -1,0 +1,6 @@
+Live DB opened mode=ro and SQLite-backed up to /private/tmp/orch-686-report-o05c_0ex/runtime/feedback/orchestrator.db
+Missing source pacing input: /Users/teacher/.codex/orchestrator/capacity-ledger.ndjson
+Missing source pacing input: /Users/teacher/.codex/orchestrator/pacing-history.ndjson
+ORCH_STATE_DIR=/private/tmp/orch-686-report-o05c_0ex/state
+ORCH_LOCAL_RUNTIME=/private/tmp/orch-686-report-o05c_0ex/runtime
+exit=0

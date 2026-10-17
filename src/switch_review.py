@@ -1926,6 +1926,27 @@ def strategy_completed_line(result: dict, costs: dict) -> str:
     return f"  strategy experiment: completed {result.get('exp_id')}{score_bit} {cost_bit}"
 
 
+def comparative_routing_line(rep: dict) -> str:
+    """Read the same hourly shadow report as the export CLI, with unknowns explicit."""
+    import comparative
+    import feedback
+
+    result = rep.get("comparative") or comparative.report(
+        feedback.resolve_db_path(), comparative.history_path(), now=rep.get("generated_at")
+    )
+    prices = " ".join(
+        f"{agent} {value if value is not None else 'unmeasured'}"
+        for agent, value in sorted({"codex": None, "claude": None, **result["lambda"]}.items())
+    )
+    line = (
+        f"comparative routing: classes_differing {result['classes_differing']} "
+        f"(window {result['window_days']}d), λ {prices or 'unmeasured'}, status {result['status']}"
+    )
+    if result["status"] == "inputs_unmeasured":
+        line += " — unmeasured; " + "; ".join(result["reasons"])
+    return line
+
+
 def format_report(rep: dict) -> str:
     lines = [
         "# Switch review — held switches must be revisited, not forgotten",
@@ -1934,6 +1955,7 @@ def format_report(rep: dict) -> str:
         f"  due for a decision: {rep['raise_count']}",
         "",
     ]
+    lines += [comparative_routing_line(rep), ""]
     try:
         import strategy_experiment
 

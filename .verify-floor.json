@@ -1,6 +1,6 @@
 {
-  "collected": 4058,
-  "passed": 4058,
+  "collected": 4133,
+  "passed": 4133,
   "skipped_max": 31,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 52,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Source660 reconciliation adds seven isolated DB/CLI/explicit-override regression cases; pass expectation and all skip/selftest/gate/mypy ceilings retained. Explicit-tilde continuation adds one isolated actual learner/CLI case; 3950 collected, pass expectation 3950 (not an observed pass count); all ceilings unchanged. FLOOR RECORDED by verify.py --update-floor on 2026-10-17: collected=3955, passed=3955. Ceilings preserved, never re-measured \u2014 they are edited by hand. Issue668 FIX round2 adds 95 pacing and 3 mirror compatibility cases: independently collected 4053 = main3955 +98; all ceilings and allowlists unchanged. 2026-10-17 M5a merged with main: collected 4058 (branch adds 5); ceilings unchanged."
+  "note": "Source660 reconciliation adds seven isolated DB/CLI/explicit-override regression cases; pass expectation and all skip/selftest/gate/mypy ceilings retained. Explicit-tilde continuation adds one isolated actual learner/CLI case; 3950 collected, pass expectation 3950 (not an observed pass count); all ceilings unchanged. FLOOR RECORDED by verify.py --update-floor on 2026-10-17: collected=3955, passed=3955. Ceilings preserved, never re-measured \u2014 they are edited by hand. Issue668 FIX round2 adds 95 pacing and 3 mirror compatibility cases: independently collected 4053 = main3955 +98; all ceilings and allowlists unchanged. 2026-10-17 M5a merged with main: collected 4058 (branch adds 5); ceilings unchanged. Issue676 round2 latest-main sync: main count 4058 +75 comparative cases = 4133 collected, including 11 net round2 regressions. Passed is the expectation, not an observed full-suite pass count; every ceiling preserved."
 }
