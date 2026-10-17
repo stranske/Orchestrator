@@ -697,9 +697,7 @@ def test_hot_usage_reads_bounded_history_tail(evidence, monkeypatch, capsys):
 
 @pytest.mark.parametrize("pool", ["codex", "claude"])
 def test_history_age_and_size_rotation_is_reported(tmp_path, pollers, pool, monkeypatch, capsys):
-    import usage_history
-
-    monkeypatch.setattr(usage_history, "HISTORY_MAX_LINES", 3)
+    monkeypatch.setitem(pollers[pool].append_history.__globals__, "HISTORY_MAX_LINES", 3)
     path = tmp_path / f"{pool}-usage.ndjson"
     path.write_text(
         "\n".join(json.dumps(dict(ts=ts)) for ts in [1, NOW - 4, NOW - 3, NOW - 2, NOW - 1]) + "\n"
@@ -730,15 +728,17 @@ def test_post_boundary_poll_with_expired_window_cannot_reuse_percentage(evidence
 
 
 def test_history_byte_cap_and_seven_day_anchor(tmp_path, pollers, monkeypatch, capsys):
-    import usage_history
-
     path = tmp_path / "codex-usage.ndjson"
     anchor = dict(ts=NOW - pacing.PERIOD_SECONDS - 600)
     path.write_text(json.dumps(anchor) + "\n")
     pollers["codex"].publish(dict(ts=NOW), tmp_path)
     assert pacing_usage.read_rows(path) == [anchor, dict(ts=NOW)]
     capsys.readouterr()
-    monkeypatch.setattr(usage_history, "HISTORY_MAX_BYTES", len(json.dumps(dict(ts=NOW))) + 1)
+    monkeypatch.setitem(
+        pollers["codex"].append_history.__globals__,
+        "HISTORY_MAX_BYTES",
+        len(json.dumps(dict(ts=NOW))) + 1,
+    )
     pollers["codex"].publish(dict(ts=NOW + 1), tmp_path)
     assert pacing_usage.read_rows(path) == [dict(ts=NOW + 1)]
     assert "rotated_out=2 retained=1 lines" in capsys.readouterr().err
