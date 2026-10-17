@@ -81,4 +81,6 @@ def test_suite_feature_goal_report_writes_no_history(tmp_path, monkeypatch, quie
     monkeypatch.setattr(feature_goals, "_persist_report", empty_goals)
     switch_review.review(now=NOW, env={"ORCH_VALUE_CHAIN_MONITOR": "0"})
     assert not path.exists(), "suite isolation removed: review wrote history"
-    assert Path(os.environ["ORCH_STATE_DIR"]) == tmp_path
+    assert (
+        Path(os.environ[feature_goals.HISTORY_PATH_ENV]) == tmp_path / "feature-goals-history.jsonl"
+    )

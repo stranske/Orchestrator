@@ -346,10 +346,16 @@ def _worktree_git_refusals_stay_in_the_test(_worktree_git_refusal_log, monkeypat
 
 @pytest.fixture(autouse=True)
 def isolate_feature_goals(request, tmp_path, monkeypatch):
-    """Every test owns its state; only marked goal-ledger tests execute real reports."""
+    """Every test owns its goal-ledger history; only marked goal-ledger tests execute real reports.
+
+    The history gets its own path override rather than a replaced `ORCH_STATE_DIR`: other tests use
+    `tmp_path` as an agent workspace, and `adapters` refuses a workspace that IS the state dir.
+    """
     import feature_goals
 
-    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv(
+        feature_goals.HISTORY_PATH_ENV, str(tmp_path / "feature-goals-history.jsonl")
+    )
     if request.node.get_closest_marker("feature_goals_real") is None:
         monkeypatch.setattr(
             feature_goals, "report", lambda now=None, **kw: feature_goals.drift([], now)

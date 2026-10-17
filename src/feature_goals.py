@@ -420,7 +420,14 @@ def drift(history: list[dict], now: int | None = None, *, goals: Sequence[Goal] 
     }
 
 
+HISTORY_PATH_ENV = "ORCH_FEATURE_GOALS_HISTORY"
+
+
 def history_path() -> Path:
+    """`$ORCH_FEATURE_GOALS_HISTORY` when set (tests), else `$ORCH_STATE_DIR/feature-goals-history.jsonl`."""
+    override = os.environ.get(HISTORY_PATH_ENV)
+    if override:
+        return Path(override)
     return (
         Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex/orchestrator"))
         / "feature-goals-history.jsonl"
