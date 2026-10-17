@@ -28,6 +28,7 @@ line are reused, not rebuilt; only the live caller and its report are new.
 from __future__ import annotations
 
 import argparse
+import collections
 import hashlib
 import json
 import os
@@ -206,6 +207,12 @@ def run_live(
                     "evaluated_sha": sha,
                     "paths": entry["collection_requirements"]["source_paths"],
                 }
+                # The persisted packet is the CERTIFIED one (metadata_only False, collected
+                # evidence, qualification), so the retrospective's evidence floor, which
+                # demotes metadata-only rows to needs_more_evidence, does not apply to a live
+                # row; the raw merged-PR packet is kept beside it for provenance.
+                entry["raw_packet"] = entry["packet"]
+                entry["packet"] = roles._collected_snapshot(case)
                 if dispatch:
                     result = runner(
                         case=case,
@@ -247,20 +254,98 @@ def run_live(
                 entry["error"] = str(exc)[:300]
         rows.append(entry)
         saved[case_id] = entry
-    # Grade everything this report holds against later truth, the retrospective's own way.
-    retro._refresh_saved_verdicts(rows, db)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    report = retro._persist_report(path, rows, len(population), db=db)
-    summary = report.get("summary") if isinstance(report, dict) else None
+    # Grade every live row against later truth and write the live report. NOT the retrospective's
+    # persistence: `adjudicator_retro._row_metadata_only` treats any serialized qualification as
+    # metadata-only on purpose (a JSON flag cannot prove collector issuance for the retro's own
+    # report), so its writer would demote every live decision to needs_more_evidence. A live row
+    # was decided on a case certified IN THIS PROCESS at dispatch time; this module records that
+    # fact itself (`certification`), grades the advice itself, and labels the number `live`.
+    _refresh_live_truth(rows, db)
+    summary = live_summary(rows)
+    _write_report(
+        path,
+        {
+            "schema": "adjudicator-live/v1",
+            "generated_at": now,
+            "population": len(population),
+            "summary": summary,
+            "rows": rows,
+        },
+    )
     return {
         "disabled": False,
         "attempted": attempted,
         "advised": advised,
         "uncertified": uncertified,
         "population": len(population),
-        "summary": summary if isinstance(summary, dict) else retro.summarize(rows),
+        "summary": summary,
         "rows": rows,
     }
+
+
+def _refresh_live_truth(rows: list[dict], db: Path | None) -> None:
+    """Later truth for every live row from the Brain's judged durability, read-only."""
+    for row in rows:
+        run_id = row.get("run_id")
+        if not isinstance(run_id, str):
+            continue
+        try:
+            row["later_truth"] = retro.native_later_truth(run_id, db)
+        except (OSError, ValueError, TypeError):
+            pass
+
+
+UNCERTIFIED_CLASSES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("prompt_too_large", ("exceeds byte limit",)),
+    ("no_criteria", ("no explicit acceptance criteria",)),
+    ("criteria_shape", ("multiline acceptance criterion", "resume after prose")),
+    (
+        "collection_incomplete",
+        ("incomplete collected case", "incomplete before-source", "supporting source"),
+    ),
+    ("diff_shape", ("add/modify", "deletion/type change", "malformed complete Git diff")),
+)
+
+
+def uncertified_class(reason: str) -> str:
+    """Name the refusal so the weekly line says which step stops certification most."""
+    for name, needles in UNCERTIFIED_CLASSES:
+        if any(needle in reason for needle in needles):
+            return name
+    return "other"
+
+
+def live_summary(rows: list[dict]) -> dict:
+    """Counts for the weekly line. `graded` is a live decision with later truth; nothing else."""
+    certified = [r for r in rows if (r.get("certification") or {}).get("status") == "certified"]
+    decided = [r for r in certified if r.get("decision") in {"uphold_blocker", "reject_blocker"}]
+    graded = [r for r in decided if r.get("later_truth") in {"PASS", "FAIL"}]
+    refused = [r for r in rows if (r.get("certification") or {}).get("status") == "uncertified"]
+    agree = sum(retro._shadow_verdict_for_row(r) == r["later_truth"] for r in graded)
+    rule = sum(r.get("merge_rule_verdict") == r["later_truth"] for r in graded)
+    return {
+        "cases": len(rows),
+        "certified": len(certified),
+        "uncertified": len(refused),
+        "uncertified_reasons": dict(
+            collections.Counter(
+                uncertified_class(str(r["certification"].get("reason") or "")) for r in refused
+            ).most_common()
+        ),
+        "advised": len(decided),
+        "graded": len(graded),
+        "agree": agree,
+        "disagree": len(graded) - agree,
+        "merge_rule_agree": rule,
+        "cost_usd_measured": sum(1 for r in decided if isinstance(r.get("cost_usd"), (int, float))),
+    }
+
+
+def _write_report(path: Path, report: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staged = path.with_suffix(".tmp")
+    staged.write_text(json.dumps(report, indent=2, default=str) + "\n", encoding="utf-8")
+    staged.replace(path)
 
 
 @contextmanager
@@ -272,19 +357,23 @@ def _exact_head_checkout(target: str, sha: str):
 
 
 def weekly_line(path: Path | None = None) -> str:
-    """`adjudicator live: disputes N, advised A, uncertified U, graded G (agree X, disagree Y)`."""
+    """`adjudicator live: disputes N, advised A, uncertified U (why), graded G (agree X, disagree Y)`."""
     try:
         report = json.loads((path or report_path()).read_text())
         rows = [row for row in report.get("rows", []) if isinstance(row, dict)]
-        summary = report.get("summary") or retro.summarize(rows)
-        advised = sum(1 for row in rows if row.get("decision"))
-        uncertified = sum(
-            1 for row in rows if (row.get("certification") or {}).get("status") == "uncertified"
+        summary = live_summary(
+            rows
+        )  # the saved rows are the truth; a saved summary may predate the module
+        reasons = summary.get("uncertified_reasons") or {}
+        refused = (
+            " (" + ", ".join(f"{name} {count}" for name, count in reasons.items()) + ")"
+            if summary["uncertified"] and reasons
+            else ""
         )
         return (
             f"adjudicator live: disputes {report.get('population', 'UNKNOWN')}, "
-            f"advised {advised}, uncertified {uncertified}, graded {summary['graded']} "
-            f"(agree {summary['agree']}, disagree {summary['disagree']})"
+            f"advised {summary['advised']}, uncertified {summary['uncertified']}{refused}, "
+            f"graded {summary['graded']} (agree {summary['agree']}, disagree {summary['disagree']})"
         )
     except (OSError, ValueError, KeyError, TypeError):
         return "adjudicator live: disputes UNKNOWN, advised UNKNOWN, uncertified UNKNOWN, graded UNKNOWN"
@@ -406,7 +495,7 @@ def _selftest() -> None:
             )
             assert (third["attempted"], third["uncertified"]) == (1, 1) and len(calls) == 1, third
             assert (
-                "adjudicator live: disputes 2, advised 1, uncertified 1, graded 0"
+                "adjudicator live: disputes 2, advised 1, uncertified 1 (no_criteria 1), graded 0"
                 in weekly_line(root / "live.json")
             )
             # The kill switch writes nothing.

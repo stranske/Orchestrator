@@ -319,6 +319,17 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "next_transition": "retry pending durability resolution after backoff",
     },
     {
+        # M2 live (#643): the adjudicator on NEW verifier disputes, certified from the merged
+        # commit, advised once, graded on later truth. Daily, after the sweep that writes truth.
+        "key": "adjudicator-live",
+        "success_stamp": ".last-adjudicator-live",
+        "cadence_days": 0,
+        "artifact": "capability-program/adjudicator-live.json",
+        "log": "adjudicator-live.log",
+        "gate": "ORCH_ADJUDICATOR_LIVE_SHADOW=1 (default) and GitHub read capacity",
+        "next_transition": "advised > 0 within 7 days of its sync; graded >= 20 by 2026-11-08",
+    },
+    {
         "key": "capability-causal-reconcile",
         "success_stamp": ".last-capability-causal-reconcile",
         "cadence_days": 0,

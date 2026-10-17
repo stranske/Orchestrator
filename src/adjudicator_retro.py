@@ -1988,24 +1988,48 @@ def prepare_collected_case(
     return packet
 
 
+_CRITERION_ITEM = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+(?:\[[ xX]\]\s*)?(.+)$")
+
+
 def _criterion_texts(body: str) -> list[str]:
-    """Read explicit one-line Markdown acceptance items; never invent a contract."""
+    """Read explicit one-line Markdown acceptance items; never invent a contract.
+
+    The item list closes at the first blank line that prose follows, as in
+    Markdown: the fleet's PR-meta workflow appends a ``**Head SHA:**`` status block
+    after the acceptance section, and that block or a trailing note is not a
+    criterion (27 of the newest 40 verifier disputes on 2026-10-17 were refused
+    for it alone). Numbered items are items. Prose inside the list, prose before
+    it, and items resuming after prose are still refused rather than guessed.
+    """
     criteria: list[str] = []
     active = False
+    blank = False
+    closed = False
     for line in body.splitlines():
         heading = re.match(r"^\s*#{1,6}\s+(.+?)\s*$", line)
         if heading:
             active = heading[1].strip().lower() == "acceptance criteria"
-        elif active:
-            item = re.match(r"^\s*[-*]\s+(?:\[[ xX]\]\s*)?(.+)$", line)
-            if item:
-                text = item[1].strip()
-                if text not in criteria:
-                    criteria.append(text)
-            elif line.strip().startswith("<!--"):
-                active = False
-            elif line.strip():
-                raise ValueError("unsupported multiline acceptance criterion; qualify explicitly")
+            blank = closed = False
+            continue
+        if not active:
+            continue
+        if not line.strip():
+            blank = True
+            continue
+        item = _CRITERION_ITEM.match(line)
+        if item:
+            if closed:
+                raise ValueError("acceptance items resume after prose; qualify explicitly")
+            text = item[1].strip()
+            if text not in criteria:
+                criteria.append(text)
+        elif line.strip().startswith("<!--"):
+            active = False
+        elif criteria and blank and not closed:
+            closed = True
+        elif not closed:
+            raise ValueError("unsupported multiline acceptance criterion; qualify explicitly")
+        blank = False
     if not criteria:
         raise ValueError("full provenance has no explicit acceptance criteria")
     return criteria

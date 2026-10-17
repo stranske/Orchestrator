@@ -1672,11 +1672,14 @@ def review(
                 ],
                 "disabled": False,
             }
+    import adjudicator_live
     import adjudicator_retro
 
     rep = {
         "generated_at": now,
         "adjudicator_shadow": adjudicator_retro.weekly_line(),
+        # The live arm (M2 live, #643): new disputes certified and advised once, graded on truth.
+        "adjudicator_live": adjudicator_live.weekly_line(),
         "adversarial_shape": adversarial_shape_population(now=now),
         "value_chain": value_chain,
         "runtime_ac_shadow": runtime_ac_shadow,
@@ -1948,6 +1951,8 @@ def format_report(rep: dict) -> str:
         lines += ["  strategy experiment: UNKNOWN — no completed scored evaluation", ""]
     if rep.get("adjudicator_shadow"):
         lines += [rep["adjudicator_shadow"], ""]
+    if rep.get("adjudicator_live"):
+        lines += [rep["adjudicator_live"], ""]
     lines += [adversarial_shape_line(rep.get("adversarial_shape", {})), ""]
     trial_line = profile_trial_summary_line()
     if trial_line:

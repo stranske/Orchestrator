@@ -567,8 +567,17 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "status": "shadow",
         "entrypoint": "roles.py:run_adjudicator_agent",
         "matcher": {"kind": "role", "equals": "adjudicator"},
-        "trigger_cadence": "bounded retrospective replay and closer recorded-verdict disagreement only",
-        "flags_defaults": {"dispatch": False, "ORCH_ROLE_SHADOW": "1"},
+        "trigger_cadence": (
+            "bounded retrospective replay and closer recorded-verdict disagreement; daily live "
+            "shadow on new disputes (adjudicator_live.py, at most ORCH_ADJUDICATOR_LIVE_LIMIT per "
+            "run)"
+        ),
+        "flags_defaults": {
+            "dispatch": False,
+            "ORCH_ROLE_SHADOW": "1",
+            "live_shadow_default": {"ORCH_ADJUDICATOR_LIVE_SHADOW": "1"},
+            "live_limit_default": {"ORCH_ADJUDICATOR_LIVE_LIMIT": "3"},
+        },
         "output_artifact": "validated blocker adjudication; capability-program/adjudicator-retro.json",
         "downstream_consumer": "switch_review.py:format_report consumes agreement and cost summaries",
         "notes": "dedup 2026-10-05: existing roles.run_adjudicator_agent and feedback.record_role_run reused; extend retrospective evidence and closer eligibility, no new capability or outcome store; 2026-10-07: collector and role case JSON already exist; extend immutable collected-byte input preparation with whole-packet budget, retain semantic admission floor",
