@@ -89,7 +89,9 @@ class CapacityPublicationTests(unittest.TestCase):
             if should_publish:
                 self.assertEqual(_git(remote, "rev-parse", f"{published_head}^"), previous_head)
                 self.assertEqual(
-                    _git(remote, "diff-tree", "--no-commit-id", "--name-only", "-r", published_head),
+                    _git(
+                        remote, "diff-tree", "--no-commit-id", "--name-only", "-r", published_head
+                    ),
                     str(export.EXPORT_PATH),
                 )
 
