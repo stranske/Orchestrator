@@ -92,7 +92,10 @@ def test_vibe_runtime_config_inserts_one_private_log_path_without_changing_other
     result = target.read_text()
     assert result.count(f'save_dir = "{logs}"') == 1
     assert source.read_text() == config
+    if "model =" in config:
+        assert "model = 'fixture'" in result
     if "[other]" in config:
+        assert "x = 1" in result
         assert result.index("save_dir") < result.index("[other]")
     assert "enabled = false" in result if "enabled = false" in config else True
 
@@ -343,14 +346,18 @@ def test_muse_interrupt_persists_receipt_removes_prompt_and_records_interrupted_
     )
 
 
-def test_unprofiled_recording_failure_preserves_deliverable_and_meter_failure_is_visible(
-    fake_offload, monkeypatch
-):
+def test_unprofiled_recording_and_meter_failures_preserve_deliverable(fake_offload, monkeypatch):
     def unavailable(*a, **k):
         raise OSError("fixture accounting unavailable")
 
+    cost_calls = []
+
+    def unavailable_cost(*args, **kwargs):
+        cost_calls.append((args, kwargs))
+        raise OSError("fixture metering unavailable")
+
     monkeypatch.setattr(d.feedback, "record_run", unavailable)
-    monkeypatch.setattr(d.feedback, "record_cost", unavailable)
+    monkeypatch.setattr(d.feedback, "record_cost", unavailable_cost)
     monkeypatch.setattr(
         d.subprocess,
         "run",
@@ -360,6 +367,8 @@ def test_unprofiled_recording_failure_preserves_deliverable_and_meter_failure_is
     assert result["exit"] == 0
     assert result["output"] == "deliverable"
     assert [k["event"] for kind, k in fake_offload if kind == "ledger"] == ["start", "complete"]
+    assert len(cost_calls) == 1
+    assert cost_calls[0][1]["source"] == "ledger"
 
 
 def test_profile_recording_failure_removes_muse_prompt_and_never_starts_transport(
