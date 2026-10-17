@@ -208,13 +208,19 @@ def evaluate(
         )
     if state == "ok" and previous_state == "shed" and projected is not None:
         result["fyi"].append(f"pool {pool}: ũ={projected:.2f} ≤ 1−r_eff → ok")
-    if previous_state == "shed" and state != "shed" and projected is None:
-        result["fyi"].append(f"pool {pool}: shed → {state} (reset/rollover; ũ=unmeasured)")
+    if previous_state == "shed" and state != "shed":
+        if projected is None:
+            result["fyi"].append(f"pool {pool}: shed → {state} (reset/rollover; ũ=unmeasured)")
+        elif state != "ok":
+            result["fyi"].append(
+                f"pool {pool}: shed → {state}; ũ={projected:.2f} vs 1−r_eff={1 - reserve:.2f}; "
+                f"u={u:.2f}; clears toward ok on fresh flat samples or reset at {period_end:.0f}"
+            )
     if projected is None:
         blocking = f"u={u:.2f} vs g(e)+δ={allowed + EARLY_SPEND_BAND:.2f}; ũ=unmeasured"
         clear = "fresh samples or schedule advancing"
     else:
-        blocking = f"ũ={projected:.2f} vs 1-r_eff={1-reserve:.2f}"
+        blocking = f"ũ={projected:.2f} vs 1-r_eff={1 - reserve:.2f}"
         hours = (
             max(0, (projected - (1 - reserve)) / rate * 24)
             if rate is not None and rate > 0

@@ -26,16 +26,19 @@ Corrections baked in:
 
 Pacing sources (2026-10-17): Claude desktop persists timestamped weekly percentages
 in ~/Library/Application Support/Claude/plan-usage-history.json, samples[].t (ms)
-and samples[].u.sd (%). Refresh is app-driven (observed cadence documented in
+and samples[].u.sd (%) plus u.fh (five-hour %). Refresh is app-driven (observed cadence documented in
  docs/capacity-pacing.md), not guaranteed. Sources older than two 15-minute ticks
 are stale. Codex reads ~/.codex/sessions/**/rollout-*.jsonl token_count events:
-rate_limits.primary.used_percent (window_minutes=10080) and resets_at (epoch).
+rate_limits.primary.used_percent (window_minutes=10080) and resets_at (epoch),
+plus secondary.used_percent (window_minutes=300) for quota-marker recovery.
 The event timestamp measures freshness; T0=T1-7d. Only these usage fields are
 extracted; credits are never retained or printed. Source refresh requires an
 active session. Agent-specific ccusage weekly tokens plus calibrated cap remain
 the fallback; mixed-agent and 5h totals cannot measure weekly consumption.
 Missing/stale usage sets pacing.state=unknown while retaining the native state.
-The normal tick appends usage samples and snapshots; build() remains read-only.
+The normal tick appends usage samples and snapshots; build() writes only a disposable
+sanitized rollout offset cache, with duration and file counts reported. One usage
+snapshot per build feeds both marker recovery and pacing integration.
 
 Read-only build; `--selftest` runs fully offline. Simple-first + legible by
 design (PR #2350 §11 anti-over-engineering): no scoring, no learning here — this
@@ -52,6 +55,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextvars import ContextVar
 from pathlib import Path
 
 import execution_profiles
@@ -478,6 +482,9 @@ def shed_marker(
     return {**found, "expires_at": expires_at, "state": "active" if expires_at > now else "expired"}
 
 
+_BUILD_PACING_USAGE: ContextVar[dict | None] = ContextVar("build_pacing_usage", default=None)
+
+
 def _shed(agent: str) -> bool:
     """Honor legacy empty flags; expire only well-formed JSON cooldown flags.
 
@@ -524,17 +531,33 @@ def _shed(agent: str) -> bool:
             and not reset_clears
         ):
             now = time.time()
-            datum = pacing_usage.usage(
-                agent, now, pacing_usage.read_json(pacing_usage.CALIBRATION_FILE) or {}
+            snapshot = _BUILD_PACING_USAGE.get()
+            datum = (
+                snapshot[agent]
+                if snapshot is not None
+                else pacing_usage.usage(
+                    agent, now, pacing_usage.read_json(pacing_usage.CALIBRATION_FILE) or {}
+                )
             )
             used, observed = datum.get("used_fraction"), datum.get("ts")
+            short = datum.get("short_used_fraction")
             sample_clears = (
                 used is not None
                 and 0 <= used < 1
+                and short is not None
+                and 0 <= short < 1
                 and observed is not None
                 and created < observed <= now
                 and now - observed <= pacing.STALE_AFTER_SECONDS
             )
+            if not sample_clears:
+                print(
+                    f"pool {agent}: quota marker age={now - created:.0f}s; weekly u={used}; "
+                    f"short-window u={short if short is not None else 'unmeasured'}; "
+                    f"drain: fresh post-incident weekly AND short-window u<1, confirmed reset, "
+                    f"or cooldown in {marker['expires_at'] - now:.0f}s",
+                    file=sys.stderr,
+                )
         if not (reset_clears or sample_clears):
             return True
     try:
@@ -1019,26 +1042,35 @@ def build(ccusage_block=None, *, record_pacing: bool = False) -> dict:
     _capability_heartbeat("invocation", ref="capacity.build")
     if ccusage_block is None:
         ccusage_block = _ccusage_active_block()
-    agents = {}
-    for agent, cfg in AGENTS.items():
-        state, reason, meta = compute(agent, cfg, ccusage_block)
-        agents[agent] = {
-            "state": state,
-            "reason": reason,
-            "account": cfg["account"],
-            "model": cfg["model"],  # Capacity accounting model; CLI models live in tier_models.
-            "window": cfg["window"],
-            # What a dispatch would actually send, per tier — so a rotted pin is visible in the
-            # snapshot itself rather than only at dispatch time. None => CLI default applies.
-            "tier_models": _tier_models(agent),
-            "tier_ceiling": _tier_ceiling(agent),  # None => uncapped; else routine spend stops here
-            "auth": (_auth_health(agent) or {}),  # {} => not evaluable; never read as a failure
-            **(meta or {}),
-        }
     import pacing_usage
 
+    now = time.time()
+    usage_data = pacing_usage.usage_snapshot(now)
+    # Per-build context preserves the single-argument _shed seam and isolates concurrent builds.
+    token = _BUILD_PACING_USAGE.set(usage_data)
+    try:
+        agents = {}
+        for agent, cfg in AGENTS.items():
+            state, reason, meta = compute(agent, cfg, ccusage_block)
+            agents[agent] = {
+                "state": state,
+                "reason": reason,
+                "account": cfg["account"],
+                "model": cfg["model"],  # Capacity accounting model; CLI models live in tier_models.
+                "window": cfg["window"],
+                # What a dispatch would actually send, per tier — so a rotted pin is visible in the
+                # snapshot itself rather than only at dispatch time. None => CLI default applies.
+                "tier_models": _tier_models(agent),
+                "tier_ceiling": _tier_ceiling(
+                    agent
+                ),  # None => uncapped; else routine spend stops here
+                "auth": (_auth_health(agent) or {}),  # {} => not evaluable; never read as a failure
+                **(meta or {}),
+            }
+    finally:
+        _BUILD_PACING_USAGE.reset(token)
     pacing_fyi = pacing_usage.integrate(
-        agents, now=time.time(), handoff=HANDOFF, record=record_pacing
+        agents, now=now, handoff=HANDOFF, record=record_pacing, usage_data=usage_data
     )
     proj = (ccusage_block or {}).get("projection") or {}
     base = {

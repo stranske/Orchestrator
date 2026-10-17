@@ -32,8 +32,18 @@ Codex's machine-readable weekly source is
 `used_percent` divided by 100, and `resets_at` as epoch T1. T0 is T1 minus seven
 days. Freshness uses the line's own `timestamp`. Only these allowlisted fields
 are extracted: credits and all other account payloads are never copied or printed.
-The reader scans the newest 300 files by mtime and uses the newest timestamped
+The reader visits the newest 300 files by mtime and uses the newest timestamped
 weekly observation; the number of older files excluded is printed explicitly.
+A private temporary-file cache stores only sanitized usage observations and per-file
+append offsets, validated against inode/size/mtime and boundary fingerprints.
+Replacement/truncation forces a rescan; incomplete final lines are retried; original
+event timestamps still control freshness. Cache failure costs speed, never changes a
+capacity verdict. Every report prints scan duration, files read/cached, bytes processed,
+malformed/unreadable counts, total files and omitted files. Warm scan measured
+0.349s (7 appended files, 293 cached; 463,088 bytes), versus 9.701s cold
+(300 files, 3,606,291,682 bytes). One usage snapshot per build is shared with
+`_shed` through a scoped context and passed to pacing integration; active Codex
+markers do not trigger a second rollout scan. The cache is derived, disposable data.
 Refresh requires active Codex sessions, including `codex exec` dispatches.
 
 A separate read-only scan of all files modified in the last week measured fresh
@@ -91,13 +101,19 @@ builds calculate the effective inventory without writing; recording ticks persis
 it. Manually entered `consumed_at` remains a fallback. Codex T0 follows the observed
 T1 minus seven days; Claude retains its fixed anchor.
 
-An incident keeps shed latched only until a fresh measured weekly u<1 observation
+The weekly pacing latch (distinct from an active provider marker) lasts until a fresh measured weekly u<1 observation
 postdates it, or the period/reset rolls. Thus a Claude five-hour 429 or a ledger
 scan hit cannot latch weekly pacing for days despite fresh weekly headroom. With
 missing or stale usage, the hold remains. Physical u>=1 still sheds.
 A consumed reset releases
 only a dated, active provider-quota marker older than the consumption event;
-ordinary auth/model checks run afterward. Manual/unreadable holds remain closed.
+ordinary auth/model checks run afterward. A fresh post-incident usage sample
+clears an active quota/rate-limit/capacity marker only when BOTH weekly usage and
+short-window usage are measured below 1: Claude `u.fh`, Codex
+`rate_limits.secondary.used_percent` with `window_minutes=300`. Unknown, full or
+stale short-window evidence retains the marker; diagnostics print its age, both
+usage quantities and the fresh-evidence/cooldown drain condition.
+Manual/unreadable/auth/model holds retain their existing release rules.
 For Claude, pre-consumption exhaustion samples are discarded without shifting T1.
 
 The implementation sandbox denied both the requested sibling checkpoint and the
@@ -125,7 +141,14 @@ spend can move it. All sampling, expiry handling and time advancement run while
 shed. Unknown/stale pacing retains the native capacity state; measured pacing can only
 worsen native state. Measured weighting applies only within identical policy tiers
 (load, late, ok/warn, capacity bias, drain urgency); all-unknown pacing retains
-legacy selection and epsilon exploration. Claude stays reserved unless its own
+legacy selection and epsilon exploration. `PACING_POOLS={"codex","claude"}` limits
+sampling to these two pools when the legacy winner belongs to that set; an unrelated
+legacy winner is returned unchanged. Legacy exploration is drawn first and remains
+unchanged for other agents. The coordinator chose to retain posterior × weight
+sampling between the pacing pools: posteriors Claude=0.766/Codex=0.612 with
+weights 1/0.918 give 57.689%/42.311% of the pacing exploitation tier, despite
+Claude's much higher deterministic legacy share. This is an explicit design decision.
+Claude stays reserved unless its own
 pacing is measured-ok (or the existing high-leverage/last-resort rule applies).
 Both `burn_rate_per_day` and `burn_per_day` are emitted with identical values.
 Export comparisons ignore clock/projection/burn diagnostics; usage, state and reset

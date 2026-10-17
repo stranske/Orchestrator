@@ -1535,7 +1535,8 @@ snapshots even while shed. Codex weekly percent/reset epochs come from timestamp
 Claude uses desktop weekly history. Unknown/stale pacing preserves native routability; shared
 ccusage totals never become per-agent percentages. Both burn-rate aliases are retained.
 `router.select_agent` preserves load/late/state/policy/drain tiers and samples tied pools by
-posterior × pacing weight, then falls back to zero-weight warn pools, then pacing-shed pools with
+posterior × pacing weight within Codex/Claude only (legacy exploration runs first), then falls
+back to zero-weight warn pools, then pacing-shed pools with
 `fail-toward-motion`; auth/model/manual holds retain authority. The plan and persisted dispatch
 metadata carry all candidate weights and projections. `capacity.py pick-agent` exposes that same
 selection for the separate relay follow-up; it prints the agent on stdout and evidence on stderr.

@@ -54,6 +54,7 @@ EXPLORATION_RATE_DEFAULT = 0.05  # sustained exploration rate; override with ORC
 EXPLORATION_MODE_DEFAULT = (
     "epsilon-greedy"  # keeps the same ε safety cap; override with thompson-hybrid
 )
+PACING_POOLS = {"codex", "claude"}
 SCARCE_AGENTS = ("codex", "claude")  # review yields when these are pressured
 # Agents the GitHub keepalive can run REMOTELY via an `agent:<X>` label (must match dispatcher.REMOTE_AGENTS).
 # vibe/aider are LOCAL-only (no keepalive lane), so remote delegation can't choose them.
@@ -478,6 +479,8 @@ def _measured_pacing(row: dict) -> bool:
 
 def _pacing_choice(scored, cap, learned, rng):
     """Posterior × literal pacing weight; warn-zero before shed fallback."""
+    if scored[0][1]["agent"] not in PACING_POOLS:
+        return scored[0], None
     rows = []
     for row in scored:
         _, entry, state, idx = row
@@ -493,12 +496,15 @@ def _pacing_choice(scored, cap, learned, rng):
     # Preserve every legacy policy tier; replace only the final learned ranking.
     best_tier = min(r[0][0][:-1] for r in eligible)
     eligible = [r for r in eligible if r[0][0][:-1] == best_tier]
-    positive = [r for r in eligible if non_shed and r[2] > 0]
-    tier = positive or eligible
+    pools = [r for r in eligible if r[0][1]["agent"] in PACING_POOLS]
+    if not pools:
+        return eligible[0][0], None
+    positive = [r for r in pools if non_shed and r[2] > 0]
+    tier = positive or pools
     policy = (
         "posterior*pacing" if positive else "fallback-warn" if non_shed else "fail-toward-motion"
     )
-    if not any(_measured_pacing(cap.get("agents", {}).get(r[0][1]["agent"], {})) for r in eligible):
+    if not any(_measured_pacing(cap.get("agents", {}).get(r[0][1]["agent"], {})) for r in pools):
         # Other tiers having measurements cannot randomize this unmeasured tier.
         return eligible[0][0], None
     weights = [r[1] * (r[2] if positive else 1.0) for r in tier]
@@ -632,15 +638,14 @@ def select_agent(
     explored = False
     rng = rng or random
     pacing_decision = None
-    if pacing_active:
-        picked, pacing_decision = _pacing_choice(scored, cap, learned, rng)
-    changed_by_pacing = pacing_decision is not None and picked != scored[0]
-    epsilon = 0.0 if changed_by_pacing else _exploration_rate(exploration_rate)
+    # Draw legacy exploration first so pacing cannot consume or suppress the
+    # unrelated pools' exploration share. Pace only the exploitation choice.
+    epsilon = _exploration_rate(exploration_rate)
     if epsilon > 0 and rng.random() < epsilon:
         mode = _exploration_mode(exploration_mode)
         exploration_scored = scored
         if pacing_active:
-            exploration_scored = [r for r in scored if r[2] != "shed"] or scored
+            exploration_scored = [r for r in scored if r[2] != "shed"]
         challenger = (
             _thompson_exploration_choice(exploration_scored, learned, rng)
             if mode == "thompson-hybrid"
@@ -658,6 +663,8 @@ def select_agent(
                     "invocation",
                     ref=f"{task_type}:{entry_agent(challenger)}",
                 )
+    if pacing_active and not explored:
+        picked, pacing_decision = _pacing_choice(scored, cap, learned, rng)
     _, entry, st, _idx = picked
     result = {
         **entry,

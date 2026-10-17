@@ -11,10 +11,13 @@ Mixed-agent ccusage totals are never silently attributed to Codex or Claude.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import statistics
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 import pacing
@@ -116,28 +119,66 @@ def weekly_tokens(path: Path, pool: str) -> list[dict]:
     return rows
 
 
-def rollout_observations(root: Path, now: float) -> list[dict]:
-    """Read only an allowlisted weekly payload. Never retain credits or raw events."""
+def rollout_observations(root: Path, now: float, *, stats: dict | None = None) -> list[dict]:
+    """Cache sanitized observations and append offsets; never cache raw payloads.
+
+    Rollouts are append-only. Inode, size, mtime and boundary fingerprints detect
+    replacement/truncation before reusing an offset. Incomplete final lines are
+    retried. Cache failure affects speed only, never source freshness or admission.
+    """
+    started = time.monotonic()
+    root_key = hashlib.sha256(str(root.resolve()).encode()).hexdigest()
+    cache_path = Path(tempfile.gettempdir()) / f"orch-pacing-{os.getuid()}-{root_key}.json"
+    cache = read_json(cache_path)
+    cache = cache if isinstance(cache, dict) else {}
+    cached = cache.get("files", {}) if cache.get("version") == 1 else {}
     files = sorted(root.glob("**/rollout-*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
     omitted = max(0, len(files) - ROLLOUT_FILE_LIMIT)
-    if omitted:
-        print(
-            f"FYI codex rollouts: scanning {len(files)-omitted}/{len(files)} newest files; "
-            f"omitted={omitted} older files",
-            file=sys.stderr,
-        )
-    rows = []
-    malformed = unreadable = 0
+    rows: list[dict] = []
+    updated = {}
+    malformed = unreadable = files_read = files_cached = bytes_read = 0
     for path in files[:ROLLOUT_FILE_LIMIT]:
         try:
-            with path.open() as stream:
-                for line in stream:
-                    if '"token_count"' not in line or '"rate_limits"' not in line:
+            stat = path.stat()
+            prior = cached.get(str(path), {})
+            with path.open("rb") as stream:
+                offset = prior.get("offset", 0)
+                prefix_size = min(offset, 4096)
+                prefix = hashlib.sha256(stream.read(prefix_size)).hexdigest()
+                stream.seek(max(0, offset - 4096))
+                boundary = hashlib.sha256(stream.read(min(offset, 4096))).hexdigest()
+                reusable = (
+                    prior.get("inode") == stat.st_ino
+                    and prior.get("device") == stat.st_dev
+                    and stat.st_size >= prior.get("size", 0) >= offset
+                    and prior.get("prefix") == prefix
+                    and prior.get("boundary") == boundary
+                    and (
+                        stat.st_size > prior.get("size", 0)
+                        or stat.st_mtime_ns == prior.get("mtime")
+                    )
+                )
+                file_rows = prior.get("rows", []) if reusable else []
+                file_bad = prior.get("malformed", 0) if reusable else 0
+                offset = offset if reusable else 0
+                stream.seek(offset)
+                if reusable and offset == stat.st_size:
+                    files_cached += 1
+                else:
+                    files_read += 1
+                while line := stream.readline():
+                    bytes_read += len(line)
+                    if not line.endswith(b"\n"):
+                        break
+                    offset = stream.tell()
+                    if b'"token_count"' not in line or b'"rate_limits"' not in line:
                         continue
                     try:
                         event = json.loads(line)
                         payload = event.get("payload") or {}
-                        primary = (payload.get("rate_limits") or {}).get("primary") or {}
+                        limits = payload.get("rate_limits") or {}
+                        primary = limits.get("primary") or {}
+                        secondary = limits.get("secondary") or {}
                         ts = pacing.timestamp(event.get("timestamp"))
                         percent = primary.get("used_percent")
                         end = pacing.timestamp(primary.get("resets_at"))
@@ -146,33 +187,79 @@ def rollout_observations(root: Path, now: float) -> list[dict]:
                             and payload.get("type") == "token_count"
                             and primary.get("window_minutes") == 10080
                             and ts is not None
-                            and ts <= now
                             and end is not None
                             and isinstance(percent, (int, float))
                             and 0 <= percent <= 100
                         ):
-                            rows.append(
+                            short = secondary.get("used_percent")
+                            file_rows.append(
                                 dict(
                                     ts=ts,
                                     used_fraction=percent / 100,
                                     period_end=end,
+                                    short_used_fraction=(
+                                        short / 100
+                                        if secondary.get("window_minutes") == 300
+                                        and isinstance(short, (int, float))
+                                        and 0 <= short <= 100
+                                        else None
+                                    ),
                                     source="codex-rollout:rate_limits.primary",
                                 )
                             )
                     except (ValueError, TypeError, AttributeError):
-                        malformed += 1
+                        file_bad += 1
+                stream.seek(0)
+                prefix = hashlib.sha256(stream.read(min(offset, 4096))).hexdigest()
+                stream.seek(max(0, offset - 4096))
+                boundary = hashlib.sha256(stream.read(min(offset, 4096))).hexdigest()
+                updated[str(path)] = dict(
+                    inode=stat.st_ino,
+                    device=stat.st_dev,
+                    size=stat.st_size,
+                    mtime=stat.st_mtime_ns,
+                    offset=offset,
+                    prefix=prefix,
+                    boundary=boundary,
+                    rows=file_rows,
+                    malformed=file_bad,
+                )
+                rows.extend(r for r in file_rows if r["ts"] <= now)
+                malformed += file_bad
         except OSError:
             unreadable += 1
-    if malformed or unreadable:
+    try:
+        # Private temporary + atomic replace: concurrent readers see a complete cache.
+        with tempfile.NamedTemporaryFile(mode="w", dir=cache_path.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(dict(version=1, files=updated), stream, allow_nan=False)
+        temporary.replace(cache_path)
+    except OSError:
         print(
-            f"FYI codex rollouts: malformed={malformed}, unreadable_files={unreadable}",
+            "FYI codex rollout cache unavailable; source scan remains authoritative",
             file=sys.stderr,
         )
+    scan = dict(
+        duration_seconds=round(time.monotonic() - started, 4),
+        files_read=files_read,
+        files_cached=files_cached,
+        bytes_read=bytes_read,
+        total_files=len(files),
+        omitted=omitted,
+        malformed=malformed,
+        unreadable_files=unreadable,
+    )
+    if stats is not None:
+        stats.update(scan)
+    print(
+        "FYI codex rollout scan: " + ", ".join(f"{k}={v}" for k, v in scan.items()), file=sys.stderr
+    )
     return sorted(rows, key=lambda r: r["ts"])
 
 
 def codex_rollout_usage(root: Path, now: float) -> dict | None:
-    rows = rollout_observations(root, now)
+    stats: dict = {}
+    rows = rollout_observations(root, now, stats=stats)
     if not rows:
         return None
     resets = []
@@ -188,7 +275,9 @@ def codex_rollout_usage(root: Path, now: float) -> dict | None:
             early = right["period_end"] - pacing.PERIOD_SECONDS < left["period_end"] - 1
             if dropped and shift > pacing.TICK_SECONDS and early:
                 resets.append(right["ts"])
-    return dict(rows[-1], reset_events=sorted(set(resets)), reset_signals=sorted(set(signals)))
+    return dict(
+        rows[-1], reset_events=sorted(set(resets)), reset_signals=sorted(set(signals)), scan=stats
+    )
 
 
 def consume_detected_resets(inventory: dict, datum: dict, *, now: float, record: bool) -> list[str]:
@@ -257,6 +346,12 @@ def usage(
                 return dict(
                     used_fraction=row["u"]["sd"] / 100,
                     ts=ts,
+                    short_used_fraction=(
+                        row["u"]["fh"] / 100
+                        if isinstance(row["u"].get("fh"), (int, float))
+                        and 0 <= row["u"]["fh"] <= 100
+                        else None
+                    ),
                     source="claude-desktop:plan-usage-history.json:u.sd",
                 )
     cap = calibration.get(f"{pool}_weekly_token_cap")
@@ -286,6 +381,30 @@ def usage(
             period_start=row["period_start"],
         )
     return dict(used_fraction=None, ts=None, source="none")
+
+
+def usage_snapshot(now: float) -> dict:
+    """One pool reading per build, preserving reset-aligned fallback periods."""
+    inventory, _ = reset_inventory(RESETS_FILE, now)
+    calibration = read_json(CALIBRATION_FILE) or {}
+    result = {}
+    for pool in ("codex", "claude"):
+        times = [
+            t
+            for entry in inventory.get(pool, [])
+            if (t := pacing.timestamp(entry.get("consumed_at"))) is not None and t <= now
+        ]
+        bounds = pacing.period(
+            pool,
+            now,
+            start=calibration.get("codex_period_start"),
+            reset_at=max(times) if times else None,
+        )
+        aligned = dict(calibration)
+        if pool == "codex" and bounds:
+            aligned["codex_period_start"] = bounds[0]
+        result[pool] = usage(pool, now, aligned, snapshots=SNAPSHOTS, claude_path=CLAUDE_USAGE)
+    return result
 
 
 def calibrate(incidents: list[dict], samples: list[dict], destination: Path) -> tuple[bool, str]:
@@ -402,7 +521,9 @@ def calibration_misses(
     return messages
 
 
-def integrate(agents: dict, *, now: float, handoff: Path, record: bool = False) -> list[str]:
+def integrate(
+    agents: dict, *, now: float, handoff: Path, record: bool = False, usage_data: dict | None = None
+) -> list[str]:
     inventory, messages = reset_inventory(RESETS_FILE, now)
     calibration = read_json(CALIBRATION_FILE) or {}
     samples_path = handoff / "pacing-usage-samples.ndjson"
@@ -438,7 +559,20 @@ def integrate(agents: dict, *, now: float, handoff: Path, record: bool = False) 
         source_calibration = dict(calibration)
         if pool == "codex" and bounds:
             source_calibration["codex_period_start"] = bounds[0]
-        datum = usage(pool, now, source_calibration, snapshots=SNAPSHOTS, claude_path=CLAUDE_USAGE)
+        datum = (
+            dict(usage_data[pool])
+            if usage_data is not None
+            else usage(pool, now, source_calibration, snapshots=SNAPSHOTS, claude_path=CLAUDE_USAGE)
+        )
+        # A recording tick can lower the calibrated cap before integration.
+        if datum.get("source", "").startswith("ccusage-calibrated"):
+            cap = source_calibration.get(f"{pool}_weekly_token_cap")
+            if isinstance(cap, (int, float)) and cap > 0:
+                datum["used_fraction"] = datum["weekly_tokens"] / cap
+        if datum.get("scan"):
+            messages.append(
+                "FYI codex rollout scan: " + ", ".join(f"{k}={v}" for k, v in datum["scan"].items())
+            )
         if pool == "codex" and datum.get("period_end") is not None:
             messages.extend(consume_detected_resets(inventory, datum, now=now, record=record))
             bounds = (datum["period_end"] - pacing.PERIOD_SECONDS, datum["period_end"])
@@ -539,7 +673,7 @@ def report(handoff: Path, *, now: float, current: dict | None = None) -> str:
             f"ũ={measured(row.get('projected_fraction'))} "
             f"state={row.get('state', 'unknown')} w_p={measured(row.get('routing_weight'))} "
             f"resets={row.get('resets_available') if row.get('resets_available') is not None else 'unknown'} source={row.get('source', 'none')} "
-            f"ts={row.get('ts')} stale={row.get('ts') is not None and now-row['ts'] > pacing.STALE_AFTER_SECONDS}; "
+            f"ts={row.get('ts')} stale={row.get('ts') is not None and now - row['ts'] > pacing.STALE_AFTER_SECONDS}; "
             f"{row.get('reason', 'usage unmeasured; clears on fresh usage/period sample')}"
         )
         finals = []
@@ -637,7 +771,7 @@ def report(handoff: Path, *, now: float, current: dict | None = None) -> str:
         passed = constrained > 0 and constrained >= pacing.PASS_SHARE_MULTIPLIER * base
         verdict = (
             ("PASS" if passed else "FAIL")
-            if constrained > 0
+            if constrained > 0 or base > 0
             else "unmeasured — no non-codex dispatches"
         )
         lines.append(

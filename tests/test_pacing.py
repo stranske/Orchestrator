@@ -55,9 +55,9 @@ def test_early_heavy_spend_sheds_without_resets():
 
 def test_banked_resets_relieve_reserve_RESET_BOOST():
     row = evaluate(n=2)
-    assert (
-        row["effective_reserve"] == 0
-    ), "RESET_BOOST must consume resets_available in reserve math"
+    assert row["effective_reserve"] == 0, (
+        "RESET_BOOST must consume resets_available in reserve math"
+    )
     assert row["state"] == "warn", "RESET_BOOST banked resets must keep projected exhaustion warn"
     assert "bank-0" in row["fyi"][0]
     # Also exercise an actual state difference induced by the reserve formula.
@@ -82,9 +82,9 @@ def test_undefined_burn_schedule(u, state):
 
 @pytest.mark.parametrize("n,expected", [(0, 0.15), (1, 0.075), (2, 0)])
 def test_literal_reserve_formula(n, expected):
-    assert pacing.effective_reserve(n) == pytest.approx(
-        expected
-    ), "RESET_BOOST literal revised formula"
+    assert pacing.effective_reserve(n) == pytest.approx(expected), (
+        "RESET_BOOST literal revised formula"
+    )
 
 
 def test_expired_and_consumed_resets_drop_out():
@@ -557,6 +557,8 @@ def test_codex_rollout_fresh_stale_and_sanitized(tmp_path, age, stale):
         "source",
         "reset_events",
         "reset_signals",
+        "short_used_fraction",
+        "scan",
     }
     row = evaluate(
         now=START + age,
@@ -805,7 +807,9 @@ def test_fresh_weekly_usage_releases_only_dated_quota_hold(
     monkeypatch.setattr(capacity.time, "time", lambda: now)
     monkeypatch.setattr(pacing_usage, "RESETS_FILE", tmp_path / "absent")
     monkeypatch.setattr(
-        pacing_usage, "usage", lambda *a, **k: dict(used_fraction=used, ts=now - age)
+        pacing_usage,
+        "usage",
+        lambda *a, **k: dict(used_fraction=used, short_used_fraction=0.2, ts=now - age),
     )
     assert capacity._shed("claude") is not clears
     assert marker.exists() is not clears
@@ -837,3 +841,195 @@ def test_export_schedule_and_weight_drift_wait_for_regular_cadence():
     assert route_weights_export._semantic_for_compare(
         base
     ) != route_weights_export._semantic_for_compare(other)
+
+
+@pytest.mark.parametrize("leader", ["claude", "cursor", "vibe", "gemini"])
+def test_measured_codex_keeps_nonpacing_legacy_shares(monkeypatch, leader):
+    agents = ("claude", "cursor", "codex", "vibe", "gemini")
+    posteriors = dict(zip(agents, (0.766, 0.776, 0.612, 0.641, 0.561)))
+    learned = {
+        a: dict(rank=i, posterior=posteriors[a], n_obs=100)
+        for i, a in enumerate([leader] + [a for a in agents if a != leader])
+    }
+    cap = {"agents": {a: dict(state="ok") for a in agents}}
+    measured = copy.deepcopy(cap)
+    measured["agents"]["codex"]["pacing"] = dict(state="ok", routing_weight=0.918)
+    # Isolate the learned tier from host model and native drain configuration.
+    monkeypatch.setattr(router.execution_profiles, "profiles_for_agent", lambda *a, **k: [])
+    monkeypatch.setattr(router, "_capacity_policy_bias", lambda *a: 0)
+    monkeypatch.setattr(router, "_drain_urgency", lambda *a: 0)
+    for entry in router._ROUTE_TABLE_TYPED["implement"]["agents"]:
+        monkeypatch.setitem(entry, "late", False)
+    before = {a: 0 for a in agents}
+    after = {a: 0 for a in agents}
+    for seed in range(2000):
+        args = dict(
+            learned=learned, exploration_rate=0.2, exploration_mode="epsilon-greedy", simulate=True
+        )
+        old = router.select_agent("implement", cap, rng=random.Random(seed), **args)
+        new = router.select_agent("implement", measured, rng=random.Random(seed), **args)
+        before[old["agent"]] += 1
+        after[new["agent"]] += 1
+    for agent in ("cursor", "vibe", "gemini"):
+        assert after[agent] == before[agent], (before, after)
+    if leader == "claude":
+        share = after["claude"] / (after["claude"] + after["codex"])
+        assert share == pytest.approx(0.766 / (0.766 + 0.612 * 0.918), abs=0.04)
+
+
+@pytest.mark.parametrize("pool", ["claude", "codex"])
+@pytest.mark.parametrize("short,clears", [(None, False), (1, False), (0.2, True)])
+def test_marker_requires_short_window_headroom(tmp_path, monkeypatch, capsys, pool, short, clears):
+    now = START + pacing.DAY_SECONDS
+    marker = tmp_path / pool
+    marker.write_text(
+        json.dumps(dict(created_at=now - 100, expires_at=now + 3600, category="quota"))
+    )
+    monkeypatch.setattr(capacity, "SHED_DIR", tmp_path)
+    monkeypatch.setattr(capacity.time, "time", lambda: now)
+    monkeypatch.setattr(pacing_usage, "RESETS_FILE", tmp_path / "absent")
+    monkeypatch.setattr(
+        pacing_usage,
+        "usage",
+        lambda *a, **k: dict(used_fraction=0.37, short_used_fraction=short, ts=now),
+    )
+    assert capacity._shed(pool) is not clears
+    assert marker.exists() is not clears
+    if not clears:
+        printed = capsys.readouterr().err
+        assert "marker age=100s" in printed and "short-window u=" in printed
+        assert "cooldown in 3600s" in printed and "post-incident" in printed
+
+
+@pytest.mark.parametrize("short", [0, 100, None])
+def test_claude_short_window_source(tmp_path, short):
+    path = tmp_path / "claude.json"
+    path.write_text(json.dumps(dict(samples=[dict(t=START * 1000, u=dict(sd=37, fh=short))])))
+    row = pacing_usage.usage("claude", START, {}, claude_path=path)
+    assert row["short_used_fraction"] == (short / 100 if short is not None else None)
+
+
+@pytest.mark.parametrize("window,short", [(300, 0), (300, 100), (10080, 100)])
+def test_codex_short_window_source(tmp_path, window, short):
+    path = rollout_file(tmp_path, [(START, 37, START + pacing.PERIOD_SECONDS)])
+    event = json.loads(path.read_text())
+    event["payload"]["rate_limits"]["secondary"] = dict(window_minutes=window, used_percent=short)
+    path.write_text(json.dumps(event) + "\n")
+    row = pacing_usage.usage("codex", START, {}, sessions=tmp_path)
+    assert row["short_used_fraction"] == (short / 100 if window == 300 else None)
+
+
+def test_rollout_cache_append_partial_and_replacement(tmp_path):
+    end = START + pacing.PERIOD_SECONDS
+    path = rollout_file(tmp_path, [(START, 100, end)])
+    first = pacing_usage.codex_rollout_usage(tmp_path, START)
+    warm = pacing_usage.codex_rollout_usage(tmp_path, START)
+    assert warm["scan"]["files_read"] == 0
+    assert warm["scan"]["files_cached"] == 1
+    event = json.loads(path.read_text())
+    event.update(timestamp=START + 1)
+    event["payload"]["rate_limits"]["primary"].update(used_percent=0, resets_at=end + 3600)
+    line = json.dumps(event)
+    with path.open("a") as stream:
+        stream.write(line[:50])
+    partial = pacing_usage.codex_rollout_usage(tmp_path, START + 1)
+    assert partial["ts"] == first["ts"]
+    with path.open("a") as stream:
+        stream.write(line[50:] + "\n")
+    appended = pacing_usage.codex_rollout_usage(tmp_path, START + 1)
+    assert appended["used_fraction"] == 0
+    assert appended["reset_events"] == [START + 1]
+    assert appended["scan"]["bytes_read"] == len(line[50:]) + 51
+    # A different clock cannot make a future cached event current.
+    assert pacing_usage.codex_rollout_usage(tmp_path, START)["ts"] == START
+    rollout_file(tmp_path, [(START + 2, 50, end)])
+    replaced = pacing_usage.codex_rollout_usage(tmp_path, START + 2)
+    assert replaced["used_fraction"] == 0.5 and not replaced["reset_events"]
+
+
+def test_build_reuses_usage_in_marker_and_pacing(tmp_path, monkeypatch):
+    now = START + pacing.DAY_SECONDS
+    (tmp_path / "codex").write_text(
+        json.dumps(dict(created_at=now - 100, expires_at=now + 3600, category="quota"))
+    )
+    monkeypatch.setattr(capacity, "SHED_DIR", tmp_path)
+    monkeypatch.setattr(capacity, "HANDOFF", tmp_path)
+    monkeypatch.setattr(capacity.time, "time", lambda: now)
+    monkeypatch.setattr(pacing_usage, "RESETS_FILE", tmp_path / "absent")
+    monkeypatch.setattr(pacing_usage, "CALIBRATION_FILE", tmp_path / "calibration.json")
+    pacing_usage.CALIBRATION_FILE.write_text(json.dumps(dict(codex_period_start=START)))
+    pacing_usage.RESETS_FILE.write_text(
+        json.dumps(dict(codex=[dict(expires="2026-11-16", consumed_at=now - 1000)], claude=[]))
+    )
+    calls = []
+
+    def usage(pool, clock, calibration, **k):
+        calls.append(pool)
+        if pool == "codex":
+            assert calibration["codex_period_start"] == now - 1000
+        return dict(used_fraction=0.1, short_used_fraction=1, ts=now, source=SOURCE)
+
+    monkeypatch.setattr(pacing_usage, "usage", usage)
+
+    def compute(agent, *a):
+        return ("shed" if capacity._shed(agent) else "ok"), "fixture", {}
+
+    monkeypatch.setattr(capacity, "compute", compute)
+    monkeypatch.setattr(capacity, "_tier_models", lambda *a: {})
+    monkeypatch.setattr(capacity, "_tier_ceiling", lambda *a: None)
+    monkeypatch.setattr(capacity, "_auth_health", lambda *a: {})
+    monkeypatch.setattr(capacity, "profile_capacity_snapshot", lambda *a, **k: {})
+    monkeypatch.setattr(capacity, "profile_pool_usage_from_ledger", lambda: {})
+    assert capacity.build(ccusage_block={})["agents"]["codex"]["state"] == "shed"
+    assert calls == ["codex", "claude"]
+    assert capacity._BUILD_PACING_USAGE.get() is None
+
+
+def test_report_zero_constrained_positive_baseline_is_fail(tmp_path):
+    end = START + pacing.PERIOD_SECONDS
+    pacing_usage.append_rows(
+        tmp_path / "capacity-ledger.ndjson",
+        [
+            dict(
+                ts=t,
+                event="pacing_snapshot",
+                agents=dict(
+                    codex=dict(
+                        state="ok" if t < START + pacing.DAY_SECONDS else "warn",
+                        pacing=dict(period_start=START, period_end=end),
+                    )
+                ),
+            )
+            for t in range(int(START), int(end), pacing.TICK_SECONDS)
+        ]
+        + [
+            dict(ts=START + 10, event="start", agent="claude", count=1),
+            dict(ts=START + 2 * pacing.DAY_SECONDS, event="start", agent="codex", count=1),
+        ],
+    )
+    line = next(
+        line
+        for line in pacing_usage.report(tmp_path, now=end).splitlines()
+        if line.startswith("3:")
+    )
+    assert "ok=1.000, warn/shed=0.000" in line and "FAIL" in line
+    assert "unmeasured" not in line
+
+
+def test_shed_to_warn_with_projection_prints_drain():
+    row = evaluate(day=6, u=0.8, previous_state="shed")
+    assert row["state"] == "warn"
+    printed = " ".join(row["fyi"])
+    assert "shed → warn" in printed and "ũ=" in printed and "1−r_eff=" in printed
+    assert "fresh flat samples or reset" in printed
+
+
+@pytest.mark.parametrize("weight", [0, 0.918])
+def test_pacing_subset_ignores_nonpool_positive_weight(monkeypatch, weight):
+    cap = {"agents": {a: dict(state="ok") for a in ("claude", "codex", "cursor", "vibe", "gemini")}}
+    for a in ("codex", "claude"):
+        cap["agents"][a]["pacing"] = dict(state="ok", routing_weight=weight)
+    monkeypatch.setattr(router.execution_profiles, "profiles_for_agent", lambda *a, **k: [])
+    row = router.select_agent("implement", cap, exploration_rate=0, simulate=True)
+    assert row["agent"] in router.PACING_POOLS
+    assert row["pacing_decision"]["policy"] == ("posterior*pacing" if weight else "fallback-warn")
