@@ -762,17 +762,20 @@ def record_review_round(
 
 def review_round_rows() -> list[tuple[str, str, int, str, str, int]]:
     """Read advisory review evidence for switch-review reporting."""
-    with _conn() as conn:
+    conn = sqlite3.connect(Path(DB_PATH).resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
+    try:
         return conn.execute(
             "SELECT run_id, pr, round, verdict, reviewer_agent, first_pass FROM review_rounds "
             "ORDER BY recorded_ts, run_id, round"
         ).fetchall()
+    finally:
+        conn.close()
 
 
 def _migrate_schema(c: sqlite3.Connection) -> None:
     """Guarded migrations for existing local feedback stores."""
     review_cols = {row[1] for row in c.execute("PRAGMA table_info(review_rounds)").fetchall()}
-    if "head_sha" not in review_cols:
+    if review_cols and "head_sha" not in review_cols:
         c.execute("ALTER TABLE review_rounds ADD COLUMN head_sha TEXT")
     cols = {row[1] for row in c.execute("PRAGMA table_info(runs)").fetchall()}
     if "model" not in cols:

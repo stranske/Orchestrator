@@ -45,9 +45,21 @@ def test_review_rounds_persist_in_isolated_brain_and_report_first_pass_fraction(
         switch_review.review_loop_share_line(rows)
         == "  review loop first-pass MERGE-WHEN-GREEN: 2/3 (67%)"
     )
+    # Reporting must not enter the writing/migration connection path.
+    monkeypatch.setattr(
+        feedback, "_conn", lambda: (_ for _ in ()).throw(AssertionError("writing read"))
+    )
+    assert switch_review.review_round_snapshot() == {"status": "measured", "rows": rows}
 
 
 def test_trial_reports_first_twenty_deliveries_without_later_dilution():
     rows = [(f"run-{i}", "owner/repo#1", 1, "FIX-FIRST", "vibe", 1) for i in range(20)]
     rows += [("later", "owner/repo#2", 1, "MERGE-WHEN-GREEN", "vibe", 1)] * 5
     assert switch_review.review_loop_share_line(rows).endswith("0/20 (0%)")
+
+
+def test_missing_round_store_is_unmeasured_and_not_created(tmp_path, monkeypatch):
+    path = tmp_path / "absent.db"
+    monkeypatch.setattr(feedback, "DB_PATH", path)
+    assert switch_review.review_round_snapshot()["status"] == "unmeasured"
+    assert not path.exists()
