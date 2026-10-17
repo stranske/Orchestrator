@@ -287,9 +287,15 @@ def _exploration_block(
         # Never describe the exploitation winner as a challenger when the
         # router cannot find another eligible seat in the same policy tier.
         challengers[task_type] = pick["agent"] if pick and pick["exploration"] else None
+    try:
+        float(os.environ["ORCH_EXPLORATION_RATE"])
+        rate_source = "env"
+    except (KeyError, ValueError):
+        rate_source = "default"
     return {
         "mode": mode,
-        "rate": router.EXPLORATION_RATE_DEFAULT,
+        "rate": router._exploration_rate(None),
+        "rate_source": rate_source,
         "week_start": week * WEEK_SECONDS,
         "challengers": challengers,
     }
@@ -376,6 +382,7 @@ def _canonical_bytes(document: dict[str, Any]) -> bytes:
 def _semantic_for_compare(document: dict[str, Any]) -> dict[str, Any]:
     """Compare export semantics without timestamp-only churn.
 
+    Exploration fields (including rate) remain publishable even within the same day.
     Dictionary capacity rows drop ``observed_at`` so a tick-only refresh does not
     republish. Non-dict or otherwise malformed rows are kept so the next write
     can repair them instead of comparing as equal after they were filtered out.

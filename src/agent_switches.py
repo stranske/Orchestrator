@@ -134,9 +134,11 @@ STATE_READ_MEASURED = ("marker", "no_marker")
 # (<why>)` to the reason of every stall switch. Its only other switch, `<agent>-unavailable`, never
 # consults the route weights and returns delegationSource 'static'. Anything else — a reason from a
 # policy version older than the suffix — is `unknown`, because guessing would inflate either count.
-DELEGATION_SOURCE_RE = re.compile(r"delegation_source:\s*(route_weights|static)\b")
+DELEGATION_SOURCE_RE = re.compile(
+    r"delegation_source:\s*(route_weights_exploration|route_weights|static)\b"
+)
 UNAVAILABLE_REASON_RE = re.compile(r"^[\w.-]+-unavailable$")
-DELEGATION_SOURCES = ("route_weights", "static", "unknown")
+DELEGATION_SOURCES = ("route_weights_exploration", "route_weights", "static", "unknown")
 REASON_KEPT_CHARS = 300
 
 
@@ -270,7 +272,7 @@ def trusted_state_author(kind: str, login: str) -> bool:
 
 
 def delegation_source_of(reason: str) -> str:
-    """`route_weights` / `static` / `unknown` for one delegation_log entry, from its reason."""
+    """Recognised delegation source for one log entry; anything else is `unknown`."""
     match = DELEGATION_SOURCE_RE.search(reason or "")
     if match:
         return match.group(1)
