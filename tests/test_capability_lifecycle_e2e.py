@@ -1099,6 +1099,11 @@ def test_dispatcher_dispatch_workflow_produces_one_accepted_edge(
     monkeypatch.setattr(capabilities, "REG", ctx["ledger"])
     monkeypatch.setattr(capabilities.load, "__defaults__", (ctx["ledger"],))
     monkeypatch.setattr(capability_lifecycle, "DEFAULT_TARGET_REGISTRY", ctx["registry"])
+    infra_id = "thompson-hybrid-routing"
+    infra_version = "capability-version:infrastructure"
+    infra = capabilities._blank_capability(infra_id)
+    infra["capability_version_id"] = infra_version
+    _mutate_json(ctx["ledger"], "capabilities", **{infra_id: infra})
     run_id = "dispatch:workflow:1"
     trigger = ctx["fixture"]["trigger"]
     assignment = {
@@ -1108,12 +1113,14 @@ def test_dispatcher_dispatch_workflow_produces_one_accepted_edge(
         "mode": "full",
         "selected_capability_id": ctx["capability_id"],
         "selected_capability_version_id": ctx["version_id"],
+        "exploration": True,
+        "exploration_mode": "thompson-hybrid",
         "capability_ids": [],
         "capability_version_ids": [],
     }
     with local_dispatch(tmp_path) as worker:
         preview = dispatcher.plan_dispatch(assignment, dry_run=True)
-        assert preview["capability_ids"] == []
+        assert preview["capability_ids"] == [infra_id]
         assert preview["routing_metadata"]["capability_dispatch_result"]["reason"] == "dry_run"
         assert (
             capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])[
@@ -1125,8 +1132,8 @@ def test_dispatcher_dispatch_workflow_produces_one_accepted_edge(
         d["run_id"] = run_id
         assert dispatcher._spawn(d) == 1234
         assert worker.call_count == 1
-    assert d["capability_ids"] == [ctx["capability_id"]]
-    assert d["capability_version_ids"] == [ctx["version_id"]]
+    assert d["capability_ids"] == [infra_id, ctx["capability_id"]]
+    assert d["capability_version_ids"] == [infra_version, ctx["version_id"]]
     receipt = d["routing_metadata"]["capability_dispatch_result"]
     assert receipt["invoked"] is True and receipt["accepted"] is True
     with feedback._conn() as conn:
@@ -1156,8 +1163,13 @@ def test_dispatcher_dispatch_workflow_produces_one_accepted_edge(
                 0
             ]
         )
-    assert len(edges) == 1
-    assert tuple(edges[0]) == (
+    infrastructure_edges = [row for row in edges if row[0] == infra_id]
+    compiled_edges = [row for row in edges if row[0] == ctx["capability_id"]]
+    assert len(infrastructure_edges) == 1
+    assert tuple(infrastructure_edges[0][:2]) == (infra_id, infra_version)
+    assert len(compiled_edges) == 1
+    assert len(edges) == 2
+    assert tuple(compiled_edges[0]) == (
         ctx["capability_id"],
         ctx["version_id"],
         receipt["source_event_id"],
@@ -1187,6 +1199,26 @@ def test_dispatcher_dispatch_workflow_produces_one_accepted_edge(
     assert len(binding["invocations"]) == 1
     assert binding["invocations"][0]["consumer_ref"] == receipt["consumer_ref"]
     assert binding["invocations"][0]["invocation_id"] == receipt["invocation_id"]
+
+    # Updating run metadata changes completion-event identity, but must preserve the
+    # existing infrastructure edge and the independently proven compiled receipt.
+    feedback.record_run(
+        run_id,
+        trigger["target"],
+        trigger["task_type"],
+        "codex",
+        capability_ids=d["capability_ids"],
+        capability_version_ids=d["capability_version_ids"],
+        routing_metadata=d["routing_metadata"],
+    )
+    with feedback._conn() as conn:
+        repeated_edges = conn.execute(
+            "SELECT capability_id,capability_version_id,source_event_id,target_event_id "
+            "FROM influence_edges WHERE target_run_id=? "
+            "AND influence_type='capability' AND accepted=1",
+            (run_id,),
+        ).fetchall()
+    assert sorted(map(tuple, repeated_edges)) == sorted(map(tuple, edges))
 
 
 @pytest.mark.parametrize("role_failure", [False, True])
