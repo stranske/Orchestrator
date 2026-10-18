@@ -29,6 +29,9 @@ def wrapper_world(tmp_path: Path) -> dict[str, Path]:
     for path in (home / ".codex" / "bin", source / "scripts", mirror, staged / "scripts", temp):
         path.mkdir(parents=True, exist_ok=True)
 
+    (source / "scripts" / "install_verified_snapshot.py").write_bytes(
+        (paths.REPO_ROOT / "scripts" / "install_verified_snapshot.py").read_bytes()
+    )
     (source / "payload.txt").write_text("mutable source\n")
     (staged / "payload.txt").write_text("verified bytes\n")
     fake_installer = staged / "scripts" / "install_verified_snapshot.py"
@@ -39,6 +42,7 @@ def wrapper_world(tmp_path: Path) -> dict[str, Path]:
         "snapshot, mirror = map(pathlib.Path, sys.argv[1:3])\n"
         "assert sys.argv[3] == '--expected-digest'\n"
         "assert sys.argv[4] == 'a' * 64\n"
+        "assert sys.argv[sys.argv.index('--expected-generation') + 1].startswith('generation-v1:')\n"
         "mirror.mkdir(parents=True, exist_ok=True)\n"
         "shutil.copy2(snapshot / 'payload.txt', mirror / 'payload.txt')\n"
         "pathlib.Path(os.environ['FAKE_RECORD']).open('a').write('install\\n')\n"

@@ -255,8 +255,10 @@ def _pacing(now: int, field: str) -> Measurement:
         return unknown(now, f"#668 capacity.py pacing-report {field} (source absent)")
     # Consume explicit evidence only; an absent/changed schema remains unknown.
     row = reader().get(field)
-    if not isinstance(row, dict) or row.get("value") is None or not row.get("evidence_class"):
+    if not isinstance(row, dict) or not row.get("evidence_class"):
         return unknown(now, f"#668 capacity.py pacing-report {field} with evidence class")
+    if row.get("value") is None:
+        return unknown(now, f"#668 pacing {field}: {row.get('reason') or 'unmeasured'}")
     return Measurement(
         float(row["value"]), row["evidence_class"], int(row["as_of"]), row.get("reason", "")
     )
@@ -274,10 +276,75 @@ def pacing_share(now: int) -> Measurement:
     return _pacing(now, "non_codex_share_at_least_double")
 
 
+# The keepalive renders this line into the PR body on every verify round (Workflows#3985,
+# keepalive_loop.js renderDeterministicGates); P/T counts named acceptance commands that passed.
+DETERMINISTIC_GATES_RE = re.compile(r"(?m)^Deterministic gates: (\d+)/(\d+) passed")
+# Workflows#3985 merged 2026-10-17T03:57Z: completions before it could not cite a gate.
+KEEPALIVE_GATE_LIVE = "2026-10-17T03:57:07Z"
+# Repos whose keepalive executes the gate. #3985: consumers "retain their current behavior until
+# their execution step is delivered"; widen this when consumer delivery lands, so the measure
+# grades agents where the gate exists instead of being pinned near zero by the rollout.
+KEEPALIVE_GATE_REPOS = frozenset({"stranske/Workflows"})
+
+
 def keepalive_acceptance(now: int) -> Measurement:
-    return unknown(
+    """Share of keepalive PRs merged in the window whose body reports every named gate passing."""
+    window = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - GOAL_SILENCE_DAYS * DAY))
+    since = max(window, KEEPALIVE_GATE_LIVE)
+    query = f"org:stranske is:pr is:merged merged:>={since} label:agents:keepalive"
+    items: list[dict] = []
+    for page in range(1, 11):
+        payload = json.loads(
+            _gh(
+                [
+                    "api",
+                    "-X",
+                    "GET",
+                    "search/issues",
+                    "-f",
+                    f"q={query}",
+                    "-f",
+                    "per_page=100",
+                    "-f",
+                    f"page={page}",
+                ]
+            )
+        )
+        if payload.get("incomplete_results"):
+            return unknown(now, "complete GitHub search for merged keepalive PRs (incomplete)")
+        batch = payload.get("items") or []
+        items += batch
+        if len(batch) < 100:
+            break
+    else:
+        return unknown(now, "merged keepalive PRs beyond 1000 search results")
+
+    def repo_of(item: dict) -> str:
+        return "/".join((item.get("repository_url") or "").split("/")[-2:])
+
+    eligible = [item for item in items if repo_of(item) not in EXCLUDED_REPOS]
+    population = [item for item in eligible if repo_of(item) in KEEPALIVE_GATE_REPOS]
+    undelivered = len(eligible) - len(population)
+    if not population:
+        return unknown(
+            now,
+            f"merged keepalive PRs since {since} in gate repos (none; {undelivered} in repos "
+            "without the gate)",
+        )
+    citing = 0
+    for item in population:
+        gates = DETERMINISTIC_GATES_RE.findall(item.get("body") or "")
+        if gates:
+            passed, total = (int(x) for x in gates[-1])
+            citing += int(total > 0 and passed == total)
+    return Measurement(
+        citing / len(population),
+        "GitHub REST search: merged keepalive PR bodies (Deterministic gates line)",
         now,
-        f"parse {GOAL_SILENCE_DAYS}-day keepalive completion comments for cited passing named acceptance tests",
+        reason=(
+            f"{citing}/{len(population)} keepalive PRs merged since {since} in gate repos report "
+            f"all named gates passing; {undelivered} merged in repos without the gate"
+        ),
     )
 
 
