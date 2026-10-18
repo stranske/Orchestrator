@@ -121,9 +121,7 @@ class DispatchPlanBoundaries(unittest.TestCase):
         self.assertEqual(self.assignment, original)
         tagged_assignment = self.tags.call_args.args[0]
         self.assertEqual(tagged_assignment["influenced_by_role_run_ids"], ["prior", "accepted"])
-        self.assertEqual(
-            tagged_assignment["rejected_role_run_ids"], ["prior-rejected", "rejected"]
-        )
+        self.assertEqual(tagged_assignment["rejected_role_run_ids"], ["prior-rejected", "rejected"])
 
     def test_profile_overrides_and_commit_boundary_reach_command_builder(self):
         profile = {"profile_id": "fixture-profile", "requested_model": "profile-model"}
