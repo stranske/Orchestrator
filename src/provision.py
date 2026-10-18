@@ -29,6 +29,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -250,6 +251,63 @@ def _pr_head_branch(repo: str, num: int) -> str:
     return out
 
 
+def _live_holder_pids(holder: Path) -> set[str]:
+    """Inspect argv and cwd, retaining both lexical and canonical holder paths."""
+    roots = {holder, Path(os.path.realpath(holder))}
+
+    def within(path: str) -> bool:
+        candidates = {Path(path), Path(os.path.realpath(path))}
+        return any(p == root or root in p.parents for p in candidates for root in roots)
+
+    def probe(args: list[str], *, no_matches: bool = False) -> str:
+        try:
+            result = _run(args, check=False)
+        except OSError as exc:
+            raise RuntimeError(
+                f"cannot check live processes for {holder}: {args[0]}: {exc}"
+            ) from exc
+        # lsof/pgrep use 1 for no matches; diagnostics make that an inspection failure.
+        if result.returncode != 0 and not (
+            no_matches
+            and result.returncode == 1
+            and not result.stdout.strip()
+            and not result.stderr.strip()
+        ):
+            raise RuntimeError(
+                f"cannot check live processes for {holder}: {args[0]} "
+                f"exited {result.returncode}: {result.stderr.strip()}"
+            )
+        return result.stdout
+
+    pids = set()
+    # One scan for all processes, on macOS and Linux; -F also emits p<pid> records.
+    pid = None
+    for line in probe(["lsof", "-a", "-d", "cwd", "-Fn"], no_matches=True).splitlines():
+        if line.startswith("p"):
+            pid = line[1:]
+        elif line.startswith("n") and pid and within(line[1:]):
+            pids.add(pid)
+    if pids:
+        return pids
+    for root in sorted(roots):
+        pids.update(probe(["pgrep", "-f", re.escape(str(root))], no_matches=True).split())
+        if pids:
+            return pids
+    # ps exposes argv aliases that cannot be found by searching for git's resolved path.
+    for line in probe(["ps", "-axo", "pid=,command="]).splitlines():
+        fields = line.strip().split(None, 1)
+        if len(fields) != 2:
+            continue
+        pid, command = fields
+        try:
+            args = shlex.split(command)
+        except ValueError:
+            args = command.split()
+        if any(within(arg.split("=", 1)[-1]) for arg in args if "/" in arg):
+            pids.add(pid)
+    return pids
+
+
 def _reclaim_branch_holder(canon: Path, branch: str, wt: Path, event: dict) -> None:
     """Remove only a clean, idle holder of this branch, never the requested checkout."""
     _run(["git", "-C", str(canon), "worktree", "prune", "--expire", "now"])
@@ -269,12 +327,10 @@ def _reclaim_branch_holder(canon: Path, branch: str, wt: Path, event: dict) -> N
             raise RuntimeError(
                 f"refusing to reclaim dirty worktree {holder}: {status.stdout.strip()}"
             )
-        live = _run(["pgrep", "-f", re.escape(str(holder))], check=False)
-        if live.returncode not in (0, 1):
-            raise RuntimeError(f"cannot check live processes for {holder}: {live.stderr.strip()}")
-        if live.returncode == 0:
+        live = _live_holder_pids(holder)
+        if live:
             raise RuntimeError(
-                f"refusing to reclaim worktree {holder}: live pid {live.stdout.strip()}"
+                f"refusing to reclaim worktree {holder}: live pid {', '.join(sorted(live))}"
             )
         _run(["git", "-C", str(canon), "worktree", "remove", "--force", str(holder)])
         _run(["git", "-C", str(canon), "worktree", "prune"])
@@ -303,7 +359,7 @@ def _provision(target: str, lane: str, event: dict) -> Path:
 
     if lane == "closer" and num is not None:
         head = _pr_head_branch(repo, num)
-        _run(["git", "-C", str(canon), "fetch", "origin", head])
+        _run(["git", "-C", str(canon), "fetch", "origin", head], check=False)
         _reclaim_branch_holder(canon, head, wt, event)
         # worktree tracking origin/<head> so the agent's push updates the PR
         _run(
@@ -323,7 +379,7 @@ def _provision(target: str, lane: str, event: dict) -> Path:
     else:  # opener (issue) or repo-level: new branch off the base
         base = base_branch(repo)
         branch = f"orchestrator/issue-{num}" if num is not None else f"orchestrator/{lane}"
-        _run(["git", "-C", str(canon), "fetch", "origin", base])
+        _run(["git", "-C", str(canon), "fetch", "origin", base], check=False)
         _reclaim_branch_holder(canon, branch, wt, event)
         exists = _run(
             ["git", "-C", str(canon), "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
@@ -364,6 +420,7 @@ def _provision(target: str, lane: str, event: dict) -> Path:
                         f"origin/{base}",
                     ]
                 )
+                event.update(outcome="reclaimed", cause="branch-reset")
         else:
             _run(
                 [
@@ -396,8 +453,10 @@ def provision(target: str, lane: str) -> Path:
         if event["outcome"] == "ok":
             event["cause"] = "new-worktree"
         return wt
-    except Exception:
+    except BaseException as exc:
         event["outcome"] = "failed"
+        if not isinstance(exc, Exception):
+            event["cause"] = "interrupted"
         raise
     finally:
         try:
@@ -416,17 +475,26 @@ def report(days: int) -> None:
     summary = f"provision: failed(branch-held|branch-exists) = {{}} over {days}d"
     if not PROVISION_EVENTS_PATH.exists():
         print("unmeasured: no ledger")
+        print("provision: malformed_lines=0")
         print(summary.format("unmeasured: no ledger"))
         return
     since = datetime.now(timezone.utc) - timedelta(days=days)
     counts: dict[tuple[str, str], int] = {}
+    malformed_lines = 0
     with PROVISION_EVENTS_PATH.open(encoding="utf-8") as ledger:
         for line in ledger:
-            event = json.loads(line)
-            ts = datetime.fromisoformat(event["ts"])
-            if since <= ts <= datetime.now(timezone.utc):
+            try:
+                event = json.loads(line)
+                ts = datetime.fromisoformat(event["ts"])
                 key = (event["outcome"], event["cause"])
+                if ts.tzinfo is None or not all(isinstance(value, str) for value in key):
+                    raise ValueError("invalid event fields")
+            except (ValueError, TypeError, KeyError):
+                malformed_lines += 1
+                continue
+            if since <= ts <= datetime.now(timezone.utc):
                 counts[key] = counts.get(key, 0) + 1
+    print(f"provision: malformed_lines={malformed_lines}")
     for outcome in ("ok", "reused", "reclaimed", "failed"):
         print(f"provision: {outcome} = {sum(n for (o, _), n in counts.items() if o == outcome)}")
     for (outcome, cause), count in sorted(counts.items()):

@@ -165,6 +165,50 @@ def test_e_empty_and_missing_ledger_are_distinct(capsys):
     empty = capsys.readouterr().out
     assert "provision: failed(branch-held|branch-exists) = 0 over 7d" in empty
     assert "unmeasured" not in empty
+    assert "provision: malformed_lines=0" in empty
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_f_cwd_only_live_holder_is_refused_naming_pid(layout, nested):
+    holder = hold(layout)
+    cwd = holder
+    if nested:
+        # Git ignores empty directories, so the holder remains clean.
+        cwd = holder / "nested"
+        cwd.mkdir()
+    proc = subprocess.Popen(["sleep", "300"], cwd=cwd, start_new_session=True)
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            provision.provision(TARGET, "closer")
+        assert str(proc.pid) in str(caught.value)
+        assert "live pid" in str(caught.value)
+        assert holder.exists()
+        assert proc.poll() is None
+    finally:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait(timeout=5)
+
+
+def test_g_symlink_alias_in_argv_is_refused(layout, tmp_path):
+    holder = hold(layout)
+    alias = tmp_path / "alias"
+    alias.symlink_to(holder, target_is_directory=True)
+    # Python retains the alias argument without using it as cwd.
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(300)", str(alias)],
+        cwd=tmp_path,
+        start_new_session=True,
+    )
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            provision.provision(TARGET, "closer")
+        assert str(proc.pid) in str(caught.value)
+        assert "live pid" in str(caught.value)
+        assert holder.exists()
+        assert proc.poll() is None
+    finally:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait(timeout=5)
 
 
 def test_missing_holder_directory_is_pruned(layout):
@@ -197,6 +241,8 @@ def test_diverged_opener_only_resets_when_all_commits_are_on_remotes(layout, uni
         wt = provision.provision(TARGET, "opener")
         assert git(wt, "rev-parse", "HEAD") == git(canon, "rev-parse", "origin/main")
         assert git(canon, "rev-parse", "origin/archived-work") == tip
+        assert events()[0]["outcome"] == "reclaimed"
+        assert events()[0]["cause"] == "branch-reset"
 
 
 def test_process_probe_failure_refuses_reclaim(layout, monkeypatch):
@@ -204,6 +250,8 @@ def test_process_probe_failure_refuses_reclaim(layout, monkeypatch):
     run = provision._run
 
     def probe(args, **kwargs):
+        if args[0] == "lsof":
+            return subprocess.CompletedProcess(args, 1, "", "")
         if args[0] == "pgrep":
             return subprocess.CompletedProcess(args, 2, "", "process inspection denied")
         return run(args, **kwargs)
@@ -215,12 +263,90 @@ def test_process_probe_failure_refuses_reclaim(layout, monkeypatch):
     assert events()[0]["outcome"] == "failed"
 
 
+@pytest.mark.parametrize("failure", ["missing", "denied", "error-one"])
+def test_lsof_failure_refuses_reclaim(layout, monkeypatch, failure):
+    holder = hold(layout)
+    run = provision._run
+
+    def probe(args, **kwargs):
+        if args[0] == "pgrep":
+            return subprocess.CompletedProcess(args, 1, "", "")
+        if args[0] == "ps":
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if args[0] == "lsof":
+            if failure == "missing":
+                raise FileNotFoundError("lsof missing")
+            return subprocess.CompletedProcess(
+                args, 1 if failure == "error-one" else 2, "", "inspection denied"
+            )
+        return run(args, **kwargs)
+
+    monkeypatch.setattr(provision, "_run", probe)
+    with pytest.raises(RuntimeError, match="cannot check live processes.*lsof"):
+        provision.provision(TARGET, "closer")
+    assert holder.exists()
+    assert events()[0]["outcome"] == "failed"
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_cwd_probe_parses_pid_and_resolves_alias(tmp_path, monkeypatch, nested):
+    holder = tmp_path / "real"
+    holder.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(holder, target_is_directory=True)
+    cwd = alias / "nested" if nested else alias
+    calls = []
+
+    def probe(args, **kwargs):
+        calls.append(args)
+        if args[0] == "pgrep":
+            return subprocess.CompletedProcess(args, 1, "", "")
+        if args[0] == "ps":
+            return subprocess.CompletedProcess(args, 0, "", "")
+        assert args == ["lsof", "-a", "-d", "cwd", "-Fn"]
+        return subprocess.CompletedProcess(
+            args, 0, f"p10\nfcwd\nn{holder}-unrelated\np42\nfcwd\nn{cwd}\n", ""
+        )
+
+    monkeypatch.setattr(provision, "_run", probe)
+    assert provision._live_holder_pids(holder) == {"42"}
+    assert sum(args[0] == "lsof" for args in calls) == 1
+
+
+def test_lsof_no_matches_allows_idle_holder(tmp_path, monkeypatch):
+    def probe(args, **kwargs):
+        return subprocess.CompletedProcess(args, 0 if args[0] == "ps" else 1, "", "")
+
+    monkeypatch.setattr(provision, "_run", probe)
+    assert provision._live_holder_pids(tmp_path) == set()
+
+
+def test_argv_probe_resolves_symlink_alias(tmp_path, monkeypatch):
+    holder = tmp_path / "real"
+    holder.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(holder, target_is_directory=True)
+
+    def probe(args, **kwargs):
+        if args[0] == "lsof":
+            return subprocess.CompletedProcess(args, 1, "", "")
+        if args[0] == "pgrep":
+            return subprocess.CompletedProcess(args, 1, "", "")
+        assert args[0] == "ps"
+        return subprocess.CompletedProcess(args, 0, f"42 python worker.py {alias}\n", "")
+
+    monkeypatch.setattr(provision, "_run", probe)
+    assert provision._live_holder_pids(holder) == {"42"}
+
+
 def test_live_probe_result_refuses_reclaim(layout, monkeypatch):
     """Exercise the live-PID branch even when the host cannot enumerate processes."""
     holder = hold(layout)
     run = provision._run
 
     def probe(args, **kwargs):
+        if args[0] == "lsof":
+            return subprocess.CompletedProcess(args, 1, "", "")
         if args[0] == "pgrep":
             assert args == ["pgrep", "-f", re.escape(str(holder))]
             return subprocess.CompletedProcess(args, 0, "12345\n", "")
@@ -246,6 +372,22 @@ def test_fresh_and_existing_worktree_emit_one_event_each(layout, monkeypatch):
     assert [e["outcome"] for e in events()] == ["ok", "reused", "failed", "reused"]
 
 
+@pytest.mark.parametrize("lane", ["closer", "opener"])
+def test_failed_fetch_preserves_cached_ref_provisioning(layout, monkeypatch, lane):
+    run = provision._run
+
+    def fail_fetch(args, **kwargs):
+        if "fetch" in args:
+            assert kwargs["check"] is False
+            return subprocess.CompletedProcess(args, 1, "", "offline")
+        return run(args, **kwargs)
+
+    monkeypatch.setattr(provision, "_run", fail_fetch)
+    wt = provision.provision(TARGET, lane)
+    assert (wt / ".git").is_file()
+    assert events()[0]["outcome"] == "ok"
+
+
 def test_clone_failure_is_recorded(monkeypatch):
     def fail(repo):
         raise RuntimeError("clone failed")
@@ -256,6 +398,28 @@ def test_clone_failure_is_recorded(monkeypatch):
     assert len(events()) == 1
     assert events()[0]["outcome"] == "failed"
     assert events()[0]["cause"] == "provision-error"
+
+
+@pytest.mark.parametrize("interruption", [KeyboardInterrupt, SystemExit])
+def test_interruption_is_recorded_and_reraised(monkeypatch, interruption):
+    def interrupt(*args):
+        raise interruption()
+
+    monkeypatch.setattr(provision, "_provision", interrupt)
+    with pytest.raises(interruption):
+        provision.provision(TARGET, "closer")
+    assert len(events()) == 1
+    assert events()[0]["outcome"] == "failed"
+    assert events()[0]["cause"] == "interrupted"
+
+
+def test_report_skips_torn_line(capsys):
+    row = {"ts": datetime.now(timezone.utc).isoformat(), "outcome": "ok", "cause": "new-worktree"}
+    provision.PROVISION_EVENTS_PATH.write_text(json.dumps(row) + '\n{"ts":')
+    provision.report(7)
+    out = capsys.readouterr().out
+    assert "provision: malformed_lines=1" in out
+    assert "provision: ok = 1" in out
 
 
 def test_report_counts_only_recent_branch_failures(capsys):
