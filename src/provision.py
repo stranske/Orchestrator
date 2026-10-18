@@ -255,6 +255,14 @@ class ProbeBlindError(RuntimeError):
     """Process inspection cannot establish its own visibility."""
 
 
+def _pgrep_base() -> list[str]:
+    """BSD/macOS pgrep excludes itself AND all of its ancestors unless `-a` is given, so without it
+    the self-visibility check can never see the calling process and every reclaim is refused as
+    probe-blind on the machine the dispatcher runs on. Linux procps pgrep uses `-a` for "print the
+    full command line" instead, which would break the pid parsing, so add it only on Darwin."""
+    return ["pgrep", "-a"] if sys.platform == "darwin" else ["pgrep"]
+
+
 def _live_holder_pids(holder: Path) -> set[str]:
     """Inspect cwd and argv using canonical path components, never string prefixes."""
     root = Path(os.path.realpath(holder))
@@ -310,7 +318,7 @@ def _live_holder_pids(holder: Path) -> set[str]:
     # as wt__10 for wt__1. Validate every candidate through the argv scan below.
     # Scan all ps rows as well, since aliases need not contain either holder spelling.
     for spelling in sorted(roots):
-        probe(["pgrep", "-f", re.escape(str(spelling))], no_matches=True)
+        probe([*_pgrep_base(), "-f", re.escape(str(spelling))], no_matches=True)
     argv_visible = False
     # -ww prevents terminal/pipe width from silently cutting off path arguments.
     for line in probe(["ps", "-axww", "-o", "pid=,command="]).splitlines():
@@ -334,7 +342,9 @@ def _live_holder_pids(holder: Path) -> set[str]:
             pids.add(pid)
     if not pids:
         require_visible(cwd_visible, "lsof")
-        require_visible(self_pid in probe(["pgrep", "-f", "."], no_matches=True).split(), "pgrep")
+        require_visible(
+            self_pid in probe([*_pgrep_base(), "-f", "."], no_matches=True).split(), "pgrep"
+        )
         require_visible(argv_visible, "ps")
     return pids
 
