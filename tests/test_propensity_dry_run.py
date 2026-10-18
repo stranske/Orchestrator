@@ -43,20 +43,30 @@ def _seeded_ledger(tmp_path: Path) -> Path:
     return ledger
 
 
-def _run(ledger: Path, *args: str, script: Path | None = None) -> subprocess.CompletedProcess[str]:
+def _run(
+    ledger: Path,
+    *args: str,
+    script: Path | None = None,
+    use_default_ledger: bool = False,
+) -> subprocess.CompletedProcess[str]:
     env = os.environ | {
         "ORCH_CAPABILITY_HEARTBEATS": "0",
         "PYTHONDONTWRITEBYTECODE": "1",
         # A temp script copy lives outside MODULE_DIR; sibling imports still resolve from there.
         "PYTHONPATH": str(paths.MODULE_DIR),
     }
+    if use_default_ledger:
+        # Exercise the production default without reaching the real user's store. Heartbeats
+        # must also remain harmless when callers have enabled them.
+        env["ORCH_LOCAL_RUNTIME"] = str(ledger.parent)
+        env.pop("ORCH_CAPABILITIES_PATH", None)
+        env["ORCH_CAPABILITY_HEARTBEATS"] = "1"
     return subprocess.run(
         [
             sys.executable,
             str(script or (paths.MODULE_DIR / "capability_propensity.py")),
             *args,
-            "--ledger",
-            str(ledger),
+            *([] if use_default_ledger else ["--ledger", str(ledger)]),
         ],
         cwd=paths.REPO_ROOT,
         env=env,
@@ -257,11 +267,13 @@ def test_tick_evidence_dry_run_passes_record_false(monkeypatch: pytest.MonkeyPat
 def test_writing_commands_reject_dry_run_before_mutation(
     tmp_path: Path, command_args: tuple[str, ...]
 ):
-    ledger = _seeded_ledger(tmp_path)
-    before = ledger.read_bytes()
+    for use_default_ledger in (False, True):
+        store = tmp_path / ("default" if use_default_ledger else "explicit")
+        ledger = _seeded_ledger(store)
+        before = {p.name: p.read_bytes() for p in store.iterdir()}
 
-    result = _run(ledger, *command_args, "--dry-run")
+        result = _run(ledger, *command_args, "--dry-run", use_default_ledger=use_default_ledger)
 
-    assert result.returncode == 2, result.stdout + result.stderr
-    assert "--dry-run is supported only by tick-evidence" in result.stderr
-    assert ledger.read_bytes() == before
+        assert result.returncode == 2, result.stdout + result.stderr
+        assert "--dry-run is supported only by tick-evidence" in result.stderr
+        assert {p.name: p.read_bytes() for p in store.iterdir()} == before
