@@ -2877,6 +2877,8 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
         provider_profiles.append(profile)
         assert "honest missing-evidence assessment is a completed deliverable" in _prompt
         assert "leave decision.criteria empty" in _prompt
+        assert "findings (array of objects, never strings" in _prompt
+        assert "evidence gaps as strings in substantive_needs" in _prompt
         assert "read-only commands such as python3 -c" in _prompt
         if profile == "gemini-low" and kwargs["subject_id"] == first:
             result = {"exit": 1, "run_id": "dispatch-failed-31", "error": "unsupported model"}
@@ -3065,7 +3067,10 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
     assert provider_profiles == route_profiles
 
 
-def test_uncertain_provider_result_stops_before_fallback_exception_or_action(tmp_path, monkeypatch):
+@pytest.mark.parametrize("accounting_pending", [False, True])
+def test_uncertain_provider_result_stops_before_fallback_exception_or_action(
+    tmp_path, monkeypatch, accounting_pending
+):
     import closer_evidence
     import dispatcher
 
@@ -3101,7 +3106,7 @@ def test_uncertain_provider_result_stops_before_fallback_exception_or_action(tmp
 
     def offload(agent, _prompt, **kwargs):
         calls.append((agent, kwargs["profile_id"]))
-        return {
+        result = {
             "exit": 124,
             "run_id": "agy-turn-still-running-41",
             "outcome_status": "uncertain",
@@ -3109,6 +3114,18 @@ def test_uncertain_provider_result_stops_before_fallback_exception_or_action(tmp
             "retry_safe": False,
             "error": "remote turn still in progress",
         }
+        if accounting_pending:
+            result.update(
+                exit=70,
+                raw_exit=0,
+                provider_completed=True,
+                output='{"classification":"relevant","findings":[]}',
+                completion_persistence={
+                    "schema": "offload-completion-persistence/v1",
+                    "status": "pending",
+                },
+            )
+        return result
 
     monkeypatch.setattr(dispatcher, "offload", offload)
     packets = {}
@@ -3161,6 +3178,10 @@ def test_uncertain_provider_result_stops_before_fallback_exception_or_action(tmp
         )
         assert interpreted["status"] == "uncertain"
         assert interpreted["provider_outcome"]["actual"]["run_id"] == ("agy-turn-still-running-41")
+        if accounting_pending:
+            actual = interpreted["provider_outcome"]["actual"]
+            assert actual["provider_completed"] and actual["raw_exit"] == 0
+            assert actual["completion_persistence"]["status"] == "pending"
         assert "substantive_needs" in interpreted
         return {"targets": {target_name: interpreted}}
 
