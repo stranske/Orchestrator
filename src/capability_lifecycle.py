@@ -291,13 +291,29 @@ def invoke_compiled_target(
     if ineligible:
         return {"matched": True, "invoked": False, "reason": ineligible}
     if status == "canary":
-        limit = int((cap.get("lifecycle_policy") or {}).get("tasks_per_day") or 1)
-        recent = sum(
-            1
-            for row in binding.get("invocations") or []
-            if int(row.get("invoked_at") or 0) >= now - 86400
-            and row.get("lifecycle_stage") == "canary"
-        )
+        # The quota logic itself is unchanged for well-formed rows; a policy
+        # or invocation history that cannot be parsed cannot prove quota
+        # remains, so it refuses as exhausted instead of raising.
+        policy = cap.get("lifecycle_policy")
+        invocations = binding.get("invocations")
+        if (policy is not None and not isinstance(policy, Mapping)) or (
+            invocations is not None
+            and (
+                not isinstance(invocations, list)
+                or not all(isinstance(row, Mapping) for row in invocations)
+            )
+        ):
+            return {"matched": True, "invoked": False, "reason": "canary_quota_exhausted"}
+        try:
+            limit = int((policy or {}).get("tasks_per_day") or 1)
+            recent = sum(
+                1
+                for row in invocations or []
+                if int(row.get("invoked_at") or 0) >= now - 86400
+                and row.get("lifecycle_stage") == "canary"
+            )
+        except (TypeError, ValueError):
+            return {"matched": True, "invoked": False, "reason": "canary_quota_exhausted"}
         if recent >= limit:
             return {"matched": True, "invoked": False, "reason": "canary_quota_exhausted"}
     result = capability_targets.invoke_target(

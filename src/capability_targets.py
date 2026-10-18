@@ -429,6 +429,16 @@ def invoke_target(
     ineligible = _ledger_ineligible(current, ledger_path, now, env)
     if ineligible:
         return {"matched": True, "invoked": False, "reason": ineligible}
+    invocations = current.get("invocations")
+    if (
+        current.get("kind") not in TARGET_KINDS
+        or current.get("artifact") is None
+        or (invocations is not None and not isinstance(invocations, list))
+    ):
+        # A binding without a known kind, any artifact, or a usable
+        # invocation history cannot be invoked; it refuses as invalid
+        # instead of raising KeyError downstream or after the producer runs.
+        return {"matched": True, "invoked": False, "reason": "artifact_invalid"}
     if not _matches(current, trigger):
         return {"matched": False, "invoked": False, "reason": "selector_mismatch"}
     supplied = dict(inputs or {})
