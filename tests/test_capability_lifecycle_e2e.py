@@ -1100,7 +1100,7 @@ def test_compiled_invocation_malformed_status_refuses_without_writes(
     assert ctx["registry"].read_bytes() == registry_before
 
 
-@pytest.mark.parametrize("version_id", [None, 123, ""])
+@pytest.mark.parametrize("version_id", [None, 123, "", "bogus"])
 def test_compiled_invocation_missing_version_refuses_without_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version_id
 ) -> None:
@@ -1130,7 +1130,10 @@ def test_compiled_invocation_missing_version_refuses_without_writes(
     assert ctx["registry"].read_bytes() == registry_before
 
 
-@pytest.mark.parametrize("kill_switch", [["ORCH_CAPABILITY_WORKFLOW_ENABLED=0"], 123])
+@pytest.mark.parametrize(
+    "kill_switch",
+    [["ORCH_CAPABILITY_WORKFLOW_ENABLED=0"], 123, "invalid-switch", {"env": ""}],
+)
 def test_compiled_invocation_malformed_kill_switch_refuses_without_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kill_switch
 ) -> None:
@@ -1165,7 +1168,7 @@ def test_direct_invoke_target_malformed_ledger_kill_switch_refuses_without_write
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ctx = _registered_workflow(tmp_path, monkeypatch)
-    _mutate_json(ctx["ledger"], "capabilities", ctx["capability_id"], kill_switch=123)
+    _mutate_json(ctx["ledger"], "capabilities", ctx["capability_id"], kill_switch={"env": ""})
     ledger_before = ctx["ledger"].read_bytes()
     registry_before = ctx["registry"].read_bytes()
     binding = capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])
@@ -1242,6 +1245,34 @@ def test_compiled_canary_corrupt_invocation_history_refuses_without_writes(
     assert ctx["registry"].read_bytes() == registry_before
 
 
+@pytest.mark.parametrize("invoked_at", [None, float("inf")])
+def test_compiled_canary_unusable_timestamp_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invoked_at
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    _mutate_json(ctx["ledger"], "capabilities", ctx["capability_id"], status="canary")
+    payload = json.loads(ctx["registry"].read_text(encoding="utf-8"))
+    row = {"lifecycle_stage": "canary"}
+    if invoked_at is not None:
+        row["invoked_at"] = invoked_at
+    payload["targets"][ctx["version_id"]]["invocations"] = [row]
+    ctx["registry"].write_text(json.dumps(payload), encoding="utf-8")
+    ledger_before = ctx["ledger"].read_bytes()
+    registry_before = ctx["registry"].read_bytes()
+    result = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="workflow:bad-canary-timestamp:1",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "canary_quota_exhausted"}
+    assert ctx["ledger"].read_bytes() == ledger_before
+    assert ctx["registry"].read_bytes() == registry_before
+
+
 @pytest.mark.parametrize("field", ["kind", "artifact"])
 def test_direct_invoke_target_missing_binding_shape_refuses_without_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str
@@ -1266,6 +1297,33 @@ def test_direct_invoke_target_missing_binding_shape_refuses_without_writes(
     )
     assert result == {"matched": True, "invoked": False, "reason": "artifact_invalid"}, result
     assert "causal_edge" not in result
+    assert ctx["ledger"].read_bytes() == ledger_before
+    assert ctx["registry"].read_bytes() == registry_before
+
+
+@pytest.mark.parametrize(
+    "field, value", [("artifact", []), ("invocations", None), ("invocations", {})]
+)
+def test_direct_invoke_target_corrupt_binding_values_refuse_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    payload = json.loads(ctx["registry"].read_text(encoding="utf-8"))
+    payload["targets"][ctx["version_id"]][field] = value
+    ctx["registry"].write_text(json.dumps(payload), encoding="utf-8")
+    ledger_before = ctx["ledger"].read_bytes()
+    registry_before = ctx["registry"].read_bytes()
+    binding = capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])
+    result = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=ctx["registry"],
+        ledger_path=ctx["ledger"],
+        target_run_id="direct:corrupt-binding-values",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "artifact_invalid"}
     assert ctx["ledger"].read_bytes() == ledger_before
     assert ctx["registry"].read_bytes() == registry_before
 

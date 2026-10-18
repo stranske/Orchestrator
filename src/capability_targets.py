@@ -250,6 +250,25 @@ def _kill_switch_triggered(declared: Any, env: Mapping[str, str]) -> bool:
     return False
 
 
+def _valid_kill_switch(declared: Any) -> bool:
+    """Return whether a declared switch can actually be evaluated.
+
+    A malformed declaration must not silently behave like an inactive switch:
+    callers use this as a fail-closed eligibility guard.
+    """
+    if isinstance(declared, str):
+        return re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", declared.strip()) is not None
+    if isinstance(declared, Mapping):
+        name = declared.get("env")
+        value = declared.get("disabled_value", declared.get("value", "1"))
+        return (
+            isinstance(name, str)
+            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is not None
+            and not isinstance(value, (Mapping, list, tuple, set))
+        )
+    return False
+
+
 def _artifact_mapping(binding: Mapping[str, Any]) -> Mapping[str, Any]:
     artifact = binding.get("artifact")
     if isinstance(artifact, Mapping):
@@ -309,6 +328,8 @@ def _binding_artifact(binding: Mapping[str, Any]) -> tuple[Mapping[str, Any], bo
             return capability_compiler.validate_skill_package(Path(binding["artifact"])), False
         except Exception:
             return {}, True
+    if not isinstance(binding.get("artifact"), Mapping):
+        return {}, True
     return _artifact_mapping(binding), False
 
 
@@ -345,6 +366,8 @@ def _binding_ineligible(
         artifact.get("kill_switch"),
         lifecycle.get("kill_switch"),
     ):
+        if declared is not None and not _valid_kill_switch(declared):
+            return "kill_switch"
         if _kill_switch_triggered(declared, env_map):
             return "kill_switch"
     return None
@@ -397,7 +420,7 @@ def _ledger_ineligible(
         return "expired"
     env_map: Mapping[str, str] = os.environ if env is None else env
     declared_switch = cap.get("kill_switch")
-    if declared_switch is not None and not isinstance(declared_switch, (str, Mapping)):
+    if declared_switch is not None and not _valid_kill_switch(declared_switch):
         # As in the lifecycle guard, an unevaluable kill-switch declaration
         # cannot prove the switch is not triggered, so it refuses.
         return "kill_switch"
@@ -433,7 +456,7 @@ def invoke_target(
     if (
         current.get("kind") not in TARGET_KINDS
         or current.get("artifact") is None
-        or (invocations is not None and not isinstance(invocations, list))
+        or not isinstance(invocations, list)
     ):
         # A binding without a known kind, any artifact, or a usable
         # invocation history cannot be invoked; it refuses as invalid

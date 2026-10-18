@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -235,7 +236,7 @@ def _invocation_ineligible(
             return "expired"
     env_map: Mapping[str, str] = os.environ if env is None else env
     declared_switch = cap.get("kill_switch")
-    if declared_switch is not None and not isinstance(declared_switch, (str, Mapping)):
+    if declared_switch is not None and not capability_targets._valid_kill_switch(declared_switch):
         # A kill-switch declaration that is neither the ``ENV=value`` string
         # ``_record`` writes nor a mapping cannot prove the switch is not
         # triggered, so it refuses as ``kill_switch`` rather than passing.
@@ -261,11 +262,12 @@ def invoke_compiled_target(
     """Invoke a matching real producer/consumer and write its version-exact edge."""
     now = int(timestamp or time.time())
     try:
-        cap = capabilities.load(Path(ledger_path), create=False).get(capability_id)
+        rows = capabilities.load(Path(ledger_path), create=False)
     except Exception:
         return {"matched": False, "invoked": False, "reason": "ledger_unreadable"}
-    if not cap:
+    if capability_id not in rows:
         raise ValueError(f"unknown capability: {capability_id}")
+    cap = rows[capability_id]
     if not isinstance(cap, Mapping):
         return {"matched": False, "invoked": False, "reason": "ledger_unreadable"}
     status = cap.get("status")
@@ -278,7 +280,9 @@ def invoke_compiled_target(
     }:
         return {"matched": False, "invoked": False, "reason": f"status:{status}"}
     version_id = cap.get("capability_version_id")
-    if not isinstance(version_id, str) or not version_id:
+    if not isinstance(version_id, str) or not re.fullmatch(
+        r"capability-version:[0-9a-f]{32}", version_id
+    ):
         # A corrupt row without its immutable version identity cannot be
         # matched to a binding, so it refuses as unreadable, not a KeyError.
         return {"matched": False, "invoked": False, "reason": "ledger_unreadable"}
@@ -300,22 +304,17 @@ def invoke_compiled_target(
         policy = cap.get("lifecycle_policy")
         invocations = binding.get("invocations")
         if (policy is not None and not isinstance(policy, Mapping)) or (
-            invocations is not None
-            and (
-                not isinstance(invocations, list)
-                or not all(isinstance(row, Mapping) for row in invocations)
-            )
+            not isinstance(invocations, list)
+            or not all(isinstance(row, Mapping) for row in invocations)
         ):
             return {"matched": True, "invoked": False, "reason": "canary_quota_exhausted"}
         try:
             limit = int((policy or {}).get("tasks_per_day") or 1)
-            recent = sum(
-                1
-                for row in invocations or []
-                if int(row.get("invoked_at") or 0) >= now - 86400
-                and row.get("lifecycle_stage") == "canary"
-            )
-        except (TypeError, ValueError):
+            canary_rows = [row for row in invocations if row.get("lifecycle_stage") == "canary"]
+            if any("invoked_at" not in row for row in canary_rows):
+                return {"matched": True, "invoked": False, "reason": "canary_quota_exhausted"}
+            recent = sum(1 for row in canary_rows if int(row["invoked_at"]) >= now - 86400)
+        except (TypeError, ValueError, OverflowError):
             return {"matched": True, "invoked": False, "reason": "canary_quota_exhausted"}
         if recent >= limit:
             return {"matched": True, "invoked": False, "reason": "canary_quota_exhausted"}
