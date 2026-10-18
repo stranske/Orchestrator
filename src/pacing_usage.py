@@ -1059,12 +1059,7 @@ def integrate(
 def report(
     handoff: Path, *, now: float, current: dict | None = None, previous: dict | None = None
 ) -> str:
-    snapshots = [
-        r
-        for r in read_rows(handoff / "capacity-ledger.ndjson")
-        if r.get("event") == "pacing_snapshot" and r.get("ts", now + 1) <= now
-    ]
-    snapshots.sort(key=lambda r: r["ts"])
+    snapshots = pacing_snapshots(handoff, now)
     previous = previous if previous is not None else (read_json(handoff / "capacity.json") or {})
     current = current if current is not None else previous
     lines = [
@@ -1132,30 +1127,55 @@ def report(
             f"ts={row.get('ts')} stale={row.get('ts') is not None and now - row['ts'] > pacing.STALE_AFTER_SECONDS}; "
             f"{row.get('reason', 'usage unmeasured; clears on fresh usage/period sample')}{shed_note}"
         )
-        finals = []
-        for snap in snapshots:
-            p = (snap.get("agents", {}).get(pool) or {}).get("pacing") or {}
-            end = p.get("period_end")
-            if (
-                end is not None
-                and end <= now
-                and 0 <= end - snap["ts"] <= pacing.STALE_AFTER_SECONDS
-            ):
-                if p.get("used_fraction") is not None and not p.get("stale"):
-                    finals.append(p)
-        if finals:
-            final = max(finals, key=lambda r: r["period_end"])
-            lo, hi = pacing.pass_bounds(final["effective_reserve"])
-            u = final["used_fraction"]
+        final = final_usage(snapshots, pool, now)
+        if final is not None:
             lines.append(
-                f"1 {pool}: u(T1)={u:.3f} bounds=[{lo:.3f},{hi:.3f}] "
-                f"{'PASS' if lo <= u <= hi else 'FAIL'} T1={final['period_end']} [usage store + rate-limit ledger]"
+                f"1 {pool}: u(T1)={final['u']:.3f} bounds=[{final['lo']:.3f},{final['hi']:.3f}] "
+                f"{'PASS' if final['passed'] else 'FAIL'} T1={final['period_end']} [usage store + rate-limit ledger]"
             )
         else:
             lines.append(
                 f"1 {pool}: unmeasured — would need a fresh usage sample at completed T1 "
                 "[usage store + rate-limit ledger]"
             )
+    lines.extend(period_results(handoff, snapshots, now)["lines"])
+    return "\n".join(lines)
+
+
+def pacing_snapshots(handoff: Path, now: float) -> list[dict]:
+    snapshots = [
+        r
+        for r in read_rows(handoff / "capacity-ledger.ndjson")
+        if r.get("event") == "pacing_snapshot" and r.get("ts", now + 1) <= now
+    ]
+    snapshots.sort(key=lambda r: r["ts"])
+    return snapshots
+
+
+def final_usage(snapshots: list[dict], pool: str, now: float) -> dict | None:
+    """Pass number 1 for one pool: u at the latest completed T1, or None when unmeasured."""
+    finals = []
+    for snap in snapshots:
+        p = (snap.get("agents", {}).get(pool) or {}).get("pacing") or {}
+        end = p.get("period_end")
+        if end is not None and end <= now and 0 <= end - snap["ts"] <= pacing.STALE_AFTER_SECONDS:
+            if p.get("used_fraction") is not None and not p.get("stale"):
+                finals.append(p)
+    if not finals:
+        return None
+    final = max(finals, key=lambda r: r["period_end"])
+    lo, hi = pacing.pass_bounds(final["effective_reserve"])
+    u = final["used_fraction"]
+    return {"u": u, "lo": lo, "hi": hi, "passed": lo <= u <= hi, "period_end": final["period_end"]}
+
+
+def period_results(handoff: Path, snapshots: list[dict], now: float) -> dict:
+    """Pass numbers 2 and 3 over the latest completed pool period, with their report lines.
+
+    `incidents`/`share` carry a measured value or None; None is unmeasured, never zero.
+    """
+    lines: list[str] = []
+    out: dict = {"lines": lines, "incidents": None, "share": None, "period": None}
     # Coverage gaps prevent a missing incident/dispatch baseline from becoming a measured zero.
     incidents = read_rows(handoff / "rate-limit-incidents.ndjson")
     events = read_rows(handoff / "capacity-ledger.ndjson")
@@ -1179,8 +1199,9 @@ def report(
             f"2: unmeasured — would need completed-period snapshots and rate-limit ledger coverage; coverage=0/unknown ticks; longest poll gap=unknown/1800s allowance; observed incidents={len(incidents)} [usage store + rate-limit ledger]",
             f"3: unmeasured — would need dispatches in both codex ok and warn/shed hours; coverage=0/unknown ticks; longest poll gap=unknown/1800s allowance; observed dispatches={len(starts)} [usage store + rate-limit ledger]",
         ]
-        return "\n".join(lines)
+        return out
     start, end = max(periods, key=lambda p: p[1])
+    out["period"] = (start, end)
     relevant = [r for r in incidents if start <= (pacing.timestamp(r.get("ts")) or 0) < end]
     stats: dict = {}
     covered, expected = poll_coverage(start, end, now=now, snapshots=snapshots, stats=stats)
@@ -1204,6 +1225,7 @@ def report(
         and len(classified) == len(relevant)
         and (handoff / "rate-limit-incidents.ndjson").exists()
     ):
+        out["incidents"] = violations
         lines.append(
             f"2: {violations} incidents while another pool ok; {coverage_text}; {'PASS' if violations == 0 else 'FAIL'} [usage store + rate-limit ledger]"
         )
@@ -1228,6 +1250,8 @@ def report(
         base = groups["ok"][0] / groups["ok"][1]
         constrained = groups["constrained"][0] / groups["constrained"][1]
         passed = constrained > 0 and constrained >= pacing.PASS_SHARE_MULTIPLIER * base
+        if constrained > 0 or base > 0:
+            out["share"] = {"ok": base, "constrained": constrained, "passed": passed}
         verdict = (
             ("PASS" if passed else "FAIL")
             if constrained > 0 or base > 0
@@ -1243,4 +1267,53 @@ def report(
             f"3: unmeasured — would need dispatches in both codex ok and warn/shed hours; "
             f"{coverage_text}; counts={groups}, unclassified={omitted} [usage store + rate-limit ledger]"
         )
-    return "\n".join(lines)
+    return out
+
+
+PASS_EVIDENCE = "usage store + rate-limit ledger"
+
+
+def pass_numbers(handoff: Path, now: float) -> dict:
+    """The three #668 pass numbers as data for the feature goals ledger; read-only.
+
+    Each field is {value, evidence_class, as_of, reason}. A value of None is unmeasured and
+    carries the report's own reason; it is never coerced to zero.
+    """
+    snapshots = pacing_snapshots(handoff, now)
+    as_of = int(now)
+    finals = {pool: final_usage(snapshots, pool, now) for pool in ("codex", "claude")}
+    measured = {pool: f for pool, f in finals.items() if f is not None}
+    detail = "; ".join(
+        (
+            f"{pool} u(T1)={f['u']:.3f} in [{f['lo']:.3f},{f['hi']:.3f}]={f['passed']}"
+            if f is not None
+            else f"{pool} unmeasured (no fresh usage sample at a completed T1)"
+        )
+        for pool, f in finals.items()
+    )
+    # Share of BOTH pools in band: an unmeasured pool has not shown it is in band, so one pool in
+    # band and one unmeasured reads 0.5, never 1.0. None only when neither pool is measured.
+    usage = {
+        "value": (sum(f["passed"] for f in measured.values()) / len(finals) if measured else None),
+        "evidence_class": PASS_EVIDENCE,
+        "as_of": as_of,
+        "reason": detail,
+    }
+    period = period_results(handoff, snapshots, now)
+    line2, line3 = (period["lines"] + ["", ""])[:2]
+    share = period["share"]
+    return {
+        "usage_in_target_band": usage,
+        "quota_incidents_while_other_ok": {
+            "value": period["incidents"],
+            "evidence_class": PASS_EVIDENCE,
+            "as_of": as_of,
+            "reason": line2[:400],
+        },
+        "non_codex_share_at_least_double": {
+            "value": None if share is None else float(share["passed"]),
+            "evidence_class": PASS_EVIDENCE,
+            "as_of": as_of,
+            "reason": line3[:400],
+        },
+    }
