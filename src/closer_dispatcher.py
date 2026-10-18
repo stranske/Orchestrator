@@ -1938,6 +1938,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             or old_prep.get("producer_sha256") != prep["producer_sha256"]
         ):
             return None
+        ordinary_nonpass_ref = None
         if prior.get("status") == "failed":
             if not closer_pipeline._legacy_failed_act_wait_proof(pipeline_path, target, prior):
                 return None
@@ -1954,6 +1955,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 old_proof,
             ):
                 return None
+            ordinary_nonpass_ref = old_proof.get("ordinary_nonpass_ref")
         inner_path = Path(context.get("action_state_path", ""))
         if not inner_path.is_file():
             return None
@@ -1984,6 +1986,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "inner_path": str(inner_path),
                 "receipt_sha256": receipt_hash,
             }
+            if ordinary_nonpass_ref is not None:
+                proof["ordinary_nonpass_ref"] = ordinary_nonpass_ref
             if closer_pipeline._valid_inner_wait(
                 Path(context["state_path"]),
                 target,

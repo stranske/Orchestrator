@@ -1958,6 +1958,73 @@ def test_helper_accounted_native_nonpass_becomes_typed_wait_without_acceptance(
     assert closer_pipeline.validate_stop(path)["valid"] is True
 
 
+def test_native_nonpass_wait_survives_real_interpreter_restart(tmp_path, monkeypatch):
+    current, prep, _interpreted, path, _backend, captured = ordinary_nonpass_wait_fixture(
+        tmp_path, monkeypatch
+    )
+    first = captured["first"]
+    proof = first["resource_evidence"]["inner_wait"]
+    prep["producer_sha256"] = "2" * 64
+    prep["proposal"] = {"action": "collect_evidence"}
+    target = current["target"]
+    closer_pipeline._save(
+        path,
+        {
+            "schema": closer_pipeline.SCHEMA,
+            "runs": {
+                "prior": {
+                    "created": time.time() - 10,
+                    "targets": {
+                        target: {
+                            "status": "deferred",
+                            "stage": "act",
+                            "deferred_reason": "validated_inner_wait",
+                            "revision": prep["revision"],
+                            "results": {"prepare": prep},
+                            "resource_evidence": first["resource_evidence"],
+                        }
+                    },
+                }
+            },
+            "carry": {},
+            "cache": {},
+        },
+    )
+    restarted = closer(tmp_path, current)
+    restarted.campaign_admission = lambda *_: {"allowed": True}
+    assert restarted.dispositions == {} and restarted.validated_nonpass_waits == {}
+    monkeypatch.setattr(
+        adapter,
+        "_pipeline_low_route",
+        lambda **_kwargs: pytest.fail("valid retained wait must not dispatch another provider"),
+    )
+    seen = {}
+
+    def pipeline_stub(_path, _targets, **callbacks):
+        context = {**copy.deepcopy(captured["context"]), "prepare": copy.deepcopy(prep)}
+        interpretation = callbacks["interpret"](target, context)
+        assert interpretation["classification"] == "deterministic_inner_wait"
+        assert (
+            interpretation["inner_wait_proof"]["ordinary_nonpass_ref"]
+            == proof["ordinary_nonpass_ref"]
+        )
+        result = callbacks["act"](target, {**context, "interpret": interpretation})
+        seen["result"] = result
+        return {"targets": {target: result}}
+
+    monkeypatch.setattr(closer_pipeline, "run_pipeline", pipeline_stub)
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [target], restarted, time.time() + 360)
+    result = seen["result"]
+    assert result["status"] == "deferred" and result["reason"] == "validated_inner_wait"
+    assert (
+        result["resource_evidence"]["inner_wait"]["ordinary_nonpass_ref"]
+        == proof["ordinary_nonpass_ref"]
+    )
+    assert result["queue_receipt"]["stop_valid"] is True
+    assert restarted.gh.calls == []
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
