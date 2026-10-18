@@ -54,6 +54,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -805,6 +806,69 @@ def fleet_gates(
     }
 
 
+def _exploration_window() -> dict:
+    """Read the hosted rate and policy-switch population, never equating unreadable with zero."""
+    import feedback
+
+    window: dict = {
+        "start": "unmeasured",
+        "end": "unmeasured",
+        "extended": "unmeasured",
+        "n_by_policy": {},
+        "rate": "UNKNOWN",
+        "env": os.environ.get("ORCH_EXPLORATION_RATE", "unset"),
+        "switches": "UNKNOWN",
+        "errors": [],
+    }
+    state_dir = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
+    try:
+        state = json.loads((state_dir / "exploration-window.json").read_text(encoding="utf-8"))
+        start = datetime.strptime(state["start"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        end = datetime.strptime(state["end"], "%Y%m%d").strftime("%Y-%m-%d")
+        if not isinstance(state["extended"], bool) or not isinstance(state["n_by_policy"], dict):
+            raise ValueError("invalid exploration-window state")
+        window.update(
+            start=start.strftime("%Y-%m-%d"),
+            end=end,
+            extended="yes" if state["extended"] else "no",
+            n_by_policy=state["n_by_policy"],
+        )
+        window["errors"].extend(state.get("errors", []))
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        window["errors"].append(f"exploration window unmeasured: {exc}")
+    ok, out, reason = _gh_call(
+        [
+            "api",
+            "repos/stranske/Orchestrator/contents/config/route-weights.json?ref=exports/route-weights",
+            "-H",
+            "Accept: application/vnd.github.raw+json",
+        ]
+    )
+    try:
+        if not ok:
+            raise ValueError(reason)
+        rate = json.loads(out)["exploration"]["rate"]
+        if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not 0 <= rate <= 1:
+            raise ValueError("invalid exploration.rate")
+        window["rate"] = rate
+    except (ValueError, KeyError, TypeError) as exc:
+        window["errors"].append(f"published rate: {exc}")
+    try:
+        if window["start"] == "unmeasured":
+            raise ValueError("window start unmeasured")
+        with closing(
+            sqlite3.connect(f"{feedback.DB_PATH.resolve().as_uri()}?mode=ro", uri=True)
+        ) as conn:
+            window["switches"] = conn.execute(
+                "SELECT count(*) FROM agent_switches WHERE source='policy' "
+                "AND delegation_source='route_weights_exploration' AND switched_ts>=?",
+                (int(start.timestamp()),),
+            ).fetchone()[0]
+    except (sqlite3.Error, ValueError) as exc:
+        window["errors"].append(f"exploration switches: {exc}")
+    return window
+
+
 def _exploration_gate() -> dict:
     """Keep an unreadable direct-mode evidence gate visible in the recurring review."""
     try:
@@ -825,6 +889,7 @@ def _exploration_gate() -> dict:
         "evidence_error": error,
         "arms": evidence.get("mode_counts", []),
         "window_days": evidence.get("window_days"),
+        "window": _exploration_window(),
         "drainable": (
             "repair the Brain read"
             if status == "direct_mode_evidence_unreadable"
@@ -2141,11 +2206,29 @@ def format_report(rep: dict) -> str:
                 lines.append(f"      {fleet['clear_paths']}")
         lines.append("")
     exploration_gate = rep.get("exploration_gate") or {}
-    if exploration_gate.get("window_days") is not None and not exploration_gate.get("suspect"):
+    window = exploration_gate.get("window")
+    show_arms = exploration_gate.get("window_days") is not None and not exploration_gate.get(
+        "suspect"
+    )
+    if window or show_arms:
+        lines += ["## Exploration arms", ""]
+    if window:
+        counts = window.get("n_by_policy") or {}
+        epsilon_n = counts.get("epsilon-greedy")
+        thompson_n = counts.get("thompson-hybrid")
+        lines += [
+            f"  exploration window: rate {window['rate']} (env {window['env']}), "
+            f"exploration switches since {window['start']} {window['switches']}",
+            f"  exploration window: end {window.get('end', 'unmeasured')} "
+            f"(extended: {window.get('extended', 'unmeasured')}, per-policy n "
+            f"epsilon-greedy {epsilon_n if epsilon_n is not None else 'unmeasured'} / "
+            f"thompson-hybrid {thompson_n if thompson_n is not None else 'unmeasured'})",
+            *[f"  UNKNOWN — {error}" for error in window.get("errors", [])],
+            "",
+        ]
+    if show_arms:
         arms = {row["mode"]: row for row in exploration_gate.get("arms") or []}
         lines += [
-            "## Exploration arms",
-            "",
             f"  window={exploration_gate.get('window_days')}d; "
             "PASS denominator=graded G; durable denominator=completed durability sweeps D",
         ]
