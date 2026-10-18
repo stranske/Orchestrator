@@ -42,6 +42,6 @@ def test_source_change_keeps_same_period_prior_weight(tmp_path, monkeypatch, poo
         "ḃ_short=unmeasured",
         "ḃ_period=0.0",
         "ḃ_eff=0.0",
-        "w_p_prev→w_p=0.0→0.25",
+        "w_p_prev→w_p=0.000→0.250",
     ):
         assert field in text
