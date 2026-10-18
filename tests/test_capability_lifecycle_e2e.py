@@ -1049,12 +1049,13 @@ def test_direct_invoke_target_non_mapping_own_row_refuses_without_writes(
     assert ledger.read_bytes() == before
 
 
+@pytest.mark.parametrize("row", ["corrupt-row", 0, "", []])
 def test_compiled_invocation_non_mapping_row_refuses_without_writes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, row
 ) -> None:
     ctx = _registered_workflow(tmp_path, monkeypatch)
     payload = json.loads(ctx["ledger"].read_text(encoding="utf-8"))
-    payload["capabilities"][ctx["capability_id"]] = "corrupt-row"
+    payload["capabilities"][ctx["capability_id"]] = row
     ctx["ledger"].write_text(json.dumps(payload), encoding="utf-8")
     registry_before = ctx["registry"].read_bytes()
     result = capability_lifecycle.invoke_compiled_target(
