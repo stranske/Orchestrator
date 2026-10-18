@@ -950,6 +950,14 @@ def integrate(
             pool_samples.append(sample)
         new_samples.append(sample)
         prior = (previous.get(pool) or {}).get("pacing") or {}
+        # Reset events restart burn history even when Claude's T1 stays fixed.
+        if reset_at is not None:
+            pool_samples = [r for r in pool_samples if r["ts"] >= reset_at]
+        same_history = (
+            prior.get("period_start") == start
+            and prior.get("period_end") == end
+            and (reset_at is None or (prior.get("ts") or 0) >= reset_at)
+        )
         row = pacing.evaluate(
             pool,
             now=now,
@@ -959,6 +967,7 @@ def integrate(
             samples=pool_samples,
             exhausted_at=max(exhausted) if exhausted else None,
             previous_state=prior.get("state"),
+            previous_weight=prior.get("routing_weight") if same_history else None,
             source_ts=datum["ts"],
             used_fraction=datum["used_fraction"],
             source=datum["source"],
@@ -968,6 +977,24 @@ def integrate(
         ranks = {"ok": 0, "warn": 1, "shed": 2}
         if row["state"] in ranks and agent["state"] in ranks:
             agent["state"] = max((agent["state"], row["state"]), key=lambda state: ranks[state])
+        # Report-only diagnostics must not become route-export semantic changes.
+        # The exporter intentionally copies only the agent's stable pacing block.
+        agent["pacing_diagnostics"] = {
+            key: row.pop(key)
+            for key in (
+                "span_h",
+                "confidence",
+                "effective_projected_fraction",
+                "previous_routing_weight",
+                "capacity_budget",
+                "n_usable",
+                "sustainable_rate_per_hour",
+                "burn_short_per_hour",
+                "burn_period_per_hour",
+                "burn_effective_per_hour",
+                "target_routing_weight",
+            )
+        }
         row["measurement"] = (
             "measured"
             if datum.get("used_fraction") is not None and not row.get("stale") and bounds
@@ -990,7 +1017,12 @@ def integrate(
                     ts=now,
                     event="pacing_snapshot",
                     agents={
-                        k: dict(state=v["state"], pacing=v.get("pacing")) for k, v in agents.items()
+                        k: dict(
+                            state=v["state"],
+                            pacing=v.get("pacing"),
+                            pacing_diagnostics=v.get("pacing_diagnostics"),
+                        )
+                        for k, v in agents.items()
                     },
                 )
             ],
@@ -1019,11 +1051,23 @@ def report(handoff: Path, *, now: float, current: dict | None = None) -> str:
         return "unmeasured" if value is None else value
 
     for pool in ("codex", "claude"):
-        row = (current.get("agents", {}).get(pool) or {}).get("pacing") or {}
+        agent = current.get("agents", {}).get(pool) or {}
+        row = {**(agent.get("pacing") or {}), **(agent.get("pacing_diagnostics") or {})}
         lines.append(
             f"pool {pool}: u={measured(row.get('used_fraction'))} "
             f"ũ={measured(row.get('projected_fraction'))} "
-            f"state={row.get('state', 'unknown')} pacing={row.get('measurement', 'unknown')} w_p={measured(row.get('routing_weight'))} "
+            f"ũ_eff={measured(row.get('effective_projected_fraction'))} "
+            f"span_h={measured(row.get('span_h'))} c={measured(row.get('confidence'))} "
+            f"C={measured(row.get('capacity_budget'))} n_usable={measured(row.get('n_usable'))} "
+            f"s={measured(row.get('sustainable_rate_per_hour'))} "
+            f"ḃ_short={measured(row.get('burn_short_per_hour'))} "
+            f"ḃ_period={measured(row.get('burn_period_per_hour'))} "
+            f"ḃ_eff={measured(row.get('burn_effective_per_hour'))} "
+            f"w_p_target={measured(row.get('target_routing_weight'))} "
+            f"state={row.get('state', 'unknown')} "
+            f"pacing={row.get('measurement', 'unknown')} w_p={measured(row.get('routing_weight'))} "
+            f"w_p_prev→w_p={measured(row.get('previous_routing_weight'))}→"
+            f"{measured(row.get('routing_weight'))} "
             f"resets={row.get('resets_available') if row.get('resets_available') is not None else 'unknown'} source={row.get('source', 'none')} "
             f"T1={row.get('period_end')} reset_expiries={row.get('reset_expiries')} "
             f"ts={row.get('ts')} stale={row.get('ts') is not None and now - row['ts'] > pacing.STALE_AFTER_SECONDS}; "

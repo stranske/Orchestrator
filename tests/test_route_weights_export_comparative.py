@@ -229,7 +229,7 @@ def test_missing_history_is_unmeasured_not_zero_and_cli_is_read_only(tmp_path):
         capture_output=True,
     )
     assert proc.returncode == 0, proc.stderr
-    assert "classes_differing None" in proc.stdout
+    assert "classes_differing unmeasured" in proc.stdout
     assert "inputs_unmeasured" in proc.stdout
     assert not (tmp_path / "output").exists()
 
@@ -421,7 +421,14 @@ def test_ledger_filter_ts_and_one_stale_hour_keeps_window_verdict(agents_fixture
         for a in row["agents"].values():
             a["pacing"]["stale"] = True
     path.write_text("\n".join(json.dumps(row) for row in rows))
-    assert comparative.report(db, path, now=NOW + 13 * 3600)["status"] == "inputs_unmeasured"
+    report = comparative.report(db, path, now=NOW + 13 * 3600)
+    assert report["status"] == "inputs_unmeasured"
+    assert report["reasons"]
+    assert any("measured pacing hour share 5/12" in reason for reason in report["reasons"])
+    assert "classes_differing unmeasured" in comparative.format_report(report)
+    line = switch_review.comparative_routing_line({"comparative": report})
+    assert "classes_differing unmeasured" in line
+    assert not line.endswith("unmeasured; ")
 
 
 @pytest.mark.parametrize("field", ["demand", "budget", "burn", "lambda"])
@@ -479,6 +486,45 @@ def test_main_680_unknown_resets_remain_optimal(main_680_pacing_fixture):
     assert result["status"] == "optimal"
     assert result["inputs"]["budget"] == pytest.approx(dict(codex=0.456, cursor=0.456))
     assert result["inputs"]["cost_source_by_agent"]["codex"]["over_reserve"] is False
+
+
+def test_effective_burn_converts_hourly_prior_to_daily_cost(main_680_pacing_fixture):
+    db, snapshot = main_680_pacing_fixture
+    row = snapshot["agents"]["codex"]["pacing"]
+    assert row["burn_rate_per_day"] is None
+    assert row["burn_effective_per_hour"] == pytest.approx(0.394 / 72)
+    # A populated legacy EWMA must not override the model's blended rate either.
+    row["burn_rate_per_day"] = 9.0
+    result = comparative.measure(db, snapshot, now=NOW)
+    legacy = copy.deepcopy(snapshot)
+    for agent in legacy["agents"].values():
+        pace = agent["pacing"]
+        pace["burn_rate_per_day"] = pace.pop("burn_effective_per_hour") * 24
+    old = comparative.measure(db, legacy, now=NOW)
+    assert result["status"] == old["status"] == "optimal"
+    assert result["inputs"]["cost"] == old["inputs"]["cost"]
+    assert (
+        "burn_effective_per_hour * 24"
+        in result["inputs"]["cost_source_by_agent"]["codex"]["source"]
+    )
+
+
+@pytest.mark.parametrize("status", ["inputs_unmeasured", "partial", "not_testable_slack"])
+def test_nonoptimal_report_hides_partial_difference_count(status):
+    report = dict(
+        status=status,
+        classes_differing=1,
+        classes={},
+        window_days=14,
+        hours_measured=1,
+        hours_observed=10,
+        reasons=["insufficient measured hours"],
+        **{"lambda": {}},
+    )
+    assert "classes_differing unmeasured" in comparative.format_report(report)
+    assert "classes_differing unmeasured" in switch_review.comparative_routing_line(
+        {"comparative": report}
+    )
 
 
 def test_effective_reserve_missing_is_unmeasured(main_680_pacing_fixture):

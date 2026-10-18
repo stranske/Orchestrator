@@ -1202,6 +1202,7 @@ def status(
     env: dict | None = None,
     report_dir: Path | None = None,
     plan_path: Path | None = None,
+    sweep_path: Path | None = None,
     pid_checker=None,
     now: int | None = None,
     link_preview: bool = True,
@@ -1224,6 +1225,7 @@ def status(
     drain = screen_candidates(
         report_dir=report_dir,
         plan_path=plan_path,
+        sweep_path=sweep_path,
         corpus_path=corpus,
         pid_checker=pid_checker,
         now=now,
@@ -1377,12 +1379,17 @@ def _write_stage2_plan(path: Path, reports: list[dict], *, generated_at: int) ->
 
 def _selftest_prescreen(tmp: Path) -> None:
     """The 2026-10-02 relationship fixes, each against the input that exposed it."""
+    import tempfile
+    from unittest.mock import patch
+
+    import redirect_sweep
     import roles
 
     corpus = tmp / "prescreen-corpus.jsonl"
     report_dir = tmp / "prescreen-reports"
     report_dir.mkdir()
     plan_path = tmp / "prescreen-plan.json"
+    sweep_path = tmp / "absent-sweep.json"
     now = int(time.time())
     open_gate = {"bootstrap_needed": True, "disagreements_needed": 3}
     spent: list = []
@@ -1490,8 +1497,9 @@ def _selftest_prescreen(tmp: Path) -> None:
     run: dict[str, Any] = {
         "report_dir": report_dir,
         "plan_path": plan_path,
-        "sweep_path": tmp / "absent-sweep.json",
+        "sweep_path": sweep_path,
         "corpus_path": corpus,
+        "backend": "codex",
         "env": {BOOTSTRAP_FLAG: "1"},
         "role_runner": judge("inspect"),
         "apply_runner": must_not_apply,
@@ -1574,42 +1582,61 @@ def _selftest_prescreen(tmp: Path) -> None:
         brain_opens.append("feedback._conn")
         raise AssertionError("status(link_preview=False) opened the Brain")
 
-    saved_conn, feedback._conn = feedback._conn, brain_tripwire
-    try:
-        lean = status(
-            corpus,
-            env={BOOTSTRAP_FLAG: "1"},
-            report_dir=report_dir,
-            plan_path=plan_path,
-            now=now,
-            link_preview=False,
-        )
-    finally:
-        feedback._conn = saved_conn
+    # Simulate a populated default state outside the fixture inputs. Removing the explicit sweep
+    # below must count this second target and fail, even on a machine with no Orchestrator state.
+    with tempfile.TemporaryDirectory(prefix="redirect-apply-decoy-live-") as live_dir:
+        live_sweep = Path(live_dir) / "redirect-sweep.json"
+        decoy = {**current, "target": "o/r#999"}
+        live_sweep.write_text(json.dumps({"generated_at": now, "actionable": [decoy]}))
+        with patch.object(redirect_sweep, "DEFAULT_REPORT", live_sweep), patch.object(
+            feedback, "_conn", brain_tripwire
+        ):
+            default_rows, _ = sweep_stalled_candidates(now=now)
+            assert [row["report"]["target"] for row in default_rows] == [decoy["target"]]
+            lean = status(
+                corpus,
+                env={BOOTSTRAP_FLAG: "1"},
+                report_dir=report_dir,
+                plan_path=plan_path,
+                sweep_path=sweep_path,
+                now=now,
+                link_preview=False,
+            )
     assert brain_opens == [], brain_opens
     assert lean["unlinked_applied_outcomes"] is None and lean["pending_outcome_links"] is None, lean
-    assert lean["drainable"] is not None and lean["current_candidates"] == 1, lean
+    assert lean["current_candidates"] == 1, f"default sweep decoy leaked into status: {lean}"
+    assert lean["candidate_counts"] == {"supervisor": 1, "sweep": 0, "eligible": 0}, lean
     assert any("unlinked applied outcomes: not read" in line for line in format_status(lean)), lean
 
 
 def _selftest() -> None:
     import tempfile
-
-    import redirect_sweep
+    from unittest.mock import patch
 
     tmp = Path(tempfile.mkdtemp(prefix="redirect-apply-"))
+    # apply_one/screen_report also consult claims, and their role/plan helpers emit heartbeats.
+    # Keep all of those inside the fixture, including when invoked from the live tick's env.
+    private_env = patch.dict(
+        os.environ,
+        {
+            "HANDOFF_DIR": str(tmp / "handoff"),
+            "ORCH_CAPABILITY_HEARTBEATS": "0",
+            BOOTSTRAP_FLAG: "0",
+        },
+    )
+    private_env.start()
     old_db, old_corpus = feedback.DB_PATH, redirect_shadow.CORPUS_PATH
     old_prompt_dir = redirect_plan.PROMPT_DIR
-    old_sweep_report = redirect_sweep.DEFAULT_REPORT
+    old_ledger = capabilities.REG
+    # Role recording resolves capability versions even with heartbeats disabled.
+    capabilities.REG = tmp / "capabilities.json"
     feedback.DB_PATH = tmp / "brain.db"
     corpus = tmp / "corpus.jsonl"
+    redirect_shadow.CORPUS_PATH = corpus
     redirect_plan.PROMPT_DIR = tmp / "prompts"
-    # status() includes the latest sweep by default. Keep its candidate population inside the
-    # fixture too; an ambient live sweep must not change selftest counts or be read here.
-    redirect_sweep.DEFAULT_REPORT = tmp / "no-sweep.json"
-    # status() also screens the candidate population; point it at paths that hold nothing, so the
-    # selftest never reads the live supervisor's plan or report directory.
-    no_reports, no_plan = tmp / "no-reports", tmp / "no-plan.json"
+    # status() reads corpus + Brain + supervisor reports/plan + redirect-sweep. Every path must
+    # be explicit: ORCH_STATE_DIR alone misses defaults already bound when modules were imported.
+    no_reports, no_plan, no_sweep = tmp / "no-reports", tmp / "no-plan.json", tmp / "no-sweep.json"
     try:
         # ---- the flag is the kill switch, and it is OFF by default ----------------------
         assert flag_enabled({}) is False
@@ -1816,7 +1843,9 @@ def _selftest() -> None:
         pending_preview = preview_link_applied_outcomes(corpus_path=corpus)
         assert pending_preview["pending"] == 1, pending_preview
         pending_hash = _corpus_digest(corpus)
-        st_pending = status(corpus, env={}, report_dir=no_reports, plan_path=no_plan)
+        st_pending = status(
+            corpus, env={}, report_dir=no_reports, plan_path=no_plan, sweep_path=no_sweep
+        )
         assert _corpus_digest(corpus) == pending_hash, "status must not write the corpus"
         assert st_pending["unlinked_applied_outcomes"] == 1, st_pending
 
@@ -1832,7 +1861,9 @@ def _selftest() -> None:
 
         # ---- status stays read-only after links exist too ---------------------------
         status_hash_before = _corpus_digest(corpus)
-        st_linker = status(corpus, env={}, report_dir=no_reports, plan_path=no_plan)
+        st_linker = status(
+            corpus, env={}, report_dir=no_reports, plan_path=no_plan, sweep_path=no_sweep
+        )
         assert _corpus_digest(corpus) == status_hash_before, "status must not write the corpus"
         assert st_linker["flag_source"] == "explicit", st_linker
         assert (
@@ -1902,6 +1933,8 @@ def _selftest() -> None:
         spent: list = []
         guarded = apply_candidates(
             report_dir=tmp,
+            plan_path=no_plan,
+            sweep_path=no_sweep,
             corpus_path=corpus,
             dry_run=True,
             env={},
@@ -1914,18 +1947,13 @@ def _selftest() -> None:
 
         # Reporting must not depend on the invoking shell: an explicit env is labelled as such,
         # and an ambient value wins over the tick's default (that IS what would run).
-        armed, src = flag_as_the_tick_sees_it()
-        assert src in {
-            "ambient",
-            "tick",
-            "unset",
-            "unresolved (tick env unavailable; ambient unset)",
-        }, src
-        os.environ[BOOTSTRAP_FLAG] = "1"
-        try:
-            assert flag_as_the_tick_sees_it() == (True, "ambient")
-        finally:
+        with patch("capability_recurrence_check.tick_env", return_value={BOOTSTRAP_FLAG: "1"}):
             os.environ.pop(BOOTSTRAP_FLAG, None)
+            assert flag_as_the_tick_sees_it() == (True, "tick")
+            os.environ[BOOTSTRAP_FLAG] = "0"
+            assert flag_as_the_tick_sees_it() == (False, "ambient")
+            os.environ[BOOTSTRAP_FLAG] = "1"
+            assert flag_as_the_tick_sees_it() == (True, "ambient")
 
         print(
             "redirect_apply.py selftest: OK (flag-off dry run, live-pid refusal, unstamped "
@@ -1935,13 +1963,14 @@ def _selftest() -> None:
             "status read-only corpus hash, linker appends exactly one event, pid-less live lane "
             "refused, unknown liveness refused, stale reports never judged, identical input "
             "judged once, per-run offload cap, drained and unknown renderings, "
-            "link_preview=False opens no Brain)"
+            "link_preview=False opens no Brain, default sweep decoy excluded)"
         )
     finally:
         feedback.DB_PATH = old_db
         redirect_shadow.CORPUS_PATH = old_corpus
         redirect_plan.PROMPT_DIR = old_prompt_dir
-        redirect_sweep.DEFAULT_REPORT = old_sweep_report
+        capabilities.REG = old_ledger
+        private_env.stop()
         import shutil
 
         shutil.rmtree(tmp, ignore_errors=True)
