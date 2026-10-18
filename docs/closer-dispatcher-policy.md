@@ -65,6 +65,17 @@ the historical invalid stop remains in the audit. Reusing an unchanged wait stil
 requires fresh campaign admission and matching evidence producer and semantic
 binding. A changed producer or head returns to normal interpretation.
 
+An expired interrupted round may admit a fresh round without making its invalid
+historical stop valid. Recovery retains the original failure evidence and permits
+fresh preparation for assigned targets with no action or an exact durable
+non-mutating wait proof, with current ownership, capacity, evidence and budget
+checks. A failed action without that proof remains quarantined. An uncertain
+operation stays behind reconciliation before any retry. Removed unsafe targets
+retain their barriers; removed read-only failures remain in the audit. They do
+not become new work. These barriers and the invalid-stop audit must survive
+later cadences and history trimming. Missing or malformed recovery proof fails
+closed; never clear the ledger or invent a resource boundary to admit work.
+
 Before ACTION C finalizes the round, run
 `python3 ~/.codex/orchestrator-mirror/closer_dispatcher.py validate-stop --state "$CLOSER_ROUND_STATE" --assignment ~/.codex/automations/reviewed-repo-automation-controller/closer-assignment.json`.
 The postrun hook independently performs this check before end-round and relay;

@@ -44,6 +44,365 @@ def callbacks(*, interpret=None, act=None, exception=None):
     }
 
 
+def interrupted_round_fixture(path, at):
+    """The 67-row interruption shape, with no invented historical stop proof."""
+    rows = {}
+    for index in range(33):
+        rows[f"owner/repo#deadline-{index}"] = {
+            "status": "deferred",
+            "stage": "interpret",
+            "results": {},
+            "deferred_reason": "deadline_exhausted",
+            "deferred_next_trigger": "next_round",
+            "resource_evidence": {},
+        }
+    for index in range(27):
+        rows[f"owner/repo#capacity-{index}"] = {
+            "status": "deferred",
+            "stage": "exception",
+            "results": {},
+            "deferred_reason": "worker_capacity",
+            "deferred_next_trigger": "capacity_recheck",
+            "resource_evidence": {
+                "capacity": {
+                    "lane": "exception",
+                    "active": 0,
+                    "limit": 0,
+                    "available": 0,
+                    "required": 1,
+                    "sampled_at": at - 3600,
+                }
+            },
+        }
+    for index in range(3):
+        rows[f"owner/repo#failed-act-{index}"] = {
+            "status": "failed",
+            "stage": "act",
+            "results": {
+                "act": {
+                    "status": "blocked",
+                    "reason": "worker_json_invalid",
+                }
+            },
+            "error": "act returned unsupported or missing status",
+            "deferred_next_trigger": "human_review",
+        }
+    for index in range(2):
+        rows[f"owner/repo#uncertain-act-{index}"] = {
+            "status": "uncertain",
+            "stage": "act",
+            "results": {},
+            "deferred_next_trigger": "reconcile_before_retry",
+        }
+        rows[f"owner/repo#read-failed-{index}"] = {
+            "status": "failed",
+            "stage": "interpret",
+            "results": {},
+            "error": "RuntimeError: target absent from fresh closer assignment",
+            "deferred_next_trigger": "human_review",
+        }
+    old_assignment = sorted(rows)
+    for row in rows.values():
+        row["metrics"] = {"waits": 0, "errors": 0}
+    removed = {
+        "owner/repo#failed-act-2",
+        "owner/repo#uncertain-act-1",
+        "owner/repo#read-failed-0",
+        "owner/repo#read-failed-1",
+    }
+    current_assignment = sorted(set(old_assignment) - removed)
+    state = {
+        "schema": closer_pipeline.SCHEMA,
+        "runs": {
+            "interrupted": {
+                "created": at - 3000,
+                "deadline": at - 1000,
+                "assignment": old_assignment,
+                "targets": rows,
+            }
+        },
+        "carry": {},
+        "cache": {},
+    }
+    closer_pipeline._save(path, state)
+    return current_assignment, removed
+
+
+def test_expired_invalid_round_restarts_only_current_nonaction_work_and_keeps_audit(tmp_path):
+    path = tmp_path / "pipeline.json"
+    clock = [1_800_000_000.0]
+    assignment, removed = interrupted_round_fixture(path, clock[0])
+    before = validate_stop(path, sorted(assignment + list(removed)), now=lambda: clock[0])
+    assert not before["valid"]
+    assert len(before["reasons"]) == 65
+    calls = []
+    cb = callbacks(
+        interpret=lambda target, _context: calls.append(("interpret", target))
+        or {"substantive_needs": []},
+        act=lambda target, _context: calls.append(("act", target))
+        or {"status": "completed", "target_complete": True},
+    )
+    cb["prepare"] = lambda target, _context: calls.append(("prepare", target)) or {
+        "revision": "fresh-revision",
+        "identity": target,
+    }
+    first = run(
+        path,
+        assignment,
+        cb,
+        seconds=10,
+        now=lambda: clock[0],
+        reconcile=lambda target, _context: calls.append(("reconcile", target))
+        or {"outcome": "unknown"},
+    )
+    assert first.get("status") != "blocked"
+    assert len([call for call in calls if call[0] == "prepare"]) == 60
+    assert len([call for call in calls if call[0] == "act"]) == 60
+    assert [target for stage, target in calls if stage == "reconcile"] == [
+        "owner/repo#uncertain-act-0"
+    ]
+    assert not any(
+        target in removed or "failed-act" in target or "uncertain-act" in target
+        for stage, target in calls
+        if stage != "reconcile"
+    )
+    state = closer_pipeline._load(path)
+    latest = next(iter(state["runs"].values()))
+    assert latest["prior_stop"]["valid"] is False
+    assert latest["prior_invalid_stop_evidence"]["valid"] is False
+    audit = latest["invalid_stop_history"][0]
+    assert audit["source_run_id"] == "interrupted"
+    assert len(audit["targets"]) == 67
+    assert audit["prior_stop"]["reasons"] == before["reasons"]
+    assert latest["targets"]["owner/repo#failed-act-0"]["status"] == "failed"
+    assert latest["targets"]["owner/repo#failed-act-0"]["recovery_barrier"]
+    assert latest["targets"]["owner/repo#failed-act-2"]["recovery_excluded"] is True
+    assert latest["targets"]["owner/repo#uncertain-act-1"]["recovery_excluded"] is True
+
+    # A fresh assignment may reobserve completed targets; the action adapter
+    # still owns source dedup. Unsafe prior actions and removed items stay barred.
+    clock[0] += 20
+    calls.clear()
+    second = run(
+        path,
+        assignment,
+        cb,
+        seconds=10,
+        now=lambda: clock[0],
+        reconcile=lambda target, _context: calls.append(("reconcile", target))
+        or {"outcome": "unknown"},
+    )
+    assert second.get("status") != "blocked"
+    assert [target for stage, target in calls if stage == "reconcile"] == [
+        "owner/repo#uncertain-act-0"
+    ]
+    assert not any(
+        target in removed or "failed-act" in target or "uncertain-act" in target
+        for stage, target in calls
+        if stage != "reconcile"
+    )
+    latest = next(iter(closer_pipeline._load(path)["runs"].values()))
+    assert latest["invalid_stop_history"][0] == audit
+    assert latest["targets"]["owner/repo#failed-act-0"]["status"] == "failed"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "unexpired",
+        "assignment",
+        "unknown_reason",
+        "unsafe_operation",
+        "created_bool",
+        "created_nan",
+        "created_infinite",
+    ],
+)
+def test_expired_invalid_round_rejects_nonmatching_prior_state(tmp_path, mutation):
+    path = tmp_path / "pipeline.json"
+    at = 1_800_000_000.0
+    assignment, _removed = interrupted_round_fixture(path, at)
+    state = closer_pipeline._load(path)
+    old = state["runs"]["interrupted"]
+    if mutation == "unexpired":
+        old["deadline"] = at + 100
+    elif mutation == "assignment":
+        old["assignment"].append("owner/repo#missing")
+    elif mutation == "unknown_reason":
+        old["targets"]["owner/repo#capacity-0"]["deferred_reason"] = "claim_held"
+    elif mutation == "created_bool":
+        old["created"] = True
+    elif mutation == "created_nan":
+        old["created"] = float("nan")
+    elif mutation == "created_infinite":
+        old["created"] = float("inf")
+    else:
+        old["targets"]["owner/repo#deadline-0"]["results"]["act"] = {
+            "status": "uncertain",
+            "operation_id": "unknown",
+        }
+    if mutation in {"unexpired", "created_bool", "created_nan", "created_infinite"}:
+        prior = validate_stop(path, old["assignment"], now=lambda: at)
+        assert not closer_pipeline._expired_invalid_round_recovery(
+            prior, old, path, "interrupted", at
+        )[0]
+        return
+    closer_pipeline._save(path, state)
+    calls = []
+    cb = callbacks(
+        act=lambda target, _context: calls.append(target)
+        or {"status": "completed", "target_complete": True}
+    )
+    result = run(path, assignment, cb, seconds=2, now=lambda: at)
+    assert result.get("status") == "blocked"
+    assert result["reason"] == "prior_run_has_no_valid_stop"
+    assert not calls
+
+
+def test_expired_invalid_round_barrier_must_match_immutable_item_lineage(tmp_path):
+    path = tmp_path / "pipeline.json"
+    at = 1_800_000_000.0
+    assignment, _removed = interrupted_round_fixture(path, at)
+    result = run(
+        path,
+        assignment,
+        callbacks(),
+        seconds=10,
+        now=lambda: at,
+        reconcile=lambda _target, _context: {"outcome": "unknown"},
+    )
+    assert result.get("status") != "blocked"
+    state = closer_pipeline._load(path)
+    run_id, previous = next(iter(state["runs"].items()))
+    prior = validate_stop(path, assignment, now=lambda: at + 20)
+    assert closer_pipeline._expired_invalid_round_recovery(
+        prior,
+        previous,
+        path,
+        run_id,
+        at + 20,
+    )[0]
+    previous["targets"]["owner/repo#failed-act-0"]["revision"] = "substituted"
+    assert not closer_pipeline._expired_invalid_round_recovery(
+        prior,
+        previous,
+        path,
+        run_id,
+        at + 20,
+    )[0]
+
+
+def test_expired_invalid_round_rechecks_admission_before_old_semantic_cache(tmp_path):
+    path = tmp_path / "pipeline.json"
+    at = 1_800_000_000.0
+    interrupted_round_fixture(path, at)
+    target = "owner/repo#deadline-0"
+    semantic = "closer-evidence-semantic/v1:" + hashlib.sha256(target.encode()).hexdigest()
+    cache_key = closer_pipeline._digest(
+        {
+            "schema": "closer-pipeline-semantic-cache/v1",
+            "target": target,
+            "identity": target,
+            "stage": "interpret",
+            "semantic": semantic,
+        }
+    )
+    state = closer_pipeline._load(path)
+    state["cache"][cache_key] = {
+        "value": {"substantive_needs": ["old approval"]},
+        "target": target,
+        "stage": "interpret",
+    }
+    closer_pipeline._save(path, state)
+    called = []
+    cb = callbacks(
+        interpret=lambda name, _ctx: called.append(("interpret", name))
+        or {
+            "status": "pending",
+            "pending_kind": "external_event",
+            "next_trigger": "fresh campaign admission",
+            "pending_evidence": {"event_id": "actual-admission-event"},
+        },
+        exception=lambda name, _ctx: called.append(("exception", name)) or {},
+        act=lambda name, _ctx: called.append(("act", name)) or {},
+    )
+    cb["prepare"] = lambda name, _ctx: {
+        "revision": "fresh-revision",
+        "identity": name,
+        "semantic_cache_key": semantic,
+    }
+    result = run(path, [target], cb, seconds=10, now=lambda: at)
+    assert result.get("status") != "blocked"
+    assert called == [("interpret", target)]
+    assert (
+        next(iter(closer_pipeline._load(path)["runs"].values()))["targets"][target]["status"]
+        == "pending"
+    )
+
+
+def test_expired_invalid_round_history_does_not_grow_on_unchanged_cadences(tmp_path):
+    path = tmp_path / "pipeline.json"
+    at = 1_800_000_000.0
+    interrupted_round_fixture(path, at)
+    target = "owner/repo#deadline-0"
+    origin = None
+    sizes = []
+    for cadence in range(10):
+        current = at + 20 * cadence
+        result = run(path, [target], callbacks(), seconds=10, now=lambda: current)
+        assert result.get("status") != "blocked"
+        latest = next(iter(closer_pipeline._load(path)["runs"].values()))
+        history = latest["invalid_stop_history"]
+        if origin is None:
+            origin = history[0]
+            assert origin["prior_stop"]["valid"] is False
+            assert len(origin["targets"]) == 67
+        assert history[0] == origin
+        sizes.append(len(json.dumps(history)))
+    assert len(set(sizes[2:])) == 1
+
+
+def test_expired_invalid_round_accepts_mixed_historically_valid_capacity(tmp_path):
+    path = tmp_path / "pipeline.json"
+    at = 1_800_000_000.0
+    interrupted_round_fixture(path, at)
+    state = closer_pipeline._load(path)
+    row = state["runs"]["interrupted"]["targets"]["owner/repo#capacity-0"]
+    row["resource_evidence"]["capacity"]["sampled_at"] = at - 10
+    deadline_row = state["runs"]["interrupted"]["targets"]["owner/repo#deadline-0"]
+    deadline_row["resource_evidence"] = {
+        "type": "active_deadline",
+        "deadline": at - 1000,
+        "observed_at": at - 999,
+    }
+    closer_pipeline._save(path, state)
+    old = state["runs"]["interrupted"]
+    prior = validate_stop(path, old["assignment"], now=lambda: at)
+    assert "unverified_resource_deferral:owner/repo#capacity-0" not in prior["reasons"]
+    assert "unverified_deadline_boundary:owner/repo#deadline-0" not in prior["reasons"]
+    assert not prior["valid"]
+    assert closer_pipeline._expired_invalid_round_recovery(
+        prior,
+        old,
+        path,
+        "interrupted",
+        at,
+    )[0]
+    called = []
+    cb = callbacks(
+        act=lambda name, _ctx: called.append(name)
+        or {
+            "status": "completed",
+            "target_complete": True,
+        }
+    )
+    result = run(
+        path, ["owner/repo#capacity-0", "owner/repo#deadline-0"], cb, seconds=10, now=lambda: at
+    )
+    assert result.get("status") != "blocked"
+    assert sorted(called) == ["owner/repo#capacity-0", "owner/repo#deadline-0"]
+
+
 @pytest.mark.parametrize(
     ("reason", "labels"),
     [
