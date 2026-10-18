@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import math
 import os
 import random
 import re
+import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -122,21 +125,34 @@ def cadence_draw(now, rate, rng, *, pools=None, cells=(), skip_reason=None, coun
         return result
 
 
-def record_launch(now=None):
+def record_launch(now=None, *, test_source=None):
     now = time.time() if now is None else now
     with locked_state():
         state = read_state()
         day = time.strftime("%Y%m%d", time.gmtime(now))
         count = state.get("launched_today", 0) if state.get("day") == day else 0
         state.update(day=day, launched_today=count + 1)
+        if test_source == "derived":
+            state["derived_tests"] = state.get("derived_tests", 0) + 1
         save_state(state)
 
 
-def record_skip(reason, *, target=None, now=None):
+def record_skip(reason, *, target=None, now=None, test_class=None):
     """Return whether a skip was recorded; unnamed tests count once per issue/UTC day."""
     now = time.time() if now is None else now
     with locked_state():
         state = read_state()
+        if reason == "derive_failed":
+            day = time.strftime("%Y%m%d", time.gmtime(now))
+            if state.get("derive_failed_day") != day:
+                state.update(derive_failed_day=day, derive_failed_issues=[])
+            if target and target in state["derive_failed_issues"]:
+                return False
+            if target:
+                state["derive_failed_issues"].append(target)
+            state["derive_failed"] = state.get("derive_failed", 0) + 1
+            save_state(state)
+            return True
         if reason == "no_named_test" and target:
             day = time.strftime("%Y%m%d", time.gmtime(now))
             if state.get("skip_day") != day:
@@ -146,6 +162,10 @@ def record_skip(reason, *, target=None, now=None):
             state["skip_issues"].append(target)
         skips = state.setdefault("skips", {})
         skips[reason] = skips.get(reason, 0) + 1
+        if reason == "no_named_test":
+            classes = state.setdefault("no_named_test_classes", {})
+            key = test_class or "none"
+            classes[key] = classes.get(key, 0) + 1
         save_state(state)
         return True
 
@@ -283,19 +303,35 @@ def build_plan(
 
     spare = research_scheduler.spare_capacity(research_scheduler.capacity_state_from_snapshot(cap))
     skipped = []
+    state = read_state()
+    failed = (
+        set(state.get("derive_failed_issues", []))
+        if state.get("derive_failed_day") == time.strftime("%Y%m%d", time.gmtime(time.time()))
+        else set()
+    )
     eligible = [
         i
         for i in items
         if i.get("target")
         and not i["target"].lower().startswith("stranske/collab-admin#")
-        and i["target"] not in claimed_targets | (excluded_targets or set())
+        and i["target"] not in claimed_targets | (excluded_targets or set()) | failed
         and i.get("lane", "research") in {"research", "opener"}
         and not backlog.research_ownership_skip_reason(i.get("labels") or [])
     ]
+    admitted = []
     for item in eligible:
-        if not named_test(item.get("body", "")):
-            skipped.append({"target": item["target"], "reason": "no_named_test"})
-    eligible = [i for i in eligible if named_test(i.get("body", ""))]
+        body = item.get("body", "")
+        if named_test(body) or acceptance_criteria(body):
+            admitted.append(item)
+        else:
+            skipped.append(
+                {
+                    "target": item["target"],
+                    "reason": "no_named_test",
+                    "test_class": test_class(body),
+                }
+            )
+    eligible = admitted
     classes = set(router.ROUTE_TABLE)
     cells = route_cells(classes, cap.get("agents", {}), conn=conn)
     cells = [
@@ -421,27 +457,313 @@ def release_lock(root, target, delivery, *, gh_fn=None, now=None):
     return delivery
 
 
+class FrozenTestError(ValueError):
+    """No comparison may start because its named test could not be frozen."""
+
+
+# Paths are repository-relative and shell-token safe. A JS file must name a test.
+TEST_PATH = r"(?:tests/[\w./-]+\.py(?:::[\w\[\]-]+)*|(?:\.?[\w-]+/)*[\w-]+\.test\.[cm]?[jt]sx?)"
+
+
 def named_test_paths(command):
-    return list(dict.fromkeys(re.findall(r"tests/[\w./-]+\.py(?:::[\w\[\]-]+)*", command or "")))
+    paths = list(dict.fromkeys(re.findall(TEST_PATH, command or "")))
+    try:
+        tokens = shlex.split(command or "")
+        if len(tokens) > 3 and tokens[0] in {"npm", "pnpm"} and tokens[1] == "--prefix":
+            return [(Path(tokens[2]) / path).as_posix() for path in paths]
+    except ValueError:
+        pass
+    return paths
 
 
-def named_test(spec):
-    """Only explicit fenced/backtick pytest commands or named test nodes qualify."""
-    commands = re.findall(r"`([^`\n]*(?:pytest|python3? [^`\n]*--selftest)[^`\n]*)`", spec)
+def acceptance_criteria(spec):
+    """Require a nonempty, explicitly headed acceptance section, not vague prose."""
+    match = re.search(
+        r"(?im)^#{1,6} +Acceptance Criteria[^\n]*\n(.*?)(?=^#{1,6} +|\Z)",
+        spec,
+        re.S | re.M,
+    )
+    return match.group(1).strip() if match and match.group(1).strip() else None
+
+
+def test_class(spec):
+    if named_test_paths(spec):
+        return "file-only"
+    if re.search(r"(?is)(?:tests?.{0,60}\bCI\b|\bCI\b.{0,60}tests?)", spec):
+        return "ci-only"
+    return "none"
+
+
+def named_test(spec, repo_dir=None):
+    """Freeze one explicit command, or derive a command from one concrete test path."""
+    from synthesis_promotion import _safe_command
+
+    commands = re.findall(r"`([^`\n]+)`", spec)
+    # Also accept shell commands in fenced blocks.
+    commands += re.findall(
+        r"(?m)^((?:python3? -m pytest|pytest|npm test|pnpm test|node --test) [^\n`]+)$", spec
+    )
     for command in commands:
-        if command.strip().startswith(("pytest ", "python3 ", "python ", "/")):
-            import shlex
+        try:
+            tokens = shlex.split(command)
+            runner = tokens
+            if len(runner) > 3 and runner[0] in {"npm", "pnpm"} and runner[1] == "--prefix":
+                runner = [runner[0], *runner[3:]]
+            is_test = bool(runner) and (
+                runner[0] == "pytest"
+                or runner[:3]
+                in (
+                    ["python3", "-m", "pytest"],
+                    ["python", "-m", "pytest"],
+                    ["uv", "run", "pytest"],
+                )
+                or runner[:2] in (["npm", "test"], ["pnpm", "test"], ["node", "--test"])
+                or (
+                    len(runner) > 2
+                    and runner[:2] in (["npm", "run"], ["pnpm", "run"])
+                    and runner[2].startswith("test")
+                )
+            )
+            if is_test and _safe_command(tokens) and named_test_paths(command):
+                return command.strip()
+        except ValueError:
+            pass
+    paths = named_test_paths(spec)
+    if not paths:
+        return None
+    path = paths[0]
+    if path.split("::")[0].endswith(".py"):
+        return "pytest " + path
+    if repo_dir is None:
+        # Planning is read-only; preparation resolves the actual repository runner.
+        return f"npm test -- {path}"
+    root = Path(repo_dir).resolve()
+    test_path = root / path
+    if not test_path.resolve().is_relative_to(root):
+        return None
+    for directory in [test_path.parent, *test_path.parent.parents]:
+        if not directory.is_relative_to(root):
+            break
+        try:
+            package = json.loads((directory / "package.json").read_text())
+        except (OSError, ValueError):
+            continue
+        if package.get("scripts", {}).get("test"):
+            runner = "pnpm" if package.get("packageManager", "").startswith("pnpm@") else "npm"
+            prefix = directory.relative_to(root).as_posix()
+            relative_test = test_path.relative_to(directory).as_posix()
+            return (
+                f"{runner} test -- {path}"
+                if prefix == "."
+                else f"{runner} --prefix {prefix} test -- {relative_test}"
+            )
+    try:
+        if "node:test" in test_path.read_text():
+            return f"node --test {path}"
+    except OSError:
+        pass
+    return None
 
-            from synthesis_promotion import _safe_command
 
-            try:
-                tokens = shlex.split(command)
-                if _safe_command(tokens) and (named_test_paths(command) or "--selftest" in tokens):
-                    return command.strip()
-            except ValueError:
-                pass
-    nodes = re.findall(r"tests/[\w./-]+\.py(?:::[\w\[\]-]+)*", spec)
-    return "python3 -m pytest -q " + " ".join(dict.fromkeys(nodes)) if nodes else None
+def _pytest_runner(canon):
+    """Use the consumer's selected local environment, then its uv project, then app Python."""
+    for name in (".venv", "venv"):
+        python = Path(canon) / name / "bin/python"
+        if python.exists():
+            return [str(python), "-m", "pytest"]
+        if (Path(canon) / name).exists():
+            raise ValueError(f"selected consumer interpreter is unavailable: {python}")
+    if (Path(canon) / "uv.lock").exists():
+        return ["uv", "run", "--project", str(canon), "pytest"]
+    return ["/opt/anaconda3/bin/python3", "-m", "pytest"]
+
+
+def _red_environment(agent, root):
+    import exp_abcd
+
+    # Never run test code with provider credentials, host HOME, or inherited Git config.
+    allowed = {k: v for k, v in os.environ.items() if k in {"PATH", "LANG", "LC_ALL", "TMPDIR"}}
+    allowed.update(HOME=str(root), PYTHONDONTWRITEBYTECODE="1", PYTEST_DISABLE_PLUGIN_AUTOLOAD="1")
+    allowed.update(
+        GIT_CONFIG_COUNT="1",
+        GIT_CONFIG_KEY_0="remote.origin.pushurl",
+        GIT_CONFIG_VALUE_0="file:///dev/null/orch-no-push",
+        GIT_CONFIG_NOSYSTEM="1",
+        GIT_CONFIG_GLOBAL=os.devnull,
+    )
+    return exp_abcd.adapters.agent_subprocess_env(agent, allowed)
+
+
+def _red_sandbox(argv, wt, canon, root):
+    import exp_abcd
+
+    # _wrapped is an agent/auth launcher, not a sandbox for arbitrary Python. Tests
+    # need their own boundary even when the worker CLI supplies its own sandbox.
+    sandbox = exp_abcd.adapters.SANDBOX_EXEC
+    if not Path(sandbox).is_file():
+        raise ValueError("derived RED proof requires sandbox-exec")
+    quote = exp_abcd.adapters._seatbelt_quote
+    profile = "(version 1)(allow default)(deny network*)(deny file-write*)"
+    profile += f"(deny file-read* (subpath {quote(str(Path.home()))}))"
+    for path in {str(Path(wt).resolve()), str(Path(canon).resolve()), sys.prefix}:
+        profile += f"(allow file-read* (subpath {quote(path)}))"
+    for path in {str(Path(wt).resolve()), str(Path(root).resolve()), "/private/tmp"}:
+        profile += f"(allow file-read* file-write* (subpath {quote(path)}))"
+    return [sandbox, "-p", profile, *argv]
+
+
+def freeze_test(repo, spec, exp_id, agent, base_sha, *, root, derive_fn=None):
+    """A test-spec worker is a prerequisite, never a comparison arm.
+
+    Only a clean, test-only commit with an observed pytest assertion failure may
+    seed comparisons. Dependency/collection errors are not a failing named test.
+    """
+    import exp_abcd
+    import provision
+
+    canon = provision.ensure_canonical(repo)
+    command = named_test(spec, canon)
+    if command:
+        source = (
+            "explicit"
+            if re.search(r"(?:pytest|npm test|pnpm test|node --test)\s", spec)
+            else "file-only"
+        )
+        return {"named_test": command, "test_source": source}
+    if not acceptance_criteria(spec):
+        raise ValueError("no_named_test: no acceptance criteria for derivation")
+    wt = exp_abcd.exp_worktree(repo, exp_id, agent, "test-spec")
+    branch = exp_abcd.exp_branch(exp_id, agent, "test-spec")
+    provision._run(["git", "-C", str(canon), "worktree", "add", "-b", branch, str(wt), base_sha])
+    try:
+        prompt = (
+            "Write and commit ONLY a failing regression test from the Acceptance Criteria below. "
+            "Do not implement the fix, push, open a PR, or request computer-wide approvals. "
+            "Use a concrete tests/test_*.py path. It must collect and fail by assertion on this base. "
+            "Write exactly pytest <test-file> to test-command.txt (leave that file untracked). "
+            "Commit only the test file.\n\n" + spec
+        )
+        if derive_fn:
+            derive_fn(agent, prompt, wt)
+        else:
+            # Use the same commit-enabled sandbox and no-push environment as experiment members.
+            exp_abcd.adapters.refuse_broad_workspace(agent, wt)
+            argv = exp_abcd.adapters.build_command(
+                agent,
+                prompt,
+                exp_abcd.AGENT_MODE.get(agent, "full"),
+                cwd=wt,
+                commits_in_worktree=True,
+            )
+            with (Path(root) / "test-spec.log").open("w") as log:
+                proc = subprocess.Popen(
+                    ["bash", "-lc", exp_abcd._wrapped(agent, argv)],
+                    cwd=wt,
+                    env=exp_abcd.adapters.agent_subprocess_env(
+                        agent, exp_abcd.member_environment()
+                    ),
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                try:
+                    rc = proc.wait(timeout=600)
+                except subprocess.TimeoutExpired as exc:
+                    os.killpg(proc.pid, signal.SIGTERM)
+                    try:
+                        proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                        proc.wait()
+                    raise ValueError(
+                        "test derivation agent timed out; process group stopped"
+                    ) from exc
+                finally:
+                    exp_abcd.adapters.record_ledger(agent, count=1, cost_usd=0.0)
+                if rc:
+                    raise ValueError("test derivation agent failed")
+
+        def git(*args):
+            import worktree_git
+
+            result = worktree_git.run(wt, list(args))
+            if result.returncode:
+                raise ValueError("cannot inspect test-spec worktree: " + result.stderr[-500:])
+            return result.stdout.strip()
+
+        raw_command = (wt / "test-command.txt").read_text().strip()
+        command = named_test(f"`{raw_command}`", wt)
+        if command != raw_command:
+            raise ValueError("derivation did not supply one named test command")
+        paths = named_test_paths(command)
+        if len(paths) != 1 or not paths[0].startswith("tests/") or not paths[0].endswith(".py"):
+            raise ValueError("derivation requires one Python test file")
+        path = paths[0]
+        if command != f"pytest {path}":
+            raise ValueError("derived command must be pytest followed by the one test file")
+        if ".." in Path(path).parts or (wt / path).is_symlink():
+            raise ValueError("derived test path escapes worktree")
+        commit = git("rev-parse", "HEAD")
+        changed = git("diff", "--name-only", base_sha, commit).splitlines()
+        if changed != [path] or git("rev-parse", "HEAD^") != base_sha:
+            raise ValueError("derivation must commit only the named test on the frozen base")
+        (wt / "test-command.txt").unlink()
+        if git("status", "--porcelain"):
+            raise ValueError("test derivation left uncommitted changes")
+        report = Path(root) / "test-spec-red.xml"
+        report.unlink(missing_ok=True)
+        runner = _pytest_runner(canon)
+        red = subprocess.run(
+            _red_sandbox(
+                [*runner, path, "-q", "-p", "no:cacheprovider", f"--junitxml={report}"],
+                wt,
+                canon,
+                root,
+            ),
+            cwd=wt,
+            env=_red_environment(agent, root),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        (Path(root) / "test-spec-red.log").write_text(red.stdout + red.stderr)
+        import xml.etree.ElementTree as ET
+
+        cases = list(ET.parse(report).getroot().iter("testcase"))
+        if (
+            red.returncode != 1
+            or not cases
+            or not any(
+                "AssertionError" in (f.text or "") or f.get("message", "").startswith("assert ")
+                for c in cases
+                for f in c.findall("failure")
+            )
+            or any(c.find("error") is not None for c in cases)
+        ):
+            raise ValueError("derived named test did not collect and fail by assertion")
+        if git("status", "--porcelain") or git("rev-parse", "HEAD") != commit:
+            raise ValueError("derived test run mutated the seed")
+        receipt = {
+            "named_test": command,
+            "test_source": "derived",
+            "test_commit": commit,
+            "test_runner": runner,
+            "test_sha256": {path: hashlib.sha256((wt / path).read_bytes()).hexdigest()},
+        }
+        (Path(root) / "test-spec.json").write_text(json.dumps(receipt, indent=2))
+        # The disposable branch can go; comparison arms need this commit to remain reachable.
+        git("update-ref", f"refs/experiment-tests/{exp_id}/{agent}", commit)
+        return receipt
+    finally:
+        # Both commands are attempted even when derivation, validation, or RED times out.
+        removed = provision._run(
+            ["git", "-C", str(canon), "worktree", "remove", "--force", str(wt)], check=False
+        )
+        deleted = provision._run(["git", "-C", str(canon), "branch", "-D", branch], check=False)
+        if removed.returncode or deleted.returncode:
+            raise ValueError("test-spec cleanup failed: " + removed.stderr + deleted.stderr)
 
 
 def producer_summary(exp_dir=None, *, gh_fn=None):
@@ -512,6 +834,9 @@ def producer_summary(exp_dir=None, *, gh_fn=None):
             cells_fresh=state.get("cells_fresh", 0),
             cells_total=state.get("cells_total", 0),
             skips=state.get("skips", {}),
+            no_named_test_classes=state.get("no_named_test_classes", {}),
+            derived_tests=state.get("derived_tests", 0),
+            derive_failed=state.get("derive_failed", 0),
         )
     except (ValueError, OSError):
         metrics["skips"] = {"unreadable_state": 1}
@@ -607,11 +932,21 @@ def main():
     args = parser.parse_args()
     if args.selftest:
         assert draw(3600, 0, 2, DAILY_CAP, random.Random(1))["reason"] == "daily_cap"
-        assert (
-            named_test("`tests/test_a.py::test_x`")
-            == "python3 -m pytest -q tests/test_a.py::test_x"
+        assert named_test("`tests/test_a.py::test_x`") == "pytest tests/test_a.py::test_x"
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            canon = Path(tmp)
+            assert _pytest_runner(canon) == ["/opt/anaconda3/bin/python3", "-m", "pytest"]
+            (canon / "uv.lock").touch()
+            assert _pytest_runner(canon)[:3] == ["uv", "run", "--project"]
+            env = _red_environment("codex", canon)
+            assert env["HOME"] == str(canon)
+            assert env["GIT_CONFIG_VALUE_0"] == "file:///dev/null/orch-no-push"
+            assert "GH_TOKEN" not in env and "META_API_KEY" not in env
+        print(
+            "experiment_producer.py selftest: OK (cap, frozen named test, runner, RED environment)"
         )
-        print("experiment_producer.py selftest: OK (cap and frozen named test)")
     elif args.trial_defaults:
         print(*trial_defaults())
     elif args.trial_verdict:
