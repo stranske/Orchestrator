@@ -49,6 +49,7 @@ import argparse
 import base64
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import time
@@ -1700,6 +1701,7 @@ def review(
 
     rep = {
         "generated_at": now,
+        "review_loop": review_round_snapshot(),
         "adjudicator_shadow": adjudicator_retro.weekly_line(),
         # The live arm (M2 live, #643): new disputes certified and advised once, graded on truth.
         "adjudicator_live": adjudicator_live.weekly_line(),
@@ -1942,6 +1944,26 @@ def strategy_completed_line(result: dict, costs: dict) -> str:
     return f"  strategy experiment: completed {result.get('exp_id')}{score_bit} {cost_bit}"
 
 
+def review_round_snapshot() -> dict:
+    """Observe rounds without creating/migrating the Brain during a report."""
+    import feedback
+
+    try:
+        return {"status": "measured", "rows": feedback.review_round_rows()}
+    except (sqlite3.Error, OSError, ValueError, TypeError) as exc:
+        return {"status": "unmeasured", "reason": type(exc).__name__}
+
+
+def review_loop_share_line(rows) -> str:
+    """Report first-pass advisory acceptance without treating it as merge authority."""
+    # The issue's evaluation cohort is the first twenty opted-in deliveries.
+    first = [row for row in rows if int(row[5]) == 1][:20]
+    if not first:
+        return "  review loop first-pass MERGE-WHEN-GREEN: n/a (0 rounds)"
+    accepted = sum(1 for row in first if row[3] == "MERGE-WHEN-GREEN")
+    return f"  review loop first-pass MERGE-WHEN-GREEN: {accepted}/{len(first)} ({accepted / len(first):.0%})"
+
+
 def format_report(rep: dict) -> str:
     lines = [
         "# Switch review — held switches must be revisited, not forgotten",
@@ -1950,6 +1972,16 @@ def format_report(rep: dict) -> str:
         f"  due for a decision: {rep['raise_count']}",
         "",
     ]
+    loop = rep.get("review_loop") or {}
+    if loop.get("status") == "measured":
+        lines += [review_loop_share_line(loop["rows"]), ""]
+    else:
+        lines += [
+            "  review loop first-pass MERGE-WHEN-GREEN: UNMEASURED ("
+            + str(loop.get("reason", "no snapshot"))
+            + ")",
+            "",
+        ]
     try:
         import strategy_experiment
 
