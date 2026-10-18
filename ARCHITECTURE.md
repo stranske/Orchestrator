@@ -1695,9 +1695,11 @@ they remain in the published block and ride along with a trigger or a refresh on
 The refresh floor is 24 h for non-state diagnostic diffs; comparative/lambda drift and all
 `comparative_*` ranking/reserve row fields do not trigger pushes. They still ship with the next
 trigger or refresh. Worst-case published `used_fraction`/`observed_at` staleness is about 25 h
-(24 h plus one tick) without another trigger, and at most 2 h for a held pool. A state push carries
-fresh numbers. Workflows uses only capacity state; a consumer gating on `observed_at` freshness
-would be misled by this diagnostic age. Posteriors and
+(24 h plus one tick) without another trigger. The 2 h hold bound measures propagation of a
+persistent state change, not absolute diagnostic age: a held row retains its previously
+published numbers, which may already be old. Repeated state flaps can extend that age.
+An accepted state push carries fresh numbers. Workflows uses only capacity state; a consumer
+gating on `observed_at` freshness would be misled by this diagnostic age. Posteriors and
 `exploration.policy_version`
 are untouched by damping. `python3 src/route_weights_export.py --publish-lag` reads the local snapshot
 and fetches the same remote branch into disposable storage, without persistent writes, heartbeats

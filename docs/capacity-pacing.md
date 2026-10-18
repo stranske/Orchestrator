@@ -276,8 +276,10 @@ published `generated_at` is over 24 hours old, or its age is unmeasured, keeping
 inside consumers' 14-day freshness limit when ticks/publication succeed. Unchanged and refresh
 logs print `published_age=<s>/floor=<s>`, including an explicit `refresh` marker when due.
 Worst-case published `used_fraction`/`observed_at` staleness is about 25 h (24 h plus one tick)
-without another trigger, and at most 2 h for a held pool; a state push carries fresh numbers.
-Workflows reads only capacity state; gating on `observed_at` freshness would be misled.
+without another trigger. The 2 h bound for a held pool is persistent state-change propagation,
+not absolute diagnostic age: the retained row may already be old, and repeated state flaps
+can extend that age. An accepted state push carries fresh numbers. Workflows reads only
+capacity state; gating on `observed_at` freshness would be misled.
 This query makes no persistent state or Git-ref writes.
 Check date: 2026-10-19 after one day of production ticks. Successful hourly ticks
 should propagate persistent state changes within two hours; failures/backoff and
