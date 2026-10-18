@@ -59,8 +59,8 @@ in the inner queue's terminal `wait` state. The outer pipeline records this only
 same target, revision, head, durable action ledger and specific source trigger, with
 no uncertain operation. It is neither acceptance nor a fabricated asynchronous
 event. A later cadence prepares fresh source evidence and re-evaluates the target;
-an unverified or changed receipt fails closed. A pre-fix failed action is carried
-forward only when its retained blocked receipt matches this same durable proof;
+an unverified or changed receipt fails closed. A pre-fix failed action may re-enter
+preparation only when its retained blocked receipt matches this same durable proof;
 the historical invalid stop remains in the audit. Reusing an unchanged wait still
 requires fresh campaign admission and matching evidence producer and semantic
 binding. A changed producer or head returns to normal interpretation.

@@ -444,6 +444,34 @@ def _legacy_failed_act_wait_proof(path: Path, target: str, item: Mapping[str, An
     )
 
 
+def _historical_validated_wait_result(
+    previous: Mapping[str, Any], target: str, item: Mapping[str, Any]
+) -> bool:
+    """Identify a stale, audited non-mutating action behind a fresh read result."""
+    results = item.get("results")
+    if not isinstance(results, Mapping):
+        return False
+    prepared = results.get("prepare")
+    act_result = results.get("act")
+    recovered = previous.get("prior_invalid_stop_evidence")
+    return (
+        isinstance(prepared, Mapping)
+        and prepared.get("revision") == item.get("revision")
+        and isinstance(act_result, Mapping)
+        and isinstance(recovered, Mapping)
+        and target in recovered.get("recovered_inner_wait_targets", [])
+        and any(
+            isinstance(record, Mapping)
+            and isinstance(record.get("targets"), Mapping)
+            and isinstance(record["targets"].get(target), Mapping)
+            and record["targets"][target].get("recovery") == "validated_inner_wait"
+            and record["targets"][target].get("act_result") == act_result
+            and record["targets"][target].get("revision") != item.get("revision")
+            for record in previous.get("invalid_stop_history", [])
+        )
+    )
+
+
 def _safe_prior_continuation(
     prior_stop: Mapping[str, Any], previous: Mapping[str, Any], path: Path
 ) -> tuple[bool, bool, set[str]]:
@@ -659,6 +687,55 @@ def _expired_invalid_round_recovery(
                 return False, set(), set(), set(), set(), {}
             retryable.add(target)
         elif (
+            status == "deferred"
+            and stage == "interpret"
+            and item.get("deferred_reason") == "provider_failure"
+        ):
+            interpreted = results.get("interpret")
+            if (
+                not (no_action or _historical_validated_wait_result(previous, target, item))
+                or f"unverified_provider_failure:{target}" in reasons
+                or item.get("provider_outcome_uncertain")
+                or not _valid_provider_failure(item.get("resource_evidence"))
+                or not isinstance(interpreted, Mapping)
+                or interpreted.get("status") != "deferred"
+                or interpreted.get("reason") != "provider_failure"
+                or interpreted.get("resource_evidence") != item.get("resource_evidence")
+                or interpreted.get("next_trigger") != item.get("deferred_next_trigger")
+            ):
+                return False, set(), set(), set(), set(), {}
+            retryable.add(target)
+        elif (
+            status == "deferred"
+            and stage == "act"
+            and item.get("deferred_reason") == "validated_inner_wait"
+        ):
+            resource = item.get("resource_evidence")
+            proof = resource.get("inner_wait") if isinstance(resource, Mapping) else None
+            prepared = results.get("prepare")
+            snapshot = prepared.get("snapshot") if isinstance(prepared, Mapping) else None
+            act_result = results.get("act")
+            if (
+                f"unverified_inner_wait:{target}" in reasons
+                or not isinstance(act_result, Mapping)
+                or act_result.get("status") != "deferred"
+                or act_result.get("reason") != "validated_inner_wait"
+                or act_result.get("resource_evidence") != resource
+                or act_result.get("next_trigger") != item.get("deferred_next_trigger")
+                or not _valid_inner_wait(
+                    path,
+                    target,
+                    item.get("revision"),
+                    snapshot,
+                    proof.get("reason") if isinstance(proof, Mapping) else None,
+                    item.get("deferred_next_trigger"),
+                    proof,
+                    now=lambda: historical_now,
+                )
+            ):
+                return False, set(), set(), set(), set(), {}
+            waits.add(target)
+        elif (
             status == "failed"
             and stage in {"prepare", "interpret", "exception"}
             and no_action
@@ -708,31 +785,15 @@ def _expired_invalid_round_recovery(
                 expected.add(active_reason)
         elif status == "pending" and stage in {"prepare", "interpret", "exception"}:
             if not no_action:
-                prepared = results.get("prepare")
                 interpreted = results.get("interpret")
-                act_result = results.get("act")
-                recovered = previous.get("prior_invalid_stop_evidence", {})
                 historical_wait = (
                     stage == "interpret"
-                    and isinstance(prepared, Mapping)
-                    and prepared.get("revision") == item.get("revision")
                     and isinstance(interpreted, Mapping)
                     and interpreted.get("status") == "pending"
                     and interpreted.get("pending_kind") == item.get("pending_kind")
                     and interpreted.get("pending_evidence") == item.get("pending_evidence")
                     and interpreted.get("next_trigger") == item.get("deferred_next_trigger")
-                    and isinstance(recovered, Mapping)
-                    and target in recovered.get("recovered_inner_wait_targets", [])
-                    and isinstance(act_result, Mapping)
-                    and any(
-                        isinstance(record, Mapping)
-                        and isinstance(record.get("targets"), Mapping)
-                        and isinstance(record["targets"].get(target), Mapping)
-                        and record["targets"][target].get("recovery") == "validated_inner_wait"
-                        and record["targets"][target].get("act_result") == act_result
-                        and record["targets"][target].get("revision") != item.get("revision")
-                        for record in previous.get("invalid_stop_history", [])
-                    )
+                    and _historical_validated_wait_result(previous, target, item)
                 )
                 if not historical_wait and not _retained_blocked_act_wait_proof(path, target, item):
                     return False, set(), set(), set(), set(), {}
@@ -1141,34 +1202,45 @@ def _run_pipeline_impl(
             if prior_invalid_stop_evidence is not None:
                 run["prior_invalid_stop_evidence"] = prior_invalid_stop_evidence
                 if recovered_wait_targets and previous is not None:
+                    wait_records: dict[str, dict[str, Any]] = {}
+                    for target in sorted(recovered_wait_targets):
+                        old_item = previous["targets"][target]
+                        old_results = old_item["results"]
+                        old_act = old_results["act"]
+                        old_resource = old_item.get("resource_evidence")
+                        old_proof = (
+                            old_resource.get("inner_wait")
+                            if isinstance(old_resource, Mapping)
+                            else None
+                        )
+                        old_receipt = old_act.get("queue_receipt")
+                        receipt_hash = (
+                            _digest(old_receipt)
+                            if isinstance(old_receipt, Mapping)
+                            else (
+                                old_proof.get("receipt_sha256")
+                                if isinstance(old_proof, Mapping)
+                                else None
+                            )
+                        )
+                        wait_records[target] = {
+                            "previous_error": old_item.get("error"),
+                            "revision": old_item.get("revision"),
+                            "head": old_results["prepare"]["snapshot"].get("head"),
+                            "reason": old_act.get("reason"),
+                            "next_trigger": old_act.get("next_trigger"),
+                            "inner_path": str(
+                                path.parent / f"{path.stem}.actions" / f"{_digest(target)}.json"
+                            ),
+                            "receipt_sha256": receipt_hash,
+                        }
                     run["recovered_invalid_stop"] = {
                         "schema": "closer-recovered-inner-wait/v1",
                         "previous_run_id": previous_run_id,
                         "prior_stop_reasons": (
                             list(prior_stop.get("reasons", [])) if prior_stop is not None else []
                         ),
-                        "targets": {
-                            target: {
-                                "previous_error": previous["targets"][target]["error"],
-                                "revision": previous["targets"][target].get("revision"),
-                                "head": previous["targets"][target]["results"]["prepare"][
-                                    "snapshot"
-                                ].get("head"),
-                                "reason": previous["targets"][target]["results"]["act"].get(
-                                    "reason"
-                                ),
-                                "next_trigger": previous["targets"][target]["results"]["act"].get(
-                                    "next_trigger"
-                                ),
-                                "inner_path": str(
-                                    path.parent / f"{path.stem}.actions" / f"{_digest(target)}.json"
-                                ),
-                                "receipt_sha256": _digest(
-                                    previous["targets"][target]["results"]["act"]["queue_receipt"]
-                                ),
-                            }
-                            for target in sorted(recovered_wait_targets)
-                        },
+                        "targets": wait_records,
                     }
             if previous is not None:
                 prior_history = previous.get("invalid_stop_history", [])

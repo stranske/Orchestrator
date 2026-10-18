@@ -403,6 +403,179 @@ def test_expired_invalid_round_accepts_mixed_historically_valid_capacity(tmp_pat
     assert sorted(called) == ["owner/repo#capacity-0", "owner/repo#deadline-0"]
 
 
+def test_expired_invalid_round_accepts_only_native_proven_provider_failure(tmp_path):
+    path = tmp_path / "pipeline.json"
+    at = 1_800_000_000.0
+    interrupted_round_fixture(path, at)
+    target = "owner/repo#deadline-0"
+    state = closer_pipeline._load(path)
+    old = state["runs"]["interrupted"]
+    failure = {
+        "profile_id": "low-a",
+        "agent": "Gemini",
+        "run_id": "native-run-123",
+        "category": "transport",
+        "evidence_hash": "e" * 64,
+        "exit": 70,
+    }
+    value = {
+        "status": "deferred",
+        "reason": "provider_failure",
+        "next_trigger": "retry_other_low_profile",
+        "resource_evidence": {"provider_failure": failure},
+    }
+    old["targets"][target].update(
+        deferred_reason="provider_failure",
+        deferred_next_trigger=value["next_trigger"],
+        resource_evidence=value["resource_evidence"],
+        results={"interpret": value},
+    )
+    closer_pipeline._save(path, state)
+    prior = validate_stop(path, old["assignment"], now=lambda: at)
+    assert not prior["valid"]
+    assert f"unverified_provider_failure:{target}" not in prior["reasons"]
+    assert closer_pipeline._expired_invalid_round_recovery(
+        prior,
+        old,
+        path,
+        "interrupted",
+        at,
+    )[0]
+    bad_old = closer_pipeline._bounded(old)
+    bad_old["targets"][target]["resource_evidence"]["provider_failure"]["exit"] = 0
+    bad_old["targets"][target]["results"]["interpret"]["resource_evidence"]["provider_failure"][
+        "exit"
+    ] = 0
+    assert not closer_pipeline._expired_invalid_round_recovery(
+        prior,
+        bad_old,
+        path,
+        "interrupted",
+        at,
+    )[0]
+    called = []
+    cb = callbacks(
+        act=lambda name, _ctx: called.append(name)
+        or {
+            "status": "completed",
+            "target_complete": True,
+        }
+    )
+    result = run(path, [target], cb, seconds=10, now=lambda: at)
+    assert result.get("status") != "blocked"
+    assert called == [target]
+
+
+def test_expired_invalid_round_carries_real_validated_inner_wait(tmp_path):
+    path = tmp_path / "pipeline.json"
+    target = "owner/repo#failed-act-0"
+    revision = "rev-wait"
+    head = "a" * 40
+    trigger = "source owner supplies current-head proof or resolves the named finding"
+    inner_path = path.parent / f"{path.stem}.actions" / f"{closer_pipeline._digest(target)}.json"
+    receipt = closer_queue.run_round(
+        inner_path,
+        [target],
+        lambda _target: {
+            "target": target,
+            "revision": revision,
+            "action": "wait",
+            "eligible": False,
+            "requires_coordinator": False,
+            "reason": "worker_json_invalid",
+            "next_trigger": trigger,
+            "evidence": {"head": head, "labels": [], "sources": []},
+        },
+        lambda *_args: pytest.fail("wait cannot execute"),
+        deadline=time.time() + 30,
+        max_workers=1,
+        max_passes=1,
+    )
+    proof = {
+        "schema": closer_pipeline.INNER_WAIT_SCHEMA,
+        "target": target,
+        "revision": revision,
+        "head": head,
+        "reason": "worker_json_invalid",
+        "next_trigger": trigger,
+        "inner_path": str(inner_path),
+        "receipt_sha256": closer_pipeline._digest(receipt),
+    }
+    at = time.time() + 10
+    interrupted_round_fixture(path, at)
+    state = closer_pipeline._load(path)
+    old = state["runs"]["interrupted"]
+    old["targets"][target] = {
+        "status": "deferred",
+        "stage": "act",
+        "revision": revision,
+        "identity": target,
+        "deferred_reason": "validated_inner_wait",
+        "deferred_next_trigger": trigger,
+        "resource_evidence": {"inner_wait": proof},
+        "results": {
+            "prepare": {
+                "revision": revision,
+                "snapshot": {
+                    "target": target,
+                    "revision": revision,
+                    "head": head,
+                    "kind": "pr",
+                },
+            },
+            "act": {
+                "status": "deferred",
+                "reason": "validated_inner_wait",
+                "next_trigger": trigger,
+                "resource_evidence": {"inner_wait": proof},
+            },
+        },
+        "metrics": {"waits": 0, "errors": 0},
+    }
+    closer_pipeline._save(path, state)
+    prior = validate_stop(path, old["assignment"], now=lambda: at)
+    assert not prior["valid"]
+    assert f"unverified_inner_wait:{target}" not in prior["reasons"]
+    assert closer_pipeline._expired_invalid_round_recovery(
+        prior,
+        old,
+        path,
+        "interrupted",
+        at,
+    )[0]
+    called = []
+    failure = {
+        "profile_id": "low-a",
+        "agent": "Gemini",
+        "run_id": "native-run-456",
+        "category": "transport",
+        "evidence_hash": "f" * 64,
+        "exit": 70,
+    }
+    provider_wait = {
+        "status": "deferred",
+        "reason": "provider_failure",
+        "next_trigger": "retry_other_low_profile",
+        "resource_evidence": {"provider_failure": failure},
+    }
+    cb = callbacks(
+        interpret=lambda _name, _ctx: provider_wait,
+        act=lambda name, _ctx: called.append(name)
+        or {
+            "status": "completed",
+            "target_complete": True,
+        },
+    )
+    result = run(path, [target], cb, seconds=10, now=lambda: at)
+    assert result.get("status") != "blocked"
+    assert result["targets"][target]["deferred_reason"] == "provider_failure"
+    assert called == []
+    cb["interpret"] = lambda _name, _ctx: {"substantive_needs": []}
+    result = run(path, [target], cb, seconds=10, now=lambda: at + 20)
+    assert result.get("status") != "blocked"
+    assert called == [target]
+
+
 @pytest.mark.parametrize(
     ("reason", "labels"),
     [
