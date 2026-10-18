@@ -4,10 +4,13 @@ import json
 import sqlite3
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
+from capability_dispatch_fixture import local_dispatch
 
 import capabilities
+import capability_targets
 import execution_profiles
 import feedback
 
@@ -76,6 +79,7 @@ def _episode(
         accepted=True,
         producer="selftest",
         attempt_id=attempt_id,
+        receipt_ref="fixture:consumed-output",
     )
     feedback.record_outcome(
         run_id,
@@ -170,6 +174,7 @@ def test_consumption_requires_an_exact_target_event(tmp_path, monkeypatch):
             target_run_id="work:missing",
             accepted=True,
             producer="selftest",
+            receipt_ref="fixture:consumed-output",
         )
 
 
@@ -439,6 +444,109 @@ def test_profile_decision_attaches_only_real_matching_attempt(tmp_path, monkeypa
         feedback.attach_profile_attempt_to_decision(envelope["decision_id"], other_attempt)
 
 
+def test_router_plan_selection_metadata_without_exercised_credit(tmp_path, monkeypatch):
+    import dispatcher
+    import router
+
+    cap = capabilities._blank_capability("selection-credit")
+    cap.update(
+        {
+            "status": "active",
+            "owner": "orchestrator",
+            "matcher": {"repository": "owner/repo", "task_types": ["implement"]},
+            "entrypoint": "fixture.py:run",
+            "trigger_cadence": "per matching task",
+            "output_artifact": "fixture-result.json",
+            "downstream_consumer": "dispatcher.py",
+            "learning_sink": "feedback capability joins",
+            "last_match": NOW,
+            "last_invocation": NOW,
+            "last_success": NOW,
+            "kill_switch": "ORCH_FIXTURE=0",
+            "rollback": {"transition": "retired", "predecessor": "baseline"},
+            "outcome_links": ["outcome:baseline"],
+            "activation_evidence": {
+                probe: {"passed": True, "checked_at": NOW, "ref": f"baseline:{probe}"}
+                for probe in capabilities.ACTIVE_PROBES
+            },
+            "expiry": NOW + 86400,
+            "capability_version_id": "capability-version:selection-credit",
+            "artifact_hash": "sha256:artifact",
+            "lifecycle_policy_hash": "sha256:policy",
+        }
+    )
+    ledger = tmp_path / "capabilities.json"
+    ledger.write_text(
+        json.dumps(
+            {
+                "schema_version": capabilities.SCHEMA_VERSION,
+                "capabilities": {cap["capability_id"]: cap},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(capabilities, "REG", ledger)
+    monkeypatch.setattr(capabilities.load, "__defaults__", (ledger,))
+    monkeypatch.setattr(capabilities.load_declared, "__defaults__", (ledger,))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setattr(router.claims, "active_claims", lambda: {})
+    result = router.plan(
+        [{"target": "owner/repo#23", "task_type": "implement", "lane": "opener"}],
+        {"agents": {"codex": {"state": "ok"}}},
+        dry_run=True,
+        now=NOW,
+    )
+    assignment = result["assignments"][0]
+    assert assignment["selected_capability_id"] == cap["capability_id"]
+    assert assignment["selected_capability_version_id"] == cap["capability_version_id"]
+    assert assignment["capability_ids"] == []
+    assert assignment["capability_version_ids"] == []
+    # Exercise the real planning/spawn/writer seams; this selected capability has
+    # no compiled binding and therefore cannot produce a consumption receipt.
+    assignment["selected_profile_id"] = None
+    with local_dispatch(tmp_path) as worker, patch.object(
+        capability_targets, "invoke_target"
+    ) as invoke:
+        dispatch = dispatcher.plan_dispatch(assignment)
+        assert dispatch["capability_ids"] == []
+        assert dispatch["capability_version_ids"] == []
+        dispatch["run_id"] = "selection-only"
+        assert dispatcher._spawn(dispatch) == 1234
+        assert worker.call_count == 1
+        invoke.assert_not_called()
+    with feedback._conn() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM influence_edges WHERE target_run_id=? AND influence_type='capability' AND accepted=1",
+            ("selection-only",),
+        ).fetchone()[0]
+        metadata = json.loads(
+            conn.execute(
+                "SELECT routing_metadata FROM runs WHERE run_id=?", ("selection-only",)
+            ).fetchone()[0]
+        )
+        decisions = conn.execute(
+            "SELECT phase,capability_id,capability_version_id,payload_json "
+            "FROM completion_events WHERE run_id=? AND event_type='decision'",
+            ("selection-only",),
+        ).fetchall()
+    assert count == 0
+    assert len(decisions) == 2
+    assert {row[0] for row in decisions} == {"trigger", "decision"}
+    for _, capability_id, version_id, payload_json in decisions:
+        assert capability_id is None
+        assert version_id is None
+        assert json.loads(payload_json)["capability_ids"] == []
+    assert metadata["selected_capability_id"] == cap["capability_id"]
+    assert metadata["selected_capability_version_id"] == cap["capability_version_id"]
+    assert metadata["capability_dispatch_result"] == {
+        "invoked": False,
+        "accepted": False,
+        "reason": "target_binding_missing",
+    }
+    assert metadata["capability_fallback"] == "baseline"
+    assert metadata["capability_decision"] == assignment["capability_decision"]
+
+
 def test_pending_durability_is_not_a_failure_or_promotion_vote(tmp_path, monkeypatch):
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
     ledger = tmp_path / "capabilities.json"
@@ -452,6 +560,7 @@ def test_pending_durability_is_not_a_failure_or_promotion_vote(tmp_path, monkeyp
         target_run_id=run_id,
         accepted=True,
         producer="selftest",
+        receipt_ref="fixture:consumed-output",
     )
     feedback.record_outcome(run_id, adjudicated_verdict="PASS", merged=True)
     result = capabilities.reconcile_causal_lifecycle(
@@ -460,3 +569,69 @@ def test_pending_durability_is_not_a_failure_or_promotion_vote(tmp_path, monkeyp
     assert result["status"] == "canary"
     assert result["routing_prior"]["observations"] == 0
     assert result["readiness"]["failures"] == 0
+
+
+def test_selection_pairs_without_receipt_cannot_bypass_brain_writer(tmp_path, monkeypatch):
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    cap = _register(tmp_path / "capabilities.json")
+    feedback.record_run(
+        "selection:forwarded-pair",
+        "owner/repo#23",
+        "implement",
+        "codex",
+        capability_ids=[cap["capability_id"]],
+        capability_version_ids=[cap["capability_version_id"]],
+    )
+    with pytest.raises(ValueError, match="requires a consumer receipt"):
+        feedback.record_capability_consumption(
+            capability_id=cap["capability_id"],
+            capability_version_id=cap["capability_version_id"],
+            source_run_id="capability-producer:unexecuted",
+            target_run_id="selection:forwarded-pair",
+            accepted=True,
+            producer="capability_lifecycle:active",
+        )
+    with feedback._conn() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM influence_edges WHERE target_run_id=? "
+            "AND influence_type='capability' AND accepted=1",
+            ("selection:forwarded-pair",),
+        ).fetchone()[0]
+    assert count == 0
+
+
+@pytest.mark.parametrize(
+    "producer", ["orchestrator", "arbitrary", "capability_lifecycle:active", "triage_consumption"]
+)
+def test_receipt_requirement_cannot_be_disabled_by_producer_name(tmp_path, monkeypatch, producer):
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    feedback.record_run("receiptless", "owner/repo#23", "implement", "codex")
+    with pytest.raises(ValueError, match="requires a consumer receipt"):
+        feedback.record_capability_consumption(
+            capability_id="selection-credit",
+            capability_version_id="cv:selection",
+            source_run_id="producer",
+            target_run_id="receiptless",
+            accepted=True,
+            producer=producer,
+        )
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 0
+
+
+def test_selected_builtin_pair_is_not_independent_instrumentation(tmp_path, monkeypatch):
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    feedback.record_run(
+        "selection:builtin",
+        "owner/repo#23",
+        "implement",
+        "codex",
+        capability_ids=["role-triage", "offload"],
+        capability_version_ids=["cv:triage", "cv:offload"],
+        routing_metadata={"selected_capability_id": "role-triage"},
+    )
+    with feedback._conn() as conn:
+        credited = conn.execute(
+            "SELECT capability_id FROM influence_edges WHERE accepted=1"
+        ).fetchall()
+    assert credited == [("offload",)]

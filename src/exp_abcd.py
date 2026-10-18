@@ -809,7 +809,25 @@ def prepare_arms(
             raise ValueError("unknown producer")
         if not spec.strip() or spec_provenance.is_missing_spec({}, spec):
             raise MissingSpecNotEvaluableError("producer requires frozen issue body")
+        import experiment_producer
+
+        try:
+            frozen = experiment_producer.freeze_test(
+                repo,
+                spec,
+                exp_id,
+                members[0]["agent"],
+                base_sha,
+                root=edir,
+            )
+        except Exception as exc:
+            raise experiment_producer.FrozenTestError(
+                f"could not freeze named test: {exc}"
+            ) from exc
         meta.update(producer_metadata)
+        meta.update(frozen)
+        spec += "\n\nFrozen judging command: `" + frozen["named_test"] + "`\n"
+        (edir / "spec.md").write_text(spec)
         meta["spec_sha256"] = hashlib.sha256(spec.encode()).hexdigest()
     (edir / "meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True))
 
@@ -836,10 +854,22 @@ def prepare_arms(
                     "-b",
                     br,
                     str(wt),
-                    f"origin/{base}",
+                    (
+                        str(meta.get("test_commit") or base_sha)
+                        if producer_metadata
+                        else f"origin/{base}"
+                    ),
                 ]
             )
+        frozen_hashes = meta.get("test_sha256")
+        if isinstance(frozen_hashes, dict):
+            for path, digest in frozen_hashes.items():
+                if hashlib.sha256((wt / path).read_bytes()).hexdigest() != digest:
+                    raise ValueError("frozen test differs in comparison worktree")
         prompt = implement_prompt(spec)
+        if meta.get("test_commit"):
+            prompt += "\nThe committed named test is frozen. Do not edit or remove it."
+
         if brief := next(
             (a.get("brief") for a in normalized_arms if a["arm_id"] == member["arm_id"]), None
         ):
@@ -913,6 +943,7 @@ def prepare_arms(
         "base_sha": base_sha or None,
         "launched": launched,
         "arms": normalized_arms,
+        **({"test_source": meta["test_source"]} if producer_metadata else {}),
     }
 
 

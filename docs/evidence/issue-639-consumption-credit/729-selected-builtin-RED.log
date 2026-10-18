@@ -1,0 +1,27 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________ test_selected_builtin_pair_is_not_independent_instrumentation _________
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-6478/test_selected_builtin_pair_is_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10809fad0>
+
+    def test_selected_builtin_pair_is_not_independent_instrumentation(tmp_path, monkeypatch):
+        monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+        feedback.record_run(
+            "selection:builtin", "owner/repo#23", "implement", "codex",
+            capability_ids=["role-triage", "offload"],
+            capability_version_ids=["cv:triage", "cv:offload"],
+            routing_metadata={"selected_capability_id": "role-triage"},
+        )
+        with feedback._conn() as conn:
+            credited = conn.execute("SELECT capability_id FROM influence_edges WHERE accepted=1").fetchall()
+>       assert credited == [("offload",)]
+E       AssertionError: assert [('offload',)...ole-triage',)] == [('offload',)]
+E         
+E         Left contains one more item: ('role-triage',)
+E         Use -v to get more diff
+
+tests/test_capability_causal_core.py:621: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_capability_causal_core.py::test_selected_builtin_pair_is_not_independent_instrumentation
+1 failed in 0.29s
