@@ -252,12 +252,13 @@ def _pr_head_branch(repo: str, num: int) -> str:
 
 
 def _live_holder_pids(holder: Path) -> set[str]:
-    """Inspect argv and cwd, retaining both lexical and canonical holder paths."""
-    roots = {holder, Path(os.path.realpath(holder))}
+    """Inspect cwd and argv using canonical path components, never string prefixes."""
+    root = Path(os.path.realpath(holder))
+    roots = {holder, root}
 
     def within(path: str) -> bool:
-        candidates = {Path(path), Path(os.path.realpath(path))}
-        return any(p == root or root in p.parents for p in candidates for root in roots)
+        candidate = Path(os.path.realpath(path))
+        return candidate == root or root in candidate.parents
 
     def probe(args: list[str], *, no_matches: bool = False) -> str:
         try:
@@ -289,11 +290,11 @@ def _live_holder_pids(holder: Path) -> set[str]:
             pids.add(pid)
     if pids:
         return pids
-    for root in sorted(roots):
-        pids.update(probe(["pgrep", "-f", re.escape(str(root))], no_matches=True).split())
-        if pids:
-            return pids
-    # ps exposes argv aliases that cannot be found by searching for git's resolved path.
+    # pgrep is only a candidate search: its regex also finds sibling prefixes such
+    # as wt__10 for wt__1. Validate every candidate through the argv scan below.
+    # Scan all ps rows as well, since aliases need not contain either holder spelling.
+    for spelling in sorted(roots):
+        probe(["pgrep", "-f", re.escape(str(spelling))], no_matches=True)
     for line in probe(["ps", "-axo", "pid=,command="]).splitlines():
         fields = line.strip().split(None, 1)
         if len(fields) != 2:

@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -112,7 +113,9 @@ def test_b_dirty_holder_is_refused(layout, lane):
 
 def test_c_live_holder_is_refused_naming_pid(layout):
     holder = hold(layout)
-    proc = subprocess.Popen(["/bin/sh", "-c", f"sleep 300 # {holder}"], start_new_session=True)
+    proc = subprocess.Popen(
+        ["/bin/sh", "-c", f"sleep 300 # {shlex.quote(str(holder))}"], start_new_session=True
+    )
     try:
         deadline = time.monotonic() + 3
         while True:
@@ -189,7 +192,20 @@ def test_f_cwd_only_live_holder_is_refused_naming_pid(layout, nested):
         proc.wait(timeout=5)
 
 
-def test_g_symlink_alias_in_argv_is_refused(layout, tmp_path):
+@pytest.mark.parametrize("lsof_mode", ["available", "no-matches", "missing"])
+def test_g_symlink_alias_in_argv_is_refused(layout, tmp_path, monkeypatch, lsof_mode):
+    if lsof_mode == "available" and shutil.which("lsof") is None:
+        pytest.skip("lsof is not installed")
+    run = provision._run
+
+    def probe(args, **kwargs):
+        if args[0] == "lsof" and lsof_mode == "missing":
+            raise FileNotFoundError("lsof missing")
+        if args[0] == "lsof" and lsof_mode == "no-matches":
+            return subprocess.CompletedProcess(args, 1, "", "")
+        return run(args, **kwargs)
+
+    monkeypatch.setattr(provision, "_run", probe)
     holder = hold(layout)
     alias = tmp_path / "alias"
     alias.symlink_to(holder, target_is_directory=True)
@@ -202,8 +218,13 @@ def test_g_symlink_alias_in_argv_is_refused(layout, tmp_path):
     try:
         with pytest.raises(RuntimeError) as caught:
             provision.provision(TARGET, "closer")
-        assert str(proc.pid) in str(caught.value)
-        assert "live pid" in str(caught.value)
+        if lsof_mode == "missing":
+            # Losing cwd inspection must still refuse, even if argv could be scanned.
+            assert "cannot check live processes" in str(caught.value)
+            assert "lsof missing" in str(caught.value)
+        else:
+            assert str(proc.pid) in str(caught.value)
+            assert "live pid" in str(caught.value)
         assert holder.exists()
         assert proc.poll() is None
     finally:
@@ -321,11 +342,16 @@ def test_lsof_no_matches_allows_idle_holder(tmp_path, monkeypatch):
     assert provision._live_holder_pids(tmp_path) == set()
 
 
-def test_argv_probe_resolves_symlink_alias(tmp_path, monkeypatch):
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("option", [False, True])
+def test_argv_probe_resolves_symlink_alias(tmp_path, monkeypatch, nested, option):
     holder = tmp_path / "real"
     holder.mkdir()
     alias = tmp_path / "alias"
     alias.symlink_to(holder, target_is_directory=True)
+    argument = str(alias / "nested" if nested else alias)
+    if option:
+        argument = "--worktree=" + argument
 
     def probe(args, **kwargs):
         if args[0] == "lsof":
@@ -333,7 +359,7 @@ def test_argv_probe_resolves_symlink_alias(tmp_path, monkeypatch):
         if args[0] == "pgrep":
             return subprocess.CompletedProcess(args, 1, "", "")
         assert args[0] == "ps"
-        return subprocess.CompletedProcess(args, 0, f"42 python worker.py {alias}\n", "")
+        return subprocess.CompletedProcess(args, 0, f"42 python worker.py {argument}\n", "")
 
     monkeypatch.setattr(provision, "_run", probe)
     assert provision._live_holder_pids(holder) == {"42"}
@@ -350,6 +376,10 @@ def test_live_probe_result_refuses_reclaim(layout, monkeypatch):
         if args[0] == "pgrep":
             assert args == ["pgrep", "-f", re.escape(str(holder))]
             return subprocess.CompletedProcess(args, 0, "12345\n", "")
+        if args[0] == "ps":
+            return subprocess.CompletedProcess(
+                args, 0, f"12345 python worker.py {shlex.quote(str(holder))}\n", ""
+            )
         return run(args, **kwargs)
 
     monkeypatch.setattr(provision, "_run", probe)
@@ -451,3 +481,22 @@ def test_report_cli_honors_temporary_ledger_env():
     )
     assert "unmeasured: no ledger" in result.stdout
     assert "over 2d" in result.stdout
+
+
+@pytest.mark.parametrize("pgrep_match", [False, True])
+def test_argv_sibling_prefix_is_not_a_live_holder(tmp_path, monkeypatch, pgrep_match):
+    holder = tmp_path / "wt__1"
+    sibling = tmp_path / "wt__10"
+
+    def probe(args, **kwargs):
+        if args[0] == "lsof":
+            return subprocess.CompletedProcess(args, 1, "", "")
+        if args[0] == "pgrep":
+            return subprocess.CompletedProcess(
+                args, 0 if pgrep_match else 1, "42\n" if pgrep_match else "", ""
+            )
+        assert args[0] == "ps"
+        return subprocess.CompletedProcess(args, 0, f"42 python {sibling}/worker.py\n", "")
+
+    monkeypatch.setattr(provision, "_run", probe)
+    assert provision._live_holder_pids(holder) == set()
