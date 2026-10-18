@@ -76,7 +76,17 @@ def test_probation_is_only_for_the_default_panel():
     assert [s["agent"] for s in explicit] == ["codex"]
 
 
-def test_muse_evaluator_command_is_toolless_private_and_reduced_to_terminal_text(tmp_path):
+def test_muse_evaluator_command_is_toolless_private_and_reduced_to_terminal_text(
+    tmp_path, monkeypatch
+):
+    # Command construction uses the real runtime-prelude builder, but never a real login.
+    real_home = tmp_path / "home"
+    login = real_home / ".config" / "muse" / "auth.json"
+    login.parent.mkdir(parents=True)
+    (real_home / "Library" / "Keychains").mkdir(parents=True)
+    login.write_text("{}")
+    monkeypatch.setattr(exp_abcd.dispatcher, "REAL_HOME", real_home)
+    monkeypatch.setattr(exp_abcd.dispatcher, "AGENT_RUNTIME_DIR", tmp_path / "runtime")
     prompt = tmp_path / "p.txt"
     prompt.write_text("judge these")
     command = exp_abcd._eval_command("muse", str(prompt), tmp_path / "ws")
