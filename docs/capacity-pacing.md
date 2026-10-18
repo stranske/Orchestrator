@@ -258,10 +258,19 @@ snapshot do not count as another tick. The tick records observations independent
 of publication backoff and prints `local`, `published` and `seen=<n>/2` when held.
 
 Read-only check: `python3 src/route_weights_export.py --publish-lag`. Each pool prints
-`pool <p>: local=<state> published=<state> published_age=<s>s lag=<ok|STALE>`.
+`pool <p>: local=<state> published=<state> published_age=<s>s lag=<ok|STALE|held(n/2)>`.
+`published_age` measures the artifact `generated_at`; `observed_age` additionally labels the
+pool observation age. Mismatches beyond `PUBLISH_LAG_STALE_S=7200` seconds are stale; a fresh
+first tick prints `held(1/2)`. Unmeasured ages print `unmeasured` without a seconds suffix.
 `all pools in sync` appears only when every state matches; failed remote reads show
-`published=unmeasured`. Observation age alone is not lag: unchanged semantic output
-does not cause a push. This query makes no persistent state or Git-ref writes.
+`published=unmeasured`. Observation age alone is not lag. Immediate capacity triggers are
+the damped `state`,
+`period_end`, and `resets_available`; existing non-capacity triggers such as learned weights
+remain immediate. Usage fractions, routing weights, period starts, reset expiries, reserve,
+measurement/source/staleness and burn diagnostics remain published but cannot trigger a push.
+A refresh carries those fields once the published `generated_at` is over 24 hours old
+(`PUBLISH_REFRESH_FLOOR_S`), keeping a quiet fleet inside consumers' 14-day freshness limit.
+This query makes no persistent state or Git-ref writes.
 Check date: 2026-10-19 after one day of production ticks. Successful hourly ticks
 should propagate persistent state changes within two hours; failures/backoff and
 disabled publication can extend that bound.

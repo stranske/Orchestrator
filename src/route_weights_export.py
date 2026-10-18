@@ -39,6 +39,8 @@ EXPORT_BRANCH = "exports/route-weights"
 EXPORT_PATH = Path("config/route-weights.json")
 CAPACITY_TICK_FILE = "route-weights-capacity-ticks.json"
 CAPACITY_TICK_MAX_AGE = 2 * 3600
+PUBLISH_LAG_STALE_S = 7200
+PUBLISH_REFRESH_FLOOR_S = 24 * 3600
 WEEK_SECONDS = 7 * 86400
 # Owner q-1ca1d09d255e987b (2026-10-17): extend once if either policy is under-sampled.
 EXPLORATION_WINDOW_END = "20261117"
@@ -301,6 +303,25 @@ def _read_object(path: Path) -> dict:
         return {}
 
 
+def _seen_count(tick: dict) -> int:
+    try:
+        return max(0, min(2, int(tick.get("seen", 0))))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _artifact_age(document: dict, now: int) -> int | None:
+    try:
+        generated = dt.datetime.fromisoformat(document["generated_at"].replace("Z", "+00:00"))
+        return max(0, int(now - generated.timestamp()))
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
+def _age_text(age: int | None) -> str:
+    return "unmeasured" if age is None else f"{age}s"
+
+
 def record_capacity_tick(state_dir: Path, *, now: int | None = None) -> bool:
     """Observe the tick-written local snapshot once, independently of publication retries.
 
@@ -324,7 +345,7 @@ def record_capacity_tick(state_dir: Path, *, now: int | None = None) -> bool:
                 and isinstance(old.get("observed_at"), (int, float))
                 and 0 <= observed - old["observed_at"] <= CAPACITY_TICK_MAX_AGE
             ):
-                seen = min(2, int(old.get("seen", 0)))
+                seen = _seen_count(old)
                 if observed > old["observed_at"]:
                     seen = min(2, seen + 1)
             ticks[pool] = {"state": row["state"], "observed_at": observed, "seen": seen}
@@ -357,7 +378,7 @@ def damp_capacity_states(
             and isinstance(tick.get("observed_at"), (int, float))
             and 0 <= current - tick["observed_at"] <= CAPACITY_TICK_MAX_AGE
         ):
-            seen = min(2, int(tick.get("seen", 0)))
+            seen = _seen_count(tick)
         if seen < 2:
             print(
                 f"[cadence] capacity publish held: {pool} local={row.get('state')} "
@@ -410,7 +431,7 @@ def read_published_export(*, remote_url="https://github.com/stranske/Orchestrato
         return value
 
 
-def publish_lag(*, now: int | None = None) -> None:
+def publish_lag(*, now: int | None = None, state_dir: Path | None = None) -> None:
     """Read-only state comparison. Artifact age alone is not semantic lag."""
     current = int(dt.datetime.now(dt.timezone.utc).timestamp()) if now is None else now
     local = _read_object(capacity.OUT)
@@ -423,6 +444,10 @@ def publish_lag(*, now: int | None = None) -> None:
         max(0, int(current - local_time)) if isinstance(local_time, (int, float)) else "unmeasured"
     )
     print(f"local capacity age={local_age}s")
+    ticks = _read_object(
+        (state_dir or Path.home() / ".codex" / "orchestrator") / CAPACITY_TICK_FILE
+    )
+    published_age = _artifact_age(published, current)
     block = _capacity_block(local)
     in_sync = bool(published) and bool(local)
     for pool, row in block.items():
@@ -434,9 +459,34 @@ def publish_lag(*, now: int | None = None) -> None:
         )
         matches = bool(local) and row["state"] == state
         in_sync = in_sync and matches
+        tick = ticks.get(pool, {})
+        held = (
+            not matches
+            and state != "unmeasured"
+            and isinstance(tick, dict)
+            and tick.get("state") == row["state"]
+            and isinstance(tick.get("observed_at"), (int, float))
+            and 0 <= current - tick["observed_at"] <= PUBLISH_LAG_STALE_S
+            and _seen_count(tick) < 2
+        )
+        lag = (
+            f"held({_seen_count(tick)}/2)"
+            if held
+            else (
+                "ok"
+                if matches
+                or (
+                    state != "unmeasured"
+                    and published_age is not None
+                    and published_age <= PUBLISH_LAG_STALE_S
+                )
+                else "STALE"
+            )
+        )
         print(
-            f"pool {pool}: local={row['state']} published={state} published_age={age}s "
-            f"lag={'ok' if matches else 'STALE'}"
+            f"pool {pool}: local={row['state']} published={state} "
+            f"published_age={_age_text(published_age)} lag={lag} "
+            f"observed_age={_age_text(age if isinstance(age, int) else None)}"
         )
     if in_sync:
         print("all pools in sync")
@@ -625,12 +675,11 @@ def _attach_comparative_ranks(
 
 
 def _semantic_for_compare(document: dict[str, Any]) -> dict[str, Any]:
-    """Compare export semantics without timestamp-only churn.
+    """Immediate capacity triggers are state, period end and usable-reset count.
 
-    Exploration fields (including rate) remain publishable even within the same day.
-    Dictionary capacity rows drop ``observed_at`` so a tick-only refresh does not
-    republish. Non-dict or otherwise malformed rows are kept so the next write
-    can repair them instead of comparing as equal after they were filtered out.
+    Keep malformed structures visible for repair. All other capacity fields remain
+    published diagnostics, carried on another trigger or the daily refresh.
+    Non-capacity semantics retain their existing comparison.
     """
     semantic = {key: value for key, value in document.items() if key != "generated_at"}
     capacity_block = semantic.get("capacity")
@@ -638,35 +687,16 @@ def _semantic_for_compare(document: dict[str, Any]) -> dict[str, Any]:
         compared: dict[str, Any] = {}
         for agent, entry in capacity_block.items():
             if isinstance(entry, dict):
-                compared[agent] = {
-                    key: value for key, value in entry.items() if key != "observed_at"
-                }
-                pace = entry.get("pacing")
+                compared[agent] = {"state": entry.get("state")}
+                pace = entry.get("pacing", {})
                 if isinstance(pace, dict):
                     compared[agent]["pacing"] = {
                         key: value
                         for key, value in pace.items()
-                        if key
-                        not in (
-                            "ts",
-                            "reason",
-                            "burn_rate_per_day",
-                            "burn_per_day",
-                            "fyi",
-                            "allowed_fraction",
-                            "projected_fraction",
-                            "routing_weight",
-                            "previous_routing_weight",
-                            "target_routing_weight",
-                            "effective_projected_fraction",
-                            "span_h",
-                            "confidence",
-                            "sustainable_rate_per_hour",
-                            "burn_short_per_hour",
-                            "burn_period_per_hour",
-                            "burn_effective_per_hour",
-                        )
+                        if key in ("period_end", "resets_available")
                     }
+                elif "pacing" in entry:
+                    compared[agent]["pacing"] = pace
             else:
                 compared[agent] = entry
         semantic["capacity"] = compared
@@ -707,7 +737,7 @@ def _semantic_for_compare(document: dict[str, Any]) -> dict[str, Any]:
     return semantic
 
 
-def write_document(path: Path, document: dict[str, Any]) -> bool:
+def write_document(path: Path, document: dict[str, Any], *, refresh: bool = False) -> bool:
     """Write only semantic changes, retaining the earlier timestamp on an unchanged export."""
     if path.exists():
         try:
@@ -715,7 +745,7 @@ def write_document(path: Path, document: dict[str, Any]) -> bool:
         except json.JSONDecodeError:
             existing = None
         if isinstance(existing, dict):
-            if _semantic_for_compare(existing) == _semantic_for_compare(document):
+            if not refresh and _semantic_for_compare(existing) == _semantic_for_compare(document):
                 return False
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
@@ -832,14 +862,23 @@ def publish_document(
     document = damp_capacity_states(
         document, published, state_dir or Path.home() / ".codex" / "orchestrator"
     )
+    # A diagnostic-only refresh is allowed only after the published artifact ages 24h.
+    now = int(dt.datetime.fromisoformat(_now().replace("Z", "+00:00")).timestamp())
+    published_age = _artifact_age(published or {}, now)
+    semantic_equal = published is not None and _semantic_for_compare(
+        document
+    ) == _semantic_for_compare(published)
+    refresh = (
+        semantic_equal and published_age is not None and published_age > PUBLISH_REFRESH_FLOOR_S
+    )
     # Compare the fetched remote artifact before touching a potentially divergent local shadow.
-    if published is not None and _semantic_for_compare(document) == _semantic_for_compare(
-        published
-    ):
+    if semantic_equal and not refresh:
         print("unchanged")
         return False
+    if refresh:
+        document = {**document, "generated_at": _now()}
     target = canonical / EXPORT_PATH
-    if not write_document(target, document):
+    if not write_document(target, document, refresh=refresh):
         print("unchanged")
         return False
     subprocess.run(["git", "-C", str(canonical), "add", str(EXPORT_PATH)], check=True)
@@ -937,7 +976,7 @@ def _selftest() -> None:
             )
             is False
         )
-        # State and window each republish independently; observed_at alone does not.
+        # State triggers publication; window and observed_at are carried on other triggers.
         shed_snapshot = json.loads(json.dumps(capacity_snapshot))
         shed_agent = next(iter(capacity.AGENTS))
         current_state = shed_snapshot["agents"][shed_agent]["state"]
@@ -960,7 +999,7 @@ def _selftest() -> None:
                     db_path, minimum=20, now=fixed_now, capacity_snapshot=window_snapshot
                 ),
             )
-            is True
+            is False
         )
         observed_only = json.loads(json.dumps(window_snapshot))
         observed_only["generated_at"] = int(observed_only.get("generated_at") or 0) + 3600
@@ -1079,7 +1118,7 @@ def main() -> int:
         _selftest()
         return 0
     if args.publish_lag:
-        publish_lag()
+        publish_lag(state_dir=args.state_dir)
         return 0
     if args.record_capacity_tick:
         return (

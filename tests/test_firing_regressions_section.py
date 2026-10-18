@@ -79,7 +79,7 @@ def _section(tmp_path, monkeypatch, *, stamp_age=3600, last_age=30 * DAY, artifa
     return switches.firing_regressions(now=NOW)
 
 
-@pytest.mark.parametrize("stamp_age", [0, 3600, 3600 + 1800])
+@pytest.mark.parametrize("stamp_age", [0, 3600, 9000])
 @pytest.mark.parametrize("artifact_age", [60, 10 * DAY])
 def test_a_silent_heartbeat_with_a_fresh_stamp_prints_heartbeat_silent_step_ran(
     tmp_path, monkeypatch, stamp_age, artifact_age
@@ -97,7 +97,7 @@ def test_a_silent_heartbeat_with_a_fresh_stamp_prints_heartbeat_silent_step_ran(
     assert step["stamp_age_seconds"] == stamp_age
 
 
-@pytest.mark.parametrize("stamp_age", [3600 + 1800 + 1, 25 * DAY])
+@pytest.mark.parametrize("stamp_age", [9000 + 1, 25 * DAY])
 @pytest.mark.parametrize("artifact_age", [60, 10 * DAY])
 def test_a_real_stop_prints_step_last_ran(tmp_path, monkeypatch, stamp_age, artifact_age):
     section = _section(tmp_path, monkeypatch, stamp_age=stamp_age, artifact_age=artifact_age)

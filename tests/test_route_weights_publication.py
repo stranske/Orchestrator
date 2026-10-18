@@ -88,7 +88,7 @@ class CapacityPublicationTests(unittest.TestCase):
         export._fixture_db(database)
         previous = export.build_document(
             database,
-            now=100,
+            now=int(time.time()),
             capacity_snapshot=snapshot,
             include_capacity=change != "legacy",
         )
@@ -108,8 +108,10 @@ class CapacityPublicationTests(unittest.TestCase):
             snapshot["agents"]["codex"]["state"] = capacity.SHED
         elif change == "window":
             snapshot["agents"]["codex"]["window"] = "1h"
-        document = export.build_document(database, now=101, capacity_snapshot=snapshot)
-        should_publish = change in {"state", "window", "legacy"}
+        document = export.build_document(
+            database, now=int(time.time()) + 1, capacity_snapshot=snapshot
+        )
+        should_publish = change in {"state", "legacy"}
         state_dir = root / "stamps"
         if change == "state":
             # A state change is semantic only after two actual local tick observations.

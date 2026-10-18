@@ -482,7 +482,7 @@ _due() {
   [[ ! -f "$1" ]] && return 0
   # -1 is the registry's named hourly period; retain whole-day semantics for existing rows.
   if [[ "$2" == "-1" ]]; then
-    [[ -n "$(find "$1" -mmin +59 2>/dev/null)" ]]
+    [[ -n "$(find "$1" -mmin +50 2>/dev/null)" ]]
   else
     [[ -n "$(find "$1" -mtime +"$2" 2>/dev/null)" ]]
   fi

@@ -32,7 +32,7 @@ from typing import Any
 # different period. The hourly sentinel uses minutes instead of days. A genuinely new period is
 # added here, by name, never as a bare number on a row.
 CADENCE_DAYS_FOR: dict[str, int] = {
-    "hourly": -1,  # explicit sub-day sentinel: _due uses find -mmin +59
+    "hourly": -1,  # explicit sub-day sentinel: _due uses find -mmin +50
     "daily": 0,  # due once the stamp is 24h old; at the hourly tick a daily step runs every ~25h
     "weekly": 6,  # due once the stamp is 7 days old
 }
@@ -497,7 +497,7 @@ def stale_after_seconds(row: dict[str, Any]) -> int:
     2026-10-02; a pair of literals is how a report and its consumer come to disagree.
     """
     if row.get("cadence_days") == CADENCE_DAYS_FOR["hourly"]:
-        return 3600 + 1800
+        return 2 * 3600 + 1800
     return (int(row.get("cadence_days") or 0) + 1) * 86400 + STALE_GRACE_S
 
 
@@ -639,7 +639,7 @@ def retirement_holds(
 
 
 def shortest_stale_after_s(registry: tuple[dict[str, Any], ...] | None = None) -> int:
-    """The tightest `stale_after_seconds` over the stamped steps (1.5 h for hourly export)."""
+    """The tightest `stale_after_seconds` over the stamped steps (2.5 h for hourly export)."""
     stamped = [row for row in registry or CADENCE_STEPS if row.get("success_stamp")]
     return min((stale_after_seconds(row) for row in stamped), default=stale_after_seconds({}))
 

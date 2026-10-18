@@ -45,6 +45,7 @@ def publication(tmp_path, monkeypatch):
     checkout = tmp_path / "checkout"
     git(tmp_path, "clone", str(remote), str(checkout))
     document = {
+        "generated_at": "2033-05-18T03:33:20Z",
         "source_version": 1,
         "task_types": {"implement": {"evidence_ok": True}},
         "capacity": {"codex": {"state": "ok", "window": "weekly", "observed_at": NOW}},
@@ -56,6 +57,7 @@ def publication(tmp_path, monkeypatch):
     git(checkout, "commit", "-m", "baseline")
     git(checkout, "push", "origin", f"HEAD:{export.EXPORT_BRANCH}")
     monkeypatch.setattr(export.provision, "ensure_canonical", lambda *a: checkout)
+    monkeypatch.setattr(export, "_now", lambda: "2033-05-18T03:33:20Z")
     return document, remote, checkout, git
 
 
@@ -129,7 +131,10 @@ def test_expired_latch_cannot_publish_new_state(local_capacity, tmp_path, capsys
 @pytest.mark.parametrize("mode", ["sync", "different", "unmeasured"])
 def test_lag_cli_is_read_only(local_capacity, tmp_path, monkeypatch, capsys, mode):
     local_capacity.write_text(json.dumps(snapshot("shed", NOW - 10)))
-    published = {"capacity": export._capacity_block(snapshot("shed", NOW - 3600))}
+    published = {
+        "generated_at": "2033-05-18T01:33:19Z",
+        "capacity": export._capacity_block(snapshot("shed", NOW - 3600)),
+    }
     if mode == "different":
         published["capacity"]["codex"]["state"] = "ok"
     if mode == "unmeasured":
@@ -146,8 +151,9 @@ def test_lag_cli_is_read_only(local_capacity, tmp_path, monkeypatch, capsys, mod
     monkeypatch.setattr(
         export, "build_document", lambda *a: pytest.fail("lag must not build/write")
     )
+    real_lag = export.publish_lag
     monkeypatch.setattr(
-        export, "publish_lag", lambda original=export.publish_lag: original(now=NOW)
+        export, "publish_lag", lambda **kwargs: real_lag(now=NOW, state_dir=tmp_path)
     )
     monkeypatch.setattr(sys, "argv", ["route_weights_export.py", "--publish-lag"])
     before = {p.name: p.read_bytes() for p in tmp_path.iterdir() if p.is_file()}
@@ -156,9 +162,9 @@ def test_lag_cli_is_read_only(local_capacity, tmp_path, monkeypatch, capsys, mod
     out = capsys.readouterr().out
     assert "local capacity age=10s" in out
     expected = {
-        "sync": "published=shed published_age=3600s lag=ok",
-        "different": "published=ok published_age=3600s lag=STALE",
-        "unmeasured": "published=unmeasured published_age=unmeasureds lag=STALE",
+        "sync": "published=shed published_age=7201s lag=ok",
+        "different": "published=ok published_age=7201s lag=STALE",
+        "unmeasured": "published=unmeasured published_age=unmeasured lag=STALE",
     }[mode]
     assert f"pool codex: local=shed {expected}" in out
     assert ("all pools in sync" in out) == (mode == "sync")
@@ -195,6 +201,13 @@ VOLATILE = (
     "allowed_fraction",
     "projected_fraction",
     "routing_weight",
+    "used_fraction",
+    "period_start",
+    "reset_expiries",
+    "effective_reserve",
+    "stale",
+    "source",
+    "measurement",
     "previous_routing_weight",
     "target_routing_weight",
     "effective_projected_fraction",
@@ -293,3 +306,130 @@ python3() {{
     assert result.stdout.count("OBSERVED") == 1
     assert ("SUCCESS" in result.stdout) == (due == 0 and attempt == 0)
     assert ("seen=1/2" in result.stdout) == (due == 0 and attempt == 0)
+
+
+def _seed(publication, document):
+    _, _, checkout, git = publication
+    (checkout / export.EXPORT_PATH).write_text(json.dumps(document))
+    git(checkout, "add", ".")
+    git(checkout, "commit", "-m", "pacing baseline")
+    git(checkout, "push", "origin", f"HEAD:{export.EXPORT_BRANCH}")
+
+
+def test_used_fraction_drift_does_not_push(publication):
+    document = publication[0]
+    document["capacity"]["codex"]["pacing"] = {"used_fraction": 0.43}
+    assert not export.publish_document(document)  # Adding only diagnostics is also silent.
+    _seed(publication, document)
+    incoming = copy.deepcopy(document)
+    incoming["capacity"]["codex"]["pacing"]["used_fraction"] = 0.47
+    assert not export.publish_document(incoming)
+
+
+@pytest.mark.parametrize("field,new", [("period_end", NOW + 86400), ("resets_available", 2)])
+def test_period_and_reset_bank_changes_push(publication, field, new):
+    document = publication[0]
+    document["capacity"]["codex"]["pacing"] = {field: 1}
+    _seed(publication, document)
+    incoming = copy.deepcopy(document)
+    incoming["capacity"]["codex"]["pacing"][field] = new
+    assert export.publish_document(incoming)
+
+
+def test_24_hour_ledger_shape_replay_only_refreshes_once(publication, monkeypatch):
+    import datetime as dt
+
+    document, remote, _, git = publication
+
+    def iso(now):
+        return dt.datetime.fromtimestamp(now, dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+    # Same shape as pacing_usage's ledger append: diagnostics are separate from pacing.
+    def ledger(hour):
+        return {
+            "event": "pacing_snapshot",
+            "ts": NOW + hour * 3600,
+            "agents": {
+                "codex": {
+                    "state": "ok",
+                    "pacing": {
+                        "state": "ok",
+                        "used_fraction": 0.43 + hour * 0.002,
+                        "routing_weight": 0.8 - hour * 0.001,
+                        "period_start": NOW - 86400,
+                        "period_end": NOW + 6 * 86400,
+                        "resets_available": 0,
+                        "measurement": "measured",
+                    },
+                    "pacing_diagnostics": {"span_h": hour + 1, "confidence": 0.9},
+                }
+            },
+        }
+
+    first = ledger(0)
+    document["capacity"] = export._capacity_block({**first, "generated_at": first["ts"]})
+    document["generated_at"] = iso(NOW - 1)
+    _seed(publication, document)
+    head = git(remote, "rev-parse", export.EXPORT_BRANCH)
+    pushed = 0
+    for hour in range(1, 25):
+        row = ledger(hour)
+        incoming = {
+            **document,
+            "generated_at": iso(row["ts"]),
+            "capacity": export._capacity_block({**row, "generated_at": row["ts"]}),
+        }
+        monkeypatch.setattr(export, "_now", lambda t=row["ts"]: iso(t))
+        pushed += export.publish_document(incoming)
+        assert pushed == (1 if hour == 24 else 0)
+    assert pushed <= 1
+    assert int(git(remote, "rev-list", "--count", f"{head}..{export.EXPORT_BRANCH}")) == 1
+    published = json.loads(git(remote, "show", f"{export.EXPORT_BRANCH}:{export.EXPORT_PATH}"))
+    assert published == incoming  # Diagnostic drift is carried by the refresh.
+
+
+@pytest.mark.parametrize("bad", [None, "broken", []])
+def test_corrupt_seen_still_publishes_on_second_observation(
+    publication, local_capacity, tmp_path, monkeypatch, bad
+):
+    document = copy.deepcopy(publication[0])
+    document["capacity"]["codex"]["state"] = "shed"
+    observe(local_capacity, tmp_path, "shed", NOW)
+    tick_path = tmp_path / export.CAPACITY_TICK_FILE
+    ticks = json.loads(tick_path.read_text())
+    ticks["codex"]["seen"] = bad
+    tick_path.write_text(json.dumps(ticks))
+    real_damp = export.damp_capacity_states
+    monkeypatch.setattr(
+        export,
+        "damp_capacity_states",
+        lambda doc, pub, directory: real_damp(doc, pub, directory, now=NOW + 3600),
+    )
+    assert not export.publish_document(document, state_dir=tmp_path)
+    observe(local_capacity, tmp_path, "shed", NOW + 3600)
+    assert export.publish_document(document, state_dir=tmp_path)
+
+
+@pytest.mark.parametrize(
+    "age,seen,expected", [(7200, 2, "ok"), (7201, 2, "STALE"), (9000, 1, "held(1/2)")]
+)
+def test_lag_threshold_and_hold(local_capacity, tmp_path, monkeypatch, capsys, age, seen, expected):
+    import datetime as dt
+
+    local_capacity.write_text(json.dumps(snapshot("shed", NOW)))
+    generated = dt.datetime.fromtimestamp(NOW - age, dt.timezone.utc).isoformat()
+    monkeypatch.setattr(
+        export,
+        "read_published_export",
+        lambda: {
+            "generated_at": generated,
+            "capacity": {"codex": {"state": "ok", "observed_at": NOW - 99}},
+        },
+    )
+    (tmp_path / export.CAPACITY_TICK_FILE).write_text(
+        json.dumps({"codex": {"state": "shed", "observed_at": NOW, "seen": seen}})
+    )
+    export.publish_lag(now=NOW, state_dir=tmp_path)
+    out = capsys.readouterr().out
+    assert f"published_age={age}s lag={expected} observed_age=99s" in out
+    assert "all pools in sync" not in out

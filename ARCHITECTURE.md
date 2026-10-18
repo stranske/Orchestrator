@@ -1685,12 +1685,19 @@ snapshot does not increment it. The second distinct tick is the drain. While hel
 published pool row is retained (including its pacing state), and the tick prints both quantities:
 `[cadence] capacity publish held: <pool> local=<state> published=<state> seen=<n>/2`.
 An initial publication or malformed-capacity repair establishes the baseline. Publication still requires
-`ORCH_ROUTE_WEIGHTS_PUBLISH=1`, preserves evidence gates and failure backoff, and pushes only a
-semantic change against the fetched remote artifact; posteriors and `exploration.policy_version`
+`ORCH_ROUTE_WEIGHTS_PUBLISH=1`, preserves evidence gates and failure backoff, and immediately pushes
+damped state, `period_end`, or `resets_available` changes against the
+fetched remote artifact, along with existing non-capacity triggers (including learned weights).
+Usage, routing-weight, burn-rate, measurement and other capacity diagnostics do not trigger pushes;
+they remain in the published block and ride along with a trigger or a refresh once the published
+`generated_at` is over 24 hours old (`PUBLISH_REFRESH_FLOOR_S`). Quiet fleets therefore refresh daily; posteriors and
+`exploration.policy_version`
 are untouched by damping. `python3 src/route_weights_export.py --publish-lag` reads the local snapshot
 and fetches the same remote branch into disposable storage, without persistent writes, heartbeats
 or publication. It prints local snapshot age and each pool's local/published state, published
-observation age and `lag=ok|STALE`; an unchanged old artifact can still be in sync. Fetch failure
+artifact `generated_at` age (`published_age`), optional pool observation age (`observed_age`)
+and `lag=ok|STALE|held(n/2)` (stale mismatches exceed `PUBLISH_LAG_STALE_S=7200` seconds);
+an unchanged old artifact can still be in sync. Fetch failure
 prints `published=unmeasured`; only a fully measured match prints `all pools in sync`.
 With hourly successful ticks, a persistent state change reaches publication within two ticks
 (default at most two hours). Switch-off, failed/backed-off publication and skipped ticks can extend
