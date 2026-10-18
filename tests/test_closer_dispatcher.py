@@ -913,7 +913,14 @@ def test_staged_action_waits_on_confirmed_native_label_after_completed_verify(
         )
         return {"targets": {targets[0]: captured["result"]}}
 
-    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=run_pipeline))
+    monkeypatch.setitem(
+        sys.modules,
+        "closer_pipeline",
+        SimpleNamespace(
+            run_pipeline=run_pipeline,
+            EVIDENCE_REFUSAL_REASONS=closer_pipeline.EVIDENCE_REFUSAL_REASONS,
+        ),
+    )
     backend = closer(tmp_path, current)
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
     adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
@@ -972,7 +979,14 @@ def test_staged_action_waits_on_pr_linked_active_run_without_provider_or_label(
         )
         return {"targets": {targets[0]: captured["result"]}}
 
-    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=run_pipeline))
+    monkeypatch.setitem(
+        sys.modules,
+        "closer_pipeline",
+        SimpleNamespace(
+            run_pipeline=run_pipeline,
+            EVIDENCE_REFUSAL_REASONS=closer_pipeline.EVIDENCE_REFUSAL_REASONS,
+        ),
+    )
     backend = closer(tmp_path, current)
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
     adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
@@ -1615,7 +1629,14 @@ def test_staged_prepare_runs_before_pending_ci_wait_selection(tmp_path, monkeypa
         seen["shadow_action"] = kwargs["act"](TARGET, {"prepare": prepared})
         return {"valid": True, "targets": {TARGET: {"status": "parked"}}}
 
-    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=run_pipeline))
+    monkeypatch.setitem(
+        sys.modules,
+        "closer_pipeline",
+        SimpleNamespace(
+            run_pipeline=run_pipeline,
+            EVIDENCE_REFUSAL_REASONS=closer_pipeline.EVIDENCE_REFUSAL_REASONS,
+        ),
+    )
     backend = closer(tmp_path, current, apply=True, workers=True)
     monkeypatch.setattr(
         backend, "execute", lambda *_a, **_k: pytest.fail("shadow mode must never execute")
@@ -1763,7 +1784,14 @@ def test_only_proven_non_ci_waits_become_pipeline_continuations(
         )
         return {"targets": {targets[0]: captured["result"]}}
 
-    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=run_pipeline))
+    monkeypatch.setitem(
+        sys.modules,
+        "closer_pipeline",
+        SimpleNamespace(
+            run_pipeline=run_pipeline,
+            EVIDENCE_REFUSAL_REASONS=closer_pipeline.EVIDENCE_REFUSAL_REASONS,
+        ),
+    )
     backend = closer(tmp_path, snapshot())
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
     adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
@@ -2369,10 +2397,13 @@ def test_same_head_inner_wait_requires_fresh_admission_and_matching_producer(tmp
     backend = closer(tmp_path, current)
     admissions = []
     admission_allowed = [True]
-    backend.campaign_admission = lambda *_: admissions.append(True) or {
-        "allowed": admission_allowed[0],
-        "reason": "fresh admission required",
-    }
+    backend.campaign_admission = lambda *_: (
+        admissions.append(True)
+        or {
+            "allowed": admission_allowed[0],
+            "reason": "fresh admission required",
+        }
+    )
     monkeypatch.setattr(adapter, "_pipeline_low_route", lambda **_kwargs: (None, "saturated"))
     seen = {}
 
@@ -2471,7 +2502,14 @@ def test_staged_action_emits_pending_only_for_fresh_bound_check_run(
         )
         return {"targets": {TARGET: observed["result"]}}
 
-    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=run_pipeline))
+    monkeypatch.setitem(
+        sys.modules,
+        "closer_pipeline",
+        SimpleNamespace(
+            run_pipeline=run_pipeline,
+            EVIDENCE_REFUSAL_REASONS=closer_pipeline.EVIDENCE_REFUSAL_REASONS,
+        ),
+    )
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
     adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
 
@@ -3087,13 +3125,15 @@ def test_assignment_guard_rechecks_immediately_before_action(tmp_path):
         tmp_path,
         current,
         apply=True,
-        assignment_guard_fn=lambda target: calls.append(target)
-        or {
-            "status": "pending",
-            "pending_kind": "external_event",
-            "next_trigger": "Workflows#4057 releases assignment hold",
-            "pending_evidence": {"event_id": "row-fp-1", "target": target},
-        },
+        assignment_guard_fn=lambda target: (
+            calls.append(target)
+            or {
+                "status": "pending",
+                "pending_kind": "external_event",
+                "next_trigger": "Workflows#4057 releases assignment hold",
+                "pending_evidence": {"event_id": "row-fp-1", "target": target},
+            }
+        ),
     )
     result = backend.execute(
         TARGET, "merge", current, {"deadline": time.time() + 30, "id": "unused"}
