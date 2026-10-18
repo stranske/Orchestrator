@@ -723,6 +723,99 @@ def _historical_validated_wait_result(
     )
 
 
+def _same_revision_retained_read_wait(
+    path: Path,
+    previous: Mapping[str, Any],
+    target: str,
+    item: Mapping[str, Any],
+    history: list[dict[str, Any]],
+    historical_now: float,
+) -> bool:
+    """Prove an audited no-operation wait retained behind a fresh read cutoff."""
+    results = item.get("results")
+    recovered = previous.get("prior_invalid_stop_evidence")
+    recovery = previous.get("recovered_invalid_stop")
+    anchor = (
+        recovery.get("targets", {}).get(target)
+        if isinstance(recovery, Mapping) and isinstance(recovery.get("targets"), Mapping)
+        else None
+    )
+    if (
+        item.get("status") != "deferred"
+        or item.get("stage") not in {"prepare", "interpret", "exception"}
+        or item.get("deferred_reason") != "deadline_exhausted"
+        or item.get("known_completed_action") is True
+        or item.get("provider_outcome_uncertain")
+        or not isinstance(results, Mapping)
+        or not isinstance(recovered, Mapping)
+        or not isinstance(recovered.get("recovered_inner_wait_targets"), list)
+        or not all(
+            isinstance(value, str) and value for value in recovered["recovered_inner_wait_targets"]
+        )
+        or target not in recovered.get("recovered_inner_wait_targets", [])
+        or not isinstance(recovery, Mapping)
+        or recovery.get("schema") != "closer-recovered-inner-wait/v1"
+        or not isinstance(recovery.get("previous_run_id"), str)
+        or not recovery["previous_run_id"].strip()
+        or not isinstance(anchor, Mapping)
+        or not isinstance(anchor.get("previous_item_sha256"), str)
+        or len(anchor["previous_item_sha256"]) != 64
+        or any(char not in "0123456789abcdef" for char in anchor["previous_item_sha256"])
+        or historical_now < float(previous["deadline"])
+        or not _valid_deadline_evidence(
+            item.get("resource_evidence"), float(previous["deadline"]), previous["targets"]
+        )
+    ):
+        return False
+    prepared, act = results.get("prepare"), results.get("act")
+    if not isinstance(prepared, Mapping) or not isinstance(act, Mapping):
+        return False
+    resource = act.get("resource_evidence")
+    proof = resource.get("inner_wait") if isinstance(resource, Mapping) else None
+    receipt = act.get("queue_receipt")
+    if (
+        act.get("status") != "deferred"
+        or act.get("reason") != "validated_inner_wait"
+        or not isinstance(proof, Mapping)
+        or not isinstance(receipt, Mapping)
+        or proof.get("receipt_sha256") != _digest(receipt)
+        or act.get("next_trigger") != proof.get("next_trigger")
+        or anchor.get("revision") != item.get("revision")
+        or anchor.get("head") != proof.get("head")
+        or anchor.get("reason") != act.get("reason")
+        or anchor.get("next_trigger") != act.get("next_trigger")
+        or anchor.get("inner_path") != proof.get("inner_path")
+        or anchor.get("receipt_sha256") != proof.get("receipt_sha256")
+        or prepared.get("revision") != item.get("revision")
+        or proof.get("revision") != item.get("revision")
+        or not isinstance(item.get("identity"), str)
+        or not item["identity"]
+        or not any(
+            isinstance(record, Mapping)
+            and record.get("source_run_id") == recovery.get("previous_run_id")
+            and isinstance(record.get("targets"), Mapping)
+            and isinstance(record["targets"].get(target), Mapping)
+            and record["targets"][target].get("recovery") == "validated_inner_wait"
+            and record["targets"][target].get("act_result") == act
+            and record["targets"][target].get("revision") == item.get("revision")
+            and record["targets"][target].get("identity") == item.get("identity")
+            and record["targets"][target].get("item_sha256") == anchor.get("previous_item_sha256")
+            for record in history
+        )
+    ):
+        return False
+    return _valid_inner_wait(
+        path,
+        target,
+        item.get("revision"),
+        prepared.get("snapshot"),
+        proof.get("reason"),
+        proof.get("next_trigger"),
+        proof,
+        now=lambda: historical_now,
+    )
+
+
 def _safe_prior_continuation(
     prior_stop: Mapping[str, Any], previous: Mapping[str, Any], path: Path
 ) -> tuple[bool, bool, set[str]]:
@@ -982,7 +1075,12 @@ def _expired_invalid_round_recovery(
         elif (
             status == "deferred"
             and stage in {"prepare", "interpret", "exception"}
-            and no_action
+            and (
+                no_action
+                or _same_revision_retained_read_wait(
+                    path, previous, target, item, history, historical_now
+                )
+            )
             and item.get("deferred_reason") == "deadline_exhausted"
         ):
             invalid_reason = f"unverified_deadline_boundary:{target}"
