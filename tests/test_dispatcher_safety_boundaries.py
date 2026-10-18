@@ -228,27 +228,31 @@ def test_load_decision_preserves_valid_json_and_fails_closed_on_bad_or_missing_i
     assert dispatcher.load_decision() == {"assignments": []}
 
 
-def test_gemini_timeout_alignment_reduces_wait_with_one_minute_floor():
+def test_gemini_timeout_alignment_preserves_seconds_and_receipt_margin():
     absent = ["agy", "--print", "prompt"]
     dispatcher._align_gemini_print_timeout(absent, 60)
     assert absent == ["agy", "--print", "prompt"]
 
     seconds = ["agy", "--print-timeout", "99m"]
     dispatcher._align_gemini_print_timeout(seconds, 75)
-    assert seconds == ["agy", "--print-timeout", "1m"]
+    assert seconds == ["agy", "--print-timeout", "60s"]
 
-    # The CLI has a one-minute minimum; the outer subprocess enforces shorter budgets.
+    # Preserve sub-minute outer budgets rather than imposing an accidental one-minute floor.
     non_integral = ["agy", "--print-timeout", "99m"]
     dispatcher._align_gemini_print_timeout(non_integral, 95)
-    assert non_integral == ["agy", "--print-timeout", "1m"]
+    assert non_integral == ["agy", "--print-timeout", "80s"]
+
+    diagnosis = ["agy", "--print-timeout", "99m"]
+    dispatcher._align_gemini_print_timeout(diagnosis, 119)
+    assert diagnosis == ["agy", "--print-timeout", "104s"]
 
     two_minutes = ["agy", "--print-timeout", "99m"]
     dispatcher._align_gemini_print_timeout(two_minutes, 135)
-    assert two_minutes == ["agy", "--print-timeout", "2m"]
+    assert two_minutes == ["agy", "--print-timeout", "120s"]
 
     near_zero = ["agy", "--print-timeout", "99m"]
     dispatcher._align_gemini_print_timeout(near_zero, 1)
-    assert near_zero == ["agy", "--print-timeout", "1m"]
+    assert near_zero == ["agy", "--print-timeout", "1s"]
 
 
 def test_agent_log_tail_uses_relative_cwd_and_redacts_before_truncation(tmp_path):
