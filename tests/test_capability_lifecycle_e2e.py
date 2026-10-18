@@ -802,6 +802,35 @@ def test_direct_invoke_target_fail_closed_declarations_refuse_without_writes(
     assert capability_targets.get_binding(version_id, registry_path=registry)["invocations"] == []
 
 
+def test_binding_ineligible_validates_skill_package_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def _counting_validate(path: Path) -> dict:
+        calls.append(str(path))
+        return {"name": "counted-skill", "expires_at": 9999999999}
+
+    monkeypatch.setattr(compiler, "validate_skill_package", _counting_validate)
+    binding = {
+        "kind": "skill",
+        "artifact": "/tmp/counted-skill-package",
+        "lifecycle_policy": {},
+        "rollback": None,
+    }
+    assert capability_targets._binding_ineligible(binding, 100, {}) is None
+    assert len(calls) == 1, calls
+
+    def _failing_validate(path: Path) -> dict:
+        calls.append(str(path))
+        raise ValueError("broken package")
+
+    monkeypatch.setattr(compiler, "validate_skill_package", _failing_validate)
+    calls.clear()
+    assert capability_targets._binding_ineligible(binding, 100, {}) == "artifact_invalid"
+    assert len(calls) == 1, calls
+
+
 def test_direct_invoke_target_broken_skill_package_refuses_without_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
