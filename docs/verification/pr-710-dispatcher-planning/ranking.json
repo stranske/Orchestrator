@@ -1,0 +1,182 @@
+[
+  {
+    "path": "src/dispatcher.py",
+    "rank_key": [
+      45.0,
+      64.0,
+      0.0
+    ],
+    "tier1_escaped_defects": 45.0,
+    "tier2_churn": 64,
+    "tier3_uncovered_statements": 0,
+    "hollow_rate": 0.0,
+    "evidence": [
+      "fix commit touched this file"
+    ]
+  },
+  {
+    "path": "src/feedback.py",
+    "rank_key": [
+      35.0,
+      59.0,
+      0.0
+    ],
+    "tier1_escaped_defects": 35.0,
+    "tier2_churn": 59,
+    "tier3_uncovered_statements": 0,
+    "hollow_rate": 0.0,
+    "evidence": [
+      "fix commit touched this file"
+    ]
+  },
+  {
+    "path": "src/capability_advisor.py",
+    "rank_key": [
+      32.0,
+      68.0,
+      0.0
+    ],
+    "tier1_escaped_defects": 32.0,
+    "tier2_churn": 68,
+    "tier3_uncovered_statements": 0,
+    "hollow_rate": 0.0,
+    "evidence": [
+      "fix commit touched this file"
+    ]
+  },
+  {
+    "path": "src/capabilities.py",
+    "rank_key": [
+      25.0,
+      57.0,
+      0.0
+    ],
+    "tier1_escaped_defects": 25.0,
+    "tier2_churn": 57,
+    "tier3_uncovered_statements": 0,
+    "hollow_rate": 0.0,
+    "evidence": [
+      "fix commit touched this file"
+    ]
+  },
+  {
+    "path": "src/adapters.py",
+    "rank_key": [
+      19.0,
+      36.0,
+      0.0
+    ],
+    "tier1_escaped_defects": 19.0,
+    "tier2_churn": 36,
+    "tier3_uncovered_statements": 0,
+    "hollow_rate": 0.0,
+    "evidence": [
+      "fix commit touched this file"
+    ]
+  },
+  {
+    "path": "src/switch_review.py",
+    "rank_key": [
+      18.0,
+      45.0,
+      0.0
+    ],
+    "tier1_escaped_defects": 18.0,
+    "tier2_churn": 45,
+    "tier3_uncovered_statements": 0,
+    "hollow_rate": 0.0,
+    "evidence": [
+      "fix commit touched this file"
+    ]
+  },
+  {
+    "path": "src/capability_propensity.py",
+    "rank_key": [
+      18.0,
+      37.0,
+      0.0
+    ],
+    "tier1_escaped_defects": 18.0,
+    "tier2_churn": 37,
+    "tier3_uncovered_statements": 0,
+    "hollow_rate": 0.0,
+    "evidence": [
+      "fix commit touched this file"
+    ]
+  },
+  {
+    "path": "src/exp_abcd.py",
+    "rank_key": [
+      17.0,
+      25.0,
+      0.0
+    ],
+    "tier1_escaped_defects": 17.0,
+    "tier2_churn": 25,
+    "tier3_uncovered_statements": 0,
+    "hollow_rate": 0.0,
+    "evidence": [
+      "fix commit touched this file"
+    ]
+  },
+  {
+    "path": "src/adjudicator_retro.py",
+    "rank_key": [
+      17.0,
+      24.0,
+      0.0
+    ],
+    "tier1_escaped_defects": 17.0,
+    "tier2_churn": 24,
+    "tier3_uncovered_statements": 0,
+    "hollow_rate": 0.0,
+    "evidence": [
+      "fix commit touched this file"
+    ]
+  },
+  {
+    "path": "src/roles.py",
+    "rank_key": [
+      15.0,
+      21.0,
+      0.0
+    ],
+    "tier1_escaped_defects": 15.0,
+    "tier2_churn": 21,
+    "tier3_uncovered_statements": 0,
+    "hollow_rate": 0.0,
+    "evidence": [
+      "fix commit touched this file"
+    ]
+  },
+  {
+    "path": "src/ledger_reconcile.py",
+    "rank_key": [
+      14.0,
+      18.0,
+      0.0
+    ],
+    "tier1_escaped_defects": 14.0,
+    "tier2_churn": 18,
+    "tier3_uncovered_statements": 0,
+    "hollow_rate": 0.0,
+    "evidence": [
+      "fix commit touched this file"
+    ]
+  },
+  {
+    "path": "src/verify.py",
+    "rank_key": [
+      13.0,
+      26.0,
+      0.0
+    ],
+    "tier1_escaped_defects": 13.0,
+    "tier2_churn": 26,
+    "tier3_uncovered_statements": 0,
+    "hollow_rate": 0.0,
+    "evidence": [
+      "fix commit touched this file"
+    ]
+  }
+]
