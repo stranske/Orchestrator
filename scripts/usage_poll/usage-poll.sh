@@ -11,7 +11,7 @@ STALE_AFTER_SECONDS=1800
 usage_poll_failed=0
 for p in codex claude; do
   out=$("$usage_poll_python" "$HOME/.codex/bin/${p}-usage-poll.py" 2>&1); rc=$?
-  printf '%s %s rc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$p" "$rc"
+  printf '%s %s rc=%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$p" "$rc" "$out"
   if [[ "$p" == codex ]]; then
     export USAGE_POLL_CODEX_RC="$rc" USAGE_POLL_CODEX_MESSAGE="$out"
   else
