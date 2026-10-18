@@ -103,7 +103,8 @@ def test_pacing_report_without_persisted_file_is_unmeasured_read_only(report_sta
     for line in pool_lines:
         assert (
             "routed_weight=unmeasured (tick ts=unmeasured, age=unmeasured) "
-            "report_weight=0.750 w_p_prev→w_p=1.0→0.75"
+            "report_weight=0.750 w_p_prev→w_p=unmeasured→0.750 "
+            "(hypothetical step from an unpersisted default)"
         ) in line
         assert "weight_delta=" not in line
     assert {p: p.read_bytes() for p in report_state.iterdir()} == before
@@ -131,7 +132,7 @@ def test_pacing_report_exact_line_and_difference_threshold(tmp_path, routed, com
         "s=unmeasured ḃ_short=unmeasured ḃ_period=unmeasured ḃ_eff=unmeasured "
         "w_p_target=unmeasured state=shed pacing=measured "
         f"routed_weight={routed:.3f} (tick ts={NOW - 60}, age=60s) "
-        f"report_weight={computed:.3f}{difference} w_p_prev→w_p=unmeasured→{computed} "
+        f"report_weight={computed:.3f}{difference} w_p_prev→w_p=unmeasured→{computed:.3f} "
         f"resets=unknown source=none T1=None reset_expiries=None ts={NOW} stale=False; "
         f"fixture; {SHED_NOTE}"
     )
@@ -150,3 +151,39 @@ def test_pacing_report_partial_snapshot_keeps_missing_values_unmeasured(tmp_path
     ) in line
     assert "weight_delta=" not in line
     assert SHED_NOTE not in line
+
+
+def test_pacing_report_rounds_step_only_preserving_diagnostic_precision(report_state):
+    path = report_state / "capacity.json"
+    previous = json.loads(path.read_text())
+    prior = 0.6753499299389598
+    for agent in previous["agents"].values():
+        agent["pacing"]["routing_weight"] = prior
+    path.write_text(json.dumps(previous))
+    agents = {pool: dict(state="ok", reason="fixture") for pool in previous["agents"]}
+    pacing_usage.integrate(agents, now=NOW, handoff=report_state, previous=previous)
+    current = dict(agents=agents)
+    before = json.dumps(current, sort_keys=True)
+    text = pacing_usage.report(report_state, now=NOW, current=current, previous=previous)
+    assert "w_p_prev→w_p=0.675→0.425" in text
+    assert "0.4253499299389598" not in text.split("w_p_prev→w_p=")[1].split(" ")[0]
+    assert agents["codex"]["pacing_diagnostics"]["previous_routing_weight"] == prior
+    assert agents["codex"]["pacing"]["routing_weight"] == prior - pacing.MAX_WEIGHT_CHANGE
+    assert json.dumps(current, sort_keys=True) == before
+
+
+def test_pacing_report_uses_persisted_diagnostic_prior_when_routed_weight_missing(tmp_path):
+    prior = 0.4253499299389598
+    previous = dict(agents=dict(codex=dict(pacing_diagnostics=dict(previous_routing_weight=prior))))
+    current = dict(
+        agents=dict(
+            codex=dict(
+                pacing=dict(routing_weight=prior + 0.25),
+                pacing_diagnostics=dict(previous_routing_weight=prior),
+            )
+        )
+    )
+    text = pacing_usage.report(tmp_path, now=NOW, current=current, previous=previous)
+    line = next(line for line in text.splitlines() if line.startswith("pool codex: u="))
+    assert "w_p_prev→w_p=0.425→0.675" in line
+    assert "hypothetical" not in line

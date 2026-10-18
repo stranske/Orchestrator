@@ -1167,8 +1167,12 @@ def test_burn_window_keeps_anchor_excludes_future_other_source_and_prior_period(
     data += [dict(ts=now - 6 * 3600, used_fraction=0.9, source="other")]
     row = evaluate(u=0.1, samples=data)
     assert row["span_h"] == 6 and row["confidence"] == 1
-    valid = [r for r in data if START <= r["ts"] <= now and r["source"] == SOURCE]
-    assert row["burn_rate_per_day"] == pacing.burn_rate(valid, now, START, source=SOURCE)
+    # Anchor interval: .08 / 18001s * 86400 = .3839786679/day;
+    # next two intervals: .01 / 1800s * 86400 = .48/day each.
+    # Clipped EWMA masses are exp(-1/6)-exp(-1) and 1-exp(-1/6):
+    # (.3839786679*.4786022837 + .48*.1535182751) / .6321205588
+    # = .4072986328160915/day (future/other-source/prior-period rows excluded).
+    assert row["burn_rate_per_day"] == pytest.approx(0.4072986328160915)
     # One anchor plus one in-window observation still cannot meet the sample minimum.
     assert pacing.burn_rate(data[2:], now, START, source=SOURCE) is None
 
@@ -1265,7 +1269,7 @@ def test_integrate_persists_previous_weight_and_report_fields(tmp_path, monkeypa
             )
         )
         text = pacing_usage.report(tmp_path, now=now, current=dict(agents=agents))
-        for field in ("span_h=0.0", "c=0.0", f"w_p_prev→w_p={float(prior)}→{expected}"):
+        for field in ("span_h=0.0", "c=0.0", f"w_p_prev→w_p={prior:.3f}→{expected:.3f}"):
             assert field in text
     saved = pacing_usage.read_rows(tmp_path / "capacity-ledger.ndjson")[-1]
     assert saved["agents"]["codex"]["pacing"]["routing_weight"] == 0.75
@@ -1372,3 +1376,23 @@ def test_expired_reset_does_not_expand_pacing_budget():
     )
     assert row["n_usable"] == 1
     assert row["capacity_budget"] == pytest.approx(1.925)
+
+
+@pytest.mark.parametrize(
+    "anchor_age,used",
+    [(20 * 3600, False), (6.1 * 3600, True), (23400, True), (23401, False)],
+)
+def test_burn_anchor_age_bound_after_poller_outage(anchor_age, used):
+    now = START + pacing.DAY_SECONDS
+    data = observations([now - anchor_age, now - 720, now - 360, now], [0.01, 0.58, 0.59, 0.6])
+    row = evaluate(u=0.6, samples=data)
+    ignored = f"anchor ignored: age={anchor_age:g}s > bound=23400s"
+    assert (ignored in row["fyi"]) is not used
+    if used:
+        assert row["confidence"] == 1 and row["span_h"] == 6
+        assert row["state"] == "shed"
+    else:
+        assert row["span_h"] == pytest.approx(0.2)
+        assert row["confidence"] == pytest.approx(0.2 / 6)
+        assert row["burn_rate_per_day"] is None
+        assert row["state"] == "warn", "partial confidence must not shed from projection"

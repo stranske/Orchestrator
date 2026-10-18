@@ -55,18 +55,18 @@ def test_anchor_interval_mass_is_clipped_and_only_latest_anchor_counts():
     now = START + pacing.DAY_SECONDS
     rows = [
         dict(ts=now + h * 3600, used_fraction=u, source=SOURCE)
-        for h, u in [(-9, 0), (-7, 0.1), (-5, 0.12), (0, 0.22)]
+        for h, u in [(-9, 0), (-6.25, 0.1), (-5, 0.12), (0, 0.22)]
     ]
     rate, span = pacing.burn_estimate(rows, now, START, source=SOURCE)
     w1 = math.exp(-5 / 6) - math.exp(-1)
     w2 = 1 - math.exp(-5 / 6)
     assert span == 6
-    assert rate == pytest.approx((0.24 * w1 + 0.48 * w2) / (w1 + w2))
+    assert rate == pytest.approx((0.384 * w1 + 0.48 * w2) / (w1 + w2))
     # An old anchor alone cannot establish a three-observation estimate.
     assert pacing.burn_estimate([rows[0], rows[-1]], now, START, source=SOURCE)[0] is None
     sparse = assess([rows[0], rows[-1]], previous_state="warn")
     assert sparse["state"] == "ok" and sparse["projected_fraction"] is None
-    assert sparse["fyi"] == []  # A full span still needs a qualified projection.
+    assert sparse["fyi"] == ["anchor ignored: age=32400s > bound=23400s"]
 
 
 def test_reset_after_anchor_restarts_confidence():
@@ -208,9 +208,9 @@ def test_nonfinite_usage_cannot_displace_a_valid_window_anchor(bad):
     now = START + pacing.DAY_SECONDS
     rows = [
         dict(ts=now + h * 3600, used_fraction=u, source=SOURCE)
-        for h, u in [(-7, 0.1), (-5, 0.12), (0, 0.22)]
+        for h, u in [(-6.5, 0.1), (-5, 0.12), (0, 0.22)]
     ]
-    invalid = dict(ts=now - 6.5 * 3600, used_fraction=bad, source=SOURCE)
+    invalid = dict(ts=now - 6.25 * 3600, used_fraction=bad, source=SOURCE)
     good = assess(rows)
     actual = assess([rows[0], invalid, *rows[1:]])
     assert actual["confidence"] == 1
@@ -249,3 +249,31 @@ def test_known_reset_weight_history_survives_inventory_loss(tmp_path, monkeypatc
         else:
             assert claude["pacing"]["routing_weight"] <= 0.07 + pacing.MAX_WEIGHT_CHANGE
         previous = dict(agents=agents)
+
+
+@pytest.mark.parametrize(
+    "pool,first_before,first_full,before_ticks,full_ticks",
+    [("codex", 48, 48, 63, 60), ("claude", 19, 96, 25, 16)],
+)
+def test_real_slice_anchor_bound_full_confidence_counts(
+    pool, first_before, first_full, before_ticks, full_ticks
+):
+    samples = json.loads((Path(__file__).parent / "fixtures/pacing-real-111.json").read_text())[
+        pool
+    ]
+    full = []
+    for i, sample in enumerate(samples):
+        ts = sample["ts"]
+        if pool == "codex":
+            start = START if ts >= START else 1792248898.0
+        else:
+            start = 1792299540.0 if ts >= 1792299540.0 else 1791694740.0
+        row = assess(samples[: i + 1], period_start=start, period_end=start + pacing.PERIOD_SECONDS)
+        if row["confidence"] == 1:
+            full.append(i + 1)
+    assert full[0] == first_full
+    assert len(full) == full_ticks
+    print(
+        f"real slice {pool}: first c=1 tick before={first_before} after={full[0]}; "
+        f"c=1 ticks before={before_ticks}/111 after={len(full)}/111"
+    )
