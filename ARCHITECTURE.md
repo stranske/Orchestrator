@@ -1766,9 +1766,10 @@ runs. A missing third agent cannot block this pass number. The window verdict re
 against that share and their reasons print separately. Measured slack prints
 `not_testable_slack`; otherwise the report prints classes_differing N. This is observed-hour
 coverage, not a claim that absent hours were measured. The CLI returns before heartbeat,
-export writes or publication. Comparative republishing compares status, entry ranks, lambda
-rounded to three decimals, and cost-source/imputed provenance, excluding diagnostic drift.
-Switch review reads the same report and prints one summary line.
+export writes or publication. The published comparative block and every `comparative_*`
+ranking/reserve field are shadow diagnostics: none triggers republication. They ride along
+with a meaningful routing/capacity change or the 24 h refresh floor. Switch review computes
+the same report from local snapshot/Brain inputs and prints one summary line.
 The live pass number requires at least one differing class with measured Codex and Claude prices
 over the 14-day pacing-history window, checked no earlier than 2026-11-07 and 14 days after
 the first #668 state. Fixture success does not meet that live pass number or enable consumption.
