@@ -64,15 +64,18 @@ def _load_registry(path: Path) -> dict[str, Any]:
     return payload
 
 
-def get_binding(capability_version_id: str, *, registry_path: Path) -> dict[str, Any] | None:
+def get_binding(capability_version_id: str, *, registry_path: Path, missing: Any = None) -> Any:
     """Return a detached copy of one target binding.
 
     A present but corrupt (non-mapping or falsy) row is returned as stored so
     invocation guards can refuse it as invalid instead of mistaking it for a
-    missing binding; only an absent row returns ``None``.
+    missing binding. An absent row returns ``missing`` (by default ``None``);
+    callers can supply a sentinel to distinguish absence from a stored null.
     """
-    row = _load_registry(Path(registry_path))["targets"].get(capability_version_id)
-    return json.loads(json.dumps(row)) if row is not None else None
+    targets = _load_registry(Path(registry_path))["targets"]
+    if capability_version_id not in targets:
+        return missing
+    return json.loads(json.dumps(targets[capability_version_id]))
 
 
 def _binding_path(registry_path: Path, capability_version_id: str) -> Path:
@@ -352,7 +355,10 @@ def _binding_ineligible(
     if rollback is not None:
         # A rollback declaration that is not a mapping cannot prove no
         # rollback is pending, so it refuses as pending rather than raising.
-        if not isinstance(rollback, Mapping) or rollback.get("phase") == "pending":
+        if not isinstance(rollback, Mapping) or rollback.get("phase") not in (
+            "applied",
+            "verified",
+        ):
             return "rollback_pending"
     artifact, skill_invalid = _binding_artifact(binding)
     if skill_invalid:
@@ -458,11 +464,15 @@ def invoke_target(
         # A binding argument without its immutable version identity cannot be
         # matched to a registry row, so it refuses instead of raising.
         return {"matched": True, "invoked": False, "reason": "artifact_invalid"}
-    current = _load_registry(Path(registry_path))["targets"].get(binding["capability_version_id"])
+    targets = _load_registry(Path(registry_path))["targets"]
+    version_id = binding["capability_version_id"]
+    if version_id not in targets:
+        return {"matched": False, "invoked": False, "reason": "binding_disabled"}
+    current = targets[version_id]
     if not isinstance(current, Mapping):
-        if current is None:
-            return {"matched": False, "invoked": False, "reason": "binding_disabled"}
         # A present registry row that is not a mapping is corrupt, not disabled.
+        return {"matched": True, "invoked": False, "reason": "artifact_invalid"}
+    if current.get("capability_version_id") != version_id:
         return {"matched": True, "invoked": False, "reason": "artifact_invalid"}
     if not current.get("enabled"):
         return {"matched": False, "invoked": False, "reason": "binding_disabled"}

@@ -1355,7 +1355,7 @@ def test_direct_invoke_target_malformed_binding_argument_refuses_without_writes(
     assert ctx["registry"].read_bytes() == registry_before
 
 
-@pytest.mark.parametrize("row", ["corrupt", 17, ["corrupt"]])
+@pytest.mark.parametrize("row", [None, "corrupt", 17, ["corrupt"]])
 def test_corrupt_registry_row_refuses_without_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, row
 ) -> None:
@@ -1391,6 +1391,91 @@ def test_corrupt_registry_row_refuses_without_writes(
     assert "causal_edge" not in compiled
     assert ctx["ledger"].read_bytes() == ledger_before
     assert ctx["registry"].read_bytes() == registry_before
+
+
+@pytest.mark.parametrize("rollback", [{}, {"phase": "unknown"}, {"phase": []}])
+def test_unknown_rollback_phase_refuses_both_entrypoints_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rollback
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    binding = capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])
+    payload = json.loads(ctx["registry"].read_text())
+    payload["targets"][ctx["version_id"]]["rollback"] = rollback
+    ctx["registry"].write_text(json.dumps(payload))
+    before = (ctx["registry"].read_bytes(), ctx["ledger"].read_bytes())
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("invalid rollback must refuse before the producer")
+
+    monkeypatch.setattr(compiler, "dry_run_workflow_rail", forbidden)
+    direct = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=ctx["registry"],
+        ledger_path=ctx["ledger"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    compiled = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="compiled:unknown-rollback",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert direct == compiled == {"matched": True, "invoked": False, "reason": "rollback_pending"}
+    assert (ctx["registry"].read_bytes(), ctx["ledger"].read_bytes()) == before
+
+
+@pytest.mark.parametrize("identity", [None, "different-version"])
+def test_loaded_binding_identity_refuses_before_producer_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, identity
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    binding = capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])
+    payload = json.loads(ctx["registry"].read_text())
+    row = payload["targets"][ctx["version_id"]]
+    row.pop("capability_version_id")
+    if identity is not None:
+        row["capability_version_id"] = identity
+    ctx["registry"].write_text(json.dumps(payload))
+    before = (ctx["registry"].read_bytes(), ctx["ledger"].read_bytes())
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("invalid loaded identity must refuse before the producer")
+
+    monkeypatch.setattr(compiler, "dry_run_workflow_rail", forbidden)
+    result = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=ctx["registry"],
+        ledger_path=ctx["ledger"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "artifact_invalid"}
+    assert (ctx["registry"].read_bytes(), ctx["ledger"].read_bytes()) == before
+
+
+def test_absent_binding_still_reports_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    payload = json.loads(ctx["registry"].read_text())
+    del payload["targets"][ctx["version_id"]]
+    ctx["registry"].write_text(json.dumps(payload))
+    assert capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"]) is None
+    with pytest.raises(ValueError, match="lifecycle version has no target binding"):
+        capability_lifecycle.invoke_compiled_target(
+            ctx["capability_id"],
+            trigger=ctx["fixture"]["trigger"],
+            target_run_id="missing",
+            ledger_path=ctx["ledger"],
+            target_registry_path=ctx["registry"],
+            timestamp=ctx["now"],
+        )
 
 
 def test_high_risk_candidate_uses_bounded_brain_owner_question(

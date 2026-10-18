@@ -293,8 +293,11 @@ def invoke_compiled_target(
     ineligible = _invocation_ineligible(cap, None, now)
     if ineligible:
         return {"matched": True, "invoked": False, "reason": ineligible}
-    binding = capability_targets.get_binding(version_id, registry_path=Path(target_registry_path))
-    if binding is None:
+    missing_binding = object()
+    binding = capability_targets.get_binding(
+        version_id, registry_path=Path(target_registry_path), missing=missing_binding
+    )
+    if binding is missing_binding:
         raise ValueError("lifecycle version has no target binding")
     if not isinstance(binding, Mapping):
         return {"matched": True, "invoked": False, "reason": "artifact_invalid"}

@@ -22,6 +22,8 @@ TICK_SECONDS = 900  # Capacity recording cadence; distinct from scheduled usage 
 POLL_TICK_SECONDS = 600
 POLL_STALE_TICKS = 3
 STALE_AFTER_SECONDS = POLL_STALE_TICKS * POLL_TICK_SECONDS
+SAMPLE_TICK_SECONDS = 3600  # The orchestrator tick records one pacing sample per hour.
+BURN_ANCHOR_MAX_AGE_SECONDS = BURN_WINDOW_HOURS * 3600 + 2 * SAMPLE_TICK_SECONDS
 
 
 def timestamp(value) -> float | None:
@@ -73,7 +75,12 @@ def elapsed_fraction(now: float, start: float, end: float) -> float:
 
 
 def burn_estimate(
-    samples: list[dict], now: float, start: float, *, source=None
+    samples: list[dict],
+    now: float,
+    start: float,
+    *,
+    source=None,
+    diagnostics: list[str] | None = None,
 ) -> tuple[float | None, float]:
     """Return EWMA du/day and observed span, retaining one clipped window anchor.
 
@@ -95,7 +102,16 @@ def burn_estimate(
     # dropping this anchor makes a full window depend on exact clock alignment.
     anchors = [i for i, row in enumerate(rows) if row["ts"] <= now - window]
     if anchors:
-        rows = rows[anchors[-1] :]
+        anchor = anchors[-1]
+        age = now - rows[anchor]["ts"]
+        if age > BURN_ANCHOR_MAX_AGE_SECONDS:
+            rows = rows[anchor + 1 :]
+            if diagnostics is not None:
+                diagnostics.append(
+                    f"anchor ignored: age={age:g}s > bound={BURN_ANCHOR_MAX_AGE_SECONDS:g}s"
+                )
+        else:
+            rows = rows[anchor:]
     restart = 0
     for i in range(1, len(rows)):
         if rows[i]["used_fraction"] < rows[i - 1]["used_fraction"]:
@@ -208,7 +224,9 @@ def evaluate(
         latched = False
     u = max(0.0, used_fraction)
     allowed = (1 - reserve) * elapsed_fraction(now, period_start, period_end)
-    rate, span_h = burn_estimate(samples, now, period_start, source=source)
+    rate, span_h = burn_estimate(
+        samples, now, period_start, source=source, diagnostics=result["fyi"]
+    )
     confidence = min(1.0, max(0.0, span_h / BURN_WINDOW_HOURS))
     remaining_days = max(0, period_end - now) / DAY_SECONDS
     projected = u + rate * remaining_days if rate is not None else None
