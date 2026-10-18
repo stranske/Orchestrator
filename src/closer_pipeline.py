@@ -140,6 +140,12 @@ def _valid_nonpass_wait_record(record, target, revision, snapshot, reason, trigg
     )
 
 
+EVIDENCE_REFUSAL_REASONS = frozenset(
+    {"substantive_or_ambiguous_finding", "source_coverage_incomplete"}
+)
+EVIDENCE_REFUSAL_TRIGGER = "source owner supplies current-head proof or resolves the named finding"
+
+
 def _valid_inner_wait(
     pipeline_path: Path,
     target: str,
@@ -182,8 +188,8 @@ def _valid_inner_wait(
         or any(char not in "0123456789abcdef" for char in head)
     ):
         return False
-    if reason == "worker_json_invalid":
-        if trigger != "source owner supplies current-head proof or resolves the named finding":
+    if reason == "worker_json_invalid" or reason in EVIDENCE_REFUSAL_REASONS:
+        if trigger != EVIDENCE_REFUSAL_TRIGGER:
             return False
     elif reason.startswith("current item-scoped hold: "):
         if trigger == "wait_for_trigger" or trigger == "resume_target_from_current_evidence":
@@ -249,6 +255,15 @@ def _valid_inner_wait(
                 return False
             history = item.get("operation_history", [])
             if not isinstance(history, list):
+                return False
+            if reason in EVIDENCE_REFUSAL_REASONS and (
+                item.get("operation") is not None
+                or history
+                or receipt.get("progress") != []
+                or receipt.get("eligible_remaining") != []
+            ):
+                # A refusal is durable scheduling evidence only. It cannot
+                # reconcile an operation or establish criterion acceptance.
                 return False
             for operation in [item.get("operation"), *history]:
                 if operation is None:
@@ -670,6 +685,12 @@ def _retained_blocked_act_wait_proof(path: Path, target: str, item: Mapping[str,
     reason, trigger = row.get("reason"), row.get("next_trigger")
     if act.get("reason") != reason or act.get("next_trigger") != trigger:
         return False
+    if (
+        isinstance(reason, str)
+        and reason in EVIDENCE_REFUSAL_REASONS
+        and (item.get("provider_outcome_uncertain") or item.get("known_completed_action") is True)
+    ):
+        return False
     inner_path = path.parent / f"{path.stem}.actions" / f"{_digest(target)}.json"
     snapshot = prepared.get("snapshot")
     proof = {
@@ -1042,6 +1063,92 @@ def _restored_compact_wait(
     return restored
 
 
+def _restored_compact_refusal(
+    path: Path, target: str, item: Mapping[str, Any], history: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """Derive scheduling proof from an audited refusal, never model evidence."""
+    barrier = item.get("recovery_barrier")
+    if not (
+        item.get("status") == "failed"
+        and item.get("stage") == "act"
+        and item.get("error") == "act returned unsupported or missing status"
+        and item.get("results") == {}
+        and not item.get("provider_outcome_uncertain")
+        and item.get("known_completed_action") is not True
+        and isinstance(barrier, Mapping)
+        and barrier.get("schema") == "closer-unverified-act-barrier/v1"
+        and isinstance(barrier.get("source_run_id"), str)
+        and bool(barrier["source_run_id"])
+        and all(
+            isinstance(barrier.get(key), str)
+            and len(barrier[key]) == 64
+            and all(char in "0123456789abcdef" for char in barrier[key])
+            for key in ("item_sha256", "act_result_sha256")
+        )
+        and all(barrier.get(key) == item.get(key) for key in ("revision", "identity", "work_key"))
+    ):
+        return None
+    candidates = [
+        entry["targets"][target]
+        for entry in history
+        if isinstance(entry, Mapping)
+        and entry.get("source_run_id") == barrier.get("source_run_id")
+        and isinstance(entry.get("targets"), Mapping)
+        and isinstance(entry["targets"].get(target), Mapping)
+        and entry["targets"][target].get("item_sha256") == barrier.get("item_sha256")
+        and all(
+            entry["targets"][target].get(key) == item.get(key)
+            for key in ("status", "stage", "error", "revision", "identity", "work_key")
+        )
+    ]
+    if not candidates:
+        return None
+    act = candidates[0].get("act_result")
+    if (
+        not isinstance(act, Mapping)
+        or any(row.get("act_result") != act for row in candidates)
+        or _digest(act) != barrier.get("act_result_sha256")
+        or act.get("status") != "blocked"
+        or not isinstance(act.get("reason"), str)
+        or act.get("reason") not in EVIDENCE_REFUSAL_REASONS
+        or act.get("next_trigger") != EVIDENCE_REFUSAL_TRIGGER
+        or not isinstance(act.get("queue_receipt"), Mapping)
+        or any(row.get("act_receipt_sha256") != _digest(act["queue_receipt"]) for row in candidates)
+    ):
+        return None
+    import closer_queue
+
+    inner_path = path.parent / f"{path.stem}.actions" / f"{_digest(target)}.json"
+    try:
+        native = closer_queue._read_state(inner_path).get("items", {}).get(target, {})
+        evidence = native.get("evidence")
+        if not isinstance(evidence, Mapping):
+            return None
+        # The adapter's original identity commits to target/head/merge. Do not
+        # infer a historical head solely from a mutable native evidence field.
+        identity = hashlib.sha256(
+            json.dumps(
+                [target, evidence.get("head"), evidence.get("merge")], sort_keys=True
+            ).encode()
+        ).hexdigest()
+        if (
+            identity != item.get("identity")
+            or evidence.get("target") != target
+            or evidence.get("revision") != item.get("revision")
+            or native.get("revision") != item.get("revision")
+        ):
+            return None
+        snapshot = {
+            key: evidence.get(key) for key in ("target", "revision", "head", "merge", "kind")
+        }
+        snapshot.update(wait_proof_only=True, refusal_proof_only=True)
+        restored = dict(item)
+        restored["results"] = {"prepare": {"snapshot": snapshot}, "act": dict(act)}
+        return restored if _legacy_failed_act_wait_proof(path, target, restored) else None
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
 def _expired_invalid_round_recovery(
     prior_stop: Mapping[str, Any],
     previous: Mapping[str, Any],
@@ -1110,7 +1217,9 @@ def _expired_invalid_round_recovery(
         if not isinstance(target, str) or not isinstance(item, Mapping):
             return False, set(), set(), set(), set(), {}
         original_item = item
-        restored = _restored_compact_wait(target, item, history)
+        restored = _restored_compact_wait(target, item, history) or _restored_compact_refusal(
+            path, target, item, history
+        )
         if restored is not None:
             item = restored
         status, stage = item.get("status"), item.get("stage")
@@ -1269,6 +1378,8 @@ def _expired_invalid_round_recovery(
                     return False, set(), set(), set(), set(), {}
             if _legacy_failed_act_wait_proof(path, target, item):
                 waits.add(target)
+                if restored is not None:
+                    restored_waits[target] = restored
             else:
                 quarantined.add(target)
         elif (
