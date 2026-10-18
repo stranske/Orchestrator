@@ -59,11 +59,26 @@ in the inner queue's terminal `wait` state. The outer pipeline records this only
 same target, revision, head, durable action ledger and specific source trigger, with
 no uncertain operation. It is neither acceptance nor a fabricated asynchronous
 event. A later cadence prepares fresh source evidence and re-evaluates the target;
-an unverified or changed receipt fails closed. A pre-fix failed action is carried
-forward only when its retained blocked receipt matches this same durable proof;
+an unverified or changed receipt fails closed. A pre-fix failed action may re-enter
+preparation only when its retained blocked receipt matches this same durable proof;
 the historical invalid stop remains in the audit. Reusing an unchanged wait still
 requires fresh campaign admission and matching evidence producer and semantic
 binding. A changed producer or head returns to normal interpretation.
+
+An expired interrupted round may admit a fresh round without making its invalid
+historical stop valid. Recovery retains the original failure evidence and permits
+fresh preparation for assigned targets with no action or an exact durable
+non-mutating wait proof, with current ownership, capacity, evidence and budget
+checks. A failed action without that proof remains quarantined. An uncertain
+operation stays behind reconciliation before any retry. Removed unsafe targets
+retain their barriers; removed read-only failures remain in the audit. They do
+not become new work. These barriers and the invalid-stop audit must survive
+later cadences and history trimming. Missing or malformed recovery proof fails
+closed; never clear the ledger or invent a resource boundary to admit work.
+When the bounded in-ledger invalid-stop history fills, the pipeline fsyncs exact
+older audit entries into immutable, hash-linked chunks beside its state before
+recording the archive head. Recovery verifies the complete chain; missing or
+tampered chunks block fresh work while the original invalid audit remains intact.
 
 Before ACTION C finalizes the round, run
 `python3 ~/.codex/orchestrator-mirror/closer_dispatcher.py validate-stop --state "$CLOSER_ROUND_STATE" --assignment ~/.codex/automations/reviewed-repo-automation-controller/closer-assignment.json`.
