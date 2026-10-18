@@ -2826,8 +2826,12 @@ def test_deterministic_dispatcher_states_skip_low_provider_stage(tmp_path, monke
     assert all("actual" not in result for result in seen.values())
 
 
-def test_low_transport_failure_suppresses_profile_and_other_profile_continues(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize(
+    "failure_kind",
+    ["transport", "refusal", "inspection", "malformed", "quota", "quota_normal_exit"],
+)
+def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
+    tmp_path, monkeypatch, failure_kind
 ):
     import closer_disposition
     import closer_evidence
@@ -2871,8 +2875,34 @@ def test_low_transport_failure_suppresses_profile_and_other_profile_continues(
     def offload(_agent, _prompt, **kwargs):
         profile = kwargs["profile_id"]
         provider_profiles.append(profile)
-        if profile == "gemini-low":
-            return {"exit": 1, "run_id": "dispatch-unsupported-31", "error": "unsupported model"}
+        assert "honest missing-evidence assessment is a completed deliverable" in _prompt
+        assert "leave decision.criteria empty" in _prompt
+        assert "read-only commands such as python3 -c" in _prompt
+        if profile == "gemini-low" and kwargs["subject_id"] == first:
+            result = {"exit": 1, "run_id": "dispatch-failed-31", "error": "unsupported model"}
+            if failure_kind in {"refusal", "inspection", "quota_normal_exit"}:
+                result.update(
+                    exit=70,
+                    raw_exit=0,
+                    error="agent reported OFFLOAD_INCOMPLETE",
+                    output=(
+                        "OFFLOAD_INCOMPLETE: Cannot truthfully provide required PASS rows: "
+                        "qualifying evidence is missing and the operational check is future-dated."
+                        if failure_kind == "refusal"
+                        else "OFFLOAD_INCOMPLETE: read-only inspection could not create a temporary file."
+                    ),
+                )
+            if failure_kind == "malformed":
+                result.update(exit=0, output='{"classification": "uncertain",')
+            if failure_kind in {"quota", "quota_normal_exit"}:
+                if failure_kind == "quota":
+                    result.update(exit=3, raw_exit=3)
+                result["rate_incident_evidence"] = {
+                    "category": "quota_exhausted",
+                    "is_authoritative": True,
+                    "evidence_hash": "f" * 64,
+                }
+            return result
         return {
             "exit": 0,
             "run_id": "dispatch-success-32",
@@ -2892,11 +2922,17 @@ def test_low_transport_failure_suppresses_profile_and_other_profile_continues(
         }
 
     monkeypatch.setattr(dispatcher, "offload", offload)
-    # The helper is only reached for the successful alternative provider.
+    integrations = []
+
+    def integrate(target, *_a, **_k):
+        integrations.append(target)
+        return {"status": "wait", "reason": "evidence incomplete", "raw_findings": []}
+
+    # A refusal or malformed response must never reach acceptance integration.
     monkeypatch.setattr(
         closer_disposition,
         "integrate_ordinary",
-        lambda *_a, **_k: {"status": "wait", "reason": "evidence incomplete", "raw_findings": []},
+        integrate,
     )
 
     def packet_for(target):
@@ -2944,16 +2980,37 @@ def test_low_transport_failure_suppresses_profile_and_other_profile_continues(
             values[target] = callbacks["interpret"](
                 target, {"prepare": packet_for(target), "deadline": time.time() + 60}
             )
-        assert values[first]["actual"]["run_id"] == "dispatch-success-32"
-        assert values[first]["prior_provider_failures"][0]["run_id"] == "dispatch-unsupported-31"
+        if failure_kind in {"refusal", "inspection", "malformed"}:
+            assert values[first]["actual"]["run_id"] == "dispatch-failed-31"
+            assert values[first]["classification"] == "uncertain"
+            assert values[first]["substantive_needs"]
+            assert values[first]["integration_status"] == "wait"
+            assert not values[first]["integration_disposition"]
+            assert not values[first]["prior_provider_failures"]
+            if failure_kind != "malformed":
+                assert values[first]["actual"]["exit"] == 70
+                assert values[first]["actual"]["raw_exit"] == 0
+                assert values[first]["substantive_needs"] == ["incomplete_low_assessment"]
+                assert "OFFLOAD_INCOMPLETE" in values[first]["proposal"]["raw_excerpt"]
+        else:
+            assert values[first]["actual"]["run_id"] == "dispatch-success-32"
+            assert values[first]["prior_provider_failures"][0]["run_id"] == "dispatch-failed-31"
         assert values[second]["actual"]["run_id"] == "dispatch-success-32"
         return {"targets": values}
 
     monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=pipeline_stub))
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
     adapter._run_staged_pipeline(args, [first, second], backend, time.time() + 360)
-    assert route_profiles == ["gemini-low", "claude-low", "claude-low"]
+    if failure_kind in {"refusal", "inspection", "malformed"}:
+        assert route_profiles == ["gemini-low", "gemini-low"]
+        assert integrations == [second]
+    else:
+        assert route_profiles == ["gemini-low", "claude-low", "claude-low"]
+        assert integrations == [first, second]
     assert provider_profiles == route_profiles
+
+    if failure_kind != "transport":
+        return
 
     route_profiles.clear()
     provider_profiles.clear()
