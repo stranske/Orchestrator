@@ -1,0 +1,5 @@
+$ /opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_experiment_producer.py::test_producer_exception_never_falls_through
+..                                                                       [100%]
+2 passed in 0.92s
+
+EXIT=0

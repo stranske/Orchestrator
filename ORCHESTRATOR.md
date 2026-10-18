@@ -578,6 +578,26 @@ cursor-agent live outside the default PATH):
 
 ---
 
+## Status-driven closer execution
+
+The local closer now has a repository-backed coordinator: see
+[docs/CLOSER_DISPATCHER.md](docs/CLOSER_DISPATCHER.md). It consumes the existing
+controller assignment and composes bounded private workers with guarded
+verification, review, repair, merge and source-closure transitions. A waiting item
+does not end the round. Its durable queue and postrun receipt account for every
+assignment and preserve real budget limits across interrupted work. Workers never
+supply merge or closure authority; the closer integrates source Tasks/AC evidence,
+and existing guards and native verifier remain authoritative. Source closure uses
+the independently owned supervisor actor only when normally deployed and enabled.
+The production invocation adds `--pipeline`: incremental evidence preparation
+runs before lifecycle selection even while CI is pending; current-finding
+classification uses a fresh capacity-aware low-effort route, and explicit
+exceptions reuse the existing closer allocation path. Per-target completions
+immediately re-enter the claimed queue. Pipeline receipts and action ledgers are
+sidecars, preserving any existing queue receipt; `validate-stop` checks the
+pipeline assignment when that sidecar exists. `--shadow` records preparation and
+proposals without worker dispatch or queue actions.
+
 ## Priors for *who does what* (override freely)
 
 For Codex local dispatch, normal `implement` work uses Sol High; bounded code,

@@ -292,7 +292,7 @@ class ResearchOwnershipTests(unittest.TestCase):
                     patch.object(tick.capabilities, "production_heartbeat"),
                 ):
                     self.assertIsNone(tick._fetch_issue_body("o/r#1"))
-                    self.assertIn("labels", read.call_args.args[0][-1])
+                    self.assertEqual(read.call_args.args[0], ["gh", "api", "repos/o/r/issues/1"])
                     outcome = tick.research_tick(
                         items,
                         cap,

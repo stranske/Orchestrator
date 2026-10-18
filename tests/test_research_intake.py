@@ -141,10 +141,11 @@ def test_the_tick_plans_research_from_the_feed_and_reports_its_inputs():
     assert "research no_subject (feed fresh 1, opener 1; skipped subject_cooldown 1)" in line
 
 
-@pytest.mark.parametrize(("state", "launchable"), (("OPEN", True), ("CLOSED", False)))
+@pytest.mark.parametrize(("state", "launchable"), (("open", True), ("closed", False)))
 def test_a_closed_issue_is_never_launched(monkeypatch, state, launchable):
     def run(argv, **kwargs):
-        assert "state" in argv[-1], argv
+        # The launch re-read is one REST call (GraphQL quota is shared); REST states are lowercase.
+        assert argv == ["gh", "api", "repos/o/a/issues/1"], argv
         payload = {"title": "T", "body": "B", "state": state, "labels": []}
         return subprocess.CompletedProcess(argv, 0, json.dumps(payload), "")
 
@@ -207,11 +208,11 @@ def test_a_paused_or_owned_issue_is_never_a_research_subject(labels, eligible):
 )
 def test_a_pause_or_writer_added_since_the_feed_stops_the_launch(monkeypatch, labels, launchable):
     def run(argv, **kwargs):
-        assert "labels" in argv[-1], argv
+        assert argv == ["gh", "api", "repos/o/a/issues/1"], argv
         payload = {
             "title": "T",
             "body": "B",
-            "state": "OPEN",
+            "state": "open",
             "labels": [{"name": lab} for lab in labels],
         }
         return subprocess.CompletedProcess(argv, 0, json.dumps(payload), "")

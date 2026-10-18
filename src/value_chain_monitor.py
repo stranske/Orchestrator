@@ -98,7 +98,69 @@ SET_ASIDE = (
 INPUT_FLAGS = {
     "role-triage": ("ORCH_DISPATCH_LANE", "ORCH_TRIAGE_CONSUME"),
     "issue-readiness": ("ORCH_DISPATCH_LANE",),
+    # The other judgment roles' declared consumers (dispatcher.plan_dispatch, epic_lane's
+    # dispatch prompts, the redirect rails) run only inside the tick's dispatch lane, shadowed
+    # since 2026-09-03. Until 2026-10-17 nothing printed that, so their rows read not_acted_on or
+    # unmeasured instead of input_off, and the 2026-09-03 switch flip surfaced nowhere.
+    # `tests/test_lane_moment_bindings.py` pins the rule: every role except the adjudicator,
+    # whose consumer is the closer lane, names its switch here.
+    "role-prompt": ("ORCH_DISPATCH_LANE",),
+    "role-decomposer": ("ORCH_DISPATCH_LANE",),
+    "role-redirect": ("ORCH_REDIRECT_APPLY_BOOTSTRAP",),
+    "redirect-plan": ("ORCH_DISPATCH_LANE",),
+    "redirect-policy": ("ORCH_DISPATCH_LANE",),
 }
+STALL_SWEEP_LOG = "redirect-sweep.log"
+
+
+def _state_dir() -> Path:
+    return Path(os.environ.get("ORCH_STATE_DIR", str(Path.home() / ".codex" / "orchestrator")))
+
+
+def _stall_sweep_targets(log: Path, start: int, end: int) -> set[str] | None:
+    """Distinct targets the redirect sweep found actionable in [start, end]; None when unread.
+
+    The sweep appends its whole JSON report to this log every hour, so the log is the one record
+    of the stall population independent of whether any role ran: 1,844 sweeps in the 90 days to
+    2026-10-17, 40 with a watched target, 6 with an actionable one (9 actionable in all).
+    """
+    if not log.exists():
+        return None
+    decoder = json.JSONDecoder()
+    try:
+        text = log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    pos, targets = 0, set()
+    while True:
+        brace = text.find("{", pos)
+        if brace < 0:
+            break
+        try:
+            obj, stop = decoder.raw_decode(text, brace)
+        except ValueError:
+            pos = brace + 1
+            continue
+        # `raw_decode` returns the ABSOLUTE end index. Adding it to `brace` skipped most of the
+        # log: the first production read decoded 10 of 2,319 sweeps and printed role-redirect's
+        # demand as 0 (`no_situation`) against 9 actionable stalls in the window (2026-10-17).
+        pos = stop  # never `end`: that name is the window's end, and shadowing it emptied every window
+        if not isinstance(obj, dict):
+            continue
+        ts = obj.get("generated_at")
+        if not isinstance(ts, (int, float)) or not start <= ts <= end:
+            continue
+        for report in obj.get("actionable") or []:
+            if isinstance(report, dict) and report.get("target"):
+                targets.add(str(report["target"]))
+            elif isinstance(report, str) and report:
+                targets.add(report)
+    return targets
+
+
+def _stall_situations(inputs: dict[str, Any]) -> int | None:
+    targets = inputs.get("stall_targets")
+    return None if targets is None else len(targets)
 
 
 def _prompt_batches(inputs: dict[str, Any]) -> int | None:
@@ -138,6 +200,7 @@ SITUATION_QUERIES: dict[str, Callable[[dict[str, Any]], int | None]] = {
     "role-decomposer": _large_issues,
     "role-triage": _open_issues,
     "role-adjudicator": _disputes,
+    "role-redirect": _stall_situations,
 }
 
 
@@ -436,8 +499,15 @@ def fleet_issues(gh_fn: Callable, since: int, now: int, repos: list[str]) -> lis
     return list(issues.values())
 
 
-def collect_inputs(*, now: int, gh_fn: Callable, repos: list[str], db: Path) -> dict[str, Any]:
+def collect_inputs(
+    *, now: int, gh_fn: Callable, repos: list[str], db: Path, stall_log: Path | None = None
+) -> dict[str, Any]:
     inputs = _brain(db, now - WINDOW_DAYS * 86400, now)
+    inputs["stall_targets"] = _stall_sweep_targets(
+        stall_log or _state_dir() / STALL_SWEEP_LOG, now - WINDOW_DAYS * 86400, now
+    )
+    if inputs["stall_targets"] is None:
+        inputs["errors"].append("stall population unavailable (redirect sweep log unread)")
     inputs["disputes"] = _dispute_count(db, now)
     if inputs["disputes"] is None:
         inputs["errors"].append("dispute population unavailable")

@@ -78,6 +78,19 @@ export ORCH_RESEARCH_ARM="${ORCH_RESEARCH_ARM:-0}"
 # completed, and 7 labelled issues closed with no PR from the labelled agent (4 delivered by codex
 # keepalive or by hand; re-measured 2026-10-04), while keepalive ran 1,239 rounds without it.
 export ORCH_DISPATCH_LANE="${ORCH_DISPATCH_LANE:-0}"
+# ORCH-ANCHOR: exploration-window-start
+# 2026-10-17 owners q-e9950a89551c92a1 / q-1ca1d09d255e987b: 20%, with sample-based extension.
+# Fallback source of truth: route_weights_export.EXPLORATION_WINDOW_END.
+_orch_exploration_end="$(python3 -c 'import json, sys; end = json.load(open(sys.argv[1]))["end"]; print(end if isinstance(end, str) and len(end) == 8 else "")' \
+  "${ORCH_STATE_DIR:-$HOME/.codex/orchestrator}/exploration-window.json" 2>/dev/null || true)"
+if [[ ! "$_orch_exploration_end" =~ ^[0-9]{8}$ ]]; then
+  _orch_exploration_end=20261117
+fi
+# Only the window default expires; explicit caller overrides remain supported.
+if [[ "$(date -u +%Y%m%d)" -le "$_orch_exploration_end" ]]; then
+  export ORCH_EXPLORATION_RATE="${ORCH_EXPLORATION_RATE:-0.20}"
+fi
+# ORCH-ANCHOR: exploration-window-end
 # GitHub API rate-budget awareness (IMPROVEMENT_BACKLOG.md #8 P2). The local lanes share ONE gh token,
 # so gh-heavy cadence steps can hit the REST search (30/min) / core (5000/hr) budget. ORCH_GH_THROTTLE=1
 # turns ON the in-loop pace/defer in durability_sweep/keepalive/langsmith (each a no-op when unset).
@@ -151,6 +164,10 @@ export ORCH_ROLE_MAX_PER_CYCLE="${ORCH_ROLE_MAX_PER_CYCLE:-1}"
 # shell=False after every shell control character has been rejected. Aligns with the owner
 # constraint: prefer machine gates over human review. Export ORCH_RUN_RUNTIME_AC=0 to pause.
 export ORCH_RUN_RUNTIME_AC="${ORCH_RUN_RUNTIME_AC:-1}"
+# Disposable exact-head executions per keepalive ingest and per post-merge sweep (one flag, read by
+# runtime_ac_gate.execution_budget). Three a day measured 9 of 166 shadow specs in a week
+# (2026-10-17); twelve covers about half a day's new specs at a few minutes each.
+export ORCH_RUNTIME_AC_SHADOW_BUDGET="${ORCH_RUNTIME_AC_SHADOW_BUDGET:-12}"
 # Range-lane LIVE dispatch — BOUNDED TRIAL started 2026-07-08 (owner: "turn it on as a bounded
 # trial"). Makes the daily range slot actively dispatch ONE range-lane task/day (testgen/epic/
 # codemod/cross_repo/runtime_ac) instead of preview-only, through range_lane_rollout's triple guard.
@@ -345,6 +362,24 @@ if [[ "$mode" == "active" ]]; then
   fi
   export ORCH_CAPABILITY_HEARTBEATS=1
 fi
+
+# ORCH-ANCHOR: experiment-producer-trial — independent of dispatch/research switches.
+# Read the trial default without starting it; the first active producer tick starts the clock.
+_orch_exp_trial="$(python3 "$ORCH/experiment_producer.py" --trial-defaults)" || {
+  echo "  ERROR: experiment producer --trial-defaults failed; defaulting off" >&2
+  _orch_exp_trial="0 fail"
+}
+_orch_exp_end="${_orch_exp_trial%% *}"
+_orch_exp_verdict="${_orch_exp_trial#* }"
+export ORCH_EXPERIMENT_TRIAL_END="${ORCH_EXPERIMENT_TRIAL_END:-${_orch_exp_end:-0}}"
+_orch_exp_default=0
+if [[ "$_orch_exp_verdict" == "pending" || "$_orch_exp_verdict" == "pass" ]]; then
+  _orch_exp_default=1
+fi
+export ORCH_EXPERIMENT_PRODUCER="${ORCH_EXPERIMENT_PRODUCER:-$_orch_exp_default}"
+export ORCH_EXPERIMENT_RATE_PER_DAY="${ORCH_EXPERIMENT_RATE_PER_DAY:-2}"
+unset _orch_exp_trial _orch_exp_end _orch_exp_verdict _orch_exp_default
+
 
 # ORCH-ANCHOR: heartbeat-producers ---------------------------------------------------------------
 # Everything from here down may emit capability heartbeats. Capacity + discovery write only
@@ -720,6 +755,20 @@ if _cadence_due redirect-apply-link && _attempt_ok redirect-apply-link; then
     python3 "$ORCH/redirect_apply.py" --status --stage2-plan "$stage2_plan_json" --report-dir "$stage2_report_dir" >> "$STAMP_DIR/redirect-apply.log" 2>&1 || true
     if [[ "$redirect_apply_ok" == "1" ]]; then _mark_success redirect-apply-link; else _mark_fail redirect-apply-link "see $STAMP_DIR/redirect-apply.log"; fi
   fi
+fi
+# Owner goals are independent of a Sunday task firing. Reconcile on recovery too:
+# limiting filing to exit 3 would leave every recovered issue open forever.
+if _cadence_due feature-goals && _attempt_ok feature-goals; then
+  if _gh_gate graphql && _gh_gate core; then
+    echo "  [cadence] feature goals (daily; report and reconcile goal-drift issues)"
+    feature_goals_rc=0
+    python3 "$ORCH/feature_goals.py" --check --file-drift-issues > "$STAMP_DIR/feature-goals.log" 2>&1 || feature_goals_rc=$?
+    if [[ "$feature_goals_rc" == "0" || "$feature_goals_rc" == "3" ]]; then
+      _mark_success feature-goals
+    else
+      _mark_fail feature-goals "see $STAMP_DIR/feature-goals.log"
+    fi
+  else echo "  [cadence] feature goals SKIPPED — gh deferred (stamp untouched)"; fi
 fi
 if _cadence_due switch-review && _attempt_ok switch-review; then
   # Held switches must be revisited, not forgotten. ORCH_RANGE_LANE_ROLLOUT was turned on

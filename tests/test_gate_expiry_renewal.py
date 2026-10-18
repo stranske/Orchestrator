@@ -399,8 +399,13 @@ def test_the_notice_names_what_the_timeout_will_retire_and_just_retired(tmp_path
     assert "not renewable: its expiry copies its artifact playbook_manifest_hash" in text, text
 
 
-def test_the_notice_and_renew_share_one_predicate(tmp_path):
-    """`renewable` must mean exactly "renew accepts it", proved by renewing every listed row."""
+def test_the_notice_and_renew_share_one_predicate(tmp_path, monkeypatch):
+    """`renewable` must mean exactly "renew accepts it", proved by renewing every listed row.
+
+    Acting is an input to the predicate (the notice reads it once from the Brain, the CLI reads it
+    per row); here it is unmeasured, which never blocks, so the lifecycle rules decide alone.
+    """
+    monkeypatch.setattr(switch_review, "_acting_index", lambda now, ids: None)
     ledger = _mixed(tmp_path)
     got = switch_review.gate_expiry(now=NOW, path=ledger)
     listed = got["expiring"] + got["lapsed"]
@@ -511,6 +516,32 @@ def test_the_notice_is_fyi_only(tmp_path, monkeypatch):
     assert ledger.read_bytes() == before, "a review renewed or retired something"
 
 
+def test_renewal_still_works_for_ledger_owned_and_refuses_artifact_owned(tmp_path):
+    now = 10_000_000
+    ledger = _ledger(
+        tmp_path,
+        {
+            "ledger-owned": _plain_row("ledger-owned", expiry=now - DAY),
+            "artifact-owned": _plain_row(
+                "artifact-owned", expiry=now - DAY, target_kind="workflow"
+            ),
+        },
+    )
+    out = capabilities.renew(
+        "ledger-owned",
+        reason="still earns its place",
+        evidence_refs=["pr#1"],
+        path=ledger,
+        timestamp=now,
+    )
+    assert out["renewed"] and _raw(ledger, "ledger-owned")["expiry"] == now + TTL
+    with pytest.raises(ValueError, match="compile and register"):
+        capabilities.renew(
+            "artifact-owned", reason="hold", evidence_refs=["pr#1"], path=ledger, timestamp=now
+        )
+    assert _raw(ledger, "artifact-owned")["expiry"] == now - DAY
+
+
 def test_the_window_covers_the_cadence_that_reads_it():
     """Measuring window vs draining window: the notice must outlast the gap between two reviews.
 
@@ -522,3 +553,36 @@ def test_the_window_covers_the_cadence_that_reads_it():
     assert (
         switch_review.GATE_EXPIRY_NOTICE_DAYS < capabilities.GATED_TTL_DAYS
     ), "a window as long as the TTL would list every gate from the day it is registered"
+
+
+def test_an_invoked_row_that_is_not_acting_needs_a_fix_ref_in_the_notice_and_in_renew(
+    tmp_path, monkeypatch
+):
+    """M1 restated (owner 2026-10-17): acting in the trailing window is the renewal currency."""
+    row = _plain_row("idle", expiry=NOW + 3 * DAY)
+    row["last_invocation"] = NOW - DAY
+    ledger = _ledger(tmp_path, {"idle": row})
+    monkeypatch.setattr(switch_review, "_acting_index", lambda now, ids: {cid: 0 for cid in ids})
+    got = switch_review.gate_expiry(now=NOW, path=ledger)
+    listed = {r["capability_id"]: r for r in got["expiring"]}
+    assert listed["idle"]["acting_trailing_window"] == 0
+    assert listed["idle"]["renewable"] is False and "fix ref" in listed["idle"]["blocker"]
+    with pytest.raises(ValueError, match="fix ref"):
+        capabilities.renew(
+            "idle", reason="hold", evidence_refs=["t"], path=ledger, timestamp=NOW, acting=0
+        )
+    renewed = capabilities.renew(
+        "idle",
+        reason="fix filed",
+        evidence_refs=["stranske/Orchestrator#643"],
+        path=ledger,
+        timestamp=NOW,
+        acting=0,
+    )
+    assert renewed["renewed"] is True
+    event = capabilities.load(ledger)["idle"]["event_history"][-1]
+    assert event["observed"]["acting_trailing_window"] == 0
+    # Unmeasured acting never blocks: the same row with no Brain reading renews on the old terms.
+    monkeypatch.setattr(switch_review, "_acting_index", lambda now, ids: None)
+    again = switch_review.gate_expiry(now=NOW, path=_ledger(tmp_path / "b", {"idle": row}))
+    assert {r["capability_id"]: r["renewable"] for r in again["expiring"]} == {"idle": True}

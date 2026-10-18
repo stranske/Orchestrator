@@ -126,6 +126,19 @@ offered at `tick` and `rail-exercise:audit`. Source deployment remains manual.
 
 ## Important functionality (what actually runs, grouped by job)
 
+Local `dispatcher.py delegate --review-loop` adds an independent review after the
+implementation writer exits. It checks local claims and every native reservation
+across PR heads, reviews the issue's Tasks/Acceptance Criteria and gate-clearing
+paths, and publishes the verdict as an exact-head GitHub status. `FIX-FIRST`
+returns verbatim findings to the same implementer for at most three reviews and
+two repair dispatches. The loop never merges; ordinary checks and review gates
+still apply. Brain `review_rounds` feed the first-pass share in `switch_review.py`.
+An unavailable review or unknown writer remains ineligible, with an explicit
+status and reason. The existing merge guard also reads the launch's opt-in and
+exact PR/head evidence from the Brain, so a missing PR marker or failed status
+publication cannot turn into approval. Omit `--review-loop` for future launches
+to disable this optional step; it does not waive a previously opted-in PR's gate.
+
 The **rail exercise cadence** runs the committed fixture-backed read-only/dry-run rail contracts weekly in shadow mode, reports every pass, failed counterexample, and named skip in `rail-exercise-report.json`, and records zero-weight `fixture_observed` verdicts separately from production usefulness only when `ORCH_RAIL_EXERCISE_RECORD=1` explicitly arms it.
 
 Historical rail-exercise verdicts can be reclassified with
@@ -704,6 +717,20 @@ and the row's own activity. It refuses without both, never stacks, and never und
 retirement, but a row its EXPIRY retired comes back to the status the timeout interrupted. Nothing
 renews on a schedule. `switch_review.py`'s weekly sweep only names the rows within two review
 windows of their expiry, or retired by it that recently, with the command (`gate_expiry`, FYI only).
+
+**Invocation refuses at the effective deadline, read-only.** Routing and compiled invocation do
+not wait for that sweep: `capabilities.capability_expired` (the same `now >= expiry` boundary the
+timeout uses, applied without mutating the row) makes `capability_routing_decision` reject an
+expired row as `expired` with the baseline fallback, and `capability_lifecycle.invoke_compiled_target`
+refuses before any producer runs. The effective deadline for a compiled target is the stricter of
+the ledger `expiry` and the artifact `expires_at` on its binding. The same entrypoint also refuses
+when the ledger row's declared `kill_switch` env var carries its declared value (`kill_switch`),
+when the ledger marks `rollback_pending`, or while the target's `rollback.phase` is `pending`
+(both `rollback_pending`); `capability_targets.invoke_target` applies the same expiry, kill-switch
+and pending-rollback refusals to direct callers. A ledger that cannot be read at all fails
+closed as `ledger_unreadable` on both entrypoints rather than raising or masquerading as
+`expired` (renewal cannot repair a corrupt ledger). A refusal returns `invoked: False` with that
+reason, writes no registry/binding invocation and records no consumption edge.
 
 Do not maintain a second static list of supposedly active or gated features here. Generate the
 current inventory with `python3 src/capabilities.py inventory` (or inspect
