@@ -517,6 +517,38 @@ def _write_runtime_registry(registry: Path, runtime_registry: Path) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _generation_token(mirror: Path) -> str:
+    """Opaque incumbent identity; caller holds this mirror's publication lock."""
+    identity: dict = {"mirror": str(mirror)}
+    try:
+        leaf = mirror.lstat()
+    except FileNotFoundError:
+        identity["kind"] = "absent"
+    else:
+        identity.update(device=leaf.st_dev, inode=leaf.st_ino, mode=leaf.st_mode)
+        if mirror.is_symlink():
+            identity.update(kind="symlink", link=os.readlink(mirror))
+            target = mirror.stat()  # A broken incumbent is not a valid capture.
+            identity.update(target_device=target.st_dev, target_inode=target.st_ino)
+        elif mirror.is_dir():
+            identity["kind"] = "legacy_directory"
+        else:
+            raise ValueError("mirror incumbent must be a directory or generation symlink")
+    return (
+        "generation-v1:" + hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+    )
+
+
+def generation_token(mirror: Path) -> str:
+    """Capture before automatic verification, serialized with every publisher."""
+    mirror = mirror.expanduser().absolute()
+    mirror = mirror.parent.resolve() / mirror.name
+    mirror.parent.mkdir(parents=True, exist_ok=True)
+    with (mirror.parent / f".{mirror.name}.publish.lock").open("a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        return _generation_token(mirror)
+
+
 def install(
     snapshot: Path,
     mirror: Path,
@@ -524,7 +556,13 @@ def install(
     runtime_registry: Path | None = None,
     *,
     verified: bool = True,
+    expected_generation: str | None = None,
 ) -> int:
+    if (
+        expected_generation is not None
+        and re.fullmatch(r"generation-v1:[0-9a-f]{64}", expected_generation) is None
+    ):
+        raise ValueError("expected generation must be a captured generation-v1 token")
     snapshot = snapshot.resolve()
     mirror = mirror.expanduser().absolute()
     mirror = mirror.parent.resolve() / mirror.name
@@ -578,6 +616,10 @@ def install(
         mirror.parent.mkdir(parents=True, exist_ok=True)
         with (mirror.parent / f".{mirror.name}.publish.lock").open("a") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            if expected_generation is not None and _generation_token(mirror) != expected_generation:
+                raise ValueError(
+                    "mirror generation changed during verification; reconcile ownership and verify again"
+                )
             # The previous publisher may have changed the shipped-doc manifest.
             prior_docs = _shipped_docs(mirror / ".docs-shipped.txt")
             _publish_generation(payload, mirror, entries, expected_digest, prior_docs)
@@ -599,17 +641,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("mirror", type=Path, nargs="?")
     parser.add_argument("--digest", action="store_true")
     parser.add_argument("--expected-digest")
+    parser.add_argument("--expected-generation")
+    parser.add_argument("--generation-token", action="store_true")
     parser.add_argument("--runtime-registry", type=Path)
     parser.add_argument(
         "--unverified", action="store_true", help="digest is integrity only; no verifier verdict"
     )
     args = parser.parse_args(argv)
     try:
+        if args.generation_token:
+            if (
+                args.mirror is not None
+                or args.runtime_registry is not None
+                or args.expected_digest is not None
+                or args.expected_generation is not None
+                or args.unverified
+                or args.digest
+            ):
+                parser.error("--generation-token accepts only MIRROR")
+            print(generation_token(args.snapshot))
+            return 0
         if args.digest:
             if (
                 args.mirror is not None
                 or args.runtime_registry is not None
                 or args.expected_digest is not None
+                or args.expected_generation is not None
                 or args.unverified
             ):
                 parser.error("--digest accepts only SNAPSHOT")
@@ -625,6 +682,7 @@ def main(argv: list[str] | None = None) -> int:
             args.expected_digest,
             args.runtime_registry,
             verified=not args.unverified,
+            expected_generation=args.expected_generation,
         )
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
         print(f"install-verified-snapshot: {exc}", file=sys.stderr)
