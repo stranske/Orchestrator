@@ -956,7 +956,6 @@ def integrate(
         same_history = (
             prior.get("period_start") == start
             and prior.get("period_end") == end
-            and prior.get("source") == datum["source"]
             and (reset_at is None or (prior.get("ts") or 0) >= reset_at)
         )
         row = pacing.evaluate(
@@ -987,6 +986,13 @@ def integrate(
                 "confidence",
                 "effective_projected_fraction",
                 "previous_routing_weight",
+                "capacity_budget",
+                "n_usable",
+                "sustainable_rate_per_hour",
+                "burn_short_per_hour",
+                "burn_period_per_hour",
+                "burn_effective_per_hour",
+                "target_routing_weight",
             )
         }
         row["measurement"] = (
@@ -1052,6 +1058,12 @@ def report(handoff: Path, *, now: float, current: dict | None = None) -> str:
             f"ũ={measured(row.get('projected_fraction'))} "
             f"ũ_eff={measured(row.get('effective_projected_fraction'))} "
             f"span_h={measured(row.get('span_h'))} c={measured(row.get('confidence'))} "
+            f"C={measured(row.get('capacity_budget'))} n_usable={measured(row.get('n_usable'))} "
+            f"s={measured(row.get('sustainable_rate_per_hour'))} "
+            f"ḃ_short={measured(row.get('burn_short_per_hour'))} "
+            f"ḃ_period={measured(row.get('burn_period_per_hour'))} "
+            f"ḃ_eff={measured(row.get('burn_effective_per_hour'))} "
+            f"w_p_target={measured(row.get('target_routing_weight'))} "
             f"state={row.get('state', 'unknown')} "
             f"pacing={row.get('measurement', 'unknown')} w_p={measured(row.get('routing_weight'))} "
             f"w_p_prev→w_p={measured(row.get('previous_routing_weight'))}→"

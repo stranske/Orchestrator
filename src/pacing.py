@@ -1,7 +1,6 @@
 """Time-based pool pacing. Pure arithmetic with explicit clocks and no I/O.
 
-A reset substitutes for reserve, not actual quota: exhaustion always sheds.
-The literal revised reserve/weight formulas govern (one reset => 0.075 reserve).
+Banked resets expand the pacing budget; actual exhaustion always sheds.
 """
 
 from __future__ import annotations
@@ -114,9 +113,8 @@ def burn_rate(samples: list[dict], now: float, start: float, *, source=None) -> 
     return burn_estimate(samples, now, start, source=source)[0]
 
 
-def routing_weight(projected: float, reserve: float) -> float:
-    target = 1 - reserve
-    return min(1.0, max(0.0, (target - projected) / target))
+def routing_weight(sustainable_rate: float, effective_burn: float) -> float:
+    return 1.0 if effective_burn <= 0 else min(1.0, max(0.0, sustainable_rate / effective_burn))
 
 
 def pass_bounds(reserve: float) -> tuple[float, float]:
@@ -157,6 +155,13 @@ def evaluate(
         burn_rate_per_day=None,
         burn_per_day=None,
         routing_weight=None,
+        capacity_budget=None,
+        n_usable=None,
+        sustainable_rate_per_hour=None,
+        burn_short_per_hour=None,
+        burn_period_per_hour=None,
+        burn_effective_per_hour=None,
+        target_routing_weight=None,
         previous_routing_weight=previous_weight,
         period_start=period_start,
         period_end=period_end,
@@ -202,11 +207,21 @@ def evaluate(
         state = "warn"
     else:
         state = "shed"
-    # Keep the reserve/weight formula: without a qualified burn use observed u.
-    # A new history starts from full weight; recorded ticks supply their prior.
+    n_usable = len(bank) if bank is not None else 0
+    budget = (1 - reserve) + n_usable
+    sustainable = max(0.0, budget - u) / max((period_end - now) / 3600, 1.0)
+    period_burn = u / max((now - period_start) / 3600, 1.0)
+    short_burn = rate / 24 if rate is not None else None
+    effective_burn = (
+        confidence * short_burn + (1 - confidence) * period_burn
+        if short_burn is not None
+        else period_burn
+    )
+    # Source changes preserve the same period's prior; reset events restart it.
     prior_weight = min(1.0, max(0.0, previous_weight)) if previous_weight is not None else 1.0
-    weight = routing_weight(effective_projected if effective_projected is not None else u, reserve)
-    if state == "shed":
+    target_weight = routing_weight(sustainable, effective_burn)
+    weight = target_weight
+    if u >= 1 or latched:
         weight = 0.0
     if u < 1 and not latched:
         weight = min(
@@ -223,15 +238,16 @@ def evaluate(
         burn_rate_per_day=rate,
         burn_per_day=rate,
         routing_weight=weight,
+        capacity_budget=budget,
+        n_usable=n_usable,
+        sustainable_rate_per_hour=sustainable,
+        burn_short_per_hour=short_burn,
+        burn_period_per_hour=period_burn,
+        burn_effective_per_hour=effective_burn,
+        target_routing_weight=target_weight,
     )
-    if (
-        effective_projected is not None
-        and effective_projected > 1
-        and bank
-        and not latched
-        and u < 1
-    ):
-        reset = bank[0]
+    if u + effective_burn * max(0, period_end - now) / 3600 > 1 and bank and not latched and u < 1:
+        reset = min(bank, key=lambda entry: timestamp(entry["expires"]) or 0.0)
         result["fyi"].append(
             f"pool {pool}: would consume oldest-expiring reset "
             f"expires={reset['expires']} (expiry source={reset.get('source', 'owner estimate UNKNOWN')})"

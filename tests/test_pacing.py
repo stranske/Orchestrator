@@ -126,13 +126,10 @@ def test_codex_reset_moves_period_claude_stays_fixed():
     assert pacing.period("codex", now) is None
 
 
-def test_weight_literal_endpoints_and_monotonicity():
-    values = [-1, 0, 0.1, 0.5, 0.85, 1, 4]
-    weights = [pacing.routing_weight(v, 0.15) for v in values]
-    assert weights == sorted(weights, reverse=True)
-    assert weights[:2] == [1, 1]
-    assert weights[-3:] == [0, 0, 0]
-    assert weights[3] == pytest.approx((0.85 - 0.5) / 0.85)
+def test_weight_rate_ratio_endpoints_and_monotonicity():
+    weights = [pacing.routing_weight(0.1, burn) for burn in (0, 0.05, 0.1, 0.2, 1)]
+    assert weights == [1, 1, 1, 0.5, 0.1]
+    assert pacing.routing_weight(0, 0.1) == 0
 
 
 @pytest.mark.parametrize("u", [1, 1.2])
@@ -708,6 +705,17 @@ def test_integrate_only_worsens_native_states(tmp_path, monkeypatch, legacy, pac
             confidence=None,
             effective_projected_fraction=None,
             previous_routing_weight=None,
+            **dict.fromkeys(
+                (
+                    "capacity_budget",
+                    "n_usable",
+                    "sustainable_rate_per_hour",
+                    "burn_short_per_hour",
+                    "burn_period_per_hour",
+                    "burn_effective_per_hour",
+                    "target_routing_weight",
+                )
+            ),
         ),
     )
     agents = {p: dict(state=legacy, reason="native") for p in ("codex", "claude")}
@@ -1149,7 +1157,7 @@ def test_minimum_sample_rule_counts_distinct_observations(offsets, values, span)
     assert row["span_h"] == span
     assert row["burn_rate_per_day"] is None
     assert row["state"] == "ok"
-    assert row["routing_weight"] == pytest.approx(pacing.routing_weight(0.1, 0.15))
+    assert row["routing_weight"] == pytest.approx(1.0)
 
 
 def test_burn_window_excludes_old_future_other_source_and_prior_period():
@@ -1178,7 +1186,7 @@ def test_usage_drop_restarts_span_even_with_unchanged_period():
 
 @pytest.mark.parametrize("prior,expected", [(1, 0.75), (0.75, 0.5), (0.5, 0.25), (0.25, 0)])
 def test_tick_weight_drop_is_bounded(prior, expected):
-    row = evaluate(previous_weight=prior)
+    row = evaluate(u=0.97, previous_weight=prior)
     assert row["routing_weight"] == expected
     assert row["previous_routing_weight"] == prior
 
@@ -1277,3 +1285,89 @@ def test_partial_confidence_schedule_warns_despite_flat_projection():
     assert row["state"] == "warn"
     assert "schedule decides state" in " ".join(row["fyi"])
     assert "schedule decides state" in row["reason"]
+
+
+# Round 4: sustainable spend, reset budget, and recovery from zero.
+def live_pace(n, previous_weight=0):
+    now = START + 5 * 3600
+    return evaluate(
+        now=now,
+        source_ts=now,
+        u=0.15,
+        n=n,
+        previous_weight=previous_weight,
+        samples=observations([now - 7200, now - 3600, now], [0, 0.075, 0.15]),
+    )
+
+
+def test_live_n_usable_raises_target_and_recovers_from_zero():
+    banked, empty = live_pace(2), live_pace(0)
+    assert (
+        banked["target_routing_weight"] > 2 * empty["target_routing_weight"] > 0
+    ), "n_usable must raise target beyond reserve relief alone (over twice the no-reset target)"
+    assert banked["n_usable"] == 2, "n_usable must include both unexpired resets"
+    assert banked["capacity_budget"] == 3
+    assert banked["burn_period_per_hour"] == pytest.approx(0.03)
+    assert banked["burn_effective_per_hour"] == pytest.approx(0.045)
+    target = (2.85 / 163) / 0.045
+    assert banked["target_routing_weight"] == pytest.approx(target)
+    assert banked["routing_weight"] == 0.25
+    assert live_pace(2, 0.25)["routing_weight"] == pytest.approx(target)
+    assert "oldest-expiring reset" in " ".join(banked["fyi"])
+    print(
+        f"live n_usable=2 target={target:.6f}; n_usable=0 target={empty['target_routing_weight']:.6f}"
+    )
+
+
+def test_claude_above_budget_has_zero_target():
+    now = START + 5 * 3600
+    row = pacing.evaluate(
+        "claude",
+        now=now,
+        used_fraction=0.97,
+        period_start=START,
+        period_end=END,
+        resets=[],
+        samples=[],
+        source=SOURCE,
+        source_ts=now,
+        previous_weight=0,
+    )
+    assert row["effective_reserve"] == 0.15
+    assert row["sustainable_rate_per_hour"] == 0
+    assert row["target_routing_weight"] == row["routing_weight"] == 0
+
+
+def test_flat_usage_weight_recovers_and_drained_print_is_reachable():
+    now = START + 2 * pacing.DAY_SECONDS
+    prior = 0
+    for expected in (0.25, 0.5, 0.75, 1):
+        row = evaluate(
+            day=2,
+            u=0.6,
+            previous_weight=prior,
+            previous_state="shed",
+            samples=observations([now - 21600, now - 10800, now], [0.6] * 3),
+        )
+        assert row["burn_effective_per_hour"] == 0
+        assert row["routing_weight"] == expected
+        assert "pool codex: ũ=0.60 ≤ 1−r_eff → ok" in row["fyi"]
+        prior = row["routing_weight"]
+    print("pool codex: ũ=0.60 ≤ 1−r_eff → ok; w_p_prev→w_p=0.750→1.000")
+
+
+def test_expired_reset_does_not_expand_pacing_budget():
+    now = START + 5 * 3600
+    row = evaluate(
+        now=now,
+        source_ts=now,
+        u=0.15,
+        resets=[
+            dict(expires=now - 1),
+            dict(expires=now),
+            dict(expires=now + 1),
+            dict(expires=now + 100, consumed_at=now - 1),
+        ],
+    )
+    assert row["n_usable"] == 1
+    assert row["capacity_budget"] == pytest.approx(1.925)
