@@ -27,6 +27,8 @@ MAX_TARGETS = 1024
 CALLBACK_RESULT_BYTES = 32 * 1024
 SEMANTIC_CACHE_PREFIX = "closer-evidence-semantic/v1:"
 INNER_WAIT_SCHEMA = "closer-inner-wait/v1"
+NONPASS_WAIT_SCHEMA = "closer-ordinary-nonpass-wait/v1"
+NONPASS_WAIT_PREFIX = "ordinary NON_PASS disposition retained: "
 
 
 def _canonical(value: Any) -> bytes:
@@ -35,6 +37,104 @@ def _canonical(value: Any) -> bytes:
 
 def _digest(value: Any) -> str:
     return hashlib.sha256(_canonical(value)).hexdigest()
+
+
+def _native_route_result(value: Mapping[str, Any]) -> bool:
+    classification = value.get("classification")
+    return isinstance(classification, str) and classification.startswith("deterministic_")
+
+
+def _nonpass_wait_store(path: Path) -> Path:
+    return path.parent / f"{path.stem}.wait-proofs"
+
+
+def _valid_nonpass_wait_record(record, target, revision, snapshot, reason, trigger) -> bool:
+    """A helper-accounted NON_PASS may prove waiting, never acceptance or an operation."""
+    import closer_dispatcher
+    import closer_disposition
+    import closer_evidence
+
+    if not isinstance(record, Mapping) or not isinstance(snapshot, Mapping):
+        return False
+    disposition, verifier = record.get("disposition"), snapshot.get("verifier")
+    if not isinstance(disposition, Mapping) or not isinstance(verifier, Mapping):
+        return False
+    subject = closer_evidence._subject_target(dict(snapshot))
+    verifier_subject = f"{verifier.get('repo')}#{verifier.get('pr')}"
+    if (
+        record.get("schema") != NONPASS_WAIT_SCHEMA
+        or record.get("target") != target
+        or record.get("revision") != revision
+        or record.get("reason") != reason
+        or record.get("next_trigger") != trigger
+        or snapshot.get("target") != target
+        or snapshot.get("revision") != revision
+        or snapshot.get("kind") != "pr"
+        or snapshot.get("state") != "MERGED"
+        or not isinstance(reason, str)
+        or not reason.startswith(NONPASS_WAIT_PREFIX)
+        or not isinstance(trigger, str)
+        or not trigger.strip()
+        or disposition.get("acceptance_authority") is not False
+        or disposition.get("repair") is not None
+        or record.get("disposition_sha256") != _digest(disposition)
+        or record.get("verifier") != verifier
+        or verifier.get("schema") != "verifier-corpus-decision/v1"
+        or verifier.get("verdict") != "NON_PASS"
+        or verifier.get("head_sha") != snapshot.get("head")
+        or not closer_dispatcher.TARGET.fullmatch(verifier_subject)
+        or verifier_subject != subject
+        or not isinstance(verifier.get("evaluated_sha"), str)
+        or not closer_dispatcher.SHA.fullmatch(verifier["evaluated_sha"])
+        or verifier.get("evaluated_sha") != snapshot.get("merge")
+        or any(
+            not str(verifier.get(field, "")).isdigit() or int(str(verifier[field])) <= 0
+            for field in ("run_id", "run_attempt")
+        )
+        or any(
+            record.get(field) != snapshot.get(field)
+            or disposition.get(field) != snapshot.get(field)
+            for field in ("head", "base", "review_revision")
+        )
+        or disposition.get("source_digest")
+        != closer_dispatcher.source_digest(snapshot.get("sources", []))
+    ):
+        return False
+    raw = disposition.get("raw_verdicts")
+    resolutions = disposition.get("resolutions")
+    actions = disposition.get("next_guarded_actions")
+    if (
+        not isinstance(raw, list)
+        or not raw
+        or not all(isinstance(row, dict) and isinstance(row.get("raw"), dict) for row in raw)
+        or any(row.get("finding_id") != closer_disposition._finding_id(row["raw"]) for row in raw)
+        or not any(
+            row["raw"] == {"source": "native_verifier", "verdict": "NON_PASS", "raw": verifier}
+            for row in raw
+        )
+        or not isinstance(resolutions, list)
+        or not all(isinstance(row, dict) for row in resolutions)
+        or sorted(row.get("finding_id", "") for row in resolutions)
+        != sorted(row["finding_id"] for row in raw)
+        or not isinstance(actions, list)
+        or actions != [row.get("next_guarded_action") for row in resolutions]
+        or any(action not in {"wait", "collect_evidence"} for action in actions)
+    ):
+        return False
+    return all(
+        row.get("status")
+        in {
+            "unresolved_missing_evidence",
+            "unresolved_mechanical",
+            "resolved_duplicate",
+            "resolved_nonissue",
+        }
+        and (
+            not row["status"].startswith("unresolved_")
+            or (isinstance(row.get("reason"), str) and bool(row["reason"].strip()))
+        )
+        for row in resolutions
+    )
 
 
 def _valid_inner_wait(
@@ -84,6 +184,9 @@ def _valid_inner_wait(
             return False
     elif reason.startswith("current item-scoped hold: "):
         if trigger == "wait_for_trigger" or trigger == "resume_target_from_current_evidence":
+            return False
+    elif reason.startswith(NONPASS_WAIT_PREFIX):
+        if not isinstance(proof.get("ordinary_nonpass_ref"), Mapping):
             return False
     else:
         return False
@@ -170,6 +273,16 @@ def _valid_inner_wait(
                     }
                 )
                 if reason != f"current item-scoped hold: {sorted(holds)}" or not holds:
+                    return False
+            elif reason.startswith(NONPASS_WAIT_PREFIX):
+                import closer_disposition
+
+                raw = closer_disposition._safe_raw(
+                    proof.get("ordinary_nonpass_ref"), _nonpass_wait_store(pipeline_path)
+                )
+                if raw is None or not _valid_nonpass_wait_record(
+                    json.loads(raw), target, revision, item.get("evidence"), reason, trigger
+                ):
                     return False
             return True
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
@@ -1834,10 +1947,7 @@ def _run_pipeline_impl(
                     if (
                         stage in {"interpret", "exception"}
                         and cache_key
-                        and not (
-                            stage == "interpret"
-                            and value.get("classification") == "deterministic_inner_wait"
-                        )
+                        and not (stage == "interpret" and _native_route_result(value))
                     ):
                         # Keep the newest semantic result per target/stage. The
                         # coordinator state byte limit bounds storage; a small
@@ -2305,10 +2415,10 @@ def _run_pipeline_impl(
                     cached = state.get("cache", {}).get(cache_key) if cache_key else None
                     if isinstance(cached, Mapping) and isinstance(cached.get("value"), Mapping):
                         cached_value = cached["value"]
-                        if stage == "interpret" and cached_value.get("classification") in {
-                            "capacity_deferred",
-                            "deterministic_inner_wait",
-                        }:
+                        if stage == "interpret" and (
+                            cached_value.get("classification") == "capacity_deferred"
+                            or _native_route_result(cached_value)
+                        ):
                             # Older coordinator receipts cached this transient
                             # route result as a semantic decision. Force a fresh
                             # route/capacity check on the next cadence.
