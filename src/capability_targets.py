@@ -717,7 +717,8 @@ def verify_rollback(binding: Mapping[str, Any], *, registry_path: Path) -> dict[
 
 
 def _selftest() -> None:
-    for malformed in (None, "corrupt", 17, ["corrupt"]):
+    invalid_bindings: tuple[Any, ...] = (None, "corrupt", 17, ["corrupt"])
+    for malformed in invalid_bindings:
         assert _binding_ineligible(malformed, 100, {}) == "artifact_invalid"
     for rollback in ("pending", 123, ["pending"]):
         assert _binding_ineligible({"rollback": rollback}, 100, {}) == "rollback_pending"
