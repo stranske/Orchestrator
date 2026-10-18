@@ -702,6 +702,16 @@ def _semantic_for_compare(document: dict[str, Any]) -> dict[str, Any]:
                 compared[agent] = entry
         semantic["capacity"] = compared
 
+    for key in ("task_types", "reserve"):
+        if key in semantic:
+            semantic[key] = _without_comparative_rows(semantic[key], rankings=key == "task_types")
+    return semantic
+
+
+def _without_comparative_rows(section, *, rankings):
+    if not isinstance(section, dict):
+        return section
+
     def without_comparative(row):
         return (
             {key: value for key, value in row.items() if not key.startswith("comparative_")}
@@ -709,20 +719,16 @@ def _semantic_for_compare(document: dict[str, Any]) -> dict[str, Any]:
             else row
         )
 
-    for key in ("task_types", "reserve"):
-        section = semantic.get(key)
-        if not isinstance(section, dict):
-            continue
-        semantic[key] = {}
-        for task, entry in section.items():
-            if key == "task_types" and isinstance(entry, dict):
-                entry = dict(entry)
-                if isinstance(entry.get("ranking"), list):
-                    entry["ranking"] = [without_comparative(row) for row in entry["ranking"]]
-            elif key == "reserve" and isinstance(entry, list):
-                entry = [without_comparative(row) for row in entry]
-            semantic[key][task] = entry
-    return semantic
+    result = {}
+    for task, entry in section.items():
+        if rankings and isinstance(entry, dict):
+            entry = dict(entry)
+            if isinstance(entry.get("ranking"), list):
+                entry["ranking"] = [without_comparative(row) for row in entry["ranking"]]
+        elif not rankings and isinstance(entry, list):
+            entry = [without_comparative(row) for row in entry]
+        result[task] = entry
+    return result
 
 
 def _same_semantics(document: dict, published: dict) -> bool:
