@@ -727,7 +727,7 @@ def test_pacing_unknown_carries_the_reports_reason(monkeypatch):
     monkeypatch.setattr(
         capacity,
         "pacing_report",
-        lambda: {
+        lambda now: {
             "quota_incidents_while_other_ok": {
                 "value": None,
                 "evidence_class": "e",
@@ -746,3 +746,24 @@ def test_pacing_unknown_carries_the_reports_reason(monkeypatch):
     assert unknown.value is None and unknown.reason.endswith("coverage 59/1008")
     measured = fg.pacing_usage(NOW)
     assert measured.value == 0.5 and measured.reason == "claude in band"
+
+
+def test_pacing_measure_survives_the_freshness_check(monkeypatch):
+    """measure() rejects as_of > now; the pacing reader must be stamped with the ledger's clock."""
+    import capacity
+
+    monkeypatch.setattr(
+        capacity,
+        "pacing_report",
+        lambda now: {
+            "usage_in_target_band": {
+                "value": 0.0,
+                "evidence_class": "e",
+                "as_of": int(now),
+                "reason": "claude 0.98",
+            }
+        },
+    )
+    goal = replace(GOAL, measure="feature_goals.py:pacing_usage")
+    result = fg.measure(goal, NOW)
+    assert result.value == 0.0 and result.as_of == NOW

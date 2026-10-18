@@ -1,0 +1,9 @@
+{
+  "source_head": "6f9fff13673bbc5c53bd76cca5ac2b0a49f32a41",
+  "time": "2026-10-18T23:16:29.553773+00:00",
+  "python": "<repo>/.venv/bin/python",
+  "python_version": "3.12.2 | packaged by conda-forge | (main, Feb 16 2024, 20:54:21) [Clang 16.0.6 ]",
+  "collector_sha256": "2b06e57331a505296b32ca89bfdaba065e58f313edefb68f6640419339e6c401",
+  "pins_sha256": "3fb6210feab5e1889dd930c825cfb85b53b9ec382d6c15ae0c4da094e53da135",
+  "platform": "macOS"
+}

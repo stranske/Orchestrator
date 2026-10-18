@@ -1,5 +1,30 @@
 # Gate python-ci baseline — what is checked, what is deferred, and what would clear it
 
+## Measured dependency PR #655 toolchain — 2026-10-18
+
+<!-- measured-with: black=26.10.1 ruff=0.17.1 isort=9.0.2 docformatter=1.7.8 mypy=2.4.0 pytest=9.1.1 pytest-cov=7.1.0 pytest-xdist=3.8.0 coverage=7.16.2 -->
+
+The exact proposed nine-pin bundle was installed in an isolated Python 3.12
+virtual environment and strictly measured against source
+`6f9fff13673bbc5c53bd76cca5ac2b0a49f32a41`. The existing collector reported:
+
+| Check | Blocking | Drainable |
+| --- | ---: | ---: |
+| Ruff | 0 findings | 0 |
+| Black | 0 files | 0 |
+| mypy | 0 errors | 0 |
+| Coverage startup | 0 errors | 0 |
+
+[Report](evidence/dev-tool-655-current-pins/report.json),
+[captured lint commands and output](evidence/dev-tool-655-current-pins/commands.json),
+and [source/tool provenance](evidence/dev-tool-655-current-pins/provenance.json)
+retain the actual measurement, installed versions and collector/pin hashes.
+All captured lint commands exited zero. Coverage startup is the collector's
+configuration probe; it does not establish full-suite, execution-mirror or
+combined-coverage acceptance. Native PR CI retains those checks. No pins,
+thresholds, baseline matcher or enforcement settings were changed by this
+measurement. Previous dated measurements remain below.
+
 ## Measured unchanged repository toolchain — 2026-10-15
 
 <!-- measured-with: ruff=0.16.10 black=26.10.0 mypy=2.4.0 pytest=9.1.1 isort=9.0.2 docformatter=1.7.8 pytest-cov=7.1.0 pytest-xdist=3.8.0 coverage=7.16.2 -->
