@@ -315,8 +315,6 @@ def test_multi_source_feedback_live_targets_and_metadata(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     "symbol",
     [
-        "comparative_routing",
-        "random_retest",
         "pacing_usage",
         "pacing_incidents",
         "pacing_share",
@@ -565,3 +563,71 @@ def test_filer_ignores_pull_requests_and_creates_missing_labels():
 def test_keepalive_reason_uses_configured_horizon(monkeypatch):
     monkeypatch.setattr(fg, "GOAL_SILENCE_DAYS", 19)
     assert "19-day" in fg.keepalive_acceptance(NOW).reason
+
+
+def test_producer_subject_string_is_attributed(tmp_path, monkeypatch):
+    """Producer experiments store `subject` as `owner/repo#N`; the measure must link them."""
+    import exp_abcd
+    import feedback
+
+    db = tmp_path / "brain.db"
+    monkeypatch.setattr(feedback, "DB_PATH", db)
+    monkeypatch.setattr(exp_abcd, "EXP_DIR", tmp_path / "experiments")
+    experiment = "tick-1-stranske-workflows-3972"
+    directory = exp_abcd.exp_paths(experiment)
+    directory.mkdir(parents=True)
+    (directory / "meta.json").write_text(
+        json.dumps({"producer": "experiment_producer", "subject": "stranske/Workflows#3972"})
+    )
+    with sqlite3.connect(db) as conn:
+        conn.executescript(
+            "CREATE TABLE runs(experiment_id TEXT,target TEXT);"
+            "CREATE TABLE evaluations_v2(experiment_id TEXT,ts INT,score REAL,evaluator_id TEXT);"
+        )
+        conn.execute(
+            "INSERT INTO runs VALUES(?,?)",
+            (experiment, "stranske/Workflows [exp x arm a member b]"),
+        )
+        for judge in ("codex", "cursor"):
+            conn.execute("INSERT INTO evaluations_v2 VALUES(?,?,?,?)", (experiment, NOW, 8, judge))
+    body = "\n".join("- [ ] task" for _ in range(12))
+    monkeypatch.setattr(fg, "_gh", lambda args: json.dumps({"body": body, "labels": []}))
+    result = fg.multi_source_feedback(NOW)
+    assert result.value == 1.0
+    assert result.reason == "unattributable 0; issue reads failed 0"
+
+
+def test_random_retest_reads_producer_cells(monkeypatch):
+    import experiment_producer
+
+    state = {"cells_fresh": 4, "cells_total": 37, "last_draw_ts": NOW - 3600}
+    monkeypatch.setattr(experiment_producer, "read_state", lambda: state)
+    result = fg.random_retest(NOW)
+    assert result.value == 4 / 37 and result.reason == "4/37 cells fresh"
+    state["last_draw_ts"] = NOW - fg.PRODUCER_STATE_MAX_AGE - 1
+    assert fg.random_retest(NOW).value is None
+    monkeypatch.setattr(experiment_producer, "read_state", lambda: {})
+    assert fg.random_retest(NOW).value is None
+
+
+def test_comparative_routing_reads_the_shadow_report(monkeypatch):
+    import comparative
+
+    monkeypatch.setattr(
+        comparative,
+        "report",
+        lambda *a, **k: {"classes_differing": 0, "status": "not_testable_slack", "reasons": []},
+    )
+    result = fg.comparative_routing(NOW)
+    assert result.value == 0.0 and "not_testable_slack" in result.reason
+    monkeypatch.setattr(
+        comparative,
+        "report",
+        lambda *a, **k: {
+            "classes_differing": None,
+            "status": "inputs_unmeasured",
+            "reasons": ["claude stale"],
+        },
+    )
+    result = fg.comparative_routing(NOW)
+    assert result.value is None and "claude stale" in result.reason
