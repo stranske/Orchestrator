@@ -1235,6 +1235,115 @@ def test_campaign_reading_fails_when_share_exceeds_25_percent():
     assert reading["share"] > producer.CAMPAIGN_SHARE_MAX
 
 
+def test_campaign_share_pin_refuses_before_check_day():
+    from datetime import datetime, timezone
+
+    interim = datetime(2026, 10, 18, 12, 0, tzinfo=timezone.utc).timestamp()
+    reading = producer.campaign_no_named_test_reading(
+        {"no_named_test": 2, "cells_total": 37, "no_named_test_share": 2 / 37},
+        now=interim,
+    )
+    assert reading["is_check_day"] is False
+    assert producer.pin_campaign_share_reading(reading, now=interim) is None
+    assert producer.pinned_campaign_share_reading() is None
+
+
+def test_campaign_share_pin_locks_check_day_reading_once():
+    """The 2026-10-25 ≤25% AC needs one durable producer-line reading, not a moving share."""
+    from datetime import datetime, timezone
+
+    check_ts = datetime(2026, 10, 25, 12, 0, tzinfo=timezone.utc).timestamp()
+    first = producer.campaign_no_named_test_reading(
+        {
+            "no_named_test": 2,
+            "cells_total": 37,
+            "no_named_test_share": 2 / 37,
+            "no_named_test_classes": {"file-only": 0, "ci-only": 0, "none": 2},
+        },
+        now=check_ts,
+    )
+    pinned = producer.pin_campaign_share_reading(first, now=check_ts)
+    assert pinned["pinned"] is True
+    assert pinned["reading_day"] == producer.CAMPAIGN_SHARE_CHECK_DATE
+    assert pinned["passes_campaign"] is True
+    assert pinned["share"] <= producer.CAMPAIGN_SHARE_MAX
+    later = producer.pin_campaign_share_reading(
+        {
+            "no_named_test": 28,
+            "cells_total": 37,
+            "share": 28 / 37,
+            "is_check_day": True,
+            "classes": {"file-only": 0, "ci-only": 0, "none": 28},
+        },
+        now=check_ts + 3600,
+    )
+    assert later["no_named_test"] == 2
+    assert later["passes_campaign"] is True
+    preferred = producer.campaign_no_named_test_reading(
+        {"no_named_test": 28, "cells_total": 37, "no_named_test_share": 28 / 37},
+        now=check_ts + 86400,
+        prefer_pin=True,
+    )
+    assert preferred["pinned"] is True
+    assert preferred["no_named_test"] == 2
+    assert preferred["passes_campaign"] is True
+
+
+def test_producer_line_pins_campaign_share_on_check_day(monkeypatch):
+    import switch_review
+    from datetime import datetime, timezone
+
+    check_ts = datetime(2026, 10, 25, 18, 0, tzinfo=timezone.utc).timestamp()
+    monkeypatch.setattr(producer.time, "time", lambda: check_ts)
+    monkeypatch.setattr(
+        producer,
+        "producer_summary",
+        lambda: dict(
+            launched=0,
+            evaluated=0,
+            winner_prs=0,
+            winner_merged=0,
+            cells_fresh=2,
+            cells_total=37,
+            skips={"no_named_test": 2},
+            no_named_test=2,
+            no_named_test_classes={"file-only": 0, "ci-only": 0, "none": 2},
+            no_named_test_share=2 / 37,
+            derived_tests=0,
+            unknowns=[],
+        ),
+    )
+    line = switch_review.experiment_producer_line()
+    assert "campaign_share=pass (pinned 2026-10-25)" in line
+    assert "no_named_test=2/37" in line
+    pinned = producer.pinned_campaign_share_reading()
+    assert pinned is not None
+    assert pinned["passes_campaign"] is True
+    assert pinned["share"] <= producer.CAMPAIGN_SHARE_MAX
+    # A worse live share must not displace the pinned check-day AC evidence.
+    monkeypatch.setattr(
+        producer,
+        "producer_summary",
+        lambda: dict(
+            launched=0,
+            evaluated=0,
+            winner_prs=0,
+            winner_merged=0,
+            cells_fresh=0,
+            cells_total=37,
+            skips={"no_named_test": 28},
+            no_named_test=28,
+            no_named_test_classes={"file-only": 0, "ci-only": 0, "none": 28},
+            no_named_test_share=28 / 37,
+            derived_tests=0,
+            unknowns=[],
+        ),
+    )
+    line2 = switch_review.experiment_producer_line()
+    assert "campaign_share=pass (pinned 2026-10-25)" in line2
+    assert "no_named_test=2/37" in line2
+
+
 @pytest.mark.parametrize(
     "response", [{"error": "flake"}, {"stdout": '{"merge_state_unknown": true}'}]
 )

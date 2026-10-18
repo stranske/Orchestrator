@@ -204,13 +204,20 @@ def project_no_named_test_share(items, cells_total):
     }
 
 
-def campaign_no_named_test_reading(metrics=None, *, now=None, items=None, cells_total=None):
+def campaign_no_named_test_reading(
+    metrics=None, *, now=None, items=None, cells_total=None, prefer_pin=False
+):
     """Structured #731 campaign share for the 2026-10-25 producer-line reading.
 
     Prefer live ``producer_summary`` metrics (same-UTC-day skip_issues / cells). When ``items``
     are supplied — interim runners without producer state — project under current admission.
+    With ``prefer_pin``, return the durable check-day pin when one exists (AC evidence).
     """
     now = time.time() if now is None else now
+    if prefer_pin:
+        pinned = pinned_campaign_share_reading()
+        if pinned is not None:
+            return dict(pinned)
     reading_day = time.strftime("%Y-%m-%d", time.gmtime(now))
     if items is not None:
         projected = project_no_named_test_share(
@@ -245,7 +252,79 @@ def campaign_no_named_test_reading(metrics=None, *, now=None, items=None, cells_
         "passes_campaign": passes,
         "threshold": CAMPAIGN_SHARE_MAX,
         "source": source,
+        "pinned": False,
     }
+
+
+def pinned_campaign_share_reading():
+    """Return the durable #731 check-day reading from producer state, or None."""
+    try:
+        pinned = read_state().get("campaign_share_reading")
+    except (ValueError, OSError):
+        return None
+    if not isinstance(pinned, dict):
+        return None
+    if pinned.get("check_date") != CAMPAIGN_SHARE_CHECK_DATE:
+        return None
+    if pinned.get("reading_day") != CAMPAIGN_SHARE_CHECK_DATE:
+        return None
+    share = pinned.get("share")
+    if share is None:
+        return None
+    out = dict(pinned)
+    out["pinned"] = True
+    out["is_check_day"] = True
+    out["passes_campaign"] = float(share) <= CAMPAIGN_SHARE_MAX
+    out["share_pct"] = f"{100 * float(share):.1f}%"
+    out.setdefault("threshold", CAMPAIGN_SHARE_MAX)
+    out.setdefault(
+        "classes",
+        {key: 0 for key in ("file-only", "ci-only", "none")},
+    )
+    return out
+
+
+def pin_campaign_share_reading(reading=None, *, now=None, force=False):
+    """Persist the check-day campaign reading once so the ≤25% AC stays auditable.
+
+    Refuses to pin before ``CAMPAIGN_SHARE_CHECK_DATE`` or when ``share`` is unknown.
+    A second call returns the existing pin unless ``force`` is set.
+    """
+    now = time.time() if now is None else now
+    existing = pinned_campaign_share_reading()
+    if existing is not None and not force:
+        return existing
+    live = reading if reading is not None else campaign_no_named_test_reading(now=now)
+    if not live.get("is_check_day"):
+        return None
+    if live.get("share") is None or int(live.get("cells_total") or 0) <= 0:
+        return None
+    # Pin as the calendar check day even if the wall clock is later (late capture).
+    pinned = {
+        "check_date": CAMPAIGN_SHARE_CHECK_DATE,
+        "reading_day": CAMPAIGN_SHARE_CHECK_DATE,
+        "is_check_day": True,
+        "no_named_test": int(live.get("no_named_test") or 0),
+        "cells_total": int(live.get("cells_total") or 0),
+        "share": float(live["share"]),
+        "share_pct": f"{100 * float(live['share']):.1f}%",
+        "classes": {
+            key: int((live.get("classes") or {}).get(key, 0) or 0)
+            for key in ("file-only", "ci-only", "none")
+        },
+        "passes_campaign": float(live["share"]) <= CAMPAIGN_SHARE_MAX,
+        "threshold": CAMPAIGN_SHARE_MAX,
+        "source": live.get("source") or "producer_summary",
+        "pinned": True,
+        "pinned_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+    }
+    with locked_state():
+        state = read_state()
+        if state.get("campaign_share_reading") and not force:
+            return pinned_campaign_share_reading()
+        state["campaign_share_reading"] = pinned
+        save_state(state)
+    return pinned
 
 
 def choose_subject(feed, forum, cells, rng):
@@ -1126,6 +1205,11 @@ def main():
         action="store_true",
         help="print the #731 no_named_test/cells campaign reading as JSON",
     )
+    parser.add_argument(
+        "--pin-campaign-share",
+        action="store_true",
+        help="persist the check-day campaign reading once (no-op before 2026-10-25)",
+    )
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
     if args.selftest:
@@ -1152,13 +1236,43 @@ def main():
             now=check_day,
         )
         assert reading["is_check_day"] and reading["passes_campaign"]
+        import tempfile
+
+        prior_state = os.environ.get("ORCH_STATE_DIR")
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["ORCH_STATE_DIR"] = tmp
+            assert pin_campaign_share_reading(reading, now=check_day)["pinned"]
+            assert pinned_campaign_share_reading()["no_named_test"] == 2
+            assert (
+                pin_campaign_share_reading(
+                    {
+                        "no_named_test": 28,
+                        "cells_total": 37,
+                        "share": 28 / 37,
+                        "is_check_day": True,
+                    },
+                    now=check_day,
+                )["no_named_test"]
+                == 2
+            )
+        if prior_state is None:
+            os.environ.pop("ORCH_STATE_DIR", None)
+        else:
+            os.environ["ORCH_STATE_DIR"] = prior_state
         print("experiment_producer.py selftest: OK (cap and frozen named test)")
     elif args.trial_defaults:
         print(*trial_defaults())
     elif args.trial_verdict:
         print(trial_verdict())
+    elif args.pin_campaign_share:
+        pinned = pin_campaign_share_reading()
+        print(
+            json.dumps(
+                pinned or campaign_no_named_test_reading(prefer_pin=True), indent=2, sort_keys=True
+            )
+        )
     elif args.campaign_share:
-        print(json.dumps(campaign_no_named_test_reading(), indent=2, sort_keys=True))
+        print(json.dumps(campaign_no_named_test_reading(prefer_pin=True), indent=2, sort_keys=True))
     return 0
 
 

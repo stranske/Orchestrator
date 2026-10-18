@@ -2057,7 +2057,17 @@ def experiment_producer_line():
     reasons = ", ".join(f"{k}={v}" for k, v in sorted(m["skips"].items())) or "none"
     classes = m.get("no_named_test_classes", {})
     # Campaign metric (#731): same-UTC-day unnamed skips over considered cells, not lifetime skips.
-    campaign = experiment_producer.campaign_no_named_test_reading(m)
+    # On/after the check day, pin the first measurable reading so the ≤25% AC remains auditable.
+    campaign = experiment_producer.campaign_no_named_test_reading(m, prefer_pin=True)
+    if (
+        campaign.get("is_check_day")
+        and not campaign.get("pinned")
+        and campaign.get("share") is not None
+        and int(campaign.get("cells_total") or 0) > 0
+    ):
+        pinned = experiment_producer.pin_campaign_share_reading(campaign)
+        if pinned is not None:
+            campaign = pinned
     unnamed = campaign["no_named_test"]
     cells = campaign["cells_total"]
     share = campaign["share"]
@@ -2072,7 +2082,9 @@ def experiment_producer_line():
     else:
         share_text = f"{share:.0%}"
         campaign_text = "pass" if campaign["passes_campaign"] else "fail"
-        if not campaign["is_check_day"]:
+        if campaign.get("pinned"):
+            campaign_text += f" (pinned {experiment_producer.CAMPAIGN_SHARE_CHECK_DATE})"
+        elif not campaign["is_check_day"]:
             campaign_text += f" (interim; check {experiment_producer.CAMPAIGN_SHARE_CHECK_DATE})"
     unknown = "; UNKNOWN " + ", ".join(m["unknowns"]) if m["unknowns"] else ""
     if verdict == "pending" and state.get("pending_since"):
