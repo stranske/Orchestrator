@@ -6,12 +6,18 @@ permissions, security boundaries or another writer's work. The Luna demand
 controller retains its scheduling authority.
 
 After mandatory preflight, start the repository-backed coordinator with
-`CLOSER_ROUND_STATE="$HOME/.codex/handoff/closer-dispatcher.json" python3 ~/.codex/orchestrator-mirror/closer_dispatcher.py run --assignment ~/.codex/automations/reviewed-repo-automation-controller/closer-assignment.json --state "$HOME/.codex/handoff/closer-dispatcher.json" --budget-seconds 2700 --max-workers 2 --apply --workers`
+`CLOSER_ROUND_STATE="$HOME/.codex/handoff/closer-dispatcher.json" python3 ~/.codex/orchestrator-mirror/closer_dispatcher.py run --assignment ~/.codex/automations/reviewed-repo-automation-controller/closer-assignment.json --state "$HOME/.codex/handoff/closer-dispatcher.json" --budget-seconds 2700 --max-workers 2 --apply --workers --pipeline`
 under existing authorization, resource bounds and ownership. The fixed ledger path
 retains pending operations across rounds. Omitting `--apply` is a read-only plan;
 it does not advance the queue. Known repository workspaces are resolved through
 their canonical target remote; provide explicit exact-head worktree mapping when
 a repair needs a prepared branch workspace. Do not substitute a different repository.
+
+The pipeline uses a sibling `<state>.pipeline.json` coordinator receipt and
+per-target action ledgers under the pipeline state directory. Existing closer
+queue state is preserved during this migration. A read-only staged preview is
+`run ... --state <path> --shadow`; it retains bounded evidence in a sibling
+private evidence directory but does not dispatch workers or queue actions.
 
 Shell exports do not persist between separate tool calls. Prefix ACTION C itself
 with `CLOSER_ROUND_STATE="$HOME/.codex/handoff/closer-dispatcher.json"` so postrun

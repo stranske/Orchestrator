@@ -1,0 +1,15 @@
+$ ["/opt/anaconda3/bin/python3", "-m", "mypy", "--follow-imports=silent", "src/route_weights_export.py", "src/agent_switches.py", "src/switch_review.py"]
+Success: no issues found in 3 source files
+exit_code=0
+
+$ ["/opt/anaconda3/bin/python3", "-m", "black", "--check", "src/route_weights_export.py", "src/agent_switches.py", "src/switch_review.py", "tests/test_agent_switches.py", "tests/test_exploration_window_extension.py", "tests/test_agent_switches_delegation_source.py", "tests/test_switch_review_exploration_window.py", "tests/test_orchestrate_exploration_window.py"]
+All done! ✨ 🍰 ✨
+8 files would be left unchanged.
+exit_code=0
+
+$ ["/opt/anaconda3/bin/python3", "-m", "ruff", "check", "src/route_weights_export.py", "src/agent_switches.py", "src/switch_review.py", "tests/test_agent_switches.py", "tests/test_exploration_window_extension.py", "tests/test_agent_switches_delegation_source.py", "tests/test_switch_review_exploration_window.py", "tests/test_orchestrate_exploration_window.py"]
+All checks passed!
+exit_code=0
+
+$ ["/bin/bash", "-n", "orchestrate.sh"]
+exit_code=0

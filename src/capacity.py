@@ -24,21 +24,24 @@ Corrections baked in:
     does NOT cover API calls (aider uses the API) — if the user's paid tier is
     the chat-only Pro, set plan_limit=0 and aider degrades to pure-credit.
 
-Pacing sources (2026-10-17): Claude desktop persists timestamped weekly percentages
-in ~/Library/Application Support/Claude/plan-usage-history.json, samples[].t (ms)
-and samples[].u.sd (%) plus u.fh (five-hour %). Refresh is app-driven (observed cadence documented in
- docs/capacity-pacing.md), not guaranteed. Sources older than two 15-minute ticks
-are stale. Codex reads ~/.codex/sessions/**/rollout-*.jsonl token_count events:
-rate_limits.primary.used_percent (window_minutes=10080) and resets_at (epoch),
-plus secondary.used_percent (window_minutes=300) for quota-marker recovery.
-The event timestamp measures freshness; T0=T1-7d. Only these usage fields are
-extracted; credits are never retained or printed. Source refresh requires an
-active session. Agent-specific ccusage weekly tokens plus calibrated cap remain
-the fallback; mixed-agent and 5h totals cannot measure weekly consumption.
-Missing/stale usage sets pacing.state=unknown while retaining the native state.
-The normal tick appends usage samples and snapshots; build() writes only a disposable
-sanitized rollout offset cache, with duration and file counts reported. One usage
-snapshot per build feeds both marker recovery and pacing integration.
+Pacing sources: freshest weekly observation wins. Codex uses the scheduled
+~/.codex/orchestrator/usage-poll/codex-usage.json app-server account/rateLimits/read
+poll or session rollout rate_limits.primary (10080 minutes). Claude uses the
+scheduled claude-usage.json /usage all-models weekly bucket or desktop
+plan-usage-history.json samples[].u.sd with original samples[].t timestamps.
+Poll weekly resets_at is authoritative T1; T0=T1-7d. Other Claude weekly buckets
+are informational. Marker recovery also requires fresh short-window headroom:
+Claude poll session (5h), Codex secondary (300 minutes), each with its own ts.
+Fresh Codex poll credits (available and unexpired) define reset inventory; the
+hand capacity-resets.json is a stale/absent-poll fallback, never debited against a
+fresh provider inventory. No credit/account identifiers enter pacing output.
+Sources expire after STALE_AFTER_SECONDS (three 600-second poll ticks, 30 min),
+defined in pacing.py. Poll health prints age, missed ticks and allowance.
+Both report pass numbers 2 and 3 share the same actual poll-slot coverage counter.
+Agent-specific calibrated ccusage remains the fallback; mixed-agent totals cannot
+measure weekly consumption. Unknown pacing retains native capacity state.
+One sanitized usage snapshot per build feeds marker recovery and integration;
+rollout scan failures are counted and cannot discard the remaining evidence.
 
 Read-only build; `--selftest` runs fully offline. Simple-first + legible by
 design (PR #2350 §11 anti-over-engineering): no scoring, no learning here — this
@@ -516,6 +519,17 @@ def _shed(agent: str) -> bool:
             if isinstance(entries, list)
             else []
         )
+        if agent == "codex":
+            snapshot = _BUILD_PACING_USAGE.get()
+            poll = (
+                (snapshot.get(agent) or {}).get("poll")
+                if snapshot is not None
+                else pacing_usage.polled_usage(agent, time.time())["poll"]
+            ) or {}
+            if poll.get("fresh"):
+                # The hand inventory may contain a false rollover debit. Fresh
+                # provider inventory cannot establish that consumption timestamp.
+                reset_events = []
         reset_clears = (
             marker["state"] == "active"
             and marker.get("category") in ("quota", "rate_limit", "capacity")
@@ -541,12 +555,16 @@ def _shed(agent: str) -> bool:
             )
             used, observed = datum.get("used_fraction"), datum.get("ts")
             short = datum.get("short_used_fraction")
+            short_ts = datum.get("short_ts", observed)
             sample_clears = (
                 used is not None
                 and 0 <= used < 1
                 and short is not None
                 and 0 <= short < 1
                 and observed is not None
+                and short_ts is not None
+                and created < short_ts <= now
+                and now - short_ts <= pacing.STALE_AFTER_SECONDS
                 and created < observed <= now
                 and now - observed <= pacing.STALE_AFTER_SECONDS
             )
@@ -1034,6 +1052,29 @@ def _capability_heartbeat(event_type: str, **kw) -> None:
         capabilities.production_heartbeat("windowed-capacity-policy", event_type, **kw)
     except Exception:
         pass
+
+
+def experiment_pacing(snapshot: dict) -> dict[str, str]:
+    """Consume #668 pacing if present; preserve shared-pool limits otherwise."""
+    result = {}
+    for agent, row in (snapshot.get("agents") or {}).items():
+        state = row.get("pacing_state", row.get("pacing", row.get("state", "unknown")))
+        if isinstance(state, dict):
+            state = state.get("state", "unknown")
+        if row.get("state", "ok") != "ok":
+            state = row["state"]
+        pool_ids = [
+            key
+            for key, definition in execution_profiles.CAPACITY_POOLS.items()
+            if definition.get("agent") == agent
+        ]
+        for pool_id in pool_ids:
+            pool = (snapshot.get("pools") or {}).get(pool_id, {})
+            pool_state = pool.get("pacing_state", pool.get("state", "ok"))
+            if pool_state != "ok":
+                state = f"{pool_id}={pool_state}"
+        result[agent] = state
+    return result
 
 
 def build(ccusage_block=None, *, record_pacing: bool = False) -> dict:

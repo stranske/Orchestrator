@@ -34,24 +34,67 @@ command returned an error. A pass bound prevents a zero-progress spin, but does
 not authorize a valid stop while actionable work and usable time remain. An
 expired recovery records its overrun honestly and launches no new actions.
 
+A later CLI invocation starts a new budget only after the persisted round has a
+finished receipt that passes the queue's normal locked stop validation against the
+current state and claim ledger. Running rounds, invalid receipts and unreadable
+state keep the original deadline or fail closed; a saved `finished_at` field alone
+does not reset the clock.
+
+The staged production path is `--pipeline --apply --workers`. It prepares
+incremental source, diff, review, check and existing-verifier evidence in an
+independent bounded IO pool before lifecycle selection, including while checks
+are pending. A router-selected low-effort profile classifies current findings;
+only explicit ambiguity, substantive/security findings or conflicting evidence
+reaches the existing closer exception path. Each completed target immediately
+re-enters the existing durable queue through its own action ledger under the
+pipeline state directory. Claims, exact-head refresh, `acceptance_ok`,
+`merge_guard`, verifier deduplication and source-closure authority stay intact.
+Requested and actual worker identities are retained separately. Low and strong
+worker text remains advisory: the coordinator independently checks exact target,
+head/base, producer/evidence revisions, complete Tasks/AC coverage and raw current
+run/patch proof membership. Only that validated disposition enters the existing
+`acceptance_ok` path; the live merge guard still makes the final decision. A
+validated mechanical repair plan can enter the existing exact-head isolated repair
+worker. A NON_PASS verifier marker stays immutable and never grants acceptance.
+
+`--shadow` collects and retains evidence and emits bounded proposals without
+worker dispatch or queue action. The ordinary inventory command remains
+read-only and makes no provider calls or queue writes. Pipeline receipts live
+beside the existing queue as `<state>.pipeline.json`; legacy queue state is
+preserved. `validate-stop --state <state>` dispatches to the pipeline receipt
+when one exists and checks the exact assignment and outstanding continuation.
+The existing closer cadence invokes `--pipeline --apply --workers` after the
+normal prompt/postrun installer; no additional scheduler is introduced.
+
 Canonical workspaces are resolved only for assigned repositories and validated
 against their Git remote without networking. `--workspaces` overrides this with
 a JSON mapping of target or repository to a local checkout. A mechanical repair
 requires a clean exact-head checkout; the existing offload then copies it into an
 isolated local workspace. No worker edits a shared checkout or publishes results.
 
-Luna Low handles read-only evidence extraction, review and repair diagnosis.
-A senior-integrated mechanical repair plan may use the existing Terra Medium
-profile. Profile requests and actual worker results are retained separately;
+The staged pipeline chooses any currently available low-effort profile through
+the existing router; a validated mechanical repair plan may use the existing
+closer execution profile. Profile requests and actual worker results are retained separately;
 configuration is not proof that a requested model was served. Unsupported-model,
 authentication or quota failures stop further affected worker launches and remain
-visible. There is no silent model fallback or increased spend cap. Luna and Terra
-share the Codex subscription pool. The existing capacity report and authoritative
-shed marker are checked without reading agent sessions. Registered repair roots
+visible. There is no silent model fallback or increased spend cap. The existing
+capacity report and authoritative shed markers account for shared provider pools
+without reading agent sessions. Registered repair roots
 also pass the existing assessment campaign admission check; this coordinator
 cannot authorize, renew or extend their permits.
+Fresh GitHub rate-ledger SHED decisions remain a read-only continuation with the
+measured reset trigger; they do not create a human ticket or bypass the throttle.
 
 ## Action and acceptance boundaries
+
+For a merged PR with a NON_PASS verifier marker, the coordinator records finding
+resolutions without rewriting the raw verdict. A proven repair can use the guarded
+isolated repair path. Reverification is available only through the existing
+source-owned verifier trigger after a materially changed verifier input; when that
+trigger cannot be proven from current state, the item remains waiting on the named
+source-owned verifier/evidence event. The staged coordinator does not remove and
+re-add labels or claim a completed repair/reverification cycle without a terminal
+current-head receipt.
 
 | Evidence state | Action |
 | --- | --- |

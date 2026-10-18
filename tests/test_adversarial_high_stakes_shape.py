@@ -223,6 +223,13 @@ def test_rendered_weekly_report_consumes_the_population_line():
 
 
 def test_weekly_cli_records_measurement_from_its_own_report(monkeypatch, capsys):
+    monkeypatch.setenv("ORCH_DISABLE_STEPS", "issue-size-quality")
+    # The shape consumer does not exercise the separate live credential scanner.
+    monkeypatch.setattr(
+        switch_review,
+        "credential_exposure",
+        lambda **kw: {"status": "unmeasured", "reason": "outside shape fixture"},
+    )
     monkeypatch.setenv("ORCH_VALUE_CHAIN_MONITOR", "0")
     section = population([])["adversarial_shape"]
     called = []

@@ -12,14 +12,18 @@
 ## Status-driven local closer
 
 `closer_dispatcher.py` composes existing rails for the local closer lifecycle;
-`closer_queue.py` persists the assigned items and operation receipts. It inventories
-status, schedules bounded independent private work, collects results and continues
-other items while checks, review or verification wait. It is a deterministic
-coordinator, not a new agent role or a second demand scheduler. Existing claims
-serialize target/source/repository mutations across ledgers. Workers use existing
-`dispatcher.offload`; Luna extracts evidence and proposes findings, while the senior
-closer integrates original Tasks/AC evidence. Exact-head merge authority remains in
-`merge_guard`; native post-merge evidence remains in `verifier_evidence`.
+`closer_queue.py` persists guarded target actions. The staged production path adds
+`closer_evidence.py` incremental preparation and `closer_pipeline.py` durable
+completion-driven pools: fresh evidence preparation runs independently of CI
+status, router-selected low-effort workers classify current findings, and only
+explicit ambiguity or substantive/security/conflicting evidence enters the
+existing closer exception path. Per-target act callbacks immediately re-enter the
+existing queue with separate durable action ledgers. The pipeline is a deterministic
+coordinator, not a new agent role or demand scheduler. Claims serialize mutations;
+`acceptance_ok`, exact-head `merge_guard`, native `verifier_evidence`, verifier
+deduplication and the existing source-closure actor retain authority. Cheap output
+is advisory and cannot become a trusted disposition. A separate pipeline receipt
+preserves any legacy queue state during migration.
 
 Postrun validates assignment accounting and actual remaining budget before end-round
 or relay. No pass quota or one-complex-repository limit can authorize early stop.
@@ -625,9 +629,56 @@ plans research from it only while it is under two hours old, and the TICK-PLAN l
 research status beside its inputs and skip reasons. At launch the issue is re-read and refused if it
 is no longer open or has since been paused or given a writer, and the subject cooldown is per issue whatever arm set is proposed (Workflows#2710 was
 launched 123 times because a new arm mix passed it). Live read after review: 7 eligible of 72 open
-issues in 16 repos, 6 of them owned or paused; a shadow tick planned 1. Launching stays off, and it is held by TWO switches, not
-one: `ORCH_RESEARCH_ARM=1`, and a non-dry-run research tick, which `tick.main` grants only when
-the dispatch lane is live. No stage moved, so the loop diagram is unchanged.
+issues in 16 repos, 6 of them owned or paused; a shadow tick planned 1. The 2026-10-17 owner decision supersedes that launch hold: the bounded producer below now supplies `tick:experiments`, independently of dispatch.
+
+**Comparative experiment producer (2026-10-17, #677).** This extends the existing
+research scheduler, ABCD members/evaluations, subject cooldown and claims, and delivery
+rails; it is not another research program or capability registry. `experiment_producer`
+draws hourly with `p = 1 - exp(-λ Δt)`, default λ=2/day, hard cap 4 per UTC day.
+`experiment-producer.json` in `$ORCH_STATE_DIR` persists every draw under a lock;
+a firing draw reserves a daily slot even if subsequent admission/launch fails, so failures
+cannot exceed the cap. Capacity skips consume their draw time rather than accumulating
+future launches. The diagnostic names blocking pools and coverage debt beside drainable cells.
+
+Released unowned feed issues retain the existing claim, fresh subject read, production
+reservation and per-issue cooldown gates. With probability 0.5 the oldest forum item
+(`experiment:forum` or at least nine checkboxes) wins; otherwise cells older than 21 days
+come first, then age-weighted task classes and uniformly selected subjects. Arms are the
+incumbent in learned rank order and the stalest challenger; 25% add a distinct member/arm
+with the incumbent agent and a test-first brief. Shared-pool pacing must be `ok` for every
+arm. Only comparative evaluation evidence refreshes route-table coverage; ordinary merges
+do not. Model-version canaries remain follow-up work.
+
+The frozen issue body and its hash are written before member launch. Missing or changed
+specifications cannot be recovered for paid evaluation. Members inherit git's
+`remote.origin.pushurl=file:///dev/null/orch-no-push` via `GIT_CONFIG_*`; after collection,
+remote `exp/<id>-*` refs must be absent. A pushed member stops with `member_pushed`.
+Two anonymized judges excluded from the participating agents score exact member identities;
+named-test `local_verify` is required for delivery. Only a locally passing winner's exact
+commit is pushed, as `orch/exp-<id>`, without synthesis. If no arm passes, the experiment
+ends `no_winner`. A fresh issue and complete open-PR body read refuses collisions before
+push; GitHub failures leave a retryable receipt and let unrelated cadence continue.
+The verified member enters the existing canonical `candidate_ready` phase through a producer-only edge, preserving exact member lineage without fabricating a synthesis run. Subsequent followup reuses `default_delivery_discovery` and the existing delivery/outcome reconciliation.
+The PR names the candidate ID and `Closes owner/repo#N`, and carries a keepalive-capable
+winner label or `agent:codex`. It is **ready for review**, following the repository readiness
+invariant that supersedes #677's original draft wording. The subject's `status:in-progress`
+is removed on no winner, discard or 72 hours without a PR; failed label mutations retry.
+
+`orchestrate.sh` has one independent export block: producer defaults ON, research and
+dispatch retain their existing OFF defaults. First deployment persists a UTC trial end
+21 days later. The default stays ON through the seven-day winner merge grace and while
+merge states remain unknown; only a persisted `fail` self-expires it. After grace,
+`experiment_producer.py --trial-verdict` polls at most once per UTC day until it persists
+an immutable `pass` or `fail`. Passing requires six winner PRs from the trial's launch
+cohort merged by the grace deadline. Unknown merge states record their count and stay
+`pending` for a later daily retry. Explicit environment overrides remain available.
+The launch switch only stops new experiments: existing producer experiments retain
+collect, judge, delivery, reconciliation and lock-release followup for 30 days, subject
+to the existing frozen-spec, budget, panel and 72-hour no-PR lock limits.
+`switch_review.py --text-out` always prints launched, evaluated (at least two scored arms),
+winner PRs, merged winners, fresh/total cells, and skip counts/reasons, including zeros.
+A local green gate proves this wiring; it does not prove deployment or a passed live trial.
+
 
 `issue_size_quality` extends that weekly caller with a read-only join: every closed issue in
 the 90-day reviewed-fleet population contributes its checkbox-count band, and only PRs merged
@@ -660,6 +711,25 @@ is at most eight days old. Label matching remains a second route after that shad
 
 
 ## The feedback loop closes over both surfaces
+
+The **feature goals ledger** (`feature_goals.py`, U-GOALS) extends these feedback
+surfaces with owner-stated goals, named read-only measures, dated evidence and
+append-only history at `$ORCH_STATE_DIR/feature-goals-history.jsonl`. Dedup checked
+value-chain, firing-regression and capability-target readers: they measure wiring,
+not owner goals. The weekly switch review always prints goal / measure / last value /
+drift, including the drained count. The daily `feature-goals` cadence independently
+checks `GOAL_SILENCE_DAYS` of observed silence or wrong-direction evidence and
+creates or updates one labelled drift issue per feature; measured recovery closes
+that issue. Unknown remains `unmeasured — would need <query>`, distinct from zero.
+The promotion measure imports the existing switch-review reader; absent comparative,
+pacing, random-cell and completion-comment sources explicitly remain unmeasured.
+The first observation establishes history unless a measured source proves a complete
+retrospective silence window or dates the last successful promotion; a declaration
+date never fabricates fourteen days of evidence. This feedback rail changes no dispatch, approval or capability
+gate. `ORCH_DISABLE_STEPS=feature-goals` disables its daily caller; rollback removes
+that caller and the weekly report seam. The external Sunday task remains a separate
+consumer: its coordinating session quotes the section verbatim into #575 with
+`goal-drift issues open: N`, and triggers its first run (it has never run).
 
 `feedback.py` learns (1) **router weights** — which agent per task_type — and (2) **role ↔ backend
 fit** — which LLM per role. Both return to the next cycle. Surface (2) is wired through role runs:
@@ -2196,6 +2266,25 @@ No role, stage, learning store or recurring dispatch policy is added. The diagra
 backlog rail also represents this exact campaign input.
 
 Research intake recovery (#569) reuses dispatcher ownership policy at discovery, scheduler selection and launch. Full issue/PR pages are incomplete and fail closed; feed timestamps must be finite, nonnegative and not future dated. Shadow intake and both existing launch gates remain unchanged.
+
+### Delegated PR review loop (#671)
+
+The delegate persists its opt-in and stable root run identity before launching a writer; a failed
+write refuses launch. `merge_guard.guarded_merge` reads that same Brain evidence before review
+hooks and again immediately before merging. A pending loop, wrong PR, changed head, newer refusal
+or live local claim blocks only that target, including when GitHub status publication failed.
+Ordinary runs without the opt-in retain the existing gates; no lifecycle state or model pin changes.
+
+`dispatcher.py delegate --review-loop` adds an exact-head advisory checkpoint after the original
+writer has terminal evidence and its claim is released. The checkpoint reads the current GitHub
+head and all-head native reservations before each re-dispatch; a queued or absent child is still an
+incumbent until its recorded attempt has terminal evidence. A reviewer must be from a configured,
+available provider family different from the implementer; an unknown family or unavailable seat
+fails closed. `FIX-FIRST` carries the review text verbatim as untrusted evidence to the same
+implementer and permits three review rounds, therefore no more than two re-dispatches, checking
+writer terminality again before each review. Pending, unavailable, failed, or exhausted reviews are
+not merge-eligible; only the advisory `MERGE-WHEN-GREEN` result returns the PR to ordinary checks.
+The loop never merges, changes claims, or treats an after-merge delegate smoke as this evidence.
 
 
 Consumer admission deadlines use the first invocation's fixed 14-day interval. The value-chain
