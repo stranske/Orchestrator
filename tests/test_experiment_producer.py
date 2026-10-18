@@ -349,7 +349,7 @@ def test_report_zero_values_are_present(monkeypatch):
     )
     assert (
         switch_review.experiment_producer_line()
-        == "  experiment producer: launched 0, evaluated 0, winner_prs 0, winner_merged 0, post_window_launches=0, cells_fresh 0/0, skipped 0 (none); trial_end not_started, verdict pending, days_left 21; winner merge grace 7d"
+        == "  experiment producer: launched 0, evaluated 0, winner_prs 0, winner_merged 0, post_window_launches=0, cells_fresh 0/0, skipped 0 (none); no_named_test=0 (file-only=0, ci-only=0, none=0), derived_tests=0; trial_end not_started, verdict pending, days_left 21; winner merge grace 7d"
     )
 
 
@@ -740,12 +740,42 @@ def test_shed_agent_does_not_latch_firing_launch(tmp_path, monkeypatch, capsys, 
     assert producer.read_state()["launched_today"] == 1
 
 
-def test_no_named_test_is_skipped_before_admission(monkeypatch):
+def test_producer_named_test_admission_and_derivation(tmp_path, monkeypatch):
     assert producer.named_test("`pytest -q`") is None
     cap, kwargs = plan_fixture(monkeypatch)
     plan = producer.build_plan([{"target": "a/b#3", "body": "Implement a feature"}], cap, **kwargs)
     assert plan["planned"] == []
-    assert {"target": "a/b#3", "reason": "no_named_test"} in plan["skipped"]
+    assert {"target": "a/b#3", "reason": "no_named_test", "test_class": "none"} in plan["skipped"]
+    for body in ("Run `tests/test_x.py`", "Run tests/test_x.py"):
+        assert producer.named_test(body) == "pytest tests/test_x.py"
+        admitted = producer.build_plan([{"target": "a/b#3", "body": body}], cap, **kwargs)
+        assert admitted["planned"][0]["target"] == "a/b#3"
+    body = "## Acceptance Criteria\n- [ ] The feature is fixed."
+    admitted = producer.build_plan([{"target": "a/b#3", "body": body}], cap, **kwargs)
+    assert admitted["planned"][0]["target"] == "a/b#3"
+    package = tmp_path / "package.json"
+    package.write_text(json.dumps({"scripts": {"test": "vitest run"}, "packageManager": "pnpm@9"}))
+    assert (
+        producer.named_test("Run `.github/scripts/x.test.js`", tmp_path)
+        == "pnpm test -- .github/scripts/x.test.js"
+    )
+    package.write_text("{}")
+    assert producer.named_test("Run `x.test.js`", tmp_path) is None
+    (tmp_path / "x.test.js").write_text("const test = require('node:test');")
+    assert producer.named_test("Run `x.test.js`", tmp_path) == "node --test x.test.js"
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    (frontend / "package.json").write_text(json.dumps({"scripts": {"test": "vitest run"}}))
+    js_command = producer.named_test("Run frontend/src/map.test.tsx", tmp_path)
+    assert js_command == "npm --prefix frontend test -- src/map.test.tsx"
+    assert producer.named_test_paths(js_command) == ["frontend/src/map.test.tsx"]
+    assert producer.named_test(f"`{js_command}`") == js_command
+    from synthesis_promotion import _safe_command
+
+    assert _safe_command(["node", "--test", "x.test.js"])
+    assert _safe_command(["npm", "--prefix", "frontend", "test", "--", "src/map.test.tsx"])
+    assert not _safe_command(["npm", "--prefix", "../other", "test"])
+    producer_derivation_proof(tmp_path, monkeypatch)
 
 
 @pytest.mark.parametrize("status", ["merged", "no_winner", "discarded", "expired"])
@@ -1079,6 +1109,10 @@ def test_no_named_test_skip_recorded_once_per_issue_per_utc_day(monkeypatch):
     clock[0] = 2 * 86400
     tick.research_tick(items, cap, dry_run=False)
     assert producer.read_state()["skips"]["no_named_test"] == 4
+    assert producer.read_state()["no_named_test_classes"] == {"none": 4}
+    assert producer.record_skip("no_named_test", target="a/b#5", test_class="ci-only")
+    assert not producer.record_skip("no_named_test", target="a/b#5", test_class="ci-only")
+    assert producer.read_state()["no_named_test_classes"] == {"none": 4, "ci-only": 1}
 
 
 @pytest.mark.parametrize(
@@ -1268,3 +1302,194 @@ def test_failed_trial_receipt_survives_switch_off_and_drain(monkeypatch, capsys)
         "producer: trial verdict fail (unresolved_unknown); launches stopped — owner decision"
         in capsys.readouterr().err
     )
+
+
+def producer_derivation_proof(tmp_path, monkeypatch):
+    """Exercise real commits, assertion RED, and comparison seeding without agent CLIs."""
+    canon = tmp_path / "repo"
+    canon.mkdir()
+
+    def git(wt, *args):
+        return subprocess.run(
+            ["git", "-C", str(wt), *args], check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    git(canon, "init", "-b", "main")
+    git(canon, "config", "user.email", "test@example.com")
+    git(canon, "config", "user.name", "Test")
+    (canon / "feature.txt").write_text("old")
+    git(canon, "add", ".")
+    git(canon, "commit", "-m", "base")
+    base = git(canon, "rev-parse", "HEAD")
+    git(canon, "update-ref", "refs/remotes/origin/main", base)
+    root = tmp_path / "derived-experiment"
+    root.mkdir()
+    monkeypatch.setattr(exp_abcd.provision, "ensure_canonical", lambda repo: canon)
+    monkeypatch.setattr(exp_abcd.provision, "base_branch", lambda repo: "main")
+    monkeypatch.setattr(exp_abcd, "exp_paths", lambda exp_id: root)
+    monkeypatch.setattr(
+        exp_abcd,
+        "exp_worktree",
+        lambda repo, exp_id, agent, member: tmp_path / (exp_id + "-" + member),
+    )
+    monkeypatch.setattr(exp_abcd.feedback, "record_run", lambda *a, **kw: None)
+    original_freeze = producer.freeze_test
+    events = []
+
+    def derive(agent, prompt, wt):
+        assert agent == "codex" and "Acceptance Criteria" in prompt
+        events.append("derive")
+        (wt / "tests").mkdir()
+        (wt / "tests/test_feature.py").write_text(
+            "from pathlib import Path\ndef test_feature():\n    assert Path('feature.txt').read_text() == 'fixed'\n"
+        )
+        git(wt, "add", "tests/test_feature.py")
+        git(wt, "commit", "-m", "failing acceptance test")
+        (wt / "test-command.txt").write_text("pytest tests/test_feature.py")
+
+    def freeze(*a, **kw):
+        result = original_freeze(*a, **kw, derive_fn=derive)
+        events.append("frozen")
+        return result
+
+    monkeypatch.setattr(producer, "freeze_test", freeze)
+
+    def spawn(agent, mode, prompt, wt, log, **kwargs):
+        assert events[0:2] == ["derive", "frozen"]
+        meta = json.loads((root / "meta.json").read_text())
+        assert meta["named_test"] == "pytest tests/test_feature.py"
+        assert meta["test_source"] == "derived"
+        assert git(wt, "rev-parse", "HEAD") == meta["test_commit"]
+        assert (
+            hashlib.sha256((wt / "tests/test_feature.py").read_bytes()).hexdigest()
+            == meta["test_sha256"]["tests/test_feature.py"]
+        )
+        events.append("arm")
+        return 123
+
+    monkeypatch.setattr(exp_abcd, "_spawn", spawn)
+    spec = tmp_path / "spec.md"
+    spec.write_text("## Acceptance Criteria\n- [ ] feature.txt contains fixed.\n")
+    arms = [{"arm_id": a, "agents": [a], "strategy": "single"} for a in ["codex", "claude"]]
+    result = exp_abcd.prepare_arms(
+        "a/b", str(spec), "derived", arms, producer_metadata={"producer": "experiment_producer"}
+    )
+    assert len(result["launched"]) == 2
+    assert events == ["derive", "frozen", "arm", "arm"]
+    assert result["test_source"] == "derived"
+    assert "1 failed" in (root / "test-spec-red.log").read_text()
+    producer.record_launch(test_source="derived")
+    assert producer.producer_summary(tmp_path)["derived_tests"] == 1
+    meta = json.loads((root / "meta.json").read_text())
+    meta["subject"] = "a/b#3"
+    with monkeypatch.context() as frozen_guard:
+        frozen_guard.setattr(
+            exp_abcd,
+            "exp_worktree",
+            lambda repo, exp_id, agent, member: tmp_path / ("derived-" + member),
+        )
+        frozen_guard.setattr(
+            __import__("research_subjects"), "mark_lifecycle", lambda *a, **k: None
+        )
+        for member in meta["members"]:
+            test = tmp_path / ("derived-" + member["member_id"]) / "tests/test_feature.py"
+            test.write_text("def test_feature(): assert True\n")
+        decision = synthesis_promotion.deliver_producer_winner(
+            root,
+            meta,
+            {"ranking": [(member["member_id"], 10) for member in meta["members"]]},
+            verify_fn=lambda *a, **k: pytest.fail(
+                "modified frozen test reached winner verification"
+            ),
+        )
+        assert decision["status"] == "no_winner"
+
+    # Missing criteria, passing tests, collection failures, implementation edits, and dirty
+    # worktrees must all fail closed BEFORE a comparison process can be spawned.
+    def bad_derive(kind):
+        def worker(agent, prompt, wt):
+            derive(agent, prompt, wt)
+            path = wt / "tests/test_feature.py"
+            if kind == "passing":
+                path.write_text("def test_feature(): assert True\n")
+            elif kind == "collection":
+                path.write_text("import missing_test_dependency_731\n")
+            elif kind == "implementation":
+                (wt / "feature.txt").write_text("fixed")
+            elif kind == "dirty":
+                (wt / "uncommitted").write_text("dirty")
+            if kind != "dirty":
+                git(wt, "add", "tests/test_feature.py", "feature.txt")
+                git(wt, "commit", "--amend", "--no-edit")
+
+        return worker
+
+    for kind in ["passing", "collection", "implementation", "dirty"]:
+        before = events.count("arm")
+
+        def freeze_bad(*a, **kw):
+            return original_freeze(*a, **kw, derive_fn=bad_derive(kind))
+
+        monkeypatch.setattr(producer, "freeze_test", freeze_bad)
+        with pytest.raises(ValueError):
+            exp_abcd.prepare_arms(
+                "a/b", str(spec), kind, arms, producer_metadata={"producer": "experiment_producer"}
+            )
+        assert events.count("arm") == before
+    # The real launcher boundary also fails closed on agent failure/timeout and stops
+    # the worker process group before returning. No actual agent CLI is executed.
+    for failure in ["worker-failure", "worker-timeout"]:
+        with monkeypatch.context() as launcher:
+            killed, accounted = [], []
+
+            class Worker:
+                pid = 731123
+                waits = 0
+
+                def wait(self, timeout=None):
+                    self.waits += 1
+                    if failure == "worker-timeout" and self.waits == 1:
+                        raise subprocess.TimeoutExpired(["stub-agent"], timeout)
+                    return 1
+
+            def popen(argv, **kwargs):
+                assert argv[:2] == ["bash", "-lc"]
+                assert kwargs["start_new_session"] is True
+                env = kwargs["env"]
+                assert "file:///dev/null/orch-no-push" in env.values()
+                return Worker()
+
+            launcher.setattr(
+                producer,
+                "subprocess",
+                SimpleNamespace(
+                    Popen=popen,
+                    TimeoutExpired=subprocess.TimeoutExpired,
+                    STDOUT=subprocess.STDOUT,
+                    DEVNULL=subprocess.DEVNULL,
+                ),
+            )
+            launcher.setattr(producer.os, "killpg", lambda *a: killed.append(a))
+            launcher.setattr(exp_abcd.adapters, "build_command", lambda *a, **kw: ["stub-agent"])
+            launcher.setattr(
+                exp_abcd.adapters, "record_ledger", lambda *a, **kw: accounted.append(kw)
+            )
+            launcher.setattr(producer, "freeze_test", original_freeze)
+            before = events.count("arm")
+            with pytest.raises(producer.FrozenTestError):
+                exp_abcd.prepare_arms(
+                    "a/b",
+                    str(spec),
+                    failure,
+                    arms,
+                    producer_metadata={"producer": "experiment_producer"},
+                )
+            assert events.count("arm") == before
+            assert bool(killed) == (failure == "worker-timeout")
+            assert len(accounted) == 1
+    spec.write_text("No test or acceptance criteria")
+    monkeypatch.setattr(producer, "freeze_test", original_freeze)
+    with pytest.raises(ValueError, match="no_named_test"):
+        exp_abcd.prepare_arms(
+            "a/b", str(spec), "no-test", arms, producer_metadata={"producer": "experiment_producer"}
+        )
