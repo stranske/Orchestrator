@@ -259,8 +259,10 @@ def invoke_compiled_target(
         return {"matched": False, "invoked": False, "reason": "ledger_unreadable"}
     if not cap:
         raise ValueError(f"unknown capability: {capability_id}")
-    if cap["status"] not in {"wired", "shadow", "exercised", "canary", "active"}:
-        return {"matched": False, "invoked": False, "reason": f"status:{cap['status']}"}
+    if not isinstance(cap, Mapping):
+        return {"matched": False, "invoked": False, "reason": "ledger_unreadable"}
+    if cap.get("status") not in {"wired", "shadow", "exercised", "canary", "active"}:
+        return {"matched": False, "invoked": False, "reason": f"status:{cap.get('status')}"}
     ineligible = _invocation_ineligible(cap, None, now)
     if ineligible:
         return {"matched": True, "invoked": False, "reason": ineligible}

@@ -967,6 +967,88 @@ def test_direct_invoke_target_unreadable_ledger_refuses_without_writes(
     )
 
 
+@pytest.mark.parametrize("rollback", ["pending", 123, ["pending"]])
+def test_binding_ineligible_malformed_rollback_refuses_as_rollback_pending(rollback) -> None:
+    # A rollback declaration that is not a mapping cannot prove no rollback
+    # is pending; it must refuse as pending instead of raising AttributeError.
+    binding = {"kind": "workflow", "artifact": {}, "lifecycle_policy": {}, "rollback": rollback}
+    assert capability_targets._binding_ineligible(binding, 100, {}) == "rollback_pending"
+    cap = {"expiry": 9999999999, "kill_switch": "ORCH_CAPABILITY_WORKFLOW_ENABLED=0"}
+    assert capability_lifecycle._invocation_ineligible(cap, binding, 100, {}) == (
+        "rollback_pending"
+    )
+
+
+def test_direct_invoke_target_malformed_rollback_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    registry, version_id = ctx["registry"], ctx["version_id"]
+    payload = json.loads(registry.read_text(encoding="utf-8"))
+    payload["targets"][version_id]["rollback"] = "pending"
+    registry.write_text(json.dumps(payload), encoding="utf-8")
+    binding = capability_targets.get_binding(version_id, registry_path=registry)
+    result = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=registry,
+        ledger_path=ctx["ledger"],
+        target_run_id="direct:malformed-rollback",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "rollback_pending"}, result
+    assert capability_targets.get_binding(version_id, registry_path=registry)["invocations"] == []
+    assert "causal_edge" not in result
+
+
+def test_direct_invoke_target_non_mapping_own_row_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    registry, version_id, ledger = ctx["registry"], ctx["version_id"], ctx["ledger"]
+    payload = json.loads(ledger.read_text(encoding="utf-8"))
+    payload["capabilities"][ctx["capability_id"]] = "corrupt-row"
+    ledger.write_text(json.dumps(payload), encoding="utf-8")
+    before = ledger.read_bytes()
+    binding = capability_targets.get_binding(version_id, registry_path=registry)
+    result = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=registry,
+        ledger_path=ledger,
+        target_run_id="direct:corrupt-row",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "ledger_unreadable"}, result
+    assert capability_targets.get_binding(version_id, registry_path=registry)["invocations"] == []
+    assert "causal_edge" not in result
+    assert ledger.read_bytes() == before
+
+
+def test_compiled_invocation_non_mapping_row_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    payload = json.loads(ctx["ledger"].read_text(encoding="utf-8"))
+    payload["capabilities"][ctx["capability_id"]] = "corrupt-row"
+    ctx["ledger"].write_text(json.dumps(payload), encoding="utf-8")
+    registry_before = ctx["registry"].read_bytes()
+    result = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="workflow:corrupt-row:1",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": False, "invoked": False, "reason": "ledger_unreadable"}, result
+    assert "causal_edge" not in result
+    assert ctx["registry"].read_bytes() == registry_before
+
+
 def test_high_risk_candidate_uses_bounded_brain_owner_question(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

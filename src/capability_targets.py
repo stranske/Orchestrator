@@ -320,8 +320,12 @@ def _binding_ineligible(
     binding: Mapping[str, Any], now: int, env: Mapping[str, str] | None = None
 ) -> str | None:
     """Fail-closed refusal for a direct binding invocation, or None if eligible."""
-    if (binding.get("rollback") or {}).get("phase") == "pending":
-        return "rollback_pending"
+    rollback = binding.get("rollback")
+    if rollback is not None:
+        # A rollback declaration that is not a mapping cannot prove no
+        # rollback is pending, so it refuses as pending rather than raising.
+        if not isinstance(rollback, Mapping) or rollback.get("phase") == "pending":
+            return "rollback_pending"
     artifact, skill_invalid = _binding_artifact(binding)
     if skill_invalid:
         return "artifact_invalid"
@@ -359,6 +363,8 @@ def _ledger_ineligible(
     The ledger is read raw (``create=False``, read-only); a missing file or
     missing row carries no ledger condition, while an unreadable ledger fails
     closed as ``ledger_unreadable`` and an unparseable expiry as ``expired``.
+    A non-mapping row for the binding's own capability is likewise
+    ``ledger_unreadable``; unrelated non-mapping rows are skipped.
     """
     if ledger_path is None or not Path(ledger_path).exists():
         return None
@@ -369,8 +375,12 @@ def _ledger_ineligible(
     except Exception:
         return "ledger_unreadable"
     cap = None
-    for row in rows.values():
+    for key, row in rows.items():
         if not isinstance(row, Mapping):
+            # The binding's own row is unreadable: it cannot prove the row is
+            # eligible, so fail closed instead of treating it as absent.
+            if key == binding.get("capability_id"):
+                return "ledger_unreadable"
             continue
         if row.get("capability_version_id") == binding.get("capability_version_id"):
             cap = row
