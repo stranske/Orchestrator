@@ -72,6 +72,7 @@ def _row(rep: dict, flag: str) -> tuple[str, dict]:
 def sandbox(tmp_path, monkeypatch):
     """A private ledger and drain, the sweep's machine reads held still, and tripwires that RECORD
     every prologue evaluation, gh call, heartbeat and Brain connection."""
+    monkeypatch.setattr(switch_review, "fleet_delivery_measures", lambda: [])
     ledger = tmp_path / "capabilities.json"
     ids = set(switch_review.SWITCH_CAPABILITY.values())
     rows = {c: capabilities._blank_capability(c) for c in sorted(ids)}

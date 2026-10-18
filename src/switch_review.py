@@ -50,7 +50,9 @@ import base64
 import json
 import math
 import os
+import re
 import sqlite3
+import statistics
 import subprocess
 import sys
 import time
@@ -93,7 +95,6 @@ MAINT_82_LOG_RUN_BUDGET = 2
 MAINT_68_REGISTRY_FALLBACK = [
     "stranske/Template",
     "stranske/Ready",
-    "stranske/Collab-Admin",
     "stranske/learning-management-system",
     "stranske/Fine-Art-Archive",
 ]
@@ -467,7 +468,7 @@ def _registered_consumer_repos(
             content = base64.b64decode(payload["content"]).decode("utf-8")
             repos = _parse_maint_68_registry_yaml(content)
             if repos:
-                return repos, ""
+                return [repo for repo in repos if repo != _FLEET_EXCLUDED_REPO], ""
         except (KeyError, json.JSONDecodeError, ValueError) as exc:
             reason = f"unmeasured: maint-68 registry parse failed ({exc})"
     if not reason:
@@ -805,6 +806,374 @@ def fleet_gates(
         "clear_paths": clear_paths,
         "stale_canary_count": len(stale_canaries),
     }
+
+
+FLEET_DELIVERY_WINDOW_S = 48 * 3600
+FLEET_CAP_TIMEOUT_S = 120  # The installed helper reads the whole fleet, not one gh endpoint.
+_FLEET_EXCLUDED_REPO = "stranske/Collab-Admin"
+_FLEET_PR_QUERY = """query($q:String!,$cursor:String){
+  search(query:$q,type:ISSUE,first:100,after:$cursor){issueCount
+    pageInfo{hasNextPage endCursor} nodes{... on PullRequest{
+      number url body headRefName createdAt mergedAt repository{nameWithOwner}
+      labels(first:20){nodes{name} pageInfo{hasNextPage}}
+      closingIssuesReferences(first:100){pageInfo{hasNextPage} nodes{
+        number closedAt repository{nameWithOwner}
+        labels(first:20){nodes{name} pageInfo{hasNextPage}}
+      }}
+    }}
+  }
+}"""
+
+
+def _fleet_json(gh, args: list[str]):
+    ok, raw, error = gh(args)
+    if not ok:
+        raise ValueError(f"gh {error or 'read failed'}")
+    payload = json.loads(raw)
+    if isinstance(payload, dict) and payload.get("errors"):
+        raise ValueError(f"gh {payload['errors']}")
+    return payload
+
+
+def _fleet_rest_pages(gh, endpoint: str, key: str | None = None) -> list[dict]:
+    """A full page is never evidence of an exhausted population. Bound API work explicitly."""
+    rows = []
+    for page in range(1, 11):
+        payload = _fleet_json(gh, ["api", f"{endpoint}&per_page=100&page={page}"])
+        batch = payload[key] if key else payload
+        if not isinstance(batch, list) or any(not isinstance(row, dict) for row in batch):
+            raise ValueError("gh malformed list response")
+        rows.extend(batch)
+        if key and payload["total_count"] > 1000:
+            raise ValueError("gh population exceeds the 1000-result API ceiling")
+        if len(batch) < 100:
+            if key and len(rows) != payload["total_count"]:
+                raise ValueError("gh incomplete population")
+            return rows
+    raise ValueError("gh pagination budget exhausted; would need a narrower query")
+
+
+def _fleet_timestamp(value: object) -> int:
+    if not isinstance(value, str) or not re.search(r"(?:Z|[+-]\d\d:\d\d)$", value):
+        raise ValueError("gh missing or invalid UTC timestamp")
+    stamp = _parse_iso_ts(value)
+    if stamp is None:
+        raise ValueError("gh invalid timestamp")
+    return stamp
+
+
+def _fleet_gate_cancellations(*, now: int, gh) -> str:
+    since = datetime.fromtimestamp(now - FLEET_DELIVERY_WINDOW_S, timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    until = datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    endpoint = (
+        f"repos/{WORKFLOWS_REPO}/actions/workflows/pr-00-gate.yml/runs" f"?created={since}..{until}"
+    )
+    runs = _fleet_rest_pages(gh, endpoint, "workflow_runs")
+    # REST exposes `event=pull_request`, NOT github.event.action. Same-SHA runs and
+    # triggering_actor do not establish labeled vs synchronize; never infer that split.
+    for run in runs:
+        if not now - FLEET_DELIVERY_WINDOW_S <= _fleet_timestamp(run["created_at"]) <= now:
+            raise ValueError("gh run outside requested window")
+        if "conclusion" not in run or "event" not in run:
+            raise ValueError("gh run conclusion/event missing")
+    completed = [run for run in runs if run["conclusion"] is not None]
+    pending = len(runs) - len(completed)
+    cancelled = sum(run["conclusion"] == "cancelled" for run in completed)
+    share = (
+        f"{cancelled}/{len(completed)} ({cancelled / len(completed):.1%}) completed"
+        if completed
+        else "no completed runs (n=0)"
+    )
+    share += f"; {pending} still running"
+    return (
+        f"{share} over 48h; labeled=unmeasured; synchronize=unmeasured — would need "
+        "gh query returning each run's github.event.action (Actions REST omits it)"
+    )
+
+
+def _fleet_oldest_canary(*, now: int, gh) -> str:
+    payload = _fleet_json(
+        gh, ["api", f"repos/{WORKFLOWS_REPO}/contents/config/consumer_sync_canaries.json"]
+    )
+    config = json.loads(base64.b64decode(payload["content"], validate=False).decode("utf-8"))
+    repos = list(dict.fromkeys(row["repo"] for row in config["canaries"]))
+    repos = [repo for repo in repos if repo != _FLEET_EXCLUDED_REPO]
+    if len(repos) != 3 or any(not re.fullmatch(r"[\w.-]+/[\w.-]+", repo) for repo in repos):
+        raise ValueError("gh would need the three configured, permitted canary repositories")
+    candidates = []
+    for repo in repos:
+        prs = _fleet_rest_pages(gh, f"repos/{repo}/pulls?state=open")
+        for pr in prs:
+            branch = pr["head"]["ref"]
+            if not isinstance(branch, str):
+                raise ValueError("gh canary head branch missing")
+            if branch.startswith("sync/workflows-"):
+                created = _fleet_timestamp(pr["created_at"])
+                if created > now:
+                    raise ValueError("gh canary creation is in the future")
+                candidates.append((created, f"{repo}#{pr['number']}"))
+    if not candidates:
+        return "none open across 3 canaries (n=0)"
+    created, target = min(candidates)
+    return f"{(now - created) / 86400:.2f}d ({target}; {len(candidates)} open across 3 canaries)"
+
+
+def _fleet_agent_prs(*, now: int, gh, repos: list[str]) -> list[dict]:
+    if not repos:
+        raise ValueError("would need a permitted fleet repository cohort")
+    since = datetime.fromtimestamp(now - FLEET_DELIVERY_WINDOW_S, timezone.utc).isoformat()
+    q = "is:pr updated:>=" + since + " " + " ".join(f"repo:{repo}" for repo in repos)
+    rows, seen = [], set()
+    total_read = 0
+    cursor = None
+    for _ in range(10):
+        args = ["api", "graphql", "-f", "query=" + _FLEET_PR_QUERY, "-f", "q=" + q]
+        if cursor:
+            args += ["-f", "cursor=" + cursor]
+        payload = _fleet_json(gh, args)
+        conn = payload["data"]["search"]
+        total_read += len(conn["nodes"])
+        if conn["issueCount"] > 1000:
+            raise ValueError(
+                "gh search exceeds the 1000-result ceiling; would need per-repo queries"
+            )
+        for pr in conn["nodes"]:
+            if pr["repository"]["nameWithOwner"] not in repos:
+                raise ValueError("gh PR outside requested repositories")
+            labels = _fleet_labels(pr)
+            branch = pr["headRefName"]
+            if not (
+                labels.intersection(
+                    {
+                        f"agent:{agent}"
+                        for agent in (
+                            "codex",
+                            "claude",
+                            "claude-code",
+                            "cursor",
+                            "gemini",
+                            "aider",
+                            "muse",
+                        )
+                    }
+                )
+                or re.match(
+                    r"(?:codex|claude|claude-code|cursor|gemini|aider|muse|orch|orchestrator)/issue-",
+                    branch,
+                )
+            ):
+                continue
+            refs = pr["closingIssuesReferences"]
+            if refs["pageInfo"]["hasNextPage"]:
+                raise ValueError("gh closing issue references truncated")
+            rows.append(pr)
+        if not conn["pageInfo"]["hasNextPage"]:
+            if conn["issueCount"] != total_read:
+                raise ValueError("gh incomplete search population")
+            return rows
+        cursor = conn["pageInfo"]["endCursor"]
+        if not cursor or cursor in seen:
+            raise ValueError("gh search pagination stalled")
+        seen.add(cursor)
+    raise ValueError("gh search pagination budget exhausted")
+
+
+def _fleet_labels(row: dict) -> set[str]:
+    conn = row["labels"]
+    if conn["pageInfo"]["hasNextPage"]:
+        raise ValueError("gh labels truncated")
+    names = [label["name"] for label in conn["nodes"]]
+    if any(not isinstance(name, str) for name in names):
+        raise ValueError("gh label name missing")
+    return set(names)
+
+
+def _fleet_close_latency(*, now: int, prs: list[dict], gh) -> str:
+    minutes, pending, before_merge = [], 0, 0
+    for pr in prs:
+        if pr["mergedAt"] is None:
+            continue
+        merged = _fleet_timestamp(pr["mergedAt"])
+        if not now - FLEET_DELIVERY_WINDOW_S <= merged <= now:
+            continue
+        # Only the explicit same-repository `Closes #N` contract requested by #672.
+        numbers = set(
+            re.findall(r"^\s*closes[ \t]+#(\d+)\b", pr["body"], re.IGNORECASE | re.MULTILINE)
+        )
+        refs = pr["closingIssuesReferences"]["nodes"]
+        # Reopened issues can disappear from closingIssuesReferences. Read the explicit
+        # issue instead of dropping an outstanding merge from the latency population.
+        missing = numbers - {
+            str(issue["number"]) for issue in refs if issue["repository"] == pr["repository"]
+        }
+        for number in sorted(missing):
+            issue = _fleet_json(
+                gh,
+                [
+                    "issue",
+                    "view",
+                    number,
+                    "--repo",
+                    pr["repository"]["nameWithOwner"],
+                    "--json",
+                    "number,closedAt",
+                ],
+            )
+            refs = [*refs, {**issue, "repository": pr["repository"]}]
+        matched = set()
+        for issue in refs:
+            if issue["repository"] != pr["repository"] or str(issue["number"]) not in numbers:
+                continue
+            matched.add(str(issue["number"]))
+            if issue["closedAt"] is None:
+                pending += 1
+                continue
+            closed = _fleet_timestamp(issue["closedAt"])
+            if closed > now:
+                raise ValueError("gh issue closure is in the future")
+            if closed < merged:
+                before_merge += 1
+                continue
+            minutes.append((closed - merged) / 60)
+        if matched != numbers:
+            raise ValueError("gh would need issue closedAt for every explicit Closes #N reference")
+    median = f"{statistics.median(minutes):.2f} min" if minutes else "no closed pairs"
+    return f"{median} (48h merges; n={len(minutes)}, still open={pending}, closed before merge={before_merge})"
+
+
+def _fleet_released_flow(*, now: int, prs: list[dict]) -> str:
+    opened: dict[str, int] = {}
+    merged: dict[str, int] = {}
+    for pr in prs:
+        if not any(
+            "repo-review-approved" in _fleet_labels(issue)
+            for issue in pr["closingIssuesReferences"]["nodes"]
+            if issue["repository"]["nameWithOwner"] != _FLEET_EXCLUDED_REPO
+        ):
+            continue
+        for timestamp, counts in ((pr["createdAt"], opened), (pr["mergedAt"], merged)):
+            if timestamp is None:
+                continue
+            stamp = _fleet_timestamp(timestamp)
+            if now - FLEET_DELIVERY_WINDOW_S <= stamp <= now:
+                day = datetime.fromtimestamp(stamp, timezone.utc).date().isoformat()
+                counts[day] = counts.get(day, 0) + 1
+    # Include zero-activity calendar buckets, and say that boundary days are partial.
+    first_day = (now - FLEET_DELIVERY_WINDOW_S) // 86400
+    days = [
+        datetime.fromtimestamp(day * 86400, timezone.utc).date().isoformat()
+        for day in range(first_day, now // 86400 + 1)
+    ]
+    buckets = "; ".join(
+        f"{day} opened={opened.get(day, 0)} merged={merged.get(day, 0)}" for day in days
+    )
+    return (
+        f"48h mean opened={sum(opened.values()) / 2:g}/day merged={sum(merged.values()) / 2:g}/day; "
+        f"UTC days (boundary days partial): {buckets}; current issue labels"
+    )
+
+
+def _fleet_opener_cap(*, repos: list[str], cap_fn=None) -> str:
+    if not repos:
+        raise ValueError("would need a permitted opener repository cohort")
+    command = [sys.executable, str(Path.home() / ".codex/bin/opener-cap-health.py"), "--json"]
+    for repo in repos:
+        command += ["--repo", repo]
+    try:
+        proc = (cap_fn or subprocess.run)(
+            command, capture_output=True, text=True, timeout=FLEET_CAP_TIMEOUT_S, check=False
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(
+            f"opener-cap-health.py timed out after {FLEET_CAP_TIMEOUT_S}s; "
+            "would need ~/.codex/bin/opener-cap-health.py --json"
+        ) from exc
+    if proc.returncode:
+        raise ValueError(f"opener-cap-health.py {proc.stderr.strip() or 'read failed'}")
+    payload = json.loads(proc.stdout)
+    if not isinstance(payload, dict):
+        raise ValueError("opener-cap-health.py JSON object required")
+    if payload.get("human_held_exempt_error"):
+        raise ValueError(f"opener-cap-health.py {payload['human_held_exempt_error']}")
+    keys = ("total_opener_owned", "human_held_exempt_count", "coverage_exempt_count")
+    if any(type(payload[key]) is not int or payload[key] < 0 for key in keys):
+        raise ValueError("opener-cap-health.py missing/nonnegative integer counts required")
+    return (
+        f"{payload[keys[0]]} opener-owned / cap {int(os.environ.get('OPENER_CAP', '8'))}; human-held exempt={payload[keys[1]]}; "
+        f"coverage exempt={payload[keys[2]]} (opener-cap-health.py population)"
+    )
+
+
+def fleet_delivery_measures(
+    *, now: int | None = None, gh_fn=None, cap_fn=None, repos=None
+) -> list[dict]:
+    """Five independent report-only rows. Incomplete reads can never become numeric zero.
+
+    Dedup: extends switch_review's existing fleet report (#203), not a new capability,
+    dispatch path, threshold or learner signal. GitHub PR metadata establishes the agent
+    cohort, not attributed agent execution or acceptance.
+    """
+    from backlog import SUPPORTED_REPOS
+
+    now = int(time.time() if now is None else now)
+    gh = gh_fn or _gh_call
+    repos = list(
+        dict.fromkeys(
+            repo
+            for repo in (repos if repos is not None else SUPPORTED_REPOS)
+            if repo != _FLEET_EXCLUDED_REPO
+        )
+    )
+    rows = []
+
+    def measure(name, reader, evidence):
+        try:
+            rows.append({"name": name, "value": reader(), "evidence_class": evidence})
+        except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as exc:
+            detail = " ".join(str(exc).split())[:300]
+            rows.append(
+                {"name": name, "value": f"unmeasured — {detail}", "evidence_class": "unmeasured"}
+            )
+
+    measure(
+        "Gate runs cancelled",
+        lambda: _fleet_gate_cancellations(now=now, gh=gh),
+        "observed GitHub runs; trigger action unmeasured",
+    )
+    # A shared full-population read, but each derived measure retains its own failure.
+    try:
+        prs, pr_error = _fleet_agent_prs(now=now, gh=gh, repos=repos), None
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as exc:
+        prs, pr_error = [], exc
+
+    def with_prs(reader):
+        if pr_error is not None:
+            raise ValueError(str(pr_error))
+        return reader(now=now, prs=prs)
+
+    measure(
+        "Merge→issue closed median",
+        lambda: with_prs(lambda **kwargs: _fleet_close_latency(**kwargs, gh=gh)),
+        "observed GitHub PR/issue timestamps; agent metadata cohort",
+    )
+    measure(
+        "Oldest sync canary PR",
+        lambda: _fleet_oldest_canary(now=now, gh=gh),
+        "observed GitHub open PRs + Maint 68 cohort",
+    )
+    measure(
+        "Opener-owned PR count",
+        lambda: _fleet_opener_cap(repos=repos, cap_fn=cap_fn),
+        "observed opener-cap-health JSON",
+    )
+    measure(
+        "Released-issue agent PR flow",
+        lambda: with_prs(_fleet_released_flow),
+        "observed GitHub PRs + current issue labels; agent metadata cohort",
+    )
+    return rows
 
 
 def _exploration_window() -> dict:
@@ -2274,6 +2643,11 @@ def format_report(rep: dict) -> str:
             if fleet.get("clear_paths"):
                 lines.append(f"      {fleet['clear_paths']}")
         lines.append("")
+    delivery = rep.get("fleet_delivery_measures")
+    if delivery is not None:
+        lines += ["## Fleet delivery measures", ""]
+        lines += [f"  {row['name']}: {row['value']} [{row['evidence_class']}]" for row in delivery]
+        lines.append("")
     exploration_gate = rep.get("exploration_gate") or {}
     window = exploration_gate.get("window")
     show_arms = exploration_gate.get("window_days") is not None and not exploration_gate.get(
@@ -3157,6 +3531,7 @@ def main(argv: list[str]) -> int:
         value_chain_inputs=value_chain_inputs,
         credential_exposure_report=credential_exposure(),
     )
+    rep["fleet_delivery_measures"] = fleet_delivery_measures()
     # The production weekly caller collects the curve, rather than leaving a CLI-only instrument.
     # Pure report/selftest readers keep their no-network and no-state-write contract.
     if (

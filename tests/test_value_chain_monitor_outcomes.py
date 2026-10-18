@@ -448,6 +448,7 @@ def test_works_needs_a_durable_success(brain):
 
 
 def _weekly_stubs(monkeypatch):
+    monkeypatch.setattr(switch_review, "fleet_delivery_measures", lambda: [])
     monkeypatch.setenv("ORCH_CREDENTIAL_EXPOSURE_SCAN", "0")
     monkeypatch.setenv(
         "ORCH_DISABLE_STEPS", os.environ.get("ORCH_DISABLE_STEPS", "") + ",issue-size-quality"

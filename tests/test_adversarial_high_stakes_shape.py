@@ -223,6 +223,7 @@ def test_rendered_weekly_report_consumes_the_population_line():
 
 
 def test_weekly_cli_records_measurement_from_its_own_report(monkeypatch, capsys):
+    monkeypatch.setattr(switch_review, "fleet_delivery_measures", lambda: [])
     monkeypatch.setenv("ORCH_DISABLE_STEPS", "issue-size-quality")
     # The shape consumer does not exercise the separate live credential scanner.
     monkeypatch.setattr(
