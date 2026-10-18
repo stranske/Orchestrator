@@ -363,6 +363,24 @@ if [[ "$mode" == "active" ]]; then
   export ORCH_CAPABILITY_HEARTBEATS=1
 fi
 
+# ORCH-ANCHOR: experiment-producer-trial — independent of dispatch/research switches.
+# Read the trial default without starting it; the first active producer tick starts the clock.
+_orch_exp_trial="$(python3 "$ORCH/experiment_producer.py" --trial-defaults)" || {
+  echo "  ERROR: experiment producer --trial-defaults failed; defaulting off" >&2
+  _orch_exp_trial="0 fail"
+}
+_orch_exp_end="${_orch_exp_trial%% *}"
+_orch_exp_verdict="${_orch_exp_trial#* }"
+export ORCH_EXPERIMENT_TRIAL_END="${ORCH_EXPERIMENT_TRIAL_END:-${_orch_exp_end:-0}}"
+_orch_exp_default=0
+if [[ "$_orch_exp_verdict" == "pending" || "$_orch_exp_verdict" == "pass" ]]; then
+  _orch_exp_default=1
+fi
+export ORCH_EXPERIMENT_PRODUCER="${ORCH_EXPERIMENT_PRODUCER:-$_orch_exp_default}"
+export ORCH_EXPERIMENT_RATE_PER_DAY="${ORCH_EXPERIMENT_RATE_PER_DAY:-2}"
+unset _orch_exp_trial _orch_exp_end _orch_exp_verdict _orch_exp_default
+
+
 # ORCH-ANCHOR: heartbeat-producers ---------------------------------------------------------------
 # Everything from here down may emit capability heartbeats. Capacity + discovery write only
 # orchestrator-owned artifacts (capacity.json/backlog.json); the legacy lanes never read them, so
