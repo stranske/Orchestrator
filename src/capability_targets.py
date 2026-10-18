@@ -365,6 +365,8 @@ def _ledger_ineligible(
     closed as ``ledger_unreadable`` and an unparseable expiry as ``expired``.
     A non-mapping row for the binding's own capability is likewise
     ``ledger_unreadable``; unrelated non-mapping rows are skipped.
+    Ledger keys equal their mapping row's ``capability_id``. Corrupt rows
+    have no fields, so their key is the only available capability identity.
     """
     if ledger_path is None or not Path(ledger_path).exists():
         return None
@@ -647,6 +649,8 @@ def verify_rollback(binding: Mapping[str, Any], *, registry_path: Path) -> dict[
 
 
 def _selftest() -> None:
+    for rollback in ("pending", 123, ["pending"]):
+        assert _binding_ineligible({"rollback": rollback}, 100, {}) == "rollback_pending"
     # Invalid declarations refuse before Path/package matching, including direct
     # invocation callers that do not pass through the compiled-target lifecycle.
     invalid_artifacts: tuple[Any, ...] = (None, 17, {}, [])
@@ -673,6 +677,20 @@ def _selftest() -> None:
             predecessor="workflow:manual",
             lifecycle_policy={"mode": "shadow", "tasks_per_day": 1},
         )
+        ledger = root / "corrupt-ledger.json"
+        import capabilities
+
+        payload = {
+            "schema_version": capabilities.SCHEMA_VERSION,
+            "capabilities": {"unrelated": "corrupt"},
+        }
+        ledger.write_text(json.dumps(payload))
+        before = ledger.read_bytes()
+        assert _ledger_ineligible(binding, ledger, 100, {}) is None
+        assert ledger.read_bytes() == before
+        payload["capabilities"] = {binding["capability_id"]: "corrupt"}
+        ledger.write_text(json.dumps(payload))
+        assert _ledger_ineligible(binding, ledger, 100, {}) == "ledger_unreadable"
         result = invoke_target(
             binding,
             trigger={"task_type": plan["selector"]["value"][0]},

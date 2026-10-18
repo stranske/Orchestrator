@@ -987,6 +987,8 @@ def test_direct_invoke_target_malformed_rollback_refuses_without_writes(
     payload = json.loads(registry.read_text(encoding="utf-8"))
     payload["targets"][version_id]["rollback"] = "pending"
     registry.write_text(json.dumps(payload), encoding="utf-8")
+    registry_before = registry.read_bytes()
+    ledger_before = ctx["ledger"].read_bytes()
     binding = capability_targets.get_binding(version_id, registry_path=registry)
     result = capability_targets.invoke_target(
         binding,
@@ -1000,6 +1002,25 @@ def test_direct_invoke_target_malformed_rollback_refuses_without_writes(
     assert result == {"matched": True, "invoked": False, "reason": "rollback_pending"}, result
     assert capability_targets.get_binding(version_id, registry_path=registry)["invocations"] == []
     assert "causal_edge" not in result
+    assert registry.read_bytes() == registry_before
+    assert ctx["ledger"].read_bytes() == ledger_before
+
+
+def test_ledger_ineligible_skips_unrelated_non_mapping_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    ledger, registry = ctx["ledger"], ctx["registry"]
+    payload = json.loads(ledger.read_text(encoding="utf-8"))
+    # Place the corrupt row first so skipping it is required to find our row.
+    payload["capabilities"] = {"unrelated-corrupt": "corrupt", **payload["capabilities"]}
+    ledger.write_text(json.dumps(payload), encoding="utf-8")
+    before = ledger.read_bytes()
+    registry_before = registry.read_bytes()
+    binding = capability_targets.get_binding(ctx["version_id"], registry_path=registry)
+    assert capability_targets._ledger_ineligible(binding, ledger, ctx["now"], {}) is None
+    assert ledger.read_bytes() == before
+    assert registry.read_bytes() == registry_before
 
 
 def test_direct_invoke_target_non_mapping_own_row_refuses_without_writes(
