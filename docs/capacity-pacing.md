@@ -5,8 +5,15 @@ relief, early-spend band and all three pass bounds. Math has no I/O; clocks are
 explicit. A burn estimate requires three distinct timestamps spanning at least
 one hour from the same source and period. Measured zero burn is distinct from
 undefined. Retain the latest sample at or before the six-hour cutoff as an
-anchor, plus the in-window observations. Compute interval rates from their actual
-endpoints and clip each interval's exponential weight to the window. The observed
+anchor, plus the in-window observations, provided the anchor is no older than
+`BURN_WINDOW_HOURS*3600 + 2*SAMPLE_TICK_SECONDS` (28,800 seconds, eight hours).
+`SAMPLE_TICK_SECONDS = 3600`: the orchestrator tick records one pacing sample
+per hour, with additional poll-driven snapshots. Two sample ticks allow for
+normal sampling cadence around the six-hour cutoff; this allowance is separate
+from the poll freshness threshold.
+An older anchor is ignored and prints `anchor ignored: age=<s>s > bound=<s>s`;
+span then starts at the oldest in-window observation. Compute interval rates from
+their actual endpoints and clip each interval's exponential weight to the window. The observed
 span is `min(6h, newest - anchor)`, so ordinary clock jitter can reach full
 confidence without a sample landing exactly six hours before the newest one.
 Negative usage jumps restart history; previous-period and other-source samples
@@ -54,8 +61,11 @@ and `report_weight=...` computed at report time. Missing persisted weights print
 `routed_weight=unmeasured`; missing tick timestamps/ages also stay unmeasured.
 `weight_delta` is report minus routed weight, shown only when its magnitude exceeds
 0.01. The `w_p_prev→w_p` diagnostic describes this report's hysteresis step from
-the persisted weight, rather than the prior tick's step. For a shed pool, the report
-explains that weight is informational: the router uses the state tier, and shed
+the persisted weight, rather than the prior tick's step, with both weights printed
+to three decimals (stored diagnostics retain full precision). Without a persisted
+prior it prints `unmeasured→<computed> (hypothetical step from an unpersisted default)`.
+For a shed pool, the report explains that weight is informational: the router uses
+the state tier, and shed
 pools receive work only when no ok/warn pool can take the task.
 
 | Pool | First-class observations | Weekly boundary |
@@ -94,6 +104,8 @@ observations and validated append offsets. Inode/size/mtime and boundary hashes
 detect replacement/truncation; incomplete lines are retried. Cache failure costs
 speed only. Every scan prints duration, files read/cached, bytes processed and
 malformed counts. The scan is shared once per capacity build.
+This rollout-scan cache is a pre-existing write in the report path: it uses an
+atomic replace in the temporary directory and is not a handoff file.
 
 Fallback: agent-specific `~/.codex/usage-snapshots/weekly-*.json` with a calibrated
 per-pool cap. Mixed-agent totals are rejected, and calendar-week starts must match
