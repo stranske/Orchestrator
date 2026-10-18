@@ -998,3 +998,123 @@ def test_only_unavailable_run_detail_produces_unknown_ci_section_but_keeps_packe
     ]
     assert packet["sections"]["source"]["status"] == "complete"
     assert Path(packet["manifest"]["section_files"]["source"]["path"]).exists()
+
+
+def test_bounded_large_receipts_keep_exact_raw_bytes_and_compact_counts(tmp_path):
+    junit = (
+        "<testsuites><testsuite>"
+        + "".join(
+            f'<testcase name="case{i}" classname="' + "x" * 120 + '"><skipped/></testcase>'
+            for i in range(2341)
+        )
+        + "</testsuite></testsuites>"
+    ).encode()
+    coverage = json.dumps(
+        {
+            "meta": {"format": 3, "version": "7.16.2"},
+            "totals": {
+                "num_statements": 100,
+                "covered_lines": 90,
+                "missing_lines": 10,
+                "num_branches": 20,
+                "covered_branches": 15,
+                "missing_branches": 5,
+                "percent_covered": 87.5,
+            },
+            "files": {"large": "x" * 985434},
+        }
+    ).encode()
+    assert len(junit) > evidence.MAX_SECTION_BYTES
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("pytest-junit.xml", junit)
+        archive.writestr("coverage.json", coverage)
+        archive.writestr(
+            "summary.json", json.dumps({"checks": {}, "artifacts": [], "python_version": "3.13"})
+        )
+        archive.writestr("index.ndjson", '{"coverage":91.6}\n{"coverage":92.2}')
+    receipts, omissions, status = evidence._parse_archive(stream.getvalue(), tmp_path)
+    assert status == "partial" and len(omissions) == 2
+    assert len(receipts) == 2
+    tests, cov = receipts
+    assert (tests["tests"], tests["skipped"], tests["failures"], tests["errors"]) == (
+        2341,
+        2341,
+        0,
+        0,
+    )
+    assert (cov["count"], cov["covered"], cov["percent_covered"]) == (100, 90, 90)
+    assert cov["branches"] == {"count": 20, "covered": 15, "missing": 5}
+    for row, raw in zip(receipts, (junit, coverage)):
+        assert Path(row["raw"]["path"]).read_bytes() == raw
+        assert row["raw"]["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert len(json.dumps(receipts).encode()) < evidence.MAX_SECTION_BYTES
+
+
+@pytest.mark.parametrize(
+    "totals",
+    [
+        {"num_statements": 10, "covered_lines": 11, "missing_lines": 0},
+        {"num_statements": 10, "covered_lines": 9, "missing_lines": 0},
+        {"num_statements": True, "covered_lines": 1, "missing_lines": 0},
+        {
+            "num_statements": 10,
+            "covered_lines": 9,
+            "missing_lines": 1,
+            "percent_covered": float("nan"),
+        },
+        {
+            "num_statements": 10,
+            "covered_lines": 9,
+            "missing_lines": 1,
+            "num_branches": 2,
+            "covered_branches": 3,
+            "missing_branches": 0,
+        },
+        {"num_statements": 10, "covered_lines": 9, "missing_lines": 1, "num_branches": 2},
+    ],
+)
+def test_coverage_py_receipt_rejects_inconsistent_counters(totals):
+    assert (
+        evidence._recognized_json({"meta": {"format": 3, "version": "7.16.2"}, "totals": totals})
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b'<!DOCTYPE testsuite [<!ENTITY x "a">]><testsuite><testcase>&x;</testcase></testsuite>',
+        '<!DOCTYPE testsuite [<!ENTITY x "a">]><testsuite/>'.encode("utf-16"),
+        b"<testsuite><testcase>",
+    ],
+)
+def test_unsafe_or_malformed_junit_is_not_evidence(tmp_path, raw):
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w") as archive:
+        archive.writestr("junit.xml", raw)
+    receipts, omissions, status = evidence._parse_archive(stream.getvalue(), tmp_path)
+    assert receipts == [] and status == "truncated"
+    assert "XML" in omissions[0]["reason"]
+
+
+def test_receipt_archive_expansion_and_entry_count_caps_remain(tmp_path, monkeypatch):
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("junit.xml", "<testsuite>" + " " * 5000 + "</testsuite>")
+    monkeypatch.setattr(evidence, "MAX_UNCOMPRESSED_BYTES", 1000)
+    assert evidence._parse_archive(stream.getvalue(), tmp_path)[2] == "truncated"
+    monkeypatch.setattr(evidence, "MAX_UNCOMPRESSED_BYTES", 16000000)
+    monkeypatch.setattr(evidence, "MAX_FILES", 0)
+    assert evidence._parse_archive(stream.getvalue(), tmp_path)[2] == "truncated"
+
+
+def test_namespaced_junit_stream_counts_children_before_clearing(tmp_path):
+    raw = b'<testsuites xmlns="urn:junit"><testsuite><testcase><failure/></testcase><testcase><error/></testcase><testcase><skipped/></testcase></testsuite></testsuites>'
+    assert evidence._junit_receipt(raw) == {
+        "kind": "junit",
+        "tests": 3,
+        "failures": 1,
+        "errors": 1,
+        "skipped": 1,
+    }

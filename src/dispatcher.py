@@ -23,6 +23,7 @@ import os
 import re
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -38,6 +39,41 @@ import feedback
 import provision
 import repo_knowledge
 import worktree_git
+
+
+class _CompletionPersistencePending(RuntimeError):
+    """The provider finished, but its exact profile completion still needs accounting."""
+
+    def __init__(self, completion: dict):
+        super().__init__("completed offload profile accounting is pending")
+        self.completion = completion
+
+
+def _persist_profile_completion(write, run_id: str, **fields) -> None:
+    """Retry only one idempotent UPDATE, never a provider or completion ledger append."""
+    deadline = time.monotonic() + 2.0
+    for attempt in range(8):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            write(run_id, **fields, lock_timeout_s=min(0.2, remaining))
+            return
+        except sqlite3.OperationalError as exc:
+            code = getattr(exc, "sqlite_errorcode", None)
+            locked = (
+                isinstance(code, int)
+                and (code & 255) in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+            ) or str(exc).lower() in {"database is locked", "database table is locked"}
+            if not locked:
+                raise
+        remaining = deadline - time.monotonic()
+        if attempt < 7 and remaining > 0:
+            time.sleep(min(0.05, remaining))
+    raise _CompletionPersistencePending(
+        {"operation": write.__name__, "run_id": run_id, "fields": fields, "reason": "sqlite_busy"}
+    )
+
 
 ORCH_DIR = Path(__file__).resolve().parent
 REAL_HOME = Path.home()
@@ -2394,22 +2430,25 @@ def offload(
                 )
             )
             resolved_model = probe.get("model")
+            completed_ts = int(time.time())
             if resolved_model:
-                feedback.complete_profile_attempt(
+                _persist_profile_completion(
+                    feedback.complete_profile_attempt,
                     run_id,
                     selected_profile_id=profile["profile_id"],
                     resolved_provider=profile["provider"],
                     resolved_model=resolved_model,
-                    completed_ts=int(time.time()),
+                    completed_ts=completed_ts,
                 )
             else:
-                feedback.complete_profile_attempt_unresolved(
+                _persist_profile_completion(
+                    feedback.complete_profile_attempt_unresolved,
                     run_id,
                     selected_profile_id=profile["profile_id"],
                     fallback_reason=(
                         f"resolved_model_not_reported_by_offload:{probe.get('reason') or 'unknown'}"
                     )[:200],
-                    completed_ts=int(time.time()),
+                    completed_ts=completed_ts,
                 )
         # Instant meter (2026-07-03 audit F2): don't wait a day for ledger_reconcile to pair the
         # ndjson events — the offload runs synchronously, so latency is known RIGHT NOW. Muse is an
@@ -2883,19 +2922,75 @@ def offload(
             fh.write(f"[orchestrator] {redaction_note}\n")
     if muse_prompt is not None:
         muse_prompt.unlink(missing_ok=True)
-    _record_complete(exit_code=out.get("exit"), error=out.get("error"))
+    provider_result = dict(out)
+    try:
+        _record_complete(exit_code=out.get("exit"), error=out.get("error"))
+    except _CompletionPersistencePending as exc:
+        # Preserve the already-redacted actual result before handing a conservative
+        # accounting barrier to callers. This branch is outside the provider loop.
+        actual_exit = out.get("raw_exit", out.get("exit"))
+        provider_completed = (
+            type(actual_exit) is int
+            and actual_exit == 0
+            and out.get("outcome_uncertain") is not True
+        )
+        pending = {
+            "schema": "offload-completion-persistence/v1",
+            "status": "pending",
+            "provider_completed": provider_completed,
+            **exc.completion,
+        }
+        raw = json.dumps({"result": out, "completion": pending}, sort_keys=True).encode()
+        receipt_path = logf.with_suffix(".completion-pending.json")
+        temporary = None
+        try:
+            fd, temporary = tempfile.mkstemp(prefix=".completion-", dir=logf.parent)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, receipt_path)
+            pending["receipt"] = {
+                "path": str(receipt_path),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "bytes": len(raw),
+            }
+        except OSError as retention_error:
+            # The native redacted log already exists. Accounting/retention failure
+            # must still return a barrier rather than lose the run identity.
+            pending["receipt_error"] = type(retention_error).__name__
+        finally:
+            if temporary is not None:
+                try:
+                    Path(temporary).unlink(missing_ok=True)
+                except OSError:
+                    pass
+        out.update(
+            raw_exit=out.get("raw_exit", out.get("exit")),
+            exit=70,
+            error="offload profile completion persistence is pending",
+            completion_persistence=pending,
+            provider_completed=provider_completed,
+            outcome_status="uncertain",
+            outcome_uncertain=True,
+            retry_safe=False,
+        )
     # Telemetry is fail-open. Classify the actual result, stderr, and per-run agent log.
     evidence_result = None
     reset_at = None
     try:
         import rate_incidents
 
-        failure_parts = [out.get("error"), out.get("stderr_tail"), out.get("agent_log_tail")]
-        stdout = str(out.get("output") or "")
+        failure_parts = [
+            provider_result.get("error"),
+            provider_result.get("stderr_tail"),
+            provider_result.get("agent_log_tail"),
+        ]
+        stdout = str(provider_result.get("output") or "")
         # A FAILED run's stdout is error evidence less codex's own record of its work: two codex
         # offloads that printed a doc about quotas became quota incidents and shed the seat
         # (2026-09-19, 09-20). A successful run's stdout counts only through the strict envelope.
-        if out.get("exit") != 0:
+        if provider_result.get("exit") != 0:
             failure_parts.insert(0, rate_incidents.failed_stdout_evidence(agent, stdout))
         elif rate_incidents.stdout_carries_capacity_evidence(stdout):
             failure_parts.insert(0, stdout)
@@ -2911,7 +3006,8 @@ def offload(
         # The provider's stated reset, from codex's harness events alone. Without it the two
         # refusals of 2026-09-25 that named Sep 28 shed for the 6 h cooldown, and this record, the
         # first of a run's two observers, is the one whose shed stands.
-        reset_at = rate_incidents.provider_reset_at(agent, stdout.splitlines())
+        reset_lines = combined_output.splitlines() if agent == "gemini" else stdout.splitlines()
+        reset_at = rate_incidents.provider_reset_at(agent, reset_lines)
     except Exception as exc:
         print(f"warn: rate-incident classification failed for {agent}: {exc}", file=sys.stderr)
     if evidence_result and evidence_result.get("is_authoritative"):
@@ -2927,7 +3023,7 @@ def offload(
                 reset_at=reset_at,
                 extra={
                     "subcategory": evidence_result["subcategory"],
-                    "exit_code": out.get("exit"),
+                    "exit_code": provider_result.get("exit"),
                     "attempts": attempts,
                 },
             )
@@ -3172,6 +3268,10 @@ def _selftest_gemini_refusal() -> None:
 
 
 def _selftest() -> None:
+    import inspect
+
+    # Wiring pin; behavioral stderr/log reset coverage also exercises offload in pytest.
+    assert "combined_output.splitlines()" in inspect.getsource(offload)
     import tempfile
 
     _selftest_gemini_refusal()

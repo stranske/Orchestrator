@@ -2460,7 +2460,8 @@ def dispatch(
             target=str(Path(cwd).expanduser().resolve()),
         )
         # And the same reset: the provider's own clock, from codex's harness events alone.
-        reset_at = rate_incidents.provider_reset_at(agent, stdout.splitlines())
+        reset_lines = combined_output.splitlines() if agent == "gemini" else stdout.splitlines()
+        reset_at = rate_incidents.provider_reset_at(agent, reset_lines)
     except Exception as exc:
         print(f"warn: rate-incident classification failed for {agent}: {exc}", file=sys.stderr)
     if evidence_result and evidence_result.get("is_authoritative"):
@@ -2614,6 +2615,10 @@ def _selftest():
 
 
 def _selftest_inner(*, gaps: list[str] | None = None):
+    import inspect
+
+    # Wiring pin; behavioral stderr reset coverage also exercises dispatch in pytest.
+    assert "combined_output.splitlines()" in inspect.getsource(dispatch)
     assert _auto_resolve("gemini", "mid", "gemini-3.8-flash-high", ["gemini-4-argon-high"]) is None
     assert _auto_resolve("gemini", "full", "gemini-4-argon-high", ["gemini-3.8-flash-high"]) is None
     import env_prereq  # imported here: env_prereq reads this module

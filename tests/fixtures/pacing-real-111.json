@@ -1,0 +1,1116 @@
+{
+  "codex": [
+    {
+      "ts": 1792258406.466648,
+      "used_fraction": 0.1,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792258812.775554,
+      "used_fraction": 0.1,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792258896.739122,
+      "used_fraction": 0.1,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792260091.741072,
+      "used_fraction": 0.11,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792260261.8814342,
+      "used_fraction": 0.11,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792260382.931166,
+      "used_fraction": 0.11,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792260847.870058,
+      "used_fraction": 0.11,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792262112.9420989,
+      "used_fraction": 0.12,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792262410.1711848,
+      "used_fraction": 0.12,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792263938.5537121,
+      "used_fraction": 0.14,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792265718.611362,
+      "used_fraction": 0.15,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792266033.2702458,
+      "used_fraction": 0.15,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792267560.2973819,
+      "used_fraction": 0.16,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792267549.269697,
+      "used_fraction": 0.16,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792268814.49139,
+      "used_fraction": 0.17,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792269339.9457011,
+      "used_fraction": 0.18,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792269730.92367,
+      "used_fraction": 0.0,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792271144.5583959,
+      "used_fraction": 0.02,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792271850.7085419,
+      "used_fraction": 0.03,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792272944.719896,
+      "used_fraction": 0.04,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792273404.07286,
+      "used_fraction": 0.04,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792274808.496091,
+      "used_fraction": 0.05,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792274753.962013,
+      "used_fraction": 0.05,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792276524.850751,
+      "used_fraction": 0.06,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792276805.6711712,
+      "used_fraction": 0.07,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792277914.238372,
+      "used_fraction": 0.07,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792278319.750242,
+      "used_fraction": 0.07,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792278587.711191,
+      "used_fraction": 0.07,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792280142.894048,
+      "used_fraction": 0.09,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792280408.16259,
+      "used_fraction": 0.09,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792281600.5896268,
+      "used_fraction": 0.09,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792281943.240344,
+      "used_fraction": 0.1,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792282157.49689,
+      "used_fraction": 0.1,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792282601.190827,
+      "used_fraction": 0.1,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792282801.4262242,
+      "used_fraction": 0.1,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792283716.277868,
+      "used_fraction": 0.11,
+      "source": "codex-app-server:account/rateLimits/read"
+    },
+    {
+      "ts": 1792284010.2487302,
+      "used_fraction": 0.11,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792285369.853514,
+      "used_fraction": 0.11,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792285532.2543008,
+      "used_fraction": 0.12,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792286315.034522,
+      "used_fraction": 0.12,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792287359.669185,
+      "used_fraction": 0.13,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792287612.950697,
+      "used_fraction": 0.14,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792289032.632007,
+      "used_fraction": 0.15,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792289141.4983082,
+      "used_fraction": 0.15,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792289592.61186,
+      "used_fraction": 0.15,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792290938.106154,
+      "used_fraction": 0.16,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792291210.90876,
+      "used_fraction": 0.16,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792292665.462548,
+      "used_fraction": 0.17,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792292722.601451,
+      "used_fraction": 0.17,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792293029.0826418,
+      "used_fraction": 0.18,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792294536.181083,
+      "used_fraction": 0.18,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792294808.55735,
+      "used_fraction": 0.18,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792296234.465796,
+      "used_fraction": 0.19,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792296342.452437,
+      "used_fraction": 0.19,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792296736.690655,
+      "used_fraction": 0.19,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792296989.6379058,
+      "used_fraction": 0.2,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792297158.2213068,
+      "used_fraction": 0.2,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792297392.4793322,
+      "used_fraction": 0.2,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792297558.500716,
+      "used_fraction": 0.2,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792297628.502004,
+      "used_fraction": 0.2,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792298091.608153,
+      "used_fraction": 0.21,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792298123.2244081,
+      "used_fraction": 0.21,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792298410.774376,
+      "used_fraction": 0.21,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792299952.755092,
+      "used_fraction": 0.22,
+      "source": "codex-app-server:account/rateLimits/read"
+    },
+    {
+      "ts": 1792300589.876838,
+      "used_fraction": 0.22,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792301737.8272982,
+      "used_fraction": 0.22,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792302009.187258,
+      "used_fraction": 0.23,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792303559.135248,
+      "used_fraction": 0.23,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792303541.124736,
+      "used_fraction": 0.23,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792303709.014869,
+      "used_fraction": 0.23,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792304987.904873,
+      "used_fraction": 0.24,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792305338.507757,
+      "used_fraction": 0.24,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792305607.122399,
+      "used_fraction": 0.25,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792306863.887744,
+      "used_fraction": 0.25,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792307143.692387,
+      "used_fraction": 0.25,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792308737.2999759,
+      "used_fraction": 0.26,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792308920.983538,
+      "used_fraction": 0.26,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792309208.8775811,
+      "used_fraction": 0.26,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792310727.653971,
+      "used_fraction": 0.27,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792311080.213658,
+      "used_fraction": 0.27,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792312547.3973708,
+      "used_fraction": 0.27,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792312808.551579,
+      "used_fraction": 0.27,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792313054.79682,
+      "used_fraction": 0.28,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792314129.543745,
+      "used_fraction": 0.28,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792314340.4715,
+      "used_fraction": 0.28,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792315085.849303,
+      "used_fraction": 0.28,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792316411.871329,
+      "used_fraction": 0.29,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792316137.8533509,
+      "used_fraction": 0.29,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792317787.9265559,
+      "used_fraction": 0.29,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792317978.4881148,
+      "used_fraction": 0.29,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792318909.2311769,
+      "used_fraction": 0.29,
+      "source": "codex-app-server:account/rateLimits/read"
+    },
+    {
+      "ts": 1792319748.5970812,
+      "used_fraction": 0.29,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792320010.7048361,
+      "used_fraction": 0.29,
+      "source": "codex-app-server:account/rateLimits/read"
+    },
+    {
+      "ts": 1792321058.838649,
+      "used_fraction": 0.3,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792321529.683358,
+      "used_fraction": 0.3,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792321890.8776891,
+      "used_fraction": 0.3,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792323339.2963042,
+      "used_fraction": 0.3,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792323611.777153,
+      "used_fraction": 0.31,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792324865.1172118,
+      "used_fraction": 0.31,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792325139.236216,
+      "used_fraction": 0.31,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792325652.713809,
+      "used_fraction": 0.31,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792326954.919521,
+      "used_fraction": 0.31,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792327206.818464,
+      "used_fraction": 0.31,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792328563.68418,
+      "used_fraction": 0.32,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792328746.612183,
+      "used_fraction": 0.32,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792329399.4837189,
+      "used_fraction": 0.32,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792330543.0731468,
+      "used_fraction": 0.32,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792330918.321902,
+      "used_fraction": 0.32,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792330980.599029,
+      "used_fraction": 0.32,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792332037.985795,
+      "used_fraction": 0.33,
+      "source": "codex-rollout:rate_limits.primary"
+    },
+    {
+      "ts": 1792332340.264609,
+      "used_fraction": 0.33,
+      "source": "codex-rollout:rate_limits.primary"
+    }
+  ],
+  "claude": [
+    {
+      "ts": 1792198800.402,
+      "used_fraction": 0.37,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792198800.402,
+      "used_fraction": 0.37,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792198800.402,
+      "used_fraction": 0.37,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792198800.402,
+      "used_fraction": 0.37,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792198800.402,
+      "used_fraction": 0.37,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792198800.402,
+      "used_fraction": 0.37,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792198800.402,
+      "used_fraction": 0.37,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792198800.402,
+      "used_fraction": 0.37,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792198800.402,
+      "used_fraction": 0.37,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792198800.402,
+      "used_fraction": 0.37,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792198800.402,
+      "used_fraction": 0.37,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792198800.402,
+      "used_fraction": 0.37,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792198800.402,
+      "used_fraction": 0.37,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792198800.402,
+      "used_fraction": 0.37,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792198800.402,
+      "used_fraction": 0.37,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792198800.402,
+      "used_fraction": 0.37,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792198800.402,
+      "used_fraction": 0.37,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792198800.402,
+      "used_fraction": 0.37,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792271850.7085419,
+      "used_fraction": 0.92,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792272944.719896,
+      "used_fraction": 0.92,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792273404.07286,
+      "used_fraction": 0.92,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792274808.496091,
+      "used_fraction": 0.92,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792181345.1098802,
+      "used_fraction": null,
+      "source": "ccusage-unscaled:weekly-agent-tokens"
+    },
+    {
+      "ts": 1792276524.850751,
+      "used_fraction": 0.92,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792274775.878,
+      "used_fraction": 0.92,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792274775.878,
+      "used_fraction": 0.92,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792274775.878,
+      "used_fraction": 0.92,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792274775.878,
+      "used_fraction": 0.92,
+      "source": "claude-desktop:plan-usage-history.json:u.sd"
+    },
+    {
+      "ts": 1792280142.894048,
+      "used_fraction": 0.94,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792280408.16259,
+      "used_fraction": 0.94,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792281600.5896268,
+      "used_fraction": 0.94,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792281943.240344,
+      "used_fraction": 0.94,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792282157.49689,
+      "used_fraction": 0.94,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792282601.190827,
+      "used_fraction": 0.94,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792282801.4262242,
+      "used_fraction": 0.94,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792283716.277868,
+      "used_fraction": 0.94,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792284010.2487302,
+      "used_fraction": 0.94,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792285369.853514,
+      "used_fraction": 0.95,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792285532.2543008,
+      "used_fraction": 0.96,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792286315.034522,
+      "used_fraction": 0.96,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792287359.669185,
+      "used_fraction": 0.96,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792287612.950697,
+      "used_fraction": 0.96,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792289032.632007,
+      "used_fraction": 0.97,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792289141.4983082,
+      "used_fraction": 0.97,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792289592.61186,
+      "used_fraction": 0.97,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792290938.106154,
+      "used_fraction": 0.97,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792291210.90876,
+      "used_fraction": 0.97,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792292665.462548,
+      "used_fraction": 0.98,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792292722.601451,
+      "used_fraction": 0.98,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792293029.0826418,
+      "used_fraction": 0.98,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792294536.181083,
+      "used_fraction": 0.98,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792294808.55735,
+      "used_fraction": 0.98,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792296234.465796,
+      "used_fraction": 0.98,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792296342.452437,
+      "used_fraction": 0.98,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792296736.690655,
+      "used_fraction": 0.98,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792296989.6379058,
+      "used_fraction": 0.98,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792297158.2213068,
+      "used_fraction": 0.98,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792297392.4793322,
+      "used_fraction": 0.98,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792297558.500716,
+      "used_fraction": 0.98,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792297628.502004,
+      "used_fraction": 0.98,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792298091.608153,
+      "used_fraction": 0.98,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792298123.2244081,
+      "used_fraction": 0.98,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792298410.774376,
+      "used_fraction": 0.98,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792299952.755092,
+      "used_fraction": 0.0,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792300589.876838,
+      "used_fraction": 0.0,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792301737.8272982,
+      "used_fraction": 0.0,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792302009.187258,
+      "used_fraction": 0.0,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792303559.135248,
+      "used_fraction": 0.0,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792303541.124736,
+      "used_fraction": 0.0,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792303709.014869,
+      "used_fraction": 0.0,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792304987.904873,
+      "used_fraction": 0.01,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792305338.507757,
+      "used_fraction": 0.01,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792305607.122399,
+      "used_fraction": 0.01,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792306863.887744,
+      "used_fraction": 0.01,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792307143.692387,
+      "used_fraction": 0.01,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792308737.2999759,
+      "used_fraction": 0.01,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792308920.983538,
+      "used_fraction": 0.01,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792309208.8775811,
+      "used_fraction": 0.01,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792310727.653971,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792311080.213658,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792312547.3973708,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792312808.551579,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792313054.79682,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792314129.543745,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792314340.4715,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792315085.849303,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792316411.871329,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792316137.8533509,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792317787.9265559,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792317978.4881148,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792318909.2311769,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792319748.5970812,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792320010.7048361,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792321058.838649,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792321529.683358,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792321890.8776891,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792323339.2963042,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792323611.777153,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792324865.1172118,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792325139.236216,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792325652.713809,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792326954.919521,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792327206.818464,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792328563.68418,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792328746.612183,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792329399.4837189,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792330543.0731468,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792330918.321902,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792330980.599029,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792332037.985795,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    },
+    {
+      "ts": 1792332340.264609,
+      "used_fraction": 0.02,
+      "source": "claude-cli:/usage"
+    }
+  ]
+}

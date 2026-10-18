@@ -830,7 +830,13 @@ def calibration_misses(
 
 
 def integrate(
-    agents: dict, *, now: float, handoff: Path, record: bool = False, usage_data: dict | None = None
+    agents: dict,
+    *,
+    now: float,
+    handoff: Path,
+    record: bool = False,
+    usage_data: dict | None = None,
+    previous: dict | None = None,
 ) -> list[str]:
     inventory, messages = reset_inventory(RESETS_FILE, now)
     calibration = read_json(CALIBRATION_FILE) or {}
@@ -851,7 +857,8 @@ def integrate(
             )
         )
         calibration = read_json(CALIBRATION_FILE) or {}
-    previous = (read_json(handoff / "capacity.json") or {}).get("agents", {})
+    previous = previous if previous is not None else (read_json(handoff / "capacity.json") or {})
+    previous_agents = previous.get("agents", {})
     new_samples = []
     for pool in ("codex", "claude"):
         entries = inventory.get(pool)
@@ -949,15 +956,29 @@ def integrate(
             sample.update(source_ts=datum["ts"], ts=now)
             pool_samples.append(sample)
         new_samples.append(sample)
-        prior = (previous.get(pool) or {}).get("pacing") or {}
-        # Reset events restart burn history even when Claude's T1 stays fixed.
-        if reset_at is not None:
-            pool_samples = [r for r in pool_samples if r["ts"] >= reset_at]
+        prior = (previous_agents.get(pool) or {}).get("pacing") or {}
+        prior_diagnostics = (previous_agents.get(pool) or {}).get("pacing_diagnostics") or {}
+        history = prior_diagnostics.get("weight_history") or {
+            "period_start": prior.get("period_start"),
+            "period_end": prior.get("period_end"),
+            "reset_at": reset_at if (prior.get("ts") or 0) >= (reset_at or 0) else None,
+        }
+        # Missing measurements are not reset events. Retain both the last weight
+        # and its boundaries through repeated stale/unmeasured rows; expire only
+        # when an observed period or reset actually changes.
         same_history = (
-            prior.get("period_start") == start
-            and prior.get("period_end") == end
-            and (reset_at is None or (prior.get("ts") or 0) >= reset_at)
+            (start is None or history.get("period_start") == start)
+            and (end is None or history.get("period_end") == end)
+            and (reset_at is None or history.get("reset_at") == reset_at)
         )
+        # Missing inventory cannot undo an observed reset. Preserve its boundary
+        # for both burn clipping and weight carry without altering reset accounting.
+        history_reset_at = reset_at if reset_at is not None else history.get("reset_at")
+        if history_reset_at is not None:
+            pool_samples = [r for r in pool_samples if r["ts"] >= history_reset_at]
+        prior_weight = prior.get("routing_weight")
+        if prior_weight is None:
+            prior_weight = prior_diagnostics.get("previous_routing_weight")
         row = pacing.evaluate(
             pool,
             now=now,
@@ -967,7 +988,7 @@ def integrate(
             samples=pool_samples,
             exhausted_at=max(exhausted) if exhausted else None,
             previous_state=prior.get("state"),
-            previous_weight=prior.get("routing_weight") if same_history else None,
+            previous_weight=prior_weight if same_history else None,
             source_ts=datum["ts"],
             used_fraction=datum["used_fraction"],
             source=datum["source"],
@@ -994,6 +1015,11 @@ def integrate(
                 "burn_effective_per_hour",
                 "target_routing_weight",
             )
+        }
+        agent["pacing_diagnostics"]["weight_history"] = {
+            "period_start": start if start is not None else history.get("period_start"),
+            "period_end": end if end is not None else history.get("period_end"),
+            "reset_at": history_reset_at,
         }
         row["measurement"] = (
             "measured"
@@ -1030,14 +1056,17 @@ def integrate(
     return messages
 
 
-def report(handoff: Path, *, now: float, current: dict | None = None) -> str:
+def report(
+    handoff: Path, *, now: float, current: dict | None = None, previous: dict | None = None
+) -> str:
     snapshots = [
         r
         for r in read_rows(handoff / "capacity-ledger.ndjson")
         if r.get("event") == "pacing_snapshot" and r.get("ts", now + 1) <= now
     ]
     snapshots.sort(key=lambda r: r["ts"])
-    current = current if current is not None else (read_json(handoff / "capacity.json") or {})
+    previous = previous if previous is not None else (read_json(handoff / "capacity.json") or {})
+    current = current if current is not None else previous
     lines = [
         "Weekly pacing check: python3 src/capacity.py pacing-report",
         "Evidence class: usage store + rate-limit ledger (dispatch share: capacity-ledger dispatch starts)",
@@ -1053,6 +1082,26 @@ def report(handoff: Path, *, now: float, current: dict | None = None) -> str:
     for pool in ("codex", "claude"):
         agent = current.get("agents", {}).get(pool) or {}
         row = {**(agent.get("pacing") or {}), **(agent.get("pacing_diagnostics") or {})}
+        routed_agent = previous.get("agents", {}).get(pool) or {}
+        routed_row = routed_agent.get("pacing") or {}
+        routed_weight = routed_row.get("routing_weight")
+        report_weight = row.get("routing_weight")
+        tick_ts = previous.get("generated_at")
+        tick_age = "unmeasured" if tick_ts is None else f"{now - tick_ts:.0f}s"
+        routed = "unmeasured" if routed_weight is None else f"{routed_weight:.3f}"
+        computed = "unmeasured" if report_weight is None else f"{report_weight:.3f}"
+        difference = ""
+        if routed_weight is not None and report_weight is not None:
+            delta = report_weight - routed_weight
+            # Ignore binary float noise at the strict 0.01 display boundary.
+            if round(abs(delta), 12) > 0.01:
+                difference = f" weight_delta={delta:+.3f}"
+        shed_note = (
+            "; shed: weight is informational; router uses the state tier "
+            "(shed pools only when no ok/warn pool can take the task)"
+            if "shed" in (agent.get("state"), row.get("state"), routed_agent.get("state"))
+            else ""
+        )
         lines.append(
             f"pool {pool}: u={measured(row.get('used_fraction'))} "
             f"ũ={measured(row.get('projected_fraction'))} "
@@ -1065,13 +1114,15 @@ def report(handoff: Path, *, now: float, current: dict | None = None) -> str:
             f"ḃ_eff={measured(row.get('burn_effective_per_hour'))} "
             f"w_p_target={measured(row.get('target_routing_weight'))} "
             f"state={row.get('state', 'unknown')} "
-            f"pacing={row.get('measurement', 'unknown')} w_p={measured(row.get('routing_weight'))} "
+            f"pacing={row.get('measurement', 'unknown')} "
+            f"routed_weight={routed} (tick ts={measured(tick_ts)}, age={tick_age}) "
+            f"report_weight={computed}{difference} "
             f"w_p_prev→w_p={measured(row.get('previous_routing_weight'))}→"
             f"{measured(row.get('routing_weight'))} "
             f"resets={row.get('resets_available') if row.get('resets_available') is not None else 'unknown'} source={row.get('source', 'none')} "
             f"T1={row.get('period_end')} reset_expiries={row.get('reset_expiries')} "
             f"ts={row.get('ts')} stale={row.get('ts') is not None and now - row['ts'] > pacing.STALE_AFTER_SECONDS}; "
-            f"{row.get('reason', 'usage unmeasured; clears on fresh usage/period sample')}"
+            f"{row.get('reason', 'usage unmeasured; clears on fresh usage/period sample')}{shed_note}"
         )
         finals = []
         for snap in snapshots:

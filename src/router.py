@@ -1284,6 +1284,7 @@ def _selftest_gemini_policy() -> None:
 
 
 def _selftest() -> None:
+    import copy
     import tempfile
 
     _selftest_gemini_policy()
@@ -1326,6 +1327,50 @@ def _selftest() -> None:
             "r/Repo#2"
         ]  # implement → claude leads (hand-set prior)
         assert by_t["r/Repo#3"]["task_type"] == "review"  # review runs (no pressure)
+
+        # injected clock: a row expiring exactly at `now` is rejected as
+        # expired with the baseline fallback, and planning must not mutate
+        # the caller's capability records (no sweep on the read path).
+        clock_now = 1_700_000_000
+        expiring = capabilities._blank_capability("expiring")
+        expiring.update(
+            {
+                "status": "active",
+                "matcher": {"repository": "owner/repo", "task_types": ["implement"]},
+                "expiry": clock_now,
+                "capability_version_id": "capability-version:expiring",
+                "artifact_hash": "sha256:artifact",
+                "lifecycle_policy_hash": "sha256:policy",
+            }
+        )
+        expired_records = {"expiring": expiring}
+        expired_before = copy.deepcopy(expired_records)
+        expired_plan = plan(
+            [{"target": "owner/repo#99", "task_type": "implement", "lane": "opener"}],
+            all_ok,
+            dry_run=True,
+            capability_records=expired_records,
+            now=clock_now,
+        )
+        expired_assignment = expired_plan["assignments"][0]
+        assert expired_assignment["selected_capability_id"] is None, expired_assignment
+        assert expired_assignment["capability_fallback"] == "baseline", expired_assignment
+        assert expired_assignment["capability_rejection_reasons"]["expiring"] == [
+            "expired"
+        ], expired_assignment
+        assert expired_records == expired_before, "plan must leave capability records unchanged"
+        live = copy.deepcopy(expiring)
+        live["expiry"] = clock_now + 1
+        live_plan = plan(
+            [{"target": "owner/repo#99", "task_type": "implement", "lane": "opener"}],
+            all_ok,
+            dry_run=True,
+            capability_records={"expiring": live},
+            now=clock_now,
+        )
+        assert live_plan["assignments"][0]["selected_capability_id"] == "expiring", live_plan[
+            "assignments"
+        ]
 
         # learned-weights wiring: a learned rank reorders WITHIN the capacity tier (feedback loop closing)
         assert (
