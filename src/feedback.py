@@ -748,15 +748,19 @@ COMPLETION_RETRY_FIELDS = {
 }
 
 
-def _conn() -> sqlite3.Connection:
+def _conn(*, timeout: float = 5.0) -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(str(DB_PATH))
-    c.executescript(SCHEMA)
-    _migrate_schema(c)
-    # Additive v2 profile tables live in the same durable Brain.  Import lazily
-    # to keep execution_profiles independent from this connection factory.
-    execution_profiles.ensure_schema(c)
-    c.commit()
+    c = sqlite3.connect(str(DB_PATH), timeout=timeout)
+    try:
+        c.executescript(SCHEMA)
+        _migrate_schema(c)
+        # Additive v2 profile tables live in the same durable Brain.  Import lazily
+        # to keep execution_profiles independent from this connection factory.
+        execution_profiles.ensure_schema(c)
+        c.commit()
+    except BaseException:
+        c.close()
+        raise
     return c
 
 
@@ -5699,6 +5703,7 @@ def complete_profile_attempt(
     resolved_model: str,
     status: str = "complete",
     completed_ts: int | None = None,
+    lock_timeout_s: float = 5.0,
 ) -> str:
     """Complete the pre-dispatch profile attempt with observed resolved identity.
 
@@ -5714,7 +5719,7 @@ def complete_profile_attempt(
     # deliberate refusal into an empty string, which broke three provenance tests.
     validated_model: str | None = validate_resolved_worker_model(resolved_model)
     attempt_id = f"attempt:profile:{run_id}"
-    with _conn() as c:
+    with _conn() if lock_timeout_s == 5.0 else _conn(timeout=lock_timeout_s) as c:
         row = c.execute(
             "SELECT profile_id FROM execution_attempts WHERE attempt_id=? AND run_id=? "
             "AND operation_role='worker'",
@@ -5753,6 +5758,7 @@ def complete_profile_attempt_unresolved(
     fallback_reason: str = "resolved_model_not_reported",
     status: str = "unresolved",
     completed_ts: int | None = None,
+    lock_timeout_s: float = 5.0,
 ) -> str:
     """Close a selected profile attempt without inventing resolved identity.
 
@@ -5766,7 +5772,7 @@ def complete_profile_attempt_unresolved(
     if not reason:
         raise ValueError("unresolved profile completion requires fallback_reason")
     attempt_id = f"attempt:profile:{run_id}"
-    with _conn() as c:
+    with _conn() if lock_timeout_s == 5.0 else _conn(timeout=lock_timeout_s) as c:
         row = c.execute(
             "SELECT profile_id,resolved_model FROM execution_attempts "
             "WHERE attempt_id=? AND run_id=? AND operation_role='worker'",

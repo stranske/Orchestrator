@@ -46,7 +46,17 @@ non-pacing agents and existing policy-tier precedence remain unchanged.
 
 `src/pacing_usage.py:usage` selects the freshest timestamped weekly observation;
 `usage_snapshot` shares that reading with marker recovery and integration. The
-report uses the same integration, source labels and staleness constants.
+report uses the same integration, source labels and staleness constants. It reads
+one persisted `~/.codex/handoff/capacity.json` snapshot through the tick's loader
+and passes that history to integration without writing capacity or sample ledgers.
+Each pool prints `routed_weight=0.451 (tick ts=..., age=...s)` from that snapshot
+and `report_weight=...` computed at report time. Missing persisted weights print
+`routed_weight=unmeasured`; missing tick timestamps/ages also stay unmeasured.
+`weight_delta` is report minus routed weight, shown only when its magnitude exceeds
+0.01. The `w_p_prev→w_p` diagnostic describes this report's hysteresis step from
+the persisted weight, rather than the prior tick's step. For a shed pool, the report
+explains that weight is informational: the router uses the state tier, and shed
+pools receive work only when no ok/warn pool can take the task.
 
 | Pool | First-class observations | Weekly boundary |
 | --- | --- | --- |

@@ -1238,6 +1238,54 @@ def test_semantic_cache_ignores_packet_churn_but_binds_head_source_and_attempt(t
     assert len(set(packet_refs)) == 5  # actions always receive freshly prepared packet refs
 
 
+@pytest.mark.parametrize(
+    "classification",
+    [
+        "deterministic_post_merge_verify",
+        "deterministic_post_merge_label_wait",
+        "deterministic_inner_wait",
+        "deterministic_complete",
+    ],
+)
+def test_native_routes_ignore_legacy_semantic_cache_and_are_not_written(tmp_path, classification):
+    path = tmp_path / "state.json"
+    target = "owner/repo#1"
+    # First create an ordinary model cache entry through the real pipeline.
+    run(path, [target], callbacks())
+    state = closer_pipeline._load(path)
+    cache_key, legacy_entry = next(iter(state["cache"].items()))
+    assert legacy_entry["stage"] == "interpret"
+    legacy_entry["value"] = {
+        "classification": classification,
+        "substantive_needs": [],
+        "route_observation": "before-native-change",
+    }
+    closer_pipeline._save(path, state)
+    observations, actions = [], []
+
+    def interpret(_target, _context):
+        observations.append(len(observations) + 1)
+        return {
+            "classification": classification,
+            "substantive_needs": [],
+            "route_observation": observations[-1],
+        }
+
+    cb = callbacks(
+        interpret=interpret,
+        act=lambda _target, context: actions.append(context["interpret"]["route_observation"])
+        or {"status": "completed", "target_complete": True},
+    )
+    for cadence in (1, 2):
+        result = run(path, [target], cb)
+        assert result["targets"][target]["status"] == "completed"
+        assert observations == list(range(1, cadence + 1))
+        assert actions == observations
+        # Neither the legacy native route nor today's native observation may
+        # survive as a reusable model interpretation, even with stable evidence.
+        assert cache_key not in closer_pipeline._load(path)["cache"]
+
+
 def test_semantic_cache_requires_versioned_sha256_binding(tmp_path):
     path = tmp_path / "state.json"
     interpretations = []
