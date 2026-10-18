@@ -1595,12 +1595,18 @@ def _selftest_prescreen(tmp: Path) -> None:
 def _selftest() -> None:
     import tempfile
 
+    import redirect_sweep
+
     tmp = Path(tempfile.mkdtemp(prefix="redirect-apply-"))
     old_db, old_corpus = feedback.DB_PATH, redirect_shadow.CORPUS_PATH
     old_prompt_dir = redirect_plan.PROMPT_DIR
+    old_sweep_report = redirect_sweep.DEFAULT_REPORT
     feedback.DB_PATH = tmp / "brain.db"
     corpus = tmp / "corpus.jsonl"
     redirect_plan.PROMPT_DIR = tmp / "prompts"
+    # status() includes the latest sweep by default. Keep its candidate population inside the
+    # fixture too; an ambient live sweep must not change selftest counts or be read here.
+    redirect_sweep.DEFAULT_REPORT = tmp / "no-sweep.json"
     # status() also screens the candidate population; point it at paths that hold nothing, so the
     # selftest never reads the live supervisor's plan or report directory.
     no_reports, no_plan = tmp / "no-reports", tmp / "no-plan.json"
@@ -1935,6 +1941,7 @@ def _selftest() -> None:
         feedback.DB_PATH = old_db
         redirect_shadow.CORPUS_PATH = old_corpus
         redirect_plan.PROMPT_DIR = old_prompt_dir
+        redirect_sweep.DEFAULT_REPORT = old_sweep_report
         import shutil
 
         shutil.rmtree(tmp, ignore_errors=True)
