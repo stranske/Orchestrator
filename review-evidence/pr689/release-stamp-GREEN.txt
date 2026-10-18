@@ -1,0 +1,5 @@
+$ /opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_experiment_producer.py::test_five_terminal_followups_release_once[discarded]
+.                                                                        [100%]
+1 passed in 1.53s
+
+EXIT=0
