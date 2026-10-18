@@ -20,7 +20,7 @@ from typing import Any, Callable
 from urllib.parse import quote
 
 SCHEMA = "closer-evidence/v1"
-PRODUCER_VERSION = "1.1.0"
+PRODUCER_VERSION = "1.2.0"
 MAX_SECTION_BYTES = 256_000
 MAX_TEXT_BYTES = 32_000
 MAX_SOURCES = 20
@@ -1054,33 +1054,24 @@ def _parse_archive(archive: bytes, root: Path) -> tuple[list[dict], list[dict], 
                         {"path": info.filename[:300], "reason": "unsafe or directory entry omitted"}
                     )
                     continue
-                if info.file_size > MAX_SECTION_BYTES:
-                    omissions.append(
-                        {"path": info.filename[:300], "reason": "entry byte cap exceeded"}
-                    )
+                # Raw receipt inputs share the archive's bounded expansion budget.
+                # MAX_SECTION_BYTES bounds the compact packet, not retained CI files.
+                with zf.open(info) as entry:
+                    raw = entry.read(MAX_UNCOMPRESSED_BYTES + 1)
+                if len(raw) != info.file_size or len(raw) > MAX_UNCOMPRESSED_BYTES:
+                    omissions.append({"path": info.filename[:300], "reason": "entry size mismatch"})
                     continue
-                raw = zf.read(info)
                 suffix = path.suffix.lower()
                 row: dict[str, Any] | None = None
                 if suffix == ".xml":
                     try:
-                        parsed = ET.fromstring(raw)
-                    except ET.ParseError:
-                        omissions.append({"path": info.filename[:300], "reason": "invalid XML"})
+                        row = _junit_receipt(raw)
+                    except (ET.ParseError, ValueError):
+                        omissions.append(
+                            {"path": info.filename[:300], "reason": "invalid or unsafe XML"}
+                        )
                         continue
-                    if (
-                        parsed.tag.split("}")[-1] == "testsuites"
-                        or parsed.tag.split("}")[-1] == "testsuite"
-                    ):
-                        cases = parsed.findall(".//testcase")
-                        row = {
-                            "kind": "junit",
-                            "tests": len(cases),
-                            "failures": sum(c.find("failure") is not None for c in cases),
-                            "errors": sum(c.find("error") is not None for c in cases),
-                            "skipped": sum(c.find("skipped") is not None for c in cases),
-                        }
-                    else:
+                    if row is None:
                         omissions.append(
                             {
                                 "path": info.filename[:300],
@@ -1125,6 +1116,39 @@ def _parse_archive(archive: bytes, root: Path) -> tuple[list[dict], list[dict], 
     return receipts, omissions[:MAX_FILES], status
 
 
+def _junit_receipt(raw: bytes) -> dict | None:
+    # Reject DTD/entity declarations before parsing, including UTF-16/32 forms.
+    # JUnit output is data; custom entities are not part of its receipt contract.
+    markup = raw.replace(b"\x00", b"").upper()
+    if b"<!DOCTYPE" in markup or b"<!ENTITY" in markup:
+        raise ValueError("XML declarations are not receipt evidence")
+    counts: dict[str, Any] = {"kind": "junit", "tests": 0, "failures": 0, "errors": 0, "skipped": 0}
+    stack: list[ET.Element] = []
+    for event, element in ET.iterparse(io.BytesIO(raw), events=("start", "end")):
+        tag = element.tag.split("}")[-1]
+        if event == "start":
+            if not stack and tag not in {"testsuites", "testsuite"}:
+                return None
+            stack.append(element)
+            continue
+        if tag == "testcase":
+            counts["tests"] += 1
+            children = {child.tag.split("}")[-1] for child in element}
+            for key, child in (
+                ("failures", "failure"),
+                ("errors", "error"),
+                ("skipped", "skipped"),
+            ):
+                counts[key] += child in children
+        # Keep direct testcase children until its counters have been observed.
+        if len(stack) < 2 or stack[-2].tag.split("}")[-1] != "testcase":
+            element.clear()
+            if len(stack) > 1:
+                stack[-2].remove(element)
+        stack.pop()
+    return counts
+
+
 def _recognized_json(doc: Any) -> dict | None:
     if not isinstance(doc, dict):
         return None
@@ -1155,6 +1179,49 @@ def _recognized_json(doc: Any) -> dict | None:
             "failed": doc["failed"],
             "skipped": skipped,
         }
+    totals = doc.get("totals")
+    meta = doc.get("meta")
+    if (
+        isinstance(totals, dict)
+        and isinstance(meta, dict)
+        and meta.get("format") == 3
+        and isinstance(meta.get("version"), str)
+        and all(key in totals for key in ("num_statements", "covered_lines", "missing_lines"))
+    ):
+
+        def counter(value):
+            return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+        count, covered, missing = (
+            totals[key] for key in ("num_statements", "covered_lines", "missing_lines")
+        )
+        if (
+            not all(counter(value) for value in (count, covered, missing))
+            or covered + missing != count
+        ):
+            return None
+        row = {
+            "kind": "coverage-summary",
+            "count": count,
+            "covered": covered,
+            "percent_covered": (100 * covered / count) if count else None,
+            "source_format": "coverage.py-3",
+        }
+        branch_keys = ("num_branches", "covered_branches", "missing_branches")
+        if any(key in totals for key in branch_keys):
+            branches: list[Any] = [totals.get(key) for key in branch_keys]
+            if (
+                not all(counter(value) for value in branches)
+                or branches[1] + branches[2] != branches[0]
+            ):
+                return None
+            row["branches"] = {"count": branches[0], "covered": branches[1], "missing": branches[2]}
+        # coverage.py's percent_covered mixes line and branch denominators; do not
+        # relabel it as line coverage or let contradictory/nonfinite input pass.
+        percent = totals.get("percent_covered")
+        if percent is not None and (not number(percent) or percent > 100):
+            return None
+        return row
     if isinstance(doc.get("totals"), dict) and isinstance(doc["totals"].get("lines"), dict):
         lines = doc["totals"]["lines"]
         if all(number(lines.get(k)) for k in ("count", "covered")):
