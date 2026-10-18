@@ -117,11 +117,11 @@ def test_missing_or_stale_pacing_exports_null_and_reason(tmp_path, missing):
     assert doc["comparative"]["lambda"]["codex"] is None
     for task in doc["task_types"].values():
         for row in task["ranking"]:
-            if row["agent"] == "codex" or all_missing:
-                assert row["comparative_rank"] is None
-                assert row["comparative_reason"]
-            else:
-                assert row["comparative_rank"] == 1
+            assert row["comparative_rank"] is None
+            assert row["comparative_reason"]
+            assert row["comparative_status"] == (
+                doc["comparative"]["status"] + ": " + "; ".join(doc["comparative"]["reasons"])
+            )
 
 
 def test_local_tokens_scale_class_cost_and_remote_tokens_do_not(tmp_path):
@@ -385,7 +385,10 @@ def test_two_paced_agents_and_one_unpaced_export_partial(agents_fixture):
     assert doc["comparative"]["status"] == "partial"
     assert doc["comparative"]["lambda"]["gemini"] is None
     rows = doc["task_types"]["implement"]["ranking"]
-    assert len([r for r in rows if r["comparative_rank"] is not None]) == 2
+    assert all(r["comparative_rank"] is None for r in rows)
+    assert all(
+        "partial:" in r["comparative_status"] and "gemini" in r["comparative_status"] for r in rows
+    )
     assert next(r for r in rows if r["agent"] == "gemini")["comparative_reason"]
 
 
@@ -539,6 +542,7 @@ def test_default_history_path_is_the_writers_ledger(monkeypatch, tmp_path):
 
 def test_below_threshold_rows_get_an_explicit_reason_and_global_ranks_survive():
     result = {
+        "status": "optimal",
         "ranks": {
             "implement": [
                 {"agent": "claude", "comparative_score": 0.5},
@@ -558,3 +562,89 @@ def test_below_threshold_rows_get_an_explicit_reason_and_global_ranks_survive():
     assert task_rows[1]["comparative_reason"] == (
         f"n_obs below comparative threshold ({comparative.MIN_OBS})"
     )
+
+
+@pytest.mark.parametrize("minimum", [5, 25])
+def test_comparative_uses_export_threshold(tmp_path, minimum):
+    db, snapshot = fixture(tmp_path)
+    doc = export.build_document(db, minimum, now=NOW, capacity_snapshot=snapshot)
+    assert doc["comparative"]["status"] == ("optimal" if minimum == 5 else "inputs_unmeasured")
+    if minimum == 25:
+        assert any("n_obs >= 25" in r for r in doc["comparative"]["reasons"])
+    rows = [{"agent": "codex", "n_obs": minimum - 1}]
+    export._attach_comparative_ranks(
+        rows, {**doc["comparative"], "ranks": {}}, "implement", minimum
+    )
+    assert rows[0]["comparative_reason"] == f"n_obs below comparative threshold ({minimum})"
+
+
+def test_stale_claude_suppresses_every_export_rank(agents_fixture):
+    db, snapshot = agents_fixture
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE route_weights SET agent='claude' WHERE agent='cursor'")
+        conn.execute("UPDATE runs SET agent='claude' WHERE agent='cursor'")
+    snapshot["agents"]["claude"] = snapshot["agents"].pop("cursor")
+    snapshot["agents"]["claude"]["pacing"]["ts"] = NOW - 20.1 * 3600
+    doc = export.build_document(db, now=NOW, capacity_snapshot=snapshot)
+    assert doc["comparative"]["status"] == "partial"
+    assert doc["comparative"]["lambda"]["codex"] is not None
+    rows = [r for section in doc["task_types"].values() for r in section["ranking"]]
+    rows += [r for section in doc["reserve"].values() for r in section]
+    assert {r["agent"] for r in rows} == {"codex", "claude"}
+    for row in rows:
+        assert row["comparative_rank"] is None
+        assert "partial:" in row["comparative_status"]
+        assert "claude" in row["comparative_status"]
+        assert (
+            f"age 20.1h > {comparative.STALE_AFTER_SECONDS / 3600:g}h" in row["comparative_status"]
+        )
+
+
+@pytest.mark.parametrize(
+    "stamp,expected",
+    [
+        (None, "absent (age unknown"),
+        (NOW + 3600, "in the future (age -1.0h"),
+        (NOW - 3 * 3600, f"stale (age 3.0h > {comparative.STALE_AFTER_SECONDS / 3600:g}h)"),
+    ],
+)
+def test_pacing_timestamp_reason_is_specific(agents_fixture, stamp, expected):
+    db, snapshot = agents_fixture
+    snapshot["agents"]["codex"]["pacing"]["ts"] = stamp
+    result = comparative.measure(db, snapshot, now=NOW)
+    reason = result["inputs"]["cost_source_by_agent"]["codex"]["reason"]
+    assert expected in reason
+    assert f"{comparative.STALE_AFTER_SECONDS / 3600:g}h" in reason
+
+
+def test_switch_review_partial_includes_comparative_reasons():
+    reason = "claude: pacing stale (age 20.1h > 2h)"
+    line = switch_review.comparative_routing_line(
+        {
+            "comparative": {
+                "status": "partial",
+                "classes_differing": None,
+                "window_days": 14,
+                "lambda": {"codex": 0.0, "claude": None},
+                "reasons": [reason],
+            }
+        }
+    )
+    assert "status partial" in line
+    assert reason in line
+
+
+@pytest.mark.parametrize(
+    "status", ["partial", "inputs_unmeasured", "infeasible_inputs", "infeasible", "iteration_limit"]
+)
+def test_every_nonoptimal_status_suppresses_even_computed_ranks(status):
+    rows = [{"agent": "codex", "n_obs": 30}]
+    result = {
+        "status": status,
+        "ranks": {"implement": [{"agent": "codex", "comparative_score": 0.4}]},
+        "inputs": {"cost_source_by_agent": {}},
+        "reasons": ["claude: pacing stale (age 20.1h > 2h)"],
+    }
+    export._attach_comparative_ranks(rows, result, "implement")
+    assert rows[0]["comparative_rank"] is None
+    assert rows[0]["comparative_status"] == status + ": " + result["reasons"][0]

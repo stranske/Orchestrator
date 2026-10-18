@@ -113,7 +113,7 @@ def _dense_simplex(matrix, rhs, objective):
     return primal, dual, iterations
 
 
-def shadow_prices(q, demand, cost, budget, price, *, value=None) -> dict:
+def shadow_prices(q, demand, cost, budget, price, *, value=None, minimum=MIN_OBS) -> dict:
     """Solve max sum x*(q*V-p*c), capacity <= B and class volume <= D.
 
     Assignment is task -> {agent: fractional runs}, so split/unmet demand is
@@ -124,7 +124,7 @@ def shadow_prices(q, demand, cost, budget, price, *, value=None) -> dict:
     tasks = sorted({task for cells in q.values() for task in cells})
     reasons, invalid = [], []
     if not q or not tasks:
-        reasons.append(f"no quality cells with n_obs >= {MIN_OBS}")
+        reasons.append(f"no quality cells with n_obs >= {minimum}")
 
     def check(label, v, lo=0, hi=None):
         if not _number(v):
@@ -184,7 +184,9 @@ def _timestamp(value) -> float | None:
         return None
 
 
-def _window(db_path: Path, now: int, window_days: int) -> tuple[list[dict], list[dict], list[str]]:
+def _window(
+    db_path: Path, now: int, window_days: int, minimum: int = MIN_OBS
+) -> tuple[list[dict], list[dict], list[str]]:
     """Read-only, no schema migration and no accidental empty Brain creation."""
     if not db_path.exists():
         return [], [], [f"{db_path}: Brain database missing"]
@@ -196,7 +198,7 @@ def _window(db_path: Path, now: int, window_days: int) -> tuple[list[dict], list
                 for row in conn.execute(
                     "SELECT agent, task_type, posterior, n_obs FROM route_weights "
                     "WHERE version=(SELECT MAX(version) FROM route_weights) AND n_obs>=?",
-                    (MIN_OBS,),
+                    (minimum,),
                 )
             ]
             runs = [
@@ -234,7 +236,13 @@ def _pacing(snapshot, agent):
 
 
 def measure(
-    db_path: Path, snapshot: dict | None, *, now=None, window_days=WINDOW_DAYS, q=None
+    db_path: Path,
+    snapshot: dict | None,
+    *,
+    now=None,
+    window_days=WINDOW_DAYS,
+    q=None,
+    minimum=MIN_OBS,
 ) -> dict:
     """D is remaining-period runs; c is period fraction/run; B is remaining fraction.
 
@@ -246,7 +254,9 @@ def measure(
     if window_days < 1:
         raise ValueError("window_days must be positive")
     now = int(time.time()) if now is None else now
-    weights, runs, reasons = _window(db_path, now, window_days)
+    if minimum < 1:
+        raise ValueError("minimum must be positive")
+    weights, runs, reasons = _window(db_path, now, window_days, minimum)
     if q is None:
         q = {}
         for row in weights:
@@ -274,19 +284,23 @@ def measure(
         if pacing is None:
             missing("pacing unmeasured")
             continue
-        if pacing.get("stale"):
-            missing("stale=true; pacing unmeasured")
-            continue
         stamp = _timestamp(
             pacing.get("observed_at", pacing.get("source_ts", pacing.get("ts", observed)))
         )
         end = _timestamp(pacing.get("period_end"))
-        if (
-            stamp is None
-            or stamp > now
-            or ("stale" not in pacing and now - stamp > STALE_AFTER_SECONDS)
-        ):
-            missing("observed_at/source_ts/ts absent, stale or in the future")
+        threshold = f"{STALE_AFTER_SECONDS / 3600:g}h"
+        age = f"{(now - stamp) / 3600:.1f}h" if stamp is not None else "unknown"
+        if pacing.get("stale"):
+            missing(f"stale=true; pacing stale (age {age}; threshold {threshold})")
+            continue
+        if stamp is None:
+            missing(f"observed_at/source_ts/ts absent (age {age}; threshold {threshold})")
+            continue
+        if stamp > now:
+            missing(f"timestamp in the future (age {age}; threshold {threshold})")
+            continue
+        if "stale" not in pacing and now - stamp > STALE_AFTER_SECONDS:
+            missing(f"stale (age {age} > {threshold})")
             continue
         if end is None or end <= now:
             missing("period_end missing or expired")
@@ -378,7 +392,7 @@ def measure(
         )
         for task in tasks
     }
-    result = shadow_prices(measured_q, demand, cost, budget, price)
+    result = shadow_prices(measured_q, demand, cost, budget, price, minimum=minimum)
     if result["status"] == "optimal" and len(measured_q) < len(q):
         result["status"] = "partial"
     result["lambda"] = {agent: result["lambda"].get(agent) for agent in q}

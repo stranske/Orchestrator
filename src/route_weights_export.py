@@ -23,6 +23,7 @@ from typing import Any
 
 import capabilities
 import capacity
+import comparative
 import exploration_collection
 import feedback
 import provision
@@ -32,7 +33,7 @@ import router
 # would fail-open away from learned weights. Capacity is additive via CAPACITY_SCHEMA.
 SCHEMA = "orchestrator.route-weights/v1"
 CAPACITY_SCHEMA = "orchestrator.route-weights-capacity/v1"
-DEFAULT_MIN_OBSERVATIONS = 20
+DEFAULT_MIN_OBSERVATIONS = comparative.MIN_OBS
 EXPORT_BRANCH = "exports/route-weights"
 EXPORT_PATH = Path("config/route-weights.json")
 WEEK_SECONDS = 7 * 86400
@@ -433,14 +434,12 @@ def build_document(
 
 def _add_comparative(document: dict, db_path: Path, snapshot: dict | None, now: int) -> None:
     """Add shadow ranks after hashing the existing policy; never reorder its entries."""
-    import comparative
-
     # Opportunity cost includes every evidenced class, beyond this export's consumer set.
-    result = comparative.measure(db_path, snapshot, now=now)
+    result = comparative.measure(db_path, snapshot, now=now, minimum=document["min_observations"])
     for task, section in document["task_types"].items():
-        _attach_comparative_ranks(section["ranking"], result, task)
+        _attach_comparative_ranks(section["ranking"], result, task, document["min_observations"])
     for task, rows in document["reserve"].items():
-        _attach_comparative_ranks(rows, result, task)
+        _attach_comparative_ranks(rows, result, task, document["min_observations"])
     document["comparative"] = {key: value for key, value in result.items() if key != "ranks"}
 
 
@@ -448,22 +447,25 @@ def _canonical_bytes(document: dict[str, Any]) -> bytes:
     return (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
-def _attach_comparative_ranks(rows: list[dict[str, Any]], result: dict, task: str) -> None:
+def _attach_comparative_ranks(
+    rows: list[dict[str, Any]], result: dict, task: str, minimum: int = DEFAULT_MIN_OBSERVATIONS
+) -> None:
     """Global comparative ranks (one enumeration per task, reserve included) plus a reason when absent."""
-    import comparative
-
+    status = result["status"]
+    status_text = status + (": " + "; ".join(result["reasons"]) if result["reasons"] else "")
     positions = {
         row["agent"]: index
         for index, row in enumerate(result["ranks"].get(task, []), 1)
         if row["comparative_score"] is not None
     }
     for row in rows:
-        row["comparative_rank"] = positions.get(row["agent"])
+        row["comparative_rank"] = positions.get(row["agent"]) if status == "optimal" else None
+        row["comparative_status"] = status_text
         if row["comparative_rank"] is not None:
             continue
-        if row["n_obs"] < comparative.MIN_OBS:
-            # `minimum` may export a row the LP never saw; say so instead of a global reason.
-            row["comparative_reason"] = f"n_obs below comparative threshold ({comparative.MIN_OBS})"
+        if row["n_obs"] < minimum:
+            # Keep the diagnostic tied to the same threshold used for this export.
+            row["comparative_reason"] = f"n_obs below comparative threshold ({minimum})"
         else:
             row["comparative_reason"] = result["inputs"]["cost_source_by_agent"].get(
                 row["agent"], {}

@@ -2035,7 +2035,7 @@ def comparative_routing_line(rep: dict) -> str:
         f"comparative routing: classes_differing {result['classes_differing']} "
         f"(window {result['window_days']}d), λ {prices or 'unmeasured'}, status {result['status']}"
     )
-    if result["status"] == "inputs_unmeasured":
+    if result["status"] in {"partial", "inputs_unmeasured"}:
         line += " — unmeasured; " + "; ".join(result["reasons"])
     return line
 
