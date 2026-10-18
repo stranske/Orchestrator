@@ -1160,16 +1160,17 @@ def test_minimum_sample_rule_counts_distinct_observations(offsets, values, span)
     assert row["routing_weight"] == pytest.approx(1.0)
 
 
-def test_burn_window_excludes_old_future_other_source_and_prior_period():
+def test_burn_window_keeps_anchor_excludes_future_other_source_and_prior_period():
     now = START + pacing.DAY_SECONDS
     data = observations([now - 3600, now - 1800, now], [0.08, 0.09, 0.1])
     data += observations([START - 1, now - 6 * 3600 - 1, now + 1], [0, 0, 1])
     data += [dict(ts=now - 6 * 3600, used_fraction=0.9, source="other")]
     row = evaluate(u=0.1, samples=data)
-    assert row["span_h"] == 1 and row["confidence"] == pytest.approx(1 / 6)
-    assert row["burn_rate_per_day"] == pytest.approx(0.48)
-    # Old endpoints cannot manufacture three observations inside the window.
-    assert pacing.burn_rate(data[1:], now, START, source=SOURCE) is None
+    assert row["span_h"] == 6 and row["confidence"] == 1
+    valid = [r for r in data if START <= r["ts"] <= now and r["source"] == SOURCE]
+    assert row["burn_rate_per_day"] == pacing.burn_rate(valid, now, START, source=SOURCE)
+    # One anchor plus one in-window observation still cannot meet the sample minimum.
+    assert pacing.burn_rate(data[2:], now, START, source=SOURCE) is None
 
 
 def test_usage_drop_restarts_span_even_with_unchanged_period():

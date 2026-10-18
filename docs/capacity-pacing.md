@@ -2,10 +2,36 @@
 
 `src/pacing.py` owns the seven-day period, six-hour burn window, reserve, reset
 relief, early-spend band and all three pass bounds. Math has no I/O; clocks are
-explicit. Two observations are necessary for a burn estimate; measured zero burn
-is distinct from undefined. The six-hour exponentially weighted interval rates
-clip spanning intervals to the window. Fresh flat observations drain old spend
-without another dispatch.
+explicit. A burn estimate requires three distinct timestamps spanning at least
+one hour from the same source and period. Measured zero burn is distinct from
+undefined. Retain the latest sample at or before the six-hour cutoff as an
+anchor, plus the in-window observations. Compute interval rates from their actual
+endpoints and clip each interval's exponential weight to the window. The observed
+span is `min(6h, newest - anchor)`, so ordinary clock jitter can reach full
+confidence without a sample landing exactly six hours before the newest one.
+Negative usage jumps restart history; previous-period and other-source samples
+cannot supply an anchor.
+
+Confidence is `c = min(1, span_h/6)`. The damped projection is
+`ũ_eff = u + c * burn_per_day * remaining_days`. Until the minimum sample rule
+and full confidence are met, the unchanged schedule plus early-spend band decides
+state. At full confidence the projection tier can reach shed and later print
+`pool <p>: ũ=<x> ≤ 1−r_eff → ok` on recovery from either warn or shed.
+This includes the normal shed → warn → ok path, with one drained line when
+full-confidence pacing returns to ok. Fresh flat observations drain old
+spend without another dispatch. `test_real_111_tick_replay_sheds_and_prints_drained_recovery`
+replays the first 111 recorded ticks per pool (the live file had grown to 112
+when captured), retaining only timestamps, usage fractions and source labels.
+The replay uses observed weekly boundaries and an empty reset bank to exercise
+projection shedding independently of reset relief. It prints blocking quantities
+from that replay and an explicitly simulated consecutive-tick
+flat-usage recovery; this is reachability evidence, not observed live recovery.
+
+Routing retains the merged sustainable-rate/effective-burn ratio and ±0.25 tick
+hysteresis. Stale or unmeasured rows retain the previous weight and its history
+boundaries; only a confirmed period change or reset expires that carry. The
+literal projection-based spec formula is exposed only as a pure comparison
+function with direct endpoint/monotonicity tests; it is not wired into routing.
 
 The reserve formula is `0.15 * max(0, 1 - 0.5*n)`: zero/one/two resets give
 0.15/0.075/0. Positive routing weights are sampled by posterior × weight;
@@ -110,7 +136,9 @@ older events. This PR does not rewrite runtime inventory.
 1. Usage at completed T1 within the fresh-source allowance and reserve bounds.
 2. Incidents while another pool was ok, with actual poll coverage and ledger evidence.
 3. Non-Codex dispatch share in Codex ok versus warn/shed hours (target ≥2×),
-   counting positive-count `event=start` records.
+   counting positive-count `event=start` records. Codex **warn** hours count as
+   constrained even when its routing weight remains high. That combination can
+   make pass 3 hard to satisfy; a high weight does not exempt warn hours.
 
 Passes 2 and 3 call **one shared coverage counter** for the same latest completed
 pool period: at each 600-second slot time, the poll in force for **each** provider
@@ -151,7 +179,19 @@ placeholder to the absolute home directory and install it at
 The wrapper explicitly uses `/opt/anaconda3/bin/python3`, or an explicitly selected
 `ORCH_USAGE_POLL_PYTHON` venv interpreter, and fails if unavailable. It never falls
 back to Apple's Python. It attempts both providers even when one fails and returns
-non-zero for any failure. Pollers publish latest via atomic replacement only after
+non-zero for any failure. After both polls it checks each latest file's own `ts`.
+The wrapper defines `STALE_AFTER_SECONDS=1800` once, mirroring
+`pacing.STALE_AFTER_SECONDS` with a parity test. Missing/invalid timestamps are
+stale with `age=unknown`. Stale alerts append to
+`${HANDOFF_ALERT_LOG:-$HOME/.codex/handoff/alerts.log}`, at most once per poller
+per six hours during an outage. A successful poll with a fresh file appends one
+`RECOVERED` transition. Age, allowance and a controlled, sanitized failure message
+(first 120 characters) accompany stale alerts; unrecognized provider diagnostics
+are redacted. These notifications feed the weekly lane-alerts digest as FYI and
+never add a routing or blocking gate. Install the new `usage_alerts.py` helper
+alongside the wrapper when deploying this change.
+
+Pollers publish latest via atomic replacement only after
 successful command, parse and history append. Errors do not echo raw provider
 responses. Codex sends only initialize, initialized notification, and
 `account/rateLimits/read`; Claude invokes the local `claude -p /usage` command.

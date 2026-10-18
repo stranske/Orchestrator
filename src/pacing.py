@@ -75,7 +75,7 @@ def elapsed_fraction(now: float, start: float, end: float) -> float:
 def burn_estimate(
     samples: list[dict], now: float, start: float, *, source=None
 ) -> tuple[float | None, float]:
-    """Return EWMA du/day and the observed span in hours inside the burn window.
+    """Return EWMA du/day and observed span, retaining one clipped window anchor.
 
     Only distinct timestamps from this source/period count. A negative usage jump
     starts a new history, including for pools whose scheduled period stays fixed.
@@ -85,24 +85,34 @@ def burn_estimate(
     by_time = {
         r["ts"]: r
         for r in samples
-        if max(start, now - window) <= r["ts"] <= now
-        and r.get("used_fraction") is not None
+        if start <= r["ts"] <= now
+        and isinstance(r.get("used_fraction"), (int, float))
+        and math.isfinite(r["used_fraction"])
         and (source is None or r.get("source") == source)
     }
     rows = [by_time[t] for t in sorted(by_time)]
+    # Keep the latest sample at/before the cutoff. Real poll timestamps jitter;
+    # dropping this anchor makes a full window depend on exact clock alignment.
+    anchors = [i for i, row in enumerate(rows) if row["ts"] <= now - window]
+    if anchors:
+        rows = rows[anchors[-1] :]
     restart = 0
     for i in range(1, len(rows)):
         if rows[i]["used_fraction"] < rows[i - 1]["used_fraction"]:
             restart = i
     rows = rows[restart:]
-    span_h = (rows[-1]["ts"] - rows[0]["ts"]) / 3600 if rows else 0.0
+    span_h = min(window, rows[-1]["ts"] - rows[0]["ts"]) / 3600 if rows else 0.0
     if len(rows) < 3 or span_h < 1:
         return None, span_h
     weighted = mass = 0.0
     for left, right in zip(rows, rows[1:]):
         dt = right["ts"] - left["ts"]
         delta = right["used_fraction"] - left["used_fraction"]
-        weight = math.exp(-(now - right["ts"]) / window) - math.exp(-(now - left["ts"]) / window)
+        # The interval rate uses its actual endpoints; only its EWMA mass is
+        # clipped. Usage before the window must not acquire extra influence.
+        a = max(left["ts"], now - window)
+        b = right["ts"]
+        weight = math.exp(-(now - b) / window) - math.exp(-(now - a) / window)
         weighted += delta / dt * DAY_SECONDS * weight
         mass += weight
     return (weighted / mass if mass > 0 else None), span_h
@@ -115,6 +125,12 @@ def burn_rate(samples: list[dict], now: float, start: float, *, source=None) -> 
 
 def routing_weight(sustainable_rate: float, effective_burn: float) -> float:
     return 1.0 if effective_burn <= 0 else min(1.0, max(0.0, sustainable_rate / effective_burn))
+
+
+def spec_routing_weight(projected: float, reserve: float) -> float:
+    """Literal spec formula for comparison tests only; never used by routing."""
+    target = 1 - reserve
+    return min(1.0, max(0.0, (target - projected) / target))
 
 
 def pass_bounds(reserve: float) -> tuple[float, float]:
@@ -252,6 +268,13 @@ def evaluate(
             f"pool {pool}: would consume oldest-expiring reset "
             f"expires={reset['expires']} (expiry source={reset.get('source', 'owner estimate UNKNOWN')})"
         )
+    if (
+        state == "ok"
+        and previous_state in ("shed", "warn")
+        and projected is not None
+        and confidence == 1
+    ):
+        result["fyi"].append(f"pool {pool}: ũ={projected:.2f} ≤ 1−r_eff → ok")
     if previous_state == "shed" and state != "shed":
         if projected is None:
             result["fyi"].append(f"pool {pool}: shed → {state} (reset/rollover; ũ=unmeasured)")
@@ -260,9 +283,7 @@ def evaluate(
                 f"pool {pool}: shed → {state}; schedule decides state (c={confidence:.3f}); "
                 f"ũ_eff={effective_projected:.2f}; clears on fresh samples or reset at {period_end:.0f}"
             )
-        elif state == "ok":
-            result["fyi"].append(f"pool {pool}: ũ={projected:.2f} ≤ 1−r_eff → ok")
-        else:
+        elif state != "ok":
             result["fyi"].append(
                 f"pool {pool}: shed → {state}; ũ={projected:.2f} vs 1−r_eff={1 - reserve:.2f}; "
                 f"u={u:.2f}; clears toward ok on fresh flat samples or reset at {period_end:.0f}"
