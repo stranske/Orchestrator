@@ -43,6 +43,9 @@ FAILURES = {"FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"}
 TERMINAL = {"completed", "cancelled", "failure", "success"}
 PIPELINE_RECEIPT_RESERVE_SECONDS = 300.0
 NONPASS_ACCOUNTING_CONTRACT = (
+    "The following accounting path applies ONLY when nonpass_finding records are supplied. "
+    "A native PASS or an absent NON_PASS section does not require finding IDs: use the ordinary "
+    "original-criterion assessment instead, and do not require empty decision.criteria on that path. "
     "Known NON_PASS accounting is distinct from acceptance. This path requires at least one supplied nonpass_finding. Only when ALL supplied nonpass_finding "
     "exact finding_id values are confidently accounted for and each bounded next_guarded_action is "
     "clear (wait, collect_evidence, or repair with a validated bound mechanical plan), return "
@@ -1926,12 +1929,53 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             )
         ):
             return None
+        if prior.get("status") == "failed" and prior.get("results") == {}:
+            try:
+                history = closer_pipeline._resolved_audit_history(
+                    pipeline_path,
+                    state_doc["runs"][
+                        max(
+                            state_doc["runs"],
+                            key=lambda key: float(state_doc["runs"][key].get("created", 0)),
+                        )
+                    ],
+                )
+                restored = closer_pipeline._restored_compact_refusal(
+                    pipeline_path, target, prior, history
+                )
+            except (OSError, ValueError, TypeError, KeyError):
+                return None
+            if restored is None:
+                return None
+            prior = restored
         prior_results = prior.get("results")
         old_prep = prior_results.get("prepare") if isinstance(prior_results, dict) else None
+        old_act = prior_results.get("act") if isinstance(prior_results, dict) else None
+        old_resource = prior.get("resource_evidence")
+        old_proof = old_resource.get("inner_wait") if isinstance(old_resource, dict) else None
+        reason = (
+            old_act.get("reason")
+            if isinstance(old_act, dict) and old_act.get("status") == "blocked"
+            else old_proof.get("reason") if isinstance(old_proof, dict) else None
+        )
+        refusal_only = (
+            isinstance(reason, str) and reason in closer_pipeline.EVIDENCE_REFUSAL_REASONS
+        )
         semantic = closer_pipeline._semantic_cache_token(prep)
-        if (
-            not isinstance(old_prep, dict)
-            or not semantic
+        if not isinstance(old_prep, dict):
+            return None
+        if refusal_only:
+            # This separate path reuses a refusal, not a model interpretation.
+            # Fresh source admission and exact revision/identity must still hold;
+            # a producer change cannot authorize replay of a completed response.
+            if (
+                prep.get("revision") != prior.get("revision")
+                or not isinstance(prep.get("identity"), str)
+                or prep.get("identity") != prior.get("identity")
+            ):
+                return None
+        elif (
+            not semantic
             or closer_pipeline._semantic_cache_token(old_prep) != semantic
             or not isinstance(prep.get("producer_sha256"), str)
             or not prep["producer_sha256"]
@@ -1988,6 +2032,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             }
             if ordinary_nonpass_ref is not None:
                 proof["ordinary_nonpass_ref"] = ordinary_nonpass_ref
+            if refusal_only:
+                proof["acceptance_authority"] = False
             if closer_pipeline._valid_inner_wait(
                 Path(context["state_path"]),
                 target,
@@ -2980,6 +3026,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         return current
 
     def act(target, context):
+        import closer_pipeline
+
         # Re-enter the existing durable queue for one target as soon as its pipeline
         # stages finish. Claims, exact-head refreshes, reconciliation and guards remain there.
         action_state = (
@@ -3178,6 +3226,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             and row.get("status") in {"deferred", "ineligible"}
             and (
                 reason == "worker_json_invalid"
+                or reason in closer_pipeline.EVIDENCE_REFUSAL_REASONS
                 or str(reason).startswith("current item-scoped hold: ")
                 or (
                     str(reason).startswith("ordinary NON_PASS disposition retained: ")
@@ -3260,6 +3309,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 }
                 if nonpass_ref is not None:
                     fresh_proof["ordinary_nonpass_ref"] = nonpass_ref
+                if reason in closer_pipeline.EVIDENCE_REFUSAL_REASONS:
+                    fresh_proof["acceptance_authority"] = False
                 if closer_pipeline._valid_inner_wait(
                     Path(context["state_path"]),
                     target,
@@ -3294,6 +3345,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             }
             if nonpass_ref is not None:
                 proof["ordinary_nonpass_ref"] = nonpass_ref
+            if reason in closer_pipeline.EVIDENCE_REFUSAL_REASONS:
+                proof["acceptance_authority"] = False
             if closer_pipeline._valid_inner_wait(
                 Path(context["state_path"]),
                 target,
@@ -3309,6 +3362,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     "next_trigger": next_trigger,
                     "resource_evidence": {"inner_wait": proof},
                     "queue_receipt": receipt,
+                    "acceptance_authority": False,
                 }
         return {
             "status": "blocked",
