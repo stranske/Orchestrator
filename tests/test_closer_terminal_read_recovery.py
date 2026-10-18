@@ -68,7 +68,7 @@ def test_failed_prelaunch_read_retries_freshly_with_exact_original_wait_audit(tm
         stop = pipeline.validate_stop(path, current["assignment"], now=lambda: clock[0])
         assert f"unresolved_pipeline_work:{target}:failed" in stop["reasons"]
         recovery = pipeline._expired_invalid_round_recovery(
-            stop, current, path, "actual-previous", clock[0] + 20
+            stop, current, path, current["receipt_summary"]["run_id"], clock[0] + 20
         )
         assert recovery[0] and target in recovery[1]
         assert recovery[3] == set(quarantines) and recovery[4] == uncertain
@@ -97,6 +97,19 @@ def test_failed_prelaunch_read_retries_freshly_with_exact_original_wait_audit(tm
         "stage_prepare",
         "stage_act",
         "early_finish",
+        "finished_missing",
+        "finished_null",
+        "finished_string",
+        "finished_bool",
+        "finished_nan",
+        "finished_infinite",
+        "finished_future",
+        "finished_before_created",
+        "receipt_missing",
+        "receipt_null",
+        "receipt_run",
+        "receipt_schema",
+        "receipt_deadline",
         "known_completed",
         "provider_uncertainty",
         "head",
@@ -111,6 +124,7 @@ def test_failed_read_retained_wait_never_hides_unknown_or_mutating_outcome(tmp_p
     _at, target, inner, _original, _current, clock, _prepared, _cb = busy_read_failure(path)
     state = pipeline._load(path)
     current = next(iter(state["runs"].values()))
+    current_run_id = current["receipt_summary"]["run_id"]
     row = current["targets"][target]
     if mutation == "different_error":
         row["error"] = "RuntimeError: unclassified callback failure"
@@ -120,6 +134,28 @@ def test_failed_read_retained_wait_never_hides_unknown_or_mutating_outcome(tmp_p
         row["stage"] = mutation[6:]
     elif mutation == "early_finish":
         current["receipt_summary"]["finished_at"] = current["deadline"] - 1
+    elif mutation.startswith("finished_"):
+        if mutation == "finished_missing":
+            current["receipt_summary"].pop("finished_at")
+        else:
+            current["receipt_summary"]["finished_at"] = {
+                "finished_null": None,
+                "finished_string": str(clock[0]),
+                "finished_bool": True,
+                "finished_nan": float("nan"),
+                "finished_infinite": float("inf"),
+                "finished_future": clock[0] + 1000,
+                "finished_before_created": current["created"] - 1,
+            }[mutation]
+    elif mutation == "receipt_missing":
+        current.pop("receipt_summary")
+    elif mutation == "receipt_null":
+        current["receipt_summary"] = None
+    elif mutation.startswith("receipt_"):
+        key = {"receipt_run": "run_id", "receipt_schema": "schema", "receipt_deadline": "deadline"}[
+            mutation
+        ]
+        current["receipt_summary"][key] = "different"
     elif mutation == "known_completed":
         row["known_completed_action"] = True
     elif mutation == "provider_uncertainty":
@@ -144,10 +180,11 @@ def test_failed_read_retained_wait_never_hides_unknown_or_mutating_outcome(tmp_p
         native = closer_queue._read_state(inner)
         native["items"][target]["operation"] = {"status": "uncertain", "operation_id": "unknown"}
         inner.write_text(__import__("json").dumps(native))
-    pipeline._save(path, state)
+    if mutation not in {"finished_nan", "finished_infinite"}:
+        pipeline._save(path, state)
     stop = pipeline.validate_stop(path, current["assignment"], now=lambda: clock[0])
     recovery = pipeline._expired_invalid_round_recovery(
-        stop, current, path, "actual-previous", clock[0] + 20
+        stop, current, path, current_run_id, clock[0] + 20
     )
     assert target not in recovery[1]
     if mutation == "stage_act":

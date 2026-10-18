@@ -733,6 +733,7 @@ def _audited_retained_wait(
     item: Mapping[str, Any],
     history: list[dict[str, Any]],
     historical_now: float,
+    source_run_id: str,
 ) -> bool:
     """Prove an original no-operation wait for read retry or origin preservation.
 
@@ -742,6 +743,23 @@ def _audited_retained_wait(
     results = item.get("results")
     recovered = previous.get("prior_invalid_stop_evidence")
     recovery = previous.get("recovered_invalid_stop")
+    summary = previous.get("receipt_summary")
+    finished_at = summary.get("finished_at") if isinstance(summary, Mapping) else None
+    # This new failed-read route requires an actual matching terminal receipt;
+    # the older deferred-resource paths retain their existing time fallback.
+    failed_read_terminal_proven = (
+        isinstance(summary, Mapping)
+        and summary.get("schema") == "closer-pipeline-receipt/v1"
+        and summary.get("run_id") == source_run_id
+        and summary.get("deadline") == previous.get("deadline")
+        and isinstance(finished_at, (int, float))
+        and not isinstance(finished_at, bool)
+        and math.isfinite(float(finished_at))
+        and float(previous["created"])
+        <= float(previous["deadline"])
+        <= float(finished_at)
+        <= historical_now
+    )
     anchor = (
         recovery.get("targets", {}).get(target)
         if isinstance(recovery, Mapping) and isinstance(recovery.get("targets"), Mapping)
@@ -772,7 +790,7 @@ def _audited_retained_wait(
                 item.get("status") == "failed"
                 and item.get("stage") == "interpret"
                 and item.get("error") == PRELAUNCH_ROUTE_BUSY_ERROR
-                and historical_now >= float(previous["deadline"])
+                and failed_read_terminal_proven
             )
         )
         or item.get("known_completed_action") is True
@@ -1101,7 +1119,7 @@ def _expired_invalid_round_recovery(
             return False, set(), set(), set(), set(), {}
         no_action = "act" not in results and item.get("known_completed_action") is not True
         retained_read_wait = not no_action and _audited_retained_wait(
-            path, previous, target, item, history, historical_now
+            path, previous, target, item, history, historical_now, run_id
         )
         if status == "completed":
             pass
@@ -1786,6 +1804,7 @@ def _run_pipeline_impl(
                         item,
                         origin_history,
                         prior_stop_now(),
+                        previous_run_id,
                     )
                 }
                 if retained_read_targets:
