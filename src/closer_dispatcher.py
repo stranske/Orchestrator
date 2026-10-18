@@ -1860,6 +1860,104 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             return None
         return _confirmed_post_merge_label_event(target, inner.get("operation"), snapshot)
 
+    def durable_prior_inner_wait(target, prep, context):
+        """Reuse a source-bound wait after a fresh prepare without rerunning workers."""
+        import closer_pipeline
+
+        prior_rows = [
+            run.get("targets", {}).get(target)
+            for run in sorted(
+                state_doc.get("runs", {}).values(),
+                key=lambda row: float(row.get("created", 0)),
+                reverse=True,
+            )
+            if isinstance(run, dict)
+        ]
+        prior = next((row for row in prior_rows if isinstance(row, dict)), None)
+        if not isinstance(prior, dict) or not (
+            (
+                prior.get("status") == "deferred"
+                and prior.get("deferred_reason") == "validated_inner_wait"
+            )
+            or (
+                prior.get("status") == "failed"
+                and prior.get("stage") == "act"
+                and prior.get("error") == "act returned unsupported or missing status"
+            )
+        ):
+            return None
+        prior_results = prior.get("results")
+        old_prep = prior_results.get("prepare") if isinstance(prior_results, dict) else None
+        semantic = closer_pipeline._semantic_cache_token(prep)
+        if (
+            not isinstance(old_prep, dict)
+            or not semantic
+            or closer_pipeline._semantic_cache_token(old_prep) != semantic
+            or not isinstance(prep.get("producer_sha256"), str)
+            or not prep["producer_sha256"]
+            or old_prep.get("producer_sha256") != prep["producer_sha256"]
+        ):
+            return None
+        if prior.get("status") == "failed":
+            if not closer_pipeline._legacy_failed_act_wait_proof(pipeline_path, target, prior):
+                return None
+        else:
+            resource = prior.get("resource_evidence")
+            old_proof = resource.get("inner_wait") if isinstance(resource, dict) else None
+            if not isinstance(old_proof, dict) or not closer_pipeline._valid_inner_wait(
+                pipeline_path,
+                target,
+                prior.get("revision"),
+                old_prep.get("snapshot"),
+                old_proof.get("reason"),
+                old_proof.get("next_trigger"),
+                old_proof,
+            ):
+                return None
+        inner_path = Path(context.get("action_state_path", ""))
+        if not inner_path.is_file():
+            return None
+        try:
+            with closer_queue._ledger_lock(
+                inner_path, cutoff=time.time() + 1, now=time.time
+            ) as locked:
+                if not locked:
+                    return None
+                inner = closer_queue._read_state(inner_path)
+                receipt = inner.get("round", {}).get("receipt")
+                if not isinstance(receipt, dict):
+                    return None
+                rows = receipt.get("accounting")
+                if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+                    return None
+                row = rows[0]
+                receipt_hash = closer_pipeline._digest(receipt)
+            reason, trigger = row.get("reason"), row.get("next_trigger")
+            snapshot = prep.get("snapshot")
+            proof = {
+                "schema": closer_pipeline.INNER_WAIT_SCHEMA,
+                "target": target,
+                "revision": prep.get("revision"),
+                "head": snapshot.get("head") if isinstance(snapshot, dict) else None,
+                "reason": reason,
+                "next_trigger": trigger,
+                "inner_path": str(inner_path),
+                "receipt_sha256": receipt_hash,
+            }
+            if closer_pipeline._valid_inner_wait(
+                Path(context["state_path"]),
+                target,
+                prep.get("revision"),
+                snapshot,
+                reason,
+                trigger,
+                proof,
+            ):
+                return proof
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            return None
+        return None
+
     def prepare(target, context):
         # Each target receives its own GitHub adapter, avoiding shared deadline mutation
         # when independent IO workers overlap.
@@ -2199,6 +2297,16 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "classification": "admission_deferred",
                 "substantive_needs": [],
                 "authority": False,
+            }
+        prior_wait = durable_prior_inner_wait(target, prep, context)
+        if prior_wait is not None:
+            return {
+                "classification": "deterministic_inner_wait",
+                "substantive_needs": [],
+                "authority": False,
+                "reason": prior_wait["reason"],
+                "next_trigger": prior_wait["next_trigger"],
+                "inner_wait_proof": prior_wait,
             }
         route, route_status = _pipeline_low_route(
             load=route_load,
@@ -2686,6 +2794,29 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             and durable_verifier_label_event(target, prep, snap, context.get("action_state_path"))
         ):
             return current
+        if (
+            isinstance(interpreted, dict)
+            and interpreted.get("classification") == "deterministic_inner_wait"
+        ):
+            import closer_pipeline
+
+            proof = interpreted.get("inner_wait_proof")
+            if not closer_pipeline._valid_inner_wait(
+                Path(context["state_path"]),
+                target,
+                context.get("revision"),
+                prep.get("snapshot"),
+                interpreted.get("reason"),
+                interpreted.get("next_trigger"),
+                proof,
+            ):
+                raise RuntimeError("prior inner wait no longer matches fresh preparation")
+            current.advisory[target] = context.get("revision")
+            current.advisory_reasons[target] = {
+                "reason": interpreted["reason"],
+                "next_trigger": interpreted["next_trigger"],
+            }
+            return current
         if isinstance(interpreted, dict):
             import closer_disposition
 
@@ -2928,6 +3059,45 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             verified_label_wait = _verified_post_merge_label_pending(target, row, receipt, inner)
             if verified_label_wait is not None:
                 return verified_label_wait
+        if (
+            receipt.get("stop_valid") is True
+            and row.get("action") == "wait"
+            and row.get("eligible") is False
+            and row.get("status") in {"deferred", "ineligible"}
+            and (
+                reason == "worker_json_invalid"
+                or str(reason).startswith("current item-scoped hold: ")
+            )
+        ):
+            import closer_pipeline
+
+            prep_snapshot = context.get("prepare", {}).get("snapshot", {})
+            proof = {
+                "schema": closer_pipeline.INNER_WAIT_SCHEMA,
+                "target": target,
+                "revision": context.get("revision"),
+                "head": prep_snapshot.get("head"),
+                "reason": reason,
+                "next_trigger": next_trigger,
+                "inner_path": str(action_state),
+                "receipt_sha256": closer_pipeline._digest(receipt),
+            }
+            if closer_pipeline._valid_inner_wait(
+                Path(context["state_path"]),
+                target,
+                context.get("revision"),
+                prep_snapshot,
+                reason,
+                next_trigger,
+                proof,
+            ):
+                return {
+                    "status": "deferred",
+                    "reason": "validated_inner_wait",
+                    "next_trigger": next_trigger,
+                    "resource_evidence": {"inner_wait": proof},
+                    "queue_receipt": receipt,
+                }
         return {
             "status": "blocked",
             "reason": reason,
