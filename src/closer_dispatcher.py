@@ -3087,6 +3087,54 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             import closer_pipeline
 
             prep_snapshot = context.get("prepare", {}).get("snapshot", {})
+            inner = closer_queue._read_state(Path(action_state)).get("items", {}).get(target, {})
+            fresh_snapshot = inner.get("evidence") if isinstance(inner, dict) else None
+            fresh_revision = inner.get("revision") if isinstance(inner, dict) else None
+            if (
+                isinstance(prep_snapshot, dict)
+                and isinstance(fresh_snapshot, dict)
+                and isinstance(context.get("revision"), str)
+                and prep_snapshot.get("target") == target
+                and prep_snapshot.get("revision") == context["revision"]
+                and fresh_revision != context["revision"]
+                and isinstance(fresh_revision, str)
+                and fresh_revision
+                and fresh_snapshot.get("target") == target
+                and fresh_snapshot.get("head") == prep_snapshot.get("head")
+                and row.get("revision") == fresh_revision
+            ):
+                fresh_proof = {
+                    "schema": closer_pipeline.INNER_WAIT_SCHEMA,
+                    "target": target,
+                    "revision": fresh_revision,
+                    "head": fresh_snapshot.get("head"),
+                    "reason": reason,
+                    "next_trigger": next_trigger,
+                    "inner_path": str(action_state),
+                    "receipt_sha256": closer_pipeline._digest(receipt),
+                }
+                if closer_pipeline._valid_inner_wait(
+                    Path(context["state_path"]),
+                    target,
+                    fresh_revision,
+                    fresh_snapshot,
+                    reason,
+                    next_trigger,
+                    fresh_proof,
+                ):
+                    return {
+                        "status": "completed",
+                        "target_complete": False,
+                        "progress_key": digest(
+                            [
+                                target,
+                                context["revision"],
+                                fresh_revision,
+                                fresh_proof["receipt_sha256"],
+                            ]
+                        ),
+                        "queue_receipt": receipt,
+                    }
             proof = {
                 "schema": closer_pipeline.INNER_WAIT_SCHEMA,
                 "target": target,

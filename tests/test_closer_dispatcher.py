@@ -1779,6 +1779,74 @@ def test_staged_adapter_emits_only_durable_validated_inner_wait(tmp_path, monkey
     assert not backend.gh.calls
 
 
+def test_fresh_inner_wait_revision_change_reprepares_before_valid_wait(tmp_path, monkeypatch):
+    old = snapshot(labels=["agents:paused"], review_revision="before-fresh-read")
+    fresh = snapshot(labels=["agents:paused"], review_revision="after-fresh-read")
+    assert old["head"] == fresh["head"] and old["revision"] != fresh["revision"]
+    monkeypatch.setattr(adapter, "GitHub", lambda **_kwargs: FakeGitHub(fresh))
+    pipeline_path = adapter._pipeline_state_path(tmp_path / "state.json")
+    action_path = (
+        pipeline_path.parent
+        / f"{pipeline_path.stem}.actions"
+        / f"{closer_pipeline._digest(TARGET)}.json"
+    )
+    reason = "current item-scoped hold: ['agents:paused']"
+    trigger = "hold owner supplies scoped disposition"
+    receipt = closer_queue.run_round(
+        action_path,
+        [TARGET],
+        lambda _target: {
+            "target": TARGET,
+            "revision": fresh["revision"],
+            "action": "wait",
+            "eligible": False,
+            "requires_coordinator": False,
+            "reason": reason,
+            "next_trigger": trigger,
+            "evidence": fresh,
+        },
+        lambda *_: pytest.fail("held wait must not execute"),
+        deadline=time.time() + 30,
+        max_workers=1,
+        max_passes=1,
+    )
+    assert receipt["stop_valid"] is True
+    returned = {"receipt": receipt}
+    monkeypatch.setattr(closer_queue, "run_round", lambda *_a, **_k: returned["receipt"])
+    captured = {}
+
+    def pipeline_stub(_path, _targets, **callbacks):
+        def context(prepared):
+            return {
+                "state_path": str(pipeline_path),
+                "action_state_path": str(action_path),
+                "deadline": time.time() + 60,
+                "revision": prepared["revision"],
+                "prepare": {"snapshot": prepared, "packet_ref": {}},
+                "interpret": {"classification": "deterministic_wait"},
+            }
+
+        captured["first"] = callbacks["act"](TARGET, context(old))
+        captured["second"] = callbacks["act"](TARGET, context(fresh))
+        returned["receipt"] = {**receipt, "stop_valid": False}
+        with pytest.raises(RuntimeError, match="valid continuation boundary"):
+            callbacks["act"](TARGET, context(old))
+        returned["receipt"] = receipt
+        changed_head = {**old, "head": "f" * 40}
+        captured["changed_head"] = callbacks["act"](TARGET, context(changed_head))
+        return {"targets": {TARGET: captured["second"]}}
+
+    monkeypatch.setattr(closer_pipeline, "run_pipeline", pipeline_stub)
+    backend = closer(tmp_path, fresh)
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
+    assert captured["first"]["status"] == "completed"
+    assert captured["first"]["target_complete"] is False
+    assert isinstance(captured["first"]["progress_key"], str)
+    assert captured["second"]["reason"] == "validated_inner_wait"
+    assert captured["changed_head"]["status"] == "blocked"
+
+
 def test_same_head_inner_wait_requires_fresh_admission_and_matching_producer(tmp_path, monkeypatch):
     current = snapshot()
     monkeypatch.setattr(adapter, "GitHub", lambda **_kwargs: FakeGitHub(current))
