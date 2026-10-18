@@ -19,7 +19,7 @@ import sys
 import time
 from collections import Counter
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 COVERAGE_DAYS = 21
@@ -228,6 +228,41 @@ def route_cells(task_types, agents, *, conn=None, now=None):
     ]
 
 
+def trial_window_end(state):
+    """One deadline for launch admission, trial cohort, and verdict grace periods.
+
+    The persisted start pins the full 21-day window to the second. The shell's date
+    is a fallback before that start exists, never an override of an existing trial.
+    """
+    if state.get("trial_start"):
+        return state["trial_start"] + COVERAGE_DAYS * 86400
+    end = os.environ.get("ORCH_EXPERIMENT_TRIAL_END", "0")
+    if end == "0":
+        return math.inf
+    return datetime.strptime(end, "%Y%m%d").replace(tzinfo=timezone.utc).timestamp()
+
+
+def trial_launch_hold(now=None):
+    state = read_state()
+    end = trial_window_end(state)
+    now = time.time() if now is None else now
+    verdict = state.get("trial_verdict", "pending")
+    if verdict == "fail":
+        reason = state.get("trial_reason", "insufficient_merged_winners")
+        return f"producer: trial verdict fail ({reason}); launches stopped — owner decision"
+    if now >= end and verdict != "pass":
+        ended = time.strftime("%Y%m%d", time.gmtime(end))
+        resolves = time.strftime(
+            "%Y%m%d",
+            time.gmtime(end + (WINNER_MERGE_GRACE_DAYS + UNRESOLVED_UNKNOWN_DAYS) * 86400),
+        )
+        return (
+            f"producer: trial window ended {ended}; verdict pending "
+            f"(resolves by {resolves}); launches held"
+        )
+    return None
+
+
 def build_plan(
     items, cap, *, learned, claimed_targets, excluded_targets, production_reserve, rng, conn=None
 ):
@@ -235,6 +270,16 @@ def build_plan(
     import capacity
     import research_scheduler
     import router
+
+    hold = trial_launch_hold()
+    if hold:
+        print(hold, file=sys.stderr)
+        return {
+            "planned": [],
+            "skipped": [{"reason": hold}],
+            "candidates": [],
+            "producer_cells": [],
+        }
 
     spare = research_scheduler.spare_capacity(research_scheduler.capacity_state_from_snapshot(cap))
     skipped = []
@@ -403,7 +448,13 @@ def producer_summary(exp_dir=None, *, gh_fn=None):
     import exp_abcd
 
     metrics = dict(
-        launched=0, evaluated=0, winner_prs=0, winner_merged=0, cells_fresh=0, cells_total=0
+        launched=0,
+        post_window_launches=0,
+        evaluated=0,
+        winner_prs=0,
+        winner_merged=0,
+        cells_fresh=0,
+        cells_total=0,
     )
     errors = []
     try:
@@ -411,7 +462,7 @@ def producer_summary(exp_dir=None, *, gh_fn=None):
     except (ValueError, OSError):
         trial_state = {}
     start = trial_state.get("trial_start", 0)
-    end = start + COVERAGE_DAYS * 86400 if start else math.inf
+    end = trial_window_end(trial_state)
     unreadable_meta = 0
     for path in Path(exp_dir or exp_abcd.EXP_DIR).glob("*/meta.json"):
         # Only a meta that READS as a producer experiment can make the verdict unknown; a corrupt
@@ -424,6 +475,8 @@ def producer_summary(exp_dir=None, *, gh_fn=None):
         if not isinstance(meta, dict) or meta.get("producer") != "experiment_producer":
             continue
         try:
+            if meta.get("launched_ts", 0) > end:
+                metrics["post_window_launches"] += 1
             if not start <= meta.get("launched_ts", 0) <= end:
                 continue
             metrics["launched"] += 1
@@ -492,7 +545,7 @@ def _cached_verdict(state, now):
         return state["trial_verdict"]
     if (
         not state.get("trial_start")
-        or now < state["trial_start"] + (COVERAGE_DAYS + WINNER_MERGE_GRACE_DAYS) * 86400
+        or now < trial_window_end(state) + WINNER_MERGE_GRACE_DAYS * 86400
     ):
         return "pending"
     if state.get("last_verdict_check") == time.strftime("%Y%m%d", time.gmtime(now)):
@@ -519,8 +572,7 @@ def trial_verdict(now=None, *, summary_fn=None):
         unknown = len(metrics.get("unknowns") or [])
         merged = int(metrics.get("winner_merged") or 0)
         resolve_ts = (
-            state["trial_start"]
-            + (COVERAGE_DAYS + WINNER_MERGE_GRACE_DAYS + UNRESOLVED_UNKNOWN_DAYS) * 86400
+            trial_window_end(state) + (WINNER_MERGE_GRACE_DAYS + UNRESOLVED_UNKNOWN_DAYS) * 86400
         )
         reason = None
         if merged >= TRIAL_PASS_MERGED:

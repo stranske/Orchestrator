@@ -349,7 +349,7 @@ def test_report_zero_values_are_present(monkeypatch):
     )
     assert (
         switch_review.experiment_producer_line()
-        == "  experiment producer: launched 0, evaluated 0, winner_prs 0, winner_merged 0, cells_fresh 0/0, skipped 0 (none); trial_end not_started, verdict pending, days_left 21; winner merge grace 7d"
+        == "  experiment producer: launched 0, evaluated 0, winner_prs 0, winner_merged 0, post_window_launches=0, cells_fresh 0/0, skipped 0 (none); trial_end not_started, verdict pending, days_left 21; winner merge grace 7d"
     )
 
 
@@ -922,6 +922,7 @@ def test_merge_grace_counts_only_trial_launches(tmp_path):
         return {"stdout": json.dumps({"merged_at": merged_at[int(argv[-1].rsplit("/", 1)[1])]})}
 
     result = producer.producer_summary(tmp_path, gh_fn=gh)
+    assert result["post_window_launches"] == 1
     assert result["launched"] == 3
     assert result["winner_merged"] == 2
 
@@ -1161,3 +1162,109 @@ def test_six_merged_pass_even_with_unknowns():
     due = 1000 + (producer.COVERAGE_DAYS + producer.WINNER_MERGE_GRACE_DAYS) * 86400
     summary = lambda: {"winner_merged": 6, "unknowns": ["merge_state_unknown"]}  # noqa: E731
     assert producer.trial_verdict(due, summary_fn=summary) == "pass"
+
+
+@pytest.mark.parametrize(
+    "offset,verdict,launches,receipt",
+    [
+        (-1, "pending", True, ""),
+        (0, "pending", False, "verdict pending (resolves by 20260212); launches held"),
+        (1, "pending", False, "verdict pending (resolves by 20260212); launches held"),
+        (1, "pass", True, ""),
+        (
+            1,
+            "fail",
+            False,
+            "trial verdict fail (unresolved_unknown); launches stopped — owner decision",
+        ),
+    ],
+)
+def test_trial_window_gates_real_plan(monkeypatch, capsys, offset, verdict, launches, receipt):
+    import research_scheduler
+
+    start = 1767225600  # 2026-01-01 UTC
+    producer.trial_defaults(start, active=True)
+    state = producer.read_state()
+    state.update(trial_verdict=verdict, trial_reason="unresolved_unknown")
+    producer.save_state(state)
+    end = producer.trial_window_end(state)
+    monkeypatch.setattr(producer.time, "time", lambda: end + offset)
+    # A stale shell fallback must never move the persisted trial's window.
+    monkeypatch.setenv("ORCH_EXPERIMENT_TRIAL_END", "20990101")
+    monkeypatch.setattr(
+        producer,
+        "route_cells",
+        lambda *a, **k: [
+            {"task_type": "implement", "agent": agent, "age_days": 25}
+            for agent in ["codex", "claude"]
+        ],
+    )
+    monkeypatch.setattr(research_scheduler, "spare_capacity", lambda *a: {"codex": 2, "claude": 2})
+    monkeypatch.setattr(
+        __import__("capacity"), "experiment_pacing", lambda *a: {"codex": "ok", "claude": "ok"}
+    )
+    plan = producer.build_plan(
+        [{"target": "a/b#1", "task_type": "implement", "body": "`pytest tests/test_fix.py`"}],
+        {"agents": {"codex": {}, "claude": {}}},
+        learned={},
+        claimed_targets=set(),
+        excluded_targets=set(),
+        production_reserve={},
+        rng=random.Random(2),
+    )
+    assert bool(plan["planned"]) is launches
+    output = capsys.readouterr().err
+    if receipt:
+        assert receipt in output
+    else:
+        assert "launches held" not in output
+        assert "launches stopped" not in output
+
+
+def test_shell_trial_end_fallback_is_used_by_hold_and_accounting(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_EXPERIMENT_TRIAL_END", "20260122")
+    end = producer.trial_window_end({})
+    assert "trial window ended 20260122" in producer.trial_launch_hold(end)
+    root = tmp_path / "late"
+    root.mkdir()
+    (root / "meta.json").write_text(
+        json.dumps(
+            {
+                "producer": "experiment_producer",
+                "launched_ts": end + 1,
+            }
+        )
+    )
+    assert producer.producer_summary(tmp_path)["post_window_launches"] == 1
+
+
+def test_held_trial_can_resolve_and_clear_without_new_launches():
+    producer.trial_defaults(1000, active=True)
+    end = producer.trial_window_end(producer.read_state())
+    assert "launches held" in producer.trial_launch_hold(end)
+    assert (
+        producer.trial_verdict(
+            end + producer.WINNER_MERGE_GRACE_DAYS * 86400,
+            summary_fn=lambda: {"winner_merged": 6},
+        )
+        == "pass"
+    )
+    assert producer.trial_launch_hold(end + 8 * 86400) is None
+
+
+def test_failed_trial_receipt_survives_switch_off_and_drain(monkeypatch, capsys):
+    import tick
+
+    producer.save_state({"trial_verdict": "fail", "trial_reason": "unresolved_unknown"})
+    monkeypatch.setattr(tick.claims, "reap_stale", lambda: None)
+    monkeypatch.setattr(tick.claims, "active_claims", lambda: {})
+    monkeypatch.setattr(
+        tick.research_scheduler,
+        "build_research_plan",
+        lambda *a, **k: {"planned": [], "skipped": [], "candidates": []},
+    )
+    tick.research_tick([], {}, dry_run=False, env={"ORCH_EXPERIMENT_PRODUCER": "0"})
+    assert (
+        "producer: trial verdict fail (unresolved_unknown); launches stopped — owner decision"
+        in capsys.readouterr().err
+    )

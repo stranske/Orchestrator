@@ -224,6 +224,12 @@ def research_tick(
         experiment_producer.trial_defaults(active=True)
     if not dry_run:
         experiment_producer.trial_verdict()
+        # Shell defaults turn a failed producer OFF; keep its terminal receipt visible
+        # even after every in-flight experiment has drained.
+        if not producer_enabled:
+            hold = experiment_producer.trial_launch_hold()
+            if hold:
+                print(hold, file=sys.stderr)
     active_claims = set(claims.active_claims().keys())
     if producer_enabled:
         plan_out = experiment_producer.build_plan(

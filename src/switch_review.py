@@ -2027,9 +2027,7 @@ def experiment_producer_line():
     verdict = experiment_producer.trial_verdict(summary_fn=lambda: m)
     state = experiment_producer.read_state()
     end = state.get("trial_end", "not_started")
-    seconds_left = (
-        state.get("trial_start", 0) + experiment_producer.COVERAGE_DAYS * 86400 - time.time()
-    )
+    seconds_left = experiment_producer.trial_window_end(state) - time.time()
     days_left = (
         max(0, math.ceil(seconds_left / 86400))
         if state.get("trial_start")
@@ -2044,6 +2042,7 @@ def experiment_producer_line():
     return (
         f"  experiment producer: launched {m['launched']}, evaluated {m['evaluated']}, "
         f"winner_prs {m['winner_prs']}, winner_merged {m['winner_merged']}, "
+        f"post_window_launches={m.get('post_window_launches', 0)}, "
         f"cells_fresh {m['cells_fresh']}/{m['cells_total']}, "
         f"skipped {sum(m['skips'].values())} ({reasons}){unknown}; "
         f"trial_end {end}, verdict {verdict}, days_left {days_left}; "
