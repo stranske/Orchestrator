@@ -520,7 +520,9 @@ def test_router_plan_selection_metadata_without_exercised_credit(tmp_path, monke
     assert count == 0
     assert metadata["selected_capability_id"] == cap["capability_id"]
     assert metadata["selected_capability_version_id"] == cap["capability_version_id"]
-    assert metadata["capability_dispatch_result"]["reason"] == "target_binding_missing"
+    assert metadata["capability_dispatch_result"]["reason"] == (
+        "target_binding_missing"
+    )
     assert metadata["capability_decision"] == assignment["capability_decision"]
 
 

@@ -1205,10 +1205,14 @@ def _invoke_selected_compiled_capability(d: dict) -> dict | None:
     ids = list(d.get("capability_ids") or [])
     versions = list(d.get("capability_version_ids") or [])
     if not versions:
-        versions = [str((ledger.get(cid) or {}).get("capability_version_id") or "") for cid in ids]
+        versions = [
+            str((ledger.get(cid) or {}).get("capability_version_id") or "") for cid in ids
+        ]
     if len(ids) != len(versions):
         raise ValueError("capability identity/version lineage length mismatch")
-    pairs = [(cid, version) for cid, version in zip(ids, versions) if version and cid != cap_id]
+    pairs = [
+        (cid, version) for cid, version in zip(ids, versions) if version and cid != cap_id
+    ]
     pairs.append((str(cap_id), str(version_id)))
     d["capability_ids"] = [cid for cid, _ in pairs]
     d["capability_version_ids"] = [version for _, version in pairs]
