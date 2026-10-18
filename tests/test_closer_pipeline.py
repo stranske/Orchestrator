@@ -2786,3 +2786,84 @@ def test_failed_low_provider_is_audited_deferral_not_exception_or_action(tmp_pat
     assert row["deferred_reason"] == "provider_failure"
     assert row["resource_evidence"] == evidence
     assert validate_stop(tmp_path / "pipeline.json")["valid"]
+
+
+@pytest.mark.parametrize("stage", ["act", "reconcile"])
+@pytest.mark.parametrize("assigned", [True, False])
+def test_expired_action_deadline_recovers_only_to_reconcile(tmp_path, stage, assigned):
+    path = tmp_path / "pipeline.json"
+    at = 1_800_000_000.0
+    interrupted_round_fixture(path, at)
+    state = closer_pipeline._load(path)
+    prior = state["runs"]["interrupted"]
+    target = "owner/repo#capacity-0"
+    prior["targets"][target].update(
+        status="deferred",
+        stage=stage,
+        deferred_reason="deadline_exhausted",
+        deferred_next_trigger="next_round",
+        resource_evidence={
+            "type": "active_deadline",
+            "deadline": at - 1000,
+            "observed_at": at - 999,
+        },
+        results={"reconcile": {"outcome": "confirmed_not_started"}},
+    )
+    closer_pipeline._save(path, state)
+    calls = []
+    cb = callbacks(
+        act=lambda name, _ctx: calls.append(("act", name))
+        or {"status": "completed", "target_complete": True}
+    )
+    result = run(
+        path,
+        [target] if assigned else ["owner/repo#capacity-1"],
+        cb,
+        seconds=10,
+        now=lambda: at,
+        reconcile=lambda name, _ctx: calls.append(("reconcile", name)) or {"outcome": "unknown"},
+    )
+    assert result.get("status") != "blocked"
+    assert ("act", target) not in calls
+    assert (("reconcile", target) in calls) is assigned
+    latest = next(iter(closer_pipeline._load(path)["runs"].values()))
+    assert latest["prior_stop"]["valid"] is False
+    audit = latest["invalid_stop_history"][-1]["targets"][target]
+    assert audit["recovery"] == "reconcile_only"
+    if not assigned:
+        assert latest["targets"][target]["recovery_excluded"] is True
+
+
+@pytest.mark.parametrize(
+    "mutation", ["wrong_deadline", "early", "operation_result", "provider_unknown"]
+)
+def test_expired_action_deadline_requires_exact_no_result_boundary(tmp_path, mutation):
+    path = tmp_path / "pipeline.json"
+    at = 1_800_000_000.0
+    interrupted_round_fixture(path, at)
+    state = closer_pipeline._load(path)
+    prior = state["runs"]["interrupted"]
+    row = prior["targets"]["owner/repo#capacity-0"]
+    row.update(
+        status="deferred",
+        stage="act",
+        deferred_reason="deadline_exhausted",
+        resource_evidence={
+            "type": "active_deadline",
+            "deadline": at - 1000,
+            "observed_at": at - 999,
+        },
+    )
+    if mutation == "wrong_deadline":
+        row["resource_evidence"]["deadline"] -= 1
+    elif mutation == "early":
+        row["resource_evidence"]["observed_at"] = at - 1001
+    elif mutation == "operation_result":
+        row["results"]["act"] = {"status": "blocked"}
+    else:
+        row["provider_outcome_uncertain"] = {"unknown": True}
+    closer_pipeline._save(path, state)
+    stop = validate_stop(path, prior["assignment"], now=lambda: at)
+    assert not closer_pipeline._expired_invalid_round_recovery(
+        stop, prior, path, "interrupted", at
+    )[0]
