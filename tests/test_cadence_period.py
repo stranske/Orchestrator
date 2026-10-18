@@ -229,7 +229,7 @@ def test_inspect_cadence_staleness_sits_between_due_and_a_missed_run(tmp_path: P
         for missed, expected in ((0, "fresh"), (1, "stale")):
             age_s = (1 + missed) * period_s + MARGIN_S
             if period_s == 3600 and missed:
-                age_s = 9000 + MARGIN_S
+                age_s = cadence_registry.HOURLY_STALE_AFTER_S + MARGIN_S
             state = _aged(tmp_path / f"{row['key']}-{missed}", {row["success_stamp"]}, age_s)
             # Measured as the step runs when re-enabled: a retired step is never late, it is
             # `retired`, and tests/test_cadence_retirement.py holds that verdict.

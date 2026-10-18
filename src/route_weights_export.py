@@ -41,6 +41,7 @@ CAPACITY_TICK_FILE = "route-weights-capacity-ticks.json"
 CAPACITY_TICK_MAX_AGE = 2 * 3600
 PUBLISH_LAG_STALE_S = 7200
 PUBLISH_REFRESH_FLOOR_S = 24 * 3600
+PERIOD_END_TOLERANCE_S = 3600
 WEEK_SECONDS = 7 * 86400
 # Owner q-1ca1d09d255e987b (2026-10-17): extend once if either policy is under-sampled.
 EXPLORATION_WINDOW_END = "20261117"
@@ -306,7 +307,7 @@ def _read_object(path: Path) -> dict:
 def _seen_count(tick: dict) -> int:
     try:
         return max(0, min(2, int(tick.get("seen", 0))))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 1
 
 
@@ -440,10 +441,8 @@ def publish_lag(*, now: int | None = None, state_dir: Path | None = None) -> Non
     except (OSError, ValueError, subprocess.SubprocessError):
         published = {}
     local_time = local.get("generated_at")
-    local_age = (
-        max(0, int(current - local_time)) if isinstance(local_time, (int, float)) else "unmeasured"
-    )
-    print(f"local capacity age={local_age}s")
+    local_age = max(0, int(current - local_time)) if isinstance(local_time, (int, float)) else None
+    print(f"local capacity age={_age_text(local_age)}")
     ticks = _read_object(
         (state_dir or Path.home() / ".codex" / "orchestrator") / CAPACITY_TICK_FILE
     )
@@ -675,13 +674,15 @@ def _attach_comparative_ranks(
 
 
 def _semantic_for_compare(document: dict[str, Any]) -> dict[str, Any]:
-    """Immediate capacity triggers are state, period end and usable-reset count.
+    """Keep actionable routing/capacity content; comparative fields are shadow diagnostics.
 
-    Keep malformed structures visible for repair. All other capacity fields remain
-    published diagnostics, carried on another trigger or the daily refresh.
-    Non-capacity semantics retain their existing comparison.
+    Keep malformed structures visible for repair. Other diagnostics ship on a
+    meaningful trigger or the refresh floor. Period-end tolerance is pairwise
+    against the published baseline in _same_semantics, never a clock bucket.
     """
-    semantic = {key: value for key, value in document.items() if key != "generated_at"}
+    semantic = {
+        key: value for key, value in document.items() if key not in ("generated_at", "comparative")
+    }
     capacity_block = semantic.get("capacity")
     if isinstance(capacity_block, dict):
         compared: dict[str, Any] = {}
@@ -700,41 +701,53 @@ def _semantic_for_compare(document: dict[str, Any]) -> dict[str, Any]:
             else:
                 compared[agent] = entry
         semantic["capacity"] = compared
-    block = semantic.get("comparative")
-    if isinstance(block, dict) and isinstance(block.get("inputs"), dict):
-        sources = block["inputs"].get("cost_source_by_agent", {})
-        semantic["comparative"] = {
-            "status": block.get("status"),
-            "lambda": {
-                a: round(v, 3) if isinstance(v, (int, float)) else v
-                for a, v in block.get("lambda", {}).items()
-            },
-            "provenance": {
-                a: {key: row.get(key) for key in ("source", "imputed")}
-                for a, row in sources.items()
-            },
-        }
-        # Entry ranks already participate in task_types/reserve comparisons.
-        # Diagnostic reasons can change each tick while the unknown rank is stable.
-        for key in ("task_types", "reserve"):
-            section = semantic.get(key, {})
-            semantic[key] = {
-                task: (
-                    {
-                        **entry,
-                        "ranking": [
-                            {k: v for k, v in row.items() if k != "comparative_reason"}
-                            for row in entry["ranking"]
-                        ],
-                    }
-                    if key == "task_types"
-                    else [
-                        {k: v for k, v in row.items() if k != "comparative_reason"} for row in entry
-                    ]
-                )
-                for task, entry in section.items()
-            }
+
+    def without_comparative(row):
+        return (
+            {key: value for key, value in row.items() if not key.startswith("comparative_")}
+            if isinstance(row, dict)
+            else row
+        )
+
+    for key in ("task_types", "reserve"):
+        section = semantic.get(key)
+        if not isinstance(section, dict):
+            continue
+        semantic[key] = {}
+        for task, entry in section.items():
+            if key == "task_types" and isinstance(entry, dict):
+                entry = dict(entry)
+                if isinstance(entry.get("ranking"), list):
+                    entry["ranking"] = [without_comparative(row) for row in entry["ranking"]]
+            elif key == "reserve" and isinstance(entry, list):
+                entry = [without_comparative(row) for row in entry]
+            semantic[key][task] = entry
     return semantic
+
+
+def _same_semantics(document: dict, published: dict) -> bool:
+    proposed = _semantic_for_compare(document)
+    baseline = _semantic_for_compare(published)
+    incoming = proposed.get("capacity")
+    previous = baseline.get("capacity")
+    if isinstance(incoming, dict) and isinstance(previous, dict):
+        for pool, row in incoming.items():
+            old = previous.get(pool)
+            if not isinstance(row, dict) or not isinstance(old, dict):
+                continue
+            pace, old_pace = row.get("pacing"), old.get("pacing")
+            if not isinstance(pace, dict) or not isinstance(old_pace, dict):
+                continue
+            end, old_end = pace.get("period_end"), old_pace.get("period_end")
+            if (
+                isinstance(end, (int, float))
+                and not isinstance(end, bool)
+                and isinstance(old_end, (int, float))
+                and not isinstance(old_end, bool)
+                and abs(end - old_end) <= PERIOD_END_TOLERANCE_S
+            ):
+                pace["period_end"] = old_end
+    return proposed == baseline
 
 
 def write_document(path: Path, document: dict[str, Any], *, refresh: bool = False) -> bool:
@@ -745,7 +758,7 @@ def write_document(path: Path, document: dict[str, Any], *, refresh: bool = Fals
         except json.JSONDecodeError:
             existing = None
         if isinstance(existing, dict):
-            if not refresh and _semantic_for_compare(existing) == _semantic_for_compare(document):
+            if not refresh and _same_semantics(document, existing):
                 return False
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
@@ -865,21 +878,22 @@ def publish_document(
     # A diagnostic-only refresh is allowed only after the published artifact ages 24h.
     now = int(dt.datetime.fromisoformat(_now().replace("Z", "+00:00")).timestamp())
     published_age = _artifact_age(published or {}, now)
-    semantic_equal = published is not None and _semantic_for_compare(
-        document
-    ) == _semantic_for_compare(published)
-    refresh = (
-        semantic_equal and published_age is not None and published_age > PUBLISH_REFRESH_FLOOR_S
-    )
+    semantic_equal = published is not None and _same_semantics(document, published)
+    refresh = semantic_equal and (published_age is None or published_age > PUBLISH_REFRESH_FLOOR_S)
     # Compare the fetched remote artifact before touching a potentially divergent local shadow.
     if semantic_equal and not refresh:
-        print("unchanged")
+        print(
+            f"unchanged published_age={_age_text(published_age)}/floor={PUBLISH_REFRESH_FLOOR_S}s"
+        )
         return False
     if refresh:
+        print(f"refresh published_age={_age_text(published_age)}/floor={PUBLISH_REFRESH_FLOOR_S}s")
         document = {**document, "generated_at": _now()}
     target = canonical / EXPORT_PATH
     if not write_document(target, document, refresh=refresh):
-        print("unchanged")
+        print(
+            f"unchanged published_age={_age_text(published_age)}/floor={PUBLISH_REFRESH_FLOOR_S}s"
+        )
         return False
     subprocess.run(["git", "-C", str(canonical), "add", str(EXPORT_PATH)], check=True)
     identity = (

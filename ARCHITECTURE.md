@@ -1674,8 +1674,8 @@ selection for the separate relay follow-up; it prints the agent on stdout and ev
 `capacity.py pacing-report` queries completed-period usage, incidents with another pool ok, and
 non-Codex dispatch share in constrained versus ok hours; missing populations stay unmeasured.
 `switch_review` prints that weekly check. Reset inventory and calibration are local runtime data;
-see `docs/capacity-pacing.md`. Semantic change detection includes capacity state, weekly usage and reset changes,
-excluding observation clocks, reasons, burn/schedule/projection drift and diagnostic weights. A capacity
+see `docs/capacity-pacing.md`. Semantic change detection includes damped capacity state, period-end moves over one hour and
+usable-reset counts; usage, clocks, burn/schedule/projection drift and diagnostic weights are silent. A capacity
 state change (worsening or recovery) is held until two consecutive tick snapshots show that state.
 `route_weights_export.py --record-capacity-tick` reads local `capacity.json` on every tick, before
 publication due/backoff checks, and persists state/count/observation time in
@@ -1686,11 +1686,18 @@ published pool row is retained (including its pacing state), and the tick prints
 `[cadence] capacity publish held: <pool> local=<state> published=<state> seen=<n>/2`.
 An initial publication or malformed-capacity repair establishes the baseline. Publication still requires
 `ORCH_ROUTE_WEIGHTS_PUBLISH=1`, preserves evidence gates and failure backoff, and immediately pushes
-damped state, `period_end`, or `resets_available` changes against the
+damped state, `period_end` moves over `PERIOD_END_TOLERANCE_S=3600` seconds, or
+`resets_available` changes against the
 fetched remote artifact, along with existing non-capacity triggers (including learned weights).
 Usage, routing-weight, burn-rate, measurement and other capacity diagnostics do not trigger pushes;
 they remain in the published block and ride along with a trigger or a refresh once the published
-`generated_at` is over 24 hours old (`PUBLISH_REFRESH_FLOOR_S`). Quiet fleets therefore refresh daily; posteriors and
+`generated_at` is over 24 hours old (`PUBLISH_REFRESH_FLOOR_S`), or its age is unmeasured.
+The refresh floor is 24 h for non-state diagnostic diffs; comparative/lambda drift and all
+`comparative_*` ranking/reserve row fields do not trigger pushes. They still ship with the next
+trigger or refresh. Worst-case published `used_fraction`/`observed_at` staleness is about 25 h
+(24 h plus one tick) without another trigger, and at most 2 h for a held pool. A state push carries
+fresh numbers. Workflows uses only capacity state; a consumer gating on `observed_at` freshness
+would be misled by this diagnostic age. Posteriors and
 `exploration.policy_version`
 are untouched by damping. `python3 src/route_weights_export.py --publish-lag` reads the local snapshot
 and fetches the same remote branch into disposable storage, without persistent writes, heartbeats

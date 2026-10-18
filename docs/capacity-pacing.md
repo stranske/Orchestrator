@@ -265,11 +265,19 @@ first tick prints `held(1/2)`. Unmeasured ages print `unmeasured` without a seco
 `all pools in sync` appears only when every state matches; failed remote reads show
 `published=unmeasured`. Observation age alone is not lag. Immediate capacity triggers are
 the damped `state`,
-`period_end`, and `resets_available`; existing non-capacity triggers such as learned weights
+`period_end` moves over `PERIOD_END_TOLERANCE_S=3600` seconds against the published baseline,
+and `resets_available`; existing non-capacity triggers such as learned weights
 remain immediate. Usage fractions, routing weights, period starts, reset expiries, reserve,
 measurement/source/staleness and burn diagnostics remain published but cannot trigger a push.
-A refresh carries those fields once the published `generated_at` is over 24 hours old
-(`PUBLISH_REFRESH_FLOOR_S`), keeping a quiet fleet inside consumers' 14-day freshness limit.
+The refresh floor is 24 h for non-state diagnostic diffs (`PUBLISH_REFRESH_FLOOR_S`).
+Comparative/lambda drift and every `comparative_*` ranking/reserve row field do not trigger
+a push; they ship with the next trigger or refresh. A refresh carries diagnostics once the
+published `generated_at` is over 24 hours old, or its age is unmeasured, keeping the artifact
+inside consumers' 14-day freshness limit when ticks/publication succeed. Unchanged and refresh
+logs print `published_age=<s>/floor=<s>`, including an explicit `refresh` marker when due.
+Worst-case published `used_fraction`/`observed_at` staleness is about 25 h (24 h plus one tick)
+without another trigger, and at most 2 h for a held pool; a state push carries fresh numbers.
+Workflows reads only capacity state; gating on `observed_at` freshness would be misled.
 This query makes no persistent state or Git-ref writes.
 Check date: 2026-10-19 after one day of production ticks. Successful hourly ticks
 should propagate persistent state changes within two hours; failures/backoff and

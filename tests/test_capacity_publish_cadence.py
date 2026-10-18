@@ -336,7 +336,7 @@ def test_period_and_reset_bank_changes_push(publication, field, new):
     assert export.publish_document(incoming)
 
 
-def test_24_hour_ledger_shape_replay_only_refreshes_once(publication, monkeypatch):
+def test_24_hour_ledger_shape_replay_only_refreshes_once(publication, monkeypatch, capsys):
     import datetime as dt
 
     document, remote, _, git = publication
@@ -366,29 +366,50 @@ def test_24_hour_ledger_shape_replay_only_refreshes_once(publication, monkeypatc
             },
         }
 
+    def comparative_drift(doc, hour):
+        doc["comparative"] = {"lambda": {"claude": 71.96 + hour}, "status": str(hour)}
+        for row in doc["task_types"]["implement"]["ranking"] + doc["reserve"]["implement"]:
+            row.update(
+                comparative_rank=hour,
+                comparative_status=str(hour),
+                comparative_reason=str(hour),
+                comparative_future_field=hour,
+            )
+
+    document["task_types"]["implement"]["ranking"] = [{"agent": "codex", "posterior": 0.9}]
+    document["reserve"] = {"implement": [{"agent": "claude", "posterior": 0.8}]}
+    comparative_drift(document, 0)
     first = ledger(0)
     document["capacity"] = export._capacity_block({**first, "generated_at": first["ts"]})
     document["generated_at"] = iso(NOW - 1)
     _seed(publication, document)
     head = git(remote, "rev-parse", export.EXPORT_BRANCH)
     pushed = 0
-    for hour in range(1, 25):
+    steps = export.PUBLISH_REFRESH_FLOOR_S // 3600
+    for hour in range(1, steps + 1):
         row = ledger(hour)
         incoming = {
-            **document,
+            **copy.deepcopy(document),
             "generated_at": iso(row["ts"]),
             "capacity": export._capacity_block({**row, "generated_at": row["ts"]}),
         }
+        comparative_drift(incoming, hour)
         monkeypatch.setattr(export, "_now", lambda t=row["ts"]: iso(t))
         pushed += export.publish_document(incoming)
-        assert pushed == (1 if hour == 24 else 0)
+        assert pushed == (1 if hour == steps else 0)
     assert pushed <= 1
     assert int(git(remote, "rev-list", "--count", f"{head}..{export.EXPORT_BRANCH}")) == 1
     published = json.loads(git(remote, "show", f"{export.EXPORT_BRANCH}:{export.EXPORT_PATH}"))
-    assert published == incoming  # Diagnostic drift is carried by the refresh.
+    assert published == incoming  # Includes the latest lambda and both kinds of comparative rows.
+    out = capsys.readouterr().out
+    assert f"unchanged published_age=3601s/floor={export.PUBLISH_REFRESH_FLOOR_S}s" in out
+    assert (
+        f"refresh published_age={export.PUBLISH_REFRESH_FLOOR_S + 1}s/floor={export.PUBLISH_REFRESH_FLOOR_S}s"
+        in out
+    )
 
 
-@pytest.mark.parametrize("bad", [None, "broken", []])
+@pytest.mark.parametrize("bad", [None, "broken", [], float("inf")])
 def test_corrupt_seen_still_publishes_on_second_observation(
     publication, local_capacity, tmp_path, monkeypatch, bad
 ):
@@ -433,3 +454,58 @@ def test_lag_threshold_and_hold(local_capacity, tmp_path, monkeypatch, capsys, a
     out = capsys.readouterr().out
     assert f"published_age={age}s lag={expected} observed_age=99s" in out
     assert "all pools in sync" not in out
+
+
+@pytest.mark.parametrize("delta", [-3600, -60, 60, 3600, -3601, 3601])
+def test_period_end_tolerance_is_against_published_baseline(publication, delta):
+    document, remote, _, git = publication
+    document["capacity"]["codex"]["pacing"] = {"period_end": NOW + 86400}
+    _seed(publication, document)
+    before = copy.deepcopy(document)
+    head = git(remote, "rev-parse", export.EXPORT_BRANCH)
+    incoming = copy.deepcopy(document)
+    incoming["capacity"]["codex"]["pacing"]["period_end"] += delta
+    loud = abs(delta) > export.PERIOD_END_TOLERANCE_S
+    assert export.publish_document(incoming) == loud
+    assert (git(remote, "rev-parse", export.EXPORT_BRANCH) != head) == loud
+    assert document == before  # Comparison cannot mutate the baseline.
+
+
+def test_local_write_period_end_drift_accumulates_against_published_baseline(tmp_path):
+    target = tmp_path / "artifact.json"
+    doc = {"capacity": {"claude": {"state": "ok", "pacing": {"period_end": NOW}}}}
+    assert export.write_document(target, doc)
+    for delta in range(60, export.PERIOD_END_TOLERANCE_S + 1, 60):
+        doc["capacity"]["claude"]["pacing"]["period_end"] = NOW + delta
+        assert not export.write_document(target, doc)
+    doc["capacity"]["claude"]["pacing"]["period_end"] = NOW + export.PERIOD_END_TOLERANCE_S + 1
+    assert export.write_document(target, doc)
+
+
+def test_missing_local_snapshot_prints_unmeasured_age(
+    local_capacity, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr(export, "read_published_export", lambda: {})
+    export.publish_lag(now=NOW, state_dir=tmp_path)
+    out = capsys.readouterr().out
+    assert "local capacity age=unmeasured\n" in out
+    assert "unmeasureds" not in out
+    assert "all pools in sync" not in out
+
+
+@pytest.mark.parametrize("generated", [None, "invalid"])
+def test_unmeasured_published_age_refreshes(publication, tmp_path, capsys, generated):
+    document, remote, _, git = publication
+    if generated is None:
+        document.pop("generated_at")
+    else:
+        document["generated_at"] = generated
+    _seed(publication, document)
+    incoming = {**document, "generated_at": "2033-05-18T03:33:20Z"}
+    assert export.publish_document(incoming, state_dir=tmp_path)
+    assert (
+        f"refresh published_age=unmeasured/floor={export.PUBLISH_REFRESH_FLOOR_S}s"
+        in capsys.readouterr().out
+    )
+    published = json.loads(git(remote, "show", f"{export.EXPORT_BRANCH}:{export.EXPORT_PATH}"))
+    assert published == incoming

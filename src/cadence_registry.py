@@ -485,6 +485,7 @@ STEP_BY_KEY = {row["key"]: row for row in CADENCE_STEPS}
 # Grace past one full period before a step's last success reads as STALE: an hourly tick runs a
 # daily step up to an hour late, and a gh-budget skip defers it a tick or two more.
 STALE_GRACE_S = 12 * 3600
+HOURLY_STALE_AFTER_S = 2 * 3600 + 1800  # two ticks plus grace
 
 
 def stale_after_seconds(row: dict[str, Any]) -> int:
@@ -497,7 +498,7 @@ def stale_after_seconds(row: dict[str, Any]) -> int:
     2026-10-02; a pair of literals is how a report and its consumer come to disagree.
     """
     if row.get("cadence_days") == CADENCE_DAYS_FOR["hourly"]:
-        return 2 * 3600 + 1800
+        return HOURLY_STALE_AFTER_S
     return (int(row.get("cadence_days") or 0) + 1) * 86400 + STALE_GRACE_S
 
 
