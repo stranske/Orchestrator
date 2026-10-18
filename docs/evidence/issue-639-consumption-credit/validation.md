@@ -141,3 +141,31 @@ GitHub connector readback confirmed PR #729 is open and ready for review at
 Ruff, mypy, and test-quality; its Python 3.12/3.13 test jobs were still running.
 CI run `39105002741` was also running. These hosted results apply to that committed
 head, not the uncommitted assertion changes above. CI Gate/keepalive remains unchecked.
+
+## Producer/consumer event lineage follow-up — 2026-10-18
+
+Strengthened the existing positive dispatch regression to verify that the receipt's
+source completion event names the actual producer invocation and exact capability/version,
+its target completion event belongs to the dispatched run, and its producer result records
+acceptance. This checks the persisted endpoints as well as the existing explicit one-edge
+count and consumer receipt assertions. No test cases were added; the collection expectation
+is unchanged.
+
+A dependency-free manual integration check used real compilation, registration, planning,
+spawn, lifecycle invocation, and Brain writes with `local_dispatch` replacing external
+effects. Exactly one accepted edge passed all new endpoint assertions. Syntax parsing and
+`git diff --check` passed. This is not a pytest result.
+
+Both required targeted pytest commands with `-m "not slow"` could not start because pytest
+is absent. Formatting the edited file and running the required repository-wide Black check
+could not start because Black is absent. An isolated pip installation could not obtain
+pytest/Black, and no cached installation was found. The Python test change remains
+uncommitted because the mandatory pre-commit formatting gate cannot run.
+
+GitHub connector readback confirmed PR #729 is open and ready for review at
+`7f4b4390aef5fcde08051c424ad058ed73a9c1b7`. Hosted Gate `39105379805` passed Black,
+Ruff, mypy, and test-quality; Python 3.12/3.13 tests and CI `39105379509` were still
+running when inspected. These hosted results apply to the committed head, not this test
+edit. CI Gate/keepalive remains unchecked. Automatic approval review rejected both the
+blocker comment and `needs-human` label update because connector mutations require
+approval while this run's approval policy is `never`; neither update was posted.

@@ -1082,6 +1082,15 @@ def test_dispatcher_dispatch_workflow_produces_one_accepted_edge(
                 (receipt["source_event_id"],),
             ).fetchone()[0]
         )
+        producer = conn.execute(
+            "SELECT run_id,capability_id,capability_version_id FROM completion_events "
+            "WHERE event_id=?",
+            (receipt["source_event_id"],),
+        ).fetchone()
+        consumer = conn.execute(
+            "SELECT run_id FROM completion_events WHERE event_id=?",
+            (receipt["target_event_id"],),
+        ).fetchone()
         stored = json.loads(
             conn.execute("SELECT routing_metadata FROM runs WHERE run_id=?", (run_id,)).fetchone()[
                 0
@@ -1097,6 +1106,13 @@ def test_dispatcher_dispatch_workflow_produces_one_accepted_edge(
     assert source["artifact_refs"] == [
         {"artifact_id": receipt["consumer_ref"], "kind": "consumer_receipt"}
     ]
+    assert tuple(producer) == (
+        f"capability-producer:{receipt['invocation_id']}",
+        ctx["capability_id"],
+        ctx["version_id"],
+    )
+    assert tuple(consumer) == (run_id,)
+    assert source["result"]["accepted"] is True
     assert stored["capability_dispatch_result"] == receipt
     assert "capability_fallback" not in stored
     with feedback._conn() as conn:
