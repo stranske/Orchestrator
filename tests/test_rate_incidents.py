@@ -363,3 +363,22 @@ def test_successful_completion_log_with_bare_429_does_not_shed(incident_paths, m
 
     assert not rate_incidents.INCIDENT_FILE.exists()
     assert not (rate_incidents.SHED_DIR / "codex").exists()
+
+
+GEMINI_INDIVIDUAL_QUOTA_LINE = (
+    "E1018 01:42:33.766065 697 errorreport.go:224] agent executor error: generating and executing: "
+    "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to "
+    "increase your limits. Resets in 140h5m6s."
+)
+
+
+def test_gemini_individual_quota_line_is_authoritative():
+    category, subcategory, confidence = rate_incidents.classify_provider_failure(
+        GEMINI_INDIVIDUAL_QUOTA_LINE
+    )
+    assert (category, subcategory, confidence) == ("quota", "quota_exhausted", "high")
+    base = 1_700_000_000
+    reset = rate_incidents.provider_reset_at(
+        "gemini", [GEMINI_INDIVIDUAL_QUOTA_LINE], now=base
+    )
+    assert reset == base + 140 * 3600 + 5 * 60 + 6

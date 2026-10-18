@@ -63,7 +63,9 @@ def _contains_explicit_resource_exhausted(text: str) -> bool:
             r"(?im)^\s*(?:\[resource_exhausted\]|resource_exhausted)\s*$"
             r"|^\s*(?:error|status|code|response|provider\s+error)\b[^\n]{0,120}"
             r"\bresource_exhausted\b"
-            r'|\{[^\n]{0,120}"(?:status|code)"\s*:\s*"RESOURCE_EXHAUSTED"',
+            r'|\{[^\n]{0,120}"(?:status|code)"\s*:\s*"RESOURCE_EXHAUSTED"'
+            r"|agent\s+executor\s+error:[^\n]{0,240}\bRESOURCE_EXHAUSTED\b"
+            r"|\bRESOURCE_EXHAUSTED\s*\(\s*code\s*429\s*\)",
             text,
         )
     )
@@ -73,16 +75,17 @@ def classify_provider_failure(text: str) -> tuple[str, str, str]:
     """Return an authoritative category only for explicit capacity evidence."""
     if not isinstance(text, str) or not text:
         return "unknown", "non_authoritative", "none"
-    if _contains_explicit_resource_exhausted(text):
-        return "capacity", "resource_exhausted", "high"
     if re.search(
         r"(?:out of usage|usage exhausted|quota exhausted|capacity exhausted)"
         r"|(?:you(?:'|’)ve hit your usage limit)"
+        r"|(?:individual\s+quota\s+reached|quota\s+reached)"
         r"|(?:credit(?:s| balance)? (?:exhausted|depleted|used up|too low))",
         text,
         re.I,
     ):
         return "quota", "quota_exhausted", "high"
+    if _contains_explicit_resource_exhausted(text):
+        return "capacity", "resource_exhausted", "high"
     # A bare number is ordinary task prose (issue 429, 429 lines, 429 tests).
     # Require either the provider's standard phrase or an error/status/code
     # anchor immediately before the numeric status.
@@ -285,6 +288,20 @@ def _harness_error_messages(event: dict) -> list[str]:
     return [message] if isinstance(message, str) else []
 
 
+def parse_resets_in_duration(text: str, *, now: int | None = None) -> int | None:
+    """Parse provider copy like ``Resets in 140h5m6s`` into an absolute unix time."""
+    match = re.search(
+        r"Resets\s+in\s+(\d+)h(\d+)m(\d+)s",
+        text,
+        re.I,
+    )
+    if not match:
+        return None
+    hours, minutes, seconds = (int(match.group(i)) for i in range(1, 4))
+    base = now if now is not None else int(time.time())
+    return base + hours * 3600 + minutes * 60 + seconds
+
+
 def provider_reset_at(agent: str, lines: list[str], *, now: int | None = None) -> int | None:
     """When the provider says it will serve again, from codex's own harness events, or None.
 
@@ -303,6 +320,13 @@ def provider_reset_at(agent: str, lines: list[str], *, now: int | None = None) -
     (offload:codex:1790322148167312000 and 1790322306091352000) named Sep 28 and shed for the 6 h
     cooldown. Several stated resets in one run: the latest is the one that binds.
     """
+    if agent == "gemini":
+        resets = []
+        for line in failure_evidence(lines):
+            reset = parse_resets_in_duration(line, now=now)
+            if reset is not None:
+                resets.append(reset)
+        return max(resets) if resets else None
     if agent != "codex":
         return None
     resets = []
