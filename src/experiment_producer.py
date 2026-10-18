@@ -25,6 +25,10 @@ from pathlib import Path
 COVERAGE_DAYS = 21
 DAILY_CAP = 4
 WINNER_MERGE_GRACE_DAYS = 7
+# A pending verdict whose unknowns never resolve (a 404 winner PR, GitHub unreachable) must not keep
+# the producer ON forever: past grace + this bound it resolves to a persisted fail, toward OFF.
+UNRESOLVED_UNKNOWN_DAYS = 14
+TRIAL_PASS_MERGED = 6
 PRODUCER_FOLLOWUP_DAYS = 30
 PRODUCER_LOCK_MAX_HOURS = 72
 TERMINAL_STATUSES = {"merged", "no_winner", "discarded", "expired", "member_pushed"}
@@ -408,11 +412,18 @@ def producer_summary(exp_dir=None, *, gh_fn=None):
         trial_state = {}
     start = trial_state.get("trial_start", 0)
     end = start + COVERAGE_DAYS * 86400 if start else math.inf
+    unreadable_meta = 0
     for path in Path(exp_dir or exp_abcd.EXP_DIR).glob("*/meta.json"):
+        # Only a meta that READS as a producer experiment can make the verdict unknown; a corrupt
+        # legacy meta.json is counted for the report and never holds the trial pending.
         try:
             meta = json.loads(path.read_text())
-            if meta.get("producer") != "experiment_producer":
-                continue
+        except (ValueError, OSError):
+            unreadable_meta += 1
+            continue
+        if not isinstance(meta, dict) or meta.get("producer") != "experiment_producer":
+            continue
+        try:
             if not start <= meta.get("launched_ts", 0) <= end:
                 continue
             metrics["launched"] += 1
@@ -452,6 +463,7 @@ def producer_summary(exp_dir=None, *, gh_fn=None):
     except (ValueError, OSError):
         metrics["skips"] = {"unreadable_state": 1}
     metrics["unknowns"] = sorted(errors)
+    metrics["unreadable_meta"] = unreadable_meta
     return metrics
 
 
@@ -505,11 +517,33 @@ def trial_verdict(now=None, *, summary_fn=None):
         save_state(state)
         metrics = (summary_fn or producer_summary)()
         unknown = len(metrics.get("unknowns") or [])
-        verdict = "pending" if unknown else ("pass" if metrics["winner_merged"] >= 6 else "fail")
+        merged = int(metrics.get("winner_merged") or 0)
+        resolve_ts = (
+            state["trial_start"]
+            + (COVERAGE_DAYS + WINNER_MERGE_GRACE_DAYS + UNRESOLVED_UNKNOWN_DAYS) * 86400
+        )
+        reason = None
+        if merged >= TRIAL_PASS_MERGED:
+            verdict = "pass"  # unknowns can only ADD merges, never remove counted ones
+        elif unknown and now < resolve_ts:
+            verdict = "pending"
+        elif unknown:
+            verdict, reason = "fail", "unresolved_unknown"
+        else:
+            verdict = "fail"
         state.update(trial_verdict=verdict, trial_metrics=metrics, trial_unknown=unknown)
+        if verdict == "pending":
+            state.setdefault("pending_since", day)
+            state["resolves_on"] = time.strftime("%Y%m%d", time.gmtime(resolve_ts))
+        if reason:
+            state["trial_reason"] = reason
         save_state(state)
-        if unknown:
-            print(f"[experiment producer] verdict pending; unknown {unknown}", file=sys.stderr)
+        if verdict == "pending":
+            print(
+                f"[experiment producer] verdict pending since {state['pending_since']}, "
+                f"unknown {unknown}, resolves fail on {state['resolves_on']}",
+                file=sys.stderr,
+            )
         return verdict
 
 

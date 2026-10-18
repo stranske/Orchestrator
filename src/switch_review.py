@@ -1960,6 +1960,10 @@ def experiment_producer_line():
     )
     reasons = ", ".join(f"{k}={v}" for k, v in sorted(m["skips"].items())) or "none"
     unknown = "; UNKNOWN " + ", ".join(m["unknowns"]) if m["unknowns"] else ""
+    if verdict == "pending" and state.get("pending_since"):
+        verdict += f" since {state['pending_since']}, resolves fail on {state.get('resolves_on')}"
+    elif state.get("trial_reason"):
+        verdict += f" ({state['trial_reason']})"
     return (
         f"  experiment producer: launched {m['launched']}, evaluated {m['evaluated']}, "
         f"winner_prs {m['winner_prs']}, winner_merged {m['winner_merged']}, "

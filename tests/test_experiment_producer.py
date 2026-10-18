@@ -1128,3 +1128,36 @@ def test_trial_defaults_failure_is_visible_and_defaults_off():
     assert result.returncode == 0
     assert result.stdout == "0"
     assert "ERROR: experiment producer --trial-defaults failed; defaulting off" in result.stderr
+
+
+def test_corrupt_non_producer_meta_never_holds_the_verdict(tmp_path, monkeypatch):
+    monkeypatch.setattr(exp_abcd, "EXP_DIR", tmp_path)
+    (tmp_path / "legacy").mkdir()
+    (tmp_path / "legacy" / "meta.json").write_text("{not json")
+    (tmp_path / "other").mkdir()
+    (tmp_path / "other" / "meta.json").write_text(json.dumps({"producer": "research"}))
+    summary = producer.producer_summary(tmp_path, gh_fn=lambda argv: pytest.fail("polled"))
+    assert summary["unknowns"] == []
+    assert summary["unreadable_meta"] == 1
+
+
+def test_unresolved_unknown_resolves_to_a_persisted_fail(capsys):
+    producer.trial_defaults(1000, active=True)
+    stuck = lambda: {"winner_merged": 2, "unknowns": ["merge_state_unknown"]}  # noqa: E731
+    due = 1000 + (producer.COVERAGE_DAYS + producer.WINNER_MERGE_GRACE_DAYS) * 86400
+    assert producer.trial_verdict(due, summary_fn=stuck) == "pending"
+    state = producer.read_state()
+    bound = due + producer.UNRESOLVED_UNKNOWN_DAYS * 86400
+    assert state["resolves_on"] == time.strftime("%Y%m%d", time.gmtime(bound))
+    assert "resolves fail on" in capsys.readouterr().err
+    assert producer.trial_verdict(bound - 86400, summary_fn=stuck) == "pending"
+    assert producer.trial_verdict(bound, summary_fn=stuck) == "fail"
+    assert producer.read_state()["trial_reason"] == "unresolved_unknown"
+    assert producer.trial_verdict(bound + 86400 * 400, summary_fn=stuck) == "fail"
+
+
+def test_six_merged_pass_even_with_unknowns():
+    producer.trial_defaults(1000, active=True)
+    due = 1000 + (producer.COVERAGE_DAYS + producer.WINNER_MERGE_GRACE_DAYS) * 86400
+    summary = lambda: {"winner_merged": 6, "unknowns": ["merge_state_unknown"]}  # noqa: E731
+    assert producer.trial_verdict(due, summary_fn=summary) == "pass"
