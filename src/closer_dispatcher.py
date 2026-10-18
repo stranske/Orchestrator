@@ -3121,8 +3121,24 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         }
 
     def reconcile_action(target, context):
+        def legacy_barrier():
+            prepared = context.get("prepare")
+            snapshot = prepared.get("snapshot") if isinstance(prepared, dict) else None
+            if not isinstance(snapshot, dict):
+                return {"outcome": "unknown", "reason": "legacy dependency snapshot is missing"}
+            try:
+                dependency = _legacy_operation_dependency(state_path, target, snapshot)
+            except RuntimeError as exc:
+                return {"outcome": "unknown", "reason": str(exc)[:500]}
+            if dependency:
+                return {"outcome": "unknown", "reason": "legacy operation remains unresolved"}
+            return None
+
         action_state = Path(context["action_state_path"])
         if not action_state.is_file():
+            barrier = legacy_barrier()
+            if barrier:
+                return barrier
             return {"outcome": "confirmed_not_started", "reason": "inner queue was never created"}
         try:
             inner = closer_queue._read_state(action_state)
@@ -3131,6 +3147,9 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         except Exception as exc:
             return {"outcome": "unknown", "reason": f"inner queue unreadable: {type(exc).__name__}"}
         if not operation:
+            barrier = legacy_barrier()
+            if barrier:
+                return barrier
             if item.get("status") in {"complete", "completed"}:
                 return {"outcome": "confirmed_completed", "target_complete": True}
             return {

@@ -2207,6 +2207,70 @@ def test_legacy_uncertain_and_private_integration_need_original_coordinator(tmp_
             adapter._legacy_operation_dependency(legacy_path, TARGET, {"sources": []})
 
 
+@pytest.mark.parametrize("inner_exists", [False, True], ids=["no-inner", "inner-no-operation"])
+@pytest.mark.parametrize(
+    "legacy_uncertain", [False, True], ids=["no-legacy-op", "legacy-uncertain"]
+)
+def test_reconcile_never_requeues_act_while_original_legacy_operation_is_uncertain(
+    tmp_path, monkeypatch, inner_exists, legacy_uncertain
+):
+    current = snapshot()
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema": "closer-queue/v1",
+                "round": {},
+                "items": {
+                    TARGET: (
+                        {
+                            "operation": {
+                                "id": "original-uncertain",
+                                "status": "uncertain",
+                                "repo_keys": ["o/r"],
+                            }
+                        }
+                        if legacy_uncertain
+                        else {}
+                    ),
+                },
+            }
+        )
+    )
+    action_path = tmp_path / "inner.json"
+    if inner_exists:
+        action_path.write_text(
+            json.dumps({"schema": "closer-queue/v1", "round": {}, "items": {TARGET: {}}})
+        )
+    captured = {}
+
+    def pipeline_stub(_path, _targets, **callbacks):
+        captured["result"] = callbacks["reconcile"](
+            TARGET,
+            {
+                "prepare": {"snapshot": current},
+                "revision": current["revision"],
+                "action_state_path": str(action_path),
+            },
+        )
+        return {"targets": {TARGET: captured["result"]}}
+
+    monkeypatch.setattr(closer_pipeline, "run_pipeline", pipeline_stub)
+    monkeypatch.setattr(
+        closer_queue,
+        "run_round",
+        lambda *_a, **_k: pytest.fail("legacy uncertainty must not retry an action"),
+    )
+    backend = closer(tmp_path, current)
+    args = SimpleNamespace(state=str(state_path), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
+    assert captured["result"]["outcome"] == (
+        "unknown" if legacy_uncertain else "confirmed_not_started"
+    )
+    if legacy_uncertain:
+        assert "legacy uncertain operation" in captured["result"]["reason"]
+
+
 def test_low_proposal_accepts_only_one_complete_json_document():
     payload = {"target": TARGET, "head": HEAD, "classification": "uncertain"}
     raw = json.dumps(payload)

@@ -82,6 +82,9 @@ retain their barriers; removed read-only failures remain in the audit. They do
 not become new work. These barriers and the invalid-stop audit must survive
 later cadences and history trimming. Missing or malformed recovery proof fails
 closed; never clear the ledger or invent a resource boundary to admit work.
+If an action lacks a derived inner queue operation, reconciliation still checks
+the original legacy queue for an unresolved operation before declaring the
+action not started. Original uncertainty stays quarantined for its queue owner.
 When the bounded in-ledger invalid-stop history fills, the pipeline fsyncs exact
 older audit entries into immutable, hash-linked chunks beside its state before
 recording the archive head. Recovery verifies the complete chain; missing or
