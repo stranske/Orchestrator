@@ -353,6 +353,141 @@ def _bounded(value: Any, *, limit: int = 128 * 1024) -> Any:
     return json.loads(encoded)
 
 
+AUDIT_ARCHIVE_SCHEMA = "closer-invalid-stop-audit-archive/v1"
+
+
+def _audit_archive_dir(path: Path) -> Path:
+    return path.with_name(path.name + ".audit")
+
+
+def _archived_history(path: Path, reference: Any) -> list[dict[str, Any]]:
+    """Verify every state-owned immutable audit chunk before relying on it."""
+    if reference is None:
+        return []
+    if (
+        not isinstance(reference, Mapping)
+        or reference.get("schema") != AUDIT_ARCHIVE_SCHEMA
+        or not isinstance(reference.get("sha256"), str)
+        or type(reference.get("count")) is not int
+        or reference["count"] < 1
+    ):
+        raise ValueError("invalid pipeline audit archive reference")
+    directory = _audit_archive_dir(path)
+    if directory.is_symlink() or not directory.is_dir():
+        raise ValueError("missing or redirected pipeline audit archive")
+    sha = reference["sha256"]
+    seen: set[str] = set()
+    chunks: list[list[dict[str, Any]]] = []
+    total = 0
+    while sha is not None:
+        if (
+            not isinstance(sha, str)
+            or len(sha) != 64
+            or any(char not in "0123456789abcdef" for char in sha)
+            or sha in seen
+            or len(seen) >= 100_000
+        ):
+            raise ValueError("invalid pipeline audit archive chain")
+        seen.add(sha)
+        source = directory / f"{sha}.json"
+        if source.is_symlink() or not source.is_file():
+            raise ValueError("missing or redirected pipeline audit archive chunk")
+        raw = source.read_bytes()
+        if len(raw) > 1024 * 1024 or hashlib.sha256(raw).hexdigest() != sha:
+            raise ValueError("tampered pipeline audit archive chunk")
+        try:
+            chunk = json.loads(raw)
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise ValueError("malformed pipeline audit archive chunk") from exc
+        entries = chunk.get("entries") if isinstance(chunk, Mapping) else None
+        if (
+            not isinstance(chunk, Mapping)
+            or chunk.get("schema") != AUDIT_ARCHIVE_SCHEMA
+            or not isinstance(entries, list)
+            or not entries
+            or not all(isinstance(entry, dict) for entry in entries)
+        ):
+            raise ValueError("invalid pipeline audit archive chunk")
+        total += len(entries)
+        if total > reference["count"]:
+            raise ValueError("pipeline audit archive count mismatch")
+        chunks.append(entries)
+        sha = chunk.get("previous_sha256")
+    if total != reference["count"]:
+        raise ValueError("pipeline audit archive count mismatch")
+    return [entry for chunk in reversed(chunks) for entry in chunk]
+
+
+def _resolved_audit_history(path: Path, previous: Mapping[str, Any]) -> list[dict[str, Any]]:
+    local = previous.get("invalid_stop_history", [])
+    if not isinstance(local, list) or not all(isinstance(entry, dict) for entry in local):
+        raise ValueError("invalid pipeline audit history")
+    archived = _archived_history(path, previous.get("invalid_stop_archive"))
+    if archived and (
+        not local or local[0].get("schema") != "closer-expired-invalid-round-recovery/v1"
+    ):
+        raise ValueError("pipeline audit archive lost its origin")
+    return local[:1] + archived + local[1:] if archived else local
+
+
+def _stage_audit_history(
+    path: Path,
+    previous: Mapping[str, Any],
+    new_entry: Mapping[str, Any] | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Archive overflow first; the caller then atomically saves the new ledger ref."""
+    _resolved_audit_history(path, previous)
+    local = list(previous.get("invalid_stop_history", []))
+    if new_entry is not None:
+        local.append(dict(new_entry))
+    reference = previous.get("invalid_stop_archive")
+    try:
+        _bounded(local, limit=512 * 1024)
+        return local, dict(reference) if isinstance(reference, Mapping) else None
+    except ValueError:
+        if len(local) < 2:
+            raise
+    entries = local[1:]
+    previous_sha = reference.get("sha256") if isinstance(reference, Mapping) else None
+    chunk = {
+        "schema": AUDIT_ARCHIVE_SCHEMA,
+        "previous_sha256": previous_sha,
+        "entries": entries,
+    }
+    raw = _canonical(chunk)
+    if len(raw) > 1024 * 1024:
+        raise ValueError("pipeline audit archive chunk too large")
+    sha = hashlib.sha256(raw).hexdigest()
+    directory = _audit_archive_dir(path)
+    if directory.is_symlink():
+        raise ValueError("redirected pipeline audit archive")
+    directory.mkdir(parents=True, exist_ok=True)
+    destination = directory / f"{sha}.json"
+    if destination.is_symlink():
+        raise ValueError("redirected pipeline audit archive chunk")
+    if destination.exists():
+        if destination.read_bytes() != raw:
+            raise ValueError("conflicting pipeline audit archive chunk")
+    else:
+        fd, temporary = tempfile.mkstemp(prefix=".audit-", suffix=".tmp", dir=directory)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, destination)
+            dfd = os.open(directory, os.O_RDONLY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(temporary)
+    count = (reference.get("count", 0) if isinstance(reference, Mapping) else 0) + len(entries)
+    return local[:1], {"schema": AUDIT_ARCHIVE_SCHEMA, "sha256": sha, "count": count}
+
+
 def _carry_item(item: Mapping[str, Any]) -> dict[str, Any]:
     """Retain only facts needed to resume/reconcile across generations."""
     keys = (
@@ -445,7 +580,10 @@ def _legacy_failed_act_wait_proof(path: Path, target: str, item: Mapping[str, An
 
 
 def _historical_validated_wait_result(
-    previous: Mapping[str, Any], target: str, item: Mapping[str, Any]
+    previous: Mapping[str, Any],
+    target: str,
+    item: Mapping[str, Any],
+    history: list[dict[str, Any]],
 ) -> bool:
     """Identify a stale, audited non-mutating action behind a fresh read result."""
     results = item.get("results")
@@ -467,7 +605,7 @@ def _historical_validated_wait_result(
             and record["targets"][target].get("recovery") == "validated_inner_wait"
             and record["targets"][target].get("act_result") == act_result
             and record["targets"][target].get("revision") != item.get("revision")
-            for record in previous.get("invalid_stop_history", [])
+            for record in history
         )
     )
 
@@ -633,6 +771,11 @@ def _expired_invalid_round_recovery(
     ):
         return False, set(), set(), set(), set(), {}
 
+    try:
+        history = _resolved_audit_history(path, previous)
+    except (ValueError, OSError):
+        return False, set(), set(), set(), set(), {}
+
     expected: set[str] = set()
     summary = previous.get("receipt_summary")
     finished_at = summary.get("finished_at") if isinstance(summary, Mapping) else None
@@ -693,7 +836,9 @@ def _expired_invalid_round_recovery(
         ):
             interpreted = results.get("interpret")
             if (
-                not (no_action or _historical_validated_wait_result(previous, target, item))
+                not (
+                    no_action or _historical_validated_wait_result(previous, target, item, history)
+                )
                 or f"unverified_provider_failure:{target}" in reasons
                 or item.get("provider_outcome_uncertain")
                 or not _valid_provider_failure(item.get("resource_evidence"))
@@ -754,7 +899,7 @@ def _expired_invalid_round_recovery(
                     return False, set(), set(), set(), set(), {}
                 matching = [
                     record["targets"][target]
-                    for record in previous.get("invalid_stop_history", [])
+                    for record in history
                     if isinstance(record, Mapping)
                     and record.get("source_run_id") == barrier.get("source_run_id")
                     and isinstance(record.get("targets"), Mapping)
@@ -793,7 +938,7 @@ def _expired_invalid_round_recovery(
                     and interpreted.get("pending_kind") == item.get("pending_kind")
                     and interpreted.get("pending_evidence") == item.get("pending_evidence")
                     and interpreted.get("next_trigger") == item.get("deferred_next_trigger")
-                    and _historical_validated_wait_result(previous, target, item)
+                    and _historical_validated_wait_result(previous, target, item, history)
                 )
                 if not historical_wait and not _retained_blocked_act_wait_proof(path, target, item):
                     return False, set(), set(), set(), set(), {}
@@ -895,7 +1040,6 @@ def _expired_invalid_round_recovery(
             },
             limit=512 * 1024,
         )
-        history = previous.get("invalid_stop_history", [])
         recorded = {
             (target, row.get("material_sha256"))
             for entry in history
@@ -914,10 +1058,7 @@ def _expired_invalid_round_recovery(
             if not history
             else {**audit, "targets": fresh_material} if fresh_material else None
         )
-        if history_entry is not None:
-            _bounded(history + [history_entry], limit=512 * 1024)
-        else:
-            _bounded(history, limit=512 * 1024)
+        _bounded(previous.get("invalid_stop_history", []), limit=512 * 1024)
         _bounded(prior_stop, limit=64 * 1024)
         prior_origin = previous.get("prior_invalid_stop_evidence")
         if isinstance(prior_origin, Mapping):
@@ -1243,14 +1384,34 @@ def _run_pipeline_impl(
                         "targets": wait_records,
                     }
             if previous is not None:
-                prior_history = previous.get("invalid_stop_history", [])
-                if isinstance(prior_history, list) and prior_history:
-                    run["invalid_stop_history"] = _bounded(prior_history, limit=512 * 1024)
+                new_history_entry = (
+                    recovery_audit.get("history_entry")
+                    if isinstance(recovery_audit, Mapping)
+                    else None
+                )
+                try:
+                    next_history, archive_reference = _stage_audit_history(
+                        path, previous, new_history_entry
+                    )
+                except (ValueError, OSError) as exc:
+                    return {
+                        "schema": "closer-pipeline-receipt/v1",
+                        "authority": False,
+                        "status": "blocked",
+                        "reason": "audit_archive_unavailable",
+                        "error": str(exc)[:300],
+                        "prior_stop": prior_stop,
+                        "continuation_required": True,
+                        "finished_at": now(),
+                        "targets": {},
+                    }
+                if next_history:
+                    run["invalid_stop_history"] = next_history
+                if archive_reference is not None:
+                    run["invalid_stop_archive"] = archive_reference
                 prior_origin = previous.get("prior_invalid_stop_evidence")
                 if isinstance(prior_origin, Mapping):
                     run.setdefault("prior_invalid_stop_evidence", _bounded(prior_origin))
-            if recovery_audit is not None and recovery_audit["history_entry"] is not None:
-                run.setdefault("invalid_stop_history", []).append(recovery_audit["history_entry"])
             latest: dict[str, dict[str, Any]] = {}
             for old_run in sorted(
                 state["runs"].values(), key=lambda row: float(row.get("created", 0))

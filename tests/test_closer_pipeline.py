@@ -362,6 +362,72 @@ def test_expired_invalid_round_history_does_not_grow_on_unchanged_cadences(tmp_p
     assert len(set(sizes[2:])) == 1
 
 
+def test_expired_invalid_round_archives_near_cap_history_without_losing_barrier(tmp_path):
+    path = tmp_path / "pipeline.json"
+    at = 1_800_000_000.0
+    interrupted_round_fixture(path, at)
+    target = "owner/repo#deadline-0"
+    cb = callbacks()
+    first = run(path, [target], cb, seconds=10, now=lambda: at)
+    assert first.get("status") != "blocked"
+    state = closer_pipeline._load(path)
+    previous = next(iter(state["runs"].values()))
+    origin = closer_pipeline._bounded(previous["invalid_stop_history"][0])
+    # A retained, large prior material transition puts the next real change
+    # over the in-ledger audit limit; it must move intact to the sidecar.
+    padding = 512 * 1024 - len(closer_pipeline._canonical([origin])) - 3000
+    older = {
+        "schema": "closer-expired-invalid-round-recovery/v1",
+        "source_run_id": "older-material-transition",
+        "targets": {},
+        "retained_evidence": "x" * padding,
+    }
+    previous["invalid_stop_history"].append(older)
+    previous["targets"]["owner/repo#uncertain-act-0"]["revision"] = "new-material-revision"
+    closer_pipeline._save(path, state)
+    second = run(
+        path,
+        [target],
+        cb,
+        seconds=10,
+        now=lambda: at + 20,
+        reconcile=lambda _target, _ctx: {"outcome": "unknown"},
+    )
+    assert second.get("status") != "blocked"
+    state = closer_pipeline._load(path)
+    latest = next(iter(state["runs"].values()))
+    assert latest["invalid_stop_history"][0] == origin
+    assert latest["targets"]["owner/repo#failed-act-0"]["recovery_barrier"]
+    archive = latest["invalid_stop_archive"]
+    assert archive["count"] >= 2
+    archived = closer_pipeline._archived_history(path, archive)
+    assert older in archived
+    assert any(entry.get("source_run_id") == first["run_id"] for entry in archived)
+    third = run(
+        path,
+        [target],
+        cb,
+        seconds=10,
+        now=lambda: at + 40,
+        reconcile=lambda _target, _ctx: {"outcome": "unknown"},
+    )
+    assert third.get("status") != "blocked"
+    latest = next(iter(closer_pipeline._load(path)["runs"].values()))
+    assert latest["invalid_stop_history"][0] == origin
+    chunk = closer_pipeline._audit_archive_dir(path) / f"{archive['sha256']}.json"
+    chunk.write_bytes(b"{}")
+    blocked = run(
+        path,
+        [target],
+        cb,
+        seconds=10,
+        now=lambda: at + 60,
+        reconcile=lambda _target, _ctx: {"outcome": "unknown"},
+    )
+    assert blocked.get("status") == "blocked"
+    assert blocked["reason"] in {"prior_run_has_no_valid_stop", "audit_archive_unavailable"}
+
+
 def test_expired_invalid_round_accepts_mixed_historically_valid_capacity(tmp_path):
     path = tmp_path / "pipeline.json"
     at = 1_800_000_000.0

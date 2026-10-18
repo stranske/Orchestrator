@@ -75,6 +75,10 @@ retain their barriers; removed read-only failures remain in the audit. They do
 not become new work. These barriers and the invalid-stop audit must survive
 later cadences and history trimming. Missing or malformed recovery proof fails
 closed; never clear the ledger or invent a resource boundary to admit work.
+When the bounded in-ledger invalid-stop history fills, the pipeline fsyncs exact
+older audit entries into immutable, hash-linked chunks beside its state before
+recording the archive head. Recovery verifies the complete chain; missing or
+tampered chunks block fresh work while the original invalid audit remains intact.
 
 Before ACTION C finalizes the round, run
 `python3 ~/.codex/orchestrator-mirror/closer_dispatcher.py validate-stop --state "$CLOSER_ROUND_STATE" --assignment ~/.codex/automations/reviewed-repo-automation-controller/closer-assignment.json`.
