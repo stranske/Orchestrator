@@ -1644,8 +1644,19 @@ publication; the published JSON preserves existing v1 routing values and adds ad
 `state`, `window`, and `observed_at` from the capacity snapshot's own `generated_at`, plus
 an additive `pacing` block for Codex/Claude (fractions, projection, EWMA burn, routing weight,
 period bounds, reset inventory and source freshness; no credentials). `pacing.py` defines the
-weekly window and constants once. The capacity tick appends source-labelled observations and
-snapshots even while shed. Codex weekly percent/reset epochs come from timestamped rollout token-count events;
+weekly window and constants once. States retain their schedule/projection rules; routing weight
+uses a time-aware budget: `C = (1 − r_eff) + n_usable`, counting unconsumed banked resets
+expiring after now (each Codex reset restarts its period; Claude uses its banked count).
+In fractions/hour, `s = max(0, C − u) / max((T1 − t)/1h, 1)` and
+`ḃ_period = u / max((t − T0)/1h, 1)`. With the single `BURN_WINDOW_HOURS = 6`,
+`w = min(1, span_h / BURN_WINDOW_HOURS)` and
+`ḃ_eff = w·ḃ_short + (1−w)·ḃ_period`; undefined short burn uses the period average.
+The target is `clamp(s / ḃ_eff, 0, 1)`, or 1 when effective burn is nonpositive.
+Ticks compute this even at zero weight and limit changes to 0.25; actual exhaustion/latched
+quota failures force zero immediately. A source-only change keeps the prior weight within
+the same pool and period. Reports print budget, usable resets, all hourly rates, target,
+previous/current weight, and the oldest-expiring reset the pace would consume. The capacity tick
+appends source-labelled observations and snapshots even while shed. Codex weekly percent/reset epochs come from timestamped rollout token-count events;
 Claude uses desktop weekly history. Unknown/stale pacing preserves native routability; shared
 ccusage totals never become per-agent percentages. Both burn-rate aliases are retained.
 `router.select_agent` preserves load/late/state/policy/drain tiers and samples tied pools by

@@ -41,8 +41,8 @@ def evaluate(day=1, u=0.6, n=0, samples=True, **kwargs):
     now = START + day * pacing.DAY_SECONDS
     data = (
         [
-            dict(ts=START, used_fraction=0, source=SOURCE),
-            dict(ts=now, used_fraction=u, source=SOURCE),
+            dict(ts=t, used_fraction=u * (t - START) / (now - START), source=SOURCE)
+            for t in (now - 6 * 3600, now - 3 * 3600, now)
         ]
         if samples
         else []
@@ -126,13 +126,10 @@ def test_codex_reset_moves_period_claude_stays_fixed():
     assert pacing.period("codex", now) is None
 
 
-def test_weight_literal_endpoints_and_monotonicity():
-    values = [-1, 0, 0.1, 0.5, 0.85, 1, 4]
-    weights = [pacing.routing_weight(v, 0.15) for v in values]
-    assert weights == sorted(weights, reverse=True)
-    assert weights[:2] == [1, 1]
-    assert weights[-3:] == [0, 0, 0]
-    assert weights[3] == pytest.approx((0.85 - 0.5) / 0.85)
+def test_weight_rate_ratio_endpoints_and_monotonicity():
+    weights = [pacing.routing_weight(0.1, burn) for burn in (0, 0.05, 0.1, 0.2, 1)]
+    assert weights == [1, 1, 1, 0.5, 0.1]
+    assert pacing.routing_weight(0, 0.1) == 0
 
 
 @pytest.mark.parametrize("u", [1, 1.2])
@@ -157,8 +154,8 @@ def test_shed_drains_to_exact_print():
         day=2,
         previous_state="shed",
         samples=[
-            dict(ts=now - 3600, used_fraction=0.6, source=SOURCE),
-            dict(ts=now, used_fraction=0.6, source=SOURCE),
+            dict(ts=t, used_fraction=0.6, source=SOURCE)
+            for t in (now - 6 * 3600, now - 3 * 3600, now)
         ],
     )
     assert row["burn_rate_per_day"] == 0
@@ -653,7 +650,8 @@ def test_newer_measured_sample_drains_latched_shed():
     assert evaluate(u=0.01, exhausted_at=incident)["state"] == "shed"
     row = evaluate(day=2, u=0.01, exhausted_at=incident, previous_state="shed")
     assert row["state"] == "ok"
-    assert "pool codex: ũ=0.04 ≤ 1−r_eff → ok" in row["fyi"]
+    assert row["projected_fraction"] == pytest.approx(0.035)
+    assert f"pool codex: ũ={row['projected_fraction']:.2f} ≤ 1−r_eff → ok" in row["fyi"]
     stale = evaluate(day=2, u=0.01, exhausted_at=incident, source_ts=incident + 1)
     assert stale["state"] == "shed"
 
@@ -697,7 +695,28 @@ def test_integrate_only_worsens_native_states(tmp_path, monkeypatch, legacy, pac
         pacing_usage, "usage", lambda *a, **k: dict(used_fraction=0.01, ts=START, source=SOURCE)
     )
     monkeypatch.setattr(
-        pacing, "evaluate", lambda *a, **k: dict(state=paced, reason="fixture", fyi=[])
+        pacing,
+        "evaluate",
+        lambda *a, **k: dict(
+            state=paced,
+            reason="fixture",
+            fyi=[],
+            span_h=None,
+            confidence=None,
+            effective_projected_fraction=None,
+            previous_routing_weight=None,
+            **dict.fromkeys(
+                (
+                    "capacity_budget",
+                    "n_usable",
+                    "sustainable_rate_per_hour",
+                    "burn_short_per_hour",
+                    "burn_period_per_hour",
+                    "burn_effective_per_hour",
+                    "target_routing_weight",
+                )
+            ),
+        ),
     )
     agents = {p: dict(state=legacy, reason="native") for p in ("codex", "claude")}
     pacing_usage.integrate(agents, now=START, handoff=tmp_path)
@@ -1063,3 +1082,292 @@ def test_pacing_subset_ignores_nonpool_positive_weight(monkeypatch, weight):
     row = router.select_agent("implement", cap, exploration_rate=0, simulate=True)
     assert row["agent"] in router.PACING_POOLS
     assert row["pacing_decision"]["policy"] == ("posterior*pacing" if weight else "fallback-warn")
+
+
+# #698: history confidence, minimum evidence, reset boundaries and tick damping.
+def observations(times, values):
+    return [dict(ts=t, used_fraction=u, source=SOURCE) for t, u in zip(times, values)]
+
+
+def test_two_samples_minutes_apart_in_fresh_week():
+    now = START + 20 * 60
+    row = evaluate(
+        now=now,
+        u=0.11,
+        source_ts=now,
+        samples=observations([now - 5 * 60, now], [0.10, 0.11]),
+    )
+    assert row["span_h"] == pytest.approx(5 / 60)
+    assert row["confidence"] == pytest.approx((5 / 60) / pacing.BURN_WINDOW_HOURS)
+    assert row["burn_rate_per_day"] is None
+    assert row["projected_fraction"] is None
+    assert row["effective_projected_fraction"] is None
+    assert row["state"] == "warn"  # 0.11 exceeds the unchanged early schedule band.
+    assert row["routing_weight"] >= 0.75
+    # Below the literal schedule threshold, the same cold start is ok.
+    row = evaluate(
+        now=now,
+        u=0.10,
+        source_ts=now,
+        samples=observations([now - 5 * 60, now], [0.09, 0.10]),
+    )
+    assert row["state"] == "ok" and row["routing_weight"] >= 0.75
+
+
+def test_short_span_projection_is_confidence_damped():
+    now = START + 3600
+    row = evaluate(
+        now=now,
+        u=0.10,
+        source_ts=now,
+        samples=observations([START, START + 1800, now], [0.08, 0.09, 0.10]),
+    )
+    assert row["span_h"] == 1
+    assert row["confidence"] == pytest.approx(1 / pacing.BURN_WINDOW_HOURS)
+    assert row["burn_rate_per_day"] == pytest.approx(0.48)
+    assert row["projected_fraction"] == pytest.approx(3.44)
+    assert row["effective_projected_fraction"] == pytest.approx(0.10 + 3.34 / 6)
+    assert row["state"] == "ok"  # Partial confidence uses the schedule, not projection.
+    assert row["routing_weight"] == 0.75  # Starts from 1, cannot drop by more than .25.
+
+
+@pytest.mark.parametrize("n,state", [(0, "shed"), (1, "warn")])
+def test_six_hours_at_point_six_per_day_restores_full_projection(n, state):
+    row = evaluate(n=n)
+    assert row["span_h"] == pacing.BURN_WINDOW_HOURS
+    assert row["confidence"] == 1
+    assert row["burn_rate_per_day"] == pytest.approx(0.6)
+    assert row["projected_fraction"] == pytest.approx(4.2)
+    assert row["effective_projected_fraction"] == row["projected_fraction"]
+    assert row["state"] == state
+
+
+@pytest.mark.parametrize(
+    "offsets,values,span",
+    [
+        ([0], [0.1], 0),
+        ([-7200, 0], [0.08, 0.1], 2),
+        ([-1800, -900, 0], [0.08, 0.09, 0.1], 0.5),
+        ([-7200, -7200, 0], [0.08, 0.08, 0.1], 2),
+    ],
+)
+def test_minimum_sample_rule_counts_distinct_observations(offsets, values, span):
+    now = START + pacing.DAY_SECONDS
+    row = evaluate(u=0.1, samples=observations([now + t for t in offsets], values))
+    assert row["span_h"] == span
+    assert row["burn_rate_per_day"] is None
+    assert row["state"] == "ok"
+    assert row["routing_weight"] == pytest.approx(1.0)
+
+
+def test_burn_window_excludes_old_future_other_source_and_prior_period():
+    now = START + pacing.DAY_SECONDS
+    data = observations([now - 3600, now - 1800, now], [0.08, 0.09, 0.1])
+    data += observations([START - 1, now - 6 * 3600 - 1, now + 1], [0, 0, 1])
+    data += [dict(ts=now - 6 * 3600, used_fraction=0.9, source="other")]
+    row = evaluate(u=0.1, samples=data)
+    assert row["span_h"] == 1 and row["confidence"] == pytest.approx(1 / 6)
+    assert row["burn_rate_per_day"] == pytest.approx(0.48)
+    # Old endpoints cannot manufacture three observations inside the window.
+    assert pacing.burn_rate(data[1:], now, START, source=SOURCE) is None
+
+
+def test_usage_drop_restarts_span_even_with_unchanged_period():
+    now = START + pacing.DAY_SECONDS
+    data = observations(
+        [now - 21600, now - 10800, now - 3600, now - 1800, now],
+        [0.7, 0.8, 0.01, 0.02, 0.03],
+    )
+    row = evaluate(u=0.03, samples=data)
+    assert row["span_h"] == 1 and row["confidence"] == pytest.approx(1 / 6)
+    assert row["burn_rate_per_day"] == pytest.approx(0.48)
+    assert row["state"] == "ok"
+
+
+@pytest.mark.parametrize("prior,expected", [(1, 0.75), (0.75, 0.5), (0.5, 0.25), (0.25, 0)])
+def test_tick_weight_drop_is_bounded(prior, expected):
+    row = evaluate(u=0.97, previous_weight=prior)
+    assert row["routing_weight"] == expected
+    assert row["previous_routing_weight"] == prior
+
+
+def test_tick_weight_recovery_is_bounded_but_exhaustion_is_immediate():
+    row = evaluate(u=0.01, samples=False, previous_weight=0)
+    assert row["routing_weight"] == 0.25
+    for kwargs in (dict(u=1), dict(u=0.01, exhausted_at=START + pacing.DAY_SECONDS)):
+        row = evaluate(previous_weight=1, **kwargs)
+        assert row["state"] == "shed" and row["routing_weight"] == 0
+
+
+@pytest.mark.parametrize("pool", ["codex", "claude"])
+def test_reset_event_restarts_span_and_weight_without_usage_drop(tmp_path, monkeypatch, pool):
+    now = START + pacing.DAY_SECONDS
+    reset_at = now - 1800
+    monkeypatch.setattr(pacing_usage, "RESETS_FILE", tmp_path / "resets.json")
+    monkeypatch.setattr(pacing_usage, "CALIBRATION_FILE", tmp_path / "calibration.json")
+    pacing_usage.RESETS_FILE.write_text(
+        json.dumps(
+            {p: [dict(expires="2026-11-16", consumed_at=reset_at)] for p in ("codex", "claude")}
+        )
+    )
+    pacing_usage.CALIBRATION_FILE.write_text(
+        json.dumps(dict(codex_period_start=START, claude_period_end=END))
+    )
+    samples = observations([now - 21600, now - 10800, reset_at], [0.07, 0.08, 0.09])
+    pacing_usage.append_rows(
+        tmp_path / "pacing-usage-samples.ndjson", [dict(agent=pool, **r) for r in samples]
+    )
+    prior = dict(
+        period_start=START,
+        period_end=START + pacing.PERIOD_SECONDS,
+        source=SOURCE,
+        ts=now - 3600,
+        routing_weight=0,
+        state="shed",
+    )
+    (tmp_path / "capacity.json").write_text(json.dumps(dict(agents={pool: dict(pacing=prior)})))
+    usage = {p: dict(used_fraction=0.1, ts=now, source=SOURCE) for p in ("codex", "claude")}
+    agents = {p: dict(state="ok", reason="native") for p in usage}
+    pacing_usage.integrate(agents, now=now, handoff=tmp_path, usage_data=usage)
+    row = {**agents[pool]["pacing"], **agents[pool]["pacing_diagnostics"]}
+    assert row["span_h"] == 0.5 and row["burn_rate_per_day"] is None
+    assert row["previous_routing_weight"] == 1
+    assert row["routing_weight"] >= 0.75
+    assert row["period_start"] == (reset_at if pool == "codex" else START)
+
+
+def test_integrate_persists_previous_weight_and_report_fields(tmp_path, monkeypatch):
+    now = START + pacing.DAY_SECONDS
+    monkeypatch.setattr(pacing_usage, "RESETS_FILE", tmp_path / "resets.json")
+    monkeypatch.setattr(pacing_usage, "CALIBRATION_FILE", tmp_path / "calibration.json")
+    pacing_usage.RESETS_FILE.write_text(json.dumps(dict(codex=[], claude=[])))
+    pacing_usage.CALIBRATION_FILE.write_text(json.dumps(dict(codex_period_start=START)))
+    data = {p: dict(used_fraction=0.1, ts=now, source=SOURCE) for p in ("codex", "claude")}
+    semantics = []
+    for prior, expected in ((0, 0.25), (0.25, 0.5), (0.5, 0.75)):
+        old = dict(
+            period_start=START,
+            period_end=START + pacing.PERIOD_SECONDS,
+            source=SOURCE,
+            ts=now - 900,
+            routing_weight=prior,
+        )
+        (tmp_path / "capacity.json").write_text(
+            json.dumps(dict(agents={p: dict(pacing=old) for p in data}))
+        )
+        agents = {p: dict(state="ok", reason="native") for p in data}
+        pacing_usage.integrate(agents, now=now, handoff=tmp_path, usage_data=data, record=True)
+        assert agents["codex"]["pacing"]["routing_weight"] == expected
+        semantics.append(
+            route_weights_export._semantic_for_compare(
+                dict(capacity=route_weights_export._capacity_block(dict(agents=agents)))
+            )
+        )
+        text = pacing_usage.report(tmp_path, now=now, current=dict(agents=agents))
+        for field in ("span_h=0.0", "c=0.0", f"w_p_prev→w_p={float(prior)}→{expected}"):
+            assert field in text
+    saved = pacing_usage.read_rows(tmp_path / "capacity-ledger.ndjson")[-1]
+    assert saved["agents"]["codex"]["pacing"]["routing_weight"] == 0.75
+    assert saved["agents"]["codex"]["pacing_diagnostics"]["span_h"] == 0
+    assert all(
+        value == semantics[0] for value in semantics
+    ), "diagnostic drift must not republish exports"
+
+
+def test_partial_confidence_schedule_warns_despite_flat_projection():
+    now = START + pacing.DAY_SECONDS
+    row = evaluate(
+        u=0.6,
+        previous_state="shed",
+        samples=observations([now - 3600, now - 1800, now], [0.6, 0.6, 0.6]),
+    )
+    assert row["effective_projected_fraction"] == 0.6
+    assert row["state"] == "warn"
+    assert "schedule decides state" in " ".join(row["fyi"])
+    assert "schedule decides state" in row["reason"]
+
+
+# Round 4: sustainable spend, reset budget, and recovery from zero.
+def live_pace(n, previous_weight=0):
+    now = START + 5 * 3600
+    return evaluate(
+        now=now,
+        source_ts=now,
+        u=0.15,
+        n=n,
+        previous_weight=previous_weight,
+        samples=observations([now - 7200, now - 3600, now], [0, 0.075, 0.15]),
+    )
+
+
+def test_live_n_usable_raises_target_and_recovers_from_zero():
+    banked, empty = live_pace(2), live_pace(0)
+    assert (
+        banked["target_routing_weight"] > 2 * empty["target_routing_weight"] > 0
+    ), "n_usable must raise target beyond reserve relief alone (over twice the no-reset target)"
+    assert banked["n_usable"] == 2, "n_usable must include both unexpired resets"
+    assert banked["capacity_budget"] == 3
+    assert banked["burn_period_per_hour"] == pytest.approx(0.03)
+    assert banked["burn_effective_per_hour"] == pytest.approx(0.045)
+    target = (2.85 / 163) / 0.045
+    assert banked["target_routing_weight"] == pytest.approx(target)
+    assert banked["routing_weight"] == 0.25
+    assert live_pace(2, 0.25)["routing_weight"] == pytest.approx(target)
+    assert "oldest-expiring reset" in " ".join(banked["fyi"])
+    print(
+        f"live n_usable=2 target={target:.6f}; n_usable=0 target={empty['target_routing_weight']:.6f}"
+    )
+
+
+def test_claude_above_budget_has_zero_target():
+    now = START + 5 * 3600
+    row = pacing.evaluate(
+        "claude",
+        now=now,
+        used_fraction=0.97,
+        period_start=START,
+        period_end=END,
+        resets=[],
+        samples=[],
+        source=SOURCE,
+        source_ts=now,
+        previous_weight=0,
+    )
+    assert row["effective_reserve"] == 0.15
+    assert row["sustainable_rate_per_hour"] == 0
+    assert row["target_routing_weight"] == row["routing_weight"] == 0
+
+
+def test_flat_usage_weight_recovers_and_drained_print_is_reachable():
+    now = START + 2 * pacing.DAY_SECONDS
+    prior = 0
+    for expected in (0.25, 0.5, 0.75, 1):
+        row = evaluate(
+            day=2,
+            u=0.6,
+            previous_weight=prior,
+            previous_state="shed",
+            samples=observations([now - 21600, now - 10800, now], [0.6] * 3),
+        )
+        assert row["burn_effective_per_hour"] == 0
+        assert row["routing_weight"] == expected
+        assert "pool codex: ũ=0.60 ≤ 1−r_eff → ok" in row["fyi"]
+        prior = row["routing_weight"]
+    print("pool codex: ũ=0.60 ≤ 1−r_eff → ok; w_p_prev→w_p=0.750→1.000")
+
+
+def test_expired_reset_does_not_expand_pacing_budget():
+    now = START + 5 * 3600
+    row = evaluate(
+        now=now,
+        source_ts=now,
+        u=0.15,
+        resets=[
+            dict(expires=now - 1),
+            dict(expires=now),
+            dict(expires=now + 1),
+            dict(expires=now + 100, consumed_at=now - 1),
+        ],
+    )
+    assert row["n_usable"] == 1
+    assert row["capacity_budget"] == pytest.approx(1.925)
