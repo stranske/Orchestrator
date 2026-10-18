@@ -22,7 +22,8 @@ TICK_SECONDS = 900  # Capacity recording cadence; distinct from scheduled usage 
 POLL_TICK_SECONDS = 600
 POLL_STALE_TICKS = 3
 STALE_AFTER_SECONDS = POLL_STALE_TICKS * POLL_TICK_SECONDS
-BURN_ANCHOR_MAX_AGE_SECONDS = BURN_WINDOW_HOURS * 3600 + STALE_AFTER_SECONDS
+SAMPLE_TICK_SECONDS = 3600  # The orchestrator tick records one pacing sample per hour.
+BURN_ANCHOR_MAX_AGE_SECONDS = BURN_WINDOW_HOURS * 3600 + 2 * SAMPLE_TICK_SECONDS
 
 
 def timestamp(value) -> float | None:

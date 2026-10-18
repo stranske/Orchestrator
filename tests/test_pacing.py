@@ -1380,13 +1380,13 @@ def test_expired_reset_does_not_expand_pacing_budget():
 
 @pytest.mark.parametrize(
     "anchor_age,used",
-    [(20 * 3600, False), (6.1 * 3600, True), (23400, True), (23401, False)],
+    [(20 * 3600, False), (6.1 * 3600, True), (8 * 3600, True), (8 * 3600 + 1, False)],
 )
 def test_burn_anchor_age_bound_after_poller_outage(anchor_age, used):
     now = START + pacing.DAY_SECONDS
     data = observations([now - anchor_age, now - 720, now - 360, now], [0.01, 0.58, 0.59, 0.6])
     row = evaluate(u=0.6, samples=data)
-    ignored = f"anchor ignored: age={anchor_age:g}s > bound=23400s"
+    ignored = f"anchor ignored: age={anchor_age:g}s > bound=28800s"
     assert (ignored in row["fyi"]) is not used
     if used:
         assert row["confidence"] == 1 and row["span_h"] == 6

@@ -6,7 +6,11 @@ explicit. A burn estimate requires three distinct timestamps spanning at least
 one hour from the same source and period. Measured zero burn is distinct from
 undefined. Retain the latest sample at or before the six-hour cutoff as an
 anchor, plus the in-window observations, provided the anchor is no older than
-`BURN_WINDOW_HOURS*3600 + POLL_STALE_TICKS*POLL_TICK_SECONDS` (23,400 seconds).
+`BURN_WINDOW_HOURS*3600 + 2*SAMPLE_TICK_SECONDS` (28,800 seconds, eight hours).
+`SAMPLE_TICK_SECONDS = 3600`: the orchestrator tick records one pacing sample
+per hour, with additional poll-driven snapshots. Two sample ticks allow for
+normal sampling cadence around the six-hour cutoff; this allowance is separate
+from the poll freshness threshold.
 An older anchor is ignored and prints `anchor ignored: age=<s>s > bound=<s>s`;
 span then starts at the oldest in-window observation. Compute interval rates from
 their actual endpoints and clip each interval's exponential weight to the window. The observed

@@ -66,7 +66,7 @@ def test_anchor_interval_mass_is_clipped_and_only_latest_anchor_counts():
     assert pacing.burn_estimate([rows[0], rows[-1]], now, START, source=SOURCE)[0] is None
     sparse = assess([rows[0], rows[-1]], previous_state="warn")
     assert sparse["state"] == "ok" and sparse["projected_fraction"] is None
-    assert sparse["fyi"] == ["anchor ignored: age=32400s > bound=23400s"]
+    assert sparse["fyi"] == ["anchor ignored: age=32400s > bound=28800s"]
 
 
 def test_reset_after_anchor_restarts_confidence():
@@ -252,27 +252,62 @@ def test_known_reset_weight_history_survives_inventory_loss(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize(
-    "pool,first_before,first_full,before_ticks,full_ticks",
-    [("codex", 48, 48, 63, 60), ("claude", 19, 96, 25, 16)],
+    "pool,first_before,first_full,before_ticks,full_ticks,ignored_ticks",
+    [
+        ("codex", 48, 48, 63, 61, [91, 93]),
+        ("claude", 19, 96, 25, 16, [19, 20, 21, 22, 24, 25, 26, 27, 28]),
+    ],
 )
 def test_real_slice_anchor_bound_full_confidence_counts(
-    pool, first_before, first_full, before_ticks, full_ticks
+    monkeypatch, pool, first_before, first_full, before_ticks, full_ticks, ignored_ticks
 ):
     samples = json.loads((Path(__file__).parent / "fixtures/pacing-real-111.json").read_text())[
         pool
     ]
-    full = []
+    full, unbounded_full, ignored = [], [], []
     for i, sample in enumerate(samples):
         ts = sample["ts"]
         if pool == "codex":
             start = START if ts >= START else 1792248898.0
         else:
             start = 1792299540.0 if ts >= 1792299540.0 else 1791694740.0
-        row = assess(samples[: i + 1], period_start=start, period_end=start + pacing.PERIOD_SECONDS)
+        args = dict(
+            now=ts,
+            source_ts=ts,
+            used_fraction=sample["used_fraction"],
+            period_start=start,
+            period_end=start + pacing.PERIOD_SECONDS,
+            resets=[],
+            samples=samples[: i + 1],
+            source=sample["source"],
+        )
+        row = pacing.evaluate(pool, **args)
+        with monkeypatch.context() as patch:
+            patch.setattr(pacing, "BURN_ANCHOR_MAX_AGE_SECONDS", float("inf"))
+            before = pacing.evaluate(pool, **args)
+        if before["confidence"] == 1:
+            unbounded_full.append(i + 1)
         if row["confidence"] == 1:
             full.append(i + 1)
+        if any(s.startswith("anchor ignored:") for s in row["fyi"]):
+            ignored.append(i + 1)
+            # Independently recover the real same-source/period anchor age;
+            # do not infer it from the rounded diagnostic text.
+            anchor = max(
+                r["ts"]
+                for r in samples[: i + 1]
+                if start <= r["ts"] <= ts - 6 * 3600
+                and r["source"] == sample["source"]
+                and isinstance(r.get("used_fraction"), (int, float))
+                and math.isfinite(r["used_fraction"])
+            )
+            assert ts - anchor > 8 * 3600
+    assert unbounded_full[0] == first_before
+    assert len(unbounded_full) == before_ticks
     assert full[0] == first_full
     assert len(full) == full_ticks
+    assert ignored == ignored_ticks
+    assert set(unbounded_full) - set(full) == set(ignored)
     print(
         f"real slice {pool}: first c=1 tick before={first_before} after={full[0]}; "
         f"c=1 ticks before={before_ticks}/111 after={len(full)}/111"
