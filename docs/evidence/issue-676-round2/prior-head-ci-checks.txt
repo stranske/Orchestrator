@@ -1,0 +1,2 @@
+{"conclusion":"success","html_url":"https://github.com/stranske/Orchestrator/actions/runs/39054222080/job/117458774652","name":"verify.py (real pytest counts + selftests + capability gates)","status":"completed"}
+{"conclusion":"failure","html_url":"https://github.com/stranske/Orchestrator/actions/runs/39054222080/job/117458774384","name":"verify.py in the flat exec-mirror shape (the tree a sync ships)","status":"completed"}

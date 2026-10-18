@@ -106,8 +106,12 @@
 <text class="ts" x="358" y="462">outcome: merge · durability · verifier</text>
 
 <!-- feedback band -->
+<g id="comparative-routing-shadow">
+<title>Routing economics: shadow comparative export beside absolute posterior</title>
+<desc>The existing route-weights export rail adds comparative_rank without reordering posterior rankings. The additive orchestrator.route-weights-comparative/v1 block carries lambda opportunity costs, status, pacing observation time and cost provenance. Only measured #668 pool pacing and burn support prices; missing or stale inputs stay null with reasons. Hourly snapshot replay and weekly switch review report classes differing; no hosted consumer or deterministic selection changes.</desc>
+</g>
 <rect class="stage" x="56" y="470" width="584" height="52" rx="8"/>
-<text class="th" x="68" y="489">feedback.py · record source/state → ingest → relearn</text>
+<text class="th" x="68" y="489">feedback.py · ingest → relearn · export comparative_rank (shadow λ)</text>
 <text class="ts" x="68" y="514">learns via outcomes:</text>
 <rect class="rail" x="118" y="502" width="104" height="18" rx="4"/><text class="ct" x="170" y="514" text-anchor="middle">selection weights</text>
 <rect class="role" x="232" y="502" width="116" height="18" rx="4"/><text class="ct" x="290" y="514" text-anchor="middle">role:&lt;name&gt; + source</text>
