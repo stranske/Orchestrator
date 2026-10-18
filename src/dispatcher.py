@@ -1176,6 +1176,18 @@ def _invoke_selected_compiled_capability(d: dict) -> dict | None:
     except Exception as exc:
         return fallback(f"target_lookup_failed:{type(exc).__name__}")
     target = str(d.get("target") or "")
+    # Fail before any producer runs or consumption edge is written: a missing
+    # infrastructure version must not leave an accepted compiled edge for a
+    # run that never starts (issue #639).
+    ids = list(d.get("capability_ids") or [])
+    versions = list(d.get("capability_version_ids") or [])
+    if not versions:
+        versions = [str((ledger.get(cid) or {}).get("capability_version_id") or "") for cid in ids]
+    if len(ids) != len(versions):
+        raise ValueError("capability identity/version lineage length mismatch")
+    missing_versions = [cid for cid, version in zip(ids, versions) if cid != cap_id and not version]
+    if missing_versions:
+        raise ValueError(f"missing capability versions for {missing_versions}")
     trigger = {
         "target": target,
         "task_type": d.get("task_type"),
@@ -1202,16 +1214,7 @@ def _invoke_selected_compiled_capability(d: dict) -> dict | None:
     edge = result.get("causal_edge") or {}
     if not result.get("consumer_ref") or not edge.get("source_event_id"):
         return fallback("consumption_receipt_missing", invoked=True)
-    # Keep existing infrastructure pairs aligned when adding compiled attribution.
-    ids = list(d.get("capability_ids") or [])
-    versions = list(d.get("capability_version_ids") or [])
-    if not versions:
-        versions = [str((ledger.get(cid) or {}).get("capability_version_id") or "") for cid in ids]
-    if len(ids) != len(versions):
-        raise ValueError("capability identity/version lineage length mismatch")
-    missing_versions = [cid for cid, version in zip(ids, versions) if cid != cap_id and not version]
-    if missing_versions:
-        raise ValueError(f"missing capability versions for {missing_versions}")
+    # Append the compiled pair only after a successful receipt.
     pairs = [(cid, version) for cid, version in zip(ids, versions) if cid != cap_id]
     pairs.append((str(cap_id), str(version_id)))
     d["capability_ids"] = [cid for cid, _ in pairs]
@@ -3380,6 +3383,7 @@ def _selftest_capability_dispatch(root: Path) -> None:
             == "target_binding_missing"
         )
         invoke.assert_called_once()
+        invoke.reset_mock()
         bad = {**plan, "capability_ids": ["missing-infra"], "capability_version_ids": []}
         try:
             _invoke_selected_compiled_capability(bad)
@@ -3387,6 +3391,7 @@ def _selftest_capability_dispatch(root: Path) -> None:
             assert "missing capability versions" in str(exc), exc
         else:
             raise AssertionError("missing infrastructure version was silently dropped")
+        invoke.assert_not_called()
 
 
 def _selftest() -> None:

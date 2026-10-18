@@ -1321,6 +1321,31 @@ def _selftest() -> None:
         ]  # implement → claude leads (hand-set prior)
         assert by_t["r/Repo#3"]["task_type"] == "review"  # review runs (no pressure)
 
+        # Selection is routing metadata only: exercised lists stay empty until
+        # dispatcher invoke_compiled_target (or infrastructure evidence) admits them.
+        selected_cap = capabilities._blank_capability("selftest-selected")
+        selected_cap.update(
+            {
+                "status": "active",
+                "matcher": {"field": "task_type", "value": "implement"},
+                "capability_version_id": "version:selftest-selected",
+                "artifact_hash": "hash:selftest-selected",
+                "lifecycle_policy_hash": "policy:selftest-selected",
+                "routing_prior": {"posterior": 0.9},
+            }
+        )
+        sel = plan(
+            [{"target": "owner/repo#23", "task_type": "implement", "lane": "opener"}],
+            all_ok,
+            dry_run=True,
+            capability_records={"selftest-selected": selected_cap},
+        )
+        sel_a = sel["assignments"][0]
+        assert sel_a["selected_capability_id"] == "selftest-selected", sel_a
+        # Break demo: restoring [selected_capability_id] into capability_ids here
+        # must fail this assertion (selection must not earn consumption credit).
+        assert sel_a["capability_ids"] == [] and sel_a["capability_version_ids"] == [], sel_a
+
         # learned-weights wiring: a learned rank reorders WITHIN the capacity tier (feedback loop closing)
         assert (
             select_agent("implement", all_ok, learned={"cursor": 0, "claude": 1})["agent"]
