@@ -2809,6 +2809,21 @@ def test_expired_action_deadline_recovers_only_to_reconcile(tmp_path, stage, ass
         },
         results={"reconcile": {"outcome": "confirmed_not_started"}},
     )
+    # Action uncertainty must retain identity-sensitive audit material even
+    # though no act result exists; ordinary non-action deferrals may deduplicate.
+    row = prior["targets"][target]
+    row["identity"] = "first-operation-binding"
+    closer_pipeline._save(path, state)
+    stop = validate_stop(path, prior["assignment"], now=lambda: at)
+    first = closer_pipeline._expired_invalid_round_recovery(stop, prior, path, "interrupted", at)
+    row["identity"] = "changed-operation-binding"
+    second = closer_pipeline._expired_invalid_round_recovery(stop, prior, path, "interrupted", at)
+    assert first[0] and second[0]
+    assert (
+        first[5]["targets"][target]["material_sha256"]
+        != second[5]["targets"][target]["material_sha256"]
+    )
+    row["identity"] = "first-operation-binding"
     closer_pipeline._save(path, state)
     calls = []
     cb = callbacks(

@@ -1006,7 +1006,7 @@ def _expired_invalid_round_recovery(
                 "deferred_reason": item.get("deferred_reason"),
                 "recovery": recovery,
             }
-            if status == "deferred" and no_action
+            if status == "deferred" and no_action and target not in uncertain
             else {
                 "status": status,
                 "stage": stage,
