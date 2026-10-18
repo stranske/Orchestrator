@@ -605,7 +605,10 @@ def test_random_retest_reads_producer_cells(monkeypatch):
     result = fg.random_retest(NOW)
     assert result.value == 4 / 37 and result.reason == "4/37 cells fresh"
     state["last_draw_ts"] = NOW - fg.PRODUCER_STATE_MAX_AGE - 1
-    assert fg.random_retest(NOW).value is None
+    stale = fg.random_retest(NOW)
+    assert stale.value is None and stale.reason.startswith(
+        "producer not ticking: last draw 2.0 days"
+    )
     monkeypatch.setattr(experiment_producer, "read_state", lambda: {})
     assert fg.random_retest(NOW).value is None
 
@@ -616,10 +619,27 @@ def test_comparative_routing_reads_the_shadow_report(monkeypatch):
     monkeypatch.setattr(
         comparative,
         "report",
+        lambda *a, **k: {"classes_differing": 1, "status": "optimal", "reasons": []},
+    )
+    result = fg.comparative_routing(NOW)
+    assert result.value == 1.0 and "status optimal" in result.reason
+    monkeypatch.setattr(
+        comparative,
+        "report",
         lambda *a, **k: {"classes_differing": 0, "status": "not_testable_slack", "reasons": []},
     )
     result = fg.comparative_routing(NOW)
-    assert result.value == 0.0 and "not_testable_slack" in result.reason
+    assert result.value is None and "slack" in result.reason
+    monkeypatch.setattr(
+        comparative,
+        "report",
+        lambda *a, **k: {
+            "classes_differing": 2,
+            "status": "inputs_unmeasured",
+            "reasons": ["thin"],
+        },
+    )
+    assert fg.comparative_routing(NOW).value is None
     monkeypatch.setattr(
         comparative,
         "report",

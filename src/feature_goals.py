@@ -201,9 +201,16 @@ def comparative_routing(now: int) -> Measurement:
         result = comparative.report(feedback.resolve_db_path(), comparative.history_path(), now=now)
     except Exception as exc:  # an unreadable report is unmeasured, never zero
         return unknown(now, f"#676 comparative report unreadable: {type(exc).__name__}")
-    if result.get("classes_differing") is None:
+    status = result.get("status")
+    if status == "not_testable_slack":
+        # #676: capacity never bound in the window, so absolute routing was correct; not a zero.
+        return unknown(
+            now, "#676 slack: capacity never bound in the window; retest when a pool binds"
+        )
+    if status != "optimal" or result.get("classes_differing") is None:
+        # A thin window can carry a count with status inputs_unmeasured; that is not a measurement.
         reasons = "; ".join(str(r) for r in result.get("reasons") or [])[:300]
-        return unknown(now, f"#676 comparative report status {result.get('status')}: {reasons}")
+        return unknown(now, f"#676 comparative report status {status}: {reasons}")
     return Measurement(
         float(result["classes_differing"]),
         "comparative shadow report (#676: pacing ledger + Brain posteriors)",
@@ -230,7 +237,8 @@ def random_retest(now: int) -> Measurement:
             now, "experiment_producer state has no route cells (no active producer tick)"
         )
     if now - ts > PRODUCER_STATE_MAX_AGE:
-        return unknown(now, f"experiment_producer state stale since {int(ts)}")
+        age_days = (now - ts) / DAY
+        return unknown(now, f"producer not ticking: last draw {age_days:.1f} days ago")
     return Measurement(
         float(fresh) / float(total),
         "experiment_producer route cells (head-to-head within its coverage window)",
