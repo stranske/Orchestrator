@@ -3,12 +3,13 @@
 import socket
 import subprocess
 from contextlib import nullcontext
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
 import capabilities
 import capability_advisor as advisor
+import capability_propensity
 import dispatcher
 
 
@@ -86,6 +87,60 @@ def test_repo_probe_memo_is_scoped_to_checkout_and_consult(monkeypatch, tmp_path
         (first_path,),
     ]
     assert len(facts) == 2
+
+
+@pytest.mark.parametrize("failure_index", [0, 1, 2])
+@pytest.mark.parametrize("explicit_ref", [False, True])
+def test_missing_fact_batch_continues_after_failure_and_counts_only_new_records(
+    monkeypatch, tmp_path, failure_index, explicit_ref
+):
+    """One unavailable write must not lose later facts or count duplicate observations."""
+    ledger = tmp_path / "ledger.json"
+    task = "bounded assessment"
+    ref = "advice:existing-consult" if explicit_ref else advisor.experiment_id(task)
+    previous_error = {"capability_id": "prior", "error_type": "ValueError"}
+    advice = {"task": task, "fact_missing_record_errors": [previous_error.copy()]}
+    if explicit_ref:
+        advice["experiment_id"] = ref
+    rows = [
+        {"capability_id": "one", "fact": "size unknown"},
+        {"capability_id": "two"},
+        {"capability_id": "three", "fact": "labels unknown"},
+    ]
+    detail = f"fixture storage failure at {ledger}"
+    outcomes = [True, False]
+    outcomes.insert(failure_index, OSError(detail))
+    record = Mock(side_effect=outcomes)
+    monkeypatch.setattr(capability_propensity, "record_fact_missing", record)
+
+    assert advisor._record_fact_missing(advice, rows, surface="fixture", path=ledger) == 1
+
+    assert record.call_args_list == [
+        call(
+            row["capability_id"],
+            ref,
+            fact=row.get("fact", "PR facts unknown"),
+            surface="fixture",
+            path=ledger,
+        )
+        for row in rows
+    ]
+    expected = {
+        "task": task,
+        "fact_missing_record_errors": [
+            previous_error,
+            {
+                "capability_id": rows[failure_index]["capability_id"],
+                "surface": "fixture",
+                "error_type": "OSError",
+            },
+        ],
+    }
+    if explicit_ref:
+        expected["experiment_id"] = ref
+    assert advice == expected
+    assert detail not in str(advice)
+    assert not ledger.exists()
 
 
 @pytest.mark.parametrize(
