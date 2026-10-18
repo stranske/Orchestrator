@@ -113,6 +113,26 @@ The single left arc is the loop closing. What it carries back is the point: `fee
 
 ## Rails — deterministic, keep as code
 
+The existing `keepalive_supervisor` cadence also has a post-merge action behind
+`ORCH_SUPERVISOR_CLOSE=1` (default off). It reads up to `min(--limit, 30)` recently updated merged PRs, then selects agent PRs.
+The `--stage2-plan` cadence uses the CLI default limit of 20. It executes at most
+three acceptance gates and closes at most three explicitly linked, still-open source issues per pass.
+It reuses `verifier_evidence` for a trusted exact-head/exact-merge PASS, or the
+existing `runtime_ac` authoring and `runtime_ac_gate.recheck_merged` runner on a
+disposable exact-merge checkout, with all merge-SHA CI green. Non-PASS or malformed
+verifier evidence, missing runnable acceptance commands, changed evidence and scoped
+or human holds refuse closure with counted reasons. The source issue and verifier
+are refreshed before mutation. A PR comment records the rule and merge SHA; only a
+confirmed closure writes an idempotent `supervisor-close` run/outcome and the existing
+capability influence edge. These outcomes measure the closure action, not a new
+implementation or durability judgment. A shared nonblocking state lock preserves
+serial closure; failures leave other candidates available. Unset the flag to stop
+future closures. This extends a deterministic rail, adds no role, and does not enable
+redirect apply. `--stage2-plan` calls it on the existing cadence; `--close-verified`
+provides the same bounded actor for the post-merge live acceptance check. Deployment,
+flag enablement, the first real closure and the seven-day latency measure remain
+separate acceptance evidence; unit tests do not establish those events.
+
 Observer reports and tick-cadence rails retain invocation, fingerprint and finding-delta evidence,
 but cannot earn delivery-usefulness verdicts. The existing selection exemption supplies the
 classification, with explicit declarations for the event-driven propensity and redirect rails.
