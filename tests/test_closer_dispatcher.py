@@ -2923,12 +2923,13 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
 
     monkeypatch.setattr(dispatcher, "offload", offload)
     integrations = []
+    ordinary_validation = closer_disposition.integrate_ordinary
 
     def integrate(target, *_a, **_k):
         integrations.append(target)
         return {"status": "wait", "reason": "evidence incomplete", "raw_findings": []}
 
-    # A refusal or malformed response must never reach acceptance integration.
+    # Interpretation must not submit a refusal/malformed response for acceptance.
     monkeypatch.setattr(
         closer_disposition,
         "integrate_ordinary",
@@ -2992,6 +2993,12 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
                 assert values[first]["actual"]["raw_exit"] == 0
                 assert values[first]["substantive_needs"] == ["incomplete_low_assessment"]
                 assert "OFFLOAD_INCOMPLETE" in values[first]["proposal"]["raw_excerpt"]
+                # A later action may validate the original receipt again. It
+                # must still reject its actual exit70, regardless of raw_exit0.
+                guarded = ordinary_validation(first, snapshots[first], {}, {}, values[first])
+                assert guarded["status"] == "wait"
+                assert guarded["reason"] == "worker_execution_unverified"
+                assert not guarded.get("disposition")
         else:
             assert values[first]["actual"]["run_id"] == "dispatch-success-32"
             assert values[first]["prior_provider_failures"][0]["run_id"] == "dispatch-failed-31"
