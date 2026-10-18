@@ -919,6 +919,24 @@ def _expired_invalid_round_recovery(
             else:
                 quarantined.add(target)
         elif (
+            status == "deferred"
+            and stage in {"act", "reconcile"}
+            and item.get("deferred_reason") == "deadline_exhausted"
+            and no_action
+            and not item.get("provider_outcome_uncertain")
+        ):
+            # An action queued at the cutoff may still depend on an unresolved
+            # original operation. Never turn its deadline into permission to act.
+            if (
+                f"unverified_deadline_boundary:{target}" in reasons
+                or historical_now < float(previous["deadline"])
+                or not _valid_deadline_evidence(
+                    item.get("resource_evidence"), float(previous["deadline"]), rows
+                )
+            ):
+                return False, set(), set(), set(), set(), {}
+            uncertain.add(target)
+        elif (
             status == "uncertain"
             and stage in {"act", "reconcile"}
             and item.get("deferred_next_trigger") == "reconcile_before_retry"
@@ -988,7 +1006,7 @@ def _expired_invalid_round_recovery(
                 "deferred_reason": item.get("deferred_reason"),
                 "recovery": recovery,
             }
-            if status == "deferred" and no_action
+            if status == "deferred" and no_action and target not in uncertain
             else {
                 "status": status,
                 "stage": stage,
@@ -1417,10 +1435,17 @@ def _run_pipeline_impl(
                 state["runs"].values(), key=lambda row: float(row.get("created", 0))
             ):
                 for old_target, old_item in old_run.get("targets", {}).items():
-                    if old_item.get("status") not in {"completed", "deferred"}:
+                    if old_item.get("status") not in {"completed", "deferred"} or (
+                        old_target in recovery_uncertain
+                    ):
                         latest[old_target] = old_item
             for old_target, old_item in state["carry"].items():
                 latest[old_target] = old_item
+            if recovery_audit is not None and previous is not None:
+                # Compact carry is a derived view, not a replacement for the
+                # audited preparation needed to reconcile an original operation.
+                for old_target in recovery_uncertain:
+                    latest[old_target] = previous["targets"][old_target]
             carried = []
             for old_target, old_item in latest.items():
                 # An old non-action failure outside today's assignment remains
@@ -1432,6 +1457,12 @@ def _run_pipeline_impl(
                 ):
                     continue
                 item = _bounded(old_item)
+                if recovery_audit is not None and old_target in recovery_uncertain:
+                    item.update(
+                        status="uncertain",
+                        stage="reconcile",
+                        deferred_next_trigger="reconcile_before_retry",
+                    )
                 if old_target in prior_wait_targets or old_target in recovery_retryable:
                     item["fresh_inner_wait_admission"] = True
                 if recovery_audit is not None and old_target in recovery_quarantined:

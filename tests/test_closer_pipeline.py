@@ -2786,3 +2786,121 @@ def test_failed_low_provider_is_audited_deferral_not_exception_or_action(tmp_pat
     assert row["deferred_reason"] == "provider_failure"
     assert row["resource_evidence"] == evidence
     assert validate_stop(tmp_path / "pipeline.json")["valid"]
+
+
+@pytest.mark.parametrize("stage", ["act", "reconcile"])
+@pytest.mark.parametrize("assigned", [True, False])
+@pytest.mark.parametrize("carry_shape", ["compact", "stale"])
+def test_expired_action_deadline_recovers_only_to_reconcile(tmp_path, stage, assigned, carry_shape):
+    path = tmp_path / "pipeline.json"
+    at = 1_800_000_000.0
+    interrupted_round_fixture(path, at)
+    state = closer_pipeline._load(path)
+    prior = state["runs"]["interrupted"]
+    target = "owner/repo#capacity-0"
+    prior["targets"][target].update(
+        status="deferred",
+        stage=stage,
+        deferred_reason="deadline_exhausted",
+        deferred_next_trigger="next_round",
+        resource_evidence={
+            "type": "active_deadline",
+            "deadline": at - 1000,
+            "observed_at": at - 999,
+        },
+        revision="recorded-revision",
+        results={
+            "reconcile": {"outcome": "confirmed_not_started"},
+            "prepare": {
+                "snapshot": {"target": target, "head": "a" * 40, "revision": "recorded-revision"}
+            },
+        },
+    )
+    # Action uncertainty must retain identity-sensitive audit material even
+    # though no act result exists; ordinary non-action deferrals may deduplicate.
+    row = prior["targets"][target]
+    row["identity"] = "first-operation-binding"
+    closer_pipeline._save(path, state)
+    stop = validate_stop(path, prior["assignment"], now=lambda: at)
+    first = closer_pipeline._expired_invalid_round_recovery(stop, prior, path, "interrupted", at)
+    row["identity"] = "changed-operation-binding"
+    second = closer_pipeline._expired_invalid_round_recovery(stop, prior, path, "interrupted", at)
+    assert first[0] and second[0]
+    assert (
+        first[5]["targets"][target]["material_sha256"]
+        != second[5]["targets"][target]["material_sha256"]
+    )
+    row["identity"] = "first-operation-binding"
+    state["carry"][target] = closer_pipeline._carry_item(row)
+    assert "prepare" not in state["carry"][target]["results"]
+    if carry_shape == "stale":
+        state["carry"][target].update(
+            stage="prepare", revision="stale-revision", identity="stale-binding"
+        )
+    closer_pipeline._save(path, state)
+    calls = []
+
+    def reconcile(name, context):
+        calls.append(("reconcile", name))
+        if name == target:
+            assert context["prepare"]["snapshot"] == row["results"]["prepare"]["snapshot"]
+            assert context["identity"] == "first-operation-binding"
+            assert context["revision"] == "recorded-revision"
+        return {"outcome": "unknown"}
+
+    cb = callbacks(
+        act=lambda name, _ctx: calls.append(("act", name))
+        or {"status": "completed", "target_complete": True}
+    )
+    result = run(
+        path,
+        [target] if assigned else ["owner/repo#capacity-1"],
+        cb,
+        seconds=10,
+        now=lambda: at,
+        reconcile=reconcile,
+    )
+    assert result.get("status") != "blocked"
+    assert ("act", target) not in calls
+    assert (("reconcile", target) in calls) is assigned
+    latest = next(iter(closer_pipeline._load(path)["runs"].values()))
+    assert latest["prior_stop"]["valid"] is False
+    audit = latest["invalid_stop_history"][-1]["targets"][target]
+    assert audit["recovery"] == "reconcile_only"
+    if not assigned:
+        assert latest["targets"][target]["recovery_excluded"] is True
+
+
+@pytest.mark.parametrize(
+    "mutation", ["wrong_deadline", "early", "operation_result", "provider_unknown"]
+)
+def test_expired_action_deadline_requires_exact_no_result_boundary(tmp_path, mutation):
+    path = tmp_path / "pipeline.json"
+    at = 1_800_000_000.0
+    interrupted_round_fixture(path, at)
+    state = closer_pipeline._load(path)
+    prior = state["runs"]["interrupted"]
+    row = prior["targets"]["owner/repo#capacity-0"]
+    row.update(
+        status="deferred",
+        stage="act",
+        deferred_reason="deadline_exhausted",
+        resource_evidence={
+            "type": "active_deadline",
+            "deadline": at - 1000,
+            "observed_at": at - 999,
+        },
+    )
+    if mutation == "wrong_deadline":
+        row["resource_evidence"]["deadline"] -= 1
+    elif mutation == "early":
+        row["resource_evidence"]["observed_at"] = at - 1001
+    elif mutation == "operation_result":
+        row["results"]["act"] = {"status": "blocked"}
+    else:
+        row["provider_outcome_uncertain"] = {"unknown": True}
+    closer_pipeline._save(path, state)
+    stop = validate_stop(path, prior["assignment"], now=lambda: at)
+    assert not closer_pipeline._expired_invalid_round_recovery(
+        stop, prior, path, "interrupted", at
+    )[0]
