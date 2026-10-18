@@ -256,6 +256,7 @@ def invoke_compiled_target(
     target_registry_path: Path,
     inputs: Mapping[str, Any] | None = None,
     timestamp: int | None = None,
+    expected_version_id: str | None = None,
 ) -> dict[str, Any]:
     """Invoke a matching real producer/consumer and write its version-exact edge."""
     now = int(timestamp or time.time())
@@ -281,6 +282,8 @@ def invoke_compiled_target(
         # A corrupt row without its immutable version identity cannot be
         # matched to a binding, so it refuses as unreadable, not a KeyError.
         return {"matched": False, "invoked": False, "reason": "ledger_unreadable"}
+    if expected_version_id is not None and version_id != expected_version_id:
+        return {"matched": False, "invoked": False, "reason": "selected_version_mismatch"}
     ineligible = _invocation_ineligible(cap, None, now)
     if ineligible:
         return {"matched": True, "invoked": False, "reason": ineligible}
@@ -327,6 +330,8 @@ def invoke_compiled_target(
         timestamp=now,
     )
     if result.get("invoked") and result.get("accepted"):
+        if not result.get("invocation_id") or not result.get("consumer_ref"):
+            return {**result, "accepted": False, "reason": "consumption_receipt_missing"}
         edge = feedback.record_capability_consumption(
             capability_id=capability_id,
             capability_version_id=version_id,
@@ -334,6 +339,7 @@ def invoke_compiled_target(
             target_run_id=target_run_id,
             accepted=True,
             producer=f"capability_lifecycle:{status}",
+            receipt_ref=result["consumer_ref"],
         )
         result["causal_edge"] = edge
     return result

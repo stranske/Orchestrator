@@ -1,0 +1,263 @@
+{
+  "inspected_at": "2026-10-18T08:01:36.609843+00:00",
+  "scope": "First 28 entries in the persisted producer skip_issues list; a subsequent 29th entry is outside the issue baseline.",
+  "counts": {
+    "ci-only": 24,
+    "file-only": 3,
+    "none": 1
+  },
+  "issues": [
+    {
+      "target": "stranske/Workflows#4063",
+      "url": "https://github.com/stranske/Workflows/issues/4063",
+      "title": "Raise test coverage toward 90% (autopilot round 6, lane D, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "c31b0a01f4cdccb814c72bed73577371e3ed45769083edfe5290956f75fcfcdc",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Workflows#4020",
+      "url": "https://github.com/stranske/Workflows/issues/4020",
+      "title": "Raise test coverage toward 90% (autopilot round 4, lane D, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "8474d5b80d85d1e392fe0be5592364aec53bced893f244ef60aa168d2a9a69eb",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Workflows#4019",
+      "url": "https://github.com/stranske/Workflows/issues/4019",
+      "title": "Raise test coverage toward 90% (autopilot round 4, lane C, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "fff50f27ec094e0c9cb28378d3e248dd6dce34809dc815e2e7067307ae57ae63",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Workflows#4018",
+      "url": "https://github.com/stranske/Workflows/issues/4018",
+      "title": "Raise test coverage toward 90% (autopilot round 3, lane B, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "5daa10df8531665ee60a3b935486e3e75156c96dce5f6dd9307c7858cef291ab",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Workflows#4013",
+      "url": "https://github.com/stranske/Workflows/issues/4013",
+      "title": "Raise test coverage toward 90% (autopilot round 3, lane D, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "40e92e8ec11b2cc7b1c17a0c47c9175bf0aa25482a4e47aefec75fc2bccd32f5",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Workflows#4005",
+      "url": "https://github.com/stranske/Workflows/issues/4005",
+      "title": "Raise test coverage toward 90% (autopilot round 2, lane B, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "8c6d8534d3576487cfd8877c5c595f8849373174d25a6d1920ee3345fd3efa81",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Workflows#4001",
+      "url": "https://github.com/stranske/Workflows/issues/4001",
+      "title": "Raise test coverage toward 90% (autopilot round 3, lane C, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "30dd19db3476340f25ad53696a742b023aa67892502b30e01c4ad2c393a9b98b",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Workflows#3998",
+      "url": "https://github.com/stranske/Workflows/issues/3998",
+      "title": "Raise test coverage toward 90% (autopilot round 2, lane D, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "33b9720780242f03406f5a77c0062cb97ff161598bfe2fc337d2034dd1bf0e08",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Workflows#3995",
+      "url": "https://github.com/stranske/Workflows/issues/3995",
+      "title": "Raise test coverage toward 90% (autopilot round 2, lane C, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "dd91b08a82adaed545ff1c14a7a23e04af85450b131acf9ddb980c529a802d75",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Workflows#3970",
+      "url": "https://github.com/stranske/Workflows/issues/3970",
+      "title": "Wire Gate failure tracking and recovery to the documented issue and snapshot sinks",
+      "test_class": "file-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "16b841f879c8355ff3e4a93e3d2609f0f566c3e62f9d0325887ee88c00f28ff5",
+      "planning_command": "npm test -- .github/scripts/__tests__/maint-post-ci.test.js"
+    },
+    {
+      "target": "stranske/Workflows#3967",
+      "url": "https://github.com/stranske/Workflows/issues/3967",
+      "title": "Keep auto-pilot verification pending when no merged source PR is found",
+      "test_class": "file-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "cc62385644019529791a968b3558837ad9a1e31e819b9cdf6ad732ca7711c870",
+      "planning_command": "node --test .github/scripts/__tests__/auto-pilot-transitions.test.js"
+    },
+    {
+      "target": "stranske/Workflows#3964",
+      "url": "https://github.com/stranske/Workflows/issues/3964",
+      "title": "Raise test coverage toward 90% (autopilot round 1, lane D, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "9dfca376b9c0d3eab505b995b5797c81accdb790128a6fe7124dee3ee8db99a2",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Workflows#3958",
+      "url": "https://github.com/stranske/Workflows/issues/3958",
+      "title": "Raise test coverage toward 90% (autopilot round 1, lane C, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "703861056cdb390f4dc860e0ec43e0956d054daaaca6988a0619b382cfa6dce0",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Workflows#3956",
+      "url": "https://github.com/stranske/Workflows/issues/3956",
+      "title": "Raise test coverage toward 90% (autopilot round 1, lane B, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "263ec21e0f204205241885120c327c9ec0d374e243414671b5f41c4fcb47cd9d",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Portable-Alpha-Extension-Model#2382",
+      "url": "https://github.com/stranske/Portable-Alpha-Extension-Model/issues/2382",
+      "title": "Raise test coverage toward 90% (autopilot round 1, lane C, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "48855c0662277ba6828462fcda7c193422e7924060b0b4e2025ef6dcd0c9bde8",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Portable-Alpha-Extension-Model#2381",
+      "url": "https://github.com/stranske/Portable-Alpha-Extension-Model/issues/2381",
+      "title": "Raise test coverage toward 90% (autopilot round 3, lane B, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "a3d6a1d2b2528ab3aaab1f4e14bf768e3c72d5d1b2301062978fd7b4f05bb5bf",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Portable-Alpha-Extension-Model#2375",
+      "url": "https://github.com/stranske/Portable-Alpha-Extension-Model/issues/2375",
+      "title": "Raise test coverage toward 90% (autopilot round 2, lane B, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "a72bcd1299bd7d10fa68c487ec686f68e16130fe558e501f3c44a04c1a280892",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Portable-Alpha-Extension-Model#2360",
+      "url": "https://github.com/stranske/Portable-Alpha-Extension-Model/issues/2360",
+      "title": "Raise test coverage toward 90% (autopilot round 1, lane B, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "bba436dda98ad8e08c5e3005d5bfd74655b886cd33cccb9d7925735af5a24878",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Manager-Database#1806",
+      "url": "https://github.com/stranske/Manager-Database/issues/1806",
+      "title": "Raise test coverage toward 90% (autopilot round 5, lane B, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "047b4cd5484af36720658b28a84a055544fbb40f58232f26a64934a259648363",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Manager-Database#1802",
+      "url": "https://github.com/stranske/Manager-Database/issues/1802",
+      "title": "Raise test coverage toward 90% (autopilot round 4, lane B, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "1ee37d0fd71943c87b367ab653cc87e23a29c4c875c21fa47ea5fd0e70f91468",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Manager-Database#1794",
+      "url": "https://github.com/stranske/Manager-Database/issues/1794",
+      "title": "Raise test coverage toward 90% (autopilot round 2, lane B, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "8319c75b90e1609a954157ef1a019d05536ae8a35c3512b8cb43cdeddcebeae4",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/trip-planner#1905",
+      "url": "https://github.com/stranske/trip-planner/issues/1905",
+      "title": "Carry option markers and selection through the live Google Maps adapter",
+      "test_class": "file-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "f4f474aeff4b3d9c30b9eb6290f6ccf468af4ab7d364eec0b4194fc3fbee7add",
+      "planning_command": "npm test -- frontend/src/components/maps/TripMap.test.tsx"
+    },
+    {
+      "target": "stranske/Fine-Art-Archive#816",
+      "url": "https://github.com/stranske/Fine-Art-Archive/issues/816",
+      "title": "Raise test coverage toward 90% (autopilot round 11, lane A, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "d78e567ec869968e2ce42de8b7ad7702ac04d660efb2d24309d55e2a5d7ccbab",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Fine-Art-Archive#810",
+      "url": "https://github.com/stranske/Fine-Art-Archive/issues/810",
+      "title": "Raise test coverage toward 90% (autopilot round 10, lane A, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "de461ecf897c3cff3e536571ad1179711dc3a3a1275dfaa47cb439551e80ba77",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Fine-Art-Archive#799",
+      "url": "https://github.com/stranske/Fine-Art-Archive/issues/799",
+      "title": "Raise test coverage toward 90% (autopilot round 9, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "2358d8f2edc0727382c71f3d9b2d401586a89c650d5571793962a33b68edfcce",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Orchestrator#720",
+      "url": "https://github.com/stranske/Orchestrator/issues/720",
+      "title": "[goal-drift] experiments: multi-source feedback on sizable features \u2014 measured_zero for 14 days",
+      "test_class": "none",
+      "has_acceptance_criteria": false,
+      "body_sha256": "d386e8c4e922349a5c8a1f41027b1c1bc67ed6ceddc640fc61a48341b106fe41",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Orchestrator#658",
+      "url": "https://github.com/stranske/Orchestrator/issues/658",
+      "title": "Raise test coverage toward 90% (autopilot round 3, lane B, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "df6e6558143eb4df5daa24726a96cae3c9f1b26d79f1854c6032e17a7e36295c",
+      "planning_command": null
+    },
+    {
+      "target": "stranske/Orchestrator#647",
+      "url": "https://github.com/stranske/Orchestrator/issues/647",
+      "title": "Raise test coverage toward 90% (autopilot round 1, lane B, low blast radius only)",
+      "test_class": "ci-only",
+      "has_acceptance_criteria": true,
+      "body_sha256": "faf9dcd49864e51cacb5ed73562c09cba863d2efe3ae7241c0066d12a2e57062",
+      "planning_command": null
+    }
+  ]
+}

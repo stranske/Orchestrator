@@ -938,6 +938,8 @@ def _routing_metadata(assignment: dict) -> dict | None:
         "selected_profile_id",
         "profile_decision",
         "requested_profile_id",
+        "selected_capability_id",
+        "selected_capability_version_id",
     }
     if not any(key in assignment for key in keys):
         return None
@@ -968,6 +970,7 @@ def _routing_metadata(assignment: dict) -> dict | None:
         "capability_assignment_probability": assignment.get("capability_assignment_probability"),
         "capability_rng_seed": assignment.get("capability_rng_seed"),
         "capability_fallback": assignment.get("capability_fallback"),
+        "capability_dispatch_result": assignment.get("capability_dispatch_result"),
         "requested_profile_id": assignment.get("requested_profile_id"),
     }
     return {key: value for key, value in metadata.items() if value not in (None, "", [], {})}
@@ -1061,6 +1064,13 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
     # and must not be lost because the optional role layer raised. `assignment` may still be the
     # caller's dict here, so copy before mutating.
     assignment = dict(assignment)
+    if assignment.get("selected_capability_id"):
+        assignment["capability_fallback"] = "baseline"
+        assignment["capability_dispatch_result"] = {
+            "invoked": False,
+            "accepted": False,
+            "reason": "dry_run" if dry_run else "not_executed",
+        }
     assignment["capability_ids"] = list(
         dict.fromkeys(
             list(assignment.get("capability_ids") or [])
@@ -1153,6 +1163,112 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
 # capability's own heartbeat fires on, so a tag means "this ran" for exactly the reason the ledger
 # already records. Without the tag the capability records that it RAN and never how the work turned
 # out, which is what put both of these in `invoked_without_outcomes` with zero edges. (2026-08-21)
+def _invoke_selected_compiled_capability(d: dict) -> dict | None:
+    """Invoke supported selections after recording the run; keep refusal metadata explicit."""
+    routing = dict(d.get("routing_metadata") or {})
+    cap_id = routing.get("selected_capability_id")
+    if not cap_id:
+        return None
+    version_id = routing.get("selected_capability_version_id")
+    # Older or external callers may still forward a selection as exercised.
+    # Remove it before invocation; only a successful receipt can add it back.
+    ids = list(d.get("capability_ids") or [])
+    versions = list(d.get("capability_version_ids") or [])
+    if cap_id in ids:
+        if versions and len(ids) != len(versions):
+            raise ValueError("capability identity/version lineage length mismatch")
+        d["capability_ids"] = [cid for cid in ids if cid != cap_id]
+        d["capability_version_ids"] = [
+            version for cid, version in zip(ids, versions) if cid != cap_id
+        ]
+
+    def fallback(reason: str, *, invoked: bool = False) -> dict:
+        result = {"invoked": invoked, "accepted": False, "reason": reason}
+        routing["capability_dispatch_result"] = result
+        routing["capability_fallback"] = "baseline"
+        d["routing_metadata"] = routing
+        return result
+
+    try:
+        import capabilities
+        import capability_lifecycle
+        import capability_targets
+
+        ledger = capabilities.load(capabilities.REG, create=False)
+        cap = ledger.get(cap_id)
+        if not cap:
+            return fallback("unknown_capability")
+        if not version_id or cap.get("capability_version_id") != version_id:
+            return fallback("selected_version_mismatch")
+        binding = capability_targets.get_binding(
+            version_id, registry_path=capability_lifecycle.DEFAULT_TARGET_REGISTRY
+        )
+        if not binding:
+            return fallback("target_binding_missing")
+        # Workflow rails have a bounded producer and typed output consumer. Other
+        # target kinds need their own dispatch inputs and consumption seams.
+        if binding.get("kind") != "workflow":
+            return fallback("unsupported_target_kind")
+    except Exception as exc:
+        return fallback(f"target_lookup_failed:{type(exc).__name__}")
+    target = str(d.get("target") or "")
+    # Fail before any producer runs or consumption edge is written: a missing
+    # infrastructure version must not leave an accepted compiled edge for a
+    # run that never starts (issue #639).
+    ids = list(d.get("capability_ids") or [])
+    versions = list(d.get("capability_version_ids") or [])
+    if not versions:
+        versions = [str((ledger.get(cid) or {}).get("capability_version_id") or "") for cid in ids]
+    if len(ids) != len(versions):
+        raise ValueError("capability identity/version lineage length mismatch")
+    missing_versions = [cid for cid, version in zip(ids, versions) if cid != cap_id and not version]
+    if missing_versions:
+        raise ValueError(f"missing capability versions for {missing_versions}")
+    trigger = {
+        "target": target,
+        "task_type": d.get("task_type"),
+        "repository": target.split("#")[0] if "#" in target else target,
+        "lane": d.get("lane") or "opener",
+    }
+    try:
+        result = capability_lifecycle.invoke_compiled_target(
+            str(cap_id),
+            trigger=trigger,
+            target_run_id=str(d["run_id"]),
+            ledger_path=capabilities.REG,
+            target_registry_path=capability_lifecycle.DEFAULT_TARGET_REGISTRY,
+            inputs={},
+            expected_version_id=str(version_id),
+        )
+    except Exception as exc:
+        return fallback(f"invoke_failed:{type(exc).__name__}")
+    if not result.get("invoked") or not result.get("accepted"):
+        return fallback(
+            str(result.get("reason") or "output_not_consumed"),
+            invoked=bool(result.get("invoked")),
+        )
+    edge = result.get("causal_edge") or {}
+    if not result.get("consumer_ref") or not edge.get("source_event_id"):
+        return fallback("consumption_receipt_missing", invoked=True)
+    # Append the compiled pair only after a successful receipt.
+    pairs = [(cid, version) for cid, version in zip(ids, versions) if cid != cap_id]
+    pairs.append((str(cap_id), str(version_id)))
+    d["capability_ids"] = [cid for cid, _ in pairs]
+    d["capability_version_ids"] = [version for _, version in pairs]
+    routing.pop("capability_fallback", None)
+    routing["capability_dispatch_result"] = {
+        "invoked": True,
+        "accepted": True,
+        "capability_id": cap_id,
+        "capability_version_id": version_id,
+        "invocation_id": result["invocation_id"],
+        "consumer_ref": result["consumer_ref"],
+        **edge,
+    }
+    d["routing_metadata"] = routing
+    return result
+
+
 def _exercised_capability_ids(assignment: dict, agent: str) -> list[str]:
     out: list[str] = []
     # adapters.build_command: "The agy seat's runtime isolation (--gemini_dir + absolute
@@ -1276,12 +1392,34 @@ def _spawn(d: dict) -> int:
         # or leave an orphan execution_attempt.
         try:
             feedback.record_run(*run_args, **run_kwargs)
+            _invoke_selected_compiled_capability(d)
+            if (d.get("routing_metadata") or {}).get("selected_capability_id"):
+                feedback.record_run(
+                    *run_args,
+                    **{
+                        **run_kwargs,
+                        "routing_metadata": d["routing_metadata"],
+                        "capability_ids": d.get("capability_ids"),
+                        "capability_version_ids": d.get("capability_version_ids"),
+                    },
+                )
         except Exception:
             claims.release(d["target"], d["agent"])
             raise
     else:
         try:
             feedback.record_run(*run_args, **run_kwargs)
+            _invoke_selected_compiled_capability(d)
+            if (d.get("routing_metadata") or {}).get("selected_capability_id"):
+                feedback.record_run(
+                    *run_args,
+                    **{
+                        **run_kwargs,
+                        "routing_metadata": d["routing_metadata"],
+                        "capability_ids": d.get("capability_ids"),
+                        "capability_version_ids": d.get("capability_version_ids"),
+                    },
+                )
         except Exception as exc:
             adapters.record_ledger(
                 d["agent"],
@@ -3267,6 +3405,91 @@ def _selftest_gemini_refusal() -> None:
         assert result["exit"] == 2 and result["run_id"] is None, result
 
 
+def _selftest_capability_dispatch(root: Path) -> None:
+    """Exercise real spawn and writer seams with offline producer/process doubles."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    import capabilities
+    import capability_lifecycle
+    import capability_targets
+
+    cap_id, version = "selftest-compiled", "cv:selftest-compiled"
+    ledger = {
+        cap_id: {"capability_version_id": version},
+        "thompson-hybrid-routing": {"capability_version_id": "cv:infra"},
+    }
+    receipt = {
+        "invoked": True,
+        "accepted": True,
+        "consumer_ref": "receipt:selftest",
+        "invocation_id": "invoke:selftest",
+        "causal_edge": {"source_event_id": "event:selftest"},
+    }
+    plan: dict = {
+        "run_id": "selftest-capability",
+        "target": "owner/repo#639",
+        "task_type": "implement",
+        "agent": "codex",
+        "mode": "full",
+        "cwd": str(root),
+        "wrapped": "true",
+        "capability_ids": ["thompson-hybrid-routing"],
+        "capability_version_ids": ["cv:infra"],
+        "routing_metadata": {
+            "selected_capability_id": cap_id,
+            "selected_capability_version_id": version,
+        },
+    }
+    with (
+        patch.object(capabilities, "load", return_value=ledger),
+        patch.object(capability_targets, "get_binding", return_value={"kind": "workflow"}),
+        patch.object(
+            capability_lifecycle, "invoke_compiled_target", return_value=receipt
+        ) as invoke,
+        patch.object(subprocess, "Popen", return_value=SimpleNamespace(pid=639)),
+        patch.object(claims, "update_metadata", return_value=True),
+        patch.object(sys.modules[__name__], "_agent_runtime_prelude", return_value=""),
+    ):
+        assert _spawn(plan) == 639
+        invoke.assert_called_once()
+        assert plan["capability_ids"] == ["thompson-hybrid-routing", cap_id], plan
+        assert plan["capability_version_ids"] == ["cv:infra", version], plan
+        with feedback._conn() as conn:
+            payloads = conn.execute(
+                "SELECT phase,payload_json FROM completion_events WHERE run_id=? AND event_type='decision'",
+                (plan["run_id"],),
+            ).fetchall()
+        # The pre-invocation envelopes remain immutable history. Both subsequent
+        # decision phases must carry the exercised pair.
+        assert {row[0] for row in payloads if cap_id in json.loads(row[1])["capability_ids"]} == {
+            "trigger",
+            "decision",
+        }, payloads
+        fallback_plan = {
+            **plan,
+            "run_id": "selftest-capability-fallback",
+            "routing_metadata": dict(plan["routing_metadata"]),
+        }
+        with patch.object(capability_targets, "get_binding", return_value=None):
+            assert _spawn(fallback_plan) == 639
+        assert cap_id not in fallback_plan["capability_ids"], fallback_plan
+        assert (
+            fallback_plan["routing_metadata"]["capability_dispatch_result"]["reason"]
+            == "target_binding_missing"
+        )
+        invoke.assert_called_once()
+        invoke.reset_mock()
+        bad = {**plan, "capability_ids": ["missing-infra"], "capability_version_ids": []}
+        try:
+            _invoke_selected_compiled_capability(bad)
+        except ValueError as exc:
+            assert "missing capability versions" in str(exc), exc
+        else:
+            raise AssertionError("missing infrastructure version was silently dropped")
+        invoke.assert_not_called()
+
+
 def _selftest() -> None:
     import inspect
 
@@ -3299,6 +3522,7 @@ def _selftest() -> None:
         _selftest_muse_login, auth_dst
     )
     try:
+        _selftest_capability_dispatch(HANDOFF)
         for agent, persona in AGENT_PERSONAS.items():
             preamble = _agent_preamble(agent)
             assert persona in preamble and CRITICAL_EVALUATOR_DIRECTIVE in preamble, preamble
