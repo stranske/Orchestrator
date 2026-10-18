@@ -262,8 +262,10 @@ def _artifact_mapping(binding: Mapping[str, Any]) -> Mapping[str, Any]:
     return {}
 
 
-def _binding_expires_at(binding: Mapping[str, Any]) -> int | None:
-    artifact = _artifact_mapping(binding)
+def _binding_deadlines(
+    artifact: Mapping[str, Any], binding: Mapping[str, Any]
+) -> tuple[bool, int | None]:
+    """One pass over the deadline fields: (any unparseable, earliest deadline)."""
     lifecycle_raw = artifact.get("lifecycle")
     lifecycle: Mapping[str, Any] = lifecycle_raw if isinstance(lifecycle_raw, Mapping) else {}
     policy_raw = binding.get("lifecycle_policy")
@@ -275,52 +277,43 @@ def _binding_expires_at(binding: Mapping[str, Any]) -> int | None:
         policy.get("expires_at"),
         policy.get("expiry"),
     ):
-        if value is not None:
-            try:
-                deadlines.append(int(value))
-            except (TypeError, ValueError):
-                continue
-    return min(deadlines) if deadlines else None
-
-
-def _binding_deadline_unparseable(binding: Mapping[str, Any]) -> bool:
-    artifact = _artifact_mapping(binding)
-    lifecycle_raw = artifact.get("lifecycle")
-    lifecycle: Mapping[str, Any] = lifecycle_raw if isinstance(lifecycle_raw, Mapping) else {}
-    policy_raw = binding.get("lifecycle_policy")
-    policy: Mapping[str, Any] = policy_raw if isinstance(policy_raw, Mapping) else {}
-    for value in (
-        artifact.get("expires_at"),
-        lifecycle.get("expires_at"),
-        policy.get("expires_at"),
-        policy.get("expiry"),
-    ):
         if value is None:
             continue
         try:
-            int(value)
-        except (TypeError, ValueError):
-            return True
-    return False
+            deadlines.append(int(value))
+        except (TypeError, ValueError, OverflowError):
+            return True, None
+    return False, (min(deadlines) if deadlines else None)
+
+
+def _binding_expires_at(binding: Mapping[str, Any]) -> int | None:
+    return _binding_deadlines(_artifact_mapping(binding), binding)[1]
+
+
+def _binding_deadline_unparseable(binding: Mapping[str, Any]) -> bool:
+    return _binding_deadlines(_artifact_mapping(binding), binding)[0]
+
+
+def _binding_artifact(binding: Mapping[str, Any]) -> tuple[Mapping[str, Any], bool]:
+    """Artifact mapping computed once, plus whether a skill package is invalid.
+
+    ``_artifact_mapping`` swallows a skill validation failure and returns
+    ``{}``, so validity is reported separately here; without it the later
+    selector match in ``_matches`` would re-validate and raise instead of
+    returning a refusal. A skill package is validated exactly once.
+    """
+    if binding.get("kind") == "skill":
+        if not isinstance(binding.get("artifact"), str):
+            return {}, True
+        try:
+            return capability_compiler.validate_skill_package(Path(binding["artifact"])), False
+        except Exception:
+            return {}, True
+    return _artifact_mapping(binding), False
 
 
 def _skill_package_invalid(binding: Mapping[str, Any]) -> bool:
-    """Whether a skill binding's package no longer validates on disk.
-
-    ``_artifact_mapping`` swallows this failure and returns ``{}``, so without
-    an explicit check the later selector match in ``_matches`` re-validates
-    the same package and raises instead of returning a refusal.
-    """
-    if binding.get("kind") != "skill":
-        return False
-    artifact = binding.get("artifact")
-    if not isinstance(artifact, str):
-        return False
-    try:
-        capability_compiler.validate_skill_package(Path(artifact))
-    except Exception:
-        return True
-    return False
+    return _binding_artifact(binding)[1]
 
 
 def _binding_ineligible(
@@ -329,15 +322,15 @@ def _binding_ineligible(
     """Fail-closed refusal for a direct binding invocation, or None if eligible."""
     if (binding.get("rollback") or {}).get("phase") == "pending":
         return "rollback_pending"
-    if _skill_package_invalid(binding):
+    artifact, skill_invalid = _binding_artifact(binding)
+    if skill_invalid:
         return "artifact_invalid"
-    if _binding_deadline_unparseable(binding):
+    unparseable, expires_at = _binding_deadlines(artifact, binding)
+    if unparseable:
         return "expired"
-    expires_at = _binding_expires_at(binding)
     if expires_at is not None and int(now) >= expires_at:
         return "expired"
     env_map: Mapping[str, str] = os.environ if env is None else env
-    artifact = _artifact_mapping(binding)
     lifecycle_raw = artifact.get("lifecycle")
     lifecycle: Mapping[str, Any] = lifecycle_raw if isinstance(lifecycle_raw, Mapping) else {}
     policy_raw = binding.get("lifecycle_policy")
@@ -644,6 +637,20 @@ def verify_rollback(binding: Mapping[str, Any], *, registry_path: Path) -> dict[
 
 
 def _selftest() -> None:
+    # Invalid declarations refuse before Path/package matching, including direct
+    # invocation callers that do not pass through the compiled-target lifecycle.
+    invalid_artifacts: tuple[Any, ...] = (None, 17, {}, [])
+    for artifact in invalid_artifacts:
+        assert (
+            _binding_ineligible({"kind": "skill", "artifact": artifact}, 100, {})
+            == "artifact_invalid"
+        )
+    assert _binding_ineligible({"kind": "skill"}, 100, {}) == "artifact_invalid"
+    for deadline in (float("inf"), float("-inf"), float("nan")):
+        assert (
+            _binding_ineligible({"kind": "workflow", "artifact": {"expires_at": deadline}}, 100, {})
+            == "expired"
+        )
     with tempfile.TemporaryDirectory(prefix="capability-targets-") as tmp:
         root = Path(tmp)
         plan = capability_compiler.compile_workflow_rail(
