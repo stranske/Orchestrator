@@ -36,6 +36,7 @@ pythonpath = ["src", "."]
 # narrows discovery would read as tests silently ceasing to run. Discovery stays as it was.
 minversion = "7.0"
 markers = [
+    "feature_goals_real: exercise real goal reports inside per-test temporary state",
     "quarantine: excluded from the PR gate by the fleet's marker expression",
     "slow: excluded from the PR gate by the fleet's marker expression",
 ]

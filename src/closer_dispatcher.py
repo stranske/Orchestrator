@@ -13,6 +13,7 @@ import contextlib
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import signal
@@ -20,6 +21,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -44,6 +46,283 @@ PIPELINE_RECEIPT_RESERVE_SECONDS = 300.0
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def _event_epoch(value):
+    if not isinstance(value, str):
+        return None
+    try:
+        moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return moment.timestamp() if moment.tzinfo is not None else None
+    except ValueError:
+        return None
+
+
+def _finite_number(value):
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except (OverflowError, TypeError, ValueError):
+        return False
+
+
+def _validly_finished_legacy_round(state_path, state_doc):
+    """Whether the durable legacy queue round has a validated terminal receipt."""
+    import closer_queue
+
+    if not isinstance(state_doc, dict):
+        return False
+    round_state = state_doc.get("round")
+    if not isinstance(round_state, dict) or round_state.get("status") != "finished":
+        return False
+    receipt = round_state.get("receipt")
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("schema") != closer_queue.RECEIPT_SCHEMA
+        or receipt.get("stop_valid") is not True
+    ):
+        return False
+    finished_at = receipt.get("finished_at")
+    deadline = round_state.get("deadline")
+    owner = round_state.get("owner")
+    if (
+        not _finite_number(finished_at)
+        or not _finite_number(deadline)
+        or not isinstance(owner, str)
+        or not owner
+        or receipt.get("deadline") != deadline
+        or receipt.get("owner") != owner
+    ):
+        return False
+    try:
+        # Use the queue's normal lock and real holder lookup. A saved stop_valid
+        # flag is not enough: claim_held rows must still have a real claimant.
+        validation = closer_queue.validate_stop(state_path, assignment_targets=None)
+        # Bind the result to the state document we based the budget decision on.
+        # A concurrent round/state change means we cannot safely renew this run.
+        current_state = closer_queue._read_state(Path(state_path))
+    except Exception:
+        return False
+    return (
+        isinstance(validation, dict)
+        and validation.get("valid") is True
+        and validation.get("stop_valid") is True
+        and current_state == state_doc
+    )
+
+
+def _deadline_with_legacy_round(requested_deadline, state_doc, state_path):
+    """Keep the old budget unless a finished queue round is validated terminal."""
+    if not isinstance(state_doc, dict):
+        raise RuntimeError("legacy closer state is malformed; refusing to renew its budget")
+    round_state = state_doc.get("round", {})
+    if not isinstance(round_state, dict):
+        raise RuntimeError("legacy closer round is malformed; refusing to renew its budget")
+    if not round_state:
+        items = state_doc.get("items")
+        if not isinstance(items, dict):
+            raise RuntimeError("legacy closer item inventory is malformed; refusing new budget")
+        try:
+            import closer_queue
+
+            active, _ = closer_queue._active_operations(items)
+        except Exception as exc:
+            raise RuntimeError(
+                "legacy closer operations are unreadable; refusing to renew its budget"
+            ) from exc
+        if active:
+            raise RuntimeError(
+                "legacy closer has pending operations without a round deadline; refusing new budget"
+            )
+        return requested_deadline
+    if _validly_finished_legacy_round(state_path, state_doc):
+        return requested_deadline
+    previous_deadline = round_state.get("deadline")
+    if not _finite_number(previous_deadline):
+        raise RuntimeError("unfinished legacy round has no safe deadline; refusing new budget")
+    return min(requested_deadline, previous_deadline)
+
+
+def _confirmed_post_merge_label_event(target, operation, evidence):
+    """Find a real label event bound to a durable completed merge-verification request."""
+    if not isinstance(operation, dict) or not isinstance(evidence, dict):
+        return None
+    binding = operation.get("binding")
+    result = operation.get("result")
+    operation_id = operation.get("id")
+    head, merge = evidence.get("head"), evidence.get("merge")
+    if (
+        operation.get("status") != "completed"
+        or operation.get("action") != "post_merge_verify"
+        or not isinstance(operation_id, str)
+        or not operation_id
+        or not isinstance(binding, dict)
+        or binding.get("pr_target") != target
+        or binding.get("head") != head
+        or binding.get("merge") != merge
+        or not isinstance(head, str)
+        or not SHA.fullmatch(head)
+        or not isinstance(merge, str)
+        or not SHA.fullmatch(merge)
+        or evidence.get("target") != target
+        or evidence.get("state") != "MERGED"
+        or evidence.get("verifier") is not None
+        or "verify:compare" not in evidence.get("labels", [])
+        or evidence.get("label_events_complete") is not True
+        or not isinstance(evidence.get("label_events"), list)
+        or not isinstance(result, dict)
+        or result.get("verification_key") != f"{target}:{merge}:compare"
+        or not isinstance(operation.get("revision"), str)
+        or not operation["revision"]
+    ):
+        return None
+    merged_at = _event_epoch(evidence.get("merged_at"))
+    invoked_at, completed_at = operation.get("invoked_at"), operation.get("completed_at")
+    if (
+        merged_at is None
+        or type(invoked_at) not in (int, float)
+        or type(completed_at) not in (int, float)
+        or not merged_at < invoked_at <= completed_at
+    ):
+        return None
+    for event in evidence["label_events"]:
+        if not isinstance(event, dict) or event.get("label") != "verify:compare":
+            continue
+        event_id = event.get("id")
+        event_at = _event_epoch(event.get("created_at"))
+        if (
+            isinstance(event_id, str)
+            and event_id
+            and event_at is not None
+            and merged_at < event_at
+            and invoked_at <= event_at <= completed_at + 60
+        ):
+            return event_id
+    return None
+
+
+def _verified_post_merge_label_pending(target, row, receipt, inner):
+    """Wait on durable operation proof and fresh evidence across queue generations."""
+    if (
+        not receipt.get("stop_valid")
+        or row.get("target") != target
+        or row.get("action") != "collect_evidence"
+        or row.get("eligible") is not False
+        or row.get("status") != "deferred"
+        or row.get("reason") != "collect terminal or unattributed verifier evidence; do not rerun"
+        or row.get("observation_freshness") != "fresh"
+        or not isinstance(inner, dict)
+        or inner.get("observation_freshness") != "fresh"
+        or inner.get("revision") != row.get("revision")
+        or inner.get("action") != "collect_evidence"
+        or inner.get("status") != "deferred"
+    ):
+        return None
+    operation = inner.get("operation") or {}
+    evidence = inner.get("evidence") or {}
+    if (
+        not isinstance(operation, dict)
+        or row.get("operation_id") != operation.get("id")
+        or row.get("operation_status") != "completed"
+    ):
+        return None
+    event_id = _confirmed_post_merge_label_event(target, operation, evidence)
+    if event_id is None:
+        return None
+    return {
+        "status": "pending",
+        "pending_kind": "external_event",
+        "next_trigger": "merge-bound verifier terminal receipt for the confirmed verify:compare label",
+        "pending_evidence": {
+            "event_id": event_id,
+            "operation_id": operation["id"],
+            "verification_key": operation["result"]["verification_key"],
+            "target": target,
+            "head": evidence["head"],
+            "merge": evidence["merge"],
+            "observed_revision": row["revision"],
+        },
+        "queue_receipt": receipt,
+    }
+
+
+def _verified_active_verifier_pending(target, row, receipt, inner):
+    """Wait only on an active GitHub verifier run explicitly linked to this PR."""
+    if (
+        not receipt.get("stop_valid")
+        or row.get("target") != target
+        or row.get("action") != "wait"
+        or row.get("eligible") is not False
+        or row.get("status") not in {"deferred", "ineligible"}
+        or row.get("observation_freshness") != "fresh"
+        or not isinstance(inner, dict)
+        or inner.get("revision") != row.get("revision")
+        or inner.get("observation_freshness") != "fresh"
+        or inner.get("action") != "wait"
+    ):
+        return None
+    match = re.fullmatch(r"existing verifier run ([1-9][0-9]*) active", str(row.get("reason")))
+    evidence = inner.get("evidence")
+    if not match or not isinstance(evidence, dict):
+        return None
+    head, merge = evidence.get("head"), evidence.get("merge")
+    subject = evidence.get("pr_target") or target
+    if (
+        evidence.get("target") != target
+        or evidence.get("state") != "MERGED"
+        or evidence.get("verifier") is not None
+        or not isinstance(evidence.get("labels"), list)
+        or "verify:compare" not in evidence.get("labels", [])
+        or not isinstance(head, str)
+        or not SHA.fullmatch(head)
+        or not isinstance(merge, str)
+        or not SHA.fullmatch(merge)
+        or not isinstance(subject, str)
+        or not TARGET.fullmatch(subject)
+        or evidence.get("verifier_run_identity_unknown") is not False
+        or not isinstance(evidence.get("verifier_runs"), list)
+    ):
+        return None
+    merged_at = _event_epoch(evidence.get("merged_at"))
+    if merged_at is None:
+        return None
+    run_id = int(match.group(1))
+    for run in evidence["verifier_runs"]:
+        if not isinstance(run, dict):
+            continue
+        created_at = _event_epoch(run.get("created_at"))
+        if (
+            type(run.get("id")) is int
+            and run["id"] == run_id
+            and run.get("linked_pr") == subject
+            and run.get("head_sha") == head
+            and run.get("path") == ".github/workflows/agents-verifier.yml"
+            and run.get("event") in {"pull_request_target", "workflow_dispatch"}
+            and run.get("status") in {"queued", "in_progress", "waiting", "requested", "pending"}
+            and run.get("conclusion") is None
+            and type(run.get("run_attempt")) is int
+            and run["run_attempt"] > 0
+            and created_at is not None
+            and created_at > merged_at
+        ):
+            return {
+                "status": "pending",
+                "pending_kind": "async_operation",
+                "next_trigger": f"GitHub verifier workflow run {run_id} reaches a terminal conclusion",
+                "pending_evidence": {
+                    "operation_id": str(run_id),
+                    "workflow_run_id": run_id,
+                    "run_attempt": run["run_attempt"],
+                    "target": target,
+                    "subject_pr": subject,
+                    "head": head,
+                    "merge": merge,
+                    "observed_revision": row["revision"],
+                },
+                "queue_receipt": receipt,
+            }
+    return None
 
 
 def assignment_rows_from_file(path):
@@ -265,6 +544,7 @@ class GitHub:
         query = """query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){
           number body state isDraft headRefOid headRefName baseRefOid mergeCommit{oid} mergedAt updatedAt mergeable mergeStateStatus
           labels(first:100){nodes{name} pageInfo{hasNextPage}}
+          timelineItems(itemTypes:[LABELED_EVENT],last:100){nodes{... on LabeledEvent{id createdAt label{name}}} pageInfo{hasPreviousPage}}
           closingIssuesReferences(first:100){nodes{number body state labels(first:100){nodes{name} pageInfo{hasNextPage}} repository{nameWithOwner}}
             pageInfo{hasNextPage}}
           reviewThreads(first:100){nodes{id isResolved isOutdated comments(last:1){nodes{body updatedAt}}}
@@ -370,6 +650,26 @@ class GitHub:
         marker = None
         if not pr["comments"]["pageInfo"].get("hasPreviousPage"):
             marker = verifier_evidence.decision_from_pr(repo, pr)
+        timeline = pr.get("timelineItems")
+        label_events_complete = (
+            isinstance(timeline, dict)
+            and isinstance(timeline.get("nodes"), list)
+            and isinstance(timeline.get("pageInfo"), dict)
+            and timeline["pageInfo"].get("hasPreviousPage") is False
+        )
+        label_events = (
+            [
+                {
+                    "id": event.get("id"),
+                    "created_at": event.get("createdAt"),
+                    "label": (event.get("label") or {}).get("name"),
+                }
+                for event in timeline["nodes"]
+                if isinstance(event, dict) and isinstance(event.get("label"), dict)
+            ]
+            if label_events_complete
+            else []
+        )
         snapshot = {
             "target": target,
             "kind": "pr",
@@ -389,6 +689,8 @@ class GitHub:
             "pending_check_head": pending_check_head,
             "mergeable": pr["mergeable"],
             "labels": [x["name"] for x in pr["labels"]["nodes"]],
+            "label_events": label_events,
+            "label_events_complete": label_events_complete,
             "verifier": marker,
             "verifier_history_complete": not pr["comments"]["pageInfo"].get("hasPreviousPage"),
         }
@@ -396,8 +698,21 @@ class GitHub:
             runs = self.api(f"repos/{repo}/actions/workflows/agents-verifier.yml/runs?per_page=100")
             snapshot["verifier_runs"] = [
                 {
-                    k: r.get(k)
-                    for k in ("id", "status", "conclusion", "html_url", "created_at", "run_attempt")
+                    **{
+                        k: r.get(k)
+                        for k in (
+                            "id",
+                            "status",
+                            "conclusion",
+                            "html_url",
+                            "created_at",
+                            "run_attempt",
+                            "head_sha",
+                            "path",
+                            "event",
+                        )
+                    },
+                    "linked_pr": target,
                 }
                 for r in runs.get("workflow_runs", [])
                 if int(num) in [p.get("number") for p in r.get("pull_requests", [])]
@@ -1528,6 +1843,121 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             snap["base"] = packet.get("base")
         return snap, packet
 
+    def durable_verifier_label_event(target, prep, snapshot, action_state_path):
+        if (
+            not isinstance(snapshot, dict)
+            or snapshot.get("target") != target
+            or snapshot.get("revision") != prep.get("revision")
+            or not isinstance(action_state_path, str)
+            or not Path(action_state_path).is_file()
+        ):
+            return None
+        try:
+            inner = closer_queue._read_state(Path(action_state_path)).get("items", {}).get(target)
+        except (OSError, ValueError, TypeError):
+            return None
+        if not isinstance(inner, dict):
+            return None
+        return _confirmed_post_merge_label_event(target, inner.get("operation"), snapshot)
+
+    def durable_prior_inner_wait(target, prep, context):
+        """Reuse a source-bound wait after a fresh prepare without rerunning workers."""
+        import closer_pipeline
+
+        prior_rows = [
+            run.get("targets", {}).get(target)
+            for run in sorted(
+                state_doc.get("runs", {}).values(),
+                key=lambda row: float(row.get("created", 0)),
+                reverse=True,
+            )
+            if isinstance(run, dict)
+        ]
+        prior = next((row for row in prior_rows if isinstance(row, dict)), None)
+        if not isinstance(prior, dict) or not (
+            (
+                prior.get("status") == "deferred"
+                and prior.get("deferred_reason") == "validated_inner_wait"
+            )
+            or (
+                prior.get("status") == "failed"
+                and prior.get("stage") == "act"
+                and prior.get("error") == "act returned unsupported or missing status"
+            )
+        ):
+            return None
+        prior_results = prior.get("results")
+        old_prep = prior_results.get("prepare") if isinstance(prior_results, dict) else None
+        semantic = closer_pipeline._semantic_cache_token(prep)
+        if (
+            not isinstance(old_prep, dict)
+            or not semantic
+            or closer_pipeline._semantic_cache_token(old_prep) != semantic
+            or not isinstance(prep.get("producer_sha256"), str)
+            or not prep["producer_sha256"]
+            or old_prep.get("producer_sha256") != prep["producer_sha256"]
+        ):
+            return None
+        if prior.get("status") == "failed":
+            if not closer_pipeline._legacy_failed_act_wait_proof(pipeline_path, target, prior):
+                return None
+        else:
+            resource = prior.get("resource_evidence")
+            old_proof = resource.get("inner_wait") if isinstance(resource, dict) else None
+            if not isinstance(old_proof, dict) or not closer_pipeline._valid_inner_wait(
+                pipeline_path,
+                target,
+                prior.get("revision"),
+                old_prep.get("snapshot"),
+                old_proof.get("reason"),
+                old_proof.get("next_trigger"),
+                old_proof,
+            ):
+                return None
+        inner_path = Path(context.get("action_state_path", ""))
+        if not inner_path.is_file():
+            return None
+        try:
+            with closer_queue._ledger_lock(
+                inner_path, cutoff=time.time() + 1, now=time.time
+            ) as locked:
+                if not locked:
+                    return None
+                inner = closer_queue._read_state(inner_path)
+                receipt = inner.get("round", {}).get("receipt")
+                if not isinstance(receipt, dict):
+                    return None
+                rows = receipt.get("accounting")
+                if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+                    return None
+                row = rows[0]
+                receipt_hash = closer_pipeline._digest(receipt)
+            reason, trigger = row.get("reason"), row.get("next_trigger")
+            snapshot = prep.get("snapshot")
+            proof = {
+                "schema": closer_pipeline.INNER_WAIT_SCHEMA,
+                "target": target,
+                "revision": prep.get("revision"),
+                "head": snapshot.get("head") if isinstance(snapshot, dict) else None,
+                "reason": reason,
+                "next_trigger": trigger,
+                "inner_path": str(inner_path),
+                "receipt_sha256": receipt_hash,
+            }
+            if closer_pipeline._valid_inner_wait(
+                Path(context["state_path"]),
+                target,
+                prep.get("revision"),
+                snapshot,
+                reason,
+                trigger,
+                proof,
+            ):
+                return proof
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            return None
+        return None
+
     def prepare(target, context):
         # Each target receives its own GitHub adapter, avoiding shared deadline mutation
         # when independent IO workers overlap.
@@ -1829,6 +2259,15 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 }
             raise RuntimeError(dependency.get("reason") or "assignment changed during pipeline")
         deterministic_action = (prep.get("proposal") or {}).get("action")
+        if deterministic_action == "collect_evidence" and durable_verifier_label_event(
+            target, prep, admitted_snapshot, context.get("action_state_path")
+        ):
+            return {
+                "classification": "deterministic_post_merge_label_wait",
+                "substantive_needs": [],
+                "authority": False,
+                "next_trigger": "merge-bound verifier terminal receipt for confirmed label event",
+            }
         if deterministic_action in {"complete", "wait", "post_merge_verify"}:
             # These states already have an explicit dispatcher route. The guarded
             # action queue will refresh and re-evaluate them; a model cannot add
@@ -1858,6 +2297,16 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "classification": "admission_deferred",
                 "substantive_needs": [],
                 "authority": False,
+            }
+        prior_wait = durable_prior_inner_wait(target, prep, context)
+        if prior_wait is not None:
+            return {
+                "classification": "deterministic_inner_wait",
+                "substantive_needs": [],
+                "authority": False,
+                "reason": prior_wait["reason"],
+                "next_trigger": prior_wait["next_trigger"],
+                "inner_wait_proof": prior_wait,
             }
         route, route_status = _pipeline_low_route(
             load=route_load,
@@ -2014,6 +2463,53 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 for pool in route.get("pools", []):
                     route_load["pool:" + pool] = max(0, route_load.get("pool:" + pool, 1) - 1)
         output = str(result.get("output") or "")
+        if result.get("outcome_uncertain") is True or result.get("retry_safe") is False:
+            if (
+                result.get("outcome_uncertain") is not True
+                or result.get("outcome_status") != "uncertain"
+                or result.get("retry_safe") is not False
+                or not isinstance(result.get("run_id"), str)
+                or not result.get("run_id")
+                or type(result.get("exit")) is not int
+                or result.get("exit") == 0
+            ):
+                raise RuntimeError("provider outcome uncertainty lacks a valid actual run receipt")
+            if run_drift:
+                with drift_lock:
+                    drift_claimed = False
+            with route_lock:
+                route_lock.notify_all()
+            # agy may still be processing this turn. Keep its actual dispatcher
+            # identity and evidence binding, and stop this target before profile
+            # fallback, strong interpretation, or an action can duplicate work.
+            return {
+                "status": "uncertain",
+                "classification": "provider_outcome_uncertain",
+                "substantive_needs": [],
+                "authority": False,
+                "provider_outcome": {
+                    "schema": "closer-provider-outcome-uncertain/v1",
+                    "target": target,
+                    "head": snap.get("head"),
+                    "base": (raw_packet or {}).get("base"),
+                    "revision": context.get("revision"),
+                    "identity": context.get("identity", target),
+                    "semantic_cache_key": prep.get("semantic_cache_key"),
+                    "actual": {
+                        "agent": route["agent"],
+                        "requested_profile": route["profile_id"],
+                        "run_id": result["run_id"],
+                        "exit": result["exit"],
+                        "outcome_status": result["outcome_status"],
+                        "retry_safe": result["retry_safe"],
+                        "requested_model": result.get("requested_model"),
+                        "served_model": result.get("served_model"),
+                        "served_model_status": result.get("served_model_status"),
+                        "error": str(result.get("error") or "")[:1000],
+                        "log": str(result.get("log") or "")[:1000],
+                    },
+                },
+            }
         if result.get("exit") != 0:
             if (
                 not isinstance(result.get("run_id"), str)
@@ -2292,6 +2788,35 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         interpreted = context.get("interpret", {})
         prep = context.get("prepare", {})
         snap, _packet = full_snapshot(prep)
+        if (
+            isinstance(interpreted, dict)
+            and interpreted.get("classification") == "deterministic_post_merge_label_wait"
+            and durable_verifier_label_event(target, prep, snap, context.get("action_state_path"))
+        ):
+            return current
+        if (
+            isinstance(interpreted, dict)
+            and interpreted.get("classification") == "deterministic_inner_wait"
+        ):
+            import closer_pipeline
+
+            proof = interpreted.get("inner_wait_proof")
+            if not closer_pipeline._valid_inner_wait(
+                Path(context["state_path"]),
+                target,
+                context.get("revision"),
+                prep.get("snapshot"),
+                interpreted.get("reason"),
+                interpreted.get("next_trigger"),
+                proof,
+            ):
+                raise RuntimeError("prior inner wait no longer matches fresh preparation")
+            current.advisory[target] = context.get("revision")
+            current.advisory_reasons[target] = {
+                "reason": interpreted["reason"],
+                "next_trigger": interpreted["next_trigger"],
+            }
+            return current
         if isinstance(interpreted, dict):
             import closer_disposition
 
@@ -2481,6 +3006,15 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         if (
             receipt.get("stop_valid")
             and row.get("action") == "wait"
+            and str(reason).startswith("existing verifier run ")
+        ):
+            inner = closer_queue._read_state(Path(action_state)).get("items", {}).get(target, {})
+            verified_run_wait = _verified_active_verifier_pending(target, row, receipt, inner)
+            if verified_run_wait is not None:
+                return verified_run_wait
+        if (
+            receipt.get("stop_valid")
+            and row.get("action") == "wait"
             and row.get("eligible") is False
             and row.get("status") in {"deferred", "ineligible"}
         ):
@@ -2516,6 +3050,54 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 if resource:
                     result["resource_evidence"] = resource
                 return result
+        if (
+            receipt.get("stop_valid")
+            and row.get("action") == "collect_evidence"
+            and reason == "collect terminal or unattributed verifier evidence; do not rerun"
+        ):
+            inner = closer_queue._read_state(Path(action_state)).get("items", {}).get(target, {})
+            verified_label_wait = _verified_post_merge_label_pending(target, row, receipt, inner)
+            if verified_label_wait is not None:
+                return verified_label_wait
+        if (
+            receipt.get("stop_valid") is True
+            and row.get("action") == "wait"
+            and row.get("eligible") is False
+            and row.get("status") in {"deferred", "ineligible"}
+            and (
+                reason == "worker_json_invalid"
+                or str(reason).startswith("current item-scoped hold: ")
+            )
+        ):
+            import closer_pipeline
+
+            prep_snapshot = context.get("prepare", {}).get("snapshot", {})
+            proof = {
+                "schema": closer_pipeline.INNER_WAIT_SCHEMA,
+                "target": target,
+                "revision": context.get("revision"),
+                "head": prep_snapshot.get("head"),
+                "reason": reason,
+                "next_trigger": next_trigger,
+                "inner_path": str(action_state),
+                "receipt_sha256": closer_pipeline._digest(receipt),
+            }
+            if closer_pipeline._valid_inner_wait(
+                Path(context["state_path"]),
+                target,
+                context.get("revision"),
+                prep_snapshot,
+                reason,
+                next_trigger,
+                proof,
+            ):
+                return {
+                    "status": "deferred",
+                    "reason": "validated_inner_wait",
+                    "next_trigger": next_trigger,
+                    "resource_evidence": {"inner_wait": proof},
+                    "queue_receipt": receipt,
+                }
         return {
             "status": "blocked",
             "reason": reason,
@@ -2703,9 +3285,13 @@ def main(argv=None):
     targets = list(assignment_rows)
     deadline = time.time() + args.budget_seconds + 300
     if Path(args.state).exists():
-        previous = json.loads(Path(args.state).read_text()).get("round", {})
-        if not previous.get("finished_at") and previous.get("deadline"):
-            deadline = min(deadline, previous["deadline"])
+        try:
+            previous_state = closer_queue._read_state(Path(args.state))
+        except Exception as exc:
+            raise RuntimeError(
+                "legacy closer state is unreadable; refusing to renew its execution budget"
+            ) from exc
+        deadline = _deadline_with_legacy_round(deadline, previous_state, args.state)
     handoff = (
         Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex/handoff")) / "lane-handoff.json"
     )

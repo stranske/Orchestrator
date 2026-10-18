@@ -1,0 +1,6 @@
+RESTORED_SHA256=579613ff7dc180ab785f6c21bcd1b8459423b9943325313f16927b606a10685c
+$ /opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_experiment_producer.py::test_producer_judges_are_two_neutral_agents_and_delivery_bypasses_synthesis[0]
+.                                                                        [100%]
+1 passed in 0.46s
+
+EXIT=0

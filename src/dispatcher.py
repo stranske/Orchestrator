@@ -959,6 +959,14 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
         )
     else:
         prompt = build_prompt(task_type, target, lane=lane)
+    if assignment.get("review_loop"):
+        prompt += (
+            "\nREVIEW-LOOP HANDOFF: Reuse the existing source issue branch/PR when repairing. "
+            "Do not merge. Once the ready-for-review PR is published, print exactly "
+            "PR_URL=https://github.com/<owner>/<repo>/pull/<number> on its own line. "
+            "Independent exact-head review runs after your writer exits; ordinary CI and "
+            "review gates still apply."
+        )
     profile_id = assignment.get("selected_profile_id")
     selected_profile = execution_profiles.get_profile(profile_id) if profile_id else None
     model = adapters.model_identity(agent, mode, selected_profile)
@@ -1081,6 +1089,9 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
         "wrapped": wrapped,
         "worktree_missing": worktree_missing,
         "feedback_mode": assignment.get("feedback_mode"),
+        "review_loop": bool(assignment.get("review_loop")),
+        "review_round": assignment.get("review_round", 1),
+        "review_run_id": assignment.get("review_run_id"),
         "selected_profile_id": profile_id,
         "requested_model": selected_profile.get("requested_model") if selected_profile else None,
         "profile_policy_version": assignment.get("profile_policy_version"),
@@ -1167,6 +1178,10 @@ def _spawn(d: dict) -> int:
     d["run_id"] = run_id
     started_ts = int(time.time())
     d["started_ts"] = started_ts
+    if d.get("review_loop"):
+        metadata = dict(d.get("routing_metadata") or {})
+        metadata.update(review_loop=True, review_run_id=d.get("review_run_id") or run_id)
+        d["routing_metadata"] = metadata
     selected_profile = (
         execution_profiles.get_profile(d["selected_profile_id"])
         if d.get("selected_profile_id")
@@ -1177,7 +1192,7 @@ def _spawn(d: dict) -> int:
         routing_metadata = dict(d.get("routing_metadata") or {})
         routing_metadata["profile_attempt_ids"] = [profile_attempt_id]
         d["routing_metadata"] = routing_metadata
-    lineage_required = any(
+    lineage_required = bool(d.get("review_loop")) or any(
         d.get(key)
         for key in (
             "influenced_by_role_run_ids",
@@ -1223,7 +1238,11 @@ def _spawn(d: dict) -> int:
         # Profile attribution is causal learning data. Persist the run before
         # the attempt or process so a DB failure cannot launch unjoinable work
         # or leave an orphan execution_attempt.
-        feedback.record_run(*run_args, **run_kwargs)
+        try:
+            feedback.record_run(*run_args, **run_kwargs)
+        except Exception:
+            claims.release(d["target"], d["agent"])
+            raise
     else:
         try:
             feedback.record_run(*run_args, **run_kwargs)
@@ -1243,6 +1262,7 @@ def _spawn(d: dict) -> int:
                 error_hash=hashlib.sha256(str(exc).encode()).hexdigest(),
             )
             if lineage_required:
+                claims.release(d["target"], d["agent"])
                 raise RuntimeError(
                     f"refusing dispatch without required completion lineage for {run_id}"
                 ) from exc
@@ -1358,9 +1378,40 @@ def _spawn(d: dict) -> int:
     # runs, and its status rides in the marker as `release_rc`, beside the agent's, never as it.
     # `release_rc` 137 is what counts a step killed again from here on.
     release = shlex.join([step_python, str(CLAIMS_PY), "release", d["target"], d["agent"]])
+    review_after = ""
+    if d.get("review_loop"):
+        # This is deliberately after release and completion.  A PR URL is not
+        # terminal evidence; review_loop independently rechecks claim state.
+        review_after = (
+            "; "
+            + shlex.join(
+                [
+                    step_python,
+                    str(ORCH_DIR / "review_loop.py"),
+                    "after-writer",
+                    "--target",
+                    d["target"],
+                    "--implementer",
+                    d["agent"],
+                    "--lane",
+                    d["lane"],
+                    "--run-id",
+                    str(d.get("review_run_id") or run_id),
+                    "--writer-run-id",
+                    run_id,
+                    "--log",
+                    str(logf),
+                    "--round",
+                    str(d.get("review_round", 1)),
+                ]
+            )
+            + ' --writer-exit "$orch_dispatch_rc"'
+        )
     wrapped = (
         f"{d['wrapped']}; orch_dispatch_rc=$?; {release}; orch_release_rc=$?; {marker_cmd}; "
-        f'{complete_cmd} --exit-code "$orch_dispatch_rc"; exit $orch_dispatch_rc'
+        f'{complete_cmd} --exit-code "$orch_dispatch_rc"'
+        + review_after
+        + "; exit $orch_dispatch_rc"
     )
     with logf.open("a") as fh:
         fh.write(
@@ -1464,12 +1515,24 @@ def delegate(
     capability_ids=None,
     capability_version_ids=None,
     acceptance_gate_ids=None,
+    review_loop: bool = False,
+    review_round: int = 1,
+    review_run_id: str | None = None,
 ) -> dict:
     """One ad-hoc delegation for the assessing orchestrator seat: claim + provision + spawn
     ONE cheap agent with the orchestrator's OWN crafted prompt (detached, PATH+auth+release
     wrapper). Returns {pid, log, worktree} to monitor, or {error}. This is the seat's hand —
     it decides WHO/WHAT/HOW (the prompt); this just executes safely. `task_type` is recorded for
     the feedback loop (the REAL kind of work, not a generic 'delegated')."""
+    if review_loop:
+        from review_loop import REVIEW_LOOP_MAX_ROUNDS
+
+        if (
+            isinstance(review_round, bool)
+            or not isinstance(review_round, int)
+            or not 1 <= review_round <= REVIEW_LOOP_MAX_ROUNDS
+        ):
+            return {"error": "review round outside bounded review loop"}
     explicit_mode = mode
     if mode is None:
         mode = (
@@ -1513,6 +1576,9 @@ def delegate(
         "capability_ids": list(capability_ids or []),
         "capability_version_ids": list(capability_version_ids or []),
         "acceptance_gate_ids": list(acceptance_gate_ids or []),
+        "review_loop": review_loop,
+        "review_round": review_round,
+        "review_run_id": review_run_id,
     }
     if codex_override_effort:
         a["reasoning_effort"] = codex_override_effort
@@ -1575,6 +1641,9 @@ def delegate(
         "target": target,
         "mode": mode,
         "run_id": d["run_id"],
+        # A PR from this dispatch is deliberately ineligible for a normal
+        # merge path until review_loop has produced MERGE-WHEN-GREEN.
+        **({"review_loop_status": "pending"} if review_loop else {}),
     }
 
 
@@ -1604,12 +1673,17 @@ def _gemini_workspace_prompt(prompt: str, cwd: str | Path) -> str:
 
 
 def _align_gemini_print_timeout(argv: list[str], timeout: int) -> None:
-    """Round the print wait down in whole minutes; the outer subprocess is the hard cap."""
+    """Keep agy's print wait inside the outer deadline, retaining a receipt margin.
+
+    agy accepts duration values in seconds (the CLI help documents ``0s`` as its
+    wait-forever default). Rounding this budget down to whole minutes made a 119s
+    dispatch self-timeout after only 60s, while the outer subprocess still had 59s
+    left to wait for a process that had already abandoned its in-progress turn.
+    """
     if "--print-timeout" not in argv:
         return
     budget = max(1, timeout - 15)
-    minutes = max(1, budget // 60)
-    argv[argv.index("--print-timeout") + 1] = f"{minutes}m"
+    argv[argv.index("--print-timeout") + 1] = f"{budget}s"
 
 
 def _argv_flag_value(argv: list[str], flag: str) -> str | None:
@@ -1633,6 +1707,46 @@ def _agent_log_tail_from_argv(argv: list[str], cwd: str | Path, *, max_chars: in
         return ""
     # Masked WHOLE and then cut: a tail cut first could split a token and keep a piece of it.
     return credential_redaction.redact(text)[-max_chars:]
+
+
+def _agy_reports_turn_in_progress(log_text: str) -> bool:
+    """Recognize agy's explicit partial-turn timeout diagnostic, not generic timeouts.
+
+    This is evidence that the CLI stopped waiting while its provider turn was still
+    active. It does not establish success, failure, cancellation, or served identity.
+    """
+    return bool(
+        re.search(
+            r"\bprint timeout after [^\r\n;]{1,48} with turn in progress; returning partial output\b",
+            log_text or "",
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _public_model_metadata(
+    agent: str,
+    requested_model: str | None,
+    observed_model: str | None,
+    observed_source: str | None,
+) -> dict[str, str | None]:
+    """Separate requested/CLI-selected labels from evidence of the served model."""
+    if agent == "gemini":
+        cli_selected = observed_model if observed_source == "agy_log_selected_override" else None
+        return {
+            "requested_model": requested_model,
+            "served_model": None,
+            "served_model_status": "unknown",
+            "cli_selected_model": cli_selected,
+            "cli_selected_model_source": (
+                "agy_log_selected_override" if cli_selected is not None else None
+            ),
+        }
+    return {
+        "requested_model": requested_model,
+        "served_model": observed_model,
+        "served_model_status": "observed" if observed_model else "unknown",
+    }
 
 
 def _capability_heartbeat(event_type: str, *, agent: str, mode: str | None) -> None:
@@ -1990,6 +2104,7 @@ def offload(
     # Set from the run's OWN stream-json output when the tool reports it; the completion path below
     # prefers it over any store probe. Declared here so both live in the same scope.
     observed_model: str | None = None
+    observed_model_source: str | None = None
     # Gemini has a documented NDJSON prompt transport. Keep a potentially megabyte-scale packet
     # out of bash's ``-lc`` argument and the provider's argv while leaving the established compact
     # print-mode transport untouched. Other adapters retain their qualified transport until their
@@ -2066,6 +2181,21 @@ def offload(
         f"{_path_prefix()}; {_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)}"
     )
     stream_prompt = adapters.gemini_stream_prompt(prepared_prompt) if prompt_via_stdin else None
+    if agent == "gemini":
+        content_bytes = prepared_prompt.encode("utf-8")
+        transport_payload = stream_prompt if stream_prompt is not None else prepared_prompt
+        transport_bytes = transport_payload.encode("utf-8")
+        request_metadata = {
+            "transport": (
+                "agy-stream-json-stdin" if stream_prompt is not None else "agy-print-argument"
+            ),
+            "content_utf8_bytes": len(content_bytes),
+            "content_sha256": hashlib.sha256(content_bytes).hexdigest(),
+            "transport_utf8_bytes": len(transport_bytes),
+            "transport_sha256": hashlib.sha256(transport_bytes).hexdigest(),
+        }
+    else:
+        request_metadata = None
     target = f"offload:{run_cwd}"
     subject, subject_source = _offload_subject(subject_id, research_round)
     task_type = task_type or "offload"
@@ -2323,7 +2453,7 @@ def offload(
         # ENCLOSING scope. Without it the assignment below made a local that the completion never
         # saw: the parse found `composer-2.5` and the attempt still closed `unresolved`, which is
         # the most deceptive possible failure -- the reader worked and the row said it had not.
-        nonlocal observed_model
+        nonlocal observed_model, observed_model_source
         nonlocal attempt_stderr
         error: str | None
         attempt_stderr = ""
@@ -2380,8 +2510,11 @@ def offload(
             hint = f" | ambient net env at dispatch: {'; '.join(suspicious)}" if suspicious else ""
             error = f"timed out after {timeout}s{hint}"
             agent_log_tail = _agent_log_tail_from_argv(argv, proc_cwd) if agent == "gemini" else ""
+            turn_uncertain = agent == "gemini" and _agy_reports_turn_in_progress(agent_log_tail)
             if agent_log_tail:
                 error = f"{error}; agy log tail captured"
+            if turn_uncertain:
+                error = "agy timed out while its provider turn was still in progress; outcome is uncertain"
             with logf.open("a") as fh:
                 fh.write(f"[orchestrator] offload marked failed: timed out after {timeout}s\n")
                 if suspicious:
@@ -2409,9 +2542,19 @@ def offload(
                 # may be a synthetic adapter tag, so it must never be read as a
                 # provider-resolved identity for a worker attempt.
                 "model": model,
+                "request_metadata": request_metadata,
                 "run_id": run_id,
                 "log": str(logf),
             }
+            out.update(_public_model_metadata(agent, model, observed_model, observed_model_source))
+            if turn_uncertain:
+                out.update(
+                    {
+                        "outcome_status": "uncertain",
+                        "outcome_uncertain": True,
+                        "retry_safe": False,
+                    }
+                )
             if agent_log_tail:
                 out["agent_log_tail"] = agent_log_tail
             return out
@@ -2483,6 +2626,8 @@ def offload(
             agy_label = adapters.model_label_from_agy_log(agy_text)
             if agy_label:
                 observed_model = adapters.model_id_for_label(agent, agy_label)
+                if observed_model:
+                    observed_model_source = "agy_log_selected_override"
         # Capture native terminal-event usage BEFORE stream reduction discards it.
         # Only CLI completion events count; JSON in an assistant deliverable does not.
         import ledger_reconcile
@@ -2559,6 +2704,8 @@ def offload(
             label = stream.get("model_label")
             if label:
                 observed_model = adapters.model_id_for_label(agent, label)
+                if observed_model:
+                    observed_model_source = "agy_stream_init_model_label"
             if stream.get("result_text") is not None:
                 proc = subprocess.CompletedProcess(
                     getattr(proc, "args", argv),
@@ -2597,11 +2744,18 @@ def offload(
             if incomplete:
                 error = incomplete
                 exit_code = 70
+        # Always inspect this invocation's own agy log before accepting a successful
+        # stdout. The CLI can return 0 and nonempty partial prose while its provider
+        # turn is still running; checking only the error path treated that as success.
         agent_log_tail = ""
-        if error and agent == "gemini":
+        if agent == "gemini":
             agent_log_tail = _agent_log_tail_from_argv(argv, proc_cwd)
             if agent_log_tail and error == "agent returned no stdout":
                 error = "agent returned no stdout; agy log tail captured"
+        turn_uncertain = agent == "gemini" and _agy_reports_turn_in_progress(agent_log_tail)
+        if turn_uncertain:
+            error = "agy stopped waiting while its provider turn was still in progress; outcome is uncertain"
+            exit_code = 70
         if error:
             with logf.open("a") as fh:
                 fh.write(f"[orchestrator] offload marked failed: {error}\n")
@@ -2615,6 +2769,7 @@ def offload(
             "exit": exit_code,
             "output": (proc.stdout or "").strip(),
             "model": model,
+            "request_metadata": request_metadata,
             "usage": reported_usage,
             "stderr_tail": (proc.stderr or "")[-800:],
             "cwd": str(run_cwd),
@@ -2623,12 +2778,21 @@ def offload(
             "run_id": run_id,
             "log": str(logf),
         }
+        out.update(_public_model_metadata(agent, model, observed_model, observed_model_source))
         if agent_log_tail:
             out["agent_log_tail"] = agent_log_tail
         if raw_exit != exit_code:
             out["raw_exit"] = raw_exit
         if error:
             out["error"] = error
+        if turn_uncertain:
+            out.update(
+                {
+                    "outcome_status": "uncertain",
+                    "outcome_uncertain": True,
+                    "retry_safe": False,
+                }
+            )
         return out
 
     out = {}
@@ -2672,6 +2836,10 @@ def offload(
         )
         out["attempts"] = attempts
         if out.get("exit") == 0:
+            break
+        if out.get("outcome_uncertain") is True:
+            # The provider turn may still be running. A retry would overlap it and can
+            # spend twice; leave reconciliation to the caller instead.
             break
         if attempt > max_network_retries:
             break
@@ -3890,7 +4058,7 @@ def _selftest() -> None:
         assert f"--add-dir {shlex.quote(gem['isolated_cwd'])}" in " ".join(
             captured["cmd"]
         ), captured["cmd"]
-        assert "--print-timeout 1m" in " ".join(captured["cmd"]), captured["cmd"]
+        assert "--print-timeout 1s" in " ".join(captured["cmd"]), captured["cmd"]
 
         captured.clear()
 
@@ -4000,6 +4168,55 @@ def _selftest() -> None:
             retry_gem["exit"] == 0 and retry_gem["attempts"] == 2 and retry_gem["retried"] is True
         ), retry_gem
         assert legacy_calls == 2, legacy_calls
+
+        # A zero exit with partial prose is still uncertain when this run's own agy
+        # log says its provider turn is in progress. Do not spend a retry on top of it.
+        captured.clear()
+        uncertain_calls = {"count": 0}
+        old_network_retries = os.environ.get("ORCH_OFFLOAD_NETWORK_RETRIES")
+
+        class PartialTurnCompleted:
+            returncode = 0
+            stdout = "Partial answer while the provider is still working."
+            stderr = ""
+
+        def fake_partial_turn_run(cmd, cwd=None, **_kwargs):
+            captured["cmd"] = cmd
+            captured["cwd"] = cwd
+            if cmd[:2] == ["bash", "-lc"]:
+                uncertain_calls["count"] += 1
+                _write_agy_log(
+                    cmd,
+                    cwd,
+                    "Print timeout after 60s with turn in progress; returning partial output\n",
+                )
+                return PartialTurnCompleted()
+            return Completed()
+
+        try:
+            os.environ["ORCH_OFFLOAD_NETWORK_RETRIES"] = "1"
+            adapter_module.build_command = fake_gemini_build_command
+            subprocess_module.run = fake_partial_turn_run
+            uncertain_gem = offload(
+                "gemini",
+                "Return a bounded answer.",
+                cwd=str(nongit),
+                isolate=True,
+                timeout=1,
+            )
+        finally:
+            adapter_module.build_command = old_build_command
+            subprocess_module.run = old_subprocess_run
+            if old_network_retries is None:
+                os.environ.pop("ORCH_OFFLOAD_NETWORK_RETRIES", None)
+            else:
+                os.environ["ORCH_OFFLOAD_NETWORK_RETRIES"] = old_network_retries
+        assert uncertain_calls["count"] == 1, uncertain_calls
+        assert uncertain_gem["exit"] != 0 and uncertain_gem["raw_exit"] == 0, uncertain_gem
+        assert uncertain_gem["outcome_uncertain"] is True, uncertain_gem
+        assert uncertain_gem["retry_safe"] is False, uncertain_gem
+        assert uncertain_gem["outcome_status"] == "uncertain", uncertain_gem
+        assert uncertain_gem["attempts"] == 1 and "retried" not in uncertain_gem, uncertain_gem
 
         captured.clear()
 
@@ -4490,6 +4707,11 @@ def main(argv: list[str]) -> int:
         p.add_argument("--profile-id", help="explicit immutable execution profile")
         p.add_argument("--task-type", default="implement")
         p.add_argument(
+            "--review-loop",
+            action="store_true",
+            help="require independent exact-head review after terminal writer release",
+        )
+        p.add_argument(
             "--influenced-by-role-run-id",
             action="append",
             default=[],
@@ -4505,6 +4727,7 @@ def main(argv: list[str]) -> int:
         if "ORCH_ROLE_SHADOW" not in os.environ:
             print("role activation off (ORCH_ROLE_SHADOW unset)", file=sys.stderr)
         prompt = ns.prompt if ns.prompt is not None else Path(ns.prompt_file).read_text()
+        review_kwargs: dict[str, Any] = {"review_loop": True} if ns.review_loop else {}
         out = delegate(
             ns.agent,
             ns.target,
@@ -4514,6 +4737,7 @@ def main(argv: list[str]) -> int:
             task_type=ns.task_type,
             profile_id=ns.profile_id,
             influenced_by_role_run_ids=ns.influenced_by_role_run_id,
+            **review_kwargs,
         )
         print(json.dumps(out, default=str))
         return 0 if "error" not in out else 1

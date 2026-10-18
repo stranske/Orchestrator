@@ -8,6 +8,7 @@ import time
 import pytest
 
 import closer_pipeline
+import closer_queue
 from closer_pipeline import run_pipeline, validate_stop
 
 
@@ -41,6 +42,348 @@ def callbacks(*, interpret=None, act=None, exception=None):
         "act": act or (lambda target, ctx: {"status": "completed", "target_complete": True}),
         "exception": exception or (lambda target, ctx: {"reviewed": True}),
     }
+
+
+@pytest.mark.parametrize(
+    ("reason", "labels"),
+    [
+        ("worker_json_invalid", []),
+        ("current item-scoped hold: ['agents:paused']", ["agents:paused"]),
+    ],
+)
+def test_validated_inner_wait_is_stop_valid_and_refreshes_next_cadence(tmp_path, reason, labels):
+    target = "owner/repo#1"
+    path = tmp_path / "pipeline.json"
+    trigger = (
+        "source owner supplies current-head proof or resolves the named finding"
+        if reason == "worker_json_invalid"
+        else "source owner removes agents:paused"
+    )
+    head = ["a" * 40]
+    calls = []
+    interpretation_calls = []
+
+    def prepare(_target, _context):
+        revision = "revision-" + head[0]
+        return {
+            "revision": revision,
+            "identity": target,
+            "semantic_cache_key": "closer-evidence-semantic/v1:"
+            + hashlib.sha256(head[0].encode()).hexdigest(),
+            "snapshot": {"target": target, "revision": revision, "head": head[0], "kind": "pr"},
+        }
+
+    def interpret(_target, _context):
+        interpretation_calls.append(head[0])
+        return {"classification": "deterministic_inner_wait", "substantive_needs": []}
+
+    def act(_target, context):
+        calls.append(head[0])
+        inner_path = context["action_state_path"]
+        receipt = closer_queue.run_round(
+            inner_path,
+            [target],
+            lambda _item: {
+                "target": target,
+                "revision": context["revision"],
+                "action": "wait",
+                "eligible": False,
+                "requires_coordinator": False,
+                "reason": reason,
+                "next_trigger": trigger,
+                "evidence": {"head": head[0], "labels": labels, "sources": []},
+            },
+            lambda *_args: pytest.fail("inner wait must not execute an action"),
+            deadline=time.time() + 30,
+            max_workers=1,
+            max_passes=1,
+        )
+        proof = {
+            "schema": closer_pipeline.INNER_WAIT_SCHEMA,
+            "target": target,
+            "revision": context["revision"],
+            "head": head[0],
+            "reason": reason,
+            "next_trigger": trigger,
+            "inner_path": inner_path,
+            "receipt_sha256": closer_pipeline._digest(receipt),
+        }
+        return {
+            "status": "deferred",
+            "reason": "validated_inner_wait",
+            "next_trigger": trigger,
+            "resource_evidence": {"inner_wait": proof},
+        }
+
+    cb = {
+        "prepare": prepare,
+        "interpret": interpret,
+        "exception": lambda *_: pytest.fail("exception not needed"),
+        "act": act,
+    }
+    first = run(path, [target], cb)
+    assert validate_stop(path, [target])["stop_valid"] is True
+    assert first["targets"][target]["deferred_reason"] == "validated_inner_wait"
+    assert validate_stop(path, [target])["stop_valid"] is True
+    # The old ordinary model result can be cached, but a validated wait still
+    # needs today's fresh admission before reusing it.
+    state = closer_pipeline._load(path)
+    old_prep = first["targets"][target]["results"]["prepare"]
+    cache_key = closer_pipeline._digest(
+        {
+            "schema": "closer-pipeline-semantic-cache/v1",
+            "target": target,
+            "identity": target,
+            "stage": "interpret",
+            "semantic": old_prep["semantic_cache_key"],
+        }
+    )
+    state["cache"][cache_key] = {
+        "target": target,
+        "stage": "interpret",
+        "value": {"classification": "relevant", "substantive_needs": []},
+    }
+    closer_pipeline._save(path, state)
+    run(path, [target], cb)
+    assert interpretation_calls == ["a" * 40, "a" * 40]
+    assert validate_stop(path, [target])["stop_valid"] is True
+    head[0] = "b" * 40
+    run(path, [target], cb)
+    assert validate_stop(path, [target])["stop_valid"] is True
+    assert interpretation_calls == ["a" * 40, "a" * 40, "b" * 40]
+    assert calls == ["a" * 40, "a" * 40, "b" * 40]
+
+
+def test_validated_inner_wait_rejects_spoofed_or_stale_proof(tmp_path):
+    target = "owner/repo#1"
+    path = tmp_path / "pipeline.json"
+    reason = "worker_json_invalid"
+    trigger = "source owner supplies current-head proof or resolves the named finding"
+    snapshot = {"target": target, "revision": "rev", "head": "a" * 40, "kind": "pr"}
+    proof = {
+        "schema": closer_pipeline.INNER_WAIT_SCHEMA,
+        "target": target,
+        "revision": "rev",
+        "head": "a" * 40,
+        "reason": reason,
+        "next_trigger": trigger,
+        "inner_path": str(
+            path.parent / f"{path.stem}.actions" / f"{closer_pipeline._digest(target)}.json"
+        ),
+        "receipt_sha256": "0" * 64,
+    }
+    cb = {
+        "prepare": lambda *_: {"revision": "rev", "identity": target, "snapshot": snapshot},
+        "interpret": lambda *_: {"substantive_needs": []},
+        "exception": lambda *_: pytest.fail("exception not needed"),
+        "act": lambda *_: {
+            "status": "deferred",
+            "reason": "validated_inner_wait",
+            "next_trigger": trigger,
+            "resource_evidence": {"inner_wait": proof},
+        },
+    }
+    receipt = run(path, [target], cb)
+    assert validate_stop(path, [target])["stop_valid"] is False
+    assert receipt["targets"][target]["error"] == "unverified_inner_wait"
+
+
+def test_inner_wait_proof_rejects_changed_head_assignment_row_and_operation(tmp_path):
+    target = "owner/repo#1"
+    path = tmp_path / "pipeline.json"
+    inner_path = path.parent / f"{path.stem}.actions" / f"{closer_pipeline._digest(target)}.json"
+    reason = "worker_json_invalid"
+    trigger = "source owner supplies current-head proof or resolves the named finding"
+    head = "a" * 40
+    snapshot = {"target": target, "revision": "rev", "head": head, "kind": "pr"}
+    receipt = closer_queue.run_round(
+        inner_path,
+        [target],
+        lambda _target: {
+            "target": target,
+            "revision": "rev",
+            "action": "wait",
+            "eligible": False,
+            "requires_coordinator": False,
+            "reason": reason,
+            "next_trigger": trigger,
+            "evidence": {"head": head},
+        },
+        lambda *_: pytest.fail("wait must not execute"),
+        deadline=time.time() + 30,
+        max_workers=1,
+        max_passes=1,
+    )
+    proof = {
+        "schema": closer_pipeline.INNER_WAIT_SCHEMA,
+        "target": target,
+        "revision": "rev",
+        "head": head,
+        "reason": reason,
+        "next_trigger": trigger,
+        "inner_path": str(inner_path),
+        "receipt_sha256": closer_pipeline._digest(receipt),
+    }
+
+    def valid():
+        return closer_pipeline._valid_inner_wait(
+            path, target, "rev", snapshot, reason, trigger, proof
+        )
+
+    assert valid()
+    assert not closer_pipeline._valid_inner_wait(
+        path, target, "rev", {**snapshot, "head": "b" * 40}, reason, trigger, proof
+    )
+    assert not closer_pipeline._valid_inner_wait(
+        path,
+        target,
+        "rev",
+        snapshot,
+        reason,
+        trigger,
+        {**proof, "inner_path": str(tmp_path / "other")},
+    )
+    assert not closer_pipeline._valid_inner_wait(
+        path,
+        target,
+        "rev",
+        snapshot,
+        "generic blocked",
+        trigger,
+        {**proof, "reason": "generic blocked"},
+    )
+    original = closer_queue._read_state(inner_path)
+    for mutate in (
+        lambda state: state["round"].update(assignment_targets=["owner/repo#2"]),
+        lambda state: state["round"].update(status="running"),
+        lambda state: state["items"][target]["evidence"].update(head="b" * 40),
+        lambda state: state["items"][target].update(
+            operation={"id": "unknown", "status": "uncertain"}
+        ),
+        lambda state: state["items"][target].update(operation_history=["unknown"]),
+        lambda state: state["round"]["receipt"]["accounting"][0].update(eligible=True),
+    ):
+        changed = json.loads(json.dumps(original))
+        mutate(changed)
+        closer_queue._atomic_write(inner_path, changed)
+        assert not valid()
+    closer_queue._atomic_write(inner_path, original)
+    assert valid()
+
+
+@pytest.mark.parametrize("tamper", [None, "generic_blocked", "missing_receipt", "uncertain_op"])
+def test_legacy_failed_act_recovers_only_from_exact_durable_wait(tmp_path, tamper):
+    target = "owner/repo#1"
+    path = tmp_path / "pipeline.json"
+    head = "a" * 40
+    reason = "worker_json_invalid"
+    trigger = "source owner supplies current-head proof or resolves the named finding"
+    snapshot = {"target": target, "revision": "rev", "head": head, "kind": "pr"}
+    first_receipt = []
+    interpretation_calls = []
+
+    def inner_wait(context):
+        receipt = closer_queue.run_round(
+            context["action_state_path"],
+            [target],
+            lambda _target: {
+                "target": target,
+                "revision": "rev",
+                "action": "wait",
+                "eligible": False,
+                "requires_coordinator": False,
+                "reason": reason,
+                "next_trigger": trigger,
+                "evidence": {"head": head},
+            },
+            lambda *_: pytest.fail("terminal wait must not execute"),
+            deadline=time.time() + 30,
+            max_workers=1,
+            max_passes=1,
+        )
+        assert receipt["stop_valid"] is True
+        return receipt
+
+    def legacy_act(_target, context):
+        receipt = inner_wait(context)
+        first_receipt.append(receipt)
+        return {
+            "status": "blocked",
+            "reason": reason,
+            "next_trigger": trigger,
+            "queue_receipt": receipt,
+        }
+
+    def interpret(*_):
+        interpretation_calls.append(True)
+        return {"classification": "relevant", "substantive_needs": []}
+
+    cb = {
+        "prepare": lambda *_: {
+            "revision": "rev",
+            "identity": target,
+            "snapshot": snapshot,
+            "semantic_cache_key": "closer-evidence-semantic/v1:" + "1" * 64,
+        },
+        "interpret": interpret,
+        "exception": lambda *_: pytest.fail("exception not needed"),
+        "act": legacy_act,
+    }
+    first = run(path, [target], cb)
+    assert len(interpretation_calls) == 1
+    assert first["targets"][target]["status"] == "failed"
+    assert first["targets"][target]["stage"] == "act"
+    assert not validate_stop(path, [target])["stop_valid"]
+
+    inner_path = path.parent / f"{path.stem}.actions" / f"{closer_pipeline._digest(target)}.json"
+    if tamper == "uncertain_op":
+        inner = closer_queue._read_state(inner_path)
+        inner["items"][target]["operation"] = {"id": "unresolved", "status": "uncertain"}
+        closer_queue._atomic_write(inner_path, inner)
+    elif tamper in {"generic_blocked", "missing_receipt"}:
+        outer = closer_pipeline._load(path)
+        old = next(iter(outer["runs"].values()))["targets"][target]["results"]["act"]
+        if tamper == "generic_blocked":
+            old["reason"] = "generic blocked"
+        else:
+            old.pop("queue_receipt")
+        closer_pipeline._save(path, outer)
+
+    def current_act(_target, context):
+        receipt = inner_wait(context)
+        proof = {
+            "schema": closer_pipeline.INNER_WAIT_SCHEMA,
+            "target": target,
+            "revision": "rev",
+            "head": head,
+            "reason": reason,
+            "next_trigger": trigger,
+            "inner_path": context["action_state_path"],
+            "receipt_sha256": closer_pipeline._digest(receipt),
+        }
+        return {
+            "status": "deferred",
+            "reason": "validated_inner_wait",
+            "next_trigger": trigger,
+            "resource_evidence": {"inner_wait": proof},
+        }
+
+    second = run(path, [target], {**cb, "act": current_act})
+    if tamper:
+        assert second["status"] == "blocked"
+        assert second["reason"] == "prior_run_has_no_valid_stop"
+        assert len(interpretation_calls) == 1
+    else:
+        assert len(interpretation_calls) == 2  # old model cache cannot skip new admission
+        assert second["targets"][target]["deferred_reason"] == "validated_inner_wait"
+        assert validate_stop(path, [target])["stop_valid"]
+        state = closer_pipeline._load(path)
+        newest = next(iter(state["runs"].values()))
+        audit = newest["recovered_invalid_stop"]
+        assert audit["targets"][target]["receipt_sha256"] == closer_pipeline._digest(
+            first_receipt[0]
+        )
+        assert newest["prior_invalid_stop_evidence"]["valid"] is False
 
 
 def run(path, targets, cb=None, *, capacity=None, seconds=2, **kw):
@@ -648,6 +991,412 @@ def test_provider_failure_defers_without_strong_or_action_and_requires_evidence(
     invalid = run(path2, ["a"], cb)
     assert invalid["targets"]["a"]["status"] == "failed"
     assert not validate_stop(path2, ["a"])["valid"]
+
+
+def test_uncertain_native_interpretation_is_durable_and_never_retried(tmp_path):
+    path = tmp_path / "uncertain-provider.json"
+    clock = [1000.0]
+    semantic = "closer-evidence-semantic/v1:" + "a" * 64
+    head = "b" * 40
+    calls = []
+
+    def prepare(target, _context):
+        calls.append(("prepare", target))
+        return {
+            "revision": "head-revision-1",
+            "identity": target,
+            "semantic_cache_key": semantic,
+            "snapshot": {"head": head, "base": "c" * 40},
+        }
+
+    def interpret(target, context):
+        calls.append(("interpret", target))
+        return {
+            "status": "uncertain",
+            "classification": "provider_outcome_uncertain",
+            "substantive_needs": [],
+            "authority": False,
+            "provider_outcome": {
+                "schema": "closer-provider-outcome-uncertain/v1",
+                "target": target,
+                "head": head,
+                "base": "c" * 40,
+                "revision": context["revision"],
+                "identity": context["identity"],
+                "semantic_cache_key": semantic,
+                "actual": {
+                    "agent": "gemini",
+                    "requested_profile": "gemini-low",
+                    "run_id": "agy-turn-still-running-77",
+                    "exit": 124,
+                    "outcome_status": "uncertain",
+                    "retry_safe": False,
+                },
+            },
+        }
+
+    cb = callbacks(interpret=interpret)
+    cb["prepare"] = prepare
+    cb["exception"] = lambda *_: calls.append(("exception", "a")) or {"reviewed": True}
+    cb["act"] = lambda *_: calls.append(("act", "a")) or {
+        "status": "completed",
+        "target_complete": True,
+    }
+    receipt = run(path, ["a"], cb, seconds=60, now=lambda: clock[0])
+
+    row = receipt["targets"]["a"]
+    assert row["status"] == "uncertain"
+    assert row["stage"] == "interpret"
+    assert row["provider_outcome_uncertain"]["actual"]["run_id"] == ("agy-turn-still-running-77")
+    stop = validate_stop(path, ["a"], now=lambda: clock[0])
+    assert not stop["valid"]
+    assert stop["continuation_required"] is True
+    assert stop["reasons"] == ["unresolved_native_provider_outcome:a:agy-turn-still-running-77"]
+    assert calls == [("prepare", "a"), ("interpret", "a")]
+
+    # A later cadence with a changed assignment/head cannot treat the local
+    # transport receipt as native completion or launch another model/action.
+    clock[0] += 1
+    resumed = run(
+        path,
+        ["a"],
+        callbacks(
+            interpret=lambda *_: calls.append(("retry", "a")) or {"substantive_needs": []},
+            exception=lambda *_: calls.append(("exception-retry", "a")) or {},
+            act=lambda *_: calls.append(("act-retry", "a")) or {},
+        ),
+        seconds=60,
+        now=lambda: clock[0],
+    )
+    assert resumed["targets"]["a"]["status"] == "uncertain"
+    assert calls == [("prepare", "a"), ("interpret", "a")]
+
+    clock[0] += 61
+    malformed_path = tmp_path / "malformed-provider-outcome.json"
+    malformed_state = json.loads(path.read_text())
+    malformed_run = next(iter(malformed_state["runs"].values()))
+    malformed_run["targets"]["a"]["provider_outcome_uncertain"]["head"] = "d" * 40
+    malformed_path.write_text(json.dumps(malformed_state))
+    malformed = run(
+        malformed_path,
+        ["a", "new-head"],
+        callbacks(),
+        seconds=60,
+        now=lambda: clock[0],
+    )
+    assert malformed["status"] == "blocked"
+    assert malformed["reason"] == "prior_run_has_no_valid_stop"
+
+    unrelated_calls = []
+    next_callbacks = callbacks(
+        interpret=lambda target, _context: unrelated_calls.append(("interpret", target))
+        or {"substantive_needs": []},
+        act=lambda target, _context: unrelated_calls.append(("act", target))
+        or {"status": "completed", "target_complete": True},
+    )
+    next_callbacks["prepare"] = lambda target, _context: unrelated_calls.append(
+        ("prepare", target)
+    ) or {
+        "revision": "rev-2",
+        "identity": target,
+        "semantic_cache_key": "closer-evidence-semantic/v1:"
+        + hashlib.sha256(target.encode()).hexdigest(),
+        "snapshot": {"head": "e" * 40},
+    }
+    continued = run(
+        path,
+        ["a", "new-head"],
+        next_callbacks,
+        seconds=60,
+        now=lambda: clock[0],
+    )
+    assert continued["targets"]["a"]["status"] == "uncertain"
+    assert continued["targets"]["new-head"]["status"] == "completed"
+    assert unrelated_calls == [
+        ("prepare", "new-head"),
+        ("interpret", "new-head"),
+        ("act", "new-head"),
+    ]
+    latest_run = json.loads(path.read_text())["runs"]
+    latest = next(iter(latest_run.values()))
+    assert latest["prior_invalid_stop_evidence"] == {
+        "valid": False,
+        "reasons": ["unresolved_native_provider_outcome:a:agy-turn-still-running-77"],
+        "continuation_required": True,
+    }
+    continued_stop = validate_stop(path, ["a", "new-head"], now=lambda: clock[0])
+    assert not continued_stop["valid"]
+    assert continued_stop["continuation_required"] is True
+    assert continued_stop["reasons"] == [
+        "unresolved_native_provider_outcome:a:agy-turn-still-running-77"
+    ], continued["targets"]["a"]
+    assert calls == [("prepare", "a"), ("interpret", "a")]
+
+
+def test_issue_uncertainty_without_head_stays_bound_by_revision_after_restart(tmp_path):
+    path = tmp_path / "uncertain-issue.json"
+    clock = [1000.0]
+    target = "owner/repo#17"
+    semantic = "closer-evidence-semantic/v1:" + "f" * 64
+    calls = []
+
+    def prepare(name, _context):
+        calls.append(("prepare", name))
+        return {
+            "revision": "issue-revision-1",
+            "identity": name,
+            "semantic_cache_key": semantic,
+            "snapshot": {"kind": "issue", "head": None, "base": None},
+        }
+
+    def interpret(name, context):
+        calls.append(("interpret", name))
+        return {
+            "status": "uncertain",
+            "provider_outcome": {
+                "schema": "closer-provider-outcome-uncertain/v1",
+                "target": name,
+                "head": None,
+                "revision": context["revision"],
+                "identity": context["identity"],
+                "semantic_cache_key": semantic,
+                "actual": {
+                    "agent": "gemini",
+                    "requested_profile": "gemini-low",
+                    "run_id": "agy-issue-turn-17",
+                    "exit": 124,
+                    "outcome_status": "uncertain",
+                    "retry_safe": False,
+                },
+            },
+        }
+
+    first_callbacks = callbacks(interpret=interpret)
+    first_callbacks["prepare"] = prepare
+    first = run(path, [target], first_callbacks, seconds=60, now=lambda: clock[0])
+    assert first["targets"][target]["status"] == "uncertain"
+    assert validate_stop(path, [target], now=lambda: clock[0])["reasons"] == [
+        f"unresolved_native_provider_outcome:{target}:agy-issue-turn-17"
+    ]
+
+    # Expire the first round so the next cadence takes the full prior-stop and
+    # carry path. The issue's no-head binding must survive in the carried prepare.
+    clock[0] += 61
+    resumed_calls = []
+    resumed_callbacks = callbacks(
+        interpret=lambda name, _ctx: resumed_calls.append(("interpret", name))
+        or {"substantive_needs": []},
+        act=lambda name, _ctx: resumed_calls.append(("act", name))
+        or {"status": "completed", "target_complete": True},
+    )
+    resumed_callbacks["prepare"] = lambda name, _ctx: resumed_calls.append(("prepare", name)) or {
+        "revision": "unrelated-revision",
+        "identity": name,
+        "semantic_cache_key": "closer-evidence-semantic/v1:"
+        + hashlib.sha256(name.encode()).hexdigest(),
+        "snapshot": {"kind": "pr", "head": "e" * 40},
+    }
+    resumed = run(
+        path,
+        [target, "owner/repo#18"],
+        resumed_callbacks,
+        seconds=60,
+        now=lambda: clock[0],
+    )
+
+    assert resumed["targets"][target]["status"] == "uncertain"
+    assert resumed_calls == [
+        ("prepare", "owner/repo#18"),
+        ("interpret", "owner/repo#18"),
+        ("act", "owner/repo#18"),
+    ]
+    assert validate_stop(path, [target, "owner/repo#18"], now=lambda: clock[0])["reasons"] == [
+        f"unresolved_native_provider_outcome:{target}:agy-issue-turn-17"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("kind", "malformation"),
+    [
+        ("pr", "missing_head"),
+        ("unknown", "missing_head"),
+        ("issue", "revision_mismatch"),
+    ],
+    ids=["pr-needs-head", "unknown-kind-needs-head", "issue-needs-revision-binding"],
+)
+def test_rejected_uncertainty_receipt_blocks_restart_and_never_retries(
+    tmp_path, kind, malformation
+):
+    path = tmp_path / f"malformed-{kind}-{malformation}.json"
+    clock = [2000.0]
+    target = "owner/repo#19"
+    semantic = "closer-evidence-semantic/v1:" + "a" * 64
+    calls = []
+
+    def prepare(name, _context):
+        calls.append(("prepare", name))
+        return {
+            "revision": "issue-revision-19",
+            "identity": name,
+            "semantic_cache_key": semantic,
+            "snapshot": {"kind": kind, "head": None},
+        }
+
+    def interpret(name, context):
+        calls.append(("interpret", name))
+        revision = context["revision"]
+        if malformation == "revision_mismatch":
+            revision = "different-revision"
+        return {
+            "status": "uncertain",
+            "provider_outcome": {
+                "schema": "closer-provider-outcome-uncertain/v1",
+                "target": name,
+                "head": None,
+                "revision": revision,
+                "identity": context["identity"],
+                "semantic_cache_key": semantic,
+                "actual": {
+                    "agent": "gemini",
+                    "requested_profile": "gemini-low",
+                    "run_id": "agy-malformed-turn-19",
+                    "exit": 124,
+                    "outcome_status": "uncertain",
+                    "retry_safe": False,
+                },
+            },
+        }
+
+    initial_callbacks = callbacks(interpret=interpret)
+    initial_callbacks["prepare"] = prepare
+    first = run(path, [target], initial_callbacks, seconds=60, now=lambda: clock[0])
+    row = first["targets"][target]
+    assert row["status"] == "failed"
+    assert row["error"] == closer_pipeline.UNBOUND_UNCERTAIN_PROVIDER_ERROR
+    stop = validate_stop(path, [target], now=lambda: clock[0])
+    assert not stop["valid"]
+    assert stop["reasons"] == [f"unresolved_pipeline_work:{target}:failed"]
+
+    # A malformed unknown provider outcome is not reclassified as a read-only
+    # failure. It blocks the next run before any existing or unrelated target can
+    # launch another turn.
+    clock[0] += 61
+    restart_calls = []
+    retry_callbacks = callbacks(
+        interpret=lambda name, _ctx: restart_calls.append(("interpret", name))
+        or {"substantive_needs": []},
+    )
+    retry_callbacks["prepare"] = lambda name, _ctx: restart_calls.append(("prepare", name)) or {
+        "revision": "new-revision",
+        "identity": name,
+    }
+    restart = run(
+        path,
+        [target, "owner/repo#20"],
+        retry_callbacks,
+        seconds=60,
+        now=lambda: clock[0],
+    )
+    assert restart["status"] == "blocked"
+    assert restart["reason"] == "prior_run_has_no_valid_stop"
+    assert restart_calls == []
+    assert calls == [("prepare", target), ("interpret", target)]
+
+
+def test_mixed_native_uncertainty_and_readonly_failure_allow_only_safe_carry(tmp_path):
+    path = tmp_path / "mixed-uncertainty.json"
+    clock = [2000.0]
+    native_head = "b" * 40
+    native_semantic = "closer-evidence-semantic/v1:" + "a" * 64
+    first_calls = []
+
+    def first_prepare(target, _context):
+        first_calls.append(("prepare", target))
+        return {
+            "revision": "rev-1",
+            "identity": target,
+            "semantic_cache_key": native_semantic,
+            "snapshot": {"head": native_head, "base": "c" * 40},
+        }
+
+    def first_interpret(target, context):
+        first_calls.append(("interpret", target))
+        if target == "b":
+            raise RuntimeError("read-only provider-result parsing failed")
+        return {
+            "status": "uncertain",
+            "provider_outcome": {
+                "schema": "closer-provider-outcome-uncertain/v1",
+                "target": target,
+                "head": native_head,
+                "base": "c" * 40,
+                "revision": context["revision"],
+                "identity": context["identity"],
+                "semantic_cache_key": native_semantic,
+                "actual": {
+                    "agent": "gemini",
+                    "requested_profile": "gemini-low",
+                    "run_id": "agy-mixed-uncertain-77",
+                    "exit": 124,
+                    "outcome_status": "uncertain",
+                    "retry_safe": False,
+                },
+            },
+        }
+
+    first_callbacks = callbacks(interpret=first_interpret)
+    first_callbacks["prepare"] = first_prepare
+    first = run(path, ["a", "b"], first_callbacks, seconds=60, now=lambda: clock[0])
+    assert first["targets"]["a"]["status"] == "uncertain"
+    assert first["targets"]["b"]["status"] == "failed"
+    first_stop = validate_stop(path, ["a", "b"], now=lambda: clock[0])
+    assert not first_stop["valid"]
+    assert set(first_stop["reasons"]) == {
+        "unresolved_native_provider_outcome:a:agy-mixed-uncertain-77",
+        "unresolved_pipeline_work:b:failed",
+    }
+
+    clock[0] += 61
+    later_calls = []
+
+    def later_prepare(target, _context):
+        later_calls.append(("prepare", target))
+        return {
+            "revision": "rev-2",
+            "identity": target,
+            "semantic_cache_key": "closer-evidence-semantic/v1:"
+            + hashlib.sha256(target.encode()).hexdigest(),
+            "snapshot": {"head": "e" * 40, "base": "c" * 40},
+        }
+
+    later_callbacks = callbacks(
+        interpret=lambda target, _context: later_calls.append(("interpret", target))
+        or {"substantive_needs": []},
+        act=lambda target, _context: later_calls.append(("act", target))
+        or {"status": "completed", "target_complete": True},
+    )
+    later_callbacks["prepare"] = later_prepare
+    resumed = run(
+        path,
+        ["a", "b", "c"],
+        later_callbacks,
+        seconds=60,
+        now=lambda: clock[0],
+    )
+    assert resumed["targets"]["a"]["status"] == "uncertain"
+    assert resumed["targets"]["b"]["status"] == "completed"
+    assert resumed["targets"]["c"]["status"] == "completed"
+    assert ("prepare", "a") not in later_calls
+    assert ("interpret", "a") not in later_calls
+    assert ("act", "a") not in later_calls
+    assert {target for stage, target in later_calls if stage == "act"} == {"b", "c"}
+
+    latest = next(iter(json.loads(path.read_text())["runs"].values()))
+    assert latest["prior_invalid_stop_evidence"]["reasons"] == first_stop["reasons"]
+    final_stop = validate_stop(path, ["a", "b", "c"], now=lambda: clock[0])
+    assert not final_stop["valid"]
+    assert final_stop["continuation_required"] is True
+    assert final_stop["reasons"] == ["unresolved_native_provider_outcome:a:agy-mixed-uncertain-77"]
 
 
 def test_exception_worker_capacity_defers_before_action(tmp_path):

@@ -1,0 +1,27 @@
+$ /opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_experiment_producer.py::test_producer_exception_never_falls_through
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+____________ test_producer_exception_never_falls_through[failure0] _____________
+tests/test_experiment_producer.py:745: in test_producer_exception_never_falls_through
+    result = exp_abcd.followup()
+             ^^^^^^^^^^^^^^^^^^^
+src/exp_abcd.py:2110: in followup
+    result = producer_followup(
+tests/test_experiment_producer.py:739: in broken
+    raise failure
+E   ValueError: broken followup
+____________ test_producer_exception_never_falls_through[failure1] _____________
+tests/test_experiment_producer.py:745: in test_producer_exception_never_falls_through
+    result = exp_abcd.followup()
+             ^^^^^^^^^^^^^^^^^^^
+src/exp_abcd.py:2110: in followup
+    result = producer_followup(
+tests/test_experiment_producer.py:739: in broken
+    raise failure
+E   RuntimeError: broken followup
+=========================== short test summary info ============================
+FAILED tests/test_experiment_producer.py::test_producer_exception_never_falls_through[failure0]
+FAILED tests/test_experiment_producer.py::test_producer_exception_never_falls_through[failure1]
+2 failed in 1.97s
+
+EXIT=1
