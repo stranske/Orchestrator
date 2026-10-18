@@ -5,6 +5,7 @@ Only fields consumed by the readers are retained. Modified copies below are expl
 controls, not additional live evidence. No test calls GitHub or the installed cap tool.
 """
 
+import base64
 import copy
 import json
 import subprocess
@@ -65,7 +66,7 @@ def test_recorded_readers(recording, cap_json, monkeypatch):
     rows = measure(recording, cap_json)
     assert len(rows) == 5
     assert all(row["evidence_class"] != "unmeasured" for row in rows), rows
-    assert rows[0]["value"].startswith("273/496 (55.0%) over 48h")
+    assert rows[0]["value"].startswith("273/495 (55.2%) completed; 1 still running over 48h")
     assert "labeled=unmeasured; synchronize=unmeasured" in rows[0]["value"]
     assert "github.event.action" in rows[0]["value"]
     assert "min" in rows[1]["value"]
@@ -183,7 +184,7 @@ def test_empty_success_is_explicit_not_a_failure(recording, cap_json):
         return recorded(args)
 
     rows = measure(recording, cap_json, gh=gh)
-    assert "no runs (n=0)" in rows[0]["value"]
+    assert "no completed runs (n=0); 0 still running" in rows[0]["value"]
     assert rows[2]["value"] == "none open across 3 canaries (n=0)"
 
 
@@ -368,3 +369,43 @@ def test_cli_collects_and_writes_section(recording, cap_json, monkeypatch, tmp_p
     assert m.main(["--env", "process", "--text-out", str(dest)]) == 0
     assert "## Fleet delivery measures" in capsys.readouterr().out
     assert all(row["name"] in dest.read_text() for row in rows)
+
+
+@pytest.mark.parametrize(
+    "conclusions,expected",
+    [
+        (["cancelled", "success", None], "1/2 (50.0%) completed; 1 still running"),
+        ([None, None], "no completed runs (n=0); 2 still running"),
+        ([], "no completed runs (n=0); 0 still running"),
+    ],
+)
+def test_gate_cancellation_share_uses_only_completed_outcomes(conclusions, expected):
+    now = 1800000000
+    runs = [
+        {"conclusion": conclusion, "event": "pull_request", "created_at": "2027-01-15T08:00:00Z"}
+        for conclusion in conclusions
+    ]
+    assert m._fleet_gate_cancellations(
+        now=now,
+        gh=lambda _args: (True, json.dumps({"total_count": len(runs), "workflow_runs": runs}), ""),
+    ).startswith(expected)
+
+
+def test_fetched_registry_filters_excluded_repository(monkeypatch):
+    import consumer_sync_artifact_ingest
+
+    monkeypatch.setattr(consumer_sync_artifact_ingest, "TEST_REGISTRY", None)
+    registry = "REGISTERED_CONSUMER_REPOS:\n  stranske/Template\n  " + m._FLEET_EXCLUDED_REPO + "\n"
+    payload = json.dumps({"content": base64.b64encode(registry.encode()).decode()})
+    calls = []
+
+    def gh(args):
+        calls.append(args)
+        return True, payload, ""
+
+    repos, reason = m._registered_consumer_repos(gh_fn=gh)
+    assert reason == ""
+    assert repos == ["stranske/Template"]
+    assert len(calls) == 1
+    assert calls[0][0] == "api"
+    assert calls[0][1].endswith("/maint-68-sync-consumer-repos.yml")

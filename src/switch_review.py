@@ -465,7 +465,7 @@ def _registered_consumer_repos(
             content = base64.b64decode(payload["content"]).decode("utf-8")
             repos = _parse_maint_68_registry_yaml(content)
             if repos:
-                return [repo for repo in repos if repo != "stranske/Collab-Admin"], ""
+                return [repo for repo in repos if repo != _FLEET_EXCLUDED_REPO], ""
         except (KeyError, json.JSONDecodeError, ValueError) as exc:
             reason = f"unmeasured: maint-68 registry parse failed ({exc})"
     if not reason:
@@ -875,8 +875,15 @@ def _fleet_gate_cancellations(*, now: int, gh) -> str:
             raise ValueError("gh run outside requested window")
         if "conclusion" not in run or "event" not in run:
             raise ValueError("gh run conclusion/event missing")
-    cancelled = sum(run["conclusion"] == "cancelled" for run in runs)
-    share = f"{cancelled}/{len(runs)} ({cancelled / len(runs):.1%})" if runs else "no runs (n=0)"
+    completed = [run for run in runs if run["conclusion"] is not None]
+    pending = len(runs) - len(completed)
+    cancelled = sum(run["conclusion"] == "cancelled" for run in completed)
+    share = (
+        f"{cancelled}/{len(completed)} ({cancelled / len(completed):.1%}) completed"
+        if completed
+        else "no completed runs (n=0)"
+    )
+    share += f"; {pending} still running"
     return (
         f"{share} over 48h; labeled=unmeasured; synchronize=unmeasured — would need "
         "gh query returning each run's github.event.action (Actions REST omits it)"
