@@ -47,6 +47,11 @@ Retain exact raw hashes, reject unsafe XML, and keep coverage.py statement and b
 counts separate. Unrecognized metadata and unknown required-check topology remain
 partial proof. A failed stronger worker stays at the exception stage with its native
 receipt; it cannot advance to an action, and a later round prepares fresh evidence.
+Helper-validated NON_PASS waits retain a bounded disposition proof bound to the
+current merged PR, native verifier, source/review identity and one-target receipt.
+A reason string alone proves nothing and the wait grants no acceptance authority.
+Deterministic verifier routes are freshly observed, never replayed as cached model
+assessments. Confirmed native label waits do not launch another evidence worker.
 
 A completed private report is an internal handoff to this senior closer, not an
 external blocker. Read the retained result, integrate or reject its findings and
