@@ -52,3 +52,18 @@ this blocker and add `needs-human` were rejected by automatic approval review: t
 requires approval, but this run's approval policy is `never`. Neither mutation succeeded.
 
 The local opener recovery below supersedes these historical environment limitations.
+
+
+## Local opener recovery — 2026-10-18
+
+All three recorded native reservations were inspected by workflow_attempt_id across every head; implementation and commit/push jobs were terminal before the exclusive local pass. Native payloads were fast-forwarded intact, then current main was merged without a conflict. Future keepalive starts were temporarily paused while the local claim is held.
+
+The recovery preserves instrumented role/offload, experiment and supervisor attribution, excludes a selected pair even when its ID names an instrumented built-in, requires a receipt for accepted consumption regardless of producer name, supplies the actual triage-consumption row reference, and persists updated exercised pairs after invocation. Existing synthetic consumption fixtures explicitly name their synthetic receipt. Missing infrastructure versions now fail instead of silently discarding IDs. The missing-binding regression spies on the actual target entrypoint.
+
+Causal evidence in this directory comes from an isolated export built with `scripts/build_exec_mirror.sh`, using the committed source and unchanged regression tests. Restoring selection-as-credit makes the actual router regression fail on `['selection-credit']`; exact restoration passes. Disconnecting both real `_spawn` invocation calls makes the new dispatcher selftest fail because `invoke_compiled_target` is called zero times; exact restoration passes the complete dispatcher selftest. The selected-built-in test also failed before its production guard was added. No working live mirror or Brain was changed by these probes.
+
+Focused selection/lifecycle acceptance: 64 tests passed before the additional selected-built-in case. Existing broad focused run: 404 passed and two new assertion defects were exposed; both were corrected and the full affected selection/lifecycle files then passed. Final focused acceptance and source count are recorded below. Mypy passed for feedback/dispatcher/outcomes; repository-wide Black checked all484 Python files successfully; focused Ruff and diff checks passed.
+
+Full `python3 src/verify.py --floor-may-lag` is running on the pre-final-guard snapshot (4977 collected); no full-suite PASS or hosted/live acceptance is claimed here. Final-head CI, native postmerge verification and original source acceptance remain required.
+
+Final local focused command (causal core, lifecycle, rejected role edges, experiment members, supervisor): **145 passed**. Independently measured final collection: **4978**. Pass floor remains an expectation until final-head full verification; all ceilings are unchanged.

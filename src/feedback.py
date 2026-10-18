@@ -3292,9 +3292,14 @@ def _record_run_in_conn(
     # Edges are the many-to-many surface, and `capability` is already a valid influence type.
     # Compiled capabilities earn accepted credit only through record_capability_consumption
     # (producer/consumer receipt). record_run may still tag independently proven infrastructure.
+    selected_id = (
+        routing_metadata.get("selected_capability_id")
+        if isinstance(routing_metadata, dict)
+        else None
+    )
     if len(capability_ids) == len(capability_version_ids):
         for cap_id, cap_version in zip(capability_ids, capability_version_ids):
-            if str(cap_id) not in RECORD_RUN_INSTRUMENTED_CAPABILITIES:
+            if str(cap_id) not in RECORD_RUN_INSTRUMENTED_CAPABILITIES or cap_id == selected_id:
                 continue
             _record_influence_edge_in_conn(
                 c,

@@ -606,3 +606,21 @@ def test_receipt_requirement_cannot_be_disabled_by_producer_name(tmp_path, monke
         )
     with feedback._conn() as conn:
         assert conn.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 0
+
+
+def test_selected_builtin_pair_is_not_independent_instrumentation(tmp_path, monkeypatch):
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    feedback.record_run(
+        "selection:builtin",
+        "owner/repo#23",
+        "implement",
+        "codex",
+        capability_ids=["role-triage", "offload"],
+        capability_version_ids=["cv:triage", "cv:offload"],
+        routing_metadata={"selected_capability_id": "role-triage"},
+    )
+    with feedback._conn() as conn:
+        credited = conn.execute(
+            "SELECT capability_id FROM influence_edges WHERE accepted=1"
+        ).fetchall()
+    assert credited == [("offload",)]
