@@ -37,6 +37,10 @@ review-thread resolution, review floors, the normal guarded merge, native verifi
 and final source-acceptance decision. A merged patch, signed receipt, review badge
 or routing record alone does not establish source completion. Preserve raw findings,
 signatures and provenance. No worker may substitute a fabricated trusted disposition.
+An exact-head pull-request CI run whose GitHub association array is empty is retained
+only when its event, branch and repository match the linked PR and a bounded PR
+lookup finds exactly one matching head. Failed runs remain in the evidence; retrieved
+artifacts alone do not establish the required-check topology or acceptance.
 
 A completed private report is an internal handoff to this senior closer, not an
 external blocker. Read the retained result, integrate or reject its findings and
@@ -44,6 +48,9 @@ continue within the original budget. The ledger marks `requires_coordinator`;
 postrun rejects stopping on that flag while usable time remains. A trusted
 integration acknowledgment is bound to operation ID, source digest, current head
 and review revision; it grants no acceptance, merge or closure authority.
+The low worker may return a single complete JSON document inside one JSON code
+fence. The same schema, target, head and evidence checks apply after unwrapping;
+prose, multiple fences and incomplete JSON do not become decisions.
 
 An asynchronous CI/review wait parks that exact target and leaves other eligible
 work running. Refresh material transitions and continue while a concrete authorized
@@ -59,11 +66,32 @@ in the inner queue's terminal `wait` state. The outer pipeline records this only
 same target, revision, head, durable action ledger and specific source trigger, with
 no uncertain operation. It is neither acceptance nor a fabricated asynchronous
 event. A later cadence prepares fresh source evidence and re-evaluates the target;
-an unverified or changed receipt fails closed. A pre-fix failed action is carried
-forward only when its retained blocked receipt matches this same durable proof;
+an unverified or changed receipt fails closed. If the inner queue observes a newer
+revision on the same head during an action,
+its validated wait only proves progress to fresh preparation; the earlier outer
+revision cannot directly inherit that wait. A pre-fix failed action may re-enter
+preparation only when its retained blocked receipt matches this same durable proof;
 the historical invalid stop remains in the audit. Reusing an unchanged wait still
 requires fresh campaign admission and matching evidence producer and semantic
 binding. A changed producer or head returns to normal interpretation.
+
+An expired interrupted round may admit a fresh round without making its invalid
+historical stop valid. Recovery retains the original failure evidence and permits
+fresh preparation for assigned targets with no action or an exact durable
+non-mutating wait proof, with current ownership, capacity, evidence and budget
+checks. A failed action without that proof remains quarantined. An uncertain
+operation stays behind reconciliation before any retry. Removed unsafe targets
+retain their barriers; removed read-only failures remain in the audit. They do
+not become new work. These barriers and the invalid-stop audit must survive
+later cadences and history trimming. Missing or malformed recovery proof fails
+closed; never clear the ledger or invent a resource boundary to admit work.
+If an action lacks a derived inner queue operation, reconciliation still checks
+the original legacy queue for an unresolved operation before declaring the
+action not started. Original uncertainty stays quarantined for its queue owner.
+When the bounded in-ledger invalid-stop history fills, the pipeline fsyncs exact
+older audit entries into immutable, hash-linked chunks beside its state before
+recording the archive head. Recovery verifies the complete chain; missing or
+tampered chunks block fresh work while the original invalid audit remains intact.
 
 Before ACTION C finalizes the round, run
 `python3 ~/.codex/orchestrator-mirror/closer_dispatcher.py validate-stop --state "$CLOSER_ROUND_STATE" --assignment ~/.codex/automations/reviewed-repo-automation-controller/closer-assignment.json`.

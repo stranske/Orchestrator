@@ -1,0 +1,2 @@
+keepalive_supervisor.py closure selftest: OK (CONCERNS veto; flag-off inert)
+keepalive_supervisor.py selftest: OK

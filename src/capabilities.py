@@ -314,36 +314,29 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "evidence_threshold": "distinct durable subjects retain complete non-orphan lineage without redaction regressions",
     },
     "live-keepalive-supervisor": {
-        "downstream_consumer": "redirect_shadow.py:record_redirect; periodic_report.py:format_human",
+        "downstream_consumer": "keepalive_supervisor.py:close_verified_issues; redirect_shadow.py:record_redirect; periodic_report.py:format_human",
+        "learning_sink": "feedback.outcomes via supervisor-close runs and capability influence edges",
+        "notes": "dedup: supervisor CLI/cadence, trusted verifier_evidence parser, runtime_ac_gate merge recheck and feedback outcome store already exist. Extend those rails for opt-in post-merge closure; no second verifier, registry or event store. Improvement log and historical dormancy inventory checked for issue675.",
+        "kill_switch": "ORCH_SUPERVISOR_CLOSE=0",
+        "rollback": "Unset ORCH_SUPERVISOR_CLOSE; retain prior closure evidence, never reopen automatically.",
         # Findability, declared ON THE GATE ENTRY. A twin entry in the declarations
         # table is forbidden: reconciliation merges the two dicts and the twin CLOBBERS
         # the gate's own fields (measured: the canary status vanished from the summary
         # view the moment a twin existed).
         "findability_category": "exercise_bound",
         "findability_rationale": (
-            "a staged planner over already-escalated keepalive PRs that refuses live action under the "
-            "single-authority rule; runs as the keepalive-stage2-plan cadence step. "
+            "the existing keepalive-stage2-plan cadence plans post-escalation recovery and, "
+            "only with ORCH_SUPERVISOR_CLOSE=1, closes verified post-merge source issues. "
         ),
         "status": "wired",
         "entrypoint": "keepalive_supervisor.py",
-        # MATCHER CORRECTED 2026-08-21. It declared `evidence_gate/ready_for_supervised_apply`,
-        # which is what this module REPORTS ON, not what makes it fire. What makes it fire is the
-        # daily `keepalive-stage2-plan` cadence step, and `keepalive_supervisor.main`'s own parser
-        # says "no live action": it plans and reports, and its heartbeat fires unconditionally at CLI
-        # entry with ref="keepalive_supervisor.main". A report cannot merge a PR, so demanding a
-        # delivery outcome from it was the observer category error — 11 invocations stuck in
-        # `invoked_without_outcomes` with advice ("fix outcome linkage") describing work that does
-        # not exist for it. `tick_phase` is already an observer kind, so the classification follows
-        # from the corrected declaration with NO change to is_observer or classify_liveness.
-        # Deliberately NOT done: adding `evidence_gate` to OBSERVER_MATCHER_KINDS. That kind is
-        # shared with `redirect-apply-bootstrap`, which really does deliver (it applies a plan that
-        # dispatches a run), so widening the set would hide a linkage gap that is genuinely expected
-        # there. The kind does not carry the distinction; the cadence declaration does.
+        # The planner remains a cadence observer. Only a confirmed closure writes an
+        # issue_closure outcome; planner invocations never fabricate delivery credit.
         "matcher": {"kind": "tick_phase", "name": "keepalive-stage2-plan"},
-        "trigger_cadence": "daily shadow evidence",
-        "flags_defaults": {"live_supervisor_allowed": False},
-        "gate_reason": "supervised apply remains disabled",
-        "gate_evidence": "live_supervisor_allowed=false",
+        "trigger_cadence": "existing keepalive-stage2-plan tick",
+        "flags_defaults": {"live_supervisor_allowed": False, "ORCH_SUPERVISOR_CLOSE": "0"},
+        "gate_reason": "redirect apply remains disabled; post-merge closure requires ORCH_SUPERVISOR_CLOSE=1",
+        "gate_evidence": "only verified closure actions record outcomes",
         "evidence_threshold": "linked live role outcomes and disagreements satisfy the Stage 2 gate",
     },
     "thompson-hybrid-routing": {

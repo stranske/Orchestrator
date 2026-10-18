@@ -48,6 +48,23 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
+def _parse_low_proposal(output):
+    """Parse one complete JSON document, optionally in one JSON code fence."""
+    if not isinstance(output, str):
+        return {}
+    document = output.strip()
+    if document.startswith("```"):
+        match = re.fullmatch(r"```(?:json)?[ \t]*\r?\n(.*?)\r?\n```", document, re.DOTALL)
+        if match is None:
+            return {}
+        document = match.group(1)
+    try:
+        parsed = json.loads(document)
+    except ValueError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _event_epoch(value):
     if not isinstance(value, str):
         return None
@@ -542,7 +559,7 @@ class GitHub:
             }
         owner, name = repo.split("/")
         query = """query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){
-          number body state isDraft headRefOid headRefName baseRefOid mergeCommit{oid} mergedAt updatedAt mergeable mergeStateStatus
+          number body state isDraft headRefOid headRefName headRepository{nameWithOwner} baseRefOid mergeCommit{oid} mergedAt updatedAt mergeable mergeStateStatus
           labels(first:100){nodes{name} pageInfo{hasNextPage}}
           timelineItems(itemTypes:[LABELED_EVENT],last:100){nodes{... on LabeledEvent{id createdAt label{name}}} pageInfo{hasPreviousPage}}
           closingIssuesReferences(first:100){nodes{number body state labels(first:100){nodes{name} pageInfo{hasNextPage}} repository{nameWithOwner}}
@@ -675,6 +692,8 @@ class GitHub:
             "kind": "pr",
             "state": pr["state"],
             "head": head,
+            "head_branch": pr.get("headRefName"),
+            "head_repository": (pr.get("headRepository") or {}).get("nameWithOwner"),
             "base": pr.get("baseRefOid"),
             "merge": (pr.get("mergeCommit") or {}).get("oid"),
             "merged_at": pr.get("mergedAt"),
@@ -2565,10 +2584,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             return interpret(target, context)
         with route_lock:
             route_lock.notify_all()
-        try:
-            proposal = json.loads(output)
-        except ValueError:
-            proposal = {}
+        proposal = _parse_low_proposal(output)
         valid = (
             result.get("exit") == 0
             and isinstance(result.get("run_id"), str)
@@ -3072,6 +3088,54 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             import closer_pipeline
 
             prep_snapshot = context.get("prepare", {}).get("snapshot", {})
+            inner = closer_queue._read_state(Path(action_state)).get("items", {}).get(target, {})
+            fresh_snapshot = inner.get("evidence") if isinstance(inner, dict) else None
+            fresh_revision = inner.get("revision") if isinstance(inner, dict) else None
+            if (
+                isinstance(prep_snapshot, dict)
+                and isinstance(fresh_snapshot, dict)
+                and isinstance(context.get("revision"), str)
+                and prep_snapshot.get("target") == target
+                and prep_snapshot.get("revision") == context["revision"]
+                and fresh_revision != context["revision"]
+                and isinstance(fresh_revision, str)
+                and fresh_revision
+                and fresh_snapshot.get("target") == target
+                and fresh_snapshot.get("head") == prep_snapshot.get("head")
+                and row.get("revision") == fresh_revision
+            ):
+                fresh_proof = {
+                    "schema": closer_pipeline.INNER_WAIT_SCHEMA,
+                    "target": target,
+                    "revision": fresh_revision,
+                    "head": fresh_snapshot.get("head"),
+                    "reason": reason,
+                    "next_trigger": next_trigger,
+                    "inner_path": str(action_state),
+                    "receipt_sha256": closer_pipeline._digest(receipt),
+                }
+                if closer_pipeline._valid_inner_wait(
+                    Path(context["state_path"]),
+                    target,
+                    fresh_revision,
+                    fresh_snapshot,
+                    reason,
+                    next_trigger,
+                    fresh_proof,
+                ):
+                    return {
+                        "status": "completed",
+                        "target_complete": False,
+                        "progress_key": digest(
+                            [
+                                target,
+                                context["revision"],
+                                fresh_revision,
+                                fresh_proof["receipt_sha256"],
+                            ]
+                        ),
+                        "queue_receipt": receipt,
+                    }
             proof = {
                 "schema": closer_pipeline.INNER_WAIT_SCHEMA,
                 "target": target,
@@ -3106,8 +3170,24 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         }
 
     def reconcile_action(target, context):
+        def legacy_barrier():
+            prepared = context.get("prepare")
+            snapshot = prepared.get("snapshot") if isinstance(prepared, dict) else None
+            if not isinstance(snapshot, dict):
+                return {"outcome": "unknown", "reason": "legacy dependency snapshot is missing"}
+            try:
+                dependency = _legacy_operation_dependency(state_path, target, snapshot)
+            except RuntimeError as exc:
+                return {"outcome": "unknown", "reason": str(exc)[:500]}
+            if dependency:
+                return {"outcome": "unknown", "reason": "legacy operation remains unresolved"}
+            return None
+
         action_state = Path(context["action_state_path"])
         if not action_state.is_file():
+            barrier = legacy_barrier()
+            if barrier:
+                return barrier
             return {"outcome": "confirmed_not_started", "reason": "inner queue was never created"}
         try:
             inner = closer_queue._read_state(action_state)
@@ -3116,6 +3196,9 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         except Exception as exc:
             return {"outcome": "unknown", "reason": f"inner queue unreadable: {type(exc).__name__}"}
         if not operation:
+            barrier = legacy_barrier()
+            if barrier:
+                return barrier
             if item.get("status") in {"complete", "completed"}:
                 return {"outcome": "confirmed_completed", "target_complete": True}
             return {

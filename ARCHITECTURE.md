@@ -113,6 +113,26 @@ The single left arc is the loop closing. What it carries back is the point: `fee
 
 ## Rails — deterministic, keep as code
 
+The existing `keepalive_supervisor` cadence also has a post-merge action behind
+`ORCH_SUPERVISOR_CLOSE=1` (default off). It reads up to `min(--limit, 30)` recently updated merged PRs, then selects agent PRs.
+The `--stage2-plan` cadence uses the CLI default limit of 20. It executes at most
+three acceptance gates and closes at most three explicitly linked, still-open source issues per pass.
+It reuses `verifier_evidence` for a trusted exact-head/exact-merge PASS, or the
+existing `runtime_ac` authoring and `runtime_ac_gate.recheck_merged` runner on a
+disposable exact-merge checkout, with all merge-SHA CI green. Non-PASS or malformed
+verifier evidence, missing runnable acceptance commands, changed evidence and scoped
+or human holds refuse closure with counted reasons. The source issue and verifier
+are refreshed before mutation. A PR comment records the rule and merge SHA; only a
+confirmed closure writes an idempotent `supervisor-close` run/outcome and the existing
+capability influence edge. These outcomes measure the closure action, not a new
+implementation or durability judgment. A shared nonblocking state lock preserves
+serial closure; failures leave other candidates available. Unset the flag to stop
+future closures. This extends a deterministic rail, adds no role, and does not enable
+redirect apply. `--stage2-plan` calls it on the existing cadence; `--close-verified`
+provides the same bounded actor for the post-merge live acceptance check. Deployment,
+flag enablement, the first real closure and the seven-day latency measure remain
+separate acceptance evidence; unit tests do not establish those events.
+
 Observer reports and tick-cadence rails retain invocation, fingerprint and finding-delta evidence,
 but cannot earn delivery-usefulness verdicts. The existing selection exemption supplies the
 classification, with explicit declarations for the event-driven propensity and redirect rails.
@@ -1624,8 +1644,19 @@ publication; the published JSON preserves existing v1 routing values and adds ad
 `state`, `window`, and `observed_at` from the capacity snapshot's own `generated_at`, plus
 an additive `pacing` block for Codex/Claude (fractions, projection, EWMA burn, routing weight,
 period bounds, reset inventory and source freshness; no credentials). `pacing.py` defines the
-weekly window and constants once. The capacity tick appends source-labelled observations and
-snapshots even while shed. Codex weekly percent/reset epochs come from timestamped rollout token-count events;
+weekly window and constants once. States retain their schedule/projection rules; routing weight
+uses a time-aware budget: `C = (1 − r_eff) + n_usable`, counting unconsumed banked resets
+expiring after now (each Codex reset restarts its period; Claude uses its banked count).
+In fractions/hour, `s = max(0, C − u) / max((T1 − t)/1h, 1)` and
+`ḃ_period = u / max((t − T0)/1h, 1)`. With the single `BURN_WINDOW_HOURS = 6`,
+`w = min(1, span_h / BURN_WINDOW_HOURS)` and
+`ḃ_eff = w·ḃ_short + (1−w)·ḃ_period`; undefined short burn uses the period average.
+The target is `clamp(s / ḃ_eff, 0, 1)`, or 1 when effective burn is nonpositive.
+Ticks compute this even at zero weight and limit changes to 0.25; actual exhaustion/latched
+quota failures force zero immediately. A source-only change keeps the prior weight within
+the same pool and period. Reports print budget, usable resets, all hourly rates, target,
+previous/current weight, and the oldest-expiring reset the pace would consume. The capacity tick
+appends source-labelled observations and snapshots even while shed. Codex weekly percent/reset epochs come from timestamped rollout token-count events;
 Claude uses desktop weekly history. Unknown/stale pacing preserves native routability; shared
 ccusage totals never become per-agent percentages. Both burn-rate aliases are retained.
 `router.select_agent` preserves load/late/state/policy/drain tiers and samples tied pools by
