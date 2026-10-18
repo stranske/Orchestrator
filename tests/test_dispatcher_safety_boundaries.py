@@ -84,6 +84,36 @@ def test_routing_metadata_keeps_only_meaningful_assignment_provenance():
     assert dispatcher._routing_metadata({"target": "o/r#7"}) is None
 
 
+@pytest.mark.parametrize("profile", [False, True])
+def test_required_lineage_failure_releases_unlaunched_claim(tmp_path, monkeypatch, profile):
+    releases = []
+    monkeypatch.setattr(dispatcher, "DISPATCH_LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr(dispatcher.execution_profiles, "get_profile", lambda _: {"profile_id": "p"})
+    monkeypatch.setattr(dispatcher.claims, "release", lambda *args: releases.append(args))
+    monkeypatch.setattr(dispatcher.adapters, "record_ledger", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        dispatcher.feedback,
+        "record_run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("lineage unavailable")),
+    )
+    plan = {
+        "agent": "codex",
+        "target": "o/r#1",
+        "mode": "medium",
+        "lane": "opener",
+        "task_type": "implement",
+        "cwd": str(tmp_path),
+        "wrapped": "never",
+        "run_id": "run",
+        "review_loop": True,
+    }
+    if profile:
+        plan["selected_profile_id"] = "p"
+    with pytest.raises(RuntimeError):
+        dispatcher._spawn(plan)
+    assert releases == [("o/r#1", "codex")]
+
+
 @pytest.mark.parametrize(
     ("error", "log_tail", "stderr", "expected"),
     [
@@ -198,27 +228,31 @@ def test_load_decision_preserves_valid_json_and_fails_closed_on_bad_or_missing_i
     assert dispatcher.load_decision() == {"assignments": []}
 
 
-def test_gemini_timeout_alignment_reduces_wait_with_one_minute_floor():
+def test_gemini_timeout_alignment_preserves_seconds_and_receipt_margin():
     absent = ["agy", "--print", "prompt"]
     dispatcher._align_gemini_print_timeout(absent, 60)
     assert absent == ["agy", "--print", "prompt"]
 
     seconds = ["agy", "--print-timeout", "99m"]
     dispatcher._align_gemini_print_timeout(seconds, 75)
-    assert seconds == ["agy", "--print-timeout", "1m"]
+    assert seconds == ["agy", "--print-timeout", "60s"]
 
-    # The CLI has a one-minute minimum; the outer subprocess enforces shorter budgets.
+    # Preserve sub-minute outer budgets rather than imposing an accidental one-minute floor.
     non_integral = ["agy", "--print-timeout", "99m"]
     dispatcher._align_gemini_print_timeout(non_integral, 95)
-    assert non_integral == ["agy", "--print-timeout", "1m"]
+    assert non_integral == ["agy", "--print-timeout", "80s"]
+
+    diagnosis = ["agy", "--print-timeout", "99m"]
+    dispatcher._align_gemini_print_timeout(diagnosis, 119)
+    assert diagnosis == ["agy", "--print-timeout", "104s"]
 
     two_minutes = ["agy", "--print-timeout", "99m"]
     dispatcher._align_gemini_print_timeout(two_minutes, 135)
-    assert two_minutes == ["agy", "--print-timeout", "2m"]
+    assert two_minutes == ["agy", "--print-timeout", "120s"]
 
     near_zero = ["agy", "--print-timeout", "99m"]
     dispatcher._align_gemini_print_timeout(near_zero, 1)
-    assert near_zero == ["agy", "--print-timeout", "1m"]
+    assert near_zero == ["agy", "--print-timeout", "1s"]
 
 
 def test_agent_log_tail_uses_relative_cwd_and_redacts_before_truncation(tmp_path):

@@ -1,0 +1,18 @@
+Source: live DB copied with shutil.copy2 to a temporary directory before SQLite access.
+SQLite access: copied DB only, mode=ro; no report/history write.
+Experiment resolution: ORCH_EXP_DIR set to observed runtime generation experiments directory.
+Candidate count: 12
+Candidate: strategy434-20261006 stranske/Portable-Alpha-Extension-Model [exp strategy434-20261006 arm arm-01-single-cursor member arm-01-single-cursor--member-01-cursor]
+Candidate: strategy434-20261006 stranske/Portable-Alpha-Extension-Model [exp strategy434-20261006 arm arm-02-single-cursor member arm-02-single-cursor--member-01-cursor]
+Candidate: strategy434-20261006 stranske/Portable-Alpha-Extension-Model [exp strategy434-20261006 arm arm-03-single-cursor member arm-03-single-cursor--member-01-cursor]
+Candidate: strategy434-20261006 stranske/Portable-Alpha-Extension-Model [exp strategy434-20261006 arm arm-04-pair-cursor-vibe member arm-04-pair-cursor-vibe--member-01-cursor]
+Candidate: strategy434-20261006 stranske/Portable-Alpha-Extension-Model [exp strategy434-20261006 arm arm-05-pair-cursor-vibe member arm-05-pair-cursor-vibe--member-01-cursor]
+G1 measurement: {"as_of": 1792255951, "evidence_class": "Brain evaluations_v2 + experiment metadata + GitHub REST issues", "inactive_since": 1791046351, "reason": "unattributable 0; issue reads failed 0", "value": 0.0}
+## Feature goals
+
+feature goals: 1 features, 1 drifting
+Drift horizon: 14 days
+
+| Feature / goal | Goal | Measure | Last value | Drift |
+| --- | --- | --- | --- | --- |
+| experiments/G1 | multi-source feedback on sizable features | feature_goals.py:multi_source_feedback | measured zero [Brain evaluations_v2 + experiment metadata + GitHub REST issues; as_of 1792255951] | measured_zero for 14 days |
