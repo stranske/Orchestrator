@@ -62,6 +62,19 @@ import pytest
 
 TESTS_DIR = Path(__file__).parent
 
+
+@pytest.fixture(autouse=True)
+def isolate_provision_events(tmp_path, monkeypatch):
+    """Provision tests and their subprocesses must never append to the production ledger."""
+    path = tmp_path / "provision-events.ndjson"
+    monkeypatch.setenv("ORCH_PROVISION_EVENTS_PATH", str(path))
+    # This conftest is also copied into standalone guard-test repos with no src/.
+    # Patch an already imported module; later imports read the temporary env path.
+    loaded = sys.modules.get("provision")
+    if loaded is not None:
+        monkeypatch.setattr(loaded, "PROVISION_EVENTS_PATH", path)
+
+
 WHY = {
     "untracked": "not tracked by git: `git add` it",
     "ignored": (
