@@ -302,7 +302,9 @@ def _binding_artifact(binding: Mapping[str, Any]) -> tuple[Mapping[str, Any], bo
     selector match in ``_matches`` would re-validate and raise instead of
     returning a refusal. A skill package is validated exactly once.
     """
-    if binding.get("kind") == "skill" and isinstance(binding.get("artifact"), str):
+    if binding.get("kind") == "skill":
+        if not isinstance(binding.get("artifact"), str):
+            return {}, True
         try:
             return capability_compiler.validate_skill_package(Path(binding["artifact"])), False
         except Exception:
