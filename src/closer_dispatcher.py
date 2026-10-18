@@ -59,9 +59,10 @@ def _parse_low_proposal(output):
             return {}
         document = match.group(1)
     try:
-        return json.loads(document)
+        parsed = json.loads(document)
     except ValueError:
         return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _event_epoch(value):

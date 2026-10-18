@@ -2352,6 +2352,10 @@ def test_low_proposal_accepts_only_one_complete_json_document():
         f"```json\n{raw}\n```\nextra prose",
     ):
         assert adapter._parse_low_proposal(invalid) == {}
+    for value in ([], "text", 1, None, True):
+        document = json.dumps(value)
+        assert adapter._parse_low_proposal(document) == {}
+        assert adapter._parse_low_proposal(f"```json\n{document}\n```") == {}
     wrong = {**payload, "head": "f" * 40}
     assert adapter._parse_low_proposal(f"```json\n{json.dumps(wrong)}\n```") == wrong
 
