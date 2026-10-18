@@ -378,7 +378,5 @@ def test_gemini_individual_quota_line_is_authoritative():
     )
     assert (category, subcategory, confidence) == ("quota", "quota_exhausted", "high")
     base = 1_700_000_000
-    reset = rate_incidents.provider_reset_at(
-        "gemini", [GEMINI_INDIVIDUAL_QUOTA_LINE], now=base
-    )
+    reset = rate_incidents.provider_reset_at("gemini", [GEMINI_INDIVIDUAL_QUOTA_LINE], now=base)
     assert reset == base + 140 * 3600 + 5 * 60 + 6
