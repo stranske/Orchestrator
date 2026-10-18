@@ -1,0 +1,33 @@
+{
+  "measured_at_utc": "2026-10-18T07:57:45Z",
+  "method": "Live research feed (backlog.py --research) projected through campaign_no_named_test_reading / project_no_named_test_share under tip admission. Denominator is the original 2026-10-18 05:53Z cells_total=37. This is an interim reading; the calendar gate remains the 2026-10-25 experiment_producer_line() same-day share.",
+  "feed_path": "/home/runner/.codex/handoff/research-backlog.json",
+  "feed_generated_at": 1792310129,
+  "feed_eligible": 113,
+  "admission_mix": {
+    "ci-only": 29,
+    "unscoped": 2,
+    "named": 66,
+    "file-only": 15,
+    "none": 1
+  },
+  "reading": {
+    "check_date": "2026-10-25",
+    "reading_day": "2026-10-18",
+    "is_check_day": false,
+    "no_named_test": 2,
+    "cells_total": 37,
+    "share": 0.05405405405405406,
+    "share_pct": "5.4%",
+    "classes": {
+      "file-only": 0,
+      "ci-only": 0,
+      "none": 2
+    },
+    "passes_campaign": true,
+    "threshold": 0.25,
+    "source": "admission_projection"
+  },
+  "passes_campaign_threshold_25pct": true,
+  "note": "Only unscoped bodies count as no_named_test after widened admission; ci-only/none with Acceptance Criteria go through derived-test freeze."
+}

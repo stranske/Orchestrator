@@ -350,7 +350,7 @@ def test_report_zero_values_are_present(monkeypatch):
     )
     assert (
         switch_review.experiment_producer_line()
-        == "  experiment producer: launched 0, evaluated 0, winner_prs 0, winner_merged 0, post_window_launches=0, cells_fresh 0/0, skipped 0 (none); no_named_test=0/0 (n/a; file-only=0, ci-only=0, none=0, unclassified=0), derived_tests=0; trial_end not_started, verdict pending, days_left 21; winner merge grace 7d"
+        == "  experiment producer: launched 0, evaluated 0, winner_prs 0, winner_merged 0, post_window_launches=0, cells_fresh 0/0, skipped 0 (none); no_named_test=0/0 (n/a; file-only=0, ci-only=0, none=0, unclassified=0), derived_tests=0, campaign_share=n/a; trial_end not_started, verdict pending, days_left 21; winner merge grace 7d"
     )
 
 
@@ -380,6 +380,8 @@ def test_producer_line_prints_same_day_no_named_test_share(monkeypatch):
     assert "none=2" in line
     # Lifetime skips stay in the skipped total; the campaign field is the same-day share.
     assert "skipped 99 (no_named_test=99)" in line
+    assert "campaign_share=pass" in line
+    assert "check 2026-10-25" in line
 
 
 @pytest.mark.parametrize("enabled", ["0", "1"])
@@ -1191,7 +1193,46 @@ def test_widened_admission_projects_campaign_share_at_or_under_25_percent():
     assert projected["classes"] == {"file-only": 0, "ci-only": 0, "none": 2}
     assert projected["share"] == pytest.approx(2 / 37)
     assert projected["passes_campaign"]
-    assert projected["share"] <= 0.25
+    assert projected["share"] <= producer.CAMPAIGN_SHARE_MAX
+    reading = producer.campaign_no_named_test_reading(items=items, cells_total=cells)
+    assert reading["passes_campaign"]
+    assert reading["source"] == "admission_projection"
+    assert reading["share"] == pytest.approx(2 / 37)
+
+
+def test_campaign_reading_on_check_date_passes_at_or_under_25_percent():
+    """The 2026-10-25 calendar gate uses the same-day share, not lifetime skips."""
+    from datetime import datetime, timezone
+
+    check_ts = datetime(2026, 10, 25, 12, 0, tzinfo=timezone.utc).timestamp()
+    metrics = {
+        "no_named_test": 2,
+        "cells_total": 37,
+        "no_named_test_share": 2 / 37,
+        "no_named_test_classes": {"file-only": 0, "ci-only": 0, "none": 2},
+        "skips": {"no_named_test": 99},
+    }
+    reading = producer.campaign_no_named_test_reading(metrics, now=check_ts)
+    assert reading["is_check_day"] is True
+    assert reading["reading_day"] == producer.CAMPAIGN_SHARE_CHECK_DATE
+    assert reading["no_named_test"] == 2
+    assert reading["cells_total"] == 37
+    assert reading["share"] == pytest.approx(2 / 37)
+    assert reading["passes_campaign"] is True
+    assert reading["share_pct"] == "5.4%"
+
+
+def test_campaign_reading_fails_when_share_exceeds_25_percent():
+    from datetime import datetime, timezone
+
+    check_ts = datetime(2026, 10, 25, 12, 0, tzinfo=timezone.utc).timestamp()
+    reading = producer.campaign_no_named_test_reading(
+        {"no_named_test": 28, "cells_total": 37, "no_named_test_share": 28 / 37},
+        now=check_ts,
+    )
+    assert reading["is_check_day"] is True
+    assert reading["passes_campaign"] is False
+    assert reading["share"] > producer.CAMPAIGN_SHARE_MAX
 
 
 @pytest.mark.parametrize(

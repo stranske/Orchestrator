@@ -32,6 +32,9 @@ TRIAL_PASS_MERGED = 6
 PRODUCER_FOLLOWUP_DAYS = 30
 PRODUCER_LOCK_MAX_HOURS = 72
 TERMINAL_STATUSES = {"merged", "no_winner", "discarded", "expired", "member_pushed"}
+# #731 campaign: no_named_test / considered cells ≤ 25% at the 2026-10-25 producer-line reading.
+CAMPAIGN_SHARE_MAX = 0.25
+CAMPAIGN_SHARE_CHECK_DATE = "2026-10-25"
 
 
 def state_path():
@@ -197,7 +200,51 @@ def project_no_named_test_share(items, cells_total):
         "cells_total": int(cells_total or 0),
         "share": share,
         "classes": {key: classes.get(key, 0) for key in ("file-only", "ci-only", "none")},
-        "passes_campaign": share is not None and share <= 0.25,
+        "passes_campaign": share is not None and share <= CAMPAIGN_SHARE_MAX,
+    }
+
+
+def campaign_no_named_test_reading(metrics=None, *, now=None, items=None, cells_total=None):
+    """Structured #731 campaign share for the 2026-10-25 producer-line reading.
+
+    Prefer live ``producer_summary`` metrics (same-UTC-day skip_issues / cells). When ``items``
+    are supplied — interim runners without producer state — project under current admission.
+    """
+    now = time.time() if now is None else now
+    reading_day = time.strftime("%Y-%m-%d", time.gmtime(now))
+    if items is not None:
+        projected = project_no_named_test_share(
+            items, cells_total if cells_total is not None else 0
+        )
+        unnamed = projected["no_named_test"]
+        cells = projected["cells_total"]
+        share = projected["share"]
+        classes = projected["classes"]
+        source = "admission_projection"
+    else:
+        summary = metrics if metrics is not None else producer_summary()
+        unnamed = summary.get("no_named_test")
+        if unnamed is None:
+            unnamed = (summary.get("skips") or {}).get("no_named_test", 0)
+        cells = int(cells_total if cells_total is not None else summary.get("cells_total") or 0)
+        share = summary.get("no_named_test_share")
+        if share is None:
+            share = no_named_test_share(unnamed, cells)
+        classes = summary.get("no_named_test_classes") or {}
+        source = "producer_summary"
+    passes = share is not None and share <= CAMPAIGN_SHARE_MAX
+    return {
+        "check_date": CAMPAIGN_SHARE_CHECK_DATE,
+        "reading_day": reading_day,
+        "is_check_day": reading_day >= CAMPAIGN_SHARE_CHECK_DATE,
+        "no_named_test": int(unnamed or 0),
+        "cells_total": int(cells or 0),
+        "share": share,
+        "share_pct": None if share is None else f"{100 * share:.1f}%",
+        "classes": {key: int(classes.get(key, 0) or 0) for key in ("file-only", "ci-only", "none")},
+        "passes_campaign": passes,
+        "threshold": CAMPAIGN_SHARE_MAX,
+        "source": source,
     }
 
 
@@ -1061,6 +1108,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--trial-defaults", action="store_true")
     parser.add_argument("--trial-verdict", action="store_true")
+    parser.add_argument(
+        "--campaign-share",
+        action="store_true",
+        help="print the #731 no_named_test/cells campaign reading as JSON",
+    )
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
     if args.selftest:
@@ -1081,11 +1133,19 @@ def main():
             37,
         )
         assert projected["no_named_test"] == 1 and projected["passes_campaign"]
+        check_day = datetime(2026, 10, 25, 12, 0, tzinfo=timezone.utc).timestamp()
+        reading = campaign_no_named_test_reading(
+            {"no_named_test": 2, "cells_total": 37, "no_named_test_share": 2 / 37},
+            now=check_day,
+        )
+        assert reading["is_check_day"] and reading["passes_campaign"]
         print("experiment_producer.py selftest: OK (cap and frozen named test)")
     elif args.trial_defaults:
         print(*trial_defaults())
     elif args.trial_verdict:
         print(trial_verdict())
+    elif args.campaign_share:
+        print(json.dumps(campaign_no_named_test_reading(), indent=2, sort_keys=True))
     return 0
 
 
