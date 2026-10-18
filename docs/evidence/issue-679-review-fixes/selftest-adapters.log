@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__679__opener/src/adapters.py", line 3140, in <module>
+    _selftest()
+  File "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__679__opener/src/adapters.py", line 2608, in _selftest
+    _selftest_inner(gaps=[])
+  File "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__679__opener/src/adapters.py", line 2929, in _selftest_inner
+    assert probed["models"][:2] == ["auto", "composer-2.5"], probed["models"]
+AssertionError: []

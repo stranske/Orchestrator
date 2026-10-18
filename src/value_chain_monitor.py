@@ -381,6 +381,12 @@ def supervisor_closure_acceptance(
     deadline = enabled_at + 86400
     end = min(now, deadline)
     inputs = _brain(db or feedback.DB_PATH, enabled_at, end)
+    return _supervisor_closure_result(enabled_at, now, inputs)
+
+
+def _supervisor_closure_result(enabled_at: int, now: int, inputs: dict) -> dict[str, Any]:
+    deadline = enabled_at + 86400
+    end = min(now, deadline)
     cid = "live-keepalive-supervisor"
     own = own_edges_of(inputs["edges"], cid)
     bounded = (
@@ -747,6 +753,28 @@ def recurrence_fixture() -> bool:
     row.update(outcome_counts("cap", [{"accepted": 1}]))  # acted on, nothing recorded yet
     assert first_break(row) == "no_outcome"
     assert all(v is None for v in outcome_counts("cap", None).values())
+    # Exercise the same deadline/prefix reducer as the read-only Brain API.
+    enabled = 100
+    deadline = enabled + 86400
+    closure = {
+        **done,
+        "capability_id": "live-keepalive-supervisor",
+        "target_run_id": "supervisor-close:fixture",
+        "outcome_recorded_ts": deadline,
+    }
+    inputs = {"edges": [closure], "errors": []}
+    assert _supervisor_closure_result(enabled, deadline, inputs)["status"] == "met"
+    assert _supervisor_closure_result(enabled, deadline + 1, inputs)["status"] == "met"
+    for excluded in (
+        {**closure, "target_run_id": "ordinary:fixture"},
+        {**closure, "outcome_recorded_ts": enabled - 1},
+        {**closure, "outcome_recorded_ts": deadline + 1},
+    ):
+        inputs = {"edges": [excluded], "errors": []}
+        assert _supervisor_closure_result(enabled, deadline - 1, inputs)["status"] == "pending"
+        assert _supervisor_closure_result(enabled, deadline, inputs)["status"] == "deadline_missed"
+    unknown = _supervisor_closure_result(enabled, deadline, {"edges": None, "errors": ["unread"]})
+    assert unknown["status"] == "unmeasured" and unknown["errors"] == ["unread"]
     return True
 
 

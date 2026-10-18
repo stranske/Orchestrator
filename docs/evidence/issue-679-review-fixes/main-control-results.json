@@ -1,0 +1,177 @@
+[
+  {
+    "test": "tests.test_agent_workspace_never_broad::test_every_evaluator_runs_in_a_scratch_workspace_of_its_own[vibe]",
+    "outcome": "failed",
+    "message": "PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/agent-runtime/vibe/.vibe/config.toml'"
+  },
+  {
+    "test": "tests.test_build_exec_mirror::test_the_documented_copier_builds_through_the_builder",
+    "outcome": "failed",
+    "message": "AssertionError: mktemp: mkstemp failed on /var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/tmp.aDzofcej0r: Operation not permitted\n  ERR: orch-sync-mirror.sh aborted at line 33 (rc 1): /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_the_documented_copier_bui0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.\n  \nassert 1 == 0\n +  where 1 = CompletedProcess(args=['bash', '/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_the_documented_cop...the_documented_copier_bui0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.\\n').returncode"
+  },
+  {
+    "test": "tests.test_build_exec_mirror::test_the_390_guard_composes_with_the_documented_copier",
+    "outcome": "failed",
+    "message": "AssertionError: mktemp: mkstemp failed on /var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/tmp.CiQNOwnRWF: Operation not permitted\n  ERR: orch-sync-mirror.sh aborted at line 38 (rc 1): /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_the_390_guard_composes_wi0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.\n  \nassert 1 == 0\n +  where 1 = CompletedProcess(args=['bash', '/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_the_390_guard_comp...the_390_guard_composes_wi0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.\\n').returncode"
+  },
+  {
+    "test": "tests.test_build_exec_mirror::test_presync_says_whether_ci_verified_the_shipped_tree[documented]",
+    "outcome": "failed",
+    "message": "AssertionError: == scratch mirror of /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v0/source @ 16e174d (0 uncommitted) -> /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v0/verify-before-sync.6rhFRw/mirror\n  tests/ shipped from git HEAD 16e174d (2 files) \u2014 uncommitted test edits are NOT shipped\n  scripts/ shipped from git HEAD (4 entries)\n  .github/ shipped from git HEAD (1 files) with .gitignore ruff.toml\n  docs/ shipped from git HEAD (1 files, merged beside run-time output)\n  built 3 .py (from /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v0/source/src) + orchestrate.sh + 1 test file(s) + 11 data/config entries -> /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v0/verify-before-sync.6rhFRw/mirror\n  mktemp: mkstemp failed on /var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/tmp.5LUPzv8xTh: Operation not permitted\n  ERR: orch-sync-mirror.sh aborted at line 33 (rc 1): /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v0/verify-before-sync.6rhFRw/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.\n  verify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched\n  \nassert 2 == 0\n +  where 2 = CompletedProcess(args=['bash', '/private/tmp/pr696-main-control/scripts/verify_before_sync.sh', '/private/tmp/pr696-ma...verify.\\nverify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched\\n').returncode"
+  },
+  {
+    "test": "tests.test_build_exec_mirror::test_presync_says_whether_ci_verified_the_shipped_tree[drifted]",
+    "outcome": "failed",
+    "message": "AssertionError: == scratch mirror of /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v1/source @ 58eede3 (0 uncommitted) -> /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v1/verify-before-sync.LLFGjA/mirror\n  tests/ shipped from git HEAD 58eede3 (2 files) \u2014 uncommitted test edits are NOT shipped\n  scripts/ shipped from git HEAD (4 entries)\n  .github/ shipped from git HEAD (1 files) with .gitignore ruff.toml\n  docs/ shipped from git HEAD (1 files, merged beside run-time output)\n  built 3 .py (from /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v1/source/src) + orchestrate.sh + 1 test file(s) + 11 data/config entries -> /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v1/verify-before-sync.LLFGjA/mirror\n  mktemp: mkstemp failed on /var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/tmp.YzKc7AH4IL: Operation not permitted\n  ERR: orch-sync-mirror.sh aborted at line 33 (rc 1): /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v1/verify-before-sync.LLFGjA/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.\n  verify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched\n  \nassert 2 == 0\n +  where 2 = CompletedProcess(args=['bash', '/private/tmp/pr696-main-control/scripts/verify_before_sync.sh', '/private/tmp/pr696-ma...verify.\\nverify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched\\n').returncode"
+  },
+  {
+    "test": "tests.test_credential_redaction::test_an_experiment_evaluators_output_is_masked_before_it_reaches_the_brain[works]",
+    "outcome": "failed",
+    "message": "PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/agent-runtime/vibe/.vibe/config.toml'"
+  },
+  {
+    "test": "tests.test_credential_redaction::test_an_experiment_evaluators_output_is_masked_before_it_reaches_the_brain[fails]",
+    "outcome": "failed",
+    "message": "PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/agent-runtime/vibe/.vibe/config.toml'"
+  },
+  {
+    "test": "tests.test_exp_abcd_selftest_private_brain::test_every_brain_connection_in_the_selftest_opens_a_private_store",
+    "outcome": "failed",
+    "message": "PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/agent-runtime/vibe/.vibe/config.toml'"
+  },
+  {
+    "test": "tests.test_experiment_arm_identity::test_arm_evaluate_dual_writes_exact_v2_and_parent_legacy",
+    "outcome": "failed",
+    "message": "PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/agent-runtime/vibe/.vibe/config.toml'"
+  },
+  {
+    "test": "tests.test_model_profile_trial::test_three_profiles_create_distinct_worker_attempts",
+    "outcome": "failed",
+    "message": "PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/capability-program/profile-trial.json.690uymdx.tmp'"
+  },
+  {
+    "test": "tests.test_model_profile_trial::test_evaluator_trace_stays_separate",
+    "outcome": "failed",
+    "message": "PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/capability-program/profile-trial.json.i0xe4q0i.tmp'"
+  },
+  {
+    "test": "tests.test_model_profile_trial::test_trial_readiness_surfaces_in_reports_and_lifecycle",
+    "outcome": "failed",
+    "message": "PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/capability-program/profile-trial.json.zwabpk_d.tmp'"
+  },
+  {
+    "test": "tests.test_model_tier_resolution::test_auth_failure_is_detected",
+    "outcome": "passed",
+    "message": ""
+  },
+  {
+    "test": "tests.test_model_tier_resolution::test_auth_ok_when_probe_succeeds",
+    "outcome": "passed",
+    "message": ""
+  },
+  {
+    "test": "tests.test_model_tier_resolution::test_exit_zero_but_failed_is_still_a_failure",
+    "outcome": "passed",
+    "message": ""
+  },
+  {
+    "test": "tests.test_model_tier_resolution::test_status_style_not_logged_in_is_caught",
+    "outcome": "passed",
+    "message": ""
+  },
+  {
+    "test": "tests.test_model_tier_resolution::test_presence_probe_still_detects_a_missing_credential",
+    "outcome": "passed",
+    "message": ""
+  },
+  {
+    "test": "tests.test_model_tier_resolution::test_every_seat_has_some_free_signal",
+    "outcome": "passed",
+    "message": ""
+  },
+  {
+    "test": "tests.test_model_tier_resolution::test_presence_pass_is_not_reported_as_verified",
+    "outcome": "passed",
+    "message": ""
+  },
+  {
+    "test": "tests.test_model_tier_resolution::test_offload_survives_a_heartbeat_failure",
+    "outcome": "failed",
+    "message": "PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/handoff/dispatch-logs/offload.cursor.1792260865109515000.log'"
+  },
+  {
+    "test": "tests.test_muse_backend::test_muse_seat_is_reported_and_never_reads_as_free",
+    "outcome": "failed",
+    "message": "PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/capacity-resets.tmp'"
+  },
+  {
+    "test": "tests.test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests::test_backslash",
+    "outcome": "failed",
+    "message": "AssertionError: stdout: \n  stderr: sandbox-exec: sandbox_apply: Operation not permitted\n  \nassert 71 == 0\n +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath \"/private/.../.git/hooks/pre-commit\"]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\\n').returncode"
+  },
+  {
+    "test": "tests.test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests::test_combined",
+    "outcome": "failed",
+    "message": "AssertionError: stdout: \n  stderr: sandbox-exec: sandbox_apply: Operation not permitted\n  \nassert 71 == 0\n +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath \"/private/.../.git/hooks/pre-commit\"]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\\n').returncode"
+  },
+  {
+    "test": "tests.test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests::test_quote",
+    "outcome": "failed",
+    "message": "AssertionError: stdout: \n  stderr: sandbox-exec: sandbox_apply: Operation not permitted\n  \nassert 71 == 0\n +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath \"/private/.../.git/hooks/pre-commit\"]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\\n').returncode"
+  },
+  {
+    "test": "tests.test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests::test_regex_metacharacters",
+    "outcome": "failed",
+    "message": "AssertionError: stdout: \n  stderr: sandbox-exec: sandbox_apply: Operation not permitted\n  \nassert 71 == 0\n +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath \"/private/.../.git/hooks/pre-commit\"]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\\n').returncode"
+  },
+  {
+    "test": "tests.test_tick_watchdog::test_a_stuck_tick_is_reported_with_the_kill_that_frees_it",
+    "outcome": "failed",
+    "message": "AssertionError: timed out after 60s waiting for a drain naming the stuck command; record={}; history=<none>"
+  },
+  {
+    "test": "tests.test_tick_watchdog::test_the_process_table_keeps_whole_command_lines",
+    "outcome": "failed",
+    "message": "PermissionError: [Errno 1] Operation not permitted: 'ps'"
+  },
+  {
+    "test": "tests.test_tick_watchdog::test_the_drained_line_is_reachable_and_exact",
+    "outcome": "failed",
+    "message": "AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed\n  \nassert 2 == 0"
+  },
+  {
+    "test": "tests.test_tick_watchdog::test_a_tick_that_reaches_no_cadence_step_alerts",
+    "outcome": "failed",
+    "message": "AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed\n  \nassert 2 == 0"
+  },
+  {
+    "test": "tests.test_tick_watchdog::test_a_previous_tick_that_left_no_end_is_unknown_and_kept",
+    "outcome": "failed",
+    "message": "AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed\n  \nassert 2 == 0"
+  },
+  {
+    "test": "tests.test_tick_watchdog::test_an_unreadable_record_is_unknown_not_clean",
+    "outcome": "failed",
+    "message": "AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed\n  \nassert 2 == 0"
+  },
+  {
+    "test": "tests.test_tick_watchdog::test_the_arming_block_as_written_arms_and_records_the_tick",
+    "outcome": "failed",
+    "message": "AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed\n    WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\n  \nassert False\n +  where False = <built-in method startswith of str object at 0x108974300>('  tick-watchdog: armed')\n +    where <built-in method startswith of str object at 0x108974300> = \"  WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed\\n  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\\n\".startswith\n +      where \"  WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed\\n  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\\n\" = CompletedProcess(args=['bash', '-c', 'set -euo pipefail\\nORCH=/private/tmp/pr696-main-control/src\\nSTAMP_DIR=/private/...s'); not armed\\n  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\\n\", stderr='').stdout"
+  },
+  {
+    "test": "tests.test_tick_watchdog::test_fleet_summary_carries_the_tick_record",
+    "outcome": "failed",
+    "message": "PermissionError: [Errno 1] Operation not permitted: 'ps'"
+  },
+  {
+    "test": "tests.test_tick_watchdog::test_a_drain_whose_target_has_exited_is_never_advertised",
+    "outcome": "failed",
+    "message": "PermissionError: [Errno 1] Operation not permitted: 'ps'"
+  },
+  {
+    "test": "tests.test_tick_watchdog::test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming",
+    "outcome": "failed",
+    "message": "AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed\n  \nassert 2 == 0"
+  }
+]

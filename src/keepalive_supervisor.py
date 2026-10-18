@@ -152,6 +152,7 @@ def _closure_gate(target: str, issue: dict, sha: str) -> dict:
             ["git", "-C", str(worktree), "rev-parse", "HEAD"],
             capture_output=True,
             text=True,
+            timeout=120,
             check=False,
         )
         if actual.returncode or actual.stdout.strip() != sha:

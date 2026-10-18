@@ -352,7 +352,13 @@ def test_close_records_real_private_brain_monitor_outcome_once(
             monitor.supervisor_closure_acceptance(invalid, now=now)
     if expected:
         rule = "verifier PASS" if verdict == "PASS" else "merge-SHA acceptance gates and green CI"
+        # A repeat after the deadline must retain the original timely receipt.
+        monkeypatch.setattr(time, "time", lambda: float(now + 86401))
         supervisor._closure_record(REPO + "#7", SHA, rule)
+        with feedback._conn() as conn:
+            assert conn.execute("SELECT durability_checked_ts FROM outcomes").fetchone()[0] == now
+        assert monitor.supervisor_closure_acceptance(now, now=now + 86401)["status"] == "met"
+        monkeypatch.setattr(time, "time", lambda: float(now))
     supervisor.close_verified_issues(**options)
     assert monitor_row()["outcome"] == expected
     with feedback._conn() as conn:
@@ -568,3 +574,30 @@ def test_closure_error_does_not_discard_stage2_plan(monkeypatch, capsys, mode, e
         assert result["issue_closure"] == closure
     else:
         assert result == closure
+
+
+def test_close_gate_bounds_git_probe(tmp_path, monkeypatch):
+    import subprocess
+
+    import provision
+
+    @contextmanager
+    def exact(*args):
+        yield tmp_path
+
+    def timed_out(args, **kwargs):
+        assert args == ["git", "-C", str(tmp_path), "rev-parse", "HEAD"]
+        assert kwargs["timeout"] == 120
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr(provision, "temporary_exact_head_worktree", exact)
+    monkeypatch.setattr(supervisor.subprocess, "run", timed_out)
+    with pytest.raises(subprocess.TimeoutExpired):
+        supervisor._closure_gate(
+            TARGET,
+            {
+                "target": REPO + "#7",
+                "body": "## Acceptance Criteria\n- `pytest tests/test_contract.py` passes.",
+            },
+            SHA,
+        )
