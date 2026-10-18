@@ -543,6 +543,8 @@ def _graphql_pr():
         "state": "OPEN",
         "isDraft": False,
         "headRefOid": HEAD,
+        "headRefName": "codex/delivery",
+        "headRepository": {"nameWithOwner": "o/r"},
         "mergedAt": None,
         "mergeCommit": None,
         "updatedAt": "2026-10-17T00:00:00Z",
@@ -605,6 +607,8 @@ def test_snapshot_retains_complete_native_label_timeline(monkeypatch):
         "pageInfo": {"hasPreviousPage": False},
     }
     current = _snapshot_from_document(monkeypatch, document)
+    assert current["head_branch"] == "codex/delivery"
+    assert current["head_repository"] == "o/r"
     assert current["label_events_complete"] is True
     assert current["label_events"] == [
         {
@@ -1775,6 +1779,74 @@ def test_staged_adapter_emits_only_durable_validated_inner_wait(tmp_path, monkey
     assert not backend.gh.calls
 
 
+def test_fresh_inner_wait_revision_change_reprepares_before_valid_wait(tmp_path, monkeypatch):
+    old = snapshot(labels=["agents:paused"], review_revision="before-fresh-read")
+    fresh = snapshot(labels=["agents:paused"], review_revision="after-fresh-read")
+    assert old["head"] == fresh["head"] and old["revision"] != fresh["revision"]
+    monkeypatch.setattr(adapter, "GitHub", lambda **_kwargs: FakeGitHub(fresh))
+    pipeline_path = adapter._pipeline_state_path(tmp_path / "state.json")
+    action_path = (
+        pipeline_path.parent
+        / f"{pipeline_path.stem}.actions"
+        / f"{closer_pipeline._digest(TARGET)}.json"
+    )
+    reason = "current item-scoped hold: ['agents:paused']"
+    trigger = "hold owner supplies scoped disposition"
+    receipt = closer_queue.run_round(
+        action_path,
+        [TARGET],
+        lambda _target: {
+            "target": TARGET,
+            "revision": fresh["revision"],
+            "action": "wait",
+            "eligible": False,
+            "requires_coordinator": False,
+            "reason": reason,
+            "next_trigger": trigger,
+            "evidence": fresh,
+        },
+        lambda *_: pytest.fail("held wait must not execute"),
+        deadline=time.time() + 30,
+        max_workers=1,
+        max_passes=1,
+    )
+    assert receipt["stop_valid"] is True
+    returned = {"receipt": receipt}
+    monkeypatch.setattr(closer_queue, "run_round", lambda *_a, **_k: returned["receipt"])
+    captured = {}
+
+    def pipeline_stub(_path, _targets, **callbacks):
+        def context(prepared):
+            return {
+                "state_path": str(pipeline_path),
+                "action_state_path": str(action_path),
+                "deadline": time.time() + 60,
+                "revision": prepared["revision"],
+                "prepare": {"snapshot": prepared, "packet_ref": {}},
+                "interpret": {"classification": "deterministic_wait"},
+            }
+
+        captured["first"] = callbacks["act"](TARGET, context(old))
+        captured["second"] = callbacks["act"](TARGET, context(fresh))
+        returned["receipt"] = {**receipt, "stop_valid": False}
+        with pytest.raises(RuntimeError, match="valid continuation boundary"):
+            callbacks["act"](TARGET, context(old))
+        returned["receipt"] = receipt
+        changed_head = {**old, "head": "f" * 40}
+        captured["changed_head"] = callbacks["act"](TARGET, context(changed_head))
+        return {"targets": {TARGET: captured["second"]}}
+
+    monkeypatch.setattr(closer_pipeline, "run_pipeline", pipeline_stub)
+    backend = closer(tmp_path, fresh)
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
+    assert captured["first"]["status"] == "completed"
+    assert captured["first"]["target_complete"] is False
+    assert isinstance(captured["first"]["progress_key"], str)
+    assert captured["second"]["reason"] == "validated_inner_wait"
+    assert captured["changed_head"]["status"] == "blocked"
+
+
 def test_same_head_inner_wait_requires_fresh_admission_and_matching_producer(tmp_path, monkeypatch):
     current = snapshot()
     monkeypatch.setattr(adapter, "GitHub", lambda **_kwargs: FakeGitHub(current))
@@ -2203,7 +2275,95 @@ def test_legacy_uncertain_and_private_integration_need_original_coordinator(tmp_
             adapter._legacy_operation_dependency(legacy_path, TARGET, {"sources": []})
 
 
-def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(tmp_path, monkeypatch):
+@pytest.mark.parametrize("inner_exists", [False, True], ids=["no-inner", "inner-no-operation"])
+@pytest.mark.parametrize(
+    "legacy_uncertain", [False, True], ids=["no-legacy-op", "legacy-uncertain"]
+)
+def test_reconcile_never_requeues_act_while_original_legacy_operation_is_uncertain(
+    tmp_path, monkeypatch, inner_exists, legacy_uncertain
+):
+    current = snapshot()
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema": "closer-queue/v1",
+                "round": {},
+                "items": {
+                    TARGET: (
+                        {
+                            "operation": {
+                                "id": "original-uncertain",
+                                "status": "uncertain",
+                                "repo_keys": ["o/r"],
+                            }
+                        }
+                        if legacy_uncertain
+                        else {}
+                    ),
+                },
+            }
+        )
+    )
+    action_path = tmp_path / "inner.json"
+    if inner_exists:
+        action_path.write_text(
+            json.dumps({"schema": "closer-queue/v1", "round": {}, "items": {TARGET: {}}})
+        )
+    captured = {}
+
+    def pipeline_stub(_path, _targets, **callbacks):
+        captured["result"] = callbacks["reconcile"](
+            TARGET,
+            {
+                "prepare": {"snapshot": current},
+                "revision": current["revision"],
+                "action_state_path": str(action_path),
+            },
+        )
+        return {"targets": {TARGET: captured["result"]}}
+
+    monkeypatch.setattr(closer_pipeline, "run_pipeline", pipeline_stub)
+    monkeypatch.setattr(
+        closer_queue,
+        "run_round",
+        lambda *_a, **_k: pytest.fail("legacy uncertainty must not retry an action"),
+    )
+    backend = closer(tmp_path, current)
+    args = SimpleNamespace(state=str(state_path), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
+    assert captured["result"]["outcome"] == (
+        "unknown" if legacy_uncertain else "confirmed_not_started"
+    )
+    if legacy_uncertain:
+        assert "legacy uncertain operation" in captured["result"]["reason"]
+
+
+def test_low_proposal_accepts_only_one_complete_json_document():
+    payload = {"target": TARGET, "head": HEAD, "classification": "uncertain"}
+    raw = json.dumps(payload)
+    assert adapter._parse_low_proposal(raw) == payload
+    assert adapter._parse_low_proposal(f"```json\n{raw}\n```") == payload
+    assert adapter._parse_low_proposal(f"```\n{raw}\n```") == payload
+    for invalid in (
+        f"Here is the result:\n```json\n{raw}\n```",
+        f"```json\n{raw}\n```\n```json\n{raw}\n```",
+        f"```json\n{raw[:-1]}\n```",
+        f"```json\n{raw}\n```\nextra prose",
+    ):
+        assert adapter._parse_low_proposal(invalid) == {}
+    for value in ([], "text", 1, None, True):
+        document = json.dumps(value)
+        assert adapter._parse_low_proposal(document) == {}
+        assert adapter._parse_low_proposal(f"```json\n{document}\n```") == {}
+    wrong = {**payload, "head": "f" * 40}
+    assert adapter._parse_low_proposal(f"```json\n{json.dumps(wrong)}\n```") == wrong
+
+
+@pytest.mark.parametrize("fenced", [False, True], ids=["plain-json", "single-json-fence"])
+def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(
+    tmp_path, monkeypatch, fenced
+):
     from subprocess import CompletedProcess
 
     import closer_disposition
@@ -2293,22 +2453,23 @@ def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(tmp_p
 
     def low_worker(_agent, prompt, **_kwargs):
         prompts.append(prompt)
+        payload = json.dumps(
+            {
+                "target": TARGET,
+                "head": HEAD,
+                "base": current["base"],
+                "classification": "relevant",
+                "substantive_needs": [],
+                "findings": [],
+                "decision": {"criteria": []},
+            }
+        )
         return {
             "exit": 0,
             "run_id": "real-run-1",
             "model": "gemini-test",
             "profile_id": "gemini-low",
-            "output": json.dumps(
-                {
-                    "target": TARGET,
-                    "head": HEAD,
-                    "base": current["base"],
-                    "classification": "relevant",
-                    "substantive_needs": [],
-                    "findings": [],
-                    "decision": {"criteria": []},
-                }
-            ),
+            "output": f"```json\n{payload}\n```" if fenced else payload,
         }
 
     monkeypatch.setattr(dispatcher, "offload", low_worker)
@@ -2665,8 +2826,12 @@ def test_deterministic_dispatcher_states_skip_low_provider_stage(tmp_path, monke
     assert all("actual" not in result for result in seen.values())
 
 
-def test_low_transport_failure_suppresses_profile_and_other_profile_continues(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize(
+    "failure_kind",
+    ["transport", "refusal", "inspection", "malformed", "quota", "quota_normal_exit"],
+)
+def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
+    tmp_path, monkeypatch, failure_kind
 ):
     import closer_disposition
     import closer_evidence
@@ -2710,8 +2875,34 @@ def test_low_transport_failure_suppresses_profile_and_other_profile_continues(
     def offload(_agent, _prompt, **kwargs):
         profile = kwargs["profile_id"]
         provider_profiles.append(profile)
-        if profile == "gemini-low":
-            return {"exit": 1, "run_id": "dispatch-unsupported-31", "error": "unsupported model"}
+        assert "honest missing-evidence assessment is a completed deliverable" in _prompt
+        assert "leave decision.criteria empty" in _prompt
+        assert "read-only commands such as python3 -c" in _prompt
+        if profile == "gemini-low" and kwargs["subject_id"] == first:
+            result = {"exit": 1, "run_id": "dispatch-failed-31", "error": "unsupported model"}
+            if failure_kind in {"refusal", "inspection", "quota_normal_exit"}:
+                result.update(
+                    exit=70,
+                    raw_exit=0,
+                    error="agent reported OFFLOAD_INCOMPLETE",
+                    output=(
+                        "OFFLOAD_INCOMPLETE: Cannot truthfully provide required PASS rows: "
+                        "qualifying evidence is missing and the operational check is future-dated."
+                        if failure_kind == "refusal"
+                        else "OFFLOAD_INCOMPLETE: read-only inspection could not create a temporary file."
+                    ),
+                )
+            if failure_kind == "malformed":
+                result.update(exit=0, output='{"classification": "uncertain",')
+            if failure_kind in {"quota", "quota_normal_exit"}:
+                if failure_kind == "quota":
+                    result.update(exit=3, raw_exit=3)
+                result["rate_incident_evidence"] = {
+                    "category": "quota_exhausted",
+                    "is_authoritative": True,
+                    "evidence_hash": "f" * 64,
+                }
+            return result
         return {
             "exit": 0,
             "run_id": "dispatch-success-32",
@@ -2731,11 +2922,18 @@ def test_low_transport_failure_suppresses_profile_and_other_profile_continues(
         }
 
     monkeypatch.setattr(dispatcher, "offload", offload)
-    # The helper is only reached for the successful alternative provider.
+    integrations = []
+    ordinary_validation = closer_disposition.integrate_ordinary
+
+    def integrate(target, *_a, **_k):
+        integrations.append(target)
+        return {"status": "wait", "reason": "evidence incomplete", "raw_findings": []}
+
+    # Interpretation must not submit a refusal/malformed response for acceptance.
     monkeypatch.setattr(
         closer_disposition,
         "integrate_ordinary",
-        lambda *_a, **_k: {"status": "wait", "reason": "evidence incomplete", "raw_findings": []},
+        integrate,
     )
 
     def packet_for(target):
@@ -2783,16 +2981,43 @@ def test_low_transport_failure_suppresses_profile_and_other_profile_continues(
             values[target] = callbacks["interpret"](
                 target, {"prepare": packet_for(target), "deadline": time.time() + 60}
             )
-        assert values[first]["actual"]["run_id"] == "dispatch-success-32"
-        assert values[first]["prior_provider_failures"][0]["run_id"] == "dispatch-unsupported-31"
+        if failure_kind in {"refusal", "inspection", "malformed"}:
+            assert values[first]["actual"]["run_id"] == "dispatch-failed-31"
+            assert values[first]["classification"] == "uncertain"
+            assert values[first]["substantive_needs"]
+            assert values[first]["integration_status"] == "wait"
+            assert not values[first]["integration_disposition"]
+            assert not values[first]["prior_provider_failures"]
+            if failure_kind != "malformed":
+                assert values[first]["actual"]["exit"] == 70
+                assert values[first]["actual"]["raw_exit"] == 0
+                assert values[first]["substantive_needs"] == ["incomplete_low_assessment"]
+                assert "OFFLOAD_INCOMPLETE" in values[first]["proposal"]["raw_excerpt"]
+                # A later action may validate the original receipt again. It
+                # must still reject its actual exit70, regardless of raw_exit0.
+                guarded = ordinary_validation(first, snapshots[first], {}, {}, values[first])
+                assert guarded["status"] == "wait"
+                assert guarded["reason"] == "worker_execution_unverified"
+                assert not guarded.get("disposition")
+        else:
+            assert values[first]["actual"]["run_id"] == "dispatch-success-32"
+            assert values[first]["prior_provider_failures"][0]["run_id"] == "dispatch-failed-31"
         assert values[second]["actual"]["run_id"] == "dispatch-success-32"
         return {"targets": values}
 
     monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=pipeline_stub))
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
     adapter._run_staged_pipeline(args, [first, second], backend, time.time() + 360)
-    assert route_profiles == ["gemini-low", "claude-low", "claude-low"]
+    if failure_kind in {"refusal", "inspection", "malformed"}:
+        assert route_profiles == ["gemini-low", "gemini-low"]
+        assert integrations == [second]
+    else:
+        assert route_profiles == ["gemini-low", "claude-low", "claude-low"]
+        assert integrations == [first, second]
     assert provider_profiles == route_profiles
+
+    if failure_kind != "transport":
+        return
 
     route_profiles.clear()
     provider_profiles.clear()

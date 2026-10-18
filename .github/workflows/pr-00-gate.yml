@@ -13,7 +13,7 @@ name: Gate
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    types: [opened, synchronize, reopened, ready_for_review]
   # ALSO ON PUSH TO MAIN, and the reason is an incident rather than a preference.
   #
   # This workflow used to run on `pull_request` only. On 2026-08-24 its PR run was held at

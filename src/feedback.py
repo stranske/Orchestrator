@@ -4111,7 +4111,13 @@ def _record_outcome_in_conn(
                 sets.append(f"{k}=?")
                 vals.append(int(v) if isinstance(v, bool) else v)
         if durability is not None:
-            sets.append("durability_checked_ts=?")
+            # A closure receipt is a first-action deadline fact, not a fresh sweep.
+            # Keep its first timestamp even when the deterministic receipt is retried.
+            sets.append(
+                "durability_checked_ts=COALESCE(durability_checked_ts,?)"
+                if str(run_id).startswith("supervisor-close:")
+                else "durability_checked_ts=?"
+            )
             vals.append(int(time.time()))
         if not sets:
             return
@@ -7182,6 +7188,25 @@ def _selftest_resolve_db_path() -> None:
                 os.environ[key] = value
 
 
+def _selftest_closure_timestamp() -> None:
+    with _conn() as conn:
+        conn.execute("SAVEPOINT closure_timestamp_fixture")
+        try:
+            for run_id in ("supervisor-close:selftest-time", "ordinary-selftest-time"):
+                _record_outcome_in_conn(conn, run_id, durability="durable", propagate_lineage=False)
+                conn.execute(
+                    "UPDATE outcomes SET durability_checked_ts=1 WHERE run_id=?", (run_id,)
+                )
+                _record_outcome_in_conn(conn, run_id, durability="durable", propagate_lineage=False)
+                stamp = conn.execute(
+                    "SELECT durability_checked_ts FROM outcomes WHERE run_id=?", (run_id,)
+                ).fetchone()[0]
+                assert (stamp == 1) if run_id.startswith("supervisor-close:") else (stamp > 1)
+        finally:
+            conn.execute("ROLLBACK TO closure_timestamp_fixture")
+            conn.execute("RELEASE closure_timestamp_fixture")
+
+
 def _selftest():
     import tempfile
 
@@ -7260,6 +7285,7 @@ def _selftest():
             )
         finally:
             legacy.close()
+        _selftest_closure_timestamp()
         _selftest_resolve_db_path()
         _selftest_agent_switches_utc()
         _selftest_refusal_role_edges()

@@ -178,6 +178,123 @@ def test_current_head_ci_runs_collected_before_verifier_and_progress_refreshes(t
     assert second["sections"]["ci_artifacts"]["content"]["runs"][0]["conclusion"] == "success"
 
 
+def test_unassociated_pull_request_runs_bind_to_unique_exact_head_and_keep_failure(tmp_path):
+    branch = "codex/issue-3"
+    snap = snapshot(head_branch=branch, head_repository="acme/repo")
+    calls = []
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as stream:
+        stream.writestr("junit.xml", '<testsuite tests="1"><testcase name="one"/></testsuite>')
+
+    def api(endpoint, **kwargs):
+        calls.append(endpoint)
+        if "/compare/" in endpoint:
+            return base_api(endpoint)
+        if "/actions/runs?" in endpoint:
+            return {"workflow_runs": [{"id": n, "head_sha": HEAD} for n in (901, 902)]}
+        if "/pulls?" in endpoint:
+            return [
+                {
+                    "number": 12,
+                    "head": {"sha": HEAD, "ref": branch, "repo": {"full_name": "acme/repo"}},
+                }
+            ]
+        if endpoint.endswith("/runs/901") or endpoint.endswith("/runs/902"):
+            run_id = int(endpoint.rsplit("/", 1)[1])
+            return {
+                "id": run_id,
+                "run_attempt": 1,
+                "head_sha": HEAD,
+                "head_branch": branch,
+                "head_repository": {"full_name": "acme/repo"},
+                "repository": {"full_name": "acme/repo"},
+                "pull_requests": [],
+                "event": "pull_request",
+                "status": "completed",
+                "conclusion": "success" if run_id == 901 else "failure",
+            }
+        if endpoint.endswith("/artifacts?per_page=100"):
+            run_id = int(endpoint.split("/runs/", 1)[1].split("/", 1)[0])
+            return {
+                "artifacts": [
+                    {
+                        "id": run_id,
+                        "name": "test-output",
+                        "size_in_bytes": 100,
+                        "expired": False,
+                    }
+                ]
+            }
+        raise AssertionError(endpoint)
+
+    packet = collect(
+        tmp_path, snap, api=api, artifact_fetch=lambda _item, **_kw: archive.getvalue()
+    )
+    ci = packet["sections"]["ci_artifacts"]
+    assert evidence.validate_packet(packet)
+    assert [(row["id"], row["conclusion"]) for row in ci["content"]["runs"]] == [
+        (901, "success"),
+        (902, "failure"),
+    ]
+    assert all(
+        row["association_basis"] == "unique_exact_pr_head"
+        and row["head_branch"] == branch
+        and row["head_repository"] == "acme/repo"
+        for row in ci["content"]["runs"]
+    )
+    assert len(ci["content"]["artifacts"]) == 2
+    assert ci["content"]["proof_status"] == "partial"
+    assert len([call for call in calls if "/pulls?" in call]) == 1
+
+
+@pytest.mark.parametrize("change", ["branch", "head-repo", "base-repo", "event", "ambiguous"])
+def test_unassociated_pull_request_run_rejects_mismatched_or_ambiguous_identity(tmp_path, change):
+    branch = "codex/issue-3"
+    snap = snapshot(head_branch=branch, head_repository="acme/repo")
+    run = {
+        "id": 901,
+        "run_attempt": 1,
+        "head_sha": HEAD,
+        "head_branch": branch,
+        "head_repository": {"full_name": "acme/repo"},
+        "repository": {"full_name": "acme/repo"},
+        "pull_requests": [],
+        "event": "pull_request",
+        "status": "completed",
+        "conclusion": "success",
+    }
+    if change == "branch":
+        run["head_branch"] = "other-branch"
+    elif change == "head-repo":
+        run["head_repository"] = {"full_name": "other/repo"}
+    elif change == "base-repo":
+        run["repository"] = {"full_name": "other/repo"}
+    elif change == "event":
+        run["event"] = "push"
+    candidate = {
+        "number": 12,
+        "head": {"sha": HEAD, "ref": branch, "repo": {"full_name": "acme/repo"}},
+    }
+
+    def api(endpoint, **kwargs):
+        if "/compare/" in endpoint:
+            return base_api(endpoint)
+        if "/actions/runs?" in endpoint:
+            return {"workflow_runs": [{"id": 901, "head_sha": HEAD}]}
+        if "/pulls?" in endpoint:
+            return (
+                [candidate, {**candidate, "number": 13}] if change == "ambiguous" else [candidate]
+            )
+        if endpoint.endswith("/runs/901"):
+            return run
+        raise AssertionError(endpoint)
+
+    packet = collect(tmp_path, snap, api=api)
+    ci = packet["sections"]["ci_artifacts"]
+    assert ci["content"]["runs"] == []
+    assert ci["status"] != "complete"
+
+
 def test_ci_run_and_artifact_identity_provenance_and_junit_raw_retention(tmp_path):
     stream = io.BytesIO()
     with zipfile.ZipFile(stream, "w") as archive:
