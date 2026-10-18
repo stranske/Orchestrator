@@ -840,6 +840,9 @@ def test_binding_ineligible_validates_skill_package_once(
     missing = {k: v for k, v in binding.items() if k != "artifact"}
     assert capability_targets._binding_ineligible(missing, 100, {}) == "artifact_invalid"
     assert calls == []
+    for deadline in (float("inf"), float("-inf"), float("nan")):
+        invalid_deadline = {"kind": "workflow", "artifact": {"expires_at": deadline}}
+        assert capability_targets._binding_ineligible(invalid_deadline, 100, {}) == "expired"
 
 
 def test_direct_invoke_target_broken_skill_package_refuses_without_writes(

@@ -281,7 +281,7 @@ def _binding_deadlines(
             continue
         try:
             deadlines.append(int(value))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return True, None
     return False, (min(deadlines) if deadlines else None)
 
@@ -637,6 +637,19 @@ def verify_rollback(binding: Mapping[str, Any], *, registry_path: Path) -> dict[
 
 
 def _selftest() -> None:
+    # Invalid declarations refuse before Path/package matching, including direct
+    # invocation callers that do not pass through the compiled-target lifecycle.
+    for artifact in (None, 17, {}, []):
+        assert (
+            _binding_ineligible({"kind": "skill", "artifact": artifact}, 100, {})
+            == "artifact_invalid"
+        )
+    assert _binding_ineligible({"kind": "skill"}, 100, {}) == "artifact_invalid"
+    for deadline in (float("inf"), float("-inf"), float("nan")):
+        assert (
+            _binding_ineligible({"kind": "workflow", "artifact": {"expires_at": deadline}}, 100, {})
+            == "expired"
+        )
     with tempfile.TemporaryDirectory(prefix="capability-targets-") as tmp:
         root = Path(tmp)
         plan = capability_compiler.compile_workflow_rail(
