@@ -127,3 +127,13 @@ Runtime-isolation assertions also depend on temporary directory placement and
 canonical runtime path shapes. The targeted environment rechecks above establish
 which subsets pass; neither full run is presented as a full-suite PASS.
 Both full runs precede the final upstream refresh from main.
+
+## Final upstream refresh
+
+Rebased onto main d3fc09662afff8e7c983b410fc1b87cab9094978 after both full runs.
+That upstream adds five closer-dispatcher cases and reconciles its own floor.
+The producer change adds no collected test cases. Final independent collection is
+4993 (`final-collection.log`); the floor is taken byte-for-byte from that main,
+without setting or recalculating a count in this branch. After the refresh,
+`producer-green.log` records 84 passed / 4909 deselected; both required selftests,
+Ruff and Black pass. No full-suite PASS is claimed on the refreshed tree.
