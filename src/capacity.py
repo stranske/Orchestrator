@@ -1054,6 +1054,29 @@ def _capability_heartbeat(event_type: str, **kw) -> None:
         pass
 
 
+def experiment_pacing(snapshot: dict) -> dict[str, str]:
+    """Consume #668 pacing if present; preserve shared-pool limits otherwise."""
+    result = {}
+    for agent, row in (snapshot.get("agents") or {}).items():
+        state = row.get("pacing_state", row.get("pacing", row.get("state", "unknown")))
+        if isinstance(state, dict):
+            state = state.get("state", "unknown")
+        if row.get("state", "ok") != "ok":
+            state = row["state"]
+        pool_ids = [
+            key
+            for key, definition in execution_profiles.CAPACITY_POOLS.items()
+            if definition.get("agent") == agent
+        ]
+        for pool_id in pool_ids:
+            pool = (snapshot.get("pools") or {}).get(pool_id, {})
+            pool_state = pool.get("pacing_state", pool.get("state", "ok"))
+            if pool_state != "ok":
+                state = f"{pool_id}={pool_state}"
+        result[agent] = state
+    return result
+
+
 def build(ccusage_block=None, *, record_pacing: bool = False) -> dict:
     # Infrastructure capability: exercised once per tick as a PHASE, never selected for a task, so
     # it records use here rather than through a routing matcher. Inert outside an active tick.

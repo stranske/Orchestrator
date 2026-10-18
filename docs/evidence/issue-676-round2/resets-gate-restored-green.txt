@@ -1,0 +1,6 @@
+.                                                                        [100%]
+1 passed in 0.77s
+
+exit_code=0
+restored_sha256=cac966bab863909d996d7fc72578bd4e183cb1b147bd1bc07cd1e8eebf5e78ee
+worktree_sha256=cac966bab863909d996d7fc72578bd4e183cb1b147bd1bc07cd1e8eebf5e78ee

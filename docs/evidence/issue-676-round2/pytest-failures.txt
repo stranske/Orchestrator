@@ -1,0 +1,138 @@
+tests/test_agent_workspace_never_broad.py::test_every_homes_control_plane_is_refused_when_home_is_moved
+AssertionError: (PosixPath('/Users/teacher/.codex/orchestrator'), "/Users/teacher/.codex/orchestrator contains the user's home (/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2817/test_every_homes_control_plane0/home)")
+assert ("/Users/teacher/.codex/orchestrator contains the user's home (/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2817/test_every_homes_control_plane0/home)" and 'default state dir' in "/Users/teacher/.codex/orchestrator contains the user's home (/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2817/test_every_homes_control_plane0/home)")
+
+tests/test_build_exec_mirror.py::test_the_documented_copier_builds_through_the_builder
+AssertionError: mktemp: mkstemp failed on /var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/tmp.9JuabTEme2: Operation not permitted
+  ERR: orch-sync-mirror.sh aborted at line 33 (rc 1): /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2817/test_the_documented_copier_bui0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.
+
+assert 1 == 0
+ +  where 1 = CompletedProcess(args=['bash', '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-28...the_documented_copier_bui0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.\n').returncode
+
+tests/test_build_exec_mirror.py::test_the_390_guard_composes_with_the_documented_copier
+AssertionError: mktemp: mkstemp failed on /var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/tmp.9DdM2SluDW: Operation not permitted
+  ERR: orch-sync-mirror.sh aborted at line 38 (rc 1): /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2817/test_the_390_guard_composes_wi0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.
+
+assert 1 == 0
+ +  where 1 = CompletedProcess(args=['bash', '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-28...the_390_guard_composes_wi0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.\n').returncode
+
+tests/test_build_exec_mirror.py::test_presync_says_whether_ci_verified_the_shipped_tree[documented]
+AssertionError: == scratch mirror of /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2817/test_presync_says_whether_ci_v1/source @ 77b56b3 (0 uncommitted) -> /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2817/test_presync_says_whether_ci_v1/verify-before-sync.y0N56a/mirror
+  tests/ shipped from git HEAD 77b56b3 (2 files) — uncommitted test edits are NOT shipped
+  scripts/ shipped from git HEAD (4 entries)
+  .github/ shipped from git HEAD (1 files) with .gitignore ruff.toml
+  docs/ shipped from git HEAD (1 files, merged beside run-time output)
+  built 3 .py (from /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2817/test_presync_says_whether_ci_v1/source/src) + orchestrate.sh + 1 test file(s) + 11 data/config entries -> /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2817/test_presync_says_whether_ci_v1/verify-before-sync.y0N56a/mirror
+  mktemp: mkstemp failed on /var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/tmp.ANIsYDsKHr: Operation not permitted
+  ERR: orch-sync-mirror.sh aborted at line 33 (rc 1): /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2817/test_presync_says_whether_ci_v1/verify-before-sync.y0N56a/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.
+  verify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched
+
+assert 2 == 0
+ +  where 2 = CompletedProcess(args=['bash', '/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__676__opener/scrip...verify.\nverify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched\n').returncode
+
+tests/test_build_exec_mirror.py::test_presync_says_whether_ci_verified_the_shipped_tree[drifted]
+AssertionError: == scratch mirror of /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2817/test_presync_says_whether_ci_v2/source @ fff2ff9 (0 uncommitted) -> /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2817/test_presync_says_whether_ci_v2/verify-before-sync.sviL7z/mirror
+  tests/ shipped from git HEAD fff2ff9 (2 files) — uncommitted test edits are NOT shipped
+  scripts/ shipped from git HEAD (4 entries)
+  .github/ shipped from git HEAD (1 files) with .gitignore ruff.toml
+  docs/ shipped from git HEAD (1 files, merged beside run-time output)
+  built 3 .py (from /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2817/test_presync_says_whether_ci_v2/source/src) + orchestrate.sh + 1 test file(s) + 11 data/config entries -> /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2817/test_presync_says_whether_ci_v2/verify-before-sync.sviL7z/mirror
+  mktemp: mkstemp failed on /var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/tmp.kImu6VUzQ9: Operation not permitted
+  ERR: orch-sync-mirror.sh aborted at line 33 (rc 1): /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2817/test_presync_says_whether_ci_v2/verify-before-sync.sviL7z/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.
+  verify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched
+
+assert 2 == 0
+ +  where 2 = CompletedProcess(args=['bash', '/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__676__opener/scrip...verify.\nverify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched\n').returncode
+
+tests/test_model_tier_resolution.py::test_capacity_sheds_seat_when_model_unresolvable
+AssertionError: {'policy': 'auth-failed', 'availability': 'unavailable_auth_failed', 'next_action': 'Refresh gemini credentials, then re-check with `python3 capacity.py --json`. The fleet reads the credential FILE, not an interactive login session.'}
+assert 'unavailable_auth_failed' == 'unavailable_model_unresolved'
+
+  - unavailable_model_unresolved
+  + unavailable_auth_failed
+
+tests/test_model_tier_resolution.py::test_capacity_stays_ok_when_model_resolves
+AssertionError: shed
+assert 'shed' != 'shed'
+ +  where 'shed' = capacity.SHED
+
+tests/test_model_tier_resolution.py::test_offload_survives_a_heartbeat_failure
+PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/handoff/dispatch-logs/offload.cursor.1792259599698500000.log'
+
+tests/test_route_weights_export.py::test_shed_pool_marker_flips_state_within_one_export
+AssertionError: assert 'shed' != 'shed'
+ +  where 'shed' = capacity.SHED
+
+tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_backslash
+AssertionError: stdout:
+  stderr: sandbox-exec: sandbox_apply: Operation not permitted
+
+assert 71 == 0
+ +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath "/Users/te.../.git/hooks/pre-commit"]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\n').returncode
+
+tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_combined
+AssertionError: stdout:
+  stderr: sandbox-exec: sandbox_apply: Operation not permitted
+
+assert 71 == 0
+ +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath "/Users/te.../.git/hooks/pre-commit"]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\n').returncode
+
+tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_quote
+AssertionError: stdout:
+  stderr: sandbox-exec: sandbox_apply: Operation not permitted
+
+assert 71 == 0
+ +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath "/Users/te.../.git/hooks/pre-commit"]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\n').returncode
+
+tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_regex_metacharacters
+AssertionError: stdout:
+  stderr: sandbox-exec: sandbox_apply: Operation not permitted
+
+assert 71 == 0
+ +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath "/Users/te.../.git/hooks/pre-commit"]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\n').returncode
+
+tests/test_tick_watchdog.py::test_a_stuck_tick_is_reported_with_the_kill_that_frees_it
+AssertionError: timed out after 60s waiting for a drain naming the stuck command; record={}; history=<none>
+
+tests/test_tick_watchdog.py::test_the_process_table_keeps_whole_command_lines
+PermissionError: [Errno 1] Operation not permitted: 'ps'
+
+tests/test_tick_watchdog.py::test_the_drained_line_is_reachable_and_exact
+AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+
+assert 2 == 0
+
+tests/test_tick_watchdog.py::test_a_tick_that_reaches_no_cadence_step_alerts
+AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+
+assert 2 == 0
+
+tests/test_tick_watchdog.py::test_a_previous_tick_that_left_no_end_is_unknown_and_kept
+AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+
+assert 2 == 0
+
+tests/test_tick_watchdog.py::test_an_unreadable_record_is_unknown_not_clean
+AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+
+assert 2 == 0
+
+tests/test_tick_watchdog.py::test_the_arming_block_as_written_arms_and_records_the_tick
+AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+    WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)
+
+assert False
+ +  where False = <built-in method startswith of str object at 0x11d123870>('  tick-watchdog: armed')
+ +    where <built-in method startswith of str object at 0x11d123870> = "  WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed\n  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\n".startswith
+ +      where "  WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed\n  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\n" = CompletedProcess(args=['bash', '-c', 'set -euo pipefail\nORCH=/Users/teacher/.codex/orchestrator/worktrees/stranske__O...s'); not armed\n  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\n", stderr='').stdout
+
+tests/test_tick_watchdog.py::test_fleet_summary_carries_the_tick_record
+PermissionError: [Errno 1] Operation not permitted: 'ps'
+
+tests/test_tick_watchdog.py::test_a_drain_whose_target_has_exited_is_never_advertised
+PermissionError: [Errno 1] Operation not permitted: 'ps'
+
+tests/test_tick_watchdog.py::test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming
+AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+
+assert 2 == 0
