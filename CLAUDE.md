@@ -305,20 +305,26 @@ Do not create a second event log, model registry, or capability inventory.
   - Measured when this was decided: a contended local run took 25 minutes for 7 minutes of CPU,
     and about half the time of its slowest checks was spent blocked on the machine-wide ledger
     lock. CI ran the same suite in 1m40s.
-- **The collection floor is an EQUALITY, so adding tests means bumping it in the same PR.**
-  `collected` in `.verify-floor.json` must EQUAL what pytest collects: too few fails (tests
-  stopped running), and since 2026-08-23 too many fails as well. A floor BEHIND reality is
-  permissive by exactly the gap, and that direction was silent for as long as it existed — four
-  drifts (21 low at the worst, then 8, then 1, then 2) each caught only because somebody happened
-  to look, because nothing required a test-adding PR to touch the file at all. CI prints the two
-  integers to write. **If a branch merged under you, REBASE before re-measuring** — the number is
-  a property of the merge result, not of your branch. You will rarely have to remember that: once
-  every test-adding branch edits these same two lines, two concurrent branches conflict in git,
-  and the second cannot merge without rebasing onto the first. `passed` stays a MINIMUM on
-  `passed + skipped`, because only collection is machine-invariant — a skipped test is still a
-  collected one, so a bare runner and the owner's machine collect the same number while their
-  pass/skip split differs. `--update-floor` is not blocked by drift (that would be a gate
-  forbidding its own drain) and now APPENDS to the note rather than replacing it.
+- **The collection floor is an EQUALITY on main; on a pull request it may LAG.** `collected` in
+  `.verify-floor.json` must EQUAL what pytest collects on main: too few fails (tests stopped
+  running), and since 2026-08-23 too many fails as well. A floor BEHIND reality is permissive by
+  exactly the gap, and that direction was silent for as long as it existed — four drifts (21 low at
+  the worst, then 8, then 1, then 2) each caught only because somebody happened to look. Main's
+  equality is enforced by the push-to-main run and healed by the `reconcile-floor` job
+  (`verify.py --reconcile-floor`, the `chore(floor)` commits). On a PULL REQUEST, CI runs
+  `verify.py --floor-may-lag`: a floor behind the tests you added is reported and forgiven, and a
+  collection DROP still fails, because the right number is only knowable on the merge result and main
+  moves under the branch (one one-line change needed six re-measurements in two hours). So **a PR
+  that adds tests may leave `.verify-floor.json` alone**, and the autopilot's lane rounds do: two
+  PRs that both edit these two lines conflict in git every time main moves it (2026-10-18: two lane
+  PRs stayed unmerged for 17 and 27 hours while main moved the floor every 15 to 60 minutes, and 6 of
+  the 15 test-adding commits before them had merged without touching it). If you DO edit it, CI
+  prints the two integers to write, and **REBASE before re-measuring** — the number is a property of
+  the merge result, not of your branch. `passed` stays a MINIMUM on `passed + skipped`, because only
+  collection is machine-invariant — a skipped test is still a collected one, so a bare runner and
+  the owner's machine collect the same number while their pass/skip split differs. `--update-floor`
+  is not blocked by drift (that would be a gate forbidding its own drain) and now APPENDS to the note
+  rather than replacing it.
 - **A check whose PREREQUISITE is absent skips with the missing thing NAMED, and skipping is
   bounded.** Some checks need what only a running instance has: the populated capability ledger,
   an installed agent CLI, `~/.codex/skills`, the version-capable Codex binary. Those gates live in
