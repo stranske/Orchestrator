@@ -403,9 +403,7 @@ def test_compacted_refusal_requires_immutable_origin_and_current_native_proof(tm
         audit_key = (
             "source_run_id"
             if key == "source_run_id"
-            else "item_sha256"
-            if key == "item_sha256"
-            else None
+            else "item_sha256" if key == "item_sha256" else None
         )
         if audit_key:
             holder = history[0] if audit_key == "source_run_id" else history[0]["targets"][target]
@@ -443,8 +441,8 @@ def test_retained_refusal_cannot_override_conflicting_outcome_marker(tmp_path, r
                 "queue_receipt": receipt,
             },
         },
-        marker: {"actual": {"run_id": "uncertain-provider"}}
-        if marker.startswith("provider")
-        else True,
+        marker: (
+            {"actual": {"run_id": "uncertain-provider"}} if marker.startswith("provider") else True
+        ),
     }
     assert not pipeline._legacy_failed_act_wait_proof(path, target, item)

@@ -1956,9 +1956,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         reason = (
             old_act.get("reason")
             if isinstance(old_act, dict) and old_act.get("status") == "blocked"
-            else old_proof.get("reason")
-            if isinstance(old_proof, dict)
-            else None
+            else old_proof.get("reason") if isinstance(old_proof, dict) else None
         )
         refusal_only = (
             isinstance(reason, str) and reason in closer_pipeline.EVIDENCE_REFUSAL_REASONS

@@ -1471,9 +1471,7 @@ def _expired_invalid_round_recovery(
                 else (
                     "quarantine"
                     if target in quarantined
-                    else "reconcile_only"
-                    if target in uncertain
-                    else "completed"
+                    else "reconcile_only" if target in uncertain else "completed"
                 )
             )
         )
@@ -1555,9 +1553,7 @@ def _expired_invalid_round_recovery(
         history_entry = (
             dict(audit)
             if not history
-            else {**audit, "targets": fresh_material}
-            if fresh_material
-            else None
+            else {**audit, "targets": fresh_material} if fresh_material else None
         )
         _bounded(previous.get("invalid_stop_history", []), limit=512 * 1024)
         _bounded(prior_stop, limit=64 * 1024)
