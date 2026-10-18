@@ -51,6 +51,13 @@ and review revision; it grants no acceptance, merge or closure authority.
 The low worker may return a single complete JSON document inside one JSON code
 fence. The same schema, target, head and evidence checks apply after unwrapping;
 prose, multiple fences and incomplete JSON do not become decisions.
+Missing evidence is a completed uncertain assessment: name the gaps and leave
+decision criteria empty instead of inventing PASS rows. A normally exited worker
+that reports `OFFLOAD_INCOMPLETE` retains its failed result for senior integration;
+without authoritative provider-incident evidence it does not suppress a healthy
+profile for other targets. Real quota/transport failures and uncertain native
+outcomes retain their existing barriers. Inspect retained files with read-only
+commands such as `python3 -c`; do not create temporary files or widen permissions.
 
 An asynchronous CI/review wait parks that exact target and leaves other eligible
 work running. Refresh material transitions and continue while a concrete authorized
