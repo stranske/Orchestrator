@@ -2960,7 +2960,9 @@ def _selftest_review(gh_calls: list) -> None:
         assert "ON but not triggering" in text and "range-lane failure mode" in text
         # The complete report carries the comparative line once (integration, not the helper).
         assert text.count("comparative routing: classes_differing unmeasured") == 1, text
-        assert "status not_testable_slack — unmeasured; capacity constraints are slack" in text, text
+        assert (
+            "status not_testable_slack — unmeasured; capacity constraints are slack" in text
+        ), text
         # ...and the three reviews above were REPORTS: none wrote the ledger. It lacks every
         # declared gate row, so the writing loader would have seeded them all into it on the first.
         assert reg.read_bytes() == saved_ledger, "review() wrote the capability ledger it reads"
