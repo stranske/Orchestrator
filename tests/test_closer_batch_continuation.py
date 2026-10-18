@@ -298,9 +298,8 @@ def test_audit_growth_retains_chain_and_tamper_fails_closed(tmp_path):
 
 
 def test_publication_lock_serializes_but_does_not_fence_an_older_verified_snapshot(tmp_path):
-    from test_install_verified_snapshot import _snapshot
-
     from scripts import install_verified_snapshot as installer
+    from test_install_verified_snapshot import _snapshot
 
     old = _snapshot(tmp_path / "old")
     new = _snapshot(tmp_path / "new")
