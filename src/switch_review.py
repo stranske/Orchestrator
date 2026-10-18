@@ -1713,6 +1713,7 @@ def review(
     sources: Mapping[str, str] | None = None,
     value_chain_inputs: dict | None = None,
     credential_exposure_report: dict | None = None,
+    feature_goals_fn=None,
 ) -> dict:
     """Which held-or-idle switches are due for an owner decision, and why.
 
@@ -1720,6 +1721,14 @@ def review(
     carried as an FYI section; a caller that passes none gets no such section."""
     _capability_heartbeat()
 
+    import feature_goals
+
+    if feature_goals_fn is None:
+        feature_goals_fn = (
+            (lambda stamp: feature_goals.drift([], stamp))
+            if sources is not None or path is not None or "--selftest" in sys.argv
+            else feature_goals.report
+        )
     live_review_clock = now is None
     now = int(now if now is not None else time.time())
     states = switch_states(now=now, env=env, path=path, sources=sources)
@@ -1796,6 +1805,7 @@ def review(
         "mirror_drift": mirror_drift(),
         "fleet_gates": fleet_gates(now=now),
         "firing_regressions": firing_regressions(now=now, path=path),
+        "feature_goals": feature_goals_fn(now),
         "exploration_gate": _exploration_gate(),
         # Same rule again: a row retired by its expiry with nobody having looked is a decision that
         # never happened. FYI only, so it is not counted in `raise_count` and raises no question.
@@ -2085,6 +2095,11 @@ def format_report(rep: dict) -> str:
         import value_chain_monitor
 
         lines += value_chain_monitor.format_lines(rep["value_chain"])
+    import feature_goals
+
+    lines += feature_goals.format_lines(
+        rep.get("feature_goals") or feature_goals.drift([], goals=feature_goals.FEATURES)
+    )
     if "issue_size_quality" in rep:
         import issue_size_quality
 
@@ -2278,6 +2293,8 @@ def format_report(rep: dict) -> str:
         lines += credential_redaction.format_lines(exposure)
     if (
         not rep["raise_count"]
+        and not (rep.get("feature_goals") or {}).get("drifting")
+        and not (rep.get("feature_goals") or {}).get("errors")
         and not rep.get("stale_runners")
         and (rep.get("mirror_drift") or {}).get("status") == "ok"
         and not (rep.get("fleet_gates") or {}).get("suspect")
@@ -2802,6 +2819,11 @@ def _selftest_review(gh_calls: list) -> None:
     import tempfile
     from pathlib import Path
 
+    import feature_goals
+
+    def fake_goals(stamp):
+        return feature_goals.drift([], stamp)
+
     now = 1_700_000_000
     with tempfile.TemporaryDirectory(prefix="switch-review-") as td:
         reg = Path(td) / "capabilities.json"
@@ -2814,7 +2836,7 @@ def _selftest_review(gh_calls: list) -> None:
         saved_ledger = reg.read_bytes()
 
         # ALL OFF -> each with a recorded criterion is raised as a pending decision.
-        rep = review(now=now, env={}, path=reg)
+        rep = review(now=now, env={}, path=reg, feature_goals_fn=fake_goals)
         flags = {r["flag"] for r in rep["held_off"]}
         assert flags == set(SWITCH_CAPABILITY), flags
         assert not rep["on_but_idle"], rep["on_but_idle"]
@@ -2825,7 +2847,7 @@ def _selftest_review(gh_calls: list) -> None:
         saved_map = dict(SWITCH_CAPABILITY)
         try:
             SWITCH_CAPABILITY["ORCH_SYNTHETIC_NO_CRITERION"] = "range-lane-rollout"
-            gap = review(now=now, env={}, path=reg)
+            gap = review(now=now, env={}, path=reg, feature_goals_fn=fake_goals)
             assert gap["unconditioned"] == ["ORCH_SYNTHETIC_NO_CRITERION"], gap["unconditioned"]
             assert "NO recorded criterion" in format_report(gap)
         finally:
@@ -2835,7 +2857,7 @@ def _selftest_review(gh_calls: list) -> None:
 
         # THE RANGE-LANE CASE: ON, but the capability recorded nothing -> re-raised.
         env = {"ORCH_RANGE_LANE_ROLLOUT": "1"}
-        rep2 = review(now=now, env=env, path=reg)
+        rep2 = review(now=now, env=env, path=reg, feature_goals_fn=fake_goals)
         idle = {r["flag"] for r in rep2["on_but_idle"]}
         assert idle == {"ORCH_RANGE_LANE_ROLLOUT"}, idle
         assert "ORCH_RANGE_LANE_ROLLOUT" not in {r["flag"] for r in rep2["held_off"]}
@@ -2856,13 +2878,13 @@ def _selftest_review(gh_calls: list) -> None:
 
         # ON and RECENTLY triggering -> silent, no question.
         invoked((now - 2 * 86400, "routing-decision.json"))
-        rep3 = review(now=now, env=env, path=reg)
+        rep3 = review(now=now, env=env, path=reg, feature_goals_fn=fake_goals)
         assert not rep3["on_but_idle"], rep3["on_but_idle"]
 
         # ON but last invocation just past the window -> raised again. This is the component that
         # makes "turned it on and forgot" impossible.
         invoked((now - (REVIEW_DAYS + 1) * 86400, "routing-decision.json"))
-        rep4 = review(now=now, env=env, path=reg)
+        rep4 = review(now=now, env=env, path=reg, feature_goals_fn=fake_goals)
         assert {r["flag"] for r in rep4["on_but_idle"]} == {"ORCH_RANGE_LANE_ROLLOUT"}, rep4
         assert rep4["on_but_idle"][0]["idle_days"] == REVIEW_DAYS + 1
         assert rep4["on_but_idle"][0]["trials_excluded"] == 0, "plain idleness, measured"
@@ -2874,14 +2896,16 @@ def _selftest_review(gh_calls: list) -> None:
             (now - (REVIEW_DAYS + 1) * 86400, "routing-decision.json"),
             (now - 86400, capabilities.ADVICE_REF_PREFIX + "0123456789ab"),
         )
-        trialled = review(now=now, env=env, path=reg)["on_but_idle"]
+        trialled = review(now=now, env=env, path=reg, feature_goals_fn=fake_goals)["on_but_idle"]
         assert [r["flag"] for r in trialled] == ["ORCH_RANGE_LANE_ROLLOUT"], trialled
         assert trialled[0]["idle_days"] == REVIEW_DAYS + 1, trialled[0]
         assert (trialled[0]["trials_excluded"], trialled[0]["newest_trial_days"]) == (1, 1.0)
         assert "1 consult trial, the newest 1.0d ago, inside the" in not_counted_phrase(trialled[0])
 
         # "0" counts as off, not on.
-        rep5 = review(now=now, env={"ORCH_RANGE_LANE_ROLLOUT": "0"}, path=reg)
+        rep5 = review(
+            now=now, env={"ORCH_RANGE_LANE_ROLLOUT": "0"}, path=reg, feature_goals_fn=fake_goals
+        )
         assert "ORCH_RANGE_LANE_ROLLOUT" in {r["flag"] for r in rep5["held_off"]}
         # ...and does not PRINT as unset: each row names its value and where that came from.
         by_flag = {r["flag"]: r for r in rep5["held_off"]}
@@ -2920,7 +2944,7 @@ def _selftest_review(gh_calls: list) -> None:
         both_on = {**env, "ORCH_REDIRECT_APPLY_BOOTSTRAP": "1"}
         try:
             calls_before = len(gh_calls)
-            swept = review(now=now, env=both_on, path=reg)
+            swept = review(now=now, env=both_on, path=reg, feature_goals_fn=fake_goals)
             # POSITIVE CONTROL: the injected runner IS the seam the sweep uses, and the heartbeat
             # stub IS the one it calls, or the two "none" assertions below would be vacuous.
             assert len(gh_calls) > calls_before, "the injected runner is not the sweep's gh seam"
@@ -3024,7 +3048,10 @@ def main(argv: list[str]) -> int:
             value_chain_inputs = {
                 "errors": [f"Value-chain setup or input collection failed: {exc}"]
             }
+    import feature_goals
+
     rep = review(
+        feature_goals_fn=feature_goals.report,
         env=env,
         sources=sources,
         value_chain_inputs=value_chain_inputs,

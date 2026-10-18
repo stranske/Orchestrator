@@ -665,6 +665,25 @@ is at most eight days old. Label matching remains a second route after that shad
 
 ## The feedback loop closes over both surfaces
 
+The **feature goals ledger** (`feature_goals.py`, U-GOALS) extends these feedback
+surfaces with owner-stated goals, named read-only measures, dated evidence and
+append-only history at `$ORCH_STATE_DIR/feature-goals-history.jsonl`. Dedup checked
+value-chain, firing-regression and capability-target readers: they measure wiring,
+not owner goals. The weekly switch review always prints goal / measure / last value /
+drift, including the drained count. The daily `feature-goals` cadence independently
+checks `GOAL_SILENCE_DAYS` of observed silence or wrong-direction evidence and
+creates or updates one labelled drift issue per feature; measured recovery closes
+that issue. Unknown remains `unmeasured — would need <query>`, distinct from zero.
+The promotion measure imports the existing switch-review reader; absent comparative,
+pacing, random-cell and completion-comment sources explicitly remain unmeasured.
+The first observation establishes history unless a measured source proves a complete
+retrospective silence window or dates the last successful promotion; a declaration
+date never fabricates fourteen days of evidence. This feedback rail changes no dispatch, approval or capability
+gate. `ORCH_DISABLE_STEPS=feature-goals` disables its daily caller; rollback removes
+that caller and the weekly report seam. The external Sunday task remains a separate
+consumer: its coordinating session quotes the section verbatim into #575 with
+`goal-drift issues open: N`, and triggers its first run (it has never run).
+
 `feedback.py` learns (1) **router weights** — which agent per task_type — and (2) **role ↔ backend
 fit** — which LLM per role. Both return to the next cycle. Surface (2) is wired through role runs:
 `feedback.record_role_run()` records a `task_type='role:<name>'` decision, and the downstream run's
