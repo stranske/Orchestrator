@@ -2059,7 +2059,8 @@ def experiment_producer_line():
     test_metrics = (
         f"no_named_test={m['skips'].get('no_named_test', 0)} "
         f"(file-only={classes.get('file-only', 0)}, ci-only={classes.get('ci-only', 0)}, "
-        f"none={classes.get('none', 0)}), derived_tests={m.get('derived_tests', 0)}"
+        f"none={classes.get('none', 0)}), derived_tests={m.get('derived_tests', 0)}, "
+        f"derive_failed={m.get('derive_failed', 0)}"
     )
     legacy_classes = max(0, m["skips"].get("no_named_test", 0) - sum(classes.values()))
     if legacy_classes:

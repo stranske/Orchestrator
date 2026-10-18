@@ -501,7 +501,7 @@ def research_tick(
             plan["error"] = str(exc)
             if producer_enabled and isinstance(exc, experiment_producer.FrozenTestError):
                 experiment_producer.record_skip(
-                    "no_named_test",
+                    "derive_failed",
                     target=target,
                     test_class=experiment_producer.test_class(spec),
                 )

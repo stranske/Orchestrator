@@ -1858,6 +1858,11 @@ def reconcile(
 
 
 def selftest() -> None:
+    for runner in ("npm", "pnpm"):
+        for prefix in ("/absolute", "../other", "frontend/../../other"):
+            assert not _safe_command([runner, "--prefix", prefix, "test"])
+    assert not _safe_command(["node", "--test", "x.test.ts"])
+    assert _safe_command(["npm", "--prefix", "frontend", "test", "--", "x.test.tsx"])
     import contextlib
     import io
     import shutil
