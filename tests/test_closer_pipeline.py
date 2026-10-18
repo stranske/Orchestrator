@@ -1997,6 +1997,62 @@ def test_mixed_native_uncertainty_and_readonly_failure_allow_only_safe_carry(tmp
     assert final_stop["reasons"] == ["unresolved_native_provider_outcome:a:agy-mixed-uncertain-77"]
 
 
+def test_failed_exception_retains_timeout_and_reprepares_without_action(tmp_path):
+    path = tmp_path / "pipeline.json"
+    at = time.time()
+    needs = ["missing per-test break-and-revert proof"]
+    failure = {
+        "status": "failed",
+        "actual": {"exit": 124, "run_id": "offload:codex:timeout-816"},
+        "validated": {"status": "wait", "reason": "strong_worker_unavailable"},
+        "result": {"status": "failed", "worker": {"exit": 124, "error": "timed out after 120s"}},
+    }
+    events = []
+
+    def exception(target, context):
+        events.append(("exception", target))
+        assert context["interpret"]["substantive_needs"] == needs
+        return (
+            failure
+            if len([event for event in events if event[0] == "exception"]) == 1
+            else {"reviewed": True}
+        )
+
+    cb = callbacks(
+        interpret=lambda *_: {"substantive_needs": needs},
+        exception=exception,
+        act=lambda target, context: events.append(("act", target))
+        or {"status": "completed", "target_complete": True},
+    )
+    original_prepare = cb["prepare"]
+    cb["prepare"] = lambda target, context: events.append(("prepare", target)) or original_prepare(
+        target, context
+    )
+    first = run(path, ["owner/repo#816"], cb, seconds=10, now=lambda: at)
+    row = first["targets"]["owner/repo#816"]
+    assert row["status"] == "failed" and row["stage"] == "exception"
+    assert row["error"] == "exception_worker_failed"
+    assert row["metrics"]["errors"] == 1
+    assert row["results"]["exception"] == failure
+    assert row["results"]["interpret"]["substantive_needs"] == needs
+    assert "act" not in row["results"]
+    assert events == [("prepare", "owner/repo#816"), ("exception", "owner/repo#816")]
+    stop = validate_stop(path, now=lambda: at)
+    assert stop["valid"] is False
+    assert stop["reasons"] == ["unresolved_pipeline_work:owner/repo#816:failed"]
+
+    second = run(path, ["owner/repo#816"], cb, seconds=10, now=lambda: at + 20)
+    assert second["targets"]["owner/repo#816"]["status"] == "completed"
+    assert events[2:] == [
+        ("prepare", "owner/repo#816"),
+        ("exception", "owner/repo#816"),
+        ("act", "owner/repo#816"),
+    ]
+    latest = next(iter(closer_pipeline._load(path)["runs"].values()))
+    assert latest["prior_stop"]["valid"] is False
+    assert latest["prior_stop"]["reasons"] == stop["reasons"]
+
+
 def test_exception_worker_capacity_defers_before_action(tmp_path):
     path = tmp_path / "state.json"
     calls = []

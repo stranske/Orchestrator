@@ -41,6 +41,12 @@ An exact-head pull-request CI run whose GitHub association array is empty is ret
 only when its event, branch and repository match the linked PR and a bounded PR
 lookup finds exactly one matching head. Failed runs remain in the evidence; retrieved
 artifacts alone do not establish the required-check topology or acceptance.
+Raw test and coverage receipts use the existing bounded archive expansion budget;
+the compact packet section limit does not discard otherwise bounded input files.
+Retain exact raw hashes, reject unsafe XML, and keep coverage.py statement and branch
+counts separate. Unrecognized metadata and unknown required-check topology remain
+partial proof. A failed stronger worker stays at the exception stage with its native
+receipt; it cannot advance to an action, and a later round prepares fresh evidence.
 
 A completed private report is an internal handoff to this senior closer, not an
 external blocker. Read the retained result, integrate or reject its findings and
