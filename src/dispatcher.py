@@ -28,6 +28,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -1703,6 +1704,128 @@ def run(decision: dict, *, dry_run: bool = False, heartbeat: bool = True) -> dic
     return {"dry_run": dry_run, "launched": launched, "skipped": skipped, "count": len(launched)}
 
 
+_linked_pr_read_error: ContextVar[str] = ContextVar("linked_pr_read_error", default="")
+LINKED_PR_READ_TIMEOUT_S = 30
+
+
+def linked_open_prs(target: str) -> list[int] | None:
+    """Read all open PR links before a local claim; incomplete evidence is unknown.
+
+    One paginated REST listing supplies bodies/branches and one paginated GraphQL
+    operation supplies closing references. Never fall back to a GraphQL PR list.
+    The diagnostic is context-local so concurrent delegates cannot swap reasons.
+    """
+    _linked_pr_read_error.set("")
+    match = re.fullmatch(r"([^/\s]+)/([^/#\s]+)#([1-9][0-9]*)", target)
+    if not match:
+        _linked_pr_read_error.set("expected owner/repo#N")
+        return None
+    owner, name, number = match.groups()
+    repo = f"{owner}/{name}"
+
+    def read(args: list[str]) -> list:
+        result = subprocess.run(
+            ["gh", "api", *args, "--paginate", "--slurp"],
+            capture_output=True,
+            text=True,
+            timeout=LINKED_PR_READ_TIMEOUT_S,
+            check=False,
+        )
+        if result.returncode:
+            raise ValueError(f"gh exit {result.returncode}: {result.stderr.strip()}")
+        pages = json.loads(result.stdout)
+        if not isinstance(pages, list) or not pages:
+            raise ValueError("missing GitHub response pages")
+        return pages
+
+    def pr_number(value: Any) -> int:
+        if type(value) is not int or value <= 0:
+            raise ValueError("invalid PR/issue number")
+        return value
+
+    try:
+        rest_pages = read([f"repos/{repo}/pulls?state=open&per_page=100"])
+        linked = set()
+        rest_numbers = set()
+        closing = re.compile(
+            r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*"
+            rf"(?:#|{re.escape(repo)}#|https://github\.com/{re.escape(repo)}/issues/)"
+            rf"{number}\b",
+            re.IGNORECASE,
+        )
+        branch = re.compile(rf"^(codex|claude|cursor|gemini|muse|aider|orch)/issue-{number}(-.*)?$")
+        for page in rest_pages:
+            if not isinstance(page, list):
+                raise ValueError("invalid REST PR page")
+            for pr in page:
+                n = pr_number(pr["number"])
+                body, head = pr["body"], pr["head"]["ref"]
+                if (body is not None and not isinstance(body, str)) or not isinstance(head, str):
+                    raise ValueError("invalid PR body or head branch")
+                rest_numbers.add(n)
+                if closing.search(body or "") or branch.fullmatch(head):
+                    linked.add(n)
+        query = """query($owner:String!,$name:String!,$endCursor:String){
+          repository(owner:$owner,name:$name){
+            pullRequests(states:OPEN,first:100,after:$endCursor){
+              pageInfo{hasNextPage endCursor}
+              nodes{number closingIssuesReferences(first:100){
+                pageInfo{hasNextPage} nodes{number repository{nameWithOwner}}
+              }}
+            }
+          }
+        }"""
+        graph_pages = read(
+            ["graphql", "-f", "query=" + query, "-f", "owner=" + owner, "-f", "name=" + name]
+        )
+        graph_numbers = set()
+        cursors = set()
+        for index, page in enumerate(graph_pages):
+            if page.get("errors"):
+                raise ValueError(f"GraphQL errors: {page['errors']}")
+            connection = page["data"]["repository"]["pullRequests"]
+            info = connection["pageInfo"]
+            if type(info["hasNextPage"]) is not bool:
+                raise ValueError("invalid GraphQL pagination")
+            if info["hasNextPage"] != (index < len(graph_pages) - 1):
+                raise ValueError("incomplete GraphQL PR pagination")
+            if info["hasNextPage"]:
+                cursor = info["endCursor"]
+                if not isinstance(cursor, str) or not cursor or cursor in cursors:
+                    raise ValueError("invalid GraphQL cursor")
+                cursors.add(cursor)
+            if not isinstance(connection["nodes"], list):
+                raise ValueError("invalid GraphQL PR nodes")
+            for pr in connection["nodes"]:
+                n = pr_number(pr["number"])
+                graph_numbers.add(n)
+                refs = pr["closingIssuesReferences"]
+                if refs["pageInfo"]["hasNextPage"] is not False:
+                    raise ValueError(f"incomplete closingIssuesReferences for PR #{n}")
+                if not isinstance(refs["nodes"], list):
+                    raise ValueError("invalid closing reference nodes")
+                for ref in refs["nodes"]:
+                    ref_number = pr_number(ref["number"])
+                    ref_repo = ref["repository"]["nameWithOwner"]
+                    if not isinstance(ref_repo, str):
+                        raise ValueError("invalid closing reference repository")
+                    if ref_number == int(number) and ref_repo.casefold() == repo.casefold():
+                        linked.add(n)
+        if rest_numbers != graph_numbers:
+            raise ValueError("open PR population changed between REST and GraphQL; retry")
+        return sorted(linked)
+    except (
+        OSError,
+        subprocess.SubprocessError,
+        ValueError,
+        KeyError,
+        TypeError,
+        AttributeError,
+    ) as exc:
+        _linked_pr_read_error.set(str(exc))
+        return None
+
+
 def delegate(
     agent: str,
     target: str,
@@ -1722,6 +1845,7 @@ def delegate(
     review_loop: bool = False,
     review_round: int = 1,
     review_run_id: str | None = None,
+    continue_pr: int | None = None,
 ) -> dict:
     """One ad-hoc delegation for the assessing orchestrator seat: claim + provision + spawn
     ONE cheap agent with the orchestrator's OWN crafted prompt (detached, PATH+auth+release
@@ -1762,6 +1886,18 @@ def delegate(
             return {"error": str(exc)}
         if requested_profile["agent"] != agent:
             return {"error": f"profile {profile_id} does not belong to {agent}"}
+    linked = linked_open_prs(target)
+    if linked is None:
+        reason = _linked_pr_read_error.get() or "GitHub linked-PR read failed"
+        return {"error": f"linked: unknown ({reason}); pass continue_pr=<N> or retry"}
+    if (linked or continue_pr is not None) and (
+        type(continue_pr) is not int or continue_pr not in linked
+    ):
+        names = ", ".join(f"#{n}" for n in linked)
+        return {
+            "error": f"linked: open PR {names or '(none)'} close {target}; "
+            "pass continue_pr=<N> to work on one of them"
+        }
     claims.reap_stale()
     if not claims.claim(target, agent):
         h = claims.holder(target)
@@ -3522,6 +3658,25 @@ def _selftest_capability_dispatch(root: Path) -> None:
         invoke.assert_not_called()
 
 
+def _selftest_delegate_linked_pr() -> None:
+    from unittest.mock import patch
+
+    # Exercise the pre-claim edge without GitHub, state cleanup or a worker.
+    with (
+        patch.object(sys.modules[__name__], "linked_open_prs", return_value=[734, 736]),
+        patch.object(claims, "reap_stale") as reap,
+        patch.object(claims, "claim", return_value=False) as claim,
+        patch.object(claims, "holder", return_value={"agent": "incumbent"}),
+    ):
+        refused = delegate("cursor", "o/r#731", "opener", "bounded")
+        assert "open PR #734, #736" in refused["error"], refused
+        claim.assert_not_called()
+        reap.assert_not_called()
+        continued = delegate("cursor", "o/r#731", "opener", "fix", continue_pr=736)
+        assert "already claimed" in continued["error"], continued
+        claim.assert_called_once_with("o/r#731", "cursor")
+
+
 def _selftest() -> None:
     import inspect
 
@@ -3536,6 +3691,7 @@ def _selftest() -> None:
         _dispatch_branch("stranske/Workflows#7", "opener", "codex", "custom/") == "custom/issue-7"
     )
     _selftest_gemini_refusal()
+    _selftest_delegate_linked_pr()
 
     tmp = tempfile.mkdtemp(prefix="dispatcher-selftest-")
     os.environ["HANDOFF_DIR"] = tmp
@@ -5071,6 +5227,7 @@ def main(argv: list[str]) -> int:
         p.add_argument("--mode")
         p.add_argument("--profile-id", help="explicit immutable execution profile")
         p.add_argument("--task-type", default="implement")
+        p.add_argument("--continue-pr", type=int, help="continue this confirmed linked open PR")
         p.add_argument(
             "--review-loop",
             action="store_true",
@@ -5101,6 +5258,7 @@ def main(argv: list[str]) -> int:
             ns.mode,
             task_type=ns.task_type,
             profile_id=ns.profile_id,
+            continue_pr=ns.continue_pr,
             influenced_by_role_run_ids=ns.influenced_by_role_run_id,
             **review_kwargs,
             **({"branch_prefix": ns.branch_prefix} if ns.branch_prefix is not None else {}),
