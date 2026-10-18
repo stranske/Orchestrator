@@ -745,6 +745,8 @@ def test_no_named_test_is_skipped_before_admission(monkeypatch, tmp_path):
     assert producer.named_test("`pytest -q`") is None
     assert producer.named_test("tests/test_x.py") == "python3 -m pytest -q tests/test_x.py"
     assert producer.named_test("tests/foo.test.js") == "node --test tests/foo.test.js"
+    assert producer.named_test("`node --test tests/foo.test.js`") == "node --test tests/foo.test.js"
+    assert producer.named_test("`node --test .github/scripts/__tests__/x.test.js`") is None
     assert synthesis_promotion._safe_command(["node", "--test", "tests/foo.test.js"])
     assert not synthesis_promotion._safe_command(["node", "--eval", "process.exit(0)"])
     assert not synthesis_promotion._safe_command(["node", "--test", "tests/../foo.test.js"])
@@ -756,6 +758,29 @@ def test_no_named_test_is_skipped_before_admission(monkeypatch, tmp_path):
     )
     assert (
         producer.test_admission("## Acceptance Criteria\n- The public value returns 2.") == "none"
+    )
+    assert (
+        producer.unnamed_skip_class(
+            "## Acceptance Criteria\n"
+            "- Cover behavior in `.github/scripts/__tests__/handoff.test.js`."
+        )
+        == "file-only"
+    )
+    assert (
+        producer.unnamed_skip_class(
+            "## Acceptance Criteria\n- Tests pass in CI for the requested behavior."
+        )
+        == "ci-only"
+    )
+    assert producer.unnamed_skip_class("Implement a feature with no tests named.") == "none"
+    assert producer.unnamed_skip_class("tests/test_x.py") is None
+    # Measure taxonomy: AC file path / CI phrase / neither stay distinct when unnamed.
+    assert (
+        producer.unnamed_skip_class(
+            "## Acceptance Criteria\n"
+            "- Covered by `.github/scripts/__tests__/auto-pilot-transitions.test.js`.\n"
+        )
+        == "file-only"
     )
     _derived_producer_roundtrip(tmp_path, monkeypatch)
     cap, kwargs = plan_fixture(monkeypatch)

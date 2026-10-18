@@ -1,0 +1,218 @@
+{
+  "measured_at_utc": "2026-10-18T07:32:03Z",
+  "feed_generated_at": 1792308671,
+  "method": "Research-feed subjects that fail experiment_producer.named_test (current tip, including file-path and allowlisted backtick node --test). Classified with experiment_producer.unnamed_skip_class: Acceptance Criteria first (file path / CI-or-tests-pass / none), else whole body. This is a live re-measure of the same skip class as the 2026-10-18 05:53Z reading (no_named_test=28); feed churn means the cardinality need not equal 28.",
+  "original_reading": {
+    "at_utc": "2026-10-18T05:53:00Z",
+    "cells_fresh": "2/37",
+    "skipped": "31 (no_draw=2, no_named_test=28, pacing cursor=production_reserve=1)",
+    "note": "Per-target skip_issues from that UTC day were not available on this runner."
+  },
+  "feed_eligible": 113,
+  "admitted_by_named_test": 81,
+  "skipped_no_named_test": 32,
+  "counts": {
+    "file-only": 1,
+    "ci-only": 29,
+    "none": 2
+  },
+  "counts_by_test_admission": {
+    "ci-only": 29,
+    "unscoped": 2,
+    "none": 1
+  },
+  "targets": [
+    {
+      "target": "stranske/Fine-Art-Archive#799",
+      "title": "Raise test coverage toward 90% (autopilot round 9, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Fine-Art-Archive#810",
+      "title": "Raise test coverage toward 90% (autopilot round 10, lane A, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Fine-Art-Archive#816",
+      "title": "Raise test coverage toward 90% (autopilot round 11, lane A, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Manager-Database#1794",
+      "title": "Raise test coverage toward 90% (autopilot round 2, lane B, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Manager-Database#1802",
+      "title": "Raise test coverage toward 90% (autopilot round 4, lane B, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Manager-Database#1806",
+      "title": "Raise test coverage toward 90% (autopilot round 5, lane B, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Orchestrator#647",
+      "title": "Raise test coverage toward 90% (autopilot round 1, lane B, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Orchestrator#652",
+      "title": "Raise test coverage toward 90% (autopilot round 2, lane B, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Orchestrator#658",
+      "title": "Raise test coverage toward 90% (autopilot round 3, lane B, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Orchestrator#702",
+      "title": "Raise test coverage toward 90% (autopilot round 1, lane C, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Portable-Alpha-Extension-Model#2360",
+      "title": "Raise test coverage toward 90% (autopilot round 1, lane B, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Portable-Alpha-Extension-Model#2375",
+      "title": "Raise test coverage toward 90% (autopilot round 2, lane B, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Portable-Alpha-Extension-Model#2381",
+      "title": "Raise test coverage toward 90% (autopilot round 3, lane B, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Portable-Alpha-Extension-Model#2382",
+      "title": "Raise test coverage toward 90% (autopilot round 1, lane C, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Workflows#3956",
+      "title": "Raise test coverage toward 90% (autopilot round 1, lane B, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Workflows#3958",
+      "title": "Raise test coverage toward 90% (autopilot round 1, lane C, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Workflows#3964",
+      "title": "Raise test coverage toward 90% (autopilot round 1, lane D, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Workflows#3970",
+      "title": "Wire Gate failure tracking and recovery to the documented issue and snapshot sinks",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Workflows#3995",
+      "title": "Raise test coverage toward 90% (autopilot round 2, lane C, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Workflows#3998",
+      "title": "Raise test coverage toward 90% (autopilot round 2, lane D, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Workflows#4001",
+      "title": "Raise test coverage toward 90% (autopilot round 3, lane C, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Workflows#4005",
+      "title": "Raise test coverage toward 90% (autopilot round 2, lane B, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Workflows#4013",
+      "title": "Raise test coverage toward 90% (autopilot round 3, lane D, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Workflows#4018",
+      "title": "Raise test coverage toward 90% (autopilot round 3, lane B, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Workflows#4019",
+      "title": "Raise test coverage toward 90% (autopilot round 4, lane C, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Workflows#4020",
+      "title": "Raise test coverage toward 90% (autopilot round 4, lane D, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Workflows#4038",
+      "title": "Raise test coverage toward 90% (autopilot round 4, lane B, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Workflows#4063",
+      "title": "Raise test coverage toward 90% (autopilot round 6, lane D, low blast radius only)",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/trip-planner#1905",
+      "title": "Carry option markers and selection through the live Google Maps adapter",
+      "class": "ci-only",
+      "test_admission": "ci-only"
+    },
+    {
+      "target": "stranske/Workflows#3967",
+      "title": "Keep auto-pilot verification pending when no merged source PR is found",
+      "class": "file-only",
+      "test_admission": "none"
+    },
+    {
+      "target": "stranske/Orchestrator#720",
+      "title": "[goal-drift] experiments: multi-source feedback on sizable features \u2014 measured_zero for 14 days",
+      "class": "none",
+      "test_admission": "unscoped"
+    },
+    {
+      "target": "stranske/Workflows#4011",
+      "title": "[coverage] baseline breach",
+      "class": "none",
+      "test_admission": "unscoped"
+    }
+  ]
+}

@@ -302,11 +302,7 @@ def build_plan(
                 {
                     "target": item["target"],
                     "reason": "no_named_test",
-                    "test_class": (
-                        "ci-only"
-                        if re.search(r"(?i)tests? pass|\bCI\b", item.get("body", ""))
-                        else "none"
-                    ),
+                    "test_class": unnamed_skip_class(item.get("body", "")) or "none",
                 }
             )
     eligible = [i for i in eligible if test_admission(i.get("body", "")) != "unscoped"]
@@ -453,32 +449,62 @@ def named_test_paths(command):
 
 
 def named_test(spec):
-    """Only explicit fenced/backtick pytest commands or named test nodes qualify."""
-    commands = re.findall(r"`([^`\n]*(?:pytest|python3? [^`\n]*--selftest)[^`\n]*)`", spec)
+    """Only explicit fenced/backtick pytest/node commands or named test nodes qualify."""
+    import shlex
+
+    from synthesis_promotion import _safe_command
+
+    commands = re.findall(
+        r"`([^`\n]*(?:pytest|python3? [^`\n]*--selftest|node --test)[^`\n]*)`", spec or ""
+    )
     for command in commands:
-        if command.strip().startswith(("pytest ", "python3 ", "python ", "/")):
-            import shlex
-
-            from synthesis_promotion import _safe_command
-
-            try:
-                tokens = shlex.split(command)
-                if _safe_command(tokens) and (named_test_paths(command) or "--selftest" in tokens):
-                    return command.strip()
-            except ValueError:
-                pass
-    nodes = re.findall(r"tests/[\w./-]+\.py(?:::[\w\[\]-]+)*", spec)
+        stripped = command.strip()
+        if not stripped.startswith(("pytest ", "python3 ", "python ", "node ", "/")):
+            continue
+        try:
+            tokens = shlex.split(stripped)
+        except ValueError:
+            continue
+        if tokens[:2] == ["node", "--test"]:
+            if _safe_command(tokens):
+                return stripped
+            continue
+        if _safe_command(tokens) and (named_test_paths(command) or "--selftest" in tokens):
+            return stripped
+    nodes = re.findall(r"tests/[\w./-]+\.py(?:::[\w\[\]-]+)*", spec or "")
     if nodes:
         return "python3 -m pytest -q " + " ".join(dict.fromkeys(nodes))
-    javascript = re.findall(r"tests/[\w./-]+\.test\.js", spec)
+    javascript = re.findall(r"tests/[\w./-]+\.test\.js", spec or "")
     return "node --test " + " ".join(dict.fromkeys(javascript)) if javascript else None
+
+
+def unnamed_skip_class(spec):
+    """Classify a body with no named test: file-only, ci-only, or none.
+
+    Preference order matches the #731 measure: Acceptance Criteria first, else the whole body.
+    A test *file* path that admission still rejects (for example `.github/...test.js`) counts as
+    file-only so the producer line can show why the pool was skipped.
+    """
+    if named_test(spec):
+        return None
+    section = re.search(
+        r"(?ims)^#{1,6}\s+acceptance\s+criteria\s*\n(.*?)(?=^#{1,6}\s|\Z)", spec or ""
+    )
+    hay = section[1] if section else (spec or "")
+    if re.search(r"(?:tests/[\w./-]+(?:\.py(?:::[\w\[\]-]*)*|\.test\.js)|[\w./-]+\.test\.js)", hay):
+        return "file-only"
+    if re.search(r"(?i)\bCI\b|tests? pass", hay):
+        return "ci-only"
+    return "none"
 
 
 def test_admission(spec):
     """Classify the specification; only an explicit acceptance section permits derivation."""
     command = named_test(spec)
     if command:
-        return "named" if re.search(r"`[^`]*pytest", spec) else "file-only"
+        if re.search(r"`[^`]*pytest", spec or "") or re.search(r"`[^`]*node --test", spec or ""):
+            return "named"
+        return "file-only"
     section = re.search(r"(?ims)^#{1,6}\s+acceptance\s+criteria\s*\n(.*?)(?=^#{1,6}\s|\Z)", spec)
     if section and re.search(r"\w{3}", section[1]):
         return "ci-only" if re.search(r"(?i)\bCI\b|tests? pass", section[1]) else "none"
@@ -992,6 +1018,8 @@ def main():
             named_test("`tests/test_a.py::test_x`")
             == "python3 -m pytest -q tests/test_a.py::test_x"
         )
+        assert named_test("`node --test tests/foo.test.js`") == "node --test tests/foo.test.js"
+        assert unnamed_skip_class("## Acceptance Criteria\n- Tests pass in CI.\n") == "ci-only"
         print("experiment_producer.py selftest: OK (cap and frozen named test)")
     elif args.trial_defaults:
         print(*trial_defaults())
