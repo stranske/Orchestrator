@@ -959,6 +959,14 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
         )
     else:
         prompt = build_prompt(task_type, target, lane=lane)
+    if assignment.get("review_loop"):
+        prompt += (
+            "\nREVIEW-LOOP HANDOFF: Reuse the existing source issue branch/PR when repairing. "
+            "Do not merge. Once the ready-for-review PR is published, print exactly "
+            "PR_URL=https://github.com/<owner>/<repo>/pull/<number> on its own line. "
+            "Independent exact-head review runs after your writer exits; ordinary CI and "
+            "review gates still apply."
+        )
     profile_id = assignment.get("selected_profile_id")
     selected_profile = execution_profiles.get_profile(profile_id) if profile_id else None
     model = adapters.model_identity(agent, mode, selected_profile)
@@ -1081,6 +1089,9 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
         "wrapped": wrapped,
         "worktree_missing": worktree_missing,
         "feedback_mode": assignment.get("feedback_mode"),
+        "review_loop": bool(assignment.get("review_loop")),
+        "review_round": assignment.get("review_round", 1),
+        "review_run_id": assignment.get("review_run_id"),
         "selected_profile_id": profile_id,
         "requested_model": selected_profile.get("requested_model") if selected_profile else None,
         "profile_policy_version": assignment.get("profile_policy_version"),
@@ -1167,6 +1178,10 @@ def _spawn(d: dict) -> int:
     d["run_id"] = run_id
     started_ts = int(time.time())
     d["started_ts"] = started_ts
+    if d.get("review_loop"):
+        metadata = dict(d.get("routing_metadata") or {})
+        metadata.update(review_loop=True, review_run_id=d.get("review_run_id") or run_id)
+        d["routing_metadata"] = metadata
     selected_profile = (
         execution_profiles.get_profile(d["selected_profile_id"])
         if d.get("selected_profile_id")
@@ -1177,7 +1192,7 @@ def _spawn(d: dict) -> int:
         routing_metadata = dict(d.get("routing_metadata") or {})
         routing_metadata["profile_attempt_ids"] = [profile_attempt_id]
         d["routing_metadata"] = routing_metadata
-    lineage_required = any(
+    lineage_required = bool(d.get("review_loop")) or any(
         d.get(key)
         for key in (
             "influenced_by_role_run_ids",
@@ -1223,7 +1238,11 @@ def _spawn(d: dict) -> int:
         # Profile attribution is causal learning data. Persist the run before
         # the attempt or process so a DB failure cannot launch unjoinable work
         # or leave an orphan execution_attempt.
-        feedback.record_run(*run_args, **run_kwargs)
+        try:
+            feedback.record_run(*run_args, **run_kwargs)
+        except Exception:
+            claims.release(d["target"], d["agent"])
+            raise
     else:
         try:
             feedback.record_run(*run_args, **run_kwargs)
@@ -1243,6 +1262,7 @@ def _spawn(d: dict) -> int:
                 error_hash=hashlib.sha256(str(exc).encode()).hexdigest(),
             )
             if lineage_required:
+                claims.release(d["target"], d["agent"])
                 raise RuntimeError(
                     f"refusing dispatch without required completion lineage for {run_id}"
                 ) from exc
@@ -1358,9 +1378,40 @@ def _spawn(d: dict) -> int:
     # runs, and its status rides in the marker as `release_rc`, beside the agent's, never as it.
     # `release_rc` 137 is what counts a step killed again from here on.
     release = shlex.join([step_python, str(CLAIMS_PY), "release", d["target"], d["agent"]])
+    review_after = ""
+    if d.get("review_loop"):
+        # This is deliberately after release and completion.  A PR URL is not
+        # terminal evidence; review_loop independently rechecks claim state.
+        review_after = (
+            "; "
+            + shlex.join(
+                [
+                    step_python,
+                    str(ORCH_DIR / "review_loop.py"),
+                    "after-writer",
+                    "--target",
+                    d["target"],
+                    "--implementer",
+                    d["agent"],
+                    "--lane",
+                    d["lane"],
+                    "--run-id",
+                    str(d.get("review_run_id") or run_id),
+                    "--writer-run-id",
+                    run_id,
+                    "--log",
+                    str(logf),
+                    "--round",
+                    str(d.get("review_round", 1)),
+                ]
+            )
+            + ' --writer-exit "$orch_dispatch_rc"'
+        )
     wrapped = (
         f"{d['wrapped']}; orch_dispatch_rc=$?; {release}; orch_release_rc=$?; {marker_cmd}; "
-        f'{complete_cmd} --exit-code "$orch_dispatch_rc"; exit $orch_dispatch_rc'
+        f'{complete_cmd} --exit-code "$orch_dispatch_rc"'
+        + review_after
+        + "; exit $orch_dispatch_rc"
     )
     with logf.open("a") as fh:
         fh.write(
@@ -1464,12 +1515,24 @@ def delegate(
     capability_ids=None,
     capability_version_ids=None,
     acceptance_gate_ids=None,
+    review_loop: bool = False,
+    review_round: int = 1,
+    review_run_id: str | None = None,
 ) -> dict:
     """One ad-hoc delegation for the assessing orchestrator seat: claim + provision + spawn
     ONE cheap agent with the orchestrator's OWN crafted prompt (detached, PATH+auth+release
     wrapper). Returns {pid, log, worktree} to monitor, or {error}. This is the seat's hand —
     it decides WHO/WHAT/HOW (the prompt); this just executes safely. `task_type` is recorded for
     the feedback loop (the REAL kind of work, not a generic 'delegated')."""
+    if review_loop:
+        from review_loop import REVIEW_LOOP_MAX_ROUNDS
+
+        if (
+            isinstance(review_round, bool)
+            or not isinstance(review_round, int)
+            or not 1 <= review_round <= REVIEW_LOOP_MAX_ROUNDS
+        ):
+            return {"error": "review round outside bounded review loop"}
     explicit_mode = mode
     if mode is None:
         mode = (
@@ -1513,6 +1576,9 @@ def delegate(
         "capability_ids": list(capability_ids or []),
         "capability_version_ids": list(capability_version_ids or []),
         "acceptance_gate_ids": list(acceptance_gate_ids or []),
+        "review_loop": review_loop,
+        "review_round": review_round,
+        "review_run_id": review_run_id,
     }
     if codex_override_effort:
         a["reasoning_effort"] = codex_override_effort
@@ -1575,6 +1641,9 @@ def delegate(
         "target": target,
         "mode": mode,
         "run_id": d["run_id"],
+        # A PR from this dispatch is deliberately ineligible for a normal
+        # merge path until review_loop has produced MERGE-WHEN-GREEN.
+        **({"review_loop_status": "pending"} if review_loop else {}),
     }
 
 
@@ -4638,6 +4707,11 @@ def main(argv: list[str]) -> int:
         p.add_argument("--profile-id", help="explicit immutable execution profile")
         p.add_argument("--task-type", default="implement")
         p.add_argument(
+            "--review-loop",
+            action="store_true",
+            help="require independent exact-head review after terminal writer release",
+        )
+        p.add_argument(
             "--influenced-by-role-run-id",
             action="append",
             default=[],
@@ -4653,6 +4727,7 @@ def main(argv: list[str]) -> int:
         if "ORCH_ROLE_SHADOW" not in os.environ:
             print("role activation off (ORCH_ROLE_SHADOW unset)", file=sys.stderr)
         prompt = ns.prompt if ns.prompt is not None else Path(ns.prompt_file).read_text()
+        review_kwargs: dict[str, Any] = {"review_loop": True} if ns.review_loop else {}
         out = delegate(
             ns.agent,
             ns.target,
@@ -4662,6 +4737,7 @@ def main(argv: list[str]) -> int:
             task_type=ns.task_type,
             profile_id=ns.profile_id,
             influenced_by_role_run_ids=ns.influenced_by_role_run_id,
+            **review_kwargs,
         )
         print(json.dumps(out, default=str))
         return 0 if "error" not in out else 1
