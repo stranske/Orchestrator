@@ -251,6 +251,10 @@ def _pr_head_branch(repo: str, num: int) -> str:
     return out
 
 
+class ProbeBlindError(RuntimeError):
+    """Process inspection cannot establish its own visibility."""
+
+
 def _live_holder_pids(holder: Path) -> set[str]:
     """Inspect cwd and argv using canonical path components, never string prefixes."""
     root = Path(os.path.realpath(holder))
@@ -280,14 +284,26 @@ def _live_holder_pids(holder: Path) -> set[str]:
             )
         return result.stdout
 
+    def require_visible(visible: bool, mechanism: str) -> None:
+        if not visible:
+            raise ProbeBlindError(
+                f"cannot verify that no process holds {holder}: "
+                f"process listing cannot see this process ({mechanism})"
+            )
+
+    self_pid = str(os.getpid())
+    cwd_visible = False
     pids = set()
     # One scan for all processes, on macOS and Linux; -F also emits p<pid> records.
     pid = None
     for line in probe(["lsof", "-a", "-d", "cwd", "-Fn"], no_matches=True).splitlines():
         if line.startswith("p"):
             pid = line[1:]
-        elif line.startswith("n") and pid and within(line[1:]):
-            pids.add(pid)
+        elif line.startswith("n") and pid:
+            if pid == self_pid and Path(os.path.realpath(line[1:])) == Path.cwd().resolve():
+                cwd_visible = True
+            if within(line[1:]):
+                pids.add(pid)
     if pids:
         return pids
     # pgrep is only a candidate search: its regex also finds sibling prefixes such
@@ -295,17 +311,31 @@ def _live_holder_pids(holder: Path) -> set[str]:
     # Scan all ps rows as well, since aliases need not contain either holder spelling.
     for spelling in sorted(roots):
         probe(["pgrep", "-f", re.escape(str(spelling))], no_matches=True)
-    for line in probe(["ps", "-axo", "pid=,command="]).splitlines():
+    argv_visible = False
+    # -ww prevents terminal/pipe width from silently cutting off path arguments.
+    for line in probe(["ps", "-axww", "-o", "pid=,command="]).splitlines():
         fields = line.strip().split(None, 1)
         if len(fields) != 2:
             continue
         pid, command = fields
+        if pid == self_pid and command.strip():
+            argv_visible = True
         try:
             args = shlex.split(command)
         except ValueError:
             args = command.split()
-        if any(within(arg.split("=", 1)[-1]) for arg in args if "/" in arg):
+        # ps does not quote argv elements containing spaces. Preserve literal holder
+        # spellings too, with component boundaries so wt__1 never matches wt__10.
+        literal_holder = any(
+            re.search(r"(?:^|[\s=\"'])" + re.escape(str(spelling)) + r"(?=$|[\s/\"'])", command)
+            for spelling in roots
+        )
+        if literal_holder or any(within(arg.split("=", 1)[-1]) for arg in args if "/" in arg):
             pids.add(pid)
+    if not pids:
+        require_visible(cwd_visible, "lsof")
+        require_visible(self_pid in probe(["pgrep", "-f", "."], no_matches=True).split(), "pgrep")
+        require_visible(argv_visible, "ps")
     return pids
 
 
@@ -328,7 +358,11 @@ def _reclaim_branch_holder(canon: Path, branch: str, wt: Path, event: dict) -> N
             raise RuntimeError(
                 f"refusing to reclaim dirty worktree {holder}: {status.stdout.strip()}"
             )
-        live = _live_holder_pids(holder)
+        try:
+            live = _live_holder_pids(holder)
+        except ProbeBlindError:
+            event.update(outcome="failed", cause="probe-blind")
+            raise
         if live:
             raise RuntimeError(
                 f"refusing to reclaim worktree {holder}: live pid {', '.join(sorted(live))}"

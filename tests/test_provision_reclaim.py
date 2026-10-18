@@ -8,7 +8,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -114,29 +113,26 @@ def test_b_dirty_holder_is_refused(layout, lane):
 def test_c_live_holder_is_refused_naming_pid(layout):
     holder = hold(layout)
     proc = subprocess.Popen(
-        ["/bin/sh", "-c", f"sleep 300 # {shlex.quote(str(holder))}"], start_new_session=True
+        [sys.executable, "-c", "import time; time.sleep(300)", str(holder)],
+        cwd=layout[0].parent,
+        start_new_session=True,
     )
     try:
-        deadline = time.monotonic() + 3
-        while True:
-            seen = subprocess.run(
-                ["pgrep", "-f", re.escape(str(holder))], capture_output=True, text=True
-            )
-            if str(proc.pid) in seen.stdout.split():
-                break
-            assert time.monotonic() < deadline, f"child not visible to pgrep: {seen.stderr}"
-            time.sleep(0.01)
         with pytest.raises(RuntimeError) as caught:
             provision.provision(TARGET, "closer")
         assert str(holder) in str(caught.value)
-        assert str(proc.pid) in str(caught.value)
+        if isinstance(caught.value, provision.ProbeBlindError):
+            assert "process listing cannot see this process" in str(caught.value)
+            assert events()[0]["cause"] == "probe-blind"
+        else:
+            assert str(proc.pid) in str(caught.value)
         assert holder.exists()
         assert proc.poll() is None
         assert len(events()) == 1
-        assert events()[0]["cause"] == "branch-held"
+        assert events()[0]["cause"] in {"branch-held", "probe-blind"}
         assert events()[0]["outcome"] == "failed"
     finally:
-        # A process group also kills sleep when the shell has kept it as a child.
+        # Kill and reap the entire disposable process group.
         os.killpg(proc.pid, signal.SIGKILL)
         proc.wait(timeout=5)
 
@@ -194,8 +190,8 @@ def test_f_cwd_only_live_holder_is_refused_naming_pid(layout, nested):
 
 @pytest.mark.parametrize("lsof_mode", ["available", "no-matches", "missing"])
 def test_g_symlink_alias_in_argv_is_refused(layout, tmp_path, monkeypatch, lsof_mode):
-    if lsof_mode == "available" and shutil.which("lsof") is None:
-        pytest.skip("lsof is not installed")
+    # procps honors COLUMNS even with stdout captured; full argv must survive.
+    monkeypatch.setenv("COLUMNS", "80")
     run = provision._run
 
     def probe(args, **kwargs):
@@ -222,6 +218,9 @@ def test_g_symlink_alias_in_argv_is_refused(layout, tmp_path, monkeypatch, lsof_
             # Losing cwd inspection must still refuse, even if argv could be scanned.
             assert "cannot check live processes" in str(caught.value)
             assert "lsof missing" in str(caught.value)
+        elif isinstance(caught.value, provision.ProbeBlindError):
+            assert "process listing cannot see this process" in str(caught.value)
+            assert events()[0]["cause"] == "probe-blind"
         else:
             assert str(proc.pid) in str(caught.value)
             assert "live pid" in str(caught.value)
@@ -334,9 +333,17 @@ def test_cwd_probe_parses_pid_and_resolves_alias(tmp_path, monkeypatch, nested):
     assert sum(args[0] == "lsof" for args in calls) == 1
 
 
-def test_lsof_no_matches_allows_idle_holder(tmp_path, monkeypatch):
+def test_visible_probes_allow_idle_holder(tmp_path, monkeypatch):
     def probe(args, **kwargs):
-        return subprocess.CompletedProcess(args, 0 if args[0] == "ps" else 1, "", "")
+        if args[0] == "lsof":
+            output = f"p{os.getpid()}\nn{Path.cwd()}\n"
+        elif args[0] == "ps":
+            output = f"{os.getpid()} python -m pytest\n"
+        elif args == ["pgrep", "-f", "."]:
+            output = f"{os.getpid()}\n"
+        else:
+            return subprocess.CompletedProcess(args, 1, "", "")
+        return subprocess.CompletedProcess(args, 0, output, "")
 
     monkeypatch.setattr(provision, "_run", probe)
     assert provision._live_holder_pids(tmp_path) == set()
@@ -358,7 +365,7 @@ def test_argv_probe_resolves_symlink_alias(tmp_path, monkeypatch, nested, option
             return subprocess.CompletedProcess(args, 1, "", "")
         if args[0] == "pgrep":
             return subprocess.CompletedProcess(args, 1, "", "")
-        assert args[0] == "ps"
+        assert args == ["ps", "-axww", "-o", "pid=,command="]
         return subprocess.CompletedProcess(args, 0, f"42 python worker.py {argument}\n", "")
 
     monkeypatch.setattr(provision, "_run", probe)
@@ -490,13 +497,47 @@ def test_argv_sibling_prefix_is_not_a_live_holder(tmp_path, monkeypatch, pgrep_m
 
     def probe(args, **kwargs):
         if args[0] == "lsof":
-            return subprocess.CompletedProcess(args, 1, "", "")
+            return subprocess.CompletedProcess(args, 0, f"p{os.getpid()}\nn{Path.cwd()}\n", "")
+        if args == ["pgrep", "-f", "."]:
+            return subprocess.CompletedProcess(args, 0, f"{os.getpid()}\n", "")
         if args[0] == "pgrep":
             return subprocess.CompletedProcess(
                 args, 0 if pgrep_match else 1, "42\n" if pgrep_match else "", ""
             )
         assert args[0] == "ps"
-        return subprocess.CompletedProcess(args, 0, f"42 python {sibling}/worker.py\n", "")
+        return subprocess.CompletedProcess(
+            args, 0, f"{os.getpid()} python -m pytest\n42 python {sibling}/worker.py\n", ""
+        )
 
     monkeypatch.setattr(provision, "_run", probe)
     assert provision._live_holder_pids(holder) == set()
+
+
+@pytest.mark.parametrize("blind", ["lsof", "pgrep", "ps"])
+def test_blind_probe_refuses_and_records_ledger(layout, monkeypatch, blind):
+    holder = hold(layout)
+    run = provision._run
+
+    def probe(args, **kwargs):
+        if args[0] == "lsof":
+            output = f"p{os.getpid()}\nn{Path.cwd()}\n"
+        elif args[0] == "ps":
+            output = f"{os.getpid()} python -m pytest\n"
+        elif args[0] == "pgrep":
+            output = f"{os.getpid()}\n" if args[-1] == "." else ""
+        else:
+            return run(args, **kwargs)
+        if args[0] == blind:
+            output = ""
+        return subprocess.CompletedProcess(args, 0 if output or args[0] == "ps" else 1, output, "")
+
+    monkeypatch.setattr(provision, "_run", probe)
+    with pytest.raises(provision.ProbeBlindError) as caught:
+        provision.provision(TARGET, "closer")
+    assert str(caught.value) == (
+        f"cannot verify that no process holds {holder}: "
+        f"process listing cannot see this process ({blind})"
+    )
+    assert holder.exists()
+    assert events()[0]["outcome"] == "failed"
+    assert events()[0]["cause"] == "probe-blind"
