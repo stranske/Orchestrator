@@ -855,14 +855,15 @@ def prepare_arms(
                     br,
                     str(wt),
                     (
-                        (meta.get("test_commit") or base_sha)
+                        str(meta.get("test_commit") or base_sha)
                         if producer_metadata
                         else f"origin/{base}"
                     ),
                 ]
             )
-        if meta.get("test_sha256"):
-            for path, digest in meta["test_sha256"].items():
+        frozen_hashes = meta.get("test_sha256")
+        if isinstance(frozen_hashes, dict):
+            for path, digest in frozen_hashes.items():
                 if hashlib.sha256((wt / path).read_bytes()).hexdigest() != digest:
                     raise ValueError("frozen test differs in comparison worktree")
         prompt = implement_prompt(spec)
