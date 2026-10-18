@@ -2076,7 +2076,12 @@ KNOWN_EXISTING_DECLARATIONS: dict[str, dict[str, Any]] = {
         "notes": (
             "source599 declaration drain: offload already exists in the live ledger; "
             "its role consumers and run binding already exist. Reconcile only the consumer "
-            "declaration; do not register a capability, promote lifecycle or grant acting credit."
+            "declaration; do not register a capability, promote lifecycle or grant acting credit. "
+            "Issue671 dedup: dispatcher.delegate, advisory offload and Brain feedback already "
+            "exist; extend that dispatch path with terminal-writer exact-head review and "
+            "bounded same-agent repair, not a second role, model registry or capability. "
+            "Concept search, dormancy inventory and improvement-log review found no existing "
+            "bounded post-delegate review/redispatch consumer. No activation credit claimed."
         ),
     },
 }

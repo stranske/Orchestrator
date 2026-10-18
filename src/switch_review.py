@@ -49,10 +49,12 @@ import argparse
 import base64
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -804,6 +806,69 @@ def fleet_gates(
     }
 
 
+def _exploration_window() -> dict:
+    """Read the hosted rate and policy-switch population, never equating unreadable with zero."""
+    import feedback
+
+    window: dict = {
+        "start": "unmeasured",
+        "end": "unmeasured",
+        "extended": "unmeasured",
+        "n_by_policy": {},
+        "rate": "UNKNOWN",
+        "env": os.environ.get("ORCH_EXPLORATION_RATE", "unset"),
+        "switches": "UNKNOWN",
+        "errors": [],
+    }
+    state_dir = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
+    try:
+        state = json.loads((state_dir / "exploration-window.json").read_text(encoding="utf-8"))
+        start = datetime.strptime(state["start"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        end = datetime.strptime(state["end"], "%Y%m%d").strftime("%Y-%m-%d")
+        if not isinstance(state["extended"], bool) or not isinstance(state["n_by_policy"], dict):
+            raise ValueError("invalid exploration-window state")
+        window.update(
+            start=start.strftime("%Y-%m-%d"),
+            end=end,
+            extended="yes" if state["extended"] else "no",
+            n_by_policy=state["n_by_policy"],
+        )
+        window["errors"].extend(state.get("errors", []))
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        window["errors"].append(f"exploration window unmeasured: {exc}")
+    ok, out, reason = _gh_call(
+        [
+            "api",
+            "repos/stranske/Orchestrator/contents/config/route-weights.json?ref=exports/route-weights",
+            "-H",
+            "Accept: application/vnd.github.raw+json",
+        ]
+    )
+    try:
+        if not ok:
+            raise ValueError(reason)
+        rate = json.loads(out)["exploration"]["rate"]
+        if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not 0 <= rate <= 1:
+            raise ValueError("invalid exploration.rate")
+        window["rate"] = rate
+    except (ValueError, KeyError, TypeError) as exc:
+        window["errors"].append(f"published rate: {exc}")
+    try:
+        if window["start"] == "unmeasured":
+            raise ValueError("window start unmeasured")
+        with closing(
+            sqlite3.connect(f"{feedback.DB_PATH.resolve().as_uri()}?mode=ro", uri=True)
+        ) as conn:
+            window["switches"] = conn.execute(
+                "SELECT count(*) FROM agent_switches WHERE source='policy' "
+                "AND delegation_source='route_weights_exploration' AND switched_ts>=?",
+                (int(start.timestamp()),),
+            ).fetchone()[0]
+    except (sqlite3.Error, ValueError) as exc:
+        window["errors"].append(f"exploration switches: {exc}")
+    return window
+
+
 def _exploration_gate() -> dict:
     """Keep an unreadable direct-mode evidence gate visible in the recurring review."""
     try:
@@ -824,6 +889,7 @@ def _exploration_gate() -> dict:
         "evidence_error": error,
         "arms": evidence.get("mode_counts", []),
         "window_days": evidence.get("window_days"),
+        "window": _exploration_window(),
         "drainable": (
             "repair the Brain read"
             if status == "direct_mode_evidence_unreadable"
@@ -1647,6 +1713,7 @@ def review(
     sources: Mapping[str, str] | None = None,
     value_chain_inputs: dict | None = None,
     credential_exposure_report: dict | None = None,
+    feature_goals_fn=None,
 ) -> dict:
     """Which held-or-idle switches are due for an owner decision, and why.
 
@@ -1654,6 +1721,14 @@ def review(
     carried as an FYI section; a caller that passes none gets no such section."""
     _capability_heartbeat()
 
+    import feature_goals
+
+    if feature_goals_fn is None:
+        feature_goals_fn = (
+            (lambda stamp: feature_goals.drift([], stamp))
+            if sources is not None or path is not None or "--selftest" in sys.argv
+            else feature_goals.report
+        )
     live_review_clock = now is None
     now = int(now if now is not None else time.time())
     states = switch_states(now=now, env=env, path=path, sources=sources)
@@ -1700,6 +1775,7 @@ def review(
 
     rep = {
         "generated_at": now,
+        "review_loop": review_round_snapshot(),
         "adjudicator_shadow": adjudicator_retro.weekly_line(),
         # The live arm (M2 live, #643): new disputes certified and advised once, graded on truth.
         "adjudicator_live": adjudicator_live.weekly_line(),
@@ -1729,6 +1805,7 @@ def review(
         "mirror_drift": mirror_drift(),
         "fleet_gates": fleet_gates(now=now),
         "firing_regressions": firing_regressions(now=now, path=path),
+        "feature_goals": feature_goals_fn(now),
         "exploration_gate": _exploration_gate(),
         # Same rule again: a row retired by its expiry with nobody having looked is a decision that
         # never happened. FYI only, so it is not counted in `raise_count` and raises no question.
@@ -1963,6 +2040,26 @@ def comparative_routing_line(rep: dict) -> str:
     return line
 
 
+def review_round_snapshot() -> dict:
+    """Observe rounds without creating/migrating the Brain during a report."""
+    import feedback
+
+    try:
+        return {"status": "measured", "rows": feedback.review_round_rows()}
+    except (sqlite3.Error, OSError, ValueError, TypeError) as exc:
+        return {"status": "unmeasured", "reason": type(exc).__name__}
+
+
+def review_loop_share_line(rows) -> str:
+    """Report first-pass advisory acceptance without treating it as merge authority."""
+    # The issue's evaluation cohort is the first twenty opted-in deliveries.
+    first = [row for row in rows if int(row[5]) == 1][:20]
+    if not first:
+        return "  review loop first-pass MERGE-WHEN-GREEN: n/a (0 rounds)"
+    accepted = sum(1 for row in first if row[3] == "MERGE-WHEN-GREEN")
+    return f"  review loop first-pass MERGE-WHEN-GREEN: {accepted}/{len(first)} ({accepted / len(first):.0%})"
+
+
 def format_report(rep: dict) -> str:
     lines = [
         "# Switch review — held switches must be revisited, not forgotten",
@@ -1972,6 +2069,16 @@ def format_report(rep: dict) -> str:
         "",
     ]
     lines += [comparative_routing_line(rep), ""]
+    loop = rep.get("review_loop") or {}
+    if loop.get("status") == "measured":
+        lines += [review_loop_share_line(loop["rows"]), ""]
+    else:
+        lines += [
+            "  review loop first-pass MERGE-WHEN-GREEN: UNMEASURED ("
+            + str(loop.get("reason", "no snapshot"))
+            + ")",
+            "",
+        ]
     try:
         import strategy_experiment
 
@@ -2010,6 +2117,11 @@ def format_report(rep: dict) -> str:
         import value_chain_monitor
 
         lines += value_chain_monitor.format_lines(rep["value_chain"])
+    import feature_goals
+
+    lines += feature_goals.format_lines(
+        rep.get("feature_goals") or feature_goals.drift([], goals=feature_goals.FEATURES)
+    )
     if "issue_size_quality" in rep:
         import issue_size_quality
 
@@ -2131,11 +2243,29 @@ def format_report(rep: dict) -> str:
                 lines.append(f"      {fleet['clear_paths']}")
         lines.append("")
     exploration_gate = rep.get("exploration_gate") or {}
-    if exploration_gate.get("window_days") is not None and not exploration_gate.get("suspect"):
+    window = exploration_gate.get("window")
+    show_arms = exploration_gate.get("window_days") is not None and not exploration_gate.get(
+        "suspect"
+    )
+    if window or show_arms:
+        lines += ["## Exploration arms", ""]
+    if window:
+        counts = window.get("n_by_policy") or {}
+        epsilon_n = counts.get("epsilon-greedy")
+        thompson_n = counts.get("thompson-hybrid")
+        lines += [
+            f"  exploration window: rate {window['rate']} (env {window['env']}), "
+            f"exploration switches since {window['start']} {window['switches']}",
+            f"  exploration window: end {window.get('end', 'unmeasured')} "
+            f"(extended: {window.get('extended', 'unmeasured')}, per-policy n "
+            f"epsilon-greedy {epsilon_n if epsilon_n is not None else 'unmeasured'} / "
+            f"thompson-hybrid {thompson_n if thompson_n is not None else 'unmeasured'})",
+            *[f"  UNKNOWN — {error}" for error in window.get("errors", [])],
+            "",
+        ]
+    if show_arms:
         arms = {row["mode"]: row for row in exploration_gate.get("arms") or []}
         lines += [
-            "## Exploration arms",
-            "",
             f"  window={exploration_gate.get('window_days')}d; "
             "PASS denominator=graded G; durable denominator=completed durability sweeps D",
         ]
@@ -2185,6 +2315,8 @@ def format_report(rep: dict) -> str:
         lines += credential_redaction.format_lines(exposure)
     if (
         not rep["raise_count"]
+        and not (rep.get("feature_goals") or {}).get("drifting")
+        and not (rep.get("feature_goals") or {}).get("errors")
         and not rep.get("stale_runners")
         and (rep.get("mirror_drift") or {}).get("status") == "ok"
         and not (rep.get("fleet_gates") or {}).get("suspect")
@@ -2709,6 +2841,11 @@ def _selftest_review(gh_calls: list) -> None:
     import tempfile
     from pathlib import Path
 
+    import feature_goals
+
+    def fake_goals(stamp):
+        return feature_goals.drift([], stamp)
+
     now = 1_700_000_000
     with tempfile.TemporaryDirectory(prefix="switch-review-") as td:
         reg = Path(td) / "capabilities.json"
@@ -2721,7 +2858,7 @@ def _selftest_review(gh_calls: list) -> None:
         saved_ledger = reg.read_bytes()
 
         # ALL OFF -> each with a recorded criterion is raised as a pending decision.
-        rep = review(now=now, env={}, path=reg)
+        rep = review(now=now, env={}, path=reg, feature_goals_fn=fake_goals)
         flags = {r["flag"] for r in rep["held_off"]}
         assert flags == set(SWITCH_CAPABILITY), flags
         assert not rep["on_but_idle"], rep["on_but_idle"]
@@ -2732,7 +2869,7 @@ def _selftest_review(gh_calls: list) -> None:
         saved_map = dict(SWITCH_CAPABILITY)
         try:
             SWITCH_CAPABILITY["ORCH_SYNTHETIC_NO_CRITERION"] = "range-lane-rollout"
-            gap = review(now=now, env={}, path=reg)
+            gap = review(now=now, env={}, path=reg, feature_goals_fn=fake_goals)
             assert gap["unconditioned"] == ["ORCH_SYNTHETIC_NO_CRITERION"], gap["unconditioned"]
             assert "NO recorded criterion" in format_report(gap)
         finally:
@@ -2742,7 +2879,7 @@ def _selftest_review(gh_calls: list) -> None:
 
         # THE RANGE-LANE CASE: ON, but the capability recorded nothing -> re-raised.
         env = {"ORCH_RANGE_LANE_ROLLOUT": "1"}
-        rep2 = review(now=now, env=env, path=reg)
+        rep2 = review(now=now, env=env, path=reg, feature_goals_fn=fake_goals)
         idle = {r["flag"] for r in rep2["on_but_idle"]}
         assert idle == {"ORCH_RANGE_LANE_ROLLOUT"}, idle
         assert "ORCH_RANGE_LANE_ROLLOUT" not in {r["flag"] for r in rep2["held_off"]}
@@ -2763,13 +2900,13 @@ def _selftest_review(gh_calls: list) -> None:
 
         # ON and RECENTLY triggering -> silent, no question.
         invoked((now - 2 * 86400, "routing-decision.json"))
-        rep3 = review(now=now, env=env, path=reg)
+        rep3 = review(now=now, env=env, path=reg, feature_goals_fn=fake_goals)
         assert not rep3["on_but_idle"], rep3["on_but_idle"]
 
         # ON but last invocation just past the window -> raised again. This is the component that
         # makes "turned it on and forgot" impossible.
         invoked((now - (REVIEW_DAYS + 1) * 86400, "routing-decision.json"))
-        rep4 = review(now=now, env=env, path=reg)
+        rep4 = review(now=now, env=env, path=reg, feature_goals_fn=fake_goals)
         assert {r["flag"] for r in rep4["on_but_idle"]} == {"ORCH_RANGE_LANE_ROLLOUT"}, rep4
         assert rep4["on_but_idle"][0]["idle_days"] == REVIEW_DAYS + 1
         assert rep4["on_but_idle"][0]["trials_excluded"] == 0, "plain idleness, measured"
@@ -2781,14 +2918,16 @@ def _selftest_review(gh_calls: list) -> None:
             (now - (REVIEW_DAYS + 1) * 86400, "routing-decision.json"),
             (now - 86400, capabilities.ADVICE_REF_PREFIX + "0123456789ab"),
         )
-        trialled = review(now=now, env=env, path=reg)["on_but_idle"]
+        trialled = review(now=now, env=env, path=reg, feature_goals_fn=fake_goals)["on_but_idle"]
         assert [r["flag"] for r in trialled] == ["ORCH_RANGE_LANE_ROLLOUT"], trialled
         assert trialled[0]["idle_days"] == REVIEW_DAYS + 1, trialled[0]
         assert (trialled[0]["trials_excluded"], trialled[0]["newest_trial_days"]) == (1, 1.0)
         assert "1 consult trial, the newest 1.0d ago, inside the" in not_counted_phrase(trialled[0])
 
         # "0" counts as off, not on.
-        rep5 = review(now=now, env={"ORCH_RANGE_LANE_ROLLOUT": "0"}, path=reg)
+        rep5 = review(
+            now=now, env={"ORCH_RANGE_LANE_ROLLOUT": "0"}, path=reg, feature_goals_fn=fake_goals
+        )
         assert "ORCH_RANGE_LANE_ROLLOUT" in {r["flag"] for r in rep5["held_off"]}
         # ...and does not PRINT as unset: each row names its value and where that came from.
         by_flag = {r["flag"]: r for r in rep5["held_off"]}
@@ -2827,7 +2966,7 @@ def _selftest_review(gh_calls: list) -> None:
         both_on = {**env, "ORCH_REDIRECT_APPLY_BOOTSTRAP": "1"}
         try:
             calls_before = len(gh_calls)
-            swept = review(now=now, env=both_on, path=reg)
+            swept = review(now=now, env=both_on, path=reg, feature_goals_fn=fake_goals)
             # POSITIVE CONTROL: the injected runner IS the seam the sweep uses, and the heartbeat
             # stub IS the one it calls, or the two "none" assertions below would be vacuous.
             assert len(gh_calls) > calls_before, "the injected runner is not the sweep's gh seam"
@@ -2931,7 +3070,10 @@ def main(argv: list[str]) -> int:
             value_chain_inputs = {
                 "errors": [f"Value-chain setup or input collection failed: {exc}"]
             }
+    import feature_goals
+
     rep = review(
+        feature_goals_fn=feature_goals.report,
         env=env,
         sources=sources,
         value_chain_inputs=value_chain_inputs,

@@ -36,6 +36,11 @@ DEFAULT_MIN_OBSERVATIONS = 20
 EXPORT_BRANCH = "exports/route-weights"
 EXPORT_PATH = Path("config/route-weights.json")
 WEEK_SECONDS = 7 * 86400
+# Owner q-1ca1d09d255e987b (2026-10-17): extend once if either policy is under-sampled.
+EXPLORATION_WINDOW_END = "20261117"
+EXPLORATION_WINDOW_EXTENDED_END = "20261215"
+EXPLORATION_WINDOW_MIN_PER_POLICY = 30
+EXPLORATION_WINDOW_START = "2026-10-17"
 # This is intentionally smaller than ROUTE_TABLE.  It is the contract that the
 # Workflows keepalive policy may act on; adding a router task type here is an
 # explicit cross-repository consumer-contract change, not an accidental export.
@@ -53,6 +58,56 @@ def _now() -> str:
     return (
         dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     )
+
+
+def update_exploration_window(db_path: Path, state_dir: Path, *, now: int | None = None) -> dict:
+    """Persist the window decision from a read-only switch snapshot, including unchanged exports."""
+    timestamp = int(dt.datetime.now(dt.timezone.utc).timestamp()) if now is None else now
+    instant = dt.datetime.fromtimestamp(timestamp, dt.timezone.utc)
+    path = state_dir / "exploration-window.json"
+    try:
+        previous = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        previous = {}
+    counts = dict.fromkeys(("epsilon-greedy", "thompson-hybrid"), 0)
+    errors = []
+    start = int(
+        dt.datetime.fromisoformat(EXPLORATION_WINDOW_START)
+        .replace(tzinfo=dt.timezone.utc)
+        .timestamp()
+    )
+    try:
+        connection = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            rows = connection.execute(
+                "SELECT switched_ts FROM agent_switches WHERE source='policy' "
+                "AND delegation_source='route_weights_exploration' AND switched_ts>=? "
+                "AND switched_ts<=?",
+                (start, timestamp),
+            )
+            for (switched_ts,) in rows:
+                # With an empty plan, choose_mode is deterministic in now (UTC-week parity).
+                # _exploration_block uses this same call to choose the published policy.
+                counts[exploration_collection.choose_mode({}, now=switched_ts)] += 1
+        finally:
+            connection.close()
+    except sqlite3.Error as exc:
+        errors.append(f"per-policy counts unmeasured: {exc}")
+    extended = isinstance(previous, dict) and previous.get("extended") is True
+    if instant.strftime("%Y%m%d") >= EXPLORATION_WINDOW_END and not errors:
+        extended = extended or any(n < EXPLORATION_WINDOW_MIN_PER_POLICY for n in counts.values())
+    window = {
+        "start": EXPLORATION_WINDOW_START,
+        "end": EXPLORATION_WINDOW_EXTENDED_END if extended else EXPLORATION_WINDOW_END,
+        "extended": extended,
+        "n_by_policy": counts if not errors else dict.fromkeys(counts, None),
+        "min_per_policy": EXPLORATION_WINDOW_MIN_PER_POLICY,
+        "decided_at": instant.isoformat().replace("+00:00", "Z"),
+    }
+    if errors:
+        window["errors"] = errors
+    write_document(path, window)
+    return window
 
 
 def publish_guard(
@@ -285,9 +340,15 @@ def _exploration_block(
         # Never describe the exploitation winner as a challenger when the
         # router cannot find another eligible seat in the same policy tier.
         challengers[task_type] = pick["agent"] if pick and pick["exploration"] else None
+    try:
+        float(os.environ["ORCH_EXPLORATION_RATE"])
+        rate_source = "env"
+    except (KeyError, ValueError):
+        rate_source = "default"
     return {
         "mode": mode,
-        "rate": router.EXPLORATION_RATE_DEFAULT,
+        "rate": router._exploration_rate(None),
+        "rate_source": rate_source,
         "week_start": week * WEEK_SECONDS,
         "challengers": challengers,
     }
@@ -410,6 +471,7 @@ def _canonical_bytes(document: dict[str, Any]) -> bytes:
 def _semantic_for_compare(document: dict[str, Any]) -> dict[str, Any]:
     """Compare export semantics without timestamp-only churn.
 
+    Exploration fields (including rate) remain publishable even within the same day.
     Dictionary capacity rows drop ``observed_at`` so a tick-only refresh does not
     republish. Non-dict or otherwise malformed rows are kept so the next write
     can repair them instead of comparing as equal after they were filtered out.
@@ -843,6 +905,7 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 — a swallowed heartbeat reads as dormancy later
         print(f"route_weights_export: capability heartbeat failed: {exc}", file=sys.stderr)
     state_dir = args.state_dir or Path.home() / ".codex" / "orchestrator"
+    update_exploration_window(db_path, state_dir)
     target = state_dir / "route-weights-export.json"
     changed = write_document(target, document)
     print(f"{'wrote' if changed else 'unchanged'} {target}")
