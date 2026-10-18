@@ -334,6 +334,8 @@ def test_cwd_probe_parses_pid_and_resolves_alias(tmp_path, monkeypatch, nested):
 
 
 def test_visible_probes_allow_idle_holder(tmp_path, monkeypatch):
+    monkeypatch.setattr(provision, "_pgrep_base", lambda: ["pgrep"])  # fakes match the plain form
+
     def probe(args, **kwargs):
         if args[0] == "lsof":
             output = f"p{os.getpid()}\nn{Path.cwd()}\n"
@@ -374,6 +376,7 @@ def test_argv_probe_resolves_symlink_alias(tmp_path, monkeypatch, nested, option
 
 def test_live_probe_result_refuses_reclaim(layout, monkeypatch):
     """Exercise the live-PID branch even when the host cannot enumerate processes."""
+    monkeypatch.setattr(provision, "_pgrep_base", lambda: ["pgrep"])  # fakes match the plain form
     holder = hold(layout)
     run = provision._run
 
@@ -492,6 +495,7 @@ def test_report_cli_honors_temporary_ledger_env():
 
 @pytest.mark.parametrize("pgrep_match", [False, True])
 def test_argv_sibling_prefix_is_not_a_live_holder(tmp_path, monkeypatch, pgrep_match):
+    monkeypatch.setattr(provision, "_pgrep_base", lambda: ["pgrep"])  # fakes match the plain form
     holder = tmp_path / "wt__1"
     sibling = tmp_path / "wt__10"
 
@@ -541,3 +545,13 @@ def test_blind_probe_refuses_and_records_ledger(layout, monkeypatch, blind):
     assert holder.exists()
     assert events()[0]["outcome"] == "failed"
     assert events()[0]["cause"] == "probe-blind"
+
+
+def test_pgrep_includes_ancestors_on_macos(monkeypatch):
+    """Without `-a`, BSD pgrep hides the caller and its ancestors, so the self-visibility check
+    would declare every probe blind on macOS and no reclaim could ever happen there."""
+    prov = provision
+    monkeypatch.setattr(prov.sys, "platform", "darwin")
+    assert prov._pgrep_base() == ["pgrep", "-a"]
+    monkeypatch.setattr(prov.sys, "platform", "linux")
+    assert prov._pgrep_base() == ["pgrep"]
