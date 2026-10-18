@@ -1,0 +1,88 @@
+[
+  {
+    "command": [
+      "ruff",
+      "check",
+      "--extend-exclude",
+      ".workflows-lib",
+      "--output-format",
+      "concise",
+      "."
+    ],
+    "cwd": "repository",
+    "returncode": 0,
+    "stdout": "All checks passed!\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "ruff",
+      "check",
+      "--fix",
+      "--exit-zero",
+      "."
+    ],
+    "cwd": "scratch-copy",
+    "returncode": 0,
+    "stdout": "All checks passed!\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "ruff",
+      "check",
+      "--fix",
+      "--exit-zero",
+      "--unsafe-fixes",
+      "."
+    ],
+    "cwd": "scratch-copy",
+    "returncode": 0,
+    "stdout": "All checks passed!\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "ruff",
+      "check",
+      "--extend-exclude",
+      ".workflows-lib",
+      "--output-format",
+      "concise",
+      "."
+    ],
+    "cwd": "scratch-copy",
+    "returncode": 0,
+    "stdout": "All checks passed!\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "black",
+      "--check",
+      "--line-length",
+      "100",
+      "--exclude",
+      "(\\.venv|\\.workflows-lib|node_modules)",
+      "."
+    ],
+    "cwd": "repository",
+    "returncode": 0,
+    "stdout": "",
+    "stderr": "All done! \u2728 \ud83c\udf70 \u2728\n481 files would be left unchanged.\n"
+  },
+  {
+    "command": [
+      "mypy",
+      "--config-file",
+      "pyproject.toml",
+      "--exclude",
+      ".workflows-lib",
+      "src"
+    ],
+    "cwd": "repository",
+    "returncode": 0,
+    "stdout": "src/gh_capacity.py:951: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nsrc/gh_capacity.py:1081: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nsrc/feedback.py:7216: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nsrc/capability_propensity.py:5098: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nsrc/capability_propensity.py:5107: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nsrc/exp_abcd.py:3142: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nSuccess: no issues found in 136 source files\n",
+    "stderr": ""
+  }
+]
