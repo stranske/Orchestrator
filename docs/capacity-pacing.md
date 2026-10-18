@@ -16,13 +16,15 @@ Confidence is `c = min(1, span_h/6)`. The damped projection is
 `ũ_eff = u + c * burn_per_day * remaining_days`. Until the minimum sample rule
 and full confidence are met, the unchanged schedule plus early-spend band decides
 state. At full confidence the projection tier can reach shed and later print
-`pool <p>: ũ=<x> ≤ 1−r_eff → ok` on recovery. Fresh flat observations drain old
+`pool <p>: ũ=<x> ≤ 1−r_eff → ok` on recovery from either warn or shed.
+This includes the normal shed → warn → ok path, with one drained line when
+full-confidence pacing returns to ok. Fresh flat observations drain old
 spend without another dispatch. `test_real_111_tick_replay_sheds_and_prints_drained_recovery`
 replays the first 111 recorded ticks per pool (the live file had grown to 112
 when captured), retaining only timestamps, usage fractions and source labels.
 The replay uses observed weekly boundaries and an empty reset bank to exercise
 projection shedding independently of reset relief. It prints blocking quantities
-from that replay and an explicitly simulated
+from that replay and an explicitly simulated consecutive-tick
 flat-usage recovery; this is reachability evidence, not observed live recovery.
 
 Routing retains the merged sustainable-rate/effective-burn ratio and ±0.25 tick

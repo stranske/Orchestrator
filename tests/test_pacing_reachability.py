@@ -64,6 +64,9 @@ def test_anchor_interval_mass_is_clipped_and_only_latest_anchor_counts():
     assert rate == pytest.approx((0.24 * w1 + 0.48 * w2) / (w1 + w2))
     # An old anchor alone cannot establish a three-observation estimate.
     assert pacing.burn_estimate([rows[0], rows[-1]], now, START, source=SOURCE)[0] is None
+    sparse = assess([rows[0], rows[-1]], previous_state="warn")
+    assert sparse["state"] == "ok" and sparse["projected_fraction"] is None
+    assert sparse["fyi"] == []  # A full span still needs a qualified projection.
 
 
 def test_reset_after_anchor_restarts_confidence():
@@ -118,16 +121,27 @@ def test_real_111_tick_replay_sheds_and_prints_drained_recovery():
     assert shed["effective_projected_fraction"] > 1
     print(shed["reason"])
     # Counterfactual no-dispatch recovery, explicitly separate from recorded data.
-    # Jittered flat observations span >6h; a capacity check after that pause must drain.
+    # Evaluate EVERY jittered tick: the real path goes shed -> warn -> ok. A test
+    # that jumps straight to the final flat window misses the drained-print gap.
     last = data["codex"][-1]
-    flat = [dict(last, ts=last["ts"] + i * 607.1) for i in range(1, 38)]
-    recovered = assess(
-        data["codex"] + flat, previous_state=shed["state"], previous_weight=shed["routing_weight"]
-    )
+    history = list(data["codex"])
+    prior = shed
+    drained = []
+    transitions = []
+    for i in range(1, 38):
+        history.append(dict(last, ts=last["ts"] + i * 607.1))
+        recovered = assess(
+            history, previous_state=prior["state"], previous_weight=prior["routing_weight"]
+        )
+        if recovered["state"] != prior["state"]:
+            transitions.append((prior["state"], recovered["state"]))
+            print(recovered["reason"])
+        drained.extend(line for line in recovered["fyi"] if "≤ 1−r_eff → ok" in line)
+        prior = recovered
+    assert transitions == [("shed", "warn"), ("warn", "ok")]
     assert recovered["confidence"] == 1 and recovered["state"] == "ok"
-    line = f"pool codex: ũ={last['used_fraction']:.2f} ≤ 1−r_eff → ok"
-    assert line in recovered["fyi"]
-    print(line)
+    assert drained == ["pool codex: ũ=0.78 ≤ 1−r_eff → ok"]
+    print(*drained, sep="\n")
 
 
 def test_weight_literal_endpoints_and_monotonicity():

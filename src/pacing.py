@@ -267,6 +267,13 @@ def evaluate(
             f"pool {pool}: would consume oldest-expiring reset "
             f"expires={reset['expires']} (expiry source={reset.get('source', 'owner estimate UNKNOWN')})"
         )
+    if (
+        state == "ok"
+        and previous_state in ("shed", "warn")
+        and projected is not None
+        and confidence == 1
+    ):
+        result["fyi"].append(f"pool {pool}: ũ={projected:.2f} ≤ 1−r_eff → ok")
     if previous_state == "shed" and state != "shed":
         if projected is None:
             result["fyi"].append(f"pool {pool}: shed → {state} (reset/rollover; ũ=unmeasured)")
@@ -275,9 +282,7 @@ def evaluate(
                 f"pool {pool}: shed → {state}; schedule decides state (c={confidence:.3f}); "
                 f"ũ_eff={effective_projected:.2f}; clears on fresh samples or reset at {period_end:.0f}"
             )
-        elif state == "ok":
-            result["fyi"].append(f"pool {pool}: ũ={projected:.2f} ≤ 1−r_eff → ok")
-        else:
+        elif state != "ok":
             result["fyi"].append(
                 f"pool {pool}: shed → {state}; ũ={projected:.2f} vs 1−r_eff={1 - reserve:.2f}; "
                 f"u={u:.2f}; clears toward ok on fresh flat samples or reset at {period_end:.0f}"
