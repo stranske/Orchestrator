@@ -41,6 +41,17 @@ An exact-head pull-request CI run whose GitHub association array is empty is ret
 only when its event, branch and repository match the linked PR and a bounded PR
 lookup finds exactly one matching head. Failed runs remain in the evidence; retrieved
 artifacts alone do not establish the required-check topology or acceptance.
+Raw test and coverage receipts use the existing bounded archive expansion budget;
+the compact packet section limit does not discard otherwise bounded input files.
+Retain exact raw hashes, reject unsafe XML, and keep coverage.py statement and branch
+counts separate. Unrecognized metadata and unknown required-check topology remain
+partial proof. A failed stronger worker stays at the exception stage with its native
+receipt; it cannot advance to an action, and a later round prepares fresh evidence.
+Helper-validated NON_PASS waits retain a bounded disposition proof bound to the
+current merged PR, native verifier, source/review identity and one-target receipt.
+A reason string alone proves nothing and the wait grants no acceptance authority.
+Deterministic verifier routes are freshly observed, never replayed as cached model
+assessments. Confirmed native label waits do not launch another evidence worker.
 
 A completed private report is an internal handoff to this senior closer, not an
 external blocker. Read the retained result, integrate or reject its findings and
@@ -92,6 +103,14 @@ retain their barriers; removed read-only failures remain in the audit. They do
 not become new work. These barriers and the invalid-stop audit must survive
 later cadences and history trimming. Missing or malformed recovery proof fails
 closed; never clear the ledger or invent a resource boundary to admit work.
+An unknown reconciliation outcome retains an explicit reconciliation-only trigger.
+Recovery recognizes the legacy missing-trigger form only with its recorded unknown
+legacy-operation result; it does not establish that the operation never started.
+A compact excluded wait may recover its proof view only from a matching immutable
+audit and the unchanged current native wait validator. Its original compact-row
+hash remains recorded, the prior stop stays invalid, and the item stays excluded.
+Full validated wait proof takes precedence over compact carry on later cadences,
+including cadences whose prior stop is valid. Reassignment requires fresh preparation.
 If an action lacks a derived inner queue operation, reconciliation still checks
 the original legacy queue for an unresolved operation before declaring the
 action not started. Original uncertainty stays quarantined for its queue owner.
