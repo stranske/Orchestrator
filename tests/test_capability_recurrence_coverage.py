@@ -193,15 +193,51 @@ def test_replay_uses_live_labels_and_successful_routing_without_network(monkeypa
     import backlog
     import runtime_ac_gate
 
-    monkeypatch.setattr(backlog, "classify", lambda labels: "testgen")
-    monkeypatch.setattr(runtime_ac_gate, "eligibility", lambda *_args: {"required": True})
-    monkeypatch.setattr(adversarial, "high_stakes_reason", lambda *_args: "risk:major")
+    calls = []
+
+    def classify(labels):
+        assert labels == ["task:test"]
+        calls.append("classify")
+        return "testgen"
+
+    def eligibility(item, spec):
+        assert item == {
+            "target": "o/r#1",
+            "lane": "closer",
+            "labels": [],
+            "source_labels": [],
+        }
+        assert str(spec) == "/nonexistent/spec.json"
+        calls.append("eligibility")
+        return {"required": True}
+
+    def high_stakes_reason(item):
+        assert item == {
+            "target": "o/r#1",
+            "labels": [],
+            "title": "t",
+            "source_labels": [],
+            "lane": "closer",
+        }
+        calls.append("high_stakes_reason")
+        return "risk:major"
+
+    def forbidden_fetch(*_args):
+        pytest.fail("offline replay must not fetch a live fixture")
+
+    monkeypatch.setattr(recurrence, "_fetch_issue", forbidden_fetch)
+    monkeypatch.setattr(backlog, "classify", classify)
+    monkeypatch.setattr(runtime_ac_gate, "eligibility", eligibility)
+    monkeypatch.setattr(adversarial, "high_stakes_reason", high_stakes_reason)
     monkeypatch.setattr(
         recurrence,
         "FIXTURES",
         (
             {
                 "capability": "routing",
+                "live": True,
+                "repo": "Orchestrator",
+                "issue": 666,
                 "kind": "classify",
                 "expect_task_type": "testgen",
                 "labels": ["task:test"],
@@ -227,6 +263,10 @@ def test_replay_uses_live_labels_and_successful_routing_without_network(monkeypa
     monkeypatch.setattr(recurrence, "PREDICATE_FIXTURES", ())
     report = recurrence.replay(offline=True)
     assert report["would_fire"] == report["total"] == 3
+    assert calls == ["classify", "eligibility", "high_stakes_reason"]
+    assert report["rows"][0]["provenance"] == "frozen (live read failed) Orchestrator#666"
+    assert report["rows"][0]["labels"] == ["task:test"]
+    assert report["rows"][0]["title"] == "t"
     assert report["rows"][0]["actual"] == "testgen"
     assert report["rows"][1]["eligibility"] == {"required": True}
     assert report["rows"][2]["reason"] == "risk:major"
