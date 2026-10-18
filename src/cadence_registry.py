@@ -271,6 +271,15 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "conservative default so no backlog can form",
     },
     {
+        "key": "feature-goals",
+        "success_stamp": ".last-feature-goals",
+        "cadence_days": 0,
+        "artifact": "feature-goals-history.jsonl",
+        "log": "feature-goals.log",
+        "gate": "report and reconcile goal-drift issues; ORCH_DISABLE_STEPS=feature-goals skips the step",
+        "next_transition": "repair missing measures or restore goal activity; reconcile recovery daily without blocking capabilities",
+    },
+    {
         "key": "feature-scan",
         "success_stamp": ".last-feature-scan",
         "cadence_days": 0,

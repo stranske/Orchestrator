@@ -78,6 +78,19 @@ export ORCH_RESEARCH_ARM="${ORCH_RESEARCH_ARM:-0}"
 # completed, and 7 labelled issues closed with no PR from the labelled agent (4 delivered by codex
 # keepalive or by hand; re-measured 2026-10-04), while keepalive ran 1,239 rounds without it.
 export ORCH_DISPATCH_LANE="${ORCH_DISPATCH_LANE:-0}"
+# ORCH-ANCHOR: exploration-window-start
+# 2026-10-17 owners q-e9950a89551c92a1 / q-1ca1d09d255e987b: 20%, with sample-based extension.
+# Fallback source of truth: route_weights_export.EXPLORATION_WINDOW_END.
+_orch_exploration_end="$(python3 -c 'import json, sys; end = json.load(open(sys.argv[1]))["end"]; print(end if isinstance(end, str) and len(end) == 8 else "")' \
+  "${ORCH_STATE_DIR:-$HOME/.codex/orchestrator}/exploration-window.json" 2>/dev/null || true)"
+if [[ ! "$_orch_exploration_end" =~ ^[0-9]{8}$ ]]; then
+  _orch_exploration_end=20261117
+fi
+# Only the window default expires; explicit caller overrides remain supported.
+if [[ "$(date -u +%Y%m%d)" -le "$_orch_exploration_end" ]]; then
+  export ORCH_EXPLORATION_RATE="${ORCH_EXPLORATION_RATE:-0.20}"
+fi
+# ORCH-ANCHOR: exploration-window-end
 # GitHub API rate-budget awareness (IMPROVEMENT_BACKLOG.md #8 P2). The local lanes share ONE gh token,
 # so gh-heavy cadence steps can hit the REST search (30/min) / core (5000/hr) budget. ORCH_GH_THROTTLE=1
 # turns ON the in-loop pace/defer in durability_sweep/keepalive/langsmith (each a no-op when unset).
@@ -742,6 +755,20 @@ if _cadence_due redirect-apply-link && _attempt_ok redirect-apply-link; then
     python3 "$ORCH/redirect_apply.py" --status --stage2-plan "$stage2_plan_json" --report-dir "$stage2_report_dir" >> "$STAMP_DIR/redirect-apply.log" 2>&1 || true
     if [[ "$redirect_apply_ok" == "1" ]]; then _mark_success redirect-apply-link; else _mark_fail redirect-apply-link "see $STAMP_DIR/redirect-apply.log"; fi
   fi
+fi
+# Owner goals are independent of a Sunday task firing. Reconcile on recovery too:
+# limiting filing to exit 3 would leave every recovered issue open forever.
+if _cadence_due feature-goals && _attempt_ok feature-goals; then
+  if _gh_gate graphql && _gh_gate core; then
+    echo "  [cadence] feature goals (daily; report and reconcile goal-drift issues)"
+    feature_goals_rc=0
+    python3 "$ORCH/feature_goals.py" --check --file-drift-issues > "$STAMP_DIR/feature-goals.log" 2>&1 || feature_goals_rc=$?
+    if [[ "$feature_goals_rc" == "0" || "$feature_goals_rc" == "3" ]]; then
+      _mark_success feature-goals
+    else
+      _mark_fail feature-goals "see $STAMP_DIR/feature-goals.log"
+    fi
+  else echo "  [cadence] feature goals SKIPPED — gh deferred (stamp untouched)"; fi
 fi
 if _cadence_due switch-review && _attempt_ok switch-review; then
   # Held switches must be revisited, not forgotten. ORCH_RANGE_LANE_ROLLOUT was turned on

@@ -283,6 +283,12 @@ def test_shed_pool_marker_flips_state_within_one_export(tmp_path: Path, monkeypa
     monkeypatch.setattr(capacity, "_tier_models", lambda agent: {})
     monkeypatch.setattr(capacity, "_tier_ceiling", lambda agent: None)
     monkeypatch.setattr(capacity, "_capability_heartbeat", lambda *a, **k: None)
+    # The pacing model (#680) reads this machine's live codex/claude usage; isolate it, or a busy
+    # seat is already shed before the marker exists and the test measures the machine, not the code.
+    import pacing_usage
+
+    monkeypatch.setattr(pacing_usage, "usage_snapshot", lambda now: {})
+    monkeypatch.setattr(pacing_usage, "integrate", lambda agents, **kw: [])
 
     before = export.build_document(database, now=100)
     assert before["capacity"]["codex"]["state"] != capacity.SHED

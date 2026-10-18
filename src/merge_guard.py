@@ -86,7 +86,7 @@ def pr_metadata(target: str, *, run_fn=subprocess.run) -> dict[str, Any]:
         "-R",
         repo,
         "--json",
-        "title,labels,state,isDraft,mergeStateStatus,closingIssuesReferences",
+        "title,labels,state,isDraft,mergeStateStatus,closingIssuesReferences,headRefName",
     ]
     res = run_fn(cmd, capture_output=True, text=True)
     if res.returncode != 0:
@@ -112,6 +112,7 @@ def pr_metadata(target: str, *, run_fn=subprocess.run) -> dict[str, Any]:
         "is_draft": bool(doc.get("isDraft")),
         "merge_state_status": doc.get("mergeStateStatus"),
         "closing_issues": closing,
+        "head_branch": doc.get("headRefName") or "",
     }
 
 
@@ -407,6 +408,7 @@ def guarded_merge(
     panel_fn=None,
     adjudicate_fn=None,
     spawn_fn=None,
+    review_loop_fn=None,
 ) -> dict[str, Any]:
     dry_run = not confirm_merge
     if confirm_merge and not expected_head:
@@ -450,6 +452,28 @@ def guarded_merge(
     }
     if gate_result["blocked"]:
         return result
+    import review_loop
+
+    def review_checkpoint():
+        meta = gate_result["metadata"]
+        try:
+            return (review_loop_fn or review_loop.merge_eligibility)(
+                target,
+                expected_head,
+                source_targets=meta.get("closing_issues", ()),
+                head_branch=meta.get("head_branch", ""),
+            )
+        except Exception as exc:
+            return {
+                "required": True,
+                "eligible": False,
+                "reason": f"review-loop evidence unavailable: {exc}",
+            }
+
+    loop_gate = review_checkpoint()
+    result["review_loop"] = loop_gate
+    if loop_gate.get("required") and not loop_gate.get("eligible"):
+        return {**result, "blocked": True, "reason": loop_gate.get("reason", "review loop pending")}
     # Advisory, after every deterministic gate has passed, so no panel is paid for a PR that
     # cannot merge. Nothing it returns, and nothing it raises, may block or stop this merge.
     try:
@@ -477,6 +501,11 @@ def guarded_merge(
         result["blocked"] = True
         result["reason"] = final_preflight_reason
         return result
+
+    loop_gate = review_checkpoint()
+    result["review_loop_final"] = loop_gate
+    if loop_gate.get("required") and not loop_gate.get("eligible"):
+        return {**result, "blocked": True, "reason": loop_gate.get("reason", "review loop pending")}
 
     merge = merge_fn(cmd, capture_output=True, text=True)
     result["merge_executed"] = True
