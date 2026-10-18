@@ -19,6 +19,8 @@ from typing import TypeGuard
 from pacing import STALE_AFTER_SECONDS
 
 SCHEMA = "orchestrator.route-weights-comparative/v1"
+# The posterior evidence floor a cell needs to enter the LP; the export uses the same constant.
+MIN_OBS = 20
 WINDOW_DAYS = 14
 MIN_MEASURED_HOUR_SHARE = 0.5
 _SIMPLEX_EPS = 1e-12
@@ -122,7 +124,7 @@ def shadow_prices(q, demand, cost, budget, price, *, value=None) -> dict:
     tasks = sorted({task for cells in q.values() for task in cells})
     reasons, invalid = [], []
     if not q or not tasks:
-        reasons.append("no quality cells with n_obs >= 20")
+        reasons.append(f"no quality cells with n_obs >= {MIN_OBS}")
 
     def check(label, v, lo=0, hi=None):
         if not _number(v):
@@ -193,7 +195,8 @@ def _window(db_path: Path, now: int, window_days: int) -> tuple[list[dict], list
                 dict(row)
                 for row in conn.execute(
                     "SELECT agent, task_type, posterior, n_obs FROM route_weights "
-                    "WHERE version=(SELECT MAX(version) FROM route_weights) AND n_obs>=20"
+                    "WHERE version=(SELECT MAX(version) FROM route_weights) AND n_obs>=?",
+                    (MIN_OBS,),
                 )
             ]
             runs = [
@@ -463,7 +466,7 @@ def report(db_path: Path, path: Path, *, now=None, window_days=WINDOW_DAYS) -> d
     required_q = {a: q[a] for a in ("codex", "claude") if a in q}
     for agent in ("codex", "claude"):
         if agent not in required_q:
-            errors.append(f"{db_path}: posterior[{agent}] missing n_obs >= 20")
+            errors.append(f"{db_path}: posterior[{agent}] missing n_obs >= {MIN_OBS}")
     classes: dict = {
         k: {
             "posterior_top": min(

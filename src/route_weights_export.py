@@ -438,34 +438,36 @@ def _add_comparative(document: dict, db_path: Path, snapshot: dict | None, now: 
     # Opportunity cost includes every evidenced class, beyond this export's consumer set.
     result = comparative.measure(db_path, snapshot, now=now)
     for task, section in document["task_types"].items():
-        positions = {
-            row["agent"]: index
-            for index, row in enumerate(result["ranks"].get(task, []), 1)
-            if row["comparative_score"] is not None
-        }
-        for row in section["ranking"]:
-            row["comparative_rank"] = positions.get(row["agent"])
-            if row["comparative_rank"] is None:
-                row["comparative_reason"] = result["inputs"]["cost_source_by_agent"].get(
-                    row["agent"], {}
-                ).get("reason") or "; ".join(result["reasons"])
+        _attach_comparative_ranks(section["ranking"], result, task)
     for task, rows in document["reserve"].items():
-        positions = {
-            row["agent"]: index
-            for index, row in enumerate(result["ranks"].get(task, []), 1)
-            if row["comparative_score"] is not None
-        }
-        for row in rows:
-            row["comparative_rank"] = positions.get(row["agent"])
-            if row["comparative_rank"] is None:
-                row["comparative_reason"] = result["inputs"]["cost_source_by_agent"].get(
-                    row["agent"], {}
-                ).get("reason") or "; ".join(result["reasons"])
+        _attach_comparative_ranks(rows, result, task)
     document["comparative"] = {key: value for key, value in result.items() if key != "ranks"}
 
 
 def _canonical_bytes(document: dict[str, Any]) -> bytes:
     return (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _attach_comparative_ranks(rows: list[dict[str, Any]], result: dict, task: str) -> None:
+    """Global comparative ranks (one enumeration per task, reserve included) plus a reason when absent."""
+    import comparative
+
+    positions = {
+        row["agent"]: index
+        for index, row in enumerate(result["ranks"].get(task, []), 1)
+        if row["comparative_score"] is not None
+    }
+    for row in rows:
+        row["comparative_rank"] = positions.get(row["agent"])
+        if row["comparative_rank"] is not None:
+            continue
+        if row["n_obs"] < comparative.MIN_OBS:
+            # `minimum` may export a row the LP never saw; say so instead of a global reason.
+            row["comparative_reason"] = f"n_obs below comparative threshold ({comparative.MIN_OBS})"
+        else:
+            row["comparative_reason"] = result["inputs"]["cost_source_by_agent"].get(
+                row["agent"], {}
+            ).get("reason") or "; ".join(result["reasons"])
 
 
 def _semantic_for_compare(document: dict[str, Any]) -> dict[str, Any]:
@@ -733,8 +735,26 @@ def _selftest() -> None:
         assert document["task_types"]["review"]["evidence_ok"] is False, document
         assert document["reserve"]["implement"][0]["agent"] == "claude", document
         assert "unknown" not in document["task_types"], document
+        import comparative
+
+        assert document["comparative"]["schema"] == comparative.SCHEMA, document["comparative"]
+        assert all(
+            "comparative_rank" in row
+            for section in document["task_types"].values()
+            for row in section["ranking"]
+        ), document
         output = root / "route-weights-export.json"
         assert write_document(output, document) is True
+        # A changed comparative_reason alone is narration, never a republish.
+        reason_only = json.loads(json.dumps(document))
+        for row in reason_only["task_types"]["implement"]["ranking"]:
+            row["comparative_reason"] = "reworded"
+        assert write_document(output, reason_only) is False
+        # The report-only CLI path reads, prints and writes nothing.
+        before = sorted(p.name for p in root.iterdir())
+        text = comparative.format_report(comparative.report(db_path, root / "no-ledger.ndjson"))
+        assert "classes_differing" in text, text
+        assert sorted(p.name for p in root.iterdir()) == before
         assert (
             write_document(
                 output,

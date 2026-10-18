@@ -535,3 +535,26 @@ def test_default_history_path_is_the_writers_ledger(monkeypatch, tmp_path):
         comparative.history_path(tmp_path / "state")
         == tmp_path / "state" / "capacity-ledger.ndjson"
     )
+
+
+def test_below_threshold_rows_get_an_explicit_reason_and_global_ranks_survive():
+    result = {
+        "ranks": {
+            "implement": [
+                {"agent": "claude", "comparative_score": 0.5},
+                {"agent": "codex", "comparative_score": 0.4},
+            ]
+        },
+        "inputs": {"cost_source_by_agent": {}},
+        "reasons": ["global reason"],
+    }
+    task_rows = [{"agent": "codex", "n_obs": 30}, {"agent": "cursor", "n_obs": 5}]
+    reserve_rows = [{"agent": "claude", "n_obs": 40}]
+    export._attach_comparative_ranks(task_rows, result, "implement")
+    export._attach_comparative_ranks(reserve_rows, result, "implement")
+    assert reserve_rows[0]["comparative_rank"] == 1  # one enumeration across reserve and ranking
+    assert task_rows[0]["comparative_rank"] == 2
+    assert task_rows[1]["comparative_rank"] is None
+    assert task_rows[1]["comparative_reason"] == (
+        f"n_obs below comparative threshold ({comparative.MIN_OBS})"
+    )
