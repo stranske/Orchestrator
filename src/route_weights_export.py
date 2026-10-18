@@ -23,6 +23,7 @@ from typing import Any
 
 import capabilities
 import capacity
+import comparative
 import exploration_collection
 import feedback
 import provision
@@ -32,10 +33,15 @@ import router
 # would fail-open away from learned weights. Capacity is additive via CAPACITY_SCHEMA.
 SCHEMA = "orchestrator.route-weights/v1"
 CAPACITY_SCHEMA = "orchestrator.route-weights-capacity/v1"
-DEFAULT_MIN_OBSERVATIONS = 20
+DEFAULT_MIN_OBSERVATIONS = comparative.MIN_OBS
 EXPORT_BRANCH = "exports/route-weights"
 EXPORT_PATH = Path("config/route-weights.json")
 WEEK_SECONDS = 7 * 86400
+# Owner q-1ca1d09d255e987b (2026-10-17): extend once if either policy is under-sampled.
+EXPLORATION_WINDOW_END = "20261117"
+EXPLORATION_WINDOW_EXTENDED_END = "20261215"
+EXPLORATION_WINDOW_MIN_PER_POLICY = 30
+EXPLORATION_WINDOW_START = "2026-10-17"
 # This is intentionally smaller than ROUTE_TABLE.  It is the contract that the
 # Workflows keepalive policy may act on; adding a router task type here is an
 # explicit cross-repository consumer-contract change, not an accidental export.
@@ -53,6 +59,56 @@ def _now() -> str:
     return (
         dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     )
+
+
+def update_exploration_window(db_path: Path, state_dir: Path, *, now: int | None = None) -> dict:
+    """Persist the window decision from a read-only switch snapshot, including unchanged exports."""
+    timestamp = int(dt.datetime.now(dt.timezone.utc).timestamp()) if now is None else now
+    instant = dt.datetime.fromtimestamp(timestamp, dt.timezone.utc)
+    path = state_dir / "exploration-window.json"
+    try:
+        previous = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        previous = {}
+    counts = dict.fromkeys(("epsilon-greedy", "thompson-hybrid"), 0)
+    errors = []
+    start = int(
+        dt.datetime.fromisoformat(EXPLORATION_WINDOW_START)
+        .replace(tzinfo=dt.timezone.utc)
+        .timestamp()
+    )
+    try:
+        connection = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            rows = connection.execute(
+                "SELECT switched_ts FROM agent_switches WHERE source='policy' "
+                "AND delegation_source='route_weights_exploration' AND switched_ts>=? "
+                "AND switched_ts<=?",
+                (start, timestamp),
+            )
+            for (switched_ts,) in rows:
+                # With an empty plan, choose_mode is deterministic in now (UTC-week parity).
+                # _exploration_block uses this same call to choose the published policy.
+                counts[exploration_collection.choose_mode({}, now=switched_ts)] += 1
+        finally:
+            connection.close()
+    except sqlite3.Error as exc:
+        errors.append(f"per-policy counts unmeasured: {exc}")
+    extended = isinstance(previous, dict) and previous.get("extended") is True
+    if instant.strftime("%Y%m%d") >= EXPLORATION_WINDOW_END and not errors:
+        extended = extended or any(n < EXPLORATION_WINDOW_MIN_PER_POLICY for n in counts.values())
+    window = {
+        "start": EXPLORATION_WINDOW_START,
+        "end": EXPLORATION_WINDOW_EXTENDED_END if extended else EXPLORATION_WINDOW_END,
+        "extended": extended,
+        "n_by_policy": counts if not errors else dict.fromkeys(counts, None),
+        "min_per_policy": EXPLORATION_WINDOW_MIN_PER_POLICY,
+        "decided_at": instant.isoformat().replace("+00:00", "Z"),
+    }
+    if errors:
+        window["errors"] = errors
+    write_document(path, window)
+    return window
 
 
 def publish_guard(
@@ -196,10 +252,8 @@ def _current_capacity_snapshot() -> dict[str, Any]:
     return capacity.build()
 
 
-def _capacity_block(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+def _capacity_block(snapshot: dict[str, Any]) -> dict[str, Any]:
     """Additive per-agent state/window/pacing contract for remote consumers."""
-    if snapshot is None:
-        snapshot = _current_capacity_snapshot()
     agents_raw = snapshot.get("agents")
     agents = agents_raw if isinstance(agents_raw, dict) else {}
     observed_raw = snapshot.get("generated_at")
@@ -287,9 +341,15 @@ def _exploration_block(
         # Never describe the exploitation winner as a challenger when the
         # router cannot find another eligible seat in the same policy tier.
         challengers[task_type] = pick["agent"] if pick and pick["exploration"] else None
+    try:
+        float(os.environ["ORCH_EXPLORATION_RATE"])
+        rate_source = "env"
+    except (KeyError, ValueError):
+        rate_source = "default"
     return {
         "mode": mode,
-        "rate": router.EXPLORATION_RATE_DEFAULT,
+        "rate": router._exploration_rate(None),
+        "rate_source": rate_source,
         "week_start": week * WEEK_SECONDS,
         "challengers": challengers,
     }
@@ -355,6 +415,8 @@ def build_document(
         "exploration": _exploration_block(version, by_task, task_types, timestamp),
     }
     if include_capacity:
+        if capacity_snapshot is None:
+            capacity_snapshot = _current_capacity_snapshot()
         document["capacity_schema"] = CAPACITY_SCHEMA
         document["capacity"] = _capacity_block(capacity_snapshot)
     # Bind the tag to the exported policy, including rankings and the sampled
@@ -366,16 +428,54 @@ def build_document(
     }
     digest = hashlib.sha256(_canonical_bytes(routing_semantic)).hexdigest()
     document["exploration"]["policy_version"] = f"route-exploration/v1:{digest}"
+    _add_comparative(document, db_path, capacity_snapshot, timestamp)
     return document
+
+
+def _add_comparative(document: dict, db_path: Path, snapshot: dict | None, now: int) -> None:
+    """Add shadow ranks after hashing the existing policy; never reorder its entries."""
+    # Opportunity cost includes every evidenced class, beyond this export's consumer set.
+    result = comparative.measure(db_path, snapshot, now=now, minimum=document["min_observations"])
+    for task, section in document["task_types"].items():
+        _attach_comparative_ranks(section["ranking"], result, task, document["min_observations"])
+    for task, rows in document["reserve"].items():
+        _attach_comparative_ranks(rows, result, task, document["min_observations"])
+    document["comparative"] = {key: value for key, value in result.items() if key != "ranks"}
 
 
 def _canonical_bytes(document: dict[str, Any]) -> bytes:
     return (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
+def _attach_comparative_ranks(
+    rows: list[dict[str, Any]], result: dict, task: str, minimum: int = DEFAULT_MIN_OBSERVATIONS
+) -> None:
+    """Global comparative ranks (one enumeration per task, reserve included) plus a reason when absent."""
+    status = result["status"]
+    status_text = status + (": " + "; ".join(result["reasons"]) if result["reasons"] else "")
+    positions = {
+        row["agent"]: index
+        for index, row in enumerate(result["ranks"].get(task, []), 1)
+        if row["comparative_score"] is not None
+    }
+    for row in rows:
+        row["comparative_rank"] = positions.get(row["agent"]) if status == "optimal" else None
+        row["comparative_status"] = status_text
+        if row["comparative_rank"] is not None:
+            continue
+        if row["n_obs"] < minimum:
+            # Keep the diagnostic tied to the same threshold used for this export.
+            row["comparative_reason"] = f"n_obs below comparative threshold ({minimum})"
+        else:
+            row["comparative_reason"] = result["inputs"]["cost_source_by_agent"].get(
+                row["agent"], {}
+            ).get("reason") or "; ".join(result["reasons"])
+
+
 def _semantic_for_compare(document: dict[str, Any]) -> dict[str, Any]:
     """Compare export semantics without timestamp-only churn.
 
+    Exploration fields (including rate) remain publishable even within the same day.
     Dictionary capacity rows drop ``observed_at`` so a tick-only refresh does not
     republish. Non-dict or otherwise malformed rows are kept so the next write
     can repair them instead of comparing as equal after they were filtered out.
@@ -409,6 +509,40 @@ def _semantic_for_compare(document: dict[str, Any]) -> dict[str, Any]:
             else:
                 compared[agent] = entry
         semantic["capacity"] = compared
+    block = semantic.get("comparative")
+    if isinstance(block, dict) and isinstance(block.get("inputs"), dict):
+        sources = block["inputs"].get("cost_source_by_agent", {})
+        semantic["comparative"] = {
+            "status": block.get("status"),
+            "lambda": {
+                a: round(v, 3) if isinstance(v, (int, float)) else v
+                for a, v in block.get("lambda", {}).items()
+            },
+            "provenance": {
+                a: {key: row.get(key) for key in ("source", "imputed")}
+                for a, row in sources.items()
+            },
+        }
+        # Entry ranks already participate in task_types/reserve comparisons.
+        # Diagnostic reasons can change each tick while the unknown rank is stable.
+        for key in ("task_types", "reserve"):
+            section = semantic.get(key, {})
+            semantic[key] = {
+                task: (
+                    {
+                        **entry,
+                        "ranking": [
+                            {k: v for k, v in row.items() if k != "comparative_reason"}
+                            for row in entry["ranking"]
+                        ],
+                    }
+                    if key == "task_types"
+                    else [
+                        {k: v for k, v in row.items() if k != "comparative_reason"} for row in entry
+                    ]
+                )
+                for task, entry in section.items()
+            }
     return semantic
 
 
@@ -603,8 +737,26 @@ def _selftest() -> None:
         assert document["task_types"]["review"]["evidence_ok"] is False, document
         assert document["reserve"]["implement"][0]["agent"] == "claude", document
         assert "unknown" not in document["task_types"], document
+        import comparative
+
+        assert document["comparative"]["schema"] == comparative.SCHEMA, document["comparative"]
+        assert all(
+            "comparative_rank" in row
+            for section in document["task_types"].values()
+            for row in section["ranking"]
+        ), document
         output = root / "route-weights-export.json"
         assert write_document(output, document) is True
+        # A changed comparative_reason alone is narration, never a republish.
+        reason_only = json.loads(json.dumps(document))
+        for row in reason_only["task_types"]["implement"]["ranking"]:
+            row["comparative_reason"] = "reworded"
+        assert write_document(output, reason_only) is False
+        # The report-only CLI path reads, prints and writes nothing.
+        before = sorted(p.name for p in root.iterdir())
+        text = comparative.format_report(comparative.report(db_path, root / "no-ledger.ndjson"))
+        assert "classes_differing" in text, text
+        assert sorted(p.name for p in root.iterdir()) == before
         assert (
             write_document(
                 output,
@@ -719,6 +871,8 @@ def _selftest() -> None:
 
 
 def main() -> int:
+    import comparative
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--min-observations", type=int, default=DEFAULT_MIN_OBSERVATIONS)
     parser.add_argument(
@@ -727,6 +881,13 @@ def main() -> int:
         default=Path(os.environ["ORCH_STATE_DIR"]) if os.environ.get("ORCH_STATE_DIR") else None,
     )
     parser.add_argument("--feedback-db", type=Path)
+    parser.add_argument("--comparative-report", action="store_true")
+    parser.add_argument("--window-days", type=int, default=comparative.WINDOW_DAYS)
+    parser.add_argument(
+        "--pacing-history",
+        type=Path,
+        help="capacity-ledger.ndjson pacing_snapshot rows (or legacy pacing-history.ndjson)",
+    )
     parser.add_argument(
         "--allow-evidence-regression",
         action="store_true",
@@ -741,6 +902,19 @@ def main() -> int:
         _selftest()
         return 0
     db_path = feedback.resolve_db_path(args.feedback_db)
+    if args.comparative_report:
+        if args.window_days < 1:
+            parser.error("--window-days must be positive")
+        print(
+            comparative.format_report(
+                comparative.report(
+                    db_path,
+                    args.pacing_history or comparative.history_path(),
+                    window_days=args.window_days,
+                )
+            )
+        )
+        return 0
     document = build_document(db_path, args.min_observations)
     # Credit INVOCATION only after the document builds; `success` below records publication's
     # result. A success alone moves `last_success` only, so this daily step exported every day from
@@ -753,6 +927,7 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 — a swallowed heartbeat reads as dormancy later
         print(f"route_weights_export: capability heartbeat failed: {exc}", file=sys.stderr)
     state_dir = args.state_dir or Path.home() / ".codex" / "orchestrator"
+    update_exploration_window(db_path, state_dir)
     target = state_dir / "route-weights-export.json"
     changed = write_document(target, document)
     print(f"{'wrote' if changed else 'unchanged'} {target}")

@@ -1,0 +1,15 @@
+$ /opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_experiment_producer.py::test_five_terminal_followups_release_once[discarded]
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_five_terminal_followups_release_once[discarded] _____________
+tests/test_experiment_producer.py:707: in test_five_terminal_followups_release_once
+    assert calls == [("a/b#3", False)]
+E   AssertionError: assert [('a/b#3', Fa.../b#3', False)] == [('a/b#3', False)]
+E     
+E     Left contains 4 more items, first extra item: ('a/b#3', False)
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED tests/test_experiment_producer.py::test_five_terminal_followups_release_once[discarded]
+1 failed in 4.11s
+
+EXIT=1

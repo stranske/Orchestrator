@@ -3,8 +3,8 @@
 
 The canonical capability lifecycle remains owned by :mod:`capabilities`.  This
 module adds only a subordinate ``delivery_phase`` and derives its canonical
-state from a fixed mapping.  It creates local candidate artifacts; it never
-pushes, opens an issue/PR, merges, or becomes a second delivery controller.
+state from a fixed mapping.  It creates local candidate artifacts. The bounded experiment producer may publish
+one verified winner directly; legacy synthesis never publishes or merges here.
 """
 
 from __future__ import annotations
@@ -387,10 +387,19 @@ def transition(
     current = state["delivery_phase"]
     if current == target_phase:
         return state, False
-    if target_phase not in PROMOTION_TRANSITIONS[current]:
+    direct_winner = (
+        current == "evaluated"
+        and target_phase == "candidate_ready"
+        and state.get("producer") == "experiment_producer"
+        and state.get("verification", {}).get("ok") is True
+        and bool(state.get("winner", {}).get("commit"))
+        and state.get("winner", {}).get("member_id")
+        in {row.get("member_id") for row in state.get("lineage", {}).get("members", [])}
+    )
+    if target_phase not in PROMOTION_TRANSITIONS[current] and not direct_winner:
         raise ValueError(f"invalid synthesis promotion transition {current}->{target_phase}")
     # Independent fail-closed invariant behind the deliberate-break test.
-    if target_phase == "candidate_ready" and current != "synth_verified":
+    if target_phase == "candidate_ready" and current != "synth_verified" and not direct_winner:
         raise ValueError("candidate_ready requires synth_verified predecessor")
     canonical = PHASE_TO_CANONICAL[target_phase]
     if canonical not in capabilities.CANONICAL_STATES:
@@ -815,6 +824,238 @@ Experiment `{lineage.get('experiment_id')}` produced a locally committed synthes
 - Workflows auto-pilot/Keepalive remains the only delivery controller.
 - Lineage summary: `{json.dumps(lineage_summary, sort_keys=True)}`
 """
+
+
+def compile_producer_candidate(root, meta, member, receipt, commit):
+    """Join the existing canonical delivery phases without claiming synthesis occurred."""
+    ensure_evaluated_state(root, meta=meta)
+    with _locked(root):
+        state = load_state(root)
+        if state["delivery_phase"] != "evaluated":
+            return state
+        verification = receipt["local_verify"][member["member_id"]]
+        state.update(
+            producer="experiment_producer",
+            winner={"member_id": member["member_id"], "agent": member["agent"], "commit": commit},
+            verification={
+                "ok": verification.get("ok") is True,
+                "evidence_hash": _hash(verification),
+            },
+            candidate={
+                "candidate_id": receipt["candidate_id"],
+                "repo": meta["repo"],
+                "lineage": state["lineage"],
+            },
+        )
+        state, _ = transition(
+            state,
+            "candidate_ready",
+            reason="locally_verified_direct_winner",
+            evidence=state["winner"],
+        )
+        _atomic_json(state_path(root), state)
+        _atomic_json(Path(root) / CANDIDATE_JSON, state["candidate"])
+        return state
+
+
+def reconcile_producer_delivery(root, *, gh_fn=None):
+    """Reuse candidate discovery and downstream outcome reconciliation, never synthesis."""
+    import experiment_producer
+
+    def read_gh(argv):
+        answer = (gh_fn or experiment_producer.gh_call)(argv)
+        if "error" in answer:
+            raise RuntimeError(answer["error"])
+        return json.loads(answer["stdout"])
+
+    return reconcile(
+        root,
+        delivery_fn=lambda state: default_delivery_discovery(state, gh_fn=read_gh),
+    )
+
+
+def deliver_producer_winner(exp_dir, meta, evaluation, *, verify_fn=None, gh_fn=None, git_fn=None):
+    """Deliver an exact verified member, never synthesize or publish another arm."""
+    import exp_abcd
+    import experiment_producer as producer
+    import local_verify
+    import research_subjects
+
+    root = Path(exp_dir)
+    receipt_path = root / "producer-delivery.json"
+    prior = json.loads(receipt_path.read_text()) if receipt_path.exists() else {}
+    if prior.get("pr_url"):
+        return prior
+    gh = gh_fn or producer.gh_call
+    run = git_fn or subprocess.run
+    target = meta.get("subject", "")
+    repo, number = target.rsplit("#", 1)
+    candidate_id = f"experiment:{root.name}"
+    receipt = {
+        "candidate_id": candidate_id,
+        "scored_arms": len(evaluation.get("ranking") or []),
+        "local_verify": prior.get("local_verify", {}),
+    }
+
+    def persist(status, **fields):
+        receipt.update(status=status, **fields)
+        if status in {"no_winner", "discarded"}:
+            producer.release_lock(root, target, receipt, gh_fn=gh)
+        _atomic_json(receipt_path, receipt)
+        return receipt
+
+    def git(args, cwd):
+        result = run(
+            ["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=120, check=False
+        )
+        if result.returncode:
+            raise RuntimeError((result.stderr or result.stdout)[-500:])
+        return result.stdout.strip()
+
+    command = producer.named_test((root / "spec.md").read_text())
+    members = {m["member_id"]: m for m in exp_abcd.experiment_members(meta)}
+    verified = []
+    for member_id, score in evaluation.get("ranking") or []:
+        member = members.get(member_id)
+        if not member or not command:
+            continue
+        wt = exp_abcd.exp_worktree(
+            repo, root.name, member["agent"], None if member["legacy"] else member_id
+        )
+        try:
+            head = git(["rev-parse", "HEAD"], wt)
+            status_before = git(["status", "--porcelain"], wt)
+        except (RuntimeError, OSError, subprocess.TimeoutExpired):
+            continue
+        if receipt["local_verify"].get(member_id, {}).get("verified_commit") != head:
+            receipt["local_verify"][member_id] = (verify_fn or local_verify.verify)(
+                wt,
+                base_ref=meta.get("base_sha") or meta["base"],
+                test_cmd=command,
+                test_paths=producer.named_test_paths(command),
+            )
+            receipt["local_verify"][member_id]["verified_commit"] = head
+        if git(["status", "--porcelain"], wt) != status_before:
+            receipt["local_verify"][member_id].update(
+                ok=False, error="verification_changed_worktree"
+            )
+        if receipt["local_verify"][member_id].get("ok") is True:
+            verified.append((member, wt))
+    if not verified:
+        research_subjects.mark_lifecycle(root.name, "failed", reason="no_winner")
+        return persist("no_winner", reason="no_arm_passed_named_local_verify")
+    member, wt = verified[0]
+    # A failed GitHub read is a retryable receipt, never an empty population or an exception
+    # that stops the unrelated cadence. All reads/writes are injectable for offline tests.
+    answer = gh(["gh", "api", f"repos/{repo}/issues/{number}"])
+    if "error" in answer:
+        return persist("github_unavailable", error=answer["error"])
+    try:
+        issue = json.loads(answer["stdout"])
+        labels = [label["name"] for label in issue.get("labels", [])]
+        import backlog
+
+        ownership = backlog.research_ownership_skip_reason(
+            [label for label in labels if label != "status:in-progress"]
+        )
+        if issue.get("state", "").lower() != "open" or ownership:
+            return persist("discarded", reason=ownership or "subject_closed")
+        page = 1
+        while True:
+            answer = gh(["gh", "api", f"repos/{repo}/pulls?state=open&per_page=100&page={page}"])
+            if "error" in answer:
+                return persist("github_unavailable", error=answer["error"])
+            prs = json.loads(answer["stdout"])
+            if not isinstance(prs, list):
+                return persist("github_unavailable", error="invalid PR population")
+            for pr in prs:
+                body = pr.get("body") or ""
+                if candidate_id in body:
+                    return persist(
+                        "delegated_or_pr",
+                        pr_url=pr["html_url"],
+                        pr_number=pr["number"],
+                        winner=member["agent"],
+                        member_id=member["member_id"],
+                    )
+                if re.search(rf"(?<![\w/])(?:{re.escape(repo)})?#{re.escape(number)}(?!\d)", body):
+                    return persist(
+                        "discarded", reason="another_pr_names_subject", conflicting_pr=pr["number"]
+                    )
+            if len(prs) < 100:
+                break
+            page += 1
+    except (ValueError, KeyError, TypeError) as exc:
+        return persist("github_unavailable", error=str(exc))
+    branch = f"orch/exp-{root.name}"
+    try:
+        if git(["status", "--porcelain"], wt):
+            return persist("discarded", reason="winner_worktree_dirty")
+        commit = git(["rev-parse", "HEAD"], wt)
+        git(["merge-base", "--is-ancestor", meta.get("base_sha") or meta["base"], commit], wt)
+        if receipt["local_verify"][member["member_id"]]["verified_commit"] != commit:
+            return persist("verification_stale", reason="winner_head_changed")
+        diff = git(["diff", "--no-ext-diff", f"{meta.get('base_sha') or meta['base']}...HEAD"], wt)
+        if SECRET_RE.search(diff):
+            return persist("discarded", reason="secret_in_winner_diff")
+        if git(["branch", "--show-current"], wt) != branch:
+            git(["branch", "-m", branch], wt)
+        compile_producer_candidate(root, meta, member, receipt, commit)
+        git(["push", "origin", f"HEAD:refs/heads/{branch}"], wt)
+    except (RuntimeError, OSError, subprocess.TimeoutExpired) as exc:
+        return persist("push_failed", error=str(exc))
+    body_path = root / "producer-pr.md"
+    _atomic_text(
+        body_path,
+        f"Deliver the locally verified winning arm `{member['member_id']}` from experiment `{root.name}`. Candidate ID: `{candidate_id}`.\n\nCloses {target}\n\nNamed gate: `{command}`. Exact winner commit: `{commit}`.\n",
+    )
+    # Repo readiness invariant supersedes the original issue's draft wording.
+    answer = gh(
+        [
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            f"repos/{repo}/pulls",
+            "-f",
+            f"head={branch}",
+            "-f",
+            f"base={meta['base']}",
+            "-f",
+            f"title=feat: deliver experiment {root.name}",
+            "-f",
+            f"body={body_path.read_text()}",
+        ]
+    )
+    if "error" in answer:
+        return persist("publication_pending", error=answer["error"])
+    try:
+        pr = json.loads(answer["stdout"])
+        url, pr_number = pr["html_url"], int(pr["number"])
+    except (ValueError, KeyError, TypeError):
+        return persist("publication_pending", error="PR URL unavailable")
+    persist(
+        "delegated_or_pr",
+        pr_url=url,
+        pr_number=pr_number,
+        winner=member["agent"],
+        member_id=member["member_id"],
+        winner_commit=commit,
+    )
+    label = member["agent"] if member["agent"] in __import__("router").KEEPALIVE_AGENTS else "codex"
+    receipt["label_result"] = gh(
+        [
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            f"repos/{repo}/issues/{pr_number}/labels",
+            "-f",
+            f"labels[]=agent:{label}",
+        ]
+    )
+    _atomic_json(receipt_path, receipt)
+    return receipt
 
 
 def compile_candidate(

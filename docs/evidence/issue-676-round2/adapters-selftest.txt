@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__676__opener/src/adapters.py", line 3140, in <module>
+    _selftest()
+  File "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__676__opener/src/adapters.py", line 2608, in _selftest
+    _selftest_inner(gaps=[])
+  File "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__676__opener/src/adapters.py", line 2770, in _selftest_inner
+    _selftest_workspace_never_broad()
+  File "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__676__opener/src/adapters.py", line 2546, in _selftest_workspace_never_broad
+    assert reason and "default state dir" in reason, reason
+AssertionError: /Users/teacher/.codex/orchestrator contains the user's home (/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/tmp7ljg07u1/home)
+
+exit_code=1
