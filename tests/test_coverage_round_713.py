@@ -74,4 +74,5 @@ def test_snapshot_report_is_isolated_and_removes_its_temp_database(monkeypatch, 
     assert report["snapshot_path"] == str(snapshot)
     assert captured["db"] != original and not captured["db"].exists()
     assert feedback.DB_PATH == original
-    assert captured["kwargs"]["probe_langsmith_artifacts"] is True
+    # Snapshot replay must preserve the offline default rather than probe live artifacts.
+    assert captured["kwargs"]["probe_langsmith_artifacts"] is False
