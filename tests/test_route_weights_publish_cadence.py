@@ -1,4 +1,4 @@
-"""The route-weights export publishes on the daily cadence, behind the owner's switch.
+"""The route-weights export publishes on the hourly cadence, behind the owner's switch.
 
 Until 2026-09-21 orchestrate.sh never passed --publish, so the export the fleet's delegation policy
 fetches was the one-off publication of 2026-09-04 while relearn kept producing new versions: a learner
@@ -19,11 +19,11 @@ ORCHESTRATE = Path(paths.REPO_ROOT) / "orchestrate.sh"
 
 def test_the_cadence_invocation_passes_publish_exactly_once():
     src = ORCHESTRATE.read_text()
-    # WIRING PIN (smallest fragment, count == 1): the daily export step must carry --publish.
+    # WIRING PIN (smallest fragment, count == 1): the hourly export step must carry --publish.
     needle = 'route_weights_export.py" ' + "--publish"
     assert (
         src.count(needle) == 1
-    ), "the daily export publishes on cadence (owner decision 2026-09-21)"
+    ), "the hourly export publishes on cadence (owner decision 2026-09-21)"
     assert (
         src.count("ORCH_ROUTE_WEIGHTS_PUBLISH:-0") == 1
     ), "the step announces which mode it runs in"

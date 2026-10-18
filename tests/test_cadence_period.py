@@ -38,7 +38,7 @@ ORCHESTRATE = paths.REPO_ROOT / "orchestrate.sh"
 # What each name MEANS, in hours. It lives here, not in the registry, because it is the meaning of the
 # word and no convention changes it: the registry says which N spells "daily", this says how long a
 # day is. A name the registry adds without an entry here fails the first test by name.
-PERIOD_HOURS = {"daily": 24, "weekly": 7 * 24}
+PERIOD_HOURS = {"hourly": 1, "daily": 24, "weekly": 7 * 24}
 # How far either side of a period to probe. Minutes, not seconds: `find` measures from its own start,
 # a moment after the stamps are aged, and the tick only looks once an hour anyway.
 MARGIN_S = 5 * 60

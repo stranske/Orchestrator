@@ -1644,7 +1644,7 @@ for redirect linking does not prove an authorised apply. Missing or unreadable e
 UNKNOWN. The snapshot date remains visible; a newer heartbeat marks an old finding as history.
 No alarm is cleared, no regression rule changes, and no owner question or automated action is added.
 Route export (`route_weights_export.py`, schema `orchestrator.route-weights/v1` on branch
-`exports/route-weights`) records invocation on every daily run and success only after an actual
+`exports/route-weights`) runs hourly (weekly `relearn` is unchanged), records invocation on each run and success only after an actual
 publication; the published JSON preserves existing v1 routing values and adds additive
 `capacity_schema` (`orchestrator.route-weights-capacity/v1`) plus a `capacity` block with per-agent
 `state`, `window`, and `observed_at` from the capacity snapshot's own `generated_at`, plus
@@ -1675,8 +1675,28 @@ selection for the separate relay follow-up; it prints the agent on stdout and ev
 non-Codex dispatch share in constrained versus ok hours; missing populations stay unmeasured.
 `switch_review` prints that weekly check. Reset inventory and calibration are local runtime data;
 see `docs/capacity-pacing.md`. Semantic change detection includes capacity state, weekly usage and reset changes,
-excluding observation clocks, reasons and burn/schedule/projection drift, so a shed or recovered seat republishes without touching posteriors or
-`exploration.policy_version`. Rail exercise records invocation without
+excluding observation clocks, reasons, burn/schedule/projection drift and diagnostic weights. A capacity
+state change (worsening or recovery) is held until two consecutive tick snapshots show that state.
+`route_weights_export.py --record-capacity-tick` reads local `capacity.json` on every tick, before
+publication due/backoff checks, and persists state/count/observation time in
+`$ORCH_STATE_DIR/route-weights-capacity-ticks.json` beside the cadence stamps. A different state,
+a missing/stale snapshot or an observation gap over two hours resets the count; re-reading the same
+snapshot does not increment it. The second distinct tick is the drain. While held, the complete
+published pool row is retained (including its pacing state), and the tick prints both quantities:
+`[cadence] capacity publish held: <pool> local=<state> published=<state> seen=<n>/2`.
+An initial publication or malformed-capacity repair establishes the baseline. Publication still requires
+`ORCH_ROUTE_WEIGHTS_PUBLISH=1`, preserves evidence gates and failure backoff, and pushes only a
+semantic change against the fetched remote artifact; posteriors and `exploration.policy_version`
+are untouched by damping. `python3 src/route_weights_export.py --publish-lag` reads the local snapshot
+and fetches the same remote branch into disposable storage, without persistent writes, heartbeats
+or publication. It prints local snapshot age and each pool's local/published state, published
+observation age and `lag=ok|STALE`; an unchanged old artifact can still be in sync. Fetch failure
+prints `published=unmeasured`; only a fully measured match prints `all pools in sync`.
+With hourly successful ticks, a persistent state change reaches publication within two ticks
+(default at most two hours). Switch-off, failed/backed-off publication and skipped ticks can extend
+that bound and remain visible as lag. Recheck the live local/published comparison on 2026-10-19;
+merge and offline tests alone do not prove a day of successful production ticks.
+Rail exercise records invocation without
 `--record`, which governs exercise verdicts only.
 The learner and exporter share feedback.py's instance DB selection: explicit DB, DB environment,
 runtime environment, state environment, then shared default (with private `DB_PATH` patches

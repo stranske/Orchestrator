@@ -29,8 +29,10 @@ from typing import Any
 # coverage-testgen-trigger declared 7 for weekly and ran every eight days. So it is a test now:
 # tests/test_cadence_period.py replays the real `_due` and `_cadence_due` against aged stamps, fails
 # a stamped row whose value is not named below, and fails a row whose `[cadence]` log line names a
-# different period. A genuinely new period is added here, by name, never as a bare number on a row.
+# different period. The hourly sentinel uses minutes instead of days. A genuinely new period is
+# added here, by name, never as a bare number on a row.
 CADENCE_DAYS_FOR: dict[str, int] = {
+    "hourly": -1,  # explicit sub-day sentinel: _due uses find -mmin +59
     "daily": 0,  # due once the stamp is 24h old; at the hourly tick a daily step runs every ~25h
     "weekly": 6,  # due once the stamp is 7 days old
 }
@@ -407,10 +409,10 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "key": "route-weights-export",
         "capabilities": ("route-weights-export",),
         "success_stamp": ".last-route-weights-export",
-        "cadence_days": 0,
+        "cadence_days": CADENCE_DAYS_FOR["hourly"],
         "artifact": "route-weights-export.json",
         "log": "route-weights-export.log",
-        "gate": "ORCH_DISABLE_STEPS=route-weights-export stops the daily export; the cadence passes "
+        "gate": "ORCH_DISABLE_STEPS=route-weights-export stops the hourly export; the cadence passes "
         "--publish (owner decision 2026-09-21) and the script publishes to exports/route-weights only "
         "when ORCH_ROUTE_WEIGHTS_PUBLISH=1 and the remote artifact would change",
         "next_transition": "rewrite the local artifact from the latest route_weights version; "
@@ -494,6 +496,8 @@ def stale_after_seconds(row: dict[str, Any]) -> int:
     stale is not a population at all. Written twice as a literal in `inspect_cadence` until
     2026-10-02; a pair of literals is how a report and its consumer come to disagree.
     """
+    if row.get("cadence_days") == CADENCE_DAYS_FOR["hourly"]:
+        return 3600 + 1800
     return (int(row.get("cadence_days") or 0) + 1) * 86400 + STALE_GRACE_S
 
 
@@ -635,7 +639,7 @@ def retirement_holds(
 
 
 def shortest_stale_after_s(registry: tuple[dict[str, Any], ...] | None = None) -> int:
-    """The tightest `stale_after_seconds` over the stamped steps -- 36 h while any step is daily."""
+    """The tightest `stale_after_seconds` over the stamped steps (1.5 h for hourly export)."""
     stamped = [row for row in registry or CADENCE_STEPS if row.get("success_stamp")]
     return min((stale_after_seconds(row) for row in stamped), default=stale_after_seconds({}))
 

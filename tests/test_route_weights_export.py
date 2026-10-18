@@ -578,6 +578,15 @@ def test_publish_guard_preserves_remote_until_explicit_override(
             return cls.fromtimestamp(200000, tz=tz)
 
     monkeypatch.setattr(export.dt, "datetime", FixedDateTime)
+    if regression == "capacity-only":
+        # State-only publication still obeys the independent two-tick latch.
+        local = tmp_path / "capacity.json"
+        monkeypatch.setattr(export.capacity, "OUT", local)
+        for timestamp in (196400, 200000):
+            local.write_text(
+                json.dumps({"generated_at": timestamp, "agents": {"muse": {"state": "shed"}}})
+            )
+            assert export.record_capacity_tick(tmp_path / "state", now=timestamp)
     hold_path = tmp_path / "state" / "route-weights-regression-hold.json"
     if aged:
         export.write_document(

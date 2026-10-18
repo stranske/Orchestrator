@@ -246,3 +246,22 @@ seat's writable sandbox; the append was denied. The fallback checkpoint is
 `/private/tmp/pacing-followup-codex-CHECKPOINT.md`. Source merge, runtime deployment,
 healthy polling, relay consumption and completed-period passes remain separate
 verification boundaries.
+
+## Capacity publication cadence
+
+The route-weights export attempts publication hourly; `relearn` remains weekly.
+The owner switch `ORCH_ROUTE_WEIGHTS_PUBLISH=1` is still required. Worsening and
+recovery states each need two consecutive local tick observations before the
+published capacity row changes. The second tick drains the hold; changing state,
+missing/stale input or a gap over two hours resets it. Repeated reads of the same
+snapshot do not count as another tick. The tick records observations independently
+of publication backoff and prints `local`, `published` and `seen=<n>/2` when held.
+
+Read-only check: `python3 src/route_weights_export.py --publish-lag`. Each pool prints
+`pool <p>: local=<state> published=<state> published_age=<s>s lag=<ok|STALE>`.
+`all pools in sync` appears only when every state matches; failed remote reads show
+`published=unmeasured`. Observation age alone is not lag: unchanged semantic output
+does not cause a push. This query makes no persistent state or Git-ref writes.
+Check date: 2026-10-19 after one day of production ticks. Successful hourly ticks
+should propagate persistent state changes within two hours; failures/backoff and
+disabled publication can extend that bound.

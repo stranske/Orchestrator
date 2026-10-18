@@ -478,7 +478,15 @@ python3 "$ORCH/research_subjects.py" rounds-report --headline 2>> "$STAMP_DIR/ro
 # pending->durable/reverted/reopened so the learner's success label is un-gameable; WEEKLY relearn
 # re-estimates the VERSIONED route_weights from accumulated outcomes (the router already reads
 # current_weights). Stamp-gated so the hourly tick runs them at the right cadence; never breaks the tick.
-_due() { [[ ! -f "$1" ]] && return 0; [[ -n "$(find "$1" -mtime +"$2" 2>/dev/null)" ]]; }   # due if missing or older than $2 days
+_due() {
+  [[ ! -f "$1" ]] && return 0
+  # -1 is the registry's named hourly period; retain whole-day semantics for existing rows.
+  if [[ "$2" == "-1" ]]; then
+    [[ -n "$(find "$1" -mmin +59 2>/dev/null)" ]]
+  else
+    [[ -n "$(find "$1" -mtime +"$2" 2>/dev/null)" ]]
+  fi
+}
 # The per-step kill switch (`_step_disabled`, `_warn_unknown_disable_steps`) is defined near the
 # top, above the tick watchdog that consults it. The check below needs the cadence registry, so it
 # runs here.
@@ -1127,21 +1135,25 @@ if _cadence_due relearn && _attempt_ok relearn; then
   echo "  [cadence] relearn + beliefs report (weekly)"
   if python3 "$ORCH/relearn_report.py" >/dev/null 2>&1; then _mark_success relearn; else _mark_fail relearn; fi
 fi
+# Observe once per tick, even during publication backoff or budget SKIPs. No network or publication.
+python3 "$ORCH/route_weights_export.py" --record-capacity-tick --state-dir "$STAMP_DIR" \
+  || echo "  warn: capacity publish observation unavailable; state changes remain held"
 if _cadence_due route-weights-export && _attempt_ok route-weights-export; then
-  # Daily export, PUBLISHED ON CADENCE when the owner's switch is set. Until 2026-09-21 the hourly
+  # Hourly export, PUBLISHED ON CADENCE when the owner's switch is set. Until 2026-09-21 the hourly
   # path never passed --publish, so the export the fleet's delegation policy fetches from
   # exports/route-weights was the one-off of 2026-09-04 while relearn moved from version ~50 to 63:
   # a learner whose output nobody could receive. The owner asked for cadence publication on
   # 2026-09-21. The script still refuses to publish unless ORCH_ROUTE_WEIGHTS_PUBLISH=1 is in the
   # environment (~/.bash_profile for launchd) and pushes only when the remote artifact would change.
   if [[ "${ORCH_ROUTE_WEIGHTS_PUBLISH:-0}" == "1" ]]; then
-    echo "  [cadence] route weights export (daily; publishing to exports/route-weights when changed)"
+    echo "  [cadence] route weights export (hourly; publishing to exports/route-weights when changed)"
   else
-    echo "  [cadence] route weights export (daily; shadow — ORCH_ROUTE_WEIGHTS_PUBLISH!=1, remote publish blocked)"
+    echo "  [cadence] route weights export (hourly; shadow — ORCH_ROUTE_WEIGHTS_PUBLISH!=1, remote publish blocked)"
   fi
   if python3 "$ORCH/route_weights_export.py" --publish \
        > "$STAMP_DIR/route-weights-export.log" 2>&1; then
     _mark_success route-weights-export
+    sed -n '/^\[cadence\] capacity publish held:/p' "$STAMP_DIR/route-weights-export.log"
   else
     cat "$STAMP_DIR/route-weights-export.log"
     _mark_fail route-weights-export "see $STAMP_DIR/route-weights-export.log"
