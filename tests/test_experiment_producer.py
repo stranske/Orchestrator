@@ -1290,8 +1290,9 @@ def test_campaign_share_pin_locks_check_day_reading_once():
 
 
 def test_producer_line_pins_campaign_share_on_check_day(monkeypatch):
-    import switch_review
     from datetime import datetime, timezone
+
+    import switch_review
 
     check_ts = datetime(2026, 10, 25, 18, 0, tzinfo=timezone.utc).timestamp()
     monkeypatch.setattr(producer.time, "time", lambda: check_ts)
