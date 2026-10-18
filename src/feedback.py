@@ -2413,6 +2413,7 @@ def record_capability_consumption(
     producer: str = "orchestrator",
     acceptance_gate_id: str | None = None,
     attempt_id: str | None = None,
+    receipt_ref: str | None = None,
 ) -> dict:
     """Record a version-exact producer-to-consumer edge.
 
@@ -2420,6 +2421,8 @@ def record_capability_consumption(
     consumption for an unobserved downstream run. Later outcomes reconcile over
     this exact edge without rewriting it.
     """
+    if accepted and producer.startswith("capability_lifecycle:") and not receipt_ref:
+        raise ValueError("compiled capability consumption requires a consumer receipt")
     with _conn() as c:
         target_event_id = _latest_completion_event_id(c, target_run_id)
         if not target_event_id:
@@ -2439,6 +2442,9 @@ def record_capability_consumption(
             payload={
                 "capability_ids": [capability_id],
                 "result": {"version_hash": capability_version_id, "accepted": accepted},
+                "artifact_refs": [{"artifact_id": receipt_ref, "kind": "consumer_receipt"}]
+                if receipt_ref
+                else [],
             },
         )
         edge = _record_influence_edge_in_conn(

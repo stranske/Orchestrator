@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 import pytest
+from capability_dispatch_fixture import local_dispatch
 from test_evidence_contract_compiler import _plan as evidence_contract_plan
 from test_evidence_contract_compiler import gap_rows as evidence_gap_rows
 from test_playbook_compiler import REPO as PLAYBOOK_REPO
@@ -989,7 +990,6 @@ def test_regression_requires_automatic_rollback(regressing_canary: tuple[dict, P
 def test_dispatcher_dispatch_workflow_produces_one_accepted_edge(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import capabilities
     import dispatcher
 
     ctx = _registered_workflow(tmp_path, monkeypatch)
@@ -998,24 +998,146 @@ def test_dispatcher_dispatch_workflow_produces_one_accepted_edge(
     monkeypatch.setattr(capability_lifecycle, "DEFAULT_TARGET_REGISTRY", ctx["registry"])
     run_id = "dispatch:workflow:1"
     trigger = ctx["fixture"]["trigger"]
-    d = {
-        "run_id": run_id,
+    assignment = {
         "target": trigger["target"],
         "task_type": trigger["task_type"],
         "agent": "codex",
-        "routing_metadata": {
-            "selected_capability_id": ctx["capability_id"],
-            "selected_capability_version_id": ctx["version_id"],
-        },
+        "mode": "full",
+        "selected_capability_id": ctx["capability_id"],
+        "selected_capability_version_id": ctx["version_id"],
+        "capability_ids": [],
+        "capability_version_ids": [],
     }
-    feedback.record_run(run_id, trigger["target"], trigger["task_type"], "codex")
-    result = dispatcher._invoke_selected_compiled_capability(d)
-    assert result is not None
-    assert result.get("invoked") and result.get("accepted")
+    with local_dispatch(tmp_path) as worker:
+        preview = dispatcher.plan_dispatch(assignment, dry_run=True)
+        assert preview["capability_ids"] == []
+        assert preview["routing_metadata"]["capability_dispatch_result"]["reason"] == "dry_run"
+        assert capability_targets.get_binding(
+            ctx["version_id"], registry_path=ctx["registry"]
+        )["invocations"] == []
+        d = dispatcher.plan_dispatch(assignment)
+        d["run_id"] = run_id
+        assert dispatcher._spawn(d) == 1234
+        assert worker.call_count == 1
+    assert d["capability_ids"] == [ctx["capability_id"]]
+    assert d["capability_version_ids"] == [ctx["version_id"]]
+    receipt = d["routing_metadata"]["capability_dispatch_result"]
+    assert receipt["invoked"] is True and receipt["accepted"] is True
     with feedback._conn() as conn:
-        count = conn.execute(
-            "SELECT COUNT(*) FROM influence_edges WHERE target_run_id=? "
+        edges = conn.execute(
+            "SELECT capability_id,capability_version_id,source_event_id,target_event_id "
+            "FROM influence_edges WHERE target_run_id=? "
             "AND influence_type='capability' AND accepted=1",
             (run_id,),
+        ).fetchall()
+        source = json.loads(
+            conn.execute(
+                "SELECT payload_json FROM completion_events WHERE event_id=?",
+                (receipt["source_event_id"],),
+            ).fetchone()[0]
+        )
+        stored = json.loads(
+            conn.execute(
+                "SELECT routing_metadata FROM runs WHERE run_id=?", (run_id,)
+            ).fetchone()[0]
+        )
+    assert len(edges) == 1
+    assert tuple(edges[0]) == (
+        ctx["capability_id"],
+        ctx["version_id"],
+        receipt["source_event_id"],
+        receipt["target_event_id"],
+    )
+    assert source["artifact_refs"] == [
+        {"artifact_id": receipt["consumer_ref"], "kind": "consumer_receipt"}
+    ]
+    assert stored["capability_dispatch_result"] == receipt
+    binding = capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])
+    assert len(binding["invocations"]) == 1
+    assert binding["invocations"][0]["consumer_ref"] == receipt["consumer_ref"]
+    assert binding["invocations"][0]["invocation_id"] == receipt["invocation_id"]
+
+
+@pytest.mark.parametrize(
+    ("case", "reason"),
+    [
+        ("refused", "kill_switch"),
+        ("failed", "invoke_failed:ValueError"),
+        ("expired", "expired"),
+        ("unsupported", "unsupported_target_kind"),
+        ("version_changed", "selected_version_mismatch"),
+        ("not_consumed", "output_not_consumed"),
+        ("receipt_missing", "consumption_receipt_missing"),
+    ],
+)
+def test_dispatch_fallback_has_no_compiled_credit_and_keeps_infrastructure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, reason: str
+) -> None:
+    import dispatcher
+
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    monkeypatch.setattr(capabilities, "REG", ctx["ledger"])
+    monkeypatch.setattr(capability_lifecycle, "DEFAULT_TARGET_REGISTRY", ctx["registry"])
+    infra_id = "thompson-hybrid-routing"
+    infra = capabilities._blank_capability(infra_id)
+    infra["capability_version_id"] = "capability-version:infrastructure"
+    _mutate_json(ctx["ledger"], "capabilities", **{infra_id: infra})
+    if case == "refused":
+        monkeypatch.setenv("ORCH_CAPABILITY_WORKFLOW_ENABLED", "0")
+    elif case == "expired":
+        _mutate_json(ctx["ledger"], "capabilities", ctx["capability_id"], expiry=ctx["now"] - 1)
+    elif case == "unsupported":
+        _mutate_json(ctx["registry"], "targets", ctx["version_id"], kind="role")
+    elif case == "failed":
+
+        def fail(_artifact):
+            raise ValueError("fixture producer failed")
+
+        monkeypatch.setattr(compiler, "dry_run_workflow_rail", fail)
+    elif case in {"not_consumed", "receipt_missing"}:
+        monkeypatch.setattr(
+            compiler,
+            "consume_workflow_output",
+            lambda output: {
+                "consumed": case == "receipt_missing",
+                "receipt_id": None if case == "receipt_missing" else "receipt:unused",
+            },
+        )
+    assignment = {
+        "agent": "codex",
+        "mode": "full",
+        "target": ctx["fixture"]["trigger"]["target"],
+        "task_type": ctx["fixture"]["trigger"]["task_type"],
+        "selected_capability_id": ctx["capability_id"],
+        "selected_capability_version_id": "capability-version:old"
+        if case == "version_changed"
+        else ctx["version_id"],
+        "exploration": True,
+        "exploration_mode": "thompson-hybrid",
+    }
+    with local_dispatch(tmp_path) as worker:
+        d = dispatcher.plan_dispatch(assignment)
+        d["run_id"] = f"dispatch:fallback:{case}"
+        assert dispatcher._spawn(d) == 1234
+        assert worker.call_count == 1
+    assert ctx["capability_id"] not in d["capability_ids"]
+    with feedback._conn() as conn:
+        selected_count = conn.execute(
+            "SELECT COUNT(*) FROM influence_edges WHERE target_run_id=? "
+            "AND capability_id=? AND accepted=1",
+            (d["run_id"], ctx["capability_id"]),
         ).fetchone()[0]
-    assert count == 1
+        infra_count = conn.execute(
+            "SELECT COUNT(*) FROM influence_edges WHERE target_run_id=? "
+            "AND capability_id=? AND accepted=1",
+            (d["run_id"], infra_id),
+        ).fetchone()[0]
+        metadata = json.loads(
+            conn.execute(
+                "SELECT routing_metadata FROM runs WHERE run_id=?", (d["run_id"],)
+            ).fetchone()[0]
+        )
+    assert selected_count == 0
+    assert infra_count == 1
+    assert metadata["capability_fallback"] == "baseline"
+    assert metadata["capability_dispatch_result"]["reason"] == reason

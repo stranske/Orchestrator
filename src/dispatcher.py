@@ -902,6 +902,8 @@ def _routing_metadata(assignment: dict) -> dict | None:
         "selected_profile_id",
         "profile_decision",
         "requested_profile_id",
+        "selected_capability_id",
+        "selected_capability_version_id",
     }
     if not any(key in assignment for key in keys):
         return None
@@ -932,6 +934,7 @@ def _routing_metadata(assignment: dict) -> dict | None:
         "capability_assignment_probability": assignment.get("capability_assignment_probability"),
         "capability_rng_seed": assignment.get("capability_rng_seed"),
         "capability_fallback": assignment.get("capability_fallback"),
+        "capability_dispatch_result": assignment.get("capability_dispatch_result"),
         "requested_profile_id": assignment.get("requested_profile_id"),
     }
     return {key: value for key, value in metadata.items() if value not in (None, "", [], {})}
@@ -1025,6 +1028,12 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
     # and must not be lost because the optional role layer raised. `assignment` may still be the
     # caller's dict here, so copy before mutating.
     assignment = dict(assignment)
+    if assignment.get("selected_capability_id"):
+        assignment["capability_dispatch_result"] = {
+            "invoked": False,
+            "accepted": False,
+            "reason": "dry_run" if dry_run else "not_executed",
+        }
     assignment["capability_ids"] = list(
         dict.fromkeys(
             list(assignment.get("capability_ids") or [])
@@ -1118,22 +1127,59 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
 # already records. Without the tag the capability records that it RAN and never how the work turned
 # out, which is what put both of these in `invoked_without_outcomes` with zero edges. (2026-08-21)
 def _invoke_selected_compiled_capability(d: dict) -> dict | None:
-    """Run invoke_compiled_target for the routed selection after the run envelope exists."""
-    routing = d.get("routing_metadata") or {}
+    """Invoke supported selections after recording the run; keep refusal metadata explicit."""
+    routing = dict(d.get("routing_metadata") or {})
     cap_id = routing.get("selected_capability_id")
     if not cap_id:
         return None
+    version_id = routing.get("selected_capability_version_id")
+    # Older or external callers may still forward a selection as exercised.
+    # Remove it before invocation; only a successful receipt can add it back.
+    ids = list(d.get("capability_ids") or [])
+    versions = list(d.get("capability_version_ids") or [])
+    if cap_id in ids:
+        if versions and len(ids) != len(versions):
+            raise ValueError("capability identity/version lineage length mismatch")
+        d["capability_ids"] = [cid for cid in ids if cid != cap_id]
+        d["capability_version_ids"] = [
+            version for cid, version in zip(ids, versions) if cid != cap_id
+        ]
+
+    def fallback(reason: str, *, invoked: bool = False) -> dict:
+        result = {"invoked": invoked, "accepted": False, "reason": reason}
+        routing["capability_dispatch_result"] = result
+        routing["capability_fallback"] = "baseline"
+        d["routing_metadata"] = routing
+        return result
+
     try:
         import capabilities
         import capability_lifecycle
-        from capability_lifecycle import DEFAULT_TARGET_REGISTRY
+        import capability_targets
+
+        ledger = capabilities.load(capabilities.REG, create=False)
+        cap = ledger.get(cap_id)
+        if not cap:
+            return fallback("unknown_capability")
+        if not version_id or cap.get("capability_version_id") != version_id:
+            return fallback("selected_version_mismatch")
+        binding = capability_targets.get_binding(
+            version_id, registry_path=capability_lifecycle.DEFAULT_TARGET_REGISTRY
+        )
+        if not binding:
+            return fallback("target_binding_missing")
+        # Workflow rails have a bounded producer and typed output consumer. Other
+        # target kinds need their own dispatch inputs and consumption seams.
+        if binding.get("kind") != "workflow":
+            return fallback("unsupported_target_kind")
     except Exception as exc:
-        return {"invoked": False, "accepted": False, "reason": f"import_failed:{exc}"}
+        return fallback(f"target_lookup_failed:{type(exc).__name__}")
     target = str(d.get("target") or "")
     trigger = {
         "target": target,
         "task_type": d.get("task_type"),
         "repository": target.split("#")[0] if "#" in target else target,
+        "lane": d.get("lane") or "opener",
     }
     try:
         result = capability_lifecycle.invoke_compiled_target(
@@ -1141,19 +1187,41 @@ def _invoke_selected_compiled_capability(d: dict) -> dict | None:
             trigger=trigger,
             target_run_id=str(d["run_id"]),
             ledger_path=capabilities.REG,
-            target_registry_path=DEFAULT_TARGET_REGISTRY,
+            target_registry_path=capability_lifecycle.DEFAULT_TARGET_REGISTRY,
             inputs={},
+            expected_version_id=str(version_id),
         )
     except Exception as exc:
-        result = {"invoked": False, "accepted": False, "reason": f"invoke_failed:{exc}"}
+        return fallback(f"invoke_failed:{type(exc).__name__}")
     if not result.get("invoked") or not result.get("accepted"):
-        metadata = dict(routing)
-        metadata["capability_dispatch_result"] = {
-            "invoked": bool(result.get("invoked")),
-            "accepted": bool(result.get("accepted")),
-            "reason": result.get("reason"),
-        }
-        d["routing_metadata"] = metadata
+        return fallback(
+            str(result.get("reason") or "output_not_consumed"),
+            invoked=bool(result.get("invoked")),
+        )
+    edge = result.get("causal_edge") or {}
+    if not result.get("consumer_ref") or not edge.get("source_event_id"):
+        return fallback("consumption_receipt_missing", invoked=True)
+    # Keep existing infrastructure pairs aligned when adding compiled attribution.
+    ids = list(d.get("capability_ids") or [])
+    versions = list(d.get("capability_version_ids") or [])
+    if not versions:
+        versions = [str((ledger.get(cid) or {}).get("capability_version_id") or "") for cid in ids]
+    if len(ids) != len(versions):
+        raise ValueError("capability identity/version lineage length mismatch")
+    pairs = [(cid, version) for cid, version in zip(ids, versions) if version and cid != cap_id]
+    pairs.append((str(cap_id), str(version_id)))
+    d["capability_ids"] = [cid for cid, _ in pairs]
+    d["capability_version_ids"] = [version for _, version in pairs]
+    routing["capability_dispatch_result"] = {
+        "invoked": True,
+        "accepted": True,
+        "capability_id": cap_id,
+        "capability_version_id": version_id,
+        "invocation_id": result["invocation_id"],
+        "consumer_ref": result["consumer_ref"],
+        **edge,
+    }
+    d["routing_metadata"] = routing
     return result
 
 
@@ -1281,6 +1349,10 @@ def _spawn(d: dict) -> int:
         try:
             feedback.record_run(*run_args, **run_kwargs)
             _invoke_selected_compiled_capability(d)
+            if (d.get("routing_metadata") or {}).get("selected_capability_id"):
+                feedback.record_run(
+                    *run_args, **{**run_kwargs, "routing_metadata": d["routing_metadata"]}
+                )
         except Exception:
             claims.release(d["target"], d["agent"])
             raise
@@ -1288,6 +1360,10 @@ def _spawn(d: dict) -> int:
         try:
             feedback.record_run(*run_args, **run_kwargs)
             _invoke_selected_compiled_capability(d)
+            if (d.get("routing_metadata") or {}).get("selected_capability_id"):
+                feedback.record_run(
+                    *run_args, **{**run_kwargs, "routing_metadata": d["routing_metadata"]}
+                )
         except Exception as exc:
             adapters.record_ledger(
                 d["agent"],

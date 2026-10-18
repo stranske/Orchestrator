@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 import pytest
+from capability_dispatch_fixture import local_dispatch
 
 import capabilities
 import execution_profiles
@@ -440,6 +441,7 @@ def test_profile_decision_attaches_only_real_matching_attempt(tmp_path, monkeypa
 
 
 def test_router_plan_selection_metadata_without_exercised_credit(tmp_path, monkeypatch):
+    import dispatcher
     import router
 
     cap = capabilities._blank_capability("selection-credit")
@@ -483,6 +485,7 @@ def test_router_plan_selection_metadata_without_exercised_credit(tmp_path, monke
     monkeypatch.setattr(capabilities.load, "__defaults__", (ledger,))
     monkeypatch.setattr(capabilities.load_declared, "__defaults__", (ledger,))
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setattr(router.claims, "active_claims", lambda: {})
     result = router.plan(
         [{"target": "owner/repo#23", "task_type": "implement", "lane": "opener"}],
         {"agents": {"codex": {"state": "ok"}}},
@@ -491,26 +494,34 @@ def test_router_plan_selection_metadata_without_exercised_credit(tmp_path, monke
     )
     assignment = result["assignments"][0]
     assert assignment["selected_capability_id"] == cap["capability_id"]
+    assert assignment["selected_capability_version_id"] == cap["capability_version_id"]
     assert assignment["capability_ids"] == []
     assert assignment["capability_version_ids"] == []
-    feedback.record_run(
-        "selection-only",
-        "owner/repo#23",
-        "implement",
-        "codex",
-        routing_metadata={
-            "selected_capability_id": assignment["selected_capability_id"],
-            "selected_capability_version_id": assignment["selected_capability_version_id"],
-        },
-        capability_ids=[],
-        capability_version_ids=[],
-    )
+    # Exercise the real planning/spawn/writer seams; this selected capability has
+    # no compiled binding and therefore cannot produce a consumption receipt.
+    assignment["selected_profile_id"] = None
+    with local_dispatch(tmp_path) as worker:
+        dispatch = dispatcher.plan_dispatch(assignment)
+        assert dispatch["capability_ids"] == []
+        assert dispatch["capability_version_ids"] == []
+        dispatch["run_id"] = "selection-only"
+        assert dispatcher._spawn(dispatch) == 1234
+        assert worker.call_count == 1
     with feedback._conn() as conn:
         count = conn.execute(
             "SELECT COUNT(*) FROM influence_edges WHERE target_run_id=? AND influence_type='capability' AND accepted=1",
             ("selection-only",),
         ).fetchone()[0]
+        metadata = json.loads(
+            conn.execute(
+                "SELECT routing_metadata FROM runs WHERE run_id=?", ("selection-only",)
+            ).fetchone()[0]
+        )
     assert count == 0
+    assert metadata["selected_capability_id"] == cap["capability_id"]
+    assert metadata["selected_capability_version_id"] == cap["capability_version_id"]
+    assert metadata["capability_dispatch_result"]["reason"] == "target_binding_missing"
+    assert metadata["capability_decision"] == assignment["capability_decision"]
 
 
 def test_pending_durability_is_not_a_failure_or_promotion_vote(tmp_path, monkeypatch):
@@ -534,3 +545,32 @@ def test_pending_durability_is_not_a_failure_or_promotion_vote(tmp_path, monkeyp
     assert result["status"] == "canary"
     assert result["routing_prior"]["observations"] == 0
     assert result["readiness"]["failures"] == 0
+
+
+def test_selection_pairs_without_receipt_cannot_bypass_brain_writer(tmp_path, monkeypatch):
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    cap = _register(tmp_path / "capabilities.json")
+    feedback.record_run(
+        "selection:forwarded-pair",
+        "owner/repo#23",
+        "implement",
+        "codex",
+        capability_ids=[cap["capability_id"]],
+        capability_version_ids=[cap["capability_version_id"]],
+    )
+    with pytest.raises(ValueError, match="requires a consumer receipt"):
+        feedback.record_capability_consumption(
+            capability_id=cap["capability_id"],
+            capability_version_id=cap["capability_version_id"],
+            source_run_id="capability-producer:unexecuted",
+            target_run_id="selection:forwarded-pair",
+            accepted=True,
+            producer="capability_lifecycle:active",
+        )
+    with feedback._conn() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM influence_edges WHERE target_run_id=? "
+            "AND influence_type='capability' AND accepted=1",
+            ("selection:forwarded-pair",),
+        ).fetchone()[0]
+    assert count == 0
