@@ -125,6 +125,177 @@ def operation(action="merge"):
     }
 
 
+def _terminal_queue_state(tmp_path):
+    path = tmp_path / "legacy-queue.json"
+    finished_at = 1_700_000_000.0
+    receipt = closer_queue.run_round(
+        path,
+        [TARGET],
+        lambda _: {
+            "revision": "terminal-revision",
+            "action": "complete",
+            "eligible": False,
+            "evidence": {},
+        },
+        lambda *_: pytest.fail("complete action must not execute"),
+        deadline=finished_at + 1200,
+        receipt_reserve_seconds=0,
+        now=lambda: finished_at,
+    )
+    assert receipt["stop_valid"] is True
+    return json.loads(path.read_text())
+
+
+def test_terminal_valid_legacy_round_gets_a_fresh_cli_budget(tmp_path):
+    previous = _terminal_queue_state(tmp_path)
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(previous))
+
+    requested = time.time() + 2700
+    assert previous["round"]["deadline"] < time.time()
+    assert adapter._validly_finished_legacy_round(state_path, previous) is True
+    assert adapter._deadline_with_legacy_round(requested, previous, state_path) == requested
+
+
+def test_claim_held_row_without_a_real_claimant_cannot_renew_budget(tmp_path, monkeypatch):
+    state_path = tmp_path / "legacy-queue.json"
+    finished_at = 1_700_000_000.0
+    receipt = closer_queue.run_round(
+        state_path,
+        [TARGET],
+        lambda _: {
+            "revision": "claim-held-revision",
+            "action": "merge",
+            "eligible": True,
+            "reason": None,
+            "next_trigger": None,
+            "evidence": {},
+        },
+        lambda *_: pytest.fail("claim conflict must prevent execution"),
+        deadline=finished_at + 1200,
+        receipt_reserve_seconds=0,
+        now=lambda: finished_at,
+        claim_fn=lambda *_: False,
+        holder_fn=lambda _target: {"agent": "somebody-else"},
+        release_fn=lambda *_: True,
+    )
+    assert receipt["stop_valid"] is True
+    state = json.loads(state_path.read_text())
+    monkeypatch.setattr(closer_queue.claims, "holder", lambda _target: None)
+
+    requested = time.time() + 2700
+    assert adapter._validly_finished_legacy_round(state_path, state) is False
+    assert (
+        adapter._deadline_with_legacy_round(requested, state, state_path)
+        == state["round"]["deadline"]
+    )
+
+
+def test_unfinished_legacy_round_keeps_original_deadline(tmp_path):
+    previous = _terminal_queue_state(tmp_path)
+    state_path = tmp_path / "legacy-queue.json"
+    previous["round"]["status"] = "running"
+    old_deadline = time.time() + 45
+    previous["round"]["deadline"] = old_deadline
+
+    requested = time.time() + 2700
+    assert adapter._validly_finished_legacy_round(state_path, previous) is False
+    assert adapter._deadline_with_legacy_round(requested, previous, state_path) == old_deadline
+
+
+def test_malformed_terminal_receipt_cannot_renew_the_legacy_budget(tmp_path):
+    previous = _terminal_queue_state(tmp_path)
+    state_path = tmp_path / "legacy-queue.json"
+    previous["round"]["receipt"]["accounted_targets"] = []
+    old_deadline = time.time() + 45
+    previous["round"]["deadline"] = old_deadline
+    state_path.write_text(json.dumps(previous))
+
+    requested = time.time() + 2700
+    assert adapter._validly_finished_legacy_round(state_path, previous) is False
+    assert adapter._deadline_with_legacy_round(requested, previous, state_path) == old_deadline
+
+
+def test_malformed_legacy_round_without_a_deadline_fails_closed():
+    with pytest.raises(RuntimeError, match="no safe deadline"):
+        adapter._deadline_with_legacy_round(
+            time.time() + 2700, {"round": {"status": "running"}}, "missing-state.json"
+        )
+
+
+@pytest.mark.parametrize(
+    ("case", "expect_fresh_budget"),
+    [("finished_valid", True), ("running", False), ("finished_malformed", False)],
+)
+def test_cli_staged_pipeline_deadline_uses_nested_valid_queue_receipt(
+    tmp_path, monkeypatch, case, expect_fresh_budget
+):
+    state_path = tmp_path / "legacy-state.json"
+    receipt = closer_queue.run_round(
+        state_path,
+        [TARGET],
+        lambda _: {
+            "revision": "terminal-revision",
+            "action": "complete",
+            "eligible": False,
+            "evidence": {},
+        },
+        lambda *_: pytest.fail("complete action must not execute"),
+        deadline=1_700_001_200,
+        receipt_reserve_seconds=0,
+        now=lambda: 1_700_000_000.0,
+    )
+    assert receipt["stop_valid"] is True
+    state = json.loads(state_path.read_text())
+    prior_deadline = state["round"]["deadline"]
+    if case == "running":
+        state["round"]["status"] = "running"
+    elif case == "finished_malformed":
+        state["round"]["receipt"]["accounted_targets"] = []
+    state_path.write_text(json.dumps(state))
+
+    assignment_path = tmp_path / "assignment.json"
+    assignment_path.write_text(json.dumps({"targets": [{"target": TARGET}]}))
+    observed = {}
+
+    class FakeBackend:
+        def __init__(self, github, **_kwargs):
+            observed["github_deadline"] = github.deadline
+
+    def run_staged(_args, _targets, _backend, deadline):
+        observed["pipeline_deadline"] = deadline
+        return {"status": "stubbed"}
+
+    monkeypatch.setattr(adapter, "Closer", FakeBackend)
+    monkeypatch.setattr(adapter, "GitHub", lambda *, deadline: SimpleNamespace(deadline=deadline))
+    monkeypatch.setattr(adapter, "known_workspaces", lambda _targets: {})
+    monkeypatch.setattr(adapter, "_run_staged_pipeline", run_staged)
+    import closer_pipeline
+
+    monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_kw: {"valid": True})
+
+    exit_code = adapter.main(
+        [
+            "run",
+            "--assignment",
+            str(assignment_path),
+            "--state",
+            str(state_path),
+            "--budget-seconds",
+            "10",
+            "--apply",
+            "--workers",
+            "--pipeline",
+        ]
+    )
+    assert exit_code == 0
+    assert observed["github_deadline"] == observed["pipeline_deadline"]
+    if expect_fresh_budget:
+        assert observed["pipeline_deadline"] > prior_deadline
+    else:
+        assert observed["pipeline_deadline"] == min(time.time() + 10 + 300, prior_deadline)
+
+
 @pytest.mark.parametrize("decision", [{"ready": True}, {"reviewer": "luna", "ready": True}, {}])
 def test_green_ci_or_model_ready_is_not_acceptance(tmp_path, decision):
     current = snapshot()
