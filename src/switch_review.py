@@ -48,6 +48,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import math
 import os
 import sqlite3
 import subprocess
@@ -2019,6 +2020,36 @@ def strategy_completed_line(result: dict, costs: dict) -> str:
     return f"  strategy experiment: completed {result.get('exp_id')}{score_bit} {cost_bit}"
 
 
+def experiment_producer_line():
+    import experiment_producer
+
+    m = experiment_producer.producer_summary()
+    verdict = experiment_producer.trial_verdict(summary_fn=lambda: m)
+    state = experiment_producer.read_state()
+    end = state.get("trial_end", "not_started")
+    seconds_left = experiment_producer.trial_window_end(state) - time.time()
+    days_left = (
+        max(0, math.ceil(seconds_left / 86400))
+        if state.get("trial_start")
+        else experiment_producer.COVERAGE_DAYS
+    )
+    reasons = ", ".join(f"{k}={v}" for k, v in sorted(m["skips"].items())) or "none"
+    unknown = "; UNKNOWN " + ", ".join(m["unknowns"]) if m["unknowns"] else ""
+    if verdict == "pending" and state.get("pending_since"):
+        verdict += f" since {state['pending_since']}, resolves fail on {state.get('resolves_on')}"
+    elif state.get("trial_reason"):
+        verdict += f" ({state['trial_reason']})"
+    return (
+        f"  experiment producer: launched {m['launched']}, evaluated {m['evaluated']}, "
+        f"winner_prs {m['winner_prs']}, winner_merged {m['winner_merged']}, "
+        f"post_window_launches={m.get('post_window_launches', 0)}, "
+        f"cells_fresh {m['cells_fresh']}/{m['cells_total']}, "
+        f"skipped {sum(m['skips'].values())} ({reasons}){unknown}; "
+        f"trial_end {end}, verdict {verdict}, days_left {days_left}; "
+        f"winner merge grace {experiment_producer.WINNER_MERGE_GRACE_DAYS}d"
+    )
+
+
 def review_round_snapshot() -> dict:
     """Observe rounds without creating/migrating the Brain during a report."""
     import feedback
@@ -2080,6 +2111,7 @@ def format_report(rep: dict) -> str:
             ]
     except (OSError, ValueError, TypeError):
         lines += ["  strategy experiment: UNKNOWN — no completed scored evaluation", ""]
+    lines += [experiment_producer_line(), ""]
     if rep.get("adjudicator_shadow"):
         lines += [rep["adjudicator_shadow"], ""]
     if rep.get("adjudicator_live"):
