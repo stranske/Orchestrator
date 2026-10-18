@@ -34,6 +34,12 @@ command returned an error. A pass bound prevents a zero-progress spin, but does
 not authorize a valid stop while actionable work and usable time remain. An
 expired recovery records its overrun honestly and launches no new actions.
 
+A later CLI invocation starts a new budget only after the persisted round has a
+finished receipt that passes the queue's normal locked stop validation against the
+current state and claim ledger. Running rounds, invalid receipts and unreadable
+state keep the original deadline or fail closed; a saved `finished_at` field alone
+does not reset the clock.
+
 The staged production path is `--pipeline --apply --workers`. It prepares
 incremental source, diff, review, check and existing-verifier evidence in an
 independent bounded IO pool before lifecycle selection, including while checks

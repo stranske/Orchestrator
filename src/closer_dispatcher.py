@@ -13,6 +13,7 @@ import contextlib
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import signal
@@ -55,6 +56,92 @@ def _event_epoch(value):
         return moment.timestamp() if moment.tzinfo is not None else None
     except ValueError:
         return None
+
+
+def _finite_number(value):
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except (OverflowError, TypeError, ValueError):
+        return False
+
+
+def _validly_finished_legacy_round(state_path, state_doc):
+    """Whether the durable legacy queue round has a validated terminal receipt."""
+    import closer_queue
+
+    if not isinstance(state_doc, dict):
+        return False
+    round_state = state_doc.get("round")
+    if not isinstance(round_state, dict) or round_state.get("status") != "finished":
+        return False
+    receipt = round_state.get("receipt")
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("schema") != closer_queue.RECEIPT_SCHEMA
+        or receipt.get("stop_valid") is not True
+    ):
+        return False
+    finished_at = receipt.get("finished_at")
+    deadline = round_state.get("deadline")
+    owner = round_state.get("owner")
+    if (
+        not _finite_number(finished_at)
+        or not _finite_number(deadline)
+        or not isinstance(owner, str)
+        or not owner
+        or receipt.get("deadline") != deadline
+        or receipt.get("owner") != owner
+    ):
+        return False
+    try:
+        # Use the queue's normal lock and real holder lookup. A saved stop_valid
+        # flag is not enough: claim_held rows must still have a real claimant.
+        validation = closer_queue.validate_stop(state_path, assignment_targets=None)
+        # Bind the result to the state document we based the budget decision on.
+        # A concurrent round/state change means we cannot safely renew this run.
+        current_state = closer_queue._read_state(Path(state_path))
+    except Exception:
+        return False
+    return (
+        isinstance(validation, dict)
+        and validation.get("valid") is True
+        and validation.get("stop_valid") is True
+        and current_state == state_doc
+    )
+
+
+def _deadline_with_legacy_round(requested_deadline, state_doc, state_path):
+    """Keep the old budget unless a finished queue round is validated terminal."""
+    if not isinstance(state_doc, dict):
+        raise RuntimeError("legacy closer state is malformed; refusing to renew its budget")
+    round_state = state_doc.get("round", {})
+    if not isinstance(round_state, dict):
+        raise RuntimeError("legacy closer round is malformed; refusing to renew its budget")
+    if not round_state:
+        items = state_doc.get("items")
+        if not isinstance(items, dict):
+            raise RuntimeError("legacy closer item inventory is malformed; refusing new budget")
+        try:
+            import closer_queue
+
+            active, _ = closer_queue._active_operations(items)
+        except Exception as exc:
+            raise RuntimeError(
+                "legacy closer operations are unreadable; refusing to renew its budget"
+            ) from exc
+        if active:
+            raise RuntimeError(
+                "legacy closer has pending operations without a round deadline; refusing new budget"
+            )
+        return requested_deadline
+    if _validly_finished_legacy_round(state_path, state_doc):
+        return requested_deadline
+    previous_deadline = round_state.get("deadline")
+    if not _finite_number(previous_deadline):
+        raise RuntimeError("unfinished legacy round has no safe deadline; refusing new budget")
+    return min(requested_deadline, previous_deadline)
 
 
 def _confirmed_post_merge_label_event(target, operation, evidence):
@@ -3028,9 +3115,13 @@ def main(argv=None):
     targets = list(assignment_rows)
     deadline = time.time() + args.budget_seconds + 300
     if Path(args.state).exists():
-        previous = json.loads(Path(args.state).read_text()).get("round", {})
-        if not previous.get("finished_at") and previous.get("deadline"):
-            deadline = min(deadline, previous["deadline"])
+        try:
+            previous_state = closer_queue._read_state(Path(args.state))
+        except Exception as exc:
+            raise RuntimeError(
+                "legacy closer state is unreadable; refusing to renew its execution budget"
+            ) from exc
+        deadline = _deadline_with_legacy_round(deadline, previous_state, args.state)
     handoff = (
         Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex/handoff")) / "lane-handoff.json"
     )
