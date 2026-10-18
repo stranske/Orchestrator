@@ -87,6 +87,85 @@ def test_complete_large_junit_is_indexed_and_consumed_without_promoting_ci(tmp_p
     assert packet == original  # No artifact, section, or global completeness promotion.
 
 
+def test_same_junit_content_preserves_each_exact_provenance_tuple(tmp_path):
+    packet, root, first, receipt = receipt_fixture(tmp_path, partial=False)
+    content = packet["sections"]["ci_artifacts"]["content"]
+    first_run = next(run for run in content["runs"] if run["id"] == first["run_id"])
+    # A second real mixed archive contains the exact same JUnit member. The
+    # content-addressed ref is shared; its successful run and attempt are distinct.
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(receipt["path"], junit_bytes())
+        archive.writestr("index.ndjson", '{"index":"another successful run"}\n')
+    receipts, omissions, status = evidence._parse_archive(stream.getvalue(), root)
+    assert receipts[0]["raw"] == receipt["raw"]
+    second = {
+        **copy.deepcopy(first),
+        "id": first["id"] + 1,
+        "run_id": first["run_id"] + 1,
+        "run_attempt": first["run_attempt"] + 1,
+        "status": status,
+        "receipts": receipts,
+        "omissions": omissions,
+        "archive": evidence._retain_bytes(root, stream.getvalue(), "zip"),
+    }
+    assert first["status"] == "complete" and second["status"] == "partial"
+    content["artifacts"].append(second)
+    content["runs"].append(
+        {**copy.deepcopy(first_run), "id": second["run_id"], "run_attempt": second["run_attempt"]}
+    )
+    raw = receipt["raw"]
+    for artifacts in ([first, second], [second, first]):
+        content["artifacts"] = artifacts
+        index = disposition._receipt_index(packet, root)
+        members = index[key(receipt)]
+        assert isinstance(members, list) and len(members) == 2
+        assert {member["artifact_id"] for member in members} == {first["id"], second["id"]}
+        proofs = []
+        for artifact in (first, second):
+            proof = {
+                "artifact_id": artifact["id"],
+                "run_id": artifact["run_id"],
+                "run_attempt": artifact["run_attempt"],
+                "head_sha": packet["head"],
+                "kind": "junit",
+                "receipt_path": receipt["path"],
+                "evidence_sha256": raw["sha256"],
+                "excerpt": '<testcase name="Ship the report">',
+                "relevance": "This exact successful run retained the named passed testcase.",
+            }
+            assert disposition._proofs_valid([raw], [proof], index, root)
+            proofs.append(proof)
+        mixed = {
+            **proofs[0],
+            "run_id": proofs[1]["run_id"],
+            "run_attempt": proofs[1]["run_attempt"],
+        }
+        assert not disposition._proofs_valid([raw], [mixed], index, root)
+        assert not disposition._proofs_valid(
+            [raw], [{**proofs[1], "run_attempt": 999}], index, root
+        )
+
+
+def test_complete_junit_at_exact_collector_byte_limit_is_admitted(tmp_path):
+    cap = evidence.MAX_UNCOMPRESSED_BYTES
+    raw = junit_bytes(cap - len(junit_bytes(0)))
+    assert len(raw) == cap
+    packet, root, _artifact, receipt = receipt_fixture(tmp_path, partial=False, raw=raw)
+    assert receipt["raw"]["bytes"] == cap
+    assert disposition._safe_raw(receipt["raw"], root) is None
+    assert disposition._safe_junit_raw(receipt["raw"], root) == raw
+    index = disposition._receipt_index(packet, root)
+    assert key(receipt) in index
+    proof = {
+        **index[key(receipt)],
+        "evidence_sha256": receipt["raw"]["sha256"],
+        "excerpt": '<testcase name="Ship the report">',
+        "relevance": "A complete named test at the existing collector limit remains usable.",
+    }
+    assert disposition._proofs_valid([receipt["raw"]], [proof], index, root)
+
+
 @pytest.mark.parametrize(
     "omissions",
     [

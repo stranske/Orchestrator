@@ -134,9 +134,9 @@ def _expected(snapshot: Mapping[str, Any]) -> list[tuple[str, str]] | None:
     return expected
 
 
-def _receipt_index(packet: dict, root: Path) -> dict[tuple[str, str], dict]:
+def _receipt_index(packet: dict, root: Path) -> dict[tuple[str, str], dict | list[dict]]:
     """Index raw, typed, current-revision implementation and test proof."""
-    index = {}
+    index: dict[tuple[str, str], dict | list[dict]] = {}
     diff = packet["sections"]["diff_files"].get("content") or {}
     if not isinstance(diff, dict):
         diff = {}
@@ -270,7 +270,7 @@ def _receipt_index(packet: dict, root: Path) -> dict[tuple[str, str], dict]:
                     receipt.get(key) != value for key, value in parsed.items()
                 ):
                     continue
-            index[(ref["path"], ref["sha256"])] = {
+            member = {
                 "artifact_id": artifact.get("id"),
                 "run_id": run.get("id"),
                 "run_attempt": run.get("run_attempt"),
@@ -278,6 +278,14 @@ def _receipt_index(packet: dict, root: Path) -> dict[tuple[str, str], dict]:
                 "kind": receipt["kind"],
                 "receipt_path": receipt.get("path"),
             }
+            key = (ref["path"], ref["sha256"])
+            prior = index.get(key)
+            if prior is None:
+                index[key] = member
+            else:
+                members = prior if isinstance(prior, list) else [prior]
+                if member not in members:
+                    index[key] = [*members, member]
     return index
 
 
@@ -427,7 +435,17 @@ def _proofs_valid(refs: Any, proofs: Any, index: dict, root: Path) -> bool:
             return False
         if not isinstance(ref.get("path"), str) or not isinstance(ref.get("sha256"), str):
             return False
-        member = index.get((ref.get("path"), ref.get("sha256")))
+        entry = index.get((ref.get("path"), ref.get("sha256")))
+        members = entry if isinstance(entry, list) else [entry]
+        member = next(
+            (
+                row
+                for row in members
+                if isinstance(row, dict)
+                and all(proof.get(key) == value for key, value in row.items())
+            ),
+            None,
+        )
         data = (
             _safe_junit_raw(ref, root)
             if isinstance(member, dict) and member.get("kind") == "junit"
