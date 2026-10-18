@@ -396,7 +396,12 @@ def _ledger_ineligible(
     if capabilities.capability_expired(cap, int(now)):
         return "expired"
     env_map: Mapping[str, str] = os.environ if env is None else env
-    if _kill_switch_triggered(cap.get("kill_switch"), env_map):
+    declared_switch = cap.get("kill_switch")
+    if declared_switch is not None and not isinstance(declared_switch, (str, Mapping)):
+        # As in the lifecycle guard, an unevaluable kill-switch declaration
+        # cannot prove the switch is not triggered, so it refuses.
+        return "kill_switch"
+    if _kill_switch_triggered(declared_switch, env_map):
         return "kill_switch"
     return None
 

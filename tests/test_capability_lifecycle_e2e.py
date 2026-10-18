@@ -1070,6 +1070,119 @@ def test_compiled_invocation_non_mapping_row_refuses_without_writes(
     assert ctx["registry"].read_bytes() == registry_before
 
 
+@pytest.mark.parametrize("status", [["canary"], {"status": "canary"}, 123])
+def test_compiled_invocation_malformed_status_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status
+) -> None:
+    # An unhashable or non-string status is a corrupt row: it must refuse
+    # with its status reason instead of raising TypeError on the set check.
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    _mutate_json(ctx["ledger"], "capabilities", ctx["capability_id"], status=status)
+    ledger_before = ctx["ledger"].read_bytes()
+    registry_before = ctx["registry"].read_bytes()
+    result = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="workflow:corrupt-status:1",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {
+        "matched": False,
+        "invoked": False,
+        "reason": f"status:{status}",
+    }, result
+    assert "causal_edge" not in result
+    assert ctx["ledger"].read_bytes() == ledger_before
+    assert ctx["registry"].read_bytes() == registry_before
+
+
+@pytest.mark.parametrize("version_id", [None, 123, ""])
+def test_compiled_invocation_missing_version_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version_id
+) -> None:
+    # A row without a usable capability_version_id cannot be matched to a
+    # binding; it refuses as unreadable instead of raising KeyError.
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    payload = json.loads(ctx["ledger"].read_text(encoding="utf-8"))
+    if version_id is None:
+        del payload["capabilities"][ctx["capability_id"]]["capability_version_id"]
+    else:
+        payload["capabilities"][ctx["capability_id"]]["capability_version_id"] = version_id
+    ctx["ledger"].write_text(json.dumps(payload), encoding="utf-8")
+    ledger_before = ctx["ledger"].read_bytes()
+    registry_before = ctx["registry"].read_bytes()
+    result = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="workflow:corrupt-version:1",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": False, "invoked": False, "reason": "ledger_unreadable"}, result
+    assert "causal_edge" not in result
+    assert ctx["ledger"].read_bytes() == ledger_before
+    assert ctx["registry"].read_bytes() == registry_before
+
+
+@pytest.mark.parametrize("kill_switch", [["ORCH_CAPABILITY_WORKFLOW_ENABLED=0"], 123])
+def test_compiled_invocation_malformed_kill_switch_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kill_switch
+) -> None:
+    # A kill-switch declaration that is neither a string nor a mapping cannot
+    # prove the switch is not triggered, so it refuses as kill_switch.
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    _mutate_json(ctx["ledger"], "capabilities", ctx["capability_id"], kill_switch=kill_switch)
+    ledger_before = ctx["ledger"].read_bytes()
+    registry_before = ctx["registry"].read_bytes()
+    result = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="workflow:corrupt-kill-switch:1",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "kill_switch"}, result
+    assert "causal_edge" not in result
+    assert (
+        capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])[
+            "invocations"
+        ]
+        == []
+    )
+    assert ctx["ledger"].read_bytes() == ledger_before
+    assert ctx["registry"].read_bytes() == registry_before
+
+
+def test_direct_invoke_target_malformed_ledger_kill_switch_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    _mutate_json(ctx["ledger"], "capabilities", ctx["capability_id"], kill_switch=123)
+    ledger_before = ctx["ledger"].read_bytes()
+    registry_before = ctx["registry"].read_bytes()
+    binding = capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])
+    result = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=ctx["registry"],
+        ledger_path=ctx["ledger"],
+        target_run_id="direct:corrupt-kill-switch",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "kill_switch"}, result
+    assert "causal_edge" not in result
+    assert ctx["ledger"].read_bytes() == ledger_before
+    assert ctx["registry"].read_bytes() == registry_before
+
+
 def test_high_risk_candidate_uses_bounded_brain_owner_question(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

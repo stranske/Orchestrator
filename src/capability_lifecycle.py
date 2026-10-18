@@ -234,7 +234,13 @@ def _invocation_ineligible(
         if artifact_expiry is not None and int(now) >= artifact_expiry:
             return "expired"
     env_map: Mapping[str, str] = os.environ if env is None else env
-    if capability_targets._kill_switch_triggered(cap.get("kill_switch"), env_map):
+    declared_switch = cap.get("kill_switch")
+    if declared_switch is not None and not isinstance(declared_switch, (str, Mapping)):
+        # A kill-switch declaration that is neither the ``ENV=value`` string
+        # ``_record`` writes nor a mapping cannot prove the switch is not
+        # triggered, so it refuses as ``kill_switch`` rather than passing.
+        return "kill_switch"
+    if capability_targets._kill_switch_triggered(declared_switch, env_map):
         return "kill_switch"
     if binding is not None:
         return capability_targets._binding_ineligible(binding, int(now), env_map)
@@ -261,20 +267,30 @@ def invoke_compiled_target(
         raise ValueError(f"unknown capability: {capability_id}")
     if not isinstance(cap, Mapping):
         return {"matched": False, "invoked": False, "reason": "ledger_unreadable"}
-    if cap.get("status") not in {"wired", "shadow", "exercised", "canary", "active"}:
-        return {"matched": False, "invoked": False, "reason": f"status:{cap.get('status')}"}
+    status = cap.get("status")
+    if not isinstance(status, str) or status not in {
+        "wired",
+        "shadow",
+        "exercised",
+        "canary",
+        "active",
+    }:
+        return {"matched": False, "invoked": False, "reason": f"status:{status}"}
+    version_id = cap.get("capability_version_id")
+    if not isinstance(version_id, str) or not version_id:
+        # A corrupt row without its immutable version identity cannot be
+        # matched to a binding, so it refuses as unreadable, not a KeyError.
+        return {"matched": False, "invoked": False, "reason": "ledger_unreadable"}
     ineligible = _invocation_ineligible(cap, None, now)
     if ineligible:
         return {"matched": True, "invoked": False, "reason": ineligible}
-    binding = capability_targets.get_binding(
-        cap["capability_version_id"], registry_path=Path(target_registry_path)
-    )
+    binding = capability_targets.get_binding(version_id, registry_path=Path(target_registry_path))
     if not binding:
         raise ValueError("lifecycle version has no target binding")
     ineligible = _invocation_ineligible(cap, binding, now)
     if ineligible:
         return {"matched": True, "invoked": False, "reason": ineligible}
-    if cap["status"] == "canary":
+    if status == "canary":
         limit = int((cap.get("lifecycle_policy") or {}).get("tasks_per_day") or 1)
         recent = sum(
             1
@@ -291,17 +307,17 @@ def invoke_compiled_target(
         ledger_path=Path(ledger_path),
         target_run_id=target_run_id,
         inputs=inputs,
-        lifecycle_stage=cap["status"],
+        lifecycle_stage=status,
         timestamp=now,
     )
     if result.get("invoked") and result.get("accepted"):
         edge = feedback.record_capability_consumption(
             capability_id=capability_id,
-            capability_version_id=cap["capability_version_id"],
+            capability_version_id=version_id,
             source_run_id=f"capability-producer:{result['invocation_id']}",
             target_run_id=target_run_id,
             accepted=True,
-            producer=f"capability_lifecycle:{cap['status']}",
+            producer=f"capability_lifecycle:{status}",
         )
         result["causal_edge"] = edge
     return result
