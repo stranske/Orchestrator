@@ -543,6 +543,8 @@ def _graphql_pr():
         "state": "OPEN",
         "isDraft": False,
         "headRefOid": HEAD,
+        "headRefName": "codex/delivery",
+        "headRepository": {"nameWithOwner": "o/r"},
         "mergedAt": None,
         "mergeCommit": None,
         "updatedAt": "2026-10-17T00:00:00Z",
@@ -605,6 +607,8 @@ def test_snapshot_retains_complete_native_label_timeline(monkeypatch):
         "pageInfo": {"hasPreviousPage": False},
     }
     current = _snapshot_from_document(monkeypatch, document)
+    assert current["head_branch"] == "codex/delivery"
+    assert current["head_repository"] == "o/r"
     assert current["label_events_complete"] is True
     assert current["label_events"] == [
         {
@@ -2203,7 +2207,27 @@ def test_legacy_uncertain_and_private_integration_need_original_coordinator(tmp_
             adapter._legacy_operation_dependency(legacy_path, TARGET, {"sources": []})
 
 
-def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(tmp_path, monkeypatch):
+def test_low_proposal_accepts_only_one_complete_json_document():
+    payload = {"target": TARGET, "head": HEAD, "classification": "uncertain"}
+    raw = json.dumps(payload)
+    assert adapter._parse_low_proposal(raw) == payload
+    assert adapter._parse_low_proposal(f"```json\n{raw}\n```") == payload
+    assert adapter._parse_low_proposal(f"```\n{raw}\n```") == payload
+    for invalid in (
+        f"Here is the result:\n```json\n{raw}\n```",
+        f"```json\n{raw}\n```\n```json\n{raw}\n```",
+        f"```json\n{raw[:-1]}\n```",
+        f"```json\n{raw}\n```\nextra prose",
+    ):
+        assert adapter._parse_low_proposal(invalid) == {}
+    wrong = {**payload, "head": "f" * 40}
+    assert adapter._parse_low_proposal(f"```json\n{json.dumps(wrong)}\n```") == wrong
+
+
+@pytest.mark.parametrize("fenced", [False, True], ids=["plain-json", "single-json-fence"])
+def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(
+    tmp_path, monkeypatch, fenced
+):
     from subprocess import CompletedProcess
 
     import closer_disposition
@@ -2293,22 +2317,23 @@ def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(tmp_p
 
     def low_worker(_agent, prompt, **_kwargs):
         prompts.append(prompt)
+        payload = json.dumps(
+            {
+                "target": TARGET,
+                "head": HEAD,
+                "base": current["base"],
+                "classification": "relevant",
+                "substantive_needs": [],
+                "findings": [],
+                "decision": {"criteria": []},
+            }
+        )
         return {
             "exit": 0,
             "run_id": "real-run-1",
             "model": "gemini-test",
             "profile_id": "gemini-low",
-            "output": json.dumps(
-                {
-                    "target": TARGET,
-                    "head": HEAD,
-                    "base": current["base"],
-                    "classification": "relevant",
-                    "substantive_needs": [],
-                    "findings": [],
-                    "decision": {"criteria": []},
-                }
-            ),
+            "output": f"```json\n{payload}\n```" if fenced else payload,
         }
 
     monkeypatch.setattr(dispatcher, "offload", low_worker)

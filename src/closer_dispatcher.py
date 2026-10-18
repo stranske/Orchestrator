@@ -48,6 +48,22 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
+def _parse_low_proposal(output):
+    """Parse one complete JSON document, optionally in one JSON code fence."""
+    if not isinstance(output, str):
+        return {}
+    document = output.strip()
+    if document.startswith("```"):
+        match = re.fullmatch(r"```(?:json)?[ \t]*\r?\n(.*?)\r?\n```", document, re.DOTALL)
+        if match is None:
+            return {}
+        document = match.group(1)
+    try:
+        return json.loads(document)
+    except ValueError:
+        return {}
+
+
 def _event_epoch(value):
     if not isinstance(value, str):
         return None
@@ -542,7 +558,7 @@ class GitHub:
             }
         owner, name = repo.split("/")
         query = """query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){
-          number body state isDraft headRefOid headRefName baseRefOid mergeCommit{oid} mergedAt updatedAt mergeable mergeStateStatus
+          number body state isDraft headRefOid headRefName headRepository{nameWithOwner} baseRefOid mergeCommit{oid} mergedAt updatedAt mergeable mergeStateStatus
           labels(first:100){nodes{name} pageInfo{hasNextPage}}
           timelineItems(itemTypes:[LABELED_EVENT],last:100){nodes{... on LabeledEvent{id createdAt label{name}}} pageInfo{hasPreviousPage}}
           closingIssuesReferences(first:100){nodes{number body state labels(first:100){nodes{name} pageInfo{hasNextPage}} repository{nameWithOwner}}
@@ -675,6 +691,8 @@ class GitHub:
             "kind": "pr",
             "state": pr["state"],
             "head": head,
+            "head_branch": pr.get("headRefName"),
+            "head_repository": (pr.get("headRepository") or {}).get("nameWithOwner"),
             "base": pr.get("baseRefOid"),
             "merge": (pr.get("mergeCommit") or {}).get("oid"),
             "merged_at": pr.get("mergedAt"),
@@ -2565,10 +2583,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             return interpret(target, context)
         with route_lock:
             route_lock.notify_all()
-        try:
-            proposal = json.loads(output)
-        except ValueError:
-            proposal = {}
+        proposal = _parse_low_proposal(output)
         valid = (
             result.get("exit") == 0
             and isinstance(result.get("run_id"), str)

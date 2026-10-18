@@ -37,6 +37,10 @@ review-thread resolution, review floors, the normal guarded merge, native verifi
 and final source-acceptance decision. A merged patch, signed receipt, review badge
 or routing record alone does not establish source completion. Preserve raw findings,
 signatures and provenance. No worker may substitute a fabricated trusted disposition.
+An exact-head pull-request CI run whose GitHub association array is empty is retained
+only when its event, branch and repository match the linked PR and a bounded PR
+lookup finds exactly one matching head. Failed runs remain in the evidence; retrieved
+artifacts alone do not establish the required-check topology or acceptance.
 
 A completed private report is an internal handoff to this senior closer, not an
 external blocker. Read the retained result, integrate or reject its findings and
@@ -44,6 +48,9 @@ continue within the original budget. The ledger marks `requires_coordinator`;
 postrun rejects stopping on that flag while usable time remains. A trusted
 integration acknowledgment is bound to operation ID, source digest, current head
 and review revision; it grants no acceptance, merge or closure authority.
+The low worker may return a single complete JSON document inside one JSON code
+fence. The same schema, target, head and evidence checks apply after unwrapping;
+prose, multiple fences and incomplete JSON do not become decisions.
 
 An asynchronous CI/review wait parks that exact target and leaves other eligible
 work running. Refresh material transitions and continue while a concrete authorized

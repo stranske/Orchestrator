@@ -17,6 +17,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
+from urllib.parse import quote
 
 SCHEMA = "closer-evidence/v1"
 PRODUCER_VERSION = "1.1.0"
@@ -660,6 +661,73 @@ def _artifact_section(
         if isinstance(row, dict)
     }
     old_artifacts = old_content.get("artifacts", [])
+    unassociated_pr_identity: tuple[bool, str] | None = None
+
+    def unique_unassociated_pr() -> tuple[bool, str]:
+        """Bind an empty run association only to one exact current PR head."""
+        nonlocal unassociated_pr_identity
+        if unassociated_pr_identity is not None:
+            return unassociated_pr_identity
+        branch = snapshot.get("head_branch")
+        head_repo = snapshot.get("head_repository")
+        head = snapshot.get("head")
+        if (
+            not isinstance(branch, str)
+            or not branch
+            or not isinstance(head_repo, str)
+            or not re.fullmatch(r"[^/#]+/[^/#]+", head_repo)
+            or not isinstance(head, str)
+            or not SHA.fullmatch(head)
+        ):
+            unassociated_pr_identity = (False, "linked PR head identity is incomplete")
+            return unassociated_pr_identity
+        owner = head_repo.split("/", 1)[0]
+        endpoint = (
+            f"repos/{subject_repo}/pulls?state=all&head={quote(owner + ':' + branch, safe='')}"
+            "&per_page=100"
+        )
+        try:
+            candidates = api(endpoint)
+        except Exception as exc:
+            if _is_round_control_exception(exc):
+                raise
+            unassociated_pr_identity = (
+                False,
+                f"linked PR head identity lookup failed: {type(exc).__name__}",
+            )
+            return unassociated_pr_identity
+        if not isinstance(candidates, list) or len(candidates) >= 100:
+            unassociated_pr_identity = (False, "linked PR head identity inventory is incomplete")
+            return unassociated_pr_identity
+        matching = []
+        for row in candidates:
+            if not isinstance(row, dict) or not isinstance(row.get("head"), dict):
+                unassociated_pr_identity = (False, "linked PR head identity inventory is malformed")
+                return unassociated_pr_identity
+            candidate_head = row["head"]
+            if candidate_head.get("sha") != head:
+                continue
+            candidate_repo = candidate_head.get("repo")
+            if (
+                not isinstance(candidate_head.get("ref"), str)
+                or not isinstance(candidate_repo, dict)
+                or not isinstance(candidate_repo.get("full_name"), str)
+                or type(row.get("number")) is not int
+                or row["number"] <= 0
+            ):
+                unassociated_pr_identity = (False, "linked PR head identity inventory is malformed")
+                return unassociated_pr_identity
+            if (
+                candidate_head["ref"] == branch
+                and candidate_repo["full_name"].lower() == head_repo.lower()
+            ):
+                matching.append(row)
+        if len(matching) != 1 or matching[0].get("number") != int(subject_num):
+            unassociated_pr_identity = (False, "linked PR head identity is ambiguous or mismatched")
+        else:
+            unassociated_pr_identity = (True, "")
+        return unassociated_pr_identity
+
     for run_stub in runs:
         if time.monotonic() >= deadline:
             any_pending = True
@@ -712,8 +780,33 @@ def _artifact_section(
                 }
             )
             continue
-        if run.get("head_sha") != snapshot.get("head") or int(subject_num) not in associated:
+        if run.get("head_sha") != snapshot.get("head"):
             continue
+        association_basis = "explicit_pull_requests"
+        if int(subject_num) not in associated:
+            if associated or run.get("event") != "pull_request":
+                continue
+            head_repo = run.get("head_repository")
+            run_repo = run.get("repository")
+            if (
+                not isinstance(head_repo, dict)
+                or not isinstance(run_repo, dict)
+                or str(head_repo.get("full_name", "")).lower()
+                != str(snapshot.get("head_repository", "")).lower()
+                or str(run_repo.get("full_name", "")).lower() != subject_repo.lower()
+                or not snapshot.get("head_repository")
+                or run.get("head_branch") != snapshot.get("head_branch")
+                or not snapshot.get("head_branch")
+            ):
+                reason = "unassociated PR run head branch or repository identity mismatches"
+                valid_identity = False
+            else:
+                valid_identity, reason = unique_unassociated_pr()
+            if not valid_identity:
+                any_pending = True
+                unavailable.append({"run_id": run_id, "status": "unknown", "reason": reason})
+                continue
+            association_basis = "unique_exact_pr_head"
         identity = {
             k: run.get(k)
             for k in (
@@ -728,6 +821,10 @@ def _artifact_section(
                 "updated_at",
             )
         }
+        identity["association_basis"] = association_basis
+        if association_basis == "unique_exact_pr_head":
+            identity["head_branch"] = run["head_branch"]
+            identity["head_repository"] = snapshot["head_repository"]
         run_rows.append(identity)
         if run.get("status") != "completed":
             any_pending = True
