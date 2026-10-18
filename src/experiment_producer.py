@@ -944,7 +944,9 @@ def main():
             assert env["HOME"] == str(canon)
             assert env["GIT_CONFIG_VALUE_0"] == "file:///dev/null/orch-no-push"
             assert "GH_TOKEN" not in env and "META_API_KEY" not in env
-        print("experiment_producer.py selftest: OK (cap, frozen named test, runner, RED environment)")
+        print(
+            "experiment_producer.py selftest: OK (cap, frozen named test, runner, RED environment)"
+        )
     elif args.trial_defaults:
         print(*trial_defaults())
     elif args.trial_verdict:

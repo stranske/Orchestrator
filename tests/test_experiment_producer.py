@@ -1324,10 +1324,12 @@ def producer_derivation_proof(tmp_path, monkeypatch):
     git(canon, "update-ref", "refs/remotes/origin/main", base)
     # A dependency visible ONLY in the consumer environment must collect in RED.
     import venv
+
     venv.EnvBuilder(system_site_packages=True, with_pip=False).create(canon / ".venv")
     consumer_python = canon / ".venv/bin/python"
     site = subprocess.check_output(
-        [str(consumer_python), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"], text=True
+        [str(consumer_python), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
+        text=True,
     ).strip()
     (Path(site) / "consumer_only_731.py").write_text("VALUE = 'fixed'\n")
     root = tmp_path / "derived-experiment"
