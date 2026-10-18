@@ -639,7 +639,8 @@ def verify_rollback(binding: Mapping[str, Any], *, registry_path: Path) -> dict[
 def _selftest() -> None:
     # Invalid declarations refuse before Path/package matching, including direct
     # invocation callers that do not pass through the compiled-target lifecycle.
-    for artifact in (None, 17, {}, []):
+    invalid_artifacts: tuple[Any, ...] = (None, 17, {}, [])
+    for artifact in invalid_artifacts:
         assert (
             _binding_ineligible({"kind": "skill", "artifact": artifact}, 100, {})
             == "artifact_invalid"
