@@ -19,6 +19,7 @@ def isolated_runtime(monkeypatch, tmp_path):
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
     monkeypatch.setattr(audit, "STATE_DIR", tmp_path / "state")
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setattr(feedback, "ORCH", tmp_path / "deployment")
     return tmp_path
 
 
@@ -56,7 +57,9 @@ def test_positive_int_rejects_non_positive_and_invalid_values(raw, isolated_runt
 
 def test_snapshot_report_is_isolated_and_removes_its_temp_database(monkeypatch, isolated_runtime):
     snapshot = isolated_runtime / "snapshot.json"
-    snapshot.write_text(json.dumps(feedback.snapshot_json()))
+    feedback.snapshot_json(snapshot)
+    assert not (isolated_runtime / "deployment" / "data" / "feedback-snapshot.json").exists()
+    assert "runs" in json.loads(snapshot.read_text())
     original = feedback.DB_PATH
     captured = {}
 
