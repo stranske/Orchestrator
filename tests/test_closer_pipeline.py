@@ -2790,7 +2790,8 @@ def test_failed_low_provider_is_audited_deferral_not_exception_or_action(tmp_pat
 
 @pytest.mark.parametrize("stage", ["act", "reconcile"])
 @pytest.mark.parametrize("assigned", [True, False])
-def test_expired_action_deadline_recovers_only_to_reconcile(tmp_path, stage, assigned):
+@pytest.mark.parametrize("carry_shape", ["compact", "stale"])
+def test_expired_action_deadline_recovers_only_to_reconcile(tmp_path, stage, assigned, carry_shape):
     path = tmp_path / "pipeline.json"
     at = 1_800_000_000.0
     interrupted_round_fixture(path, at)
@@ -2807,7 +2808,13 @@ def test_expired_action_deadline_recovers_only_to_reconcile(tmp_path, stage, ass
             "deadline": at - 1000,
             "observed_at": at - 999,
         },
-        results={"reconcile": {"outcome": "confirmed_not_started"}},
+        revision="recorded-revision",
+        results={
+            "reconcile": {"outcome": "confirmed_not_started"},
+            "prepare": {
+                "snapshot": {"target": target, "head": "a" * 40, "revision": "recorded-revision"}
+            },
+        },
     )
     # Action uncertainty must retain identity-sensitive audit material even
     # though no act result exists; ordinary non-action deferrals may deduplicate.
@@ -2824,8 +2831,23 @@ def test_expired_action_deadline_recovers_only_to_reconcile(tmp_path, stage, ass
         != second[5]["targets"][target]["material_sha256"]
     )
     row["identity"] = "first-operation-binding"
+    state["carry"][target] = closer_pipeline._carry_item(row)
+    assert "prepare" not in state["carry"][target]["results"]
+    if carry_shape == "stale":
+        state["carry"][target].update(
+            stage="prepare", revision="stale-revision", identity="stale-binding"
+        )
     closer_pipeline._save(path, state)
     calls = []
+
+    def reconcile(name, context):
+        calls.append(("reconcile", name))
+        if name == target:
+            assert context["prepare"]["snapshot"] == row["results"]["prepare"]["snapshot"]
+            assert context["identity"] == "first-operation-binding"
+            assert context["revision"] == "recorded-revision"
+        return {"outcome": "unknown"}
+
     cb = callbacks(
         act=lambda name, _ctx: calls.append(("act", name))
         or {"status": "completed", "target_complete": True}
@@ -2836,7 +2858,7 @@ def test_expired_action_deadline_recovers_only_to_reconcile(tmp_path, stage, ass
         cb,
         seconds=10,
         now=lambda: at,
-        reconcile=lambda name, _ctx: calls.append(("reconcile", name)) or {"outcome": "unknown"},
+        reconcile=reconcile,
     )
     assert result.get("status") != "blocked"
     assert ("act", target) not in calls

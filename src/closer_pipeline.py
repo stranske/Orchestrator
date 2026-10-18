@@ -1441,6 +1441,11 @@ def _run_pipeline_impl(
                         latest[old_target] = old_item
             for old_target, old_item in state["carry"].items():
                 latest[old_target] = old_item
+            if recovery_audit is not None and previous is not None:
+                # Compact carry is a derived view, not a replacement for the
+                # audited preparation needed to reconcile an original operation.
+                for old_target in recovery_uncertain:
+                    latest[old_target] = previous["targets"][old_target]
             carried = []
             for old_target, old_item in latest.items():
                 # An old non-action failure outside today's assignment remains
@@ -1453,7 +1458,11 @@ def _run_pipeline_impl(
                     continue
                 item = _bounded(old_item)
                 if recovery_audit is not None and old_target in recovery_uncertain:
-                    item.update(status="uncertain", deferred_next_trigger="reconcile_before_retry")
+                    item.update(
+                        status="uncertain",
+                        stage="reconcile",
+                        deferred_next_trigger="reconcile_before_retry",
+                    )
                 if old_target in prior_wait_targets or old_target in recovery_retryable:
                     item["fresh_inner_wait_admission"] = True
                 if recovery_audit is not None and old_target in recovery_quarantined:
