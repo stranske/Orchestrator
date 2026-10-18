@@ -6,7 +6,7 @@
 
 The exact proposed nine-pin bundle was installed in an isolated Python 3.12
 virtual environment and strictly measured against source
-`59369a7ef740a1ce49d56315b38c1961f05ba12e`. The existing collector reported:
+`6f9fff13673bbc5c53bd76cca5ac2b0a49f32a41`. The existing collector reported:
 
 | Check | Blocking | Drainable |
 | --- | ---: | ---: |
