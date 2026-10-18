@@ -1,0 +1,12 @@
+[
+  {
+    "test": "tests.test_model_tier_resolution::test_capacity_sheds_seat_when_model_unresolvable",
+    "outcome": "failed",
+    "message": "AssertionError: {'policy': 'auth-failed', 'availability': 'unavailable_auth_failed', 'next_action': 'Refresh gemini credentials, then re-check with `python3 capacity.py --json`. The fleet reads the credential FILE, not an interactive login session.'}\nassert 'unavailable_auth_failed' == 'unavailable_model_unresolved'\n  \n  - unavailable_model_unresolved\n  + unavailable_auth_failed"
+  },
+  {
+    "test": "tests.test_model_tier_resolution::test_capacity_stays_ok_when_model_resolves",
+    "outcome": "failed",
+    "message": "AssertionError: shed\nassert 'shed' != 'shed'\n +  where 'shed' = capacity.SHED"
+  }
+]

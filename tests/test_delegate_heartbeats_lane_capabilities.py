@@ -155,6 +155,92 @@ def test_an_implement_delegate_tags_none_of_them(world):
         )
 
 
+def test_review_loop_survives_real_plan_and_spawn_with_one_chain_identity(world, monkeypatch):
+    from types import SimpleNamespace
+
+    launches = []
+    monkeypatch.setattr(
+        dispatcher.subprocess,
+        "Popen",
+        lambda argv, **kw: launches.append((argv, kw)) or SimpleNamespace(pid=4321),
+    )
+    result = dispatcher.delegate(
+        "cursor",
+        "stranske/Test#432",
+        "opener",
+        "Repair the same PR",
+        review_loop=True,
+        review_round=2,
+        review_run_id="original-chain",
+    )
+    assert "error" not in result
+    command = launches[0][0][-1]
+    assert "review_loop.py after-writer" in command
+    assert "--round 2" in command and "--run-id original-chain" in command
+    assert '--writer-exit "$orch_dispatch_rc"' in command
+    assert command.index("claims.py release") < command.index("review_loop.py after-writer")
+    # Completion bookkeeping failure must not suppress the fail-closed review
+    # status; the hook separately sees the actual writer's exit and fresh claims.
+    assert "; " in command.split("review_loop.py after-writer")[0]
+    assert command.endswith("exit $orch_dispatch_rc")
+    assert "--writer-run-id" in command
+    with feedback._conn() as conn:
+        metadata = json.loads(
+            conn.execute(
+                "SELECT routing_metadata FROM runs WHERE run_id=?", (result["run_id"],)
+            ).fetchone()[0]
+        )
+    assert metadata["review_loop"] is True
+    assert metadata["review_run_id"] == "original-chain"
+
+
+def test_plain_delegate_does_not_start_optional_review(world, monkeypatch):
+    from types import SimpleNamespace
+
+    launches = []
+    monkeypatch.setattr(
+        dispatcher.subprocess,
+        "Popen",
+        lambda argv, **kw: launches.append(argv) or SimpleNamespace(pid=4321),
+    )
+    assert "error" not in _delegate("implement")
+    assert "review_loop.py after-writer" not in launches[0][-1]
+
+
+def test_review_prompt_requires_explicit_pr_marker_without_merge_permission(world, monkeypatch):
+    prompts = []
+    import roles
+
+    monkeypatch.setattr(
+        roles,
+        "activate_dispatch_roles",
+        lambda _a, prompt, **kw: prompts.append(prompt) or {"prompt": prompt},
+    )
+    dispatcher.delegate(
+        "cursor",
+        "stranske/Test#432",
+        "opener",
+        "Bounded work",
+        review_loop=True,
+    )
+    assert "PR_URL=https://github.com/" in prompts[0]
+    assert "Do not merge" in prompts[0]
+
+
+def test_review_loop_refuses_launch_if_opt_in_cannot_be_persisted(world, monkeypatch):
+    def refuse(*args, **kwargs):
+        raise OSError("Brain unavailable")
+
+    monkeypatch.setattr(feedback, "record_run", refuse)
+    monkeypatch.setattr(
+        dispatcher.subprocess,
+        "Popen",
+        lambda *args, **kwargs: pytest.fail("untracked review-loop writer"),
+    )
+    with pytest.raises(RuntimeError, match="required completion lineage"):
+        dispatcher.delegate("cursor", "stranske/Test#432", "opener", "Bounded", review_loop=True)
+
+
 @pytest.mark.parametrize("failure", ["claimed", "unbuildable", "spawn"])
 def test_a_delegate_that_does_not_start_never_invokes_the_lane(world, monkeypatch, failure):
     if failure == "claimed":
