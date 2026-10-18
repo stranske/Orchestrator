@@ -897,12 +897,28 @@ def frozen_tests_intact(meta, wt):
         return False
 
 
+def _record_derived_test(meta):
+    """Count a durable launch intent once, including a replay after either state write."""
+    with locked_state():
+        state = read_state()
+        recorded = set(state.get("derived_test_experiments", []))
+        if meta["exp_id"] in recorded:
+            return
+        recorded.add(meta["exp_id"])
+        state["derived_test_experiments"] = sorted(recorded)
+        state["derived_tests"] = state.get("derived_tests", 0) + 1
+        save_state(state)
+
+
 def advance_test_stage(meta, root, *, launch_fn, spawn_fn):
     """Resume one exact derivation or comparison launch; callers hold experiment_lock."""
     import exp_abcd
 
     stage = meta["test_stage"]
     if stage["phase"] == "comparison_running":
+        # Legacy completed stages have no intent; preserve their existing aggregate count.
+        if stage.get("derived_count_intent"):
+            _record_derived_test(meta)
         return None
     if stage["phase"] == "refused":
         return {"status": "discarded", "reason": stage["reason"]}
@@ -934,12 +950,9 @@ def advance_test_stage(meta, root, *, launch_fn, spawn_fn):
     )
     if any(row.get("state") == "launch-unknown" for row in launched):
         return {"status": "comparison_launch_unknown"}
-    stage["phase"] = "comparison_running"
+    stage.update(phase="comparison_running", derived_count_intent=True)
     _stage_save(root, meta)
-    with locked_state():
-        state = read_state()
-        state["derived_tests"] = state.get("derived_tests", 0) + 1
-        save_state(state)
+    _record_derived_test(meta)
     return {"status": "comparison_running"}
 
 

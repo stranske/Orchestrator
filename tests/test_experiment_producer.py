@@ -1514,7 +1514,37 @@ def _derived_producer_roundtrip(tmp_path, monkeypatch):
     assert advance()["status"] == "derivation_terminal_unknown"
     assert len(spawned) == 1
     marker.write_bytes(terminal)
-    assert advance()["status"] == "comparison_running"
+    save_state = producer.save_state
+
+    def crash_before_count(state):
+        raise RuntimeError("before count commit")
+
+    monkeypatch.setattr(producer, "save_state", crash_before_count)
+    with pytest.raises(RuntimeError, match="before count commit"):
+        advance()
+    assert json.loads((root / "meta.json").read_text())["test_stage"]["phase"] == (
+        "comparison_running"
+    )
+    assert len(spawned) == 3
+
+    # Replay may also crash after the atomic count/experiment-ID write committed.
+    def crash_after_count(state):
+        save_state(state)
+        raise RuntimeError("after count commit")
+
+    monkeypatch.setattr(producer, "save_state", crash_after_count)
+    with pytest.raises(RuntimeError, match="after count commit"):
+        advance()
+    monkeypatch.setattr(producer, "save_state", save_state)
+    assert advance() is None
+    assert advance() is None
+    assert len(spawned) == 3
+    assert producer.read_state()["derived_tests"] == 1
+    assert producer.read_state()["derived_test_experiments"] == ["exp"]
+    # Old completed stages predate the intent marker and must not be counted again.
+    meta["test_stage"].pop("derived_count_intent")
+    assert advance() is None
+    assert producer.read_state()["derived_tests"] == 1
     frozen = meta["comparison_base_sha"]
     assert frozen != base and [x[1] for x in spawned] == [base, frozen, frozen]
     assert meta["base_sha"] == base and len(meta["members"]) == 2
