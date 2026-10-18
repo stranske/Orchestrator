@@ -70,6 +70,7 @@ RECORD_RUN_INSTRUMENTED_CAPABILITIES = frozenset(
         "abcd-experiment",
         "live-keepalive-supervisor",
         "feedback-store",
+        "adversarial-review",
     }
 )
 
