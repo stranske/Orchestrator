@@ -741,8 +741,14 @@ drift, including the drained count. The daily `feature-goals` cadence independen
 checks `GOAL_SILENCE_DAYS` of observed silence or wrong-direction evidence and
 creates or updates one labelled drift issue per feature; measured recovery closes
 that issue. Unknown remains `unmeasured — would need <query>`, distinct from zero.
-The promotion measure imports the existing switch-review reader; absent comparative,
-pacing, random-cell and completion-comment sources explicitly remain unmeasured.
+The promotion measure imports the existing switch-review reader. Since 2026-10-18 every
+goal has a live source (#756 and this change): comparative reads #676's shadow report
+(measured only when `optimal`), random retest reads the producer's route cells, the three
+pacing goals read `capacity.pacing_report()` (the #668 pass numbers as data, computed by the
+same `pacing_usage.final_usage`/`period_results` helpers the text `pacing-report` renders,
+read-only), and keepalive acceptance reads the `Deterministic gates: P/T passed` line that
+Workflows#3985 writes into merged keepalive PR bodies, counted from the gate's deploy
+(`KEEPALIVE_GATE_LIVE`). Each passes its source's own unmeasured reason through.
 The first observation establishes history unless a measured source proves a complete
 retrospective silence window or dates the last successful promotion; a declaration
 date never fabricates fourteen days of evidence. This feedback rail changes no dispatch, approval or capability
