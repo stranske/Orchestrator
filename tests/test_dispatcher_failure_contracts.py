@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import shlex
 import socket
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -244,6 +247,246 @@ def test_offload_process_start_failure_keeps_failure_identity_and_completes_once
     assert len(calls) == 1
     assert [k["event"] for kind, k in fake_offload if kind == "ledger"] == ["start", "complete"]
     assert Path(result["log"]).is_file()
+
+
+@pytest.fixture
+def profiled_offload(fake_offload, monkeypatch):
+    profile = {
+        "profile_id": "fixture-low",
+        "provider": "fixture",
+        "requested_model": "fixture-model",
+    }
+    monkeypatch.setattr(d, "_select_offload_profile", lambda *a: profile)
+    monkeypatch.setattr(d.adapters, "can_report_cli_identity", lambda *a: (True, None))
+    monkeypatch.setattr(
+        d.adapters, "cli_reported_model", lambda *a, **k: {"model": None, "reason": "not reported"}
+    )
+    monkeypatch.setattr(d.feedback, "record_execution_attempt", lambda *a, **k: None)
+    return fake_offload
+
+
+@pytest.mark.parametrize("resolved", [False, True])
+def test_profile_completion_retries_same_update_without_repeating_provider_or_ledger(
+    profiled_offload, monkeypatch, resolved
+):
+    calls, writes = [], []
+    monkeypatch.setattr(d.time, "sleep", lambda *_: None)
+    if resolved:
+        monkeypatch.setattr(
+            d.adapters,
+            "cli_reported_model",
+            lambda *a, **k: {"model": "reported-model", "reason": None},
+        )
+
+    def completed(*args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout="actual fixture result", stderr="")
+
+    def persist(run_id, **kwargs):
+        writes.append((run_id, kwargs))
+        if len(writes) == 1:
+            raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(d.subprocess, "run", completed)
+    method = "complete_profile_attempt" if resolved else "complete_profile_attempt_unresolved"
+    monkeypatch.setattr(d.feedback, method, persist)
+    result = d.offload("cursor", "inspect", max_network_retries=0)
+    assert result["exit"] == 0 and result["output"] == "actual fixture result"
+    assert len(calls) == 1 and len(writes) == 2
+    assert writes[0] == writes[1]
+    assert writes[0][1]["lock_timeout_s"] <= 0.2
+    assert [k["event"] for kind, k in profiled_offload if kind == "ledger"] == ["start", "complete"]
+
+
+def test_exhausted_completion_lock_retains_redacted_result_and_blocks_retry(
+    profiled_offload, monkeypatch
+):
+    calls, writes = [], []
+    secret = "ghp_" + "A" * 36
+    monkeypatch.setattr(d.time, "sleep", lambda *_: None)
+
+    def completed(*args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout="fixture report " + secret, stderr="")
+
+    def locked(*args, **kwargs):
+        writes.append((args, kwargs))
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(d.subprocess, "run", completed)
+    monkeypatch.setattr(d.feedback, "complete_profile_attempt_unresolved", locked)
+    result = d.offload("cursor", "inspect", max_network_retries=0)
+    assert result["exit"] == 70 and result["raw_exit"] == 0
+    assert result["provider_completed"] and result["outcome_uncertain"]
+    assert result["retry_safe"] is False
+    assert len(calls) == 1 and len(writes) == 8
+    pending = result["completion_persistence"]
+    raw = Path(pending["receipt"]["path"]).read_bytes()
+    receipt = json.loads(raw)
+    assert secret not in raw.decode() and secret not in result["output"]
+    assert receipt["result"]["run_id"] == result["run_id"]
+    assert receipt["result"]["exit"] == 0
+    assert receipt["result"]["output"] == result["output"]
+    assert hashlib.sha256(raw).hexdigest() == pending["receipt"]["sha256"]
+    assert Path(pending["receipt"]["path"]).stat().st_mode & 0o777 == 0o600
+    assert [k["event"] for kind, k in profiled_offload if kind == "ledger"] == ["start", "complete"]
+
+
+def test_completion_lock_budget_includes_sqlite_waits(monkeypatch):
+    clock, calls = [0.0], []
+    monkeypatch.setattr(d.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(d.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+
+    def locked(run_id, **kwargs):
+        calls.append(kwargs["lock_timeout_s"])
+        clock[0] += kwargs["lock_timeout_s"] + 0.1
+        raise sqlite3.OperationalError("database is locked")
+
+    with pytest.raises(d._CompletionPersistencePending):
+        d._persist_profile_completion(locked, "fixture-run", completed_ts=123)
+    assert len(calls) < 8
+    assert 2 <= clock[0] <= 2.1
+    assert all(wait <= 0.2 for wait in calls)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [sqlite3.OperationalError("no such table: fixture"), ValueError("selected profile changed")],
+)
+def test_completion_nonlock_failure_is_not_retried(error):
+    calls = []
+
+    def failed(*args, **kwargs):
+        calls.append(args)
+        raise error
+
+    with pytest.raises(type(error), match=str(error)):
+        d._persist_profile_completion(failed, "fixture-run")
+    assert len(calls) == 1
+
+
+def test_profile_admission_lock_still_prevents_provider(profiled_offload, monkeypatch):
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(d.feedback, "record_run", locked)
+    with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+        d.offload("cursor", "inspect", max_network_retries=0)
+    assert [k["event"] for kind, k in profiled_offload if kind == "ledger"] == ["start"]
+
+
+@pytest.mark.parametrize("actual_exit", [0, 1])
+def test_pending_accounting_classifies_original_provider_exit(
+    profiled_offload, monkeypatch, actual_exit
+):
+    import rate_incidents
+
+    observed, failed_stdout = [], []
+    monkeypatch.setattr(d.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(
+        d.subprocess,
+        "run",
+        lambda *a, **k: SimpleNamespace(
+            returncode=actual_exit, stdout="quota reference", stderr=""
+        ),
+    )
+
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(d.feedback, "complete_profile_attempt_unresolved", locked)
+    monkeypatch.setattr(
+        rate_incidents,
+        "failed_stdout_evidence",
+        lambda agent, text: failed_stdout.append(text) or text,
+    )
+    monkeypatch.setattr(rate_incidents, "stdout_carries_capacity_evidence", lambda text: False)
+    monkeypatch.setattr(
+        rate_incidents,
+        "get_structured_evidence",
+        lambda **kwargs: observed.append(kwargs["error_text"]) or None,
+    )
+    result = d.offload("cursor", "inspect", max_network_retries=0)
+    assert result["exit"] == 70 and result["raw_exit"] == actual_exit
+    assert bool(failed_stdout) is bool(actual_exit)
+    assert ("quota reference" in observed[0]) is bool(actual_exit)
+
+
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_pending_receipt_write_failure_still_returns_run_barrier(
+    profiled_offload, monkeypatch, cleanup_fails
+):
+    monkeypatch.setattr(d.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(
+        d.subprocess,
+        "run",
+        lambda *a, **k: SimpleNamespace(returncode=0, stdout="retained report", stderr=""),
+    )
+
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    def refused(*args, **kwargs):
+        raise PermissionError("fixture retention denied")
+
+    monkeypatch.setattr(d.feedback, "complete_profile_attempt_unresolved", locked)
+    monkeypatch.setattr(d.os, "replace", refused)
+    if cleanup_fails:
+        original_unlink = Path.unlink
+
+        def fail_temporary_cleanup(path, *args, **kwargs):
+            if path.name.startswith(".completion-"):
+                raise PermissionError("fixture cleanup denied")
+            return original_unlink(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", fail_temporary_cleanup)
+    result = d.offload("cursor", "inspect", max_network_retries=0)
+    assert result["retry_safe"] is False and result["outcome_uncertain"]
+    assert result["completion_persistence"]["receipt_error"] == "PermissionError"
+    assert result["output"] == "retained report" and result["run_id"]
+    assert "retained report" in Path(result["log"]).read_text()
+
+
+@pytest.mark.parametrize("resolved", [False, True])
+def test_completion_only_connection_timeout_is_forwarded(monkeypatch, resolved):
+    seen = []
+
+    def connection(*, timeout):
+        seen.append(timeout)
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(d.feedback, "_conn", connection)
+    kwargs = {"selected_profile_id": "fixture", "lock_timeout_s": 0.125}
+    if resolved:
+        kwargs.update(resolved_provider="codex", resolved_model="gpt-6-luna")
+    method = (
+        d.feedback.complete_profile_attempt
+        if resolved
+        else d.feedback.complete_profile_attempt_unresolved
+    )
+    with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+        method("fixture-run", **kwargs)
+    assert seen == [0.125]
+
+
+def test_failed_completion_connection_is_closed_before_retry(monkeypatch):
+    effects = []
+
+    class BusyConnection:
+        def executescript(self, schema):
+            raise sqlite3.OperationalError("database is locked")
+
+        def close(self):
+            effects.append("closed")
+
+    def connect(path, *, timeout):
+        effects.append(timeout)
+        return BusyConnection()
+
+    monkeypatch.setattr(d.feedback.sqlite3, "connect", connect)
+    with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+        d.feedback._conn(timeout=0.125)
+    assert effects == [0.125, "closed"]
 
 
 def test_offload_start_callback_failure_prevents_transport_and_completion(fake_offload):
