@@ -350,8 +350,36 @@ def test_report_zero_values_are_present(monkeypatch):
     )
     assert (
         switch_review.experiment_producer_line()
-        == "  experiment producer: launched 0, evaluated 0, winner_prs 0, winner_merged 0, post_window_launches=0, cells_fresh 0/0, skipped 0 (none); no_named_test=0 (file-only=0, ci-only=0, none=0, unclassified=0), derived_tests=0; trial_end not_started, verdict pending, days_left 21; winner merge grace 7d"
+        == "  experiment producer: launched 0, evaluated 0, winner_prs 0, winner_merged 0, post_window_launches=0, cells_fresh 0/0, skipped 0 (none); no_named_test=0/0 (n/a; file-only=0, ci-only=0, none=0, unclassified=0), derived_tests=0; trial_end not_started, verdict pending, days_left 21; winner merge grace 7d"
     )
+
+
+def test_producer_line_prints_same_day_no_named_test_share(monkeypatch):
+    import switch_review
+
+    monkeypatch.setattr(
+        producer,
+        "producer_summary",
+        lambda: dict(
+            launched=0,
+            evaluated=0,
+            winner_prs=0,
+            winner_merged=0,
+            cells_fresh=2,
+            cells_total=37,
+            skips={"no_named_test": 99},
+            no_named_test=2,
+            no_named_test_classes={"file-only": 0, "ci-only": 0, "none": 2},
+            no_named_test_share=2 / 37,
+            derived_tests=0,
+            unknowns=[],
+        ),
+    )
+    line = switch_review.experiment_producer_line()
+    assert "no_named_test=2/37 (5%;" in line
+    assert "none=2" in line
+    # Lifetime skips stay in the skipped total; the campaign field is the same-day share.
+    assert "skipped 99 (no_named_test=99)" in line
 
 
 @pytest.mark.parametrize("enabled", ["0", "1"])
@@ -1115,11 +1143,55 @@ def test_no_named_test_skip_recorded_once_per_issue_per_utc_day(monkeypatch):
     for _ in range(2):
         tick.research_tick(items, cap, dry_run=False)
     assert producer.read_state()["skips"]["no_named_test"] == 2
+    assert producer.no_named_test_day_counts(producer.read_state(), now=clock[0])["count"] == 2
     assert len(events) == 4  # two issue rejections plus one no_subject per tick
     assert producer.read_state()["skips"]["no_subject"] == 2
     clock[0] = 2 * 86400
     tick.research_tick(items, cap, dry_run=False)
+    # Lifetime skips still accumulate; the campaign day-count resets with the UTC day.
     assert producer.read_state()["skips"]["no_named_test"] == 4
+    day = producer.no_named_test_day_counts(producer.read_state(), now=clock[0])
+    assert day["count"] == 2
+    assert day["classes"]["none"] == 2
+    assert producer.no_named_test_share(day["count"], 37) < 0.25
+
+
+def test_widened_admission_projects_campaign_share_at_or_under_25_percent():
+    """Replay the #731 measure pool: only unscoped bodies remain no_named_test skips."""
+    evidence = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "docs/evidence/issue-731/no-named-test-classification.json"
+        ).read_text()
+    )
+    # Bodies are not stored; reconstruct the admission classes the measure recorded.
+    bodies = {
+        "ci-only": "## Acceptance Criteria\n- Tests pass in CI.\n",
+        "none": "## Acceptance Criteria\n- The public value returns 2.\n",
+        "unscoped": "Implement a feature with no acceptance criteria.",
+        "file-only": "tests/test_x.py",
+    }
+    items = []
+    for row in evidence["targets"]:
+        admission = row["test_admission"]
+        if admission == "named":
+            body = "`pytest tests/test_x.py`"
+        elif admission == "file-only":
+            body = bodies["file-only"]
+        elif admission == "ci-only":
+            body = bodies["ci-only"]
+        elif admission == "none":
+            body = bodies["none"]
+        else:
+            body = bodies["unscoped"]
+        items.append({"target": row["target"], "body": body})
+    cells = int(str(evidence["original_reading"]["cells_fresh"]).split("/")[1])
+    projected = producer.project_no_named_test_share(items, cells)
+    assert projected["no_named_test"] == 2
+    assert projected["classes"] == {"file-only": 0, "ci-only": 0, "none": 2}
+    assert projected["share"] == pytest.approx(2 / 37)
+    assert projected["passes_campaign"]
+    assert projected["share"] <= 0.25
 
 
 @pytest.mark.parametrize(

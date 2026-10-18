@@ -133,14 +133,18 @@ def record_launch(now=None):
 
 
 def record_skip(reason, *, target=None, now=None, test_class="none"):
-    """Return whether a skip was recorded; unnamed tests count once per issue/UTC day."""
+    """Return whether a skip was recorded; unnamed tests count once per issue/UTC day.
+
+    Class tallies reset with the UTC day so the campaign share (no_named_test / cells)
+    is a same-day reading, not a lifetime sum that ratchets past any fixed threshold.
+    """
     now = time.time() if now is None else now
     with locked_state():
         state = read_state()
         if reason == "no_named_test" and target:
             day = time.strftime("%Y%m%d", time.gmtime(now))
             if state.get("skip_day") != day:
-                state.update(skip_day=day, skip_issues=[])
+                state.update(skip_day=day, skip_issues=[], no_named_test_classes={})
             if target in state["skip_issues"]:
                 return False
             state["skip_issues"].append(target)
@@ -152,6 +156,49 @@ def record_skip(reason, *, target=None, now=None, test_class="none"):
         skips[reason] = skips.get(reason, 0) + 1
         save_state(state)
         return True
+
+
+def no_named_test_day_counts(state, now=None):
+    """Same-UTC-day unnamed-test skips; stale skip_issues from a prior day count as zero."""
+    now = time.time() if now is None else now
+    day = time.strftime("%Y%m%d", time.gmtime(now))
+    if state.get("skip_day") != day:
+        return {"count": 0, "classes": {}}
+    return {
+        "count": len(state.get("skip_issues") or []),
+        "classes": {
+            key: int(state.get("no_named_test_classes", {}).get(key, 0) or 0)
+            for key in ("file-only", "ci-only", "none")
+        },
+    }
+
+
+def no_named_test_share(unnamed, cells_total):
+    """Share of considered cells skipped for lacking a named test; None when cells are unknown."""
+    cells = int(cells_total or 0)
+    if cells <= 0:
+        return None
+    return int(unnamed or 0) / cells
+
+
+def project_no_named_test_share(items, cells_total):
+    """Project the campaign share under current admission (unscoped bodies only)."""
+    classes = Counter()
+    unnamed = 0
+    for item in items or []:
+        body = item.get("body", "") if isinstance(item, dict) else ""
+        if test_admission(body) != "unscoped":
+            continue
+        unnamed += 1
+        classes[unnamed_skip_class(body) or "none"] += 1
+    share = no_named_test_share(unnamed, cells_total)
+    return {
+        "no_named_test": unnamed,
+        "cells_total": int(cells_total or 0),
+        "share": share,
+        "classes": {key: classes.get(key, 0) for key in ("file-only", "ci-only", "none")},
+        "passes_campaign": share is not None and share <= 0.25,
+    }
 
 
 def choose_subject(feed, forum, cells, rng):
@@ -913,11 +960,15 @@ def producer_summary(exp_dir=None, *, gh_fn=None):
             errors.append("unreadable_experiment")
     try:
         state = read_state()
+        day = no_named_test_day_counts(state)
+        cells_total = state.get("cells_total", 0)
         metrics.update(
             cells_fresh=state.get("cells_fresh", 0),
-            cells_total=state.get("cells_total", 0),
+            cells_total=cells_total,
             skips=state.get("skips", {}),
-            no_named_test_classes=state.get("no_named_test_classes", {}),
+            no_named_test=day["count"],
+            no_named_test_classes=day["classes"],
+            no_named_test_share=no_named_test_share(day["count"], cells_total),
             derived_tests=state.get("derived_tests", 0),
         )
     except (ValueError, OSError):
@@ -1020,6 +1071,16 @@ def main():
         )
         assert named_test("`node --test tests/foo.test.js`") == "node --test tests/foo.test.js"
         assert unnamed_skip_class("## Acceptance Criteria\n- Tests pass in CI.\n") == "ci-only"
+        assert no_named_test_share(2, 37) == 2 / 37
+        projected = project_no_named_test_share(
+            [
+                {"body": "no tests and no acceptance criteria"},
+                {"body": "## Acceptance Criteria\n- Tests pass in CI.\n"},
+                {"body": "tests/test_x.py"},
+            ],
+            37,
+        )
+        assert projected["no_named_test"] == 1 and projected["passes_campaign"]
         print("experiment_producer.py selftest: OK (cap and frozen named test)")
     elif args.trial_defaults:
         print(*trial_defaults())

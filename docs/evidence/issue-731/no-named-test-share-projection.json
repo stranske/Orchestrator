@@ -1,0 +1,16 @@
+{
+  "measured_at_utc": "2026-10-18T07:40:00Z",
+  "method": "project_no_named_test_share over the 2026-10-18T07:32Z classification targets, reconstructing bodies from recorded test_admission classes under current tip admission (unscoped only counts as no_named_test). cells_total from the original 05:53Z reading denominator.",
+  "source_classification": "docs/evidence/issue-731/no-named-test-classification.json",
+  "cells_total": 37,
+  "no_named_test": 2,
+  "share": 0.05405405405405406,
+  "share_pct": "5.4%",
+  "classes": {
+    "file-only": 0,
+    "ci-only": 0,
+    "none": 2
+  },
+  "passes_campaign_threshold_25pct": true,
+  "note": "This is an admission projection, not the 2026-10-25 live experiment_producer_line() reading. Same-day share printing lands in this PR so that calendar reading is comparable once the mirror runs the widened admission."
+}

@@ -2056,11 +2056,23 @@ def experiment_producer_line():
     )
     reasons = ", ".join(f"{k}={v}" for k, v in sorted(m["skips"].items())) or "none"
     classes = m.get("no_named_test_classes", {})
-    unnamed = m["skips"].get("no_named_test", 0)
+    # Campaign metric (#731): same-UTC-day unnamed skips over considered cells, not lifetime skips.
+    unnamed = m.get("no_named_test")
+    if unnamed is None:
+        unnamed = m["skips"].get("no_named_test", 0)
+    cells = int(m.get("cells_total") or 0)
+    share = m.get("no_named_test_share")
+    if share is None and cells > 0:
+        share = experiment_producer.no_named_test_share(unnamed, cells)
+    class_total = sum(classes.get(key, 0) for key in ("file-only", "ci-only", "none"))
     test_counts = ", ".join(
         f"{key}={classes.get(key, 0)}" for key in ("file-only", "ci-only", "none")
     )
-    test_counts += f", unclassified={max(0, unnamed - sum(classes.values()))}"
+    test_counts += f", unclassified={max(0, int(unnamed or 0) - class_total)}"
+    if share is None:
+        share_text = "n/a"
+    else:
+        share_text = f"{share:.0%}"
     unknown = "; UNKNOWN " + ", ".join(m["unknowns"]) if m["unknowns"] else ""
     if verdict == "pending" and state.get("pending_since"):
         verdict += f" since {state['pending_since']}, resolves fail on {state.get('resolves_on')}"
@@ -2072,7 +2084,8 @@ def experiment_producer_line():
         f"post_window_launches={m.get('post_window_launches', 0)}, "
         f"cells_fresh {m['cells_fresh']}/{m['cells_total']}, "
         f"skipped {sum(m['skips'].values())} ({reasons}){unknown}; "
-        f"no_named_test={unnamed} ({test_counts}), derived_tests={m.get('derived_tests', 0)}; "
+        f"no_named_test={unnamed}/{cells} ({share_text}; {test_counts}), "
+        f"derived_tests={m.get('derived_tests', 0)}; "
         f"trial_end {end}, verdict {verdict}, days_left {days_left}; "
         f"winner merge grace {experiment_producer.WINNER_MERGE_GRACE_DAYS}d"
     )
