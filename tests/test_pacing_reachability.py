@@ -201,3 +201,51 @@ def test_low_weight_survives_repeated_gaps_until_real_boundary(tmp_path, monkeyp
         agents, now=tick, handoff=tmp_path, usage_data={p: dict(datum) for p in agents}
     )
     assert agents["codex"]["pacing_diagnostics"]["previous_routing_weight"] == 1
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_nonfinite_usage_cannot_displace_a_valid_window_anchor(bad):
+    now = START + pacing.DAY_SECONDS
+    rows = [
+        dict(ts=now + h * 3600, used_fraction=u, source=SOURCE)
+        for h, u in [(-7, 0.1), (-5, 0.12), (0, 0.22)]
+    ]
+    invalid = dict(ts=now - 6.5 * 3600, used_fraction=bad, source=SOURCE)
+    good = assess(rows)
+    actual = assess([rows[0], invalid, *rows[1:]])
+    assert actual["confidence"] == 1
+    assert math.isfinite(actual["burn_rate_per_day"])
+    assert actual["burn_rate_per_day"] == good["burn_rate_per_day"]
+    assert actual["effective_projected_fraction"] == good["effective_projected_fraction"]
+    assert actual["state"] == good["state"]
+
+
+@pytest.mark.parametrize("missing", [True, False])
+def test_known_reset_weight_history_survives_inventory_loss(tmp_path, monkeypatch, missing):
+    monkeypatch.setattr(pacing_usage, "RESETS_FILE", tmp_path / "resets.json")
+    monkeypatch.setattr(pacing_usage, "CALIBRATION_FILE", tmp_path / "calibration.json")
+    monkeypatch.setattr(pacing_usage, "POLL_DIR", tmp_path / "polls")
+    if not missing:
+        pacing_usage.RESETS_FILE.write_text("invalid json")
+    pacing_usage.CALIBRATION_FILE.write_text(json.dumps(dict(claude_period_end=END)))
+    now = START + pacing.DAY_SECONDS
+    reset = now - 1800
+    old = dict(period_start=START, period_end=END, ts=now - 100, routing_weight=0.07)
+    diagnostics = dict(weight_history=dict(period_start=START, period_end=END, reset_at=reset))
+    previous = dict(agents=dict(claude=dict(pacing=old, pacing_diagnostics=diagnostics)))
+    for step in range(2):
+        tick = now + step * pacing.TICK_SECONDS
+        (tmp_path / "capacity.json").write_text(json.dumps(previous))
+        agents = {p: dict(state="ok", reason="native") for p in ("codex", "claude")}
+        data = {
+            p: dict(used_fraction=None if step == 0 else 0.01, ts=tick, source=SOURCE)
+            for p in agents
+        }
+        pacing_usage.integrate(agents, now=tick, handoff=tmp_path, usage_data=data)
+        claude = agents["claude"]
+        assert claude["pacing_diagnostics"]["weight_history"]["reset_at"] == reset
+        if step == 0:
+            assert claude["pacing_diagnostics"]["previous_routing_weight"] == 0.07
+        else:
+            assert claude["pacing"]["routing_weight"] <= 0.07 + pacing.MAX_WEIGHT_CHANGE
+        previous = dict(agents=agents)

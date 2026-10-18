@@ -950,9 +950,6 @@ def integrate(
             pool_samples.append(sample)
         new_samples.append(sample)
         prior = (previous.get(pool) or {}).get("pacing") or {}
-        # Reset events restart burn history even when Claude's T1 stays fixed.
-        if reset_at is not None:
-            pool_samples = [r for r in pool_samples if r["ts"] >= reset_at]
         prior_diagnostics = (previous.get(pool) or {}).get("pacing_diagnostics") or {}
         history = prior_diagnostics.get("weight_history") or {
             "period_start": prior.get("period_start"),
@@ -965,8 +962,13 @@ def integrate(
         same_history = (
             (start is None or history.get("period_start") == start)
             and (end is None or history.get("period_end") == end)
-            and history.get("reset_at") == reset_at
+            and (reset_at is None or history.get("reset_at") == reset_at)
         )
+        # Missing inventory cannot undo an observed reset. Preserve its boundary
+        # for both burn clipping and weight carry without altering reset accounting.
+        history_reset_at = reset_at if reset_at is not None else history.get("reset_at")
+        if history_reset_at is not None:
+            pool_samples = [r for r in pool_samples if r["ts"] >= history_reset_at]
         prior_weight = prior.get("routing_weight")
         if prior_weight is None:
             prior_weight = prior_diagnostics.get("previous_routing_weight")
@@ -1010,7 +1012,7 @@ def integrate(
         agent["pacing_diagnostics"]["weight_history"] = {
             "period_start": start if start is not None else history.get("period_start"),
             "period_end": end if end is not None else history.get("period_end"),
-            "reset_at": reset_at,
+            "reset_at": history_reset_at,
         }
         row["measurement"] = (
             "measured"

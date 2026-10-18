@@ -1,5 +1,6 @@
 """Temp-HOME scheduled wrapper tests; no provider commands or live alert writes."""
 
+import datetime as dt
 import importlib.util
 import json
 import os
@@ -140,7 +141,7 @@ def test_six_hour_repeat_is_per_poller_and_recurs_after_new_outage(tmp_path):
     assert "codex STALE" in log.read_text().splitlines()[-1]
 
 
-@pytest.mark.parametrize("ts", [None, "bad", float("nan"), {}, float("inf")])
+@pytest.mark.parametrize("ts", [None, "bad", float("nan"), {}, float("inf"), 1792300000 + 86400])
 def test_invalid_timestamp_is_unknown_not_a_false_recovery(tmp_path, ts):
     alerts = alert_module()
     home = tmp_path / "home"
@@ -162,3 +163,25 @@ def test_alert_diagnostics_are_controlled_and_visibly_bounded():
     assert alerts.safe_message("untrusted provider response", "claude") == (
         "poll failed (diagnostic redacted)"
     )
+
+
+@pytest.mark.parametrize("suffix", ["Z", "+02:00"])
+@pytest.mark.parametrize("age,stale", [(1800, False), (1801, True)])
+def test_iso_timestamp_drives_stale_decision_at_exact_allowance(tmp_path, suffix, age, stale):
+    alerts = alert_module()
+    now = 1792300000
+    observed = dt.datetime.fromtimestamp(now - age, dt.timezone.utc)
+    ts = (
+        observed.isoformat().replace("+00:00", "Z")
+        if suffix == "Z"
+        else observed.astimezone(dt.timezone(dt.timedelta(hours=2))).isoformat()
+    )
+    home = tmp_path / "home"
+    latest = home / ".codex/orchestrator/usage-poll"
+    latest.mkdir(parents=True)
+    (latest / "codex-usage.json").write_text(json.dumps(dict(ts=ts)))
+    log = tmp_path / "alerts.log"
+    alerts.update_alerts(home, log, 1800, [("codex", True, "")], now=now)
+    assert log.exists() is stale
+    if stale:
+        assert "STALE age=1801s allowance=1800s" in log.read_text()

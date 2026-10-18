@@ -55,7 +55,7 @@ def update_alerts(home, log, allowance, results, *, now=None):
             ts = timestamp(json.loads(path.read_text()).get("ts"))
         except (OSError, ValueError, TypeError, AttributeError):
             ts = None
-        age = max(0, now - ts) if ts is not None else None
+        age = now - ts if ts is not None and ts <= now else None
         age_text = f"{age:.0f}" if age is not None else "unknown"
         prior_ts, prior_state = last.get(name, (None, None))
         line = None

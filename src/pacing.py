@@ -86,7 +86,8 @@ def burn_estimate(
         r["ts"]: r
         for r in samples
         if start <= r["ts"] <= now
-        and r.get("used_fraction") is not None
+        and isinstance(r.get("used_fraction"), (int, float))
+        and math.isfinite(r["used_fraction"])
         and (source is None or r.get("source") == source)
     }
     rows = [by_time[t] for t in sorted(by_time)]
