@@ -953,11 +953,23 @@ def integrate(
         # Reset events restart burn history even when Claude's T1 stays fixed.
         if reset_at is not None:
             pool_samples = [r for r in pool_samples if r["ts"] >= reset_at]
+        prior_diagnostics = (previous.get(pool) or {}).get("pacing_diagnostics") or {}
+        history = prior_diagnostics.get("weight_history") or {
+            "period_start": prior.get("period_start"),
+            "period_end": prior.get("period_end"),
+            "reset_at": reset_at if (prior.get("ts") or 0) >= (reset_at or 0) else None,
+        }
+        # Missing measurements are not reset events. Retain both the last weight
+        # and its boundaries through repeated stale/unmeasured rows; expire only
+        # when an observed period or reset actually changes.
         same_history = (
-            prior.get("period_start") == start
-            and prior.get("period_end") == end
-            and (reset_at is None or (prior.get("ts") or 0) >= reset_at)
+            (start is None or history.get("period_start") == start)
+            and (end is None or history.get("period_end") == end)
+            and history.get("reset_at") == reset_at
         )
+        prior_weight = prior.get("routing_weight")
+        if prior_weight is None:
+            prior_weight = prior_diagnostics.get("previous_routing_weight")
         row = pacing.evaluate(
             pool,
             now=now,
@@ -967,7 +979,7 @@ def integrate(
             samples=pool_samples,
             exhausted_at=max(exhausted) if exhausted else None,
             previous_state=prior.get("state"),
-            previous_weight=prior.get("routing_weight") if same_history else None,
+            previous_weight=prior_weight if same_history else None,
             source_ts=datum["ts"],
             used_fraction=datum["used_fraction"],
             source=datum["source"],
@@ -994,6 +1006,11 @@ def integrate(
                 "burn_effective_per_hour",
                 "target_routing_weight",
             )
+        }
+        agent["pacing_diagnostics"]["weight_history"] = {
+            "period_start": start if start is not None else history.get("period_start"),
+            "period_end": end if end is not None else history.get("period_end"),
+            "reset_at": reset_at,
         }
         row["measurement"] = (
             "measured"
