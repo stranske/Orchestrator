@@ -169,3 +169,36 @@ running when inspected. These hosted results apply to the committed head, not th
 edit. CI Gate/keepalive remains unchecked. Automatic approval review rejected both the
 blocker comment and `needs-human` label update because connector mutations require
 approval while this run's approval policy is `never`; neither update was posted.
+
+## Selection decision-event assertion follow-up — 2026-10-18
+
+Reviewed the recent native fallback and receipt-lineage commits through `303bfbd6`.
+The PR body already checks all implementation tasks and acceptance criteria; only
+CI Gate/keepalive remains unchecked, so reconciliation requires no checkbox changes.
+
+Strengthened the existing negative router/dispatch/Brain test to require exactly two
+decision events, covering both trigger and decision phases. Each event must have no
+capability ID, no capability version, and an empty exercised-capability payload. This
+checks the acceptance requirement that the decision is recorded as well as the existing
+explicit zero accepted-edge assertion. No test cases were added.
+
+A direct function check with only pytest's import-time decorators replaced passed using
+the real router, dispatcher, and Brain writer. A negative control deleting decision
+events after the writer returned failed the added event-count assertion as expected.
+This is a manual integration check, not a pytest result. The dispatcher selftest,
+Python syntax parsing, and `git diff --check` also passed.
+
+Both required targeted pytest commands and both Black commands could not start because
+pytest and Black are absent. An isolated pip installation could not find either package;
+the local pip cache contains neither. The Python test change remains uncommitted because
+the mandatory pre-commit formatting gate cannot run. No commit or push was made.
+
+GitHub readback confirmed PR #729 is open and ready for review at `303bfbd6`.
+Gate `39105715626` passed Black, Ruff, mypy, and test-quality; its Python 3.12/3.13
+tests were still running. CI `39105715475` was also running. These hosted results
+apply to the existing commit, not this uncommitted assertion change. CI Gate/keepalive
+remains unchecked pending completed hosted verification.
+
+Automatic approval review blocked posting the blocker comment and adding `needs-human`:
+connector writes require approval, but this run's approval policy is `never`. Neither
+external update was posted.

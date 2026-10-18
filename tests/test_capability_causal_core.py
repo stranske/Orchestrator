@@ -524,7 +524,18 @@ def test_router_plan_selection_metadata_without_exercised_credit(tmp_path, monke
                 "SELECT routing_metadata FROM runs WHERE run_id=?", ("selection-only",)
             ).fetchone()[0]
         )
+        decisions = conn.execute(
+            "SELECT phase,capability_id,capability_version_id,payload_json "
+            "FROM completion_events WHERE run_id=? AND event_type='decision'",
+            ("selection-only",),
+        ).fetchall()
     assert count == 0
+    assert len(decisions) == 2
+    assert {row[0] for row in decisions} == {"trigger", "decision"}
+    for _, capability_id, version_id, payload_json in decisions:
+        assert capability_id is None
+        assert version_id is None
+        assert json.loads(payload_json)["capability_ids"] == []
     assert metadata["selected_capability_id"] == cap["capability_id"]
     assert metadata["selected_capability_version_id"] == cap["capability_version_id"]
     assert metadata["capability_dispatch_result"] == {
