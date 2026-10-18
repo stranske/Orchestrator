@@ -2000,7 +2000,19 @@ def _run_pipeline_impl(
                             item["stage"] = "act"
                     elif stage == "exception":
                         # Senior output routes work only; it cannot certify completion.
-                        if value.get("status") == "deferred":
+                        if value.get("status") == "failed":
+                            # A returned worker failure is not a routing decision.
+                            # Retain its native result, but never advance it to act
+                            # or cache a transient failure across a fresh round.
+                            if cache_key:
+                                doc.get("cache", {}).pop(cache_key, None)
+                            item["metrics"]["errors"] += 1
+                            item.update(
+                                status="failed",
+                                error="exception_worker_failed",
+                                deferred_next_trigger="fresh_round",
+                            )
+                        elif value.get("status") == "deferred":
                             resource = value.get("resource_evidence")
                             reason = value.get("reason")
                             if (
