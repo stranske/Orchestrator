@@ -221,7 +221,9 @@ def test_synchronous_adapter_preserves_classification_when_recording_fails(
     assert "rate-incident recording failed" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("evidence_source", ["stdout", "stderr", "agent_log"])
+@pytest.mark.parametrize(
+    "evidence_source", ["stdout", "stderr", "agent_log", "gemini_stderr", "gemini_agent_log"]
+)
 def test_offload_hook_reads_output_stderr_and_agent_log(
     incident_paths, monkeypatch, evidence_source
 ):
@@ -246,7 +248,13 @@ def test_offload_hook_reads_output_stderr_and_agent_log(
     monkeypatch.setattr(dispatcher.feedback, "record_cost", lambda *args, **kwargs: None)
     stdout = "resource_exhausted" if evidence_source == "stdout" else "ordinary output"
     stderr = "resource_exhausted" if evidence_source == "stderr" else "ordinary stderr"
-    agent = "gemini" if evidence_source == "agent_log" else "codex"
+    agent = (
+        "gemini"
+        if evidence_source in {"agent_log", "gemini_stderr", "gemini_agent_log"}
+        else "codex"
+    )
+    if evidence_source == "gemini_stderr":
+        stderr = GEMINI_INDIVIDUAL_QUOTA_LINE
     monkeypatch.setattr(
         dispatcher.subprocess,
         "run",
@@ -255,13 +263,20 @@ def test_offload_hook_reads_output_stderr_and_agent_log(
     monkeypatch.setattr(
         dispatcher,
         "_agent_log_tail_from_argv",
-        lambda *args, **kwargs: "resource_exhausted" if evidence_source == "agent_log" else "",
+        lambda *args, **kwargs: (
+            GEMINI_INDIVIDUAL_QUOTA_LINE
+            if evidence_source == "gemini_agent_log"
+            else "resource_exhausted" if evidence_source == "agent_log" else ""
+        ),
     )
     monkeypatch.setenv("ORCH_OFFLOAD_NETWORK_RETRIES", "0")
     result = dispatcher.offload(agent, "test", cwd=str(incident_paths))
     row = json.loads(rate_incidents.INCIDENT_FILE.read_text())
     assert result["rate_incident_evidence"]["is_authoritative"] is True
     assert row["surface"] == "dispatcher.offload" and row["run_id"] == result["run_id"]
+    if evidence_source.startswith("gemini_"):
+        assert row["reset_at"] is not None
+        assert row["reset_at"] > time.time() + 139 * 3600
 
 
 def test_offload_preserves_classification_when_recording_fails(incident_paths, monkeypatch, capsys):
@@ -381,3 +396,39 @@ def test_gemini_individual_quota_line_is_authoritative():
     base = 1_700_000_000
     reset = rate_incidents.provider_reset_at("gemini", [GEMINI_INDIVIDUAL_QUOTA_LINE], now=base)
     assert reset == base + 140 * 3600 + 5 * 60 + 6
+
+
+@pytest.mark.parametrize(
+    "prose",
+    ["handle RESOURCE_EXHAUSTED (code 429) errors", "handle quota reached errors"],
+)
+def test_gemini_quoted_capacity_prose_is_not_a_refusal(prose):
+    assert not rate_incidents.stdout_carries_capacity_evidence(prose)
+    assert not rate_incidents.is_authoritative_error(prose)
+
+
+def test_gemini_reset_ignores_unrelated_prose_duration():
+    refusal = "Error: Individual quota reached. Resets in 2h3m4s."
+    lines = ["Document Resets in 999h0m0s in the help text", refusal]
+    assert rate_incidents.provider_reset_at("gemini", lines, now=1000) == 1000 + 7384
+    assert rate_incidents.provider_reset_at("gemini", lines[:1], now=1000) is None
+
+
+def test_gemini_adapter_reads_reset_from_stderr(incident_paths, monkeypatch):
+    calls = iter(
+        (
+            subprocess.CompletedProcess(
+                ["agent"], 1, "ordinary output", GEMINI_INDIVIDUAL_QUOTA_LINE
+            ),
+            subprocess.CompletedProcess(["git"], 0, "", ""),
+        )
+    )
+    monkeypatch.setattr(adapters, "build_command", lambda *args, **kwargs: ["agent"])
+    monkeypatch.setattr(adapters.subprocess, "run", lambda *args, **kwargs: next(calls))
+    monkeypatch.setattr(adapters, "record_ledger", lambda *args, **kwargs: None)
+    before = int(time.time())
+    adapters.dispatch("gemini", "test", cwd=str(incident_paths))
+    row = json.loads(rate_incidents.INCIDENT_FILE.read_text())
+    duration = 140 * 3600 + 5 * 60 + 6
+    assert row["reset_at"] is not None
+    assert before + duration <= row["reset_at"] <= int(time.time()) + duration

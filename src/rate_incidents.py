@@ -56,6 +56,18 @@ def _hash_evidence(text: str) -> str:
     return hashlib.sha256(str(text).encode("utf-8")).hexdigest()[:16]
 
 
+def _has_provider_error_context(line: str) -> bool:
+    """Require an error envelope, including Gemini's glog error prefix."""
+    return bool(
+        re.match(
+            r"\s*(?:E\d{4}\s+\d{2}:\d{2}:\d{2}\.\d+\s+\d+\s+[^\]\n]+\]\s*)?"
+            r"(?:agent\s+executor\s+error|provider\s+error|error|ActionRequiredError)\s*:",
+            line,
+            re.I,
+        )
+    )
+
+
 def _contains_explicit_resource_exhausted(text: str) -> bool:
     """Recognize provider-shaped exhaustion, not implementation/review prose."""
     return bool(
@@ -63,11 +75,12 @@ def _contains_explicit_resource_exhausted(text: str) -> bool:
             r"(?im)^\s*(?:\[resource_exhausted\]|resource_exhausted)\s*$"
             r"|^\s*(?:error|status|code|response|provider\s+error)\b[^\n]{0,120}"
             r"\bresource_exhausted\b"
-            r'|\{[^\n]{0,120}"(?:status|code)"\s*:\s*"RESOURCE_EXHAUSTED"'
-            r"|agent\s+executor\s+error:[^\n]{0,240}\bRESOURCE_EXHAUSTED\b"
-            r"|\bRESOURCE_EXHAUSTED\s*\(\s*code\s*429\s*\)",
+            r'|^\s*\{[^\n]{0,120}"(?:status|code)"\s*:\s*"RESOURCE_EXHAUSTED"',
             text,
         )
+    ) or any(
+        _has_provider_error_context(line) and re.search(r"\bRESOURCE_EXHAUSTED\b", line, re.I)
+        for line in text.splitlines()
     )
 
 
@@ -78,10 +91,13 @@ def classify_provider_failure(text: str) -> tuple[str, str, str]:
     if re.search(
         r"(?:out of usage|usage exhausted|quota exhausted|capacity exhausted)"
         r"|(?:you(?:'|’)ve hit your usage limit)"
-        r"|(?:individual\s+quota\s+reached|quota\s+reached)"
         r"|(?:credit(?:s| balance)? (?:exhausted|depleted|used up|too low))",
         text,
         re.I,
+    ) or any(
+        _has_provider_error_context(line)
+        and re.search(r"\b(?:individual\s+)?quota\s+reached\b", line, re.I)
+        for line in text.splitlines()
     ):
         return "quota", "quota_exhausted", "high"
     if _contains_explicit_resource_exhausted(text):
@@ -326,6 +342,8 @@ def provider_reset_at(agent: str, lines: list[str], *, now: int | None = None) -
     if agent == "gemini":
         resets = []
         for line in failure_evidence(lines):
+            if not _has_provider_error_context(line) or not is_authoritative_error(line):
+                continue
             reset = parse_resets_in_duration(line, now=now)
             if reset is not None:
                 resets.append(reset)
@@ -627,10 +645,16 @@ def _selftest() -> int:
         )
         assert classify_provider_failure(gemini_line) == ("quota", "quota_exhausted", "high")
         assert not is_authoritative_error("handle RESOURCE_EXHAUSTED errors")
+        for prose in ("handle RESOURCE_EXHAUSTED (code 429) errors", "handle quota reached errors"):
+            assert not is_authoritative_error(prose)
+            assert not stdout_carries_capacity_evidence(prose)
         base = 1_700_000_000
         assert (
             provider_reset_at("gemini", [gemini_line], now=base) == base + 140 * 3600 + 5 * 60 + 6
         )
+        assert provider_reset_at(
+            "gemini", ["Document Resets in 999h0m0s", gemini_line], now=base
+        ) == provider_reset_at("gemini", [gemini_line], now=base)
         print("rate_incidents.py selftest: OK")
         return 0
     finally:

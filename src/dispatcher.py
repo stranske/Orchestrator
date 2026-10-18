@@ -2911,7 +2911,8 @@ def offload(
         # The provider's stated reset, from codex's harness events alone. Without it the two
         # refusals of 2026-09-25 that named Sep 28 shed for the 6 h cooldown, and this record, the
         # first of a run's two observers, is the one whose shed stands.
-        reset_at = rate_incidents.provider_reset_at(agent, stdout.splitlines())
+        reset_lines = combined_output.splitlines() if agent == "gemini" else stdout.splitlines()
+        reset_at = rate_incidents.provider_reset_at(agent, reset_lines)
     except Exception as exc:
         print(f"warn: rate-incident classification failed for {agent}: {exc}", file=sys.stderr)
     if evidence_result and evidence_result.get("is_authoritative"):
@@ -3172,6 +3173,10 @@ def _selftest_gemini_refusal() -> None:
 
 
 def _selftest() -> None:
+    import inspect
+
+    # Wiring pin; behavioral stderr/log reset coverage also exercises offload in pytest.
+    assert "combined_output.splitlines()" in inspect.getsource(offload)
     import tempfile
 
     _selftest_gemini_refusal()
