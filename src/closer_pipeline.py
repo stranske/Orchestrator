@@ -1149,6 +1149,70 @@ def _restored_compact_refusal(
         return None
 
 
+def _inherited_unstarted_wait_deferral(
+    previous: Mapping[str, Any],
+    target: str,
+    item: Mapping[str, Any],
+    history: list[dict[str, Any]],
+) -> bool:
+    """Recognize an inherited read cutoff without validating a later round's stop.
+
+    Callers must independently prove the retained native no-operation wait.
+    Scheduling stamps distinguish an unstarted prepare from a running provider
+    callback. The exact earlier cutoff and action remain in the immutable audit.
+    """
+    created, scheduled = previous.get("created"), item.get("last_scheduled")
+    resource = item.get("resource_evidence")
+    results = item.get("results")
+    if (
+        item.get("status") != "deferred"
+        or item.get("stage") != "prepare"
+        or item.get("deferred_reason") != "deadline_exhausted"
+        or item.get("deferred_next_trigger") != "next_round"
+        or item.get("fresh_inner_wait_admission") is not True
+        or item.get("provider_outcome_uncertain")
+        or item.get("known_completed_action") is True
+        or not isinstance(resource, Mapping)
+        or not isinstance(results, Mapping)
+        or not isinstance(results.get("act"), Mapping)
+        or not isinstance(created, (int, float))
+        or not isinstance(scheduled, (int, float))
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            for value in (created, scheduled, resource.get("deadline"), resource.get("observed_at"))
+        )
+        or not float(scheduled) < float(created)
+        or not float(resource["deadline"]) <= float(resource["observed_at"]) < float(created)
+        or not _valid_deadline_evidence(
+            resource, float(resource["deadline"]), previous.get("targets", {})
+        )
+    ):
+        return False
+    candidates = [
+        record["targets"][target]
+        for record in history
+        if isinstance(record, Mapping)
+        and record.get("source_deadline") == resource["deadline"]
+        and isinstance(record.get("source_run_id"), str)
+        and bool(record["source_run_id"])
+        and isinstance(record.get("targets"), Mapping)
+        and isinstance(record["targets"].get(target), Mapping)
+    ]
+    return bool(candidates) and all(
+        row.get("status") == "deferred"
+        and row.get("stage") == "prepare"
+        and row.get("recovery") == "retry_fresh"
+        and row.get("deferred_reason") == "deadline_exhausted"
+        and row.get("next_trigger") == "next_round"
+        and row.get("resource_evidence") == resource
+        and row.get("act_result") == results["act"]
+        and all(row.get(key) == item.get(key) for key in ("revision", "identity", "work_key"))
+        for row in candidates
+    )
+
+
 def _expired_invalid_round_recovery(
     prior_stop: Mapping[str, Any],
     previous: Mapping[str, Any],
@@ -1239,10 +1303,19 @@ def _expired_invalid_round_recovery(
             and item.get("deferred_reason") == "deadline_exhausted"
         ):
             invalid_reason = f"unverified_deadline_boundary:{target}"
-            if retained_read_wait and (
-                historical_now < float(previous["deadline"])
-                or not _valid_deadline_evidence(
-                    item.get("resource_evidence"), float(previous["deadline"]), rows
+            inherited_unstarted_wait = (
+                retained_read_wait
+                and invalid_reason in reasons
+                and _inherited_unstarted_wait_deferral(previous, target, item, history)
+            )
+            if (
+                retained_read_wait
+                and not inherited_unstarted_wait
+                and (
+                    historical_now < float(previous["deadline"])
+                    or not _valid_deadline_evidence(
+                        item.get("resource_evidence"), float(previous["deadline"]), rows
+                    )
                 )
             ):
                 return False, set(), set(), set(), set(), {}

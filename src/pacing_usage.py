@@ -1090,6 +1090,15 @@ def report(
         tick_age = "unmeasured" if tick_ts is None else f"{now - tick_ts:.0f}s"
         routed = "unmeasured" if routed_weight is None else f"{routed_weight:.3f}"
         computed = "unmeasured" if report_weight is None else f"{report_weight:.3f}"
+        prior_weight = row.get("previous_routing_weight")
+        persisted_prior = routed_weight
+        if persisted_prior is None:
+            persisted_prior = (routed_agent.get("pacing_diagnostics") or {}).get(
+                "previous_routing_weight"
+            )
+        hypothetical = persisted_prior is None and prior_weight is not None
+        prior = "unmeasured" if hypothetical or prior_weight is None else f"{prior_weight:.3f}"
+        step_note = " (hypothetical step from an unpersisted default)" if hypothetical else ""
         difference = ""
         if routed_weight is not None and report_weight is not None:
             delta = report_weight - routed_weight
@@ -1117,8 +1126,7 @@ def report(
             f"pacing={row.get('measurement', 'unknown')} "
             f"routed_weight={routed} (tick ts={measured(tick_ts)}, age={tick_age}) "
             f"report_weight={computed}{difference} "
-            f"w_p_prev→w_p={measured(row.get('previous_routing_weight'))}→"
-            f"{measured(row.get('routing_weight'))} "
+            f"w_p_prev→w_p={prior}→{computed}{step_note} "
             f"resets={row.get('resets_available') if row.get('resets_available') is not None else 'unknown'} source={row.get('source', 'none')} "
             f"T1={row.get('period_end')} reset_expiries={row.get('reset_expiries')} "
             f"ts={row.get('ts')} stale={row.get('ts') is not None and now - row['ts'] > pacing.STALE_AFTER_SECONDS}; "
