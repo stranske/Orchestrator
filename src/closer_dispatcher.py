@@ -2710,7 +2710,14 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             "integration_status": integration.get("status"),
             "integration_reason": integration.get("reason"),
             "raw_findings": integration.get("raw_findings", [])[:20],
-            "integration_disposition": integration.get("disposition"),
+            # Ordinary NON_PASS dispositions duplicate the retained raw findings
+            # and resolutions. The action backend independently re-integrates
+            # the original proposal and packet before using that disposition.
+            **(
+                {"integration_disposition": integration.get("disposition")}
+                if integration.get("status") != "ordinary_nonpass"
+                else {}
+            ),
             "prior_provider_failures": list(low_profile_failures.values()),
         }
 
