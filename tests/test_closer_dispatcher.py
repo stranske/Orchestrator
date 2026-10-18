@@ -15,6 +15,7 @@ import pytest
 
 import claims
 import closer_dispatcher as adapter
+import closer_pipeline
 import closer_queue
 
 TARGET = "o/r#7"
@@ -1719,6 +1720,178 @@ def test_only_proven_non_ci_waits_become_pipeline_continuations(
     if expected_status == "deferred":
         assert result["reason"] == "claim_held"
         assert result["resource_evidence"] == {"holder": {"agent": "other"}}
+
+
+@pytest.mark.parametrize("case", ["malformed_worker", "source_hold"])
+def test_staged_adapter_emits_only_durable_validated_inner_wait(tmp_path, monkeypatch, case):
+    current = snapshot(labels=["agents:paused"]) if case == "source_hold" else snapshot()
+    monkeypatch.setattr(adapter, "GitHub", lambda **_kwargs: FakeGitHub(current))
+    pipeline_path = adapter._pipeline_state_path(tmp_path / "state.json")
+    action_path = (
+        pipeline_path.parent
+        / f"{pipeline_path.stem}.actions"
+        / f"{closer_pipeline._digest(TARGET)}.json"
+    )
+    captured = {}
+
+    def pipeline_stub(_path, _targets, **callbacks):
+        interpretation = (
+            {
+                "proposal": {"raw_excerpt": "invalid"},
+                "actual": {"exit": 0, "run_id": "real-low-run"},
+            }
+            if case == "malformed_worker"
+            else {"classification": "deterministic_wait"}
+        )
+        captured["result"] = callbacks["act"](
+            TARGET,
+            {
+                "state_path": str(pipeline_path),
+                "action_state_path": str(action_path),
+                "deadline": time.time() + 60,
+                "revision": current["revision"],
+                "work_key": "offline-bound-wait",
+                "prepare": {"snapshot": current, "packet_ref": {}},
+                "interpret": interpretation,
+                "exception": {
+                    "validated": {
+                        "status": "exception",
+                        "reason": "substantive_or_ambiguous_finding",
+                    }
+                },
+            },
+        )
+        return {"targets": {TARGET: captured["result"]}}
+
+    monkeypatch.setattr(closer_pipeline, "run_pipeline", pipeline_stub)
+    backend = closer(tmp_path, current)
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
+    result = captured["result"]
+    assert result["status"] == "deferred"
+    assert result["reason"] == "validated_inner_wait"
+    assert result["queue_receipt"]["stop_valid"] is True
+    assert result["resource_evidence"]["inner_wait"]["inner_path"] == str(action_path)
+    assert not backend.gh.calls
+
+
+def test_same_head_inner_wait_requires_fresh_admission_and_matching_producer(tmp_path, monkeypatch):
+    current = snapshot()
+    monkeypatch.setattr(adapter, "GitHub", lambda **_kwargs: FakeGitHub(current))
+    pipeline_path = adapter._pipeline_state_path(tmp_path / "state.json")
+    action_path = (
+        pipeline_path.parent
+        / f"{pipeline_path.stem}.actions"
+        / f"{closer_pipeline._digest(TARGET)}.json"
+    )
+    reason = "worker_json_invalid"
+    trigger = "source owner supplies current-head proof or resolves the named finding"
+    receipt = closer_queue.run_round(
+        action_path,
+        [TARGET],
+        lambda _target: {
+            "target": TARGET,
+            "revision": current["revision"],
+            "action": "wait",
+            "eligible": False,
+            "requires_coordinator": False,
+            "reason": reason,
+            "next_trigger": trigger,
+            "evidence": current,
+        },
+        lambda *_: pytest.fail("terminal wait must not execute"),
+        deadline=time.time() + 30,
+        max_workers=1,
+        max_passes=1,
+    )
+    semantic = "closer-evidence-semantic/v1:" + "1" * 64
+    old_prepare = {
+        "revision": current["revision"],
+        "snapshot": current,
+        "semantic_cache_key": semantic,
+        "producer_sha256": "2" * 64,
+        "proposal": {"action": "collect_evidence"},
+    }
+    proof = {
+        "schema": closer_pipeline.INNER_WAIT_SCHEMA,
+        "target": TARGET,
+        "revision": current["revision"],
+        "head": current["head"],
+        "reason": reason,
+        "next_trigger": trigger,
+        "inner_path": str(action_path),
+        "receipt_sha256": closer_pipeline._digest(receipt),
+    }
+    closer_pipeline._save(
+        pipeline_path,
+        {
+            "schema": closer_pipeline.SCHEMA,
+            "runs": {
+                "prior": {
+                    "created": time.time() - 10,
+                    "targets": {
+                        TARGET: {
+                            "status": "deferred",
+                            "deferred_reason": "validated_inner_wait",
+                            "revision": current["revision"],
+                            "results": {"prepare": old_prepare},
+                            "resource_evidence": {"inner_wait": proof},
+                        }
+                    },
+                }
+            },
+            "carry": {},
+            "cache": {},
+        },
+    )
+    backend = closer(tmp_path, current)
+    admissions = []
+    admission_allowed = [True]
+    backend.campaign_admission = lambda *_: admissions.append(True) or {
+        "allowed": admission_allowed[0],
+        "reason": "fresh admission required",
+    }
+    monkeypatch.setattr(adapter, "_pipeline_low_route", lambda **_kwargs: (None, "saturated"))
+    seen = {}
+
+    def pipeline_stub(_path, _targets, **callbacks):
+        old_context = {
+            "state_path": str(pipeline_path),
+            "action_state_path": str(action_path),
+            "deadline": time.time() + 60,
+            "revision": current["revision"],
+            "work_key": "same-head-reuse",
+            "prepare": old_prepare,
+        }
+        old_interpret = callbacks["interpret"](TARGET, old_context)
+        assert old_interpret["classification"] == "deterministic_inner_wait"
+        assert admissions == [True]
+        old_act = callbacks["act"](TARGET, {**old_context, "interpret": old_interpret})
+        assert old_act["status"] == "deferred"
+        admission_allowed[0] = False
+        denied = callbacks["interpret"](TARGET, old_context)
+        assert denied["classification"] == "admission_deferred"
+        admission_allowed[0] = True
+        changed_producer = {**old_context, "prepare": {**old_prepare, "producer_sha256": "3" * 64}}
+        producer_interpret = callbacks["interpret"](TARGET, changed_producer)
+        assert producer_interpret["classification"] == "capacity_deferred"
+        changed = snapshot(head="b" * 40)
+        changed_context = {
+            **old_context,
+            "revision": changed["revision"],
+            "prepare": {**old_prepare, "revision": changed["revision"], "snapshot": changed},
+        }
+        changed_interpret = callbacks["interpret"](TARGET, changed_context)
+        assert changed_interpret["classification"] == "capacity_deferred"
+        assert len(admissions) == 4
+        seen["result"] = old_act
+        return {"targets": {TARGET: old_act}}
+
+    monkeypatch.setattr(closer_pipeline, "run_pipeline", pipeline_stub)
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
+    assert seen["result"]["reason"] == "validated_inner_wait"
+    assert backend.gh.calls == []
 
 
 @pytest.mark.parametrize(
