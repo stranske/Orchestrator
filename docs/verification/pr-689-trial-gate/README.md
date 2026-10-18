@@ -24,7 +24,8 @@ Runtime: `/opt/anaconda3/bin/python3` throughout. No permission or privacy setti
   that same shared Vibe config write. Final tick selftest was rerun after the drain receipt change.
 - Changed-code Ruff, Black, MyPy, and `git diff --check` pass.
 - `.verify-floor.json` matches main at `80336468ffa2720d508bec4a99ee7f8d507c0f06`
-  byte-for-byte (blob `db60970dc544f18c86246c66fd1c61d5bb62568d`). No count or ceiling was set.
+  byte-for-byte at the initial merge. Main advanced during verification; the final follow-up merge
+  carries `99dfa1c9835f322e647c5ad93cd4417cef861486` byte-for-byte (blob `056f9b089a28343c2c3d9ad6be2c56e02c47c250`). No count or ceiling was set.
 
 Full verifier **RED**, exit 1: **4,676 passed, 33 failed**, 319 subtests passed;
 103/107 module selftests ran, with adapters, capability_propensity, exp_abcd, and tick_watchdog
@@ -52,3 +53,13 @@ filtered run; the broad run is not represented as a clean final-head acceptance.
 
 
 Logs are retained losslessly as gzip files. No CI wait, deployment, or live-trial claim.
+
+## Final main synchronization
+
+Main advanced during the full verifier. The final merge brings in #717's closer budget
+changes and main's exact floor; the earlier full-verifier receipt describes the pre-#717
+merge, not a clean gate on this final merge. A subsequent required filtered-suite rerun is
+retained as `focused-final-main.log.gz`.
+
+Final merged-tree results: required filtered suite **200 passed, 4518 deselected**;
+closer dispatcher suite **118 passed** (`closer-main.log.gz`).
