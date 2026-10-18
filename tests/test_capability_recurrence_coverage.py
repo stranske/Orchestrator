@@ -178,16 +178,19 @@ def test_replay_records_fixture_errors_instead_of_raising(monkeypatch):
 def test_replay_uses_live_labels_and_successful_routing_without_network(monkeypatch):
     """Live fixtures retain their provenance while every routing shape stays locally controlled."""
     fixture = {"live": True, "repo": "Orchestrator", "issue": 666, "labels": [], "title": "old"}
-    monkeypatch.setattr(
-        recurrence,
-        "_fetch_issue",
-        lambda *_args: {"labels": [{"name": "task:test"}], "title": "current title"},
-    )
+    fetch_calls = []
+
+    def fake_fetch_issue(repo, number):
+        fetch_calls.append((repo, number))
+        return {"labels": [{"name": "task:test"}], "title": "current title"}
+
+    monkeypatch.setattr(recurrence, "_fetch_issue", fake_fetch_issue)
     assert recurrence._labels_of(fixture, offline=False) == (
         ["task:test"],
         "current title",
         "live Orchestrator#666",
     )
+    assert fetch_calls == [("Orchestrator", 666)]
 
     import adversarial
     import backlog
