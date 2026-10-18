@@ -645,7 +645,7 @@ def _carry_item(item: Mapping[str, Any]) -> dict[str, Any]:
     )
     carried = {key: item[key] for key in keys if key in item}
     results: dict[str, Any] = {}
-    if item.get("status") == "uncertain" and item.get("stage") == "interpret":
+    if item.get("status") == "uncertain" and item.get("stage") in {"interpret", "exception"}:
         outcome = item.get("provider_outcome_uncertain")
         if isinstance(outcome, Mapping):
             prepared = item.get("results", {}).get("prepare", {})
@@ -838,6 +838,47 @@ def _audited_retained_wait(
     prepared, act = results.get("prepare"), results.get("act")
     if not isinstance(prepared, Mapping) or not isinstance(act, Mapping):
         return False
+    if act.get("status") == "blocked":
+        # A compact pre-fix refusal can be restored as scheduling proof, then
+        # encounter a new read-only capacity/deadline boundary. Preserve that
+        # same immutable native refusal across the next cadence; it still has
+        # no acceptance or action authority.
+        receipt = act.get("queue_receipt")
+        snapshot = prepared.get("snapshot")
+        if (
+            not isinstance(act.get("reason"), str)
+            or act.get("reason") not in EVIDENCE_REFUSAL_REASONS
+            or act.get("next_trigger") != EVIDENCE_REFUSAL_TRIGGER
+            or not isinstance(receipt, Mapping)
+            or not isinstance(snapshot, Mapping)
+            or prepared.get("revision", snapshot.get("revision")) != item.get("revision")
+            or snapshot.get("revision") != item.get("revision")
+            or anchor.get("revision") != item.get("revision")
+            or anchor.get("head") != snapshot.get("head")
+            or anchor.get("reason") != act.get("reason")
+            or anchor.get("next_trigger") != act.get("next_trigger")
+            or anchor.get("inner_path")
+            != str(path.parent / f"{path.stem}.actions" / f"{_digest(target)}.json")
+            or anchor.get("receipt_sha256") != _digest(receipt)
+            or not isinstance(item.get("identity"), str)
+            or not item["identity"]
+            or not any(
+                isinstance(record, Mapping)
+                and record.get("source_run_id")
+                == anchor.get("previous_run_id", recovery["previous_run_id"])
+                and isinstance(record.get("targets"), Mapping)
+                and isinstance(record["targets"].get(target), Mapping)
+                and record["targets"][target].get("recovery") == "validated_inner_wait"
+                and record["targets"][target].get("act_result") == act
+                and record["targets"][target].get("revision") == item.get("revision")
+                and record["targets"][target].get("identity") == item.get("identity")
+                and record["targets"][target].get("item_sha256")
+                == anchor.get("previous_item_sha256")
+                for record in history
+            )
+        ):
+            return False
+        return _retained_blocked_act_wait_proof(path, target, item)
     resource = act.get("resource_evidence")
     proof = resource.get("inner_wait") if isinstance(resource, Mapping) else None
     receipt = act.get("queue_receipt")
@@ -912,7 +953,10 @@ def _safe_prior_continuation(
             for target, item in rows.items():
                 if not isinstance(target, str) or not isinstance(item, Mapping):
                     continue
-                if item.get("status") != "uncertain" or item.get("stage") != "interpret":
+                if item.get("status") != "uncertain" or item.get("stage") not in {
+                    "interpret",
+                    "exception",
+                }:
                     continue
                 interpretation = {
                     "status": "uncertain",
@@ -983,7 +1027,11 @@ def _safe_prior_continuation(
         status = item.get("status")
         if status in {"completed", "deferred", "pending"}:
             continue
-        if target in native_targets and status == "uncertain" and item.get("stage") == "interpret":
+        if (
+            target in native_targets
+            and status == "uncertain"
+            and item.get("stage") in {"interpret", "exception"}
+        ):
             continue
         if (
             status == "failed"
@@ -2349,6 +2397,38 @@ def _run_pipeline_impl(
                     item["results"][stage] = value
                     if (
                         stage in {"interpret", "exception"}
+                        and (
+                            value.get("status") == "uncertain"
+                            or value.get("outcome_uncertain") is True
+                        )
+                    ) or (
+                        stage == "act"
+                        and value.get("status") == "uncertain"
+                        and isinstance(value.get("provider_outcome"), Mapping)
+                        and value["provider_outcome"].get("schema")
+                        == "closer-completed-response-retention/v1"
+                    ):
+                        if cache_key:
+                            doc.get("cache", {}).pop(cache_key, None)
+                        if not _valid_uncertain_provider_outcome(value, target, item):
+                            item.update(
+                                status="failed",
+                                error=UNBOUND_UNCERTAIN_PROVIDER_ERROR,
+                                deferred_next_trigger="human_review",
+                            )
+                            return
+                        outcome = value["provider_outcome"]
+                        actual = outcome["actual"]
+                        run_id = actual["run_id"]
+                        item.update(
+                            status="uncertain",
+                            stage=stage,
+                            deferred_next_trigger=f"unresolved_native_provider_outcome:{run_id}",
+                            provider_outcome_uncertain=outcome,
+                        )
+                        return
+                    if (
+                        stage in {"interpret", "exception"}
                         and cache_key
                         and not (stage == "interpret" and _native_route_result(value))
                     ):
@@ -2384,29 +2464,6 @@ def _run_pipeline_impl(
                             item["results"].pop("exception", None)
                         item["stage"] = "interpret"
                     elif stage == "interpret":
-                        if (
-                            value.get("status") == "uncertain"
-                            or value.get("outcome_uncertain") is True
-                        ):
-                            if cache_key:
-                                doc.get("cache", {}).pop(cache_key, None)
-                            if not _valid_uncertain_provider_outcome(value, target, item):
-                                item.update(
-                                    status="failed",
-                                    error=UNBOUND_UNCERTAIN_PROVIDER_ERROR,
-                                    deferred_next_trigger="human_review",
-                                )
-                                return
-                            outcome = value["provider_outcome"]
-                            actual = outcome["actual"]
-                            run_id = actual["run_id"]
-                            item.update(
-                                status="uncertain",
-                                stage="interpret",
-                                deferred_next_trigger=f"unresolved_native_provider_outcome:{run_id}",
-                                provider_outcome_uncertain=outcome,
-                            )
-                            return
                         if value.get("classification") == "capacity_deferred":
                             # Capacity is transient operational evidence. Never
                             # retain it in the semantic cache, even for legacy
@@ -3084,7 +3141,7 @@ def validate_stop(
             continue
         status = item.get("status")
         stage = item.get("stage")
-        if status == "uncertain" and stage == "interpret":
+        if status == "uncertain" and stage in {"interpret", "exception"}:
             continuation = True
             outcome = item.get("provider_outcome_uncertain")
             actual = outcome.get("actual") if isinstance(outcome, Mapping) else None
