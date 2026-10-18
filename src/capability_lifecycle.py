@@ -230,6 +230,8 @@ def _invocation_ineligible(
         return "rollback_pending"
     if capabilities.capability_expired(cap, int(now)):
         return "expired"
+    if binding is not None and not isinstance(binding, Mapping):
+        return "artifact_invalid"
     if binding is not None:
         artifact_expiry = capability_targets._binding_expires_at(binding)
         if artifact_expiry is not None and int(now) >= artifact_expiry:
@@ -292,8 +294,10 @@ def invoke_compiled_target(
     if ineligible:
         return {"matched": True, "invoked": False, "reason": ineligible}
     binding = capability_targets.get_binding(version_id, registry_path=Path(target_registry_path))
-    if not binding:
+    if binding is None:
         raise ValueError("lifecycle version has no target binding")
+    if not isinstance(binding, Mapping):
+        return {"matched": True, "invoked": False, "reason": "artifact_invalid"}
     ineligible = _invocation_ineligible(cap, binding, now)
     if ineligible:
         return {"matched": True, "invoked": False, "reason": ineligible}

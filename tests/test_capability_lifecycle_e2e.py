@@ -1329,6 +1329,70 @@ def test_direct_invoke_target_corrupt_binding_values_refuse_without_writes(
     assert ctx["registry"].read_bytes() == registry_before
 
 
+@pytest.mark.parametrize(
+    "binding", [None, "corrupt", [], {}, {"kind": "workflow"}, {"capability_version_id": 17}]
+)
+def test_direct_invoke_target_malformed_binding_argument_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, binding
+) -> None:
+    # A direct caller handing invoke_target a non-mapping or version-less
+    # binding gets a refusal, not a KeyError/TypeError, and nothing is written.
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    ledger_before = ctx["ledger"].read_bytes()
+    registry_before = ctx["registry"].read_bytes()
+    result = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=ctx["registry"],
+        ledger_path=ctx["ledger"],
+        target_run_id="direct:malformed-binding-argument",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "artifact_invalid"}, result
+    assert "causal_edge" not in result
+    assert ctx["ledger"].read_bytes() == ledger_before
+    assert ctx["registry"].read_bytes() == registry_before
+
+
+@pytest.mark.parametrize("row", ["corrupt", 17, ["corrupt"]])
+def test_corrupt_registry_row_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, row
+) -> None:
+    # A registry row that is not a mapping cannot prove eligibility: both the
+    # direct and the compiled entrypoints refuse instead of raising.
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    payload = json.loads(ctx["registry"].read_text(encoding="utf-8"))
+    payload["targets"][ctx["version_id"]] = row
+    ctx["registry"].write_text(json.dumps(payload), encoding="utf-8")
+    ledger_before = ctx["ledger"].read_bytes()
+    registry_before = ctx["registry"].read_bytes()
+    binding = capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])
+    direct = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=ctx["registry"],
+        ledger_path=ctx["ledger"],
+        target_run_id="direct:corrupt-registry-row",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert direct == {"matched": True, "invoked": False, "reason": "artifact_invalid"}, direct
+    compiled = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="compiled:corrupt-registry-row",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert compiled == {"matched": True, "invoked": False, "reason": "artifact_invalid"}, compiled
+    assert "causal_edge" not in compiled
+    assert ctx["ledger"].read_bytes() == ledger_before
+    assert ctx["registry"].read_bytes() == registry_before
+
+
 def test_high_risk_candidate_uses_bounded_brain_owner_question(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

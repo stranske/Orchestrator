@@ -65,9 +65,14 @@ def _load_registry(path: Path) -> dict[str, Any]:
 
 
 def get_binding(capability_version_id: str, *, registry_path: Path) -> dict[str, Any] | None:
-    """Return a detached copy of one target binding."""
+    """Return a detached copy of one target binding.
+
+    A present but corrupt (non-mapping or falsy) row is returned as stored so
+    invocation guards can refuse it as invalid instead of mistaking it for a
+    missing binding; only an absent row returns ``None``.
+    """
     row = _load_registry(Path(registry_path))["targets"].get(capability_version_id)
-    return json.loads(json.dumps(row)) if row else None
+    return json.loads(json.dumps(row)) if row is not None else None
 
 
 def _binding_path(registry_path: Path, capability_version_id: str) -> Path:
@@ -341,6 +346,8 @@ def _binding_ineligible(
     binding: Mapping[str, Any], now: int, env: Mapping[str, str] | None = None
 ) -> str | None:
     """Fail-closed refusal for a direct binding invocation, or None if eligible."""
+    if not isinstance(binding, Mapping):
+        return "artifact_invalid"
     rollback = binding.get("rollback")
     if rollback is not None:
         # A rollback declaration that is not a mapping cannot prove no
@@ -393,6 +400,8 @@ def _ledger_ineligible(
     """
     if ledger_path is None or not Path(ledger_path).exists():
         return None
+    if not isinstance(binding, Mapping):
+        return "ledger_unreadable"
     try:
         import capabilities
 
@@ -443,8 +452,19 @@ def invoke_target(
 ) -> dict[str, Any]:
     """Run the actual target producer and consumer and retain their receipts."""
     now = int(timestamp or time.time())
+    if not isinstance(binding, Mapping) or not isinstance(
+        binding.get("capability_version_id"), str
+    ):
+        # A binding argument without its immutable version identity cannot be
+        # matched to a registry row, so it refuses instead of raising.
+        return {"matched": True, "invoked": False, "reason": "artifact_invalid"}
     current = _load_registry(Path(registry_path))["targets"].get(binding["capability_version_id"])
-    if not current or not current.get("enabled"):
+    if not isinstance(current, Mapping):
+        if current is None:
+            return {"matched": False, "invoked": False, "reason": "binding_disabled"}
+        # A present registry row that is not a mapping is corrupt, not disabled.
+        return {"matched": True, "invoked": False, "reason": "artifact_invalid"}
+    if not current.get("enabled"):
         return {"matched": False, "invoked": False, "reason": "binding_disabled"}
     ineligible = _binding_ineligible(current, now, env)
     if ineligible:
@@ -687,6 +707,8 @@ def verify_rollback(binding: Mapping[str, Any], *, registry_path: Path) -> dict[
 
 
 def _selftest() -> None:
+    for malformed in (None, "corrupt", 17, ["corrupt"]):
+        assert _binding_ineligible(malformed, 100, {}) == "artifact_invalid"
     for rollback in ("pending", 123, ["pending"]):
         assert _binding_ineligible({"rollback": rollback}, 100, {}) == "rollback_pending"
     # Invalid declarations refuse before Path/package matching, including direct
