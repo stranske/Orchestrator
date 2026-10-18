@@ -1029,6 +1029,7 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
     # caller's dict here, so copy before mutating.
     assignment = dict(assignment)
     if assignment.get("selected_capability_id"):
+        assignment["capability_fallback"] = "baseline"
         assignment["capability_dispatch_result"] = {
             "invoked": False,
             "accepted": False,
@@ -1215,6 +1216,7 @@ def _invoke_selected_compiled_capability(d: dict) -> dict | None:
     pairs.append((str(cap_id), str(version_id)))
     d["capability_ids"] = [cid for cid, _ in pairs]
     d["capability_version_ids"] = [version for _, version in pairs]
+    routing.pop("capability_fallback", None)
     routing["capability_dispatch_result"] = {
         "invoked": True,
         "accepted": True,

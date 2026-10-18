@@ -69,3 +69,43 @@ Full `python3 src/verify.py --floor-may-lag` is running on the pre-final-guard s
 Final local focused command (causal core, lifecycle, rejected role edges, experiment members, supervisor): **145 passed**. Independently measured final collection: **4978**. Pass floor remains an expectation until final-head full verification; all ceilings are unchanged.
 
 Current main advanced during validation. The serial pass integrated merged #730; only the independently measured collection expectation conflicted, now4991, with every ceiling unchanged. The long full-pytest phase completed:4976tests and319subtests passed; one existing multi-capability regression exposed another omitted instrumented built-in (`adversarial-review`). That original regression is preserved and rerun after restoring its contract. The old verify supervisor was stopped before its later phases; this is not a full verify PASS. Current-head full verification remains required in CI.
+
+## Planning fallback follow-up — 2026-10-18
+
+The first unchecked task still had a planning gap: `plan_dispatch` recorded `dry_run`
+or `not_executed` but did not explicitly mark baseline fallback. It now sets
+`capability_fallback=baseline` before execution and removes that marker only after
+receipt-backed acceptance. Added regression cases check both planning modes, zero
+accepted edges, empty exercised pairs, and no invocation. The positive dispatch
+regression also checks that successful execution clears the fallback marker.
+
+`activate_dispatch_roles` returns role lineage independently of capability pairs;
+the dispatcher adds infrastructure attribution outside its optional role block.
+The fallback regression now exercises both the real disabled role selectors and an
+exception from role activation for every existing refusal/failure case, asserting
+exactly zero selected-capability edges and one infrastructure edge.
+
+A dependency-free manual harness ran the real planning, spawn, lifecycle, and Brain
+writer seams using `tests/capability_dispatch_fixture.py`. All 17 scenarios passed:
+two unexecuted plans, one receipt-backed success, and seven fallback cases under
+each role condition. Disconnecting the new planning marker made the manual check
+fail; exact source restoration passed. See
+[`729-fallback-followup.log`](729-fallback-followup.log). This manual mutation check
+does not replace the required router pytest deliberate-break gate.
+
+Production imports, syntax compilation of both edited Python files, and
+`git diff --check` passed. `rg -n "invoke_compiled_target" src/dispatcher.py`
+confirmed the production call site at line 1186.
+
+Both requested pytest commands (with `-m "not slow"`) cannot start in this runner:
+`No module named pytest`. Formatting the edited files and the required repository-wide
+Black check cannot start either: `No module named black`. An isolated installation
+failed because PyPI DNS resolution is unavailable; no cached pytest/Black wheels were
+found. No commit or push was made because the mandatory formatting gate cannot run.
+The added parametrization introduces nine test cases; independently remeasure full
+collection and reconcile `.verify-floor.json` before delivery. No additional task or
+acceptance checkbox is claimed complete in this run.
+
+GitHub readback (`gh pr view`) also failed to connect to `api.github.com`, so this run
+could not verify current PR readiness, check CI Gate/keepalive, or post a blocker comment
+and `needs-human` label. Prior readiness evidence above is historical.

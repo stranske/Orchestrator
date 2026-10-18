@@ -1,0 +1,28 @@
+Dependency-free manual check; this is not a pytest result.
+Disconnected planning fallback marker: exit=1
+Traceback (most recent call last):
+  File "/tmp/check_consumption_fallback.py", line 151, in <module>
+    check('unexecuted', dry_run=preview)
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/check_consumption_fallback.py", line 107, in check
+    assert d['routing_metadata']['capability_fallback'] == 'baseline'
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+KeyError: 'capability_fallback'
+Exact source restoration: exit=0
+PASS unexecuted dry_run=False: zero edges, explicit baseline reason
+PASS unexecuted dry_run=True: zero edges, explicit baseline reason
+PASS success role_failure=False: selected_edges=1, infrastructure_edges=0
+PASS refused role_failure=False: selected_edges=0, infrastructure_edges=1
+PASS refused role_failure=True: selected_edges=0, infrastructure_edges=1
+PASS failed role_failure=False: selected_edges=0, infrastructure_edges=1
+PASS failed role_failure=True: selected_edges=0, infrastructure_edges=1
+PASS expired role_failure=False: selected_edges=0, infrastructure_edges=1
+PASS expired role_failure=True: selected_edges=0, infrastructure_edges=1
+PASS unsupported role_failure=False: selected_edges=0, infrastructure_edges=1
+PASS unsupported role_failure=True: selected_edges=0, infrastructure_edges=1
+PASS version_changed role_failure=False: selected_edges=0, infrastructure_edges=1
+PASS version_changed role_failure=True: selected_edges=0, infrastructure_edges=1
+PASS not_consumed role_failure=False: selected_edges=0, infrastructure_edges=1
+PASS not_consumed role_failure=True: selected_edges=0, infrastructure_edges=1
+PASS receipt_missing role_failure=False: selected_edges=0, infrastructure_edges=1
+PASS receipt_missing role_failure=True: selected_edges=0, infrastructure_edges=1

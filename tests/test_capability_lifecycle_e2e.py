@@ -987,6 +987,49 @@ def test_regression_requires_automatic_rollback(regressing_canary: tuple[dict, P
     )
 
 
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_dispatch_unexecuted_selection_records_baseline_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dry_run: bool
+) -> None:
+    import dispatcher
+
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+
+    def unexpected_invocation(*args, **kwargs):
+        pytest.fail("planning must not execute the selected target")
+
+    monkeypatch.setattr(capability_lifecycle, "invoke_compiled_target", unexpected_invocation)
+    assignment = {
+        "target": ctx["fixture"]["trigger"]["target"],
+        "task_type": ctx["fixture"]["trigger"]["task_type"],
+        "agent": "codex",
+        "mode": "full",
+        "selected_capability_id": ctx["capability_id"],
+        "selected_capability_version_id": ctx["version_id"],
+        "capability_ids": [],
+        "capability_version_ids": [],
+    }
+    with local_dispatch(tmp_path) as worker:
+        dispatch = dispatcher.plan_dispatch(assignment, dry_run=dry_run)
+        assert worker.call_count == 0
+    assert dispatch["capability_ids"] == []
+    assert dispatch["capability_version_ids"] == []
+    metadata = dispatch["routing_metadata"]
+    assert metadata["capability_dispatch_result"] == {
+        "invoked": False,
+        "accepted": False,
+        "reason": "dry_run" if dry_run else "not_executed",
+    }
+    assert metadata["capability_fallback"] == "baseline"
+    with feedback._conn() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM influence_edges WHERE influence_type='capability' AND accepted=1"
+        ).fetchone()[0]
+    assert count == 0
+    binding = capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])
+    assert len(binding["invocations"]) == 0
+
+
 def test_dispatcher_dispatch_workflow_produces_one_accepted_edge(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1055,6 +1098,7 @@ def test_dispatcher_dispatch_workflow_produces_one_accepted_edge(
         {"artifact_id": receipt["consumer_ref"], "kind": "consumer_receipt"}
     ]
     assert stored["capability_dispatch_result"] == receipt
+    assert "capability_fallback" not in stored
     with feedback._conn() as conn:
         events = conn.execute(
             "SELECT phase,payload_json FROM completion_events WHERE run_id=? AND event_type='decision'",
@@ -1069,6 +1113,7 @@ def test_dispatcher_dispatch_workflow_produces_one_accepted_edge(
     assert binding["invocations"][0]["invocation_id"] == receipt["invocation_id"]
 
 
+@pytest.mark.parametrize("role_failure", [False, True])
 @pytest.mark.parametrize(
     ("case", "reason"),
     [
@@ -1082,7 +1127,11 @@ def test_dispatcher_dispatch_workflow_produces_one_accepted_edge(
     ],
 )
 def test_dispatch_fallback_has_no_compiled_credit_and_keeps_infrastructure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, reason: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+    reason: str,
+    role_failure: bool,
 ) -> None:
     import dispatcher
 
@@ -1093,6 +1142,12 @@ def test_dispatch_fallback_has_no_compiled_credit_and_keeps_infrastructure(
     infra = capabilities._blank_capability(infra_id)
     infra["capability_version_id"] = "capability-version:infrastructure"
     _mutate_json(ctx["ledger"], "capabilities", **{infra_id: infra})
+    if role_failure:
+
+        def fail_role_activation(*args, **kwargs):
+            raise RuntimeError("optional role activation failed")
+
+        monkeypatch.setattr(roles, "activate_dispatch_roles", fail_role_activation)
     if case == "refused":
         monkeypatch.setenv("ORCH_CAPABILITY_WORKFLOW_ENABLED", "0")
     elif case == "expired":
@@ -1128,10 +1183,16 @@ def test_dispatch_fallback_has_no_compiled_credit_and_keeps_infrastructure(
     }
     with local_dispatch(tmp_path) as worker:
         d = dispatcher.plan_dispatch(assignment)
+        if role_failure:
+            assert d["role_activation"]["error"] == "optional role activation failed"
+        else:
+            assert len(d["role_activation"]["selectors"]) == 2
+            assert all(not selector["invoked"] for selector in d["role_activation"]["selectors"])
         d["run_id"] = f"dispatch:fallback:{case}"
         assert dispatcher._spawn(d) == 1234
         assert worker.call_count == 1
-    assert ctx["capability_id"] not in d["capability_ids"]
+    assert d["capability_ids"] == [infra_id]
+    assert ctx["version_id"] not in d["capability_version_ids"]
     with feedback._conn() as conn:
         selected_count = conn.execute(
             "SELECT COUNT(*) FROM influence_edges WHERE target_run_id=? "
