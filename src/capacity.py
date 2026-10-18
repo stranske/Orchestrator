@@ -1466,5 +1466,12 @@ def main(argv):
     return 0
 
 
+def pacing_report(now: float | None = None) -> dict:
+    """The #668 pass numbers as data (read-only; no integrate, no ledger write)."""
+    import pacing_usage
+
+    return pacing_usage.pass_numbers(HANDOFF, time.time() if now is None else now)
+
+
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
