@@ -1,6 +1,6 @@
 # Consumption-credit validation — 2026-10-18
 
-Source and regression changes are prepared locally and remain uncommitted.
+At this historical validation run, source and regression changes were prepared locally and remained uncommitted.
 
 ## Available checks
 
@@ -29,7 +29,7 @@ selection through router/plan_dispatch/_spawn/Brain: passed; accepted capability
 The router was restored afterward. This manual check does **not** fulfill the required
 deliberate-break gate using the actual pytest regression.
 
-## Blocked gates
+## Gates unavailable in the historical runner
 
 Both requested targeted pytest commands, with `-m "not slow"`, failed to start:
 
@@ -44,12 +44,11 @@ No module named black
 ```
 
 An attempted isolated installation failed because the runner could not resolve/reach the package
-index. No commit or push was made because the required pre-commit formatting gate cannot pass.
+index. That validation run made no commit or push because its formatting gate could not run.
 No additional task or acceptance checkbox is claimed complete.
 
 GitHub readback confirmed PR #729 is open and ready for review (`draft=false`). Attempts to post
 this blocker and add `needs-human` were rejected by automatic approval review: the connector
 requires approval, but this run's approval policy is `never`. Neither mutation succeeded.
 
-Next: provide pytest, Black, and the repository test dependencies; run the targeted regressions
-and their actual deliberate-break gate; run Black and its repository-wide check; then commit.
+The local opener recovery below supersedes these historical environment limitations.

@@ -1012,9 +1012,12 @@ def test_dispatcher_dispatch_workflow_produces_one_accepted_edge(
         preview = dispatcher.plan_dispatch(assignment, dry_run=True)
         assert preview["capability_ids"] == []
         assert preview["routing_metadata"]["capability_dispatch_result"]["reason"] == "dry_run"
-        assert capability_targets.get_binding(
-            ctx["version_id"], registry_path=ctx["registry"]
-        )["invocations"] == []
+        assert (
+            capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])[
+                "invocations"
+            ]
+            == []
+        )
         d = dispatcher.plan_dispatch(assignment)
         d["run_id"] = run_id
         assert dispatcher._spawn(d) == 1234
@@ -1037,9 +1040,9 @@ def test_dispatcher_dispatch_workflow_produces_one_accepted_edge(
             ).fetchone()[0]
         )
         stored = json.loads(
-            conn.execute(
-                "SELECT routing_metadata FROM runs WHERE run_id=?", (run_id,)
-            ).fetchone()[0]
+            conn.execute("SELECT routing_metadata FROM runs WHERE run_id=?", (run_id,)).fetchone()[
+                0
+            ]
         )
     assert len(edges) == 1
     assert tuple(edges[0]) == (
@@ -1052,6 +1055,14 @@ def test_dispatcher_dispatch_workflow_produces_one_accepted_edge(
         {"artifact_id": receipt["consumer_ref"], "kind": "consumer_receipt"}
     ]
     assert stored["capability_dispatch_result"] == receipt
+    with feedback._conn() as conn:
+        events = conn.execute(
+            "SELECT phase,payload_json FROM completion_events WHERE run_id=? AND event_type='decision'",
+            (run_id,),
+        ).fetchall()
+    assert {
+        row[0] for row in events if ctx["capability_id"] in json.loads(row[1])["capability_ids"]
+    } == {"trigger", "decision"}
     binding = capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])
     assert len(binding["invocations"]) == 1
     assert binding["invocations"][0]["consumer_ref"] == receipt["consumer_ref"]
@@ -1109,9 +1120,9 @@ def test_dispatch_fallback_has_no_compiled_credit_and_keeps_infrastructure(
         "target": ctx["fixture"]["trigger"]["target"],
         "task_type": ctx["fixture"]["trigger"]["task_type"],
         "selected_capability_id": ctx["capability_id"],
-        "selected_capability_version_id": "capability-version:old"
-        if case == "version_changed"
-        else ctx["version_id"],
+        "selected_capability_version_id": (
+            "capability-version:old" if case == "version_changed" else ctx["version_id"]
+        ),
         "exploration": True,
         "exploration_mode": "thompson-hybrid",
     }

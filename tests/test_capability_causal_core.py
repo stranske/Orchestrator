@@ -4,11 +4,13 @@ import json
 import sqlite3
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from capability_dispatch_fixture import local_dispatch
 
 import capabilities
+import capability_targets
 import execution_profiles
 import feedback
 
@@ -77,6 +79,7 @@ def _episode(
         accepted=True,
         producer="selftest",
         attempt_id=attempt_id,
+        receipt_ref="fixture:consumed-output",
     )
     feedback.record_outcome(
         run_id,
@@ -171,6 +174,7 @@ def test_consumption_requires_an_exact_target_event(tmp_path, monkeypatch):
             target_run_id="work:missing",
             accepted=True,
             producer="selftest",
+            receipt_ref="fixture:consumed-output",
         )
 
 
@@ -500,13 +504,16 @@ def test_router_plan_selection_metadata_without_exercised_credit(tmp_path, monke
     # Exercise the real planning/spawn/writer seams; this selected capability has
     # no compiled binding and therefore cannot produce a consumption receipt.
     assignment["selected_profile_id"] = None
-    with local_dispatch(tmp_path) as worker:
+    with local_dispatch(tmp_path) as worker, patch.object(
+        capability_targets, "invoke_target"
+    ) as invoke:
         dispatch = dispatcher.plan_dispatch(assignment)
         assert dispatch["capability_ids"] == []
         assert dispatch["capability_version_ids"] == []
         dispatch["run_id"] = "selection-only"
         assert dispatcher._spawn(dispatch) == 1234
         assert worker.call_count == 1
+        invoke.assert_not_called()
     with feedback._conn() as conn:
         count = conn.execute(
             "SELECT COUNT(*) FROM influence_edges WHERE target_run_id=? AND influence_type='capability' AND accepted=1",
@@ -520,9 +527,12 @@ def test_router_plan_selection_metadata_without_exercised_credit(tmp_path, monke
     assert count == 0
     assert metadata["selected_capability_id"] == cap["capability_id"]
     assert metadata["selected_capability_version_id"] == cap["capability_version_id"]
-    assert metadata["capability_dispatch_result"]["reason"] == (
-        "target_binding_missing"
-    )
+    assert metadata["capability_dispatch_result"] == {
+        "invoked": False,
+        "accepted": False,
+        "reason": "target_binding_missing",
+    }
+    assert metadata["capability_fallback"] == "baseline"
     assert metadata["capability_decision"] == assignment["capability_decision"]
 
 
@@ -539,6 +549,7 @@ def test_pending_durability_is_not_a_failure_or_promotion_vote(tmp_path, monkeyp
         target_run_id=run_id,
         accepted=True,
         producer="selftest",
+        receipt_ref="fixture:consumed-output",
     )
     feedback.record_outcome(run_id, adjudicated_verdict="PASS", merged=True)
     result = capabilities.reconcile_causal_lifecycle(
@@ -576,3 +587,22 @@ def test_selection_pairs_without_receipt_cannot_bypass_brain_writer(tmp_path, mo
             ("selection:forwarded-pair",),
         ).fetchone()[0]
     assert count == 0
+
+
+@pytest.mark.parametrize(
+    "producer", ["orchestrator", "arbitrary", "capability_lifecycle:active", "triage_consumption"]
+)
+def test_receipt_requirement_cannot_be_disabled_by_producer_name(tmp_path, monkeypatch, producer):
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    feedback.record_run("receiptless", "owner/repo#23", "implement", "codex")
+    with pytest.raises(ValueError, match="requires a consumer receipt"):
+        feedback.record_capability_consumption(
+            capability_id="selection-credit",
+            capability_version_id="cv:selection",
+            source_run_id="producer",
+            target_run_id="receiptless",
+            accepted=True,
+            producer=producer,
+        )
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 0
