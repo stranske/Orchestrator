@@ -1958,6 +1958,121 @@ def test_helper_accounted_native_nonpass_becomes_typed_wait_without_acceptance(
     assert closer_pipeline.validate_stop(path)["valid"] is True
 
 
+def test_nonpass_callback_preserves_complete_evidence_without_unused_disposition_duplicate(
+    tmp_path, monkeypatch
+):
+    import test_closer_disposition
+
+    import closer_disposition
+    import dispatcher
+
+    # Large but legitimate retained NON_PASS rows, without private queue data.
+    prior = {
+        "criteria": [
+            {"result": "NON_PASS", "criterion": f"criterion-{index}", "reason": "gap " + "x" * 2100}
+            for index in range(6)
+        ]
+    }
+    current, packet, ref, prep, interpreted = test_closer_disposition.fixture(
+        tmp_path, native=True, dispositions=prior
+    )
+    current.update(state="MERGED", labels=[], draft=False, active_threads=0, mergeable="MERGEABLE")
+    target = current["target"]
+    prepared_snapshot = tmp_path / "prepared-snapshot.json"
+    prepared_snapshot.write_text(json.dumps(current))
+    prep.update(
+        snapshot=copy.deepcopy(current),
+        identity=target,
+        packet_ref=ref,
+        snapshot_ref={
+            "path": str(prepared_snapshot),
+            "sha256": hashlib.sha256(prepared_snapshot.read_bytes()).hexdigest(),
+        },
+    )
+    proposal = interpreted["proposal"]
+    proposal["decision"]["criteria"] = []
+    proposal["findings"] = [{"summary": "Original criterion proof remains missing"}]
+    proposal["resolutions"] = [
+        {
+            "finding_id": row["finding_id"],
+            "status": "unresolved_missing_evidence",
+            "next_guarded_action": "wait",
+            "reason": "Original proof remains unavailable; source-owned follow-up required",
+        }
+        for row in closer_disposition.pending_nonpass_findings(current, packet)
+    ]
+    original_proposal = copy.deepcopy(proposal)
+    actual = {"exit": 0, "run_id": "offline-completed-low", "profile_id": "offline-low"}
+    monkeypatch.setattr(adapter, "GitHub", lambda **_kwargs: FakeGitHub(current))
+    monkeypatch.setattr(
+        adapter,
+        "_pipeline_low_route",
+        lambda **_kwargs: (
+            {"agent": "codex", "profile_id": "offline-low", "pools": []},
+            "available",
+        ),
+    )
+    calls = []
+    monkeypatch.setattr(
+        dispatcher,
+        "offload",
+        lambda *_args, **_kwargs: calls.append(True) or {**actual, "output": json.dumps(proposal)},
+    )
+    integrations = []
+    real_integrate = closer_disposition.integrate_ordinary
+
+    def integrate(*args, **kwargs):
+        result = real_integrate(*args, **kwargs)
+        integrations.append(copy.deepcopy(result))
+        return result
+
+    monkeypatch.setattr(closer_disposition, "integrate_ordinary", integrate)
+    backend = closer(tmp_path, current)
+    backend.campaign_admission = lambda *_args: {"allowed": True}
+    path = adapter._pipeline_state_path(tmp_path / "state.json")
+
+    def pipeline_stub(_path, _targets, **callbacks):
+        context = {
+            "state_path": str(path),
+            "action_state_path": str(
+                path.parent / f"{path.stem}.actions" / f"{closer_pipeline._digest(target)}.json"
+            ),
+            "deadline": time.time() + 60,
+            "revision": prep["revision"],
+            "identity": target,
+            "prepare": prep,
+        }
+        value = callbacks["interpret"](target, context)
+        assert value["integration_status"] == "ordinary_nonpass"
+        assert "integration_disposition" not in value
+        assert value["proposal"] == original_proposal
+        assert value["raw_findings"] == integrations[0]["raw_findings"]
+        assert len(value["raw_findings"]) == len(proposal["resolutions"]) == 10
+        assert closer_pipeline.CALLBACK_RESULT_BYTES == 32768
+        assert closer_pipeline._bounded(value, limit=32768) == value
+        with pytest.raises(ValueError, match="pipeline JSON exceeds 32768 bytes"):
+            closer_pipeline._bounded(
+                {**value, "integration_disposition": integrations[0]["disposition"]}, limit=32768
+            )
+        result = callbacks["act"](target, {**context, "interpret": value})
+        assert len(integrations) == 2  # Native action independently rechecks all original proof.
+        assert integrations[1] == integrations[0]
+        assert result["reason"] == "validated_inner_wait"
+        proof = result["resource_evidence"]["inner_wait"]
+        assert closer_pipeline._valid_inner_wait(
+            path, target, prep["revision"], current, proof["reason"], result["next_trigger"], proof
+        )
+        retained = json.loads(Path(proof["ordinary_nonpass_ref"]["path"]).read_bytes())
+        assert retained["disposition"] == integrations[0]["disposition"]
+        assert retained["disposition"]["acceptance_authority"] is False
+        return {"targets": {target: result}}
+
+    monkeypatch.setattr(closer_pipeline, "run_pipeline", pipeline_stub)
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [target], backend, time.time() + 360)
+    assert calls == [True] and backend.gh.calls == []
+
+
 def test_native_nonpass_wait_survives_real_interpreter_restart(tmp_path, monkeypatch):
     current, prep, _interpreted, path, _backend, captured = ordinary_nonpass_wait_fixture(
         tmp_path, monkeypatch

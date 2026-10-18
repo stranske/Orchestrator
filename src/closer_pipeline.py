@@ -25,6 +25,9 @@ STAGES = ("prepare", "interpret", "exception", "act", "reconcile")
 CEILINGS = {"io": 8, "low": 4, "exception": 2}
 MAX_TARGETS = 1024
 CALLBACK_RESULT_BYTES = 32 * 1024
+PRELAUNCH_ROUTE_BUSY_ERROR = (
+    "RuntimeError: low provider route remained internally busy through deadline"
+)
 SEMANTIC_CACHE_PREFIX = "closer-evidence-semantic/v1:"
 INNER_WAIT_SCHEMA = "closer-inner-wait/v1"
 NONPASS_WAIT_SCHEMA = "closer-ordinary-nonpass-wait/v1"
@@ -730,6 +733,7 @@ def _audited_retained_wait(
     item: Mapping[str, Any],
     history: list[dict[str, Any]],
     historical_now: float,
+    source_run_id: str,
 ) -> bool:
     """Prove an original no-operation wait for read retry or origin preservation.
 
@@ -739,21 +743,54 @@ def _audited_retained_wait(
     results = item.get("results")
     recovered = previous.get("prior_invalid_stop_evidence")
     recovery = previous.get("recovered_invalid_stop")
+    summary = previous.get("receipt_summary")
+    finished_at = summary.get("finished_at") if isinstance(summary, Mapping) else None
+    # This new failed-read route requires an actual matching terminal receipt;
+    # the older deferred-resource paths retain their existing time fallback.
+    failed_read_terminal_proven = (
+        isinstance(summary, Mapping)
+        and summary.get("schema") == "closer-pipeline-receipt/v1"
+        and summary.get("run_id") == source_run_id
+        and summary.get("deadline") == previous.get("deadline")
+        and isinstance(finished_at, (int, float))
+        and not isinstance(finished_at, bool)
+        and math.isfinite(float(finished_at))
+        and float(previous["created"])
+        <= float(previous["deadline"])
+        <= float(finished_at)
+        <= historical_now
+    )
     anchor = (
         recovery.get("targets", {}).get(target)
         if isinstance(recovery, Mapping) and isinstance(recovery.get("targets"), Mapping)
         else None
     )
     if (
-        item.get("status") != "deferred"
-        or not (
+        not (
             (
-                item.get("stage") in {"prepare", "interpret", "exception"}
-                and item.get("deferred_reason")
-                in {"deadline_exhausted", "worker_capacity", "provider_failure", "github_capacity"}
+                item.get("status") == "deferred"
+                and (
+                    (
+                        item.get("stage") in {"prepare", "interpret", "exception"}
+                        and item.get("deferred_reason")
+                        in {
+                            "deadline_exhausted",
+                            "worker_capacity",
+                            "provider_failure",
+                            "github_capacity",
+                        }
+                    )
+                    or (
+                        item.get("stage") == "act"
+                        and item.get("deferred_reason") == "validated_inner_wait"
+                    )
+                )
             )
             or (
-                item.get("stage") == "act" and item.get("deferred_reason") == "validated_inner_wait"
+                item.get("status") == "failed"
+                and item.get("stage") == "interpret"
+                and item.get("error") == PRELAUNCH_ROUTE_BUSY_ERROR
+                and failed_read_terminal_proven
             )
         )
         or item.get("known_completed_action") is True
@@ -1082,7 +1119,7 @@ def _expired_invalid_round_recovery(
             return False, set(), set(), set(), set(), {}
         no_action = "act" not in results and item.get("known_completed_action") is not True
         retained_read_wait = not no_action and _audited_retained_wait(
-            path, previous, target, item, history, historical_now
+            path, previous, target, item, history, historical_now, run_id
         )
         if status == "completed":
             pass
@@ -1196,7 +1233,10 @@ def _expired_invalid_round_recovery(
         elif (
             status == "failed"
             and stage in {"prepare", "interpret", "exception"}
-            and no_action
+            and (
+                no_action
+                or (item.get("error") == PRELAUNCH_ROUTE_BUSY_ERROR and retained_read_wait)
+            )
             and item.get("error") != UNBOUND_UNCERTAIN_PROVIDER_ERROR
         ):
             expected.add(f"unresolved_pipeline_work:{target}:failed")
@@ -1764,6 +1804,7 @@ def _run_pipeline_impl(
                         item,
                         origin_history,
                         prior_stop_now(),
+                        previous_run_id,
                     )
                 }
                 if retained_read_targets:
