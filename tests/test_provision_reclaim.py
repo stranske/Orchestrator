@@ -60,12 +60,21 @@ def events():
 
 
 @pytest.mark.parametrize("lane", ["closer", "opener"])
-def test_a_clean_idle_holder_is_reclaimed(layout, lane, capsys):
+def test_a_clean_idle_holder_is_reclaimed(layout, lane, capsys, monkeypatch):
     canon, _ = layout
     branch = "pr-head" if lane == "closer" else OPENER_BRANCH
     if lane == "opener":
         git(canon, "branch", branch)
     holder = hold(layout, branch)
+    checked_holders = []
+
+    def prove_idle(candidate):
+        # Keep this offline positive-path fixture deterministic across restricted hosts.
+        # Probe parsing and fail-closed behavior are exercised by the tests below.
+        checked_holders.append(candidate)
+        return set()
+
+    monkeypatch.setattr(provision, "_live_holder_pids", prove_idle)
     try:
         wt = provision.provision(TARGET, lane)
     except subprocess.CalledProcessError as exc:
@@ -74,6 +83,7 @@ def test_a_clean_idle_holder_is_reclaimed(layout, lane, capsys):
     assert (wt / ".git").is_file()
     assert git(wt, "branch", "--show-current") == branch
     assert not holder.exists()
+    assert checked_holders == [holder]
     assert (
         f"provision: reclaimed stale worktree {holder} holding {branch}" in capsys.readouterr().out
     )
@@ -124,6 +134,10 @@ def test_c_live_holder_is_refused_naming_pid(layout):
         if isinstance(caught.value, provision.ProbeBlindError):
             assert "process listing cannot see this process" in str(caught.value)
             assert events()[0]["cause"] == "probe-blind"
+        elif "cannot check live processes" in str(caught.value):
+            # Restricted hosts may reject enumeration before the live PID is visible.
+            # Refusal is safe here; deterministic PID detection is covered below.
+            assert events()[0]["outcome"] == "failed"
         else:
             assert str(proc.pid) in str(caught.value)
         assert holder.exists()
@@ -221,6 +235,9 @@ def test_g_symlink_alias_in_argv_is_refused(layout, tmp_path, monkeypatch, lsof_
         elif isinstance(caught.value, provision.ProbeBlindError):
             assert "process listing cannot see this process" in str(caught.value)
             assert events()[0]["cause"] == "probe-blind"
+        elif "cannot check live processes" in str(caught.value):
+            # An unavailable process-list service must refuse rather than reclaim.
+            assert events()[0]["outcome"] == "failed"
         else:
             assert str(proc.pid) in str(caught.value)
             assert "live pid" in str(caught.value)

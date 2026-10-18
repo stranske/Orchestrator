@@ -1,0 +1,17 @@
+[
+  {
+    "mutation": "deadline",
+    "exit": 1,
+    "restored_sha256": "d4e3c14edf8bb0d66e4eef898ad2a3e3bd19fb81895d5a89c8d8a893e6205bd6"
+  },
+  {
+    "mutation": "timestamp",
+    "exit": 1,
+    "restored_sha256": "13aff43cab434115a35bd65faeb5ef608ccf6f3f71cd721e491741becf22b832"
+  },
+  {
+    "mutation": "timeout",
+    "exit": 1,
+    "restored_sha256": "93ee6e80abad72447eb8e22abb56ea747a5ed9d0d55747b73a8dad073fad017b"
+  }
+]
