@@ -1199,17 +1199,19 @@ def test_dispatch_fallback_has_no_compiled_credit_and_keeps_infrastructure(
             "AND capability_id=? AND accepted=1",
             (d["run_id"], ctx["capability_id"]),
         ).fetchone()[0]
-        infra_count = conn.execute(
-            "SELECT COUNT(*) FROM influence_edges WHERE target_run_id=? "
-            "AND capability_id=? AND accepted=1",
-            (d["run_id"], infra_id),
-        ).fetchone()[0]
+        accepted_edges = conn.execute(
+            "SELECT capability_id,capability_version_id FROM influence_edges "
+            "WHERE target_run_id=? AND influence_type='capability' AND accepted=1",
+            (d["run_id"],),
+        ).fetchall()
         metadata = json.loads(
             conn.execute(
                 "SELECT routing_metadata FROM runs WHERE run_id=?", (d["run_id"],)
             ).fetchone()[0]
         )
     assert selected_count == 0
-    assert infra_count == 1
+    assert len(accepted_edges) == 1
+    assert tuple(accepted_edges[0]) == (infra_id, infra["capability_version_id"])
     assert metadata["capability_fallback"] == "baseline"
+    assert metadata["capability_dispatch_result"]["accepted"] is False
     assert metadata["capability_dispatch_result"]["reason"] == reason

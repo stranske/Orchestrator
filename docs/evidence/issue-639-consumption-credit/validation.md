@@ -114,3 +114,30 @@ and `needs-human` label. Prior readiness evidence above is historical.
 ## Local validation of native7365e300 — 2026-10-18
 
 Preserved and inspected every new native change after direct implementation/push terminality. Both complete causal/lifecycle files now pass **74 tests** locally, including all nine additions; both edited native Python files pass Black unchanged. Independently collected5000 cases; the real verify `_floor_problems` rejects the old4991 expectation and accepts the reconciled5000 expectation. All ceilings unchanged; passed expectation is not a new full-suite PASS claim. The earlier source and flat-mirror hosted full verify PASS applies to b1955a60; current-head full CI remains required. This local receipt supersedes the preceding runner environment limitations without altering that historical evidence.
+
+## Fallback edge assertion follow-up — 2026-10-18
+
+Strengthened the existing fallback regression to inspect every accepted capability edge
+for the dispatched run. It now requires exactly one edge, checks the infrastructure ID
+and exact version together, and checks persisted `accepted=False` fallback metadata.
+The explicit zero selected-capability edge assertion remains. No test cases were added,
+so this change does not require a collection-floor adjustment.
+
+A dependency-free manual harness exercised real compilation, registration, planning,
+spawn, lifecycle refusal, and Brain writes using `local_dispatch`. All 14 scenarios
+passed the stronger assertions: seven existing refusal/failure cases, each with role
+activation working or raising. Python syntax parsing and `git diff --check` passed.
+This manual run does not claim a pytest result.
+
+Both required targeted pytest commands with `-m "not slow"` failed to start because
+pytest is absent. Black formatting and the required repository-wide Black check also
+failed to start because Black is absent. An isolated installation failed on PyPI DNS
+resolution, and no installed pytest/Black or cached wheels for either were found.
+The Python test edit remains uncommitted because the mandatory formatting gate cannot
+run. No task or acceptance checkbox was changed.
+
+GitHub connector readback confirmed PR #729 is open and ready for review at
+`2962d573766a25f287150b724bfe784e95f6a236`. Gate run `39105002976` passed Black,
+Ruff, mypy, and test-quality; its Python 3.12/3.13 test jobs were still running.
+CI run `39105002741` was also running. These hosted results apply to that committed
+head, not the uncommitted assertion changes above. CI Gate/keepalive remains unchecked.
