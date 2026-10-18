@@ -1997,6 +1997,62 @@ def test_mixed_native_uncertainty_and_readonly_failure_allow_only_safe_carry(tmp
     assert final_stop["reasons"] == ["unresolved_native_provider_outcome:a:agy-mixed-uncertain-77"]
 
 
+def test_failed_exception_retains_timeout_and_reprepares_without_action(tmp_path):
+    path = tmp_path / "pipeline.json"
+    at = time.time()
+    needs = ["missing per-test break-and-revert proof"]
+    failure = {
+        "status": "failed",
+        "actual": {"exit": 124, "run_id": "offload:codex:timeout-816"},
+        "validated": {"status": "wait", "reason": "strong_worker_unavailable"},
+        "result": {"status": "failed", "worker": {"exit": 124, "error": "timed out after 120s"}},
+    }
+    events = []
+
+    def exception(target, context):
+        events.append(("exception", target))
+        assert context["interpret"]["substantive_needs"] == needs
+        return (
+            failure
+            if len([event for event in events if event[0] == "exception"]) == 1
+            else {"reviewed": True}
+        )
+
+    cb = callbacks(
+        interpret=lambda *_: {"substantive_needs": needs},
+        exception=exception,
+        act=lambda target, context: events.append(("act", target))
+        or {"status": "completed", "target_complete": True},
+    )
+    original_prepare = cb["prepare"]
+    cb["prepare"] = lambda target, context: events.append(("prepare", target)) or original_prepare(
+        target, context
+    )
+    first = run(path, ["owner/repo#816"], cb, seconds=10, now=lambda: at)
+    row = first["targets"]["owner/repo#816"]
+    assert row["status"] == "failed" and row["stage"] == "exception"
+    assert row["error"] == "exception_worker_failed"
+    assert row["metrics"]["errors"] == 1
+    assert row["results"]["exception"] == failure
+    assert row["results"]["interpret"]["substantive_needs"] == needs
+    assert "act" not in row["results"]
+    assert events == [("prepare", "owner/repo#816"), ("exception", "owner/repo#816")]
+    stop = validate_stop(path, now=lambda: at)
+    assert stop["valid"] is False
+    assert stop["reasons"] == ["unresolved_pipeline_work:owner/repo#816:failed"]
+
+    second = run(path, ["owner/repo#816"], cb, seconds=10, now=lambda: at + 20)
+    assert second["targets"]["owner/repo#816"]["status"] == "completed"
+    assert events[2:] == [
+        ("prepare", "owner/repo#816"),
+        ("exception", "owner/repo#816"),
+        ("act", "owner/repo#816"),
+    ]
+    latest = next(iter(closer_pipeline._load(path)["runs"].values()))
+    assert latest["prior_stop"]["valid"] is False
+    assert latest["prior_stop"]["reasons"] == stop["reasons"]
+
+
 def test_exception_worker_capacity_defers_before_action(tmp_path):
     path = tmp_path / "state.json"
     calls = []
@@ -2904,3 +2960,267 @@ def test_expired_action_deadline_requires_exact_no_result_boundary(tmp_path, mut
     assert not closer_pipeline._expired_invalid_round_recovery(
         stop, prior, path, "interrupted", at
     )[0]
+
+
+def compact_paused_wait_fixture(path):
+    target = "owner/repo#paused"
+    revision, head = "rev-paused", "b" * 40
+    reason = "current item-scoped hold: ['agents:paused']"
+    trigger = "hold owner supplies scoped disposition"
+    inner_path = path.parent / f"{path.stem}.actions" / f"{closer_pipeline._digest(target)}.json"
+    receipt = closer_queue.run_round(
+        inner_path,
+        [target],
+        lambda _target: {
+            "target": target,
+            "revision": revision,
+            "action": "wait",
+            "eligible": False,
+            "requires_coordinator": False,
+            "reason": reason,
+            "next_trigger": trigger,
+            "evidence": {"head": head, "labels": ["agents:paused"], "sources": []},
+        },
+        lambda *_args: pytest.fail("paused wait cannot execute"),
+        deadline=time.time() + 30,
+        max_workers=1,
+        max_passes=1,
+    )
+    proof = {
+        "schema": closer_pipeline.INNER_WAIT_SCHEMA,
+        "target": target,
+        "revision": revision,
+        "head": head,
+        "reason": reason,
+        "next_trigger": trigger,
+        "inner_path": str(inner_path),
+        "receipt_sha256": closer_pipeline._digest(receipt),
+    }
+    resource = {"inner_wait": proof}
+    act = {
+        "status": "deferred",
+        "reason": "validated_inner_wait",
+        "next_trigger": trigger,
+        "resource_evidence": resource,
+        "queue_receipt": receipt,
+    }
+    at = time.time() + 10
+    interrupted_round_fixture(path, at)
+    state = closer_pipeline._load(path)
+    old = state["runs"]["interrupted"]
+    old["carry_targets"] = [target]
+    item = {
+        "status": "deferred",
+        "stage": "act",
+        "revision": revision,
+        "identity": "paused-id",
+        "work_key": "paused-key",
+        "carried": True,
+        "recovery_excluded": True,
+        "deferred_reason": "validated_inner_wait",
+        "deferred_next_trigger": trigger,
+        "resource_evidence": resource,
+        "metrics": {"waits": 0, "errors": 0},
+        "results": {
+            "prepare": {"snapshot": {"target": target, "revision": revision, "head": head}},
+            "act": act,
+        },
+    }
+    old["targets"][target] = item
+    closer_pipeline._save(path, state)
+    prior = validate_stop(path, old["assignment"], now=lambda: at)
+    audit = closer_pipeline._expired_invalid_round_recovery(prior, old, path, "interrupted", at)[-1]
+    assert audit
+    old["invalid_stop_history"] = [audit["history_entry"]]
+    old["targets"][target] = closer_pipeline._carry_item(item)
+    state["carry"][target] = closer_pipeline._bounded(old["targets"][target])
+    closer_pipeline._save(path, state)
+    return at, target, inner_path
+
+
+def test_compact_paused_wait_recovery_preserves_exclusion_and_audit_across_cadences(tmp_path):
+    path = tmp_path / "pipeline.json"
+    at, target, _inner = compact_paused_wait_fixture(path)
+    before = closer_pipeline._load(path)
+    original_audit = before["runs"]["interrupted"]["invalid_stop_history"][0]
+    compact_hash = closer_pipeline._digest(before["runs"]["interrupted"]["targets"][target])
+    calls = []
+    cb = callbacks(
+        act=lambda name, _ctx: calls.append(name)
+        or {"status": "completed", "target_complete": True}
+    )
+    for index in range(3):
+        result = run(path, ["owner/repo#fresh"], cb, seconds=10, now=lambda: at + index * 20)
+        assert result.get("status") != "blocked"
+        state = closer_pipeline._load(path)
+        latest = next(iter(state["runs"].values()))
+        paused = latest["targets"][target]
+        assert paused["status"] == "deferred"
+        assert paused["recovery_excluded"] and paused["carried"]
+        assert paused["results"]["prepare"]["snapshot"]["wait_proof_only"]
+        assert latest["invalid_stop_history"][0] == original_audit
+        assert latest["prior_invalid_stop_evidence"]["valid"] is False
+        assert latest["recovered_invalid_stop"]["targets"][target]["revision"] == "rev-paused"
+        if index == 0:
+            assert (
+                latest["recovered_invalid_stop"]["targets"][target]["previous_item_sha256"]
+                == compact_hash
+            )
+    assert target not in calls
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "identity",
+        "revision",
+        "work_key",
+        "trigger",
+        "resource",
+        "receipt",
+        "conflicting_audit",
+        "operation",
+        "pause_removed",
+        "missing_native",
+    ],
+)
+def test_compact_wait_recovery_rejects_unbound_or_changed_proof(tmp_path, mutation):
+    path = tmp_path / "pipeline.json"
+    at, target, inner = compact_paused_wait_fixture(path)
+    state = closer_pipeline._load(path)
+    old = state["runs"]["interrupted"]
+    item = old["targets"][target]
+    if mutation in {"identity", "revision", "work_key"}:
+        item[mutation] = "changed"
+    elif mutation == "trigger":
+        item["deferred_next_trigger"] = "different"
+    elif mutation == "resource":
+        item["resource_evidence"]["inner_wait"]["head"] = "c" * 40
+    elif mutation == "receipt":
+        old["invalid_stop_history"][0]["targets"][target]["act_result"]["queue_receipt"][
+            "stop_valid"
+        ] = False
+    elif mutation == "conflicting_audit":
+        extra = closer_pipeline._bounded(old["invalid_stop_history"][0])
+        extra["targets"][target]["act_result"]["conflicting"] = True
+        old["invalid_stop_history"].append(extra)
+    elif mutation == "missing_native":
+        inner.unlink()
+    else:
+        native = closer_queue._read_state(inner)
+        if mutation == "operation":
+            native["items"][target]["operation"] = {
+                "status": "uncertain",
+                "operation_id": "unknown",
+            }
+        else:
+            native["items"][target]["evidence"]["labels"] = []
+        inner.write_text(json.dumps(native))
+    closer_pipeline._save(path, state)
+    prior = validate_stop(path, old["assignment"], now=lambda: at)
+    assert not closer_pipeline._expired_invalid_round_recovery(prior, old, path, "interrupted", at)[
+        0
+    ]
+
+
+def test_compact_wait_reassignment_requires_fresh_prepare(tmp_path):
+    path = tmp_path / "pipeline.json"
+    at, target, _inner = compact_paused_wait_fixture(path)
+    events = []
+    cb = callbacks(
+        act=lambda name, ctx: events.append(("act", ctx["revision"]))
+        or {"status": "completed", "target_complete": True}
+    )
+    cb["prepare"] = lambda name, ctx: events.append(("prepare", name)) or {
+        "revision": "new-head-revision",
+        "identity": name,
+    }
+    result = run(path, [target], cb, seconds=10, now=lambda: at)
+    assert result.get("status") != "blocked"
+    assert events == [("prepare", target), ("act", "new-head-revision")]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        None,
+        "arbitrary_reason",
+        "provider_uncertainty",
+        "empty_reason",
+        "not_unknown",
+        "explicit_trigger",
+    ],
+)
+def test_legacy_unknown_reconciliation_metadata_is_reconcile_only(tmp_path, mutation):
+    path = tmp_path / "pipeline.json"
+    at = time.time()
+    assignment, _removed = interrupted_round_fixture(path, at)
+    state = closer_pipeline._load(path)
+    old = state["runs"]["interrupted"]
+    target = "owner/repo#uncertain-act-0"
+    item = old["targets"][target]
+    item["stage"] = "reconcile"
+    item.pop("deferred_next_trigger")
+    item["results"]["reconcile"] = {
+        "outcome": "unknown",
+        "reason": "legacy uncertain operation lacks external-run or live-owner proof; reconcile it in the original closer queue",
+    }
+    if mutation in {"arbitrary_reason", "empty_reason"}:
+        item["results"]["reconcile"]["reason"] = (
+            "" if mutation == "empty_reason" else "unbound unknown"
+        )
+    elif mutation == "provider_uncertainty":
+        item["provider_outcome_uncertain"] = {"run_id": "unresolved"}
+    elif mutation == "not_unknown":
+        item["results"]["reconcile"]["outcome"] = "confirmed_not_started"
+    elif mutation == "explicit_trigger":
+        item["deferred_next_trigger"] = "other"
+    closer_pipeline._save(path, state)
+    prior = validate_stop(path, old["assignment"], now=lambda: at)
+    admitted = closer_pipeline._expired_invalid_round_recovery(prior, old, path, "interrupted", at)[
+        0
+    ]
+    assert admitted is (mutation is None)
+    if mutation is not None:
+        return
+    calls = []
+    for offset in (0, 20):
+        result = run(
+            path,
+            [target],
+            callbacks(act=lambda *_args: pytest.fail("uncertain operation cannot retry")),
+            seconds=10,
+            now=lambda: at + offset,
+            reconcile=lambda name, ctx: calls.append(name) or {"outcome": "unknown"},
+        )
+        assert result.get("status") != "blocked"
+        latest = next(iter(closer_pipeline._load(path)["runs"].values()))
+        assert latest["targets"][target]["deferred_next_trigger"] == "reconcile_before_retry"
+    assert calls == [target, target]
+
+
+def test_restored_excluded_wait_survives_consecutive_valid_stop_cadences(tmp_path):
+    path = tmp_path / "pipeline.json"
+    at, target, _inner = compact_paused_wait_fixture(path)
+    state = closer_pipeline._load(path)
+    old = state["runs"]["interrupted"]
+    for name, item in old["targets"].items():
+        if name != target:
+            item["status"] = "completed"
+    closer_pipeline._save(path, state)
+    cb = callbacks(
+        act=lambda name, ctx: (
+            {"status": "completed", "target_complete": True}
+            if name != target
+            else pytest.fail("paused item executed")
+        )
+    )
+    for index in range(4):
+        result = run(path, ["owner/repo#fresh"], cb, seconds=10, now=lambda: at + index * 20)
+        assert result.get("status") != "blocked"
+        stop = validate_stop(path, ["owner/repo#fresh"], now=lambda: at + index * 20)
+        assert stop["valid"], stop
+        latest = next(iter(closer_pipeline._load(path)["runs"].values()))
+        assert latest["targets"][target]["recovery_excluded"]
+        assert latest["targets"][target]["results"]["act"]
+        assert len(latest["invalid_stop_history"]) == 2
