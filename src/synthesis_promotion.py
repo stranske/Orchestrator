@@ -504,6 +504,11 @@ def _safe_command(argv: list[str]) -> bool:
         return False
     if argv[:3] == ["git", "diff", "--check"]:
         return True
+    if argv[:2] == ["node", "--test"]:
+        return len(argv) > 2 and all(
+            re.fullmatch(r"tests/[\w./-]+\.test\.js", path) and ".." not in Path(path).parts
+            for path in argv[2:]
+        )
     if argv[0] == "pytest":
         return True
     if argv[:3] == ["python3", "-m", "pytest"]:
@@ -912,7 +917,9 @@ def deliver_producer_winner(exp_dir, meta, evaluation, *, verify_fn=None, gh_fn=
             raise RuntimeError((result.stderr or result.stdout)[-500:])
         return result.stdout.strip()
 
-    command = producer.named_test((root / "spec.md").read_text())
+    command = (meta.get("test_stage") or {}).get("command") or producer.named_test(
+        (root / "spec.md").read_text()
+    )
     members = {m["member_id"]: m for m in exp_abcd.experiment_members(meta)}
     verified = []
     for member_id, score in evaluation.get("ranking") or []:
@@ -922,6 +929,8 @@ def deliver_producer_winner(exp_dir, meta, evaluation, *, verify_fn=None, gh_fn=
         wt = exp_abcd.exp_worktree(
             repo, root.name, member["agent"], None if member["legacy"] else member_id
         )
+        if not producer.frozen_tests_intact(meta, wt):
+            continue
         try:
             head = git(["rev-parse", "HEAD"], wt)
             status_before = git(["status", "--porcelain"], wt)

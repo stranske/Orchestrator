@@ -129,6 +129,10 @@ def _is_held(path: Path, ttl: int, now: float) -> bool:
     """
     meta = _read_meta(path)
     if meta is not None:
+        # A producer reserves its subject across asynchronous child boundaries.
+        # Only explicit terminal cleanup releases this; a dead PID is insufficient.
+        if meta.get("agent") == "research" and meta.get("experiment_reservation"):
+            return True
         pids = _meta_pids(meta)
         if pids:
             return any(_pid_alive(pid) for pid in pids)
@@ -166,6 +170,8 @@ def claim(target: str, agent: str, *, ttl: int = CLAIM_TTL_DEFAULT, pid: int | N
 
     meta = _read_meta(path)
     if meta is not None and meta.get("agent") == agent:
+        if meta.get("experiment_reservation"):
+            return False
         # Same-agent re-claim is CRASH RECOVERY only (item 13): if a stamped pid other than ours
         # is still ALIVE, a concurrent same-agent planner already owns this target — returning
         # True here was the audited double-win race (two planners choosing the same deterministic

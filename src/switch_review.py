@@ -2055,6 +2055,12 @@ def experiment_producer_line():
         else experiment_producer.COVERAGE_DAYS
     )
     reasons = ", ".join(f"{k}={v}" for k, v in sorted(m["skips"].items())) or "none"
+    classes = m.get("no_named_test_classes", {})
+    unnamed = m["skips"].get("no_named_test", 0)
+    test_counts = ", ".join(
+        f"{key}={classes.get(key, 0)}" for key in ("file-only", "ci-only", "none")
+    )
+    test_counts += f", unclassified={max(0, unnamed - sum(classes.values()))}"
     unknown = "; UNKNOWN " + ", ".join(m["unknowns"]) if m["unknowns"] else ""
     if verdict == "pending" and state.get("pending_since"):
         verdict += f" since {state['pending_since']}, resolves fail on {state.get('resolves_on')}"
@@ -2066,6 +2072,7 @@ def experiment_producer_line():
         f"post_window_launches={m.get('post_window_launches', 0)}, "
         f"cells_fresh {m['cells_fresh']}/{m['cells_total']}, "
         f"skipped {sum(m['skips'].values())} ({reasons}){unknown}; "
+        f"no_named_test={unnamed} ({test_counts}), derived_tests={m.get('derived_tests', 0)}; "
         f"trial_end {end}, verdict {verdict}, days_left {days_left}; "
         f"winner merge grace {experiment_producer.WINNER_MERGE_GRACE_DAYS}d"
     )

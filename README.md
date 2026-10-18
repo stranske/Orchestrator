@@ -21,6 +21,14 @@ The existing codemod/range rails accept a versioned add-only gitignore campaign:
 per-repo work orders, exact-target previews, guarded one-off dispatch, and attributed outcome
 reporting. See [the campaign contract](docs/CODEMOD_CAMPAIGN.md).
 
+The experiment producer can derive a frozen test from an issue's explicit acceptance
+criteria before launching comparison implementations. The tests-only worker must finish
+successfully and demonstrate assertion RED on unchanged production; every arm then uses
+the same immutable test commit. Existing file-only Python gates are accepted directly;
+JavaScript files require the repository's existing `node --test` runner. The producer
+line splits unnamed-test skips and reports derived tests. Local checks prove the rail;
+the October 25 coverage target and six merged winners remain later live observations.
+
 ## How it runs (execution topology)
 
 ```

@@ -19,6 +19,7 @@ ORIGINAL_GH_CALL = producer.gh_call
 
 @pytest.fixture(autouse=True)
 def isolate(tmp_path, monkeypatch):
+    monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("ORCH_EXPERIMENT_PRODUCER", "1")
     monkeypatch.setenv("ORCH_CAPABILITIES_PATH", str(tmp_path / "capabilities.json"))
@@ -349,7 +350,7 @@ def test_report_zero_values_are_present(monkeypatch):
     )
     assert (
         switch_review.experiment_producer_line()
-        == "  experiment producer: launched 0, evaluated 0, winner_prs 0, winner_merged 0, post_window_launches=0, cells_fresh 0/0, skipped 0 (none); trial_end not_started, verdict pending, days_left 21; winner merge grace 7d"
+        == "  experiment producer: launched 0, evaluated 0, winner_prs 0, winner_merged 0, post_window_launches=0, cells_fresh 0/0, skipped 0 (none); no_named_test=0 (file-only=0, ci-only=0, none=0, unclassified=0), derived_tests=0; trial_end not_started, verdict pending, days_left 21; winner merge grace 7d"
     )
 
 
@@ -740,12 +741,27 @@ def test_shed_agent_does_not_latch_firing_launch(tmp_path, monkeypatch, capsys, 
     assert producer.read_state()["launched_today"] == 1
 
 
-def test_no_named_test_is_skipped_before_admission(monkeypatch):
+def test_no_named_test_is_skipped_before_admission(monkeypatch, tmp_path):
     assert producer.named_test("`pytest -q`") is None
+    assert producer.named_test("tests/test_x.py") == "python3 -m pytest -q tests/test_x.py"
+    assert producer.named_test("tests/foo.test.js") == "node --test tests/foo.test.js"
+    assert synthesis_promotion._safe_command(["node", "--test", "tests/foo.test.js"])
+    assert not synthesis_promotion._safe_command(["node", "--eval", "process.exit(0)"])
+    assert not synthesis_promotion._safe_command(["node", "--test", "tests/../foo.test.js"])
+    assert (
+        producer.test_admission(
+            "## Acceptance Criteria\n- Tests pass in CI for the requested behavior."
+        )
+        == "ci-only"
+    )
+    assert (
+        producer.test_admission("## Acceptance Criteria\n- The public value returns 2.") == "none"
+    )
+    _derived_producer_roundtrip(tmp_path, monkeypatch)
     cap, kwargs = plan_fixture(monkeypatch)
     plan = producer.build_plan([{"target": "a/b#3", "body": "Implement a feature"}], cap, **kwargs)
     assert plan["planned"] == []
-    assert {"target": "a/b#3", "reason": "no_named_test"} in plan["skipped"]
+    assert {"target": "a/b#3", "reason": "no_named_test", "test_class": "none"} in plan["skipped"]
 
 
 @pytest.mark.parametrize("status", ["merged", "no_winner", "discarded", "expired"])
@@ -1268,3 +1284,189 @@ def test_failed_trial_receipt_survives_switch_off_and_drain(monkeypatch, capsys)
         "producer: trial verdict fail (unresolved_unknown); launches stopped — owner decision"
         in capsys.readouterr().err
     )
+
+
+def _derived_producer_roundtrip(tmp_path, monkeypatch):
+    """Real B/F repositories exercise the full asynchronous admission-to-collection seam."""
+    import os
+
+    import claims
+
+    canon = tmp_path / "canon"
+    canon.mkdir()
+
+    def git(*args, cwd=canon):
+        return subprocess.check_output(["git", "-C", str(cwd), *args], text=True).strip()
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "test@example.invalid")
+    git("config", "user.name", "Test")
+    (canon / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
+    (canon / "value.py").write_text("def value():\n    return 1\n")
+    git("add", ".")
+    git("commit", "-qm", "B")
+    base = git("rev-parse", "HEAD")
+    git("update-ref", "refs/remotes/origin/main", base)
+    spec = "## Acceptance Criteria\n- The public value function returns 2.\n"
+    spec_file = tmp_path / "spec.md"
+    spec_file.write_text(spec)
+    root = tmp_path / "exp"
+    monkeypatch.setattr(exp_abcd, "exp_paths", lambda _: root)
+    monkeypatch.setattr(exp_abcd.provision, "ensure_canonical", lambda _: canon)
+    monkeypatch.setattr(exp_abcd.provision, "base_branch", lambda _: "main")
+    original_run = exp_abcd.provision._run
+
+    def local_run(argv, **kwargs):
+        if "fetch" in argv:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return original_run(argv, **kwargs)
+
+    monkeypatch.setattr(exp_abcd.provision, "_run", local_run)
+    monkeypatch.setattr(exp_abcd, "exp_worktree", lambda r, e, a, m=None: tmp_path / (m or a))
+    monkeypatch.setattr(exp_abcd.feedback, "record_run", lambda *a, **k: None)
+    monkeypatch.setattr(producer, "stage_launch_allowed", lambda meta: None)
+    spawned = []
+
+    def spawn(agent, mode, prompt, wt, log, **kwargs):
+        spawned.append((kwargs["run_id"], git("rev-parse", "HEAD", cwd=wt), prompt))
+        meta = json.loads((root / "meta.json").read_text())
+        if kwargs["task_type"] == "testgen":
+            path = wt / meta["test_stage"]["path"]
+            path.parent.mkdir(exist_ok=True)
+            path.write_text(
+                'from value import value\ndef test_requested_value():\n    """The public value function returns 2."""\n    assert value() == 2\n'
+            )
+            git("add", ".", cwd=wt)
+            git("commit", "-qm", "F tests only", cwd=wt)
+        else:
+            assert producer.frozen_tests_intact(meta, wt)
+            (wt / "value.py").write_text("def value():\n    return 2\n")
+            git("add", ".", cwd=wt)
+            git("commit", "-qm", "implementation", cwd=wt)
+        log.write_text("done")
+        (root / "done").mkdir(exist_ok=True)
+        (root / "done" / (kwargs["run_id"] + ".json")).write_text(
+            json.dumps({"run_id": kwargs["run_id"], "rc_of": "agent", "rc": 0})
+        )
+        return os.getpid()
+
+    monkeypatch.setattr(exp_abcd, "_spawn", spawn)
+    arms = [{"arm_id": "A", "agents": ["codex"]}, {"arm_id": "B", "agents": ["claude"]}]
+    metadata = dict(
+        producer="experiment_producer",
+        subject="a/b#73",
+        launched_ts=time.time(),
+        spec_provenance="issue_body",
+    )
+    assert claims.claim("a/b#73", "research")
+    assert claims.update_metadata("a/b#73", "research", experiment_reservation="exp")
+    prepared = exp_abcd.prepare_arms("a/b", str(spec_file), "exp", arms, producer_metadata=metadata)
+    assert len(spawned) == 1 and prepared["test_stage"]["phase"] == "deriving"
+    meta = json.loads((root / "meta.json").read_text())
+    # A missing or wrong terminal marker never starts comparisons, even with a changed head.
+    marker = root / "done" / (meta["test_stage"]["run_id"] + ".json")
+    terminal = marker.read_bytes()
+    marker.write_text(json.dumps({"run_id": "wrong", "rc_of": "agent", "rc": 0}))
+
+    def advance():
+        return producer.advance_test_stage(
+            meta, root, launch_fn=exp_abcd._launch_members, spawn_fn=spawn
+        )
+
+    assert advance()["status"] == "derivation_terminal_unknown"
+    assert len(spawned) == 1
+    marker.write_bytes(terminal)
+    assert advance()["status"] == "comparison_running"
+    frozen = meta["comparison_base_sha"]
+    assert frozen != base and [x[1] for x in spawned] == [base, frozen, frozen]
+    assert meta["base_sha"] == base and len(meta["members"]) == 2
+    assert json.loads((root / "derived-red-proof.json").read_text())["ok"]
+    assert producer.read_state()["derived_tests"] == 1
+    import sys
+
+    import local_verify
+
+    first = exp_abcd.experiment_members(meta)[0]
+    winner_wt = exp_abcd.exp_worktree("a/b", "exp", first["agent"], first["member_id"])
+    gate_command = meta["test_stage"]["command"].replace("python3", sys.executable, 1)
+    verification = local_verify.verify(
+        winner_wt,
+        base_ref=base,
+        test_cmd=gate_command,
+        test_paths=[meta["test_stage"]["path"]],
+        timeout=30,
+    )
+    assert verification["ok"], verification
+    assert (
+        meta["test_stage"]["path"]
+        in git("diff", "--name-only", base, "HEAD", cwd=winner_wt).splitlines()
+    )
+    assert advance() is None and len(spawned) == 3
+    # Moving main cannot change collection or resumed member seeds.
+    git("commit", "--allow-empty", "-qm", "main moved")
+    git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"))
+    exp_abcd.collect("a/b", "exp")
+    patches = list(root.glob("diff-*.patch"))
+    assert patches and all(
+        "value.py" in p.read_text() and "test_experiment_" not in p.read_text() for p in patches
+    )
+    # A worker may add tests but cannot replace or delete the shared judging test.
+    first = exp_abcd.experiment_members(meta)[0]
+    wt = exp_abcd.exp_worktree("a/b", "exp", first["agent"], first["member_id"])
+    gate = wt / meta["test_stage"]["path"]
+    original = gate.read_bytes()
+    gate.write_text("def test_hollow():\n    assert True\n")
+    assert not producer.frozen_tests_intact(meta, wt)
+    with pytest.raises(ValueError, match="comparison_changed_frozen_tests"):
+        exp_abcd.collect("a/b", "exp")
+    gate.write_bytes(original)
+    # Same experiment replay reuses receipts, rather than deriving or spawning again.
+    exp_abcd.prepare_arms("a/b", str(spec_file), "exp", arms, producer_metadata=metadata)
+    assert len(spawned) == 3
+    # Rejected derivations exercise real Git artifacts and real pytest outcomes.
+    import copy
+
+    for case in ("production", "symlink", "constant", "green", "dependency", "runtime"):
+        bad = tmp_path / ("bad-" + case)
+        git("worktree", "add", "--detach", str(bad), base)
+        path = bad / meta["test_stage"]["path"]
+        path.parent.mkdir(exist_ok=True)
+        if case == "symlink":
+            path.symlink_to("../value.py")
+        else:
+            source = 'from value import value\ndef test_value():\n    """The public value must be 2."""\n    assert value() == 2\n'
+            if case == "production":
+                (bad / "value.py").write_text("def value():\n    return 2\n")
+            elif case == "constant":
+                source = source.replace("assert value() == 2", "assert False")
+            elif case == "green":
+                source = source.replace("== 2", "== 1")
+            elif case == "dependency":
+                source = source.replace(
+                    "from value import value", "from unavailable_dependency_731 import value"
+                )
+            elif case == "runtime":
+                source = source.replace(
+                    "    assert", '    raise RuntimeError("not a behavioral assertion")\n    assert'
+                )
+            path.write_text(source)
+        git("add", ".", cwd=bad)
+        git("commit", "-qm", case, cwd=bad)
+        bad_meta = copy.deepcopy(meta)
+        bad_meta["test_stage"] = {
+            k: v
+            for k, v in meta["test_stage"].items()
+            if k not in {"frozen_sha", "test_blob", "command"}
+        }
+        bad_meta["test_stage"].update(phase="deriving", worktree=str(bad))
+        with pytest.raises(ValueError):
+            producer.freeze_derived_tests(bad_meta, tmp_path / ("proof-" + case))
+    spec_file.write_text(spec + "changed")
+    with pytest.raises(ValueError, match="changed frozen issue"):
+        exp_abcd.prepare_arms("a/b", str(spec_file), "exp", arms, producer_metadata=metadata)
+    # The persistent reservation spans dead-PID gaps, including same-agent planners.
+    claims.update_metadata("a/b#73", "research", pid=99999999, pids=[])
+    assert claims.holder("a/b#73")["experiment_reservation"] == "exp"
+    assert not claims.claim("a/b#73", "research")
+    producer.release_lock(root, "a/b#73", {}, gh_fn=lambda _: {"stdout": ""})
+    assert claims.holder("a/b#73") is None

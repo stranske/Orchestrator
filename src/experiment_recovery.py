@@ -135,6 +135,8 @@ def arm_diff(
     base: str = DEFAULT_BASE,
     *,
     member_id: str | None = None,
+    base_ref: str | None = None,
+    frozen_test: dict | None = None,
 ) -> str | None:
     """The arm's real delta, anchored at its merge-base. None means the branch is gone.
 
@@ -150,7 +152,11 @@ def arm_diff(
     branch = exp_abcd.exp_branch(exp_id, agent, member_id)
     if not _git(store, "rev-parse", "--verify", "--quiet", branch).strip():
         return None
-    base_ref = f"origin/{base}"
+    if frozen_test and frozen_test.get("test_source") == "derived":
+        actual = _git(store, "rev-parse", branch + ":" + frozen_test["path"]).strip()
+        if actual != frozen_test.get("test_blob"):
+            raise ValueError("recovered_comparison_changed_frozen_tests")
+    base_ref = base_ref or f"origin/{base}"
     merge_base = _git(store, "merge-base", branch, base_ref).strip() or base_ref
     return _git(store, "--no-pager", "diff", merge_base, branch)
 

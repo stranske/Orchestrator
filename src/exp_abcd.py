@@ -766,7 +766,42 @@ def research_v2_arms(agents: list[str], profiles=None) -> list[dict]:
     return arms
 
 
-def prepare_arms(
+def prepare_arms(repo, spec_file, exp_id, arms, task_type="implement", *, producer_metadata=None):
+    if producer_metadata:
+        import experiment_producer as producer
+
+        if producer_metadata.get("producer") != "experiment_producer":
+            raise ValueError("unknown producer")
+        root = exp_paths(exp_id)
+        with producer.experiment_lock(root):
+            if (root / "meta.json").exists():
+                meta = json.loads((root / "meta.json").read_text())
+                normalized, _ = _normalize_arm_members(arms)
+                if (
+                    meta.get("repo") != repo
+                    or meta.get("task_type") != task_type
+                    or meta.get("arms") != normalized
+                    or meta.get("subject") != producer_metadata.get("subject")
+                ):
+                    raise ValueError("producer replay changed experiment identity")
+                if (
+                    meta.get("spec_sha256")
+                    != hashlib.sha256(Path(spec_file).read_bytes()).hexdigest()
+                ):
+                    raise ValueError("producer replay changed frozen issue specification")
+                return {
+                    "exp_id": exp_id,
+                    "base_sha": meta["base_sha"],
+                    "launched": list(meta.get("member_launches", {}).values()),
+                    "test_stage": meta.get("test_stage"),
+                }
+            return _prepare_arms(
+                repo, spec_file, exp_id, arms, task_type, producer_metadata=producer_metadata
+            )
+    return _prepare_arms(repo, spec_file, exp_id, arms, task_type)
+
+
+def _prepare_arms(
     repo: str,
     spec_file: str,
     exp_id: str,
@@ -807,6 +842,36 @@ def prepare_arms(
         meta["spec_sha256"] = hashlib.sha256(spec.encode()).hexdigest()
     (edir / "meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True))
 
+    if producer_metadata:
+        import experiment_producer as producer
+
+        command = producer.named_test(spec)
+        if command and command.startswith("node --test "):
+            try:
+                script = json.loads((canon / "package.json").read_text())["scripts"]["test"]
+            except (OSError, ValueError, KeyError, TypeError):
+                raise ValueError(
+                    "javascript test file requires the repository's existing node --test script"
+                ) from None
+            if not script.startswith("node --test"):
+                raise ValueError("unsupported repository JavaScript test runner")
+        if not command:
+            return producer.start_test_derivation(meta, edir, canon, spawn_fn=_spawn)
+    launched = _launch_members(meta, edir, canon, spec, seed=base_sha or f"origin/{base}")
+    return {
+        "exp_id": exp_id,
+        "repo": repo,
+        "base": base,
+        "base_sha": base_sha or None,
+        "launched": launched,
+        "arms": normalized_arms,
+    }
+
+
+def _launch_members(meta, edir, canon, spec, *, seed):
+    repo, exp_id = meta["repo"], meta["exp_id"]
+    normalized_arms, members = meta["arms"], meta["members"]
+    task_type = meta["task_type"]
     launched = []
     for member in members:
         agent = member["agent"]
@@ -817,6 +882,22 @@ def prepare_arms(
         if member.get("role") == "review":
             launched.append({**member, "state": "review-pending"})
             continue
+        if meta.get("producer") == "experiment_producer":
+            prior = meta.setdefault("member_launches", {}).get(member_id)
+            if prior:
+                if prior.get("state") == "launch-unknown":
+                    try:
+                        done = json.loads((edir / "done" / (prior["run_id"] + ".json")).read_text())
+                        if (
+                            done.get("run_id") == prior["run_id"]
+                            and done.get("rc_of") == "agent"
+                            and isinstance(done.get("rc"), int)
+                        ):
+                            prior.update(state="completed", completion_rc=done["rc"])
+                    except (OSError, ValueError):
+                        pass
+                launched.append(prior)
+                continue
         wt = exp_worktree(repo, exp_id, agent, member_id)
         br = exp_branch(exp_id, agent, member_id)
         if not (wt / ".git").exists():
@@ -830,10 +911,27 @@ def prepare_arms(
                     "-b",
                     br,
                     str(wt),
-                    f"origin/{base}",
+                    seed,
                 ]
             )
+        if meta.get("producer") == "experiment_producer":
+            import experiment_producer as producer
+
+            if producer._stage_git(wt, ["rev-parse", "HEAD"], repo) != seed or producer._stage_git(
+                wt, ["status", "--porcelain"], repo
+            ):
+                raise ValueError("comparison_worktree_not_at_frozen_seed")
         prompt = implement_prompt(spec)
+        if stage := meta.get("test_stage"):
+            prompt += (
+                "\n\nFrozen judging gate: `"
+                + stage["command"]
+                + "`. Do not change or delete "
+                + stage["path"]
+                + "; its committed blob must remain "
+                + stage["test_blob"]
+                + "."
+            )
         if brief := next(
             (a.get("brief") for a in normalized_arms if a["arm_id"] == member["arm_id"]), None
         ):
@@ -876,6 +974,18 @@ def prepare_arms(
                 ),
             },
         )
+        if meta.get("producer") == "experiment_producer":
+            meta["member_launches"][member_id] = {
+                **member,
+                "state": "launch-unknown",
+                "run_id": run_id,
+                "worktree": str(wt),
+                "branch": br,
+                "log": str(log),
+            }
+            from fleet_shapes import write_json_atomic
+
+            write_json_atomic(edir / "meta.json", meta)
         pid = _spawn(
             agent,
             mode,
@@ -900,14 +1010,19 @@ def prepare_arms(
                 "diff": str(edir / exp_diff_path(agent, member_id)),
             }
         )
-    return {
-        "exp_id": exp_id,
-        "repo": repo,
-        "base": base,
-        "base_sha": base_sha or None,
-        "launched": launched,
-        "arms": normalized_arms,
-    }
+        if meta.get("producer") == "experiment_producer":
+            meta["member_launches"][member_id] = launched[-1]
+            from fleet_shapes import write_json_atomic
+
+            write_json_atomic(edir / "meta.json", meta)
+    if meta.get("producer") == "experiment_producer":
+        for row in launched:
+            if row.get("pid"):
+                meta.setdefault("member_launches", {})[row["member_id"]] = row
+        from fleet_shapes import write_json_atomic
+
+        write_json_atomic(edir / "meta.json", meta)
+    return launched
 
 
 def _completion_log_stale(log: Path, stale_after_s: int) -> bool:
@@ -1190,7 +1305,7 @@ def _capped_diff(text: str, cap: int = EVAL_DIFF_CAP_CHARS) -> str:
 def collect(repo: str, exp_id: str) -> dict:
     meta = json.loads((exp_paths(exp_id) / "meta.json").read_text())
     base = meta["base"]
-    base_ref = f"origin/{base}"
+    base_ref = meta.get("comparison_base_sha") or meta.get("base_sha") or f"origin/{base}"
     edir = exp_paths(exp_id)
     written = {}
     for member in experiment_members(meta):
@@ -1211,7 +1326,13 @@ def collect(repo: str, exp_id: str) -> dict:
                 # THE MEMBER ID IS PART OF THE BRANCH NAME (`exp/<exp_id>-<member_id>`), so a v2
                 # arm's branch is unreachable without it and recovery reported the evidence gone.
                 recovered = experiment_recovery.arm_diff(
-                    repo, exp_id, agent, base=base, member_id=artifact_member
+                    repo,
+                    exp_id,
+                    agent,
+                    base=base,
+                    member_id=artifact_member,
+                    base_ref=base_ref,
+                    frozen_test=meta.get("test_stage"),
                 )
             except Exception:
                 recovered = None
@@ -1228,6 +1349,10 @@ def collect(repo: str, exp_id: str) -> dict:
                     "source": "branch",
                 }
                 continue
+        import experiment_producer as producer
+
+        if not producer.frozen_tests_intact(meta, wt):
+            raise ValueError("comparison_changed_frozen_tests")
         # The arm could write its worktree git dir (#452): pin the repository locations.
         merge_base = (
             worktree_git.run(wt, ["merge-base", "HEAD", base_ref], repo=repo).stdout.strip()
@@ -1796,7 +1921,15 @@ def _collected_candidate_diffs(collected: dict) -> dict[str, str]:
     return out
 
 
-def producer_followup(
+def producer_followup(edir, meta, **kwargs):
+    import experiment_producer as producer
+
+    with producer.experiment_lock(edir):
+        current = json.loads((Path(edir) / "meta.json").read_text())
+        return _producer_followup(edir, current if current.get("test_stage") else meta, **kwargs)
+
+
+def _producer_followup(
     edir,
     meta,
     *,
@@ -1857,6 +1990,21 @@ def producer_followup(
         return {**result, **delivery}
     age = now - meta.get("launched_ts", (edir / "meta.json").stat().st_mtime)
     if age >= producer.PRODUCER_LOCK_MAX_HOURS * 3600:
+        runs = [v.get("run_id") for v in meta.get("member_launches", {}).values()]
+        if meta.get("test_stage", {}).get("launch_intent"):
+            runs.append(meta["test_stage"].get("run_id"))
+        for run_id in runs:
+            try:
+                done = json.loads((edir / "done" / (run_id + ".json")).read_text())
+                terminal = (
+                    done.get("run_id") == run_id
+                    and done.get("rc_of") == "agent"
+                    and isinstance(done.get("rc"), int)
+                )
+            except (OSError, ValueError, TypeError):
+                terminal = False
+            if not terminal:
+                return {**result, "status": "expired_execution_terminal_unknown"}
         delivery.update(status="discarded", reason="72h_without_pr")
         producer.release_lock(edir, target, delivery, gh_fn=gh_fn, now=now)
         fleet_shapes.write_json_atomic(delivery_path, delivery)
@@ -1873,12 +2021,34 @@ def producer_followup(
         fleet_shapes.write_json_atomic(delivery_path, delivery)
         producer.release_lock(edir, target, delivery, gh_fn=gh_fn, now=now)
         return {**result, **delivery}
+    if meta.get("test_stage"):
+        if violation := (push_check_fn or assert_no_member_push)(meta["repo"], edir.name):
+            return {**result, "status": violation}
+        stage_result = producer.advance_test_stage(
+            meta, edir, launch_fn=_launch_members, spawn_fn=_spawn
+        )
+        if stage_result is not None:
+            if stage_result.get("status") == "discarded":
+                delivery.update(stage_result)
+                fleet_shapes.write_json_atomic(delivery_path, delivery)
+                producer.release_lock(edir, target, delivery, gh_fn=gh_fn, now=now)
+            return {**result, **stage_result}
     members = experiment_members(meta)
     logs = [
         edir / exp_log_path(m["agent"], None if m["legacy"] else m["member_id"]) for m in members
     ]
     if not logs or any(not p.exists() or now - p.stat().st_mtime < min_idle_s for p in logs):
         return {**result, "status": "still_running"}
+    if meta.get("test_stage"):
+        for row in meta.get("member_launches", {}).values():
+            try:
+                done = json.loads((edir / "done" / (row["run_id"] + ".json")).read_text())
+                if done.get("run_id") != row["run_id"] or done.get("rc_of") != "agent":
+                    return {**result, "status": "comparison_terminal_unknown"}
+                if done.get("rc") != 0:
+                    return {**result, "status": "comparison_failed"}
+            except (OSError, ValueError, KeyError):
+                return {**result, "status": "comparison_terminal_unknown"}
     violation = (push_check_fn or assert_no_member_push)(meta["repo"], edir.name)
     if violation:
         delivery.update(status=violation)

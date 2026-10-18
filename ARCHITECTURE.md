@@ -111,6 +111,28 @@ stage, every component is tagged:
 The single left arc is the loop closing. What it carries back is the point: `feedback.py` relearns
 **both** surfaces — `selection weights` (blue) and `role ↔ backend fit` (amber) — into the next cycle.
 
+## Producer test derivation within the experiment rail
+
+The existing experiment producer admits Python test files directly and bounded Node
+`*.test.js` files only when the repository already uses `node --test`. Issues with an
+explicit acceptance section can instead enter an asynchronous tests-only derivation.
+A separate execution by the first arm's agent commits one new test file over pinned
+original base **B**. It is never a comparison member. The rail requires its exact
+successful completion marker, a clean tests-only regular-file delta, behavioral
+assertions and attributable RED on unchanged production before freezing commit **F**.
+Every comparison then starts from F. Collection/recovery compare against F; delivery
+and deliberate-break verification compare against B so the published winner includes
+the frozen tests. Changed frozen test blobs refuse evaluation/delivery.
+
+A per-experiment mutex and persisted launch intents serialize prepare/followup and
+prevent replay from spawning a second writer. A durable research claim spans dead-PID
+stage gaps; unknown execution remains reserved, including after the original 72-hour
+expiry. Delayed launches recheck the original issue hash, ownership, capacity, pacing
+and production reserves, retaining the existing no-push adapter and usage gates. A
+cadence draw counts once, and derived tests are counted once after comparison launch.
+No role registry, cadence distribution, daily cap or six-merged-winner threshold changes.
+This extends existing deterministic control around delegated workers; it adds no role.
+
 ## Rails — deterministic, keep as code
 
 The existing `keepalive_supervisor` cadence also has a post-merge action behind

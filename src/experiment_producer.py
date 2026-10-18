@@ -132,7 +132,7 @@ def record_launch(now=None):
         save_state(state)
 
 
-def record_skip(reason, *, target=None, now=None):
+def record_skip(reason, *, target=None, now=None, test_class="none"):
     """Return whether a skip was recorded; unnamed tests count once per issue/UTC day."""
     now = time.time() if now is None else now
     with locked_state():
@@ -144,6 +144,10 @@ def record_skip(reason, *, target=None, now=None):
             if target in state["skip_issues"]:
                 return False
             state["skip_issues"].append(target)
+        if reason == "no_named_test":
+            classes = state.setdefault("no_named_test_classes", {})
+            cls = test_class if test_class in {"file-only", "ci-only", "none"} else "none"
+            classes[cls] = classes.get(cls, 0) + 1
         skips = state.setdefault("skips", {})
         skips[reason] = skips.get(reason, 0) + 1
         save_state(state)
@@ -293,9 +297,19 @@ def build_plan(
         and not backlog.research_ownership_skip_reason(i.get("labels") or [])
     ]
     for item in eligible:
-        if not named_test(item.get("body", "")):
-            skipped.append({"target": item["target"], "reason": "no_named_test"})
-    eligible = [i for i in eligible if named_test(i.get("body", ""))]
+        if test_admission(item.get("body", "")) == "unscoped":
+            skipped.append(
+                {
+                    "target": item["target"],
+                    "reason": "no_named_test",
+                    "test_class": (
+                        "ci-only"
+                        if re.search(r"(?i)tests? pass|\bCI\b", item.get("body", ""))
+                        else "none"
+                    ),
+                }
+            )
+    eligible = [i for i in eligible if test_admission(i.get("body", "")) != "unscoped"]
     classes = set(router.ROUTE_TABLE)
     cells = route_cells(classes, cap.get("agents", {}), conn=conn)
     cells = [
@@ -415,6 +429,15 @@ def release_lock(root, target, delivery, *, gh_fn=None, now=None):
     delivery["issue_status"] = issue_status(target, False, gh_fn=gh_fn)
     if "error" not in delivery["issue_status"]:
         delivery["lock_released_ts"] = time.time() if now is None else now
+        import claims
+
+        held = claims.holder(target) if target else None
+        if (
+            held
+            and held.get("agent") == "research"
+            and held.get("experiment_reservation") == Path(root).name
+        ):
+            claims.release(target, "research")
     from fleet_shapes import write_json_atomic
 
     write_json_atomic(Path(root) / "producer-delivery.json", delivery)
@@ -422,7 +445,11 @@ def release_lock(root, target, delivery, *, gh_fn=None, now=None):
 
 
 def named_test_paths(command):
-    return list(dict.fromkeys(re.findall(r"tests/[\w./-]+\.py(?:::[\w\[\]-]+)*", command or "")))
+    return list(
+        dict.fromkeys(
+            re.findall(r"tests/[\w./-]+(?:\.py(?:::[\w\[\]-]+)*|\.test\.js)", command or "")
+        )
+    )
 
 
 def named_test(spec):
@@ -441,7 +468,359 @@ def named_test(spec):
             except ValueError:
                 pass
     nodes = re.findall(r"tests/[\w./-]+\.py(?:::[\w\[\]-]+)*", spec)
-    return "python3 -m pytest -q " + " ".join(dict.fromkeys(nodes)) if nodes else None
+    if nodes:
+        return "python3 -m pytest -q " + " ".join(dict.fromkeys(nodes))
+    javascript = re.findall(r"tests/[\w./-]+\.test\.js", spec)
+    return "node --test " + " ".join(dict.fromkeys(javascript)) if javascript else None
+
+
+def test_admission(spec):
+    """Classify the specification; only an explicit acceptance section permits derivation."""
+    command = named_test(spec)
+    if command:
+        return "named" if re.search(r"`[^`]*pytest", spec) else "file-only"
+    section = re.search(r"(?ims)^#{1,6}\s+acceptance\s+criteria\s*\n(.*?)(?=^#{1,6}\s|\Z)", spec)
+    if section and re.search(r"\w{3}", section[1]):
+        return "ci-only" if re.search(r"(?i)\bCI\b|tests? pass", section[1]) else "none"
+    return "unscoped"
+
+
+@contextmanager
+def experiment_lock(root):
+    """Serialize stage advancement, including the intent-before-spawn window."""
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / ".producer-stage.lock").open("a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def _stage_save(root, meta):
+    from fleet_shapes import write_json_atomic
+
+    write_json_atomic(Path(root) / "meta.json", meta)
+
+
+def _stage_git(wt, args, repo):
+    import worktree_git
+
+    result = worktree_git.run(Path(wt), args, repo=repo, timeout=120)
+    if result.returncode:
+        raise ValueError((result.stderr or result.stdout)[-1000:])
+    return result.stdout.strip()
+
+
+def stage_launch_allowed(meta):
+    """A delayed launch rechecks ownership, the exact issue and current spare capacity."""
+    import backlog
+    import capacity
+    import claims
+    import research_scheduler
+
+    if time.time() - meta["launched_ts"] >= PRODUCER_LOCK_MAX_HOURS * 3600:
+        return "producer_expired"
+    held = claims.holder(meta["subject"])
+    if (
+        not held
+        or held.get("agent") != "research"
+        or held.get("experiment_reservation") != meta["exp_id"]
+    ):
+        return "claim_lost"
+    repo, number = meta["subject"].rsplit("#", 1)
+    answer = gh_call(["gh", "api", f"repos/{repo}/issues/{number}"])
+    try:
+        issue = json.loads(answer["stdout"])
+        if hashlib_sha(issue.get("body", "").encode()) != meta["spec_sha256"]:
+            return "issue_spec_changed"
+        labels = [x["name"] for x in issue.get("labels", []) if x["name"] != "status:in-progress"]
+        if issue.get("state") != "open" or backlog.research_ownership_skip_reason(labels):
+            return "subject_owned_or_closed"
+    except (KeyError, TypeError, ValueError):
+        return "issue_state_unknown"
+    snapshot = capacity.build()
+    pacing = capacity.experiment_pacing(snapshot)
+    spare = research_scheduler.spare_capacity(
+        research_scheduler.capacity_state_from_snapshot(snapshot)
+    )
+    demand = Counter(m["agent"] for m in meta["members"] if m.get("role") != "review")
+    for agent, count in demand.items():
+        if (
+            pacing.get(agent) != "ok"
+            or spare.get(agent, 0) - meta.get("production_reserve", {}).get(agent, 0) < count
+        ):
+            return "capacity_pending"
+    return None
+
+
+def hashlib_sha(data):
+    import hashlib
+
+    return hashlib.sha256(data).hexdigest()
+
+
+def start_test_derivation(meta, root, canon, *, spawn_fn):
+    """Launch a separate tests-only execution; it is never a comparison member."""
+    import exp_abcd
+
+    spec = (Path(root) / "spec.md").read_text()
+    if test_admission(spec) == "unscoped":
+        raise ValueError("derivation requires acceptance criteria")
+    member = next(m for m in meta["members"] if m.get("role") != "review")
+    agent = member["agent"]
+    path = "tests/test_experiment_" + meta["spec_sha256"][:16] + ".py"
+    wt = exp_abcd.exp_worktree(meta["repo"], meta["exp_id"], agent, "derive-tests")
+    branch = exp_abcd.exp_branch(meta["exp_id"], agent, "derive-tests")
+    run_id = f"exp:{meta['exp_id']}:derive-tests"
+    stage = meta["test_stage"] = {
+        "phase": "derivation_pending",
+        "test_source": "derived",
+        "path": path,
+        "worktree": str(wt),
+        "branch": branch,
+        "run_id": run_id,
+        "agent": agent,
+        "profile_id": member.get("profile_id"),
+        "log": str(Path(root) / "derive-tests.log"),
+    }
+    _stage_save(root, meta)
+    reason = stage_launch_allowed(meta)
+    if reason:
+        stage["wait_reason"] = reason
+        _stage_save(root, meta)
+        return {
+            "exp_id": meta["exp_id"],
+            "base_sha": meta["base_sha"],
+            "launched": [],
+            "test_stage": stage,
+        }
+    return launch_test_derivation(meta, root, canon, spawn_fn=spawn_fn)
+
+
+def launch_test_derivation(meta, root, canon, *, spawn_fn):
+    import exp_abcd
+    import feedback
+
+    stage = meta["test_stage"]
+    wt = Path(stage["worktree"])
+    if (wt / ".git").exists():
+        if _stage_git(wt, ["rev-parse", "HEAD"], meta["repo"]) != meta["base_sha"] or _stage_git(
+            wt, ["status", "--porcelain"], meta["repo"]
+        ):
+            raise ValueError("derivation_worktree_not_at_original_base")
+    else:
+        exp_abcd.provision._run(
+            [
+                "git",
+                "-C",
+                str(canon),
+                "worktree",
+                "add",
+                "-b",
+                stage["branch"],
+                str(wt),
+                meta["base_sha"],
+            ]
+        )
+    prompt = (
+        "Write and commit ONLY the NEW Python test file " + stage["path"] + ". "
+        "Derive behavioral assertions from the Acceptance Criteria below, against existing production APIs. "
+        "Do not implement the fix, change any existing file, runner/config, dependencies or git metadata. "
+        "Do not push, open a PR, or contact GitHub. Tests must expose the requested behavior with real assertions, "
+        "not unconditional failures, missing imports, skips or collection errors. Include the relevant acceptance "
+        "criterion in each test docstring. Commit the tests even though they fail.\n\n"
+        + (Path(root) / "spec.md").read_text()
+    )
+    stage.update(phase="deriving", launch_intent=True)
+    _stage_save(root, meta)  # Unknown spawn outcomes never launch a second writer.
+    feedback.record_run(
+        stage["run_id"],
+        meta["subject"],
+        "testgen",
+        stage["agent"],
+        experiment_id=meta["exp_id"],
+        routing_metadata={"producer_stage": "derive-tests"},
+    )
+    pid = spawn_fn(
+        stage["agent"],
+        exp_abcd.AGENT_MODE.get(stage["agent"], "full"),
+        prompt,
+        wt,
+        Path(stage["log"]),
+        run_id=stage["run_id"],
+        target=meta["subject"],
+        task_type="testgen",
+        profile_id=(
+            stage.get("profile_id")
+            if stage.get("profile_id") in exp_abcd.execution_profiles.PROFILE_REGISTRY
+            else None
+        ),
+    )
+    stage["pid"] = pid
+    _stage_save(root, meta)
+    import claims
+
+    claims.update_metadata(meta["subject"], "research", pids=[pid], refresh_ts=True)
+    return {
+        "exp_id": meta["exp_id"],
+        "base_sha": meta["base_sha"],
+        "launched": [{**stage}],
+        "test_stage": stage,
+    }
+
+
+def freeze_derived_tests(meta, root):
+    """Certify a tests-only F over B, with attributable assertion RED on unchanged production."""
+    import ast
+    import tempfile
+
+    import local_verify
+
+    stage = meta["test_stage"]
+    wt, repo, base = Path(stage["worktree"]), meta["repo"], meta["base_sha"]
+    if _stage_git(wt, ["status", "--porcelain"], repo):
+        raise ValueError("derivation_worktree_dirty")
+    head = _stage_git(wt, ["rev-parse", "HEAD"], repo)
+    if stage.get("frozen_sha"):
+        if (
+            head != stage["frozen_sha"]
+            or _stage_git(wt, ["rev-parse", head + ":" + stage["path"]], repo) != stage["test_blob"]
+        ):
+            raise ValueError("frozen_identity_change")
+        return
+    _stage_git(wt, ["merge-base", "--is-ancestor", base, head], repo)
+    changed = _stage_git(wt, ["diff", "--name-only", base, head], repo).splitlines()
+    if changed != [stage["path"]]:
+        raise ValueError("derivation_must_change_only_the_named_new_test")
+    if _stage_git(wt, ["ls-tree", base, "--", stage["path"]], repo):
+        raise ValueError("derivation_must_not_replace_existing_tests")
+    tree = _stage_git(wt, ["ls-tree", head, "--", stage["path"]], repo)
+    if not tree.startswith("100644 blob "):
+        raise ValueError("derived_test_not_regular_file")
+    source = _stage_git(wt, ["show", head + ":" + stage["path"]], repo)
+    parsed = ast.parse(source)
+    tests = [
+        n
+        for n in ast.walk(parsed)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name.startswith("test_")
+    ]
+    if not tests or any(not ast.get_docstring(n) for n in tests):
+        raise ValueError("derived_tests_need_acceptance_docstrings")
+    assertions = [n for n in ast.walk(parsed) if isinstance(n, ast.Assert)]
+    if not assertions or any(isinstance(n.test, ast.Constant) for n in assertions):
+        raise ValueError("derived_tests_need_behavioral_assertions")
+    with tempfile.TemporaryDirectory(prefix="producer-red-") as tmp:
+        dest = Path(tmp)
+        if error := local_verify._extract_base(wt, head, dest):
+            raise ValueError(error)
+        argv = [
+            sys.executable,
+            "-m",
+            "pytest",
+            stage["path"],
+            "-v",
+            "--tb=short",
+            "-p",
+            "no:cacheprovider",
+            "-o",
+            "addopts=",
+        ]
+        report, stdout = local_verify._run_argv(argv, dest, 120, env=local_verify._probe_env())
+        nodes = local_verify._parse_node_outcomes(stdout)
+        valid = (
+            report.get("returncode") == 1
+            and nodes
+            and all(outcome == "FAILED" for _, outcome in nodes)
+            and ("AssertionError" in stdout or re.search(r"(?m)^E\s+assert\b", stdout))
+            and local_verify._pytest_failure_cause(report)["test_failure"]
+        )
+        from fleet_shapes import write_json_atomic
+
+        write_json_atomic(
+            Path(root) / "derived-red-proof.json",
+            {
+                "base_sha": base,
+                "frozen_sha": head,
+                "report": report,
+                "nodes": nodes,
+                "ok": bool(valid),
+            },
+        )
+        if not valid:
+            raise ValueError("derived_red_not_attributable_assertion_failure")
+    blob = _stage_git(wt, ["rev-parse", head + ":" + stage["path"]], repo)
+    stage.update(
+        phase="tests_frozen",
+        frozen_sha=head,
+        test_blob=blob,
+        command="python3 -m pytest -q " + stage["path"],
+    )
+    meta["comparison_base_sha"] = head
+    _stage_save(root, meta)
+
+
+def frozen_tests_intact(meta, wt):
+    stage = meta.get("test_stage") or {}
+    if stage.get("test_source") != "derived":
+        return True
+    if not stage.get("frozen_sha") or not stage.get("test_blob"):
+        return False
+    try:
+        repo = meta["repo"]
+        _stage_git(wt, ["merge-base", "--is-ancestor", stage["frozen_sha"], "HEAD"], repo)
+        committed = _stage_git(wt, ["rev-parse", "HEAD:" + stage["path"]], repo)
+        actual = _stage_git(wt, ["hash-object", "--", stage["path"]], repo)
+        return (
+            committed == actual == stage["test_blob"]
+            and not (Path(wt) / stage["path"]).is_symlink()
+        )
+    except (ValueError, OSError):
+        return False
+
+
+def advance_test_stage(meta, root, *, launch_fn, spawn_fn):
+    """Resume one exact derivation or comparison launch; callers hold experiment_lock."""
+    import exp_abcd
+
+    stage = meta["test_stage"]
+    if stage["phase"] == "comparison_running":
+        return None
+    if stage["phase"] == "refused":
+        return {"status": "discarded", "reason": stage["reason"]}
+    canon = exp_abcd.provision.ensure_canonical(meta["repo"])
+    if stage["phase"] == "derivation_pending":
+        if reason := stage_launch_allowed(meta):
+            return {"status": reason}
+        launch_test_derivation(meta, root, canon, spawn_fn=spawn_fn)
+        return {"status": "deriving"}
+    if stage["phase"] == "deriving":
+        try:
+            done = json.loads((Path(root) / "done" / (stage["run_id"] + ".json")).read_text())
+        except (OSError, ValueError):
+            return {"status": "derivation_terminal_unknown"}
+        if done.get("run_id") != stage["run_id"] or done.get("rc_of") != "agent":
+            return {"status": "derivation_terminal_unknown"}
+        try:
+            if done.get("rc") != 0:
+                raise ValueError("derivation_agent_failed")
+            freeze_derived_tests(meta, root)
+        except (ValueError, OSError, SyntaxError) as exc:
+            stage.update(phase="refused", reason=str(exc))
+            _stage_save(root, meta)
+            return {"status": "discarded", "reason": str(exc)}
+    if reason := stage_launch_allowed(meta):
+        return {"status": reason}
+    launched = launch_fn(
+        meta, root, canon, (Path(root) / "spec.md").read_text(), seed=stage["frozen_sha"]
+    )
+    if any(row.get("state") == "launch-unknown" for row in launched):
+        return {"status": "comparison_launch_unknown"}
+    stage["phase"] = "comparison_running"
+    _stage_save(root, meta)
+    with locked_state():
+        state = read_state()
+        state["derived_tests"] = state.get("derived_tests", 0) + 1
+        save_state(state)
+    return {"status": "comparison_running"}
 
 
 def producer_summary(exp_dir=None, *, gh_fn=None):
@@ -512,6 +891,8 @@ def producer_summary(exp_dir=None, *, gh_fn=None):
             cells_fresh=state.get("cells_fresh", 0),
             cells_total=state.get("cells_total", 0),
             skips=state.get("skips", {}),
+            no_named_test_classes=state.get("no_named_test_classes", {}),
+            derived_tests=state.get("derived_tests", 0),
         )
     except (ValueError, OSError):
         metrics["skips"] = {"unreadable_state": 1}

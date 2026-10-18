@@ -261,7 +261,11 @@ def research_tick(
         for row in plan_out.get("skipped") or []:
             if row.get("reason"):
                 if producer_enabled:
-                    if not experiment_producer.record_skip(row["reason"], target=row.get("target")):
+                    if not experiment_producer.record_skip(
+                        row["reason"],
+                        target=row.get("target"),
+                        test_class=row.get("test_class", "none"),
+                    ):
                         continue
                 research_subjects.record_event(
                     "rejected",
@@ -324,6 +328,7 @@ def research_tick(
             if not draw["fire"]:
                 continue
         subject_identity = None
+        exp_id = None
         try:
             spec = _fetch_issue_body(target, issue_body_fn=issue_body_fn)
             if not spec:
@@ -395,6 +400,8 @@ def research_tick(
                     continue
             repo = _target_repo(target)
             exp_id = f"tick-{int(time.time())}-{target.lower().replace('/', '-').replace('#', '-')}"
+            if producer_enabled:
+                claims.update_metadata(target, "research", experiment_reservation=exp_id)
             spec_dir = Path(tempfile.mkdtemp(prefix="orch-research-spec-"))
             spec_file = spec_dir / "spec.md"
             spec_file.write_text(spec, encoding="utf-8")
@@ -413,6 +420,7 @@ def research_tick(
                         "subject": target,
                         "launched_ts": time.time(),
                         "spec_provenance": "issue_body",
+                        "production_reserve": production_reserve or {},
                     }
                 }
                 if producer_enabled
@@ -492,8 +500,11 @@ def research_tick(
                 )
                 plan["claim_status"] = "watchable"
             else:
-                claims.release(target, "research")
-                plan["claim_status"] = "released_no_child_pids"
+                if producer_enabled:
+                    plan["claim_status"] = "reserved_between_stages"
+                else:
+                    claims.release(target, "research")
+                    plan["claim_status"] = "released_no_child_pids"
         except Exception as exc:
             plan["active_status"] = "failed"
             plan["error"] = str(exc)
@@ -506,9 +517,19 @@ def research_tick(
                 metadata={"error": str(exc)[:500]},
                 conn=conn,
             )
-            claims.release(target, "research")
-            if producer_enabled:
-                experiment_producer.issue_status(target, False)
+            uncertain_launch = False
+            if producer_enabled and exp_id:
+                try:
+                    staged = json.loads((exp_abcd.exp_paths(exp_id) / "meta.json").read_text())
+                    uncertain_launch = bool(
+                        staged.get("member_launches") or staged.get("test_stage")
+                    )
+                except (OSError, ValueError):
+                    pass
+            if not uncertain_launch:
+                claims.release(target, "research")
+                if producer_enabled:
+                    experiment_producer.issue_status(target, False)
     public = _public_research_plan(plan_out)
     return {
         **{k: v for k, v in public.items() if k != "planned"},

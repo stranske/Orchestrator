@@ -1,0 +1,33 @@
+FILE-PATH ADMISSION DISCONNECTED
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________________ test_no_named_test_is_skipped_before_admission ________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10dcb0e60>
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-6508/test_no_named_test_is_skipped_0')
+
+    def test_no_named_test_is_skipped_before_admission(monkeypatch, tmp_path):
+        assert producer.named_test("`pytest -q`") is None
+>       assert producer.named_test("tests/test_x.py") == "python3 -m pytest -q tests/test_x.py"
+E       AssertionError: assert None == 'python3 -m pytest -q tests/test_x.py'
+E        +  where None = <function named_test at 0x10dcd6a20>('tests/test_x.py')
+E        +    where <function named_test at 0x10dcd6a20> = producer.named_test
+
+tests/test_experiment_producer.py:746: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_experiment_producer.py::test_no_named_test_is_skipped_before_admission
+1 failed, 70 deselected in 0.49s
+
+EXACT-BYTE RESTORE GREEN
+.                                                                        [100%]
+=============================== warnings summary ===============================
+tests/test_experiment_producer.py::test_no_named_test_is_skipped_before_admission
+tests/test_experiment_producer.py::test_no_named_test_is_skipped_before_admission
+tests/test_experiment_producer.py::test_no_named_test_is_skipped_before_admission
+tests/test_experiment_producer.py::test_no_named_test_is_skipped_before_admission
+tests/test_experiment_producer.py::test_no_named_test_is_skipped_before_admission
+  /opt/anaconda3/lib/python3.12/tarfile.py:2221: DeprecationWarning: Python 3.14 will, by default, filter extracted tar archives and reject files or modify their metadata. Use the filter argument to control this behavior.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1 passed, 70 deselected, 5 warnings in 8.44s
