@@ -670,10 +670,31 @@ def test_keepalive_acceptance_counts_prs_whose_gates_all_pass(monkeypatch):
             "body": "Deterministic gates: 0/0 passed",
         },
     ]
+    monkeypatch.setattr(
+        fg, "KEEPALIVE_GATE_REPOS", frozenset({"stranske/Workflows", "stranske/Ready"})
+    )
     monkeypatch.setattr(fg, "_gh", lambda args: _search(items))
     result = fg.keepalive_acceptance(NOW)
     assert result.value == 0.25
     assert result.reason.startswith("1/4 keepalive PRs merged since ")
+
+
+def test_keepalive_acceptance_counts_only_repos_with_the_gate(monkeypatch):
+    items = [
+        {
+            "repository_url": "https://api.github.com/repos/stranske/Workflows",
+            "body": "Deterministic gates: 1/1 passed",
+        },
+        {"repository_url": "https://api.github.com/repos/stranske/Ready", "body": "no gates"},
+        {"repository_url": "https://api.github.com/repos/stranske/Ready", "body": "no gates"},
+    ]
+    monkeypatch.setattr(fg, "_gh", lambda args: _search(items))
+    result = fg.keepalive_acceptance(NOW)
+    assert result.value == 1.0
+    assert result.reason.endswith("; 2 merged in repos without the gate")
+    monkeypatch.setattr(fg, "_gh", lambda args: _search(items[1:]))
+    consumers_only = fg.keepalive_acceptance(NOW)
+    assert consumers_only.value is None and "2 in repos without the gate" in consumers_only.reason
 
 
 def test_keepalive_acceptance_is_unknown_without_a_complete_population(monkeypatch):
@@ -681,7 +702,9 @@ def test_keepalive_acceptance_is_unknown_without_a_complete_population(monkeypat
     assert fg.keepalive_acceptance(NOW).value is None
     monkeypatch.setattr(fg, "_gh", lambda args: _search([]))
     empty = fg.keepalive_acceptance(NOW)
-    assert empty.value is None and "(none)" in empty.reason
+    assert (
+        empty.value is None and "in gate repos (none; 0 in repos without the gate)" in empty.reason
+    )
 
 
 def test_keepalive_acceptance_window_never_starts_before_the_gate(monkeypatch):

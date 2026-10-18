@@ -1291,10 +1291,10 @@ def pass_numbers(handoff: Path, now: float) -> dict:
         )
         for pool, f in finals.items()
     )
+    # Share of BOTH pools in band: an unmeasured pool has not shown it is in band, so one pool in
+    # band and one unmeasured reads 0.5, never 1.0. None only when neither pool is measured.
     usage = {
-        "value": (
-            sum(f["passed"] for f in measured.values()) / len(measured) if measured else None
-        ),
+        "value": (sum(f["passed"] for f in measured.values()) / len(finals) if measured else None),
         "evidence_class": PASS_EVIDENCE,
         "as_of": as_of,
         "reason": detail,

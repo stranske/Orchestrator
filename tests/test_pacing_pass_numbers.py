@@ -71,3 +71,25 @@ def test_text_report_lines_come_from_the_same_computation(tmp_path):
     text = pacing_usage.report(tmp_path, now=NOW, current={}, previous={})
     for line in pacing_usage.period_results(tmp_path, [], NOW)["lines"]:
         assert line in text
+
+
+def test_one_pool_in_band_and_one_unmeasured_reads_half(tmp_path):
+    reserve = 0.15
+    lo, hi = pacing.pass_bounds(reserve)
+    end = NOW - 60
+    _write(
+        tmp_path,
+        [
+            _snapshot(
+                end - 30,
+                "claude",
+                period_end=end,
+                used_fraction=(lo + hi) / 2,
+                effective_reserve=reserve,
+                stale=False,
+            )
+        ],
+    )
+    usage = pacing_usage.pass_numbers(tmp_path, NOW)["usage_in_target_band"]
+    assert usage["value"] == 0.5
+    assert "codex unmeasured" in usage["reason"]

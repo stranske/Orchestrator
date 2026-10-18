@@ -281,6 +281,10 @@ def pacing_share(now: int) -> Measurement:
 DETERMINISTIC_GATES_RE = re.compile(r"(?m)^Deterministic gates: (\d+)/(\d+) passed")
 # Workflows#3985 merged 2026-10-17T03:57Z: completions before it could not cite a gate.
 KEEPALIVE_GATE_LIVE = "2026-10-17T03:57:07Z"
+# Repos whose keepalive executes the gate. #3985: consumers "retain their current behavior until
+# their execution step is delivered"; widen this when consumer delivery lands, so the measure
+# grades agents where the gate exists instead of being pinned near zero by the rollout.
+KEEPALIVE_GATE_REPOS = frozenset({"stranske/Workflows"})
 
 
 def keepalive_acceptance(now: int) -> Measurement:
@@ -314,15 +318,19 @@ def keepalive_acceptance(now: int) -> Measurement:
             break
     else:
         return unknown(now, "merged keepalive PRs beyond 1000 search results")
-    population = [
-        item
-        for item in items
-        if not any(
-            (item.get("repository_url") or "").endswith("/repos/" + repo) for repo in EXCLUDED_REPOS
-        )
-    ]
+
+    def repo_of(item: dict) -> str:
+        return "/".join((item.get("repository_url") or "").split("/")[-2:])
+
+    eligible = [item for item in items if repo_of(item) not in EXCLUDED_REPOS]
+    population = [item for item in eligible if repo_of(item) in KEEPALIVE_GATE_REPOS]
+    undelivered = len(eligible) - len(population)
     if not population:
-        return unknown(now, f"merged keepalive PRs since {since} (none)")
+        return unknown(
+            now,
+            f"merged keepalive PRs since {since} in gate repos (none; {undelivered} in repos "
+            "without the gate)",
+        )
     citing = 0
     for item in population:
         gates = DETERMINISTIC_GATES_RE.findall(item.get("body") or "")
@@ -333,7 +341,10 @@ def keepalive_acceptance(now: int) -> Measurement:
         citing / len(population),
         "GitHub REST search: merged keepalive PR bodies (Deterministic gates line)",
         now,
-        reason=f"{citing}/{len(population)} keepalive PRs merged since {since} report all named gates passing",
+        reason=(
+            f"{citing}/{len(population)} keepalive PRs merged since {since} in gate repos report "
+            f"all named gates passing; {undelivered} merged in repos without the gate"
+        ),
     )
 
 
