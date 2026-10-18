@@ -50,6 +50,30 @@ LOCAL_RUNTIME = Path(os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex"
 DB_PATH_ENV = "ORCH_FEEDBACK_DB"
 DB_PATH = Path(os.environ.get(DB_PATH_ENV, LOCAL_RUNTIME / "feedback" / "orchestrator.db"))
 
+# Instrumented built-in paths, independently of compiled target selection:
+# dispatcher._exercised_capability_ids, record_role_run (proposal + backend),
+# exp_abcd.prepare_arms/promotion, keepalive_supervisor and this store's selftest.
+# A routed/compiled capability is deliberately absent: it needs a consumption receipt.
+RECORD_RUN_INSTRUMENTED_CAPABILITIES = frozenset(
+    {
+        "agy-runtime-isolation",
+        "thompson-hybrid-routing",
+        "testgen-lane",
+        "codemod-campaign",
+        "cross-repo-coordination",
+        "role-triage",
+        "role-prompt",
+        "role-redirect",
+        "role-decomposer",
+        "role-adjudicator",
+        "offload",
+        "abcd-experiment",
+        "live-keepalive-supervisor",
+        "feedback-store",
+        "adversarial-review",
+    }
+)
+
 
 def resolve_db_path(explicit: Path | None = None, state_dir: Path | None = None) -> Path:
     """Resolve the shared Brain path without opening or migrating the store.
@@ -2417,6 +2441,7 @@ def record_capability_consumption(
     producer: str = "orchestrator",
     acceptance_gate_id: str | None = None,
     attempt_id: str | None = None,
+    receipt_ref: str | None = None,
 ) -> dict:
     """Record a version-exact producer-to-consumer edge.
 
@@ -2424,6 +2449,8 @@ def record_capability_consumption(
     consumption for an unobserved downstream run. Later outcomes reconcile over
     this exact edge without rewriting it.
     """
+    if accepted and not receipt_ref:
+        raise ValueError("compiled capability consumption requires a consumer receipt")
     with _conn() as c:
         target_event_id = _latest_completion_event_id(c, target_run_id)
         if not target_event_id:
@@ -2443,6 +2470,11 @@ def record_capability_consumption(
             payload={
                 "capability_ids": [capability_id],
                 "result": {"version_hash": capability_version_id, "accepted": accepted},
+                "artifact_refs": (
+                    [{"artifact_id": receipt_ref, "kind": "consumer_receipt"}]
+                    if receipt_ref
+                    else []
+                ),
             },
         )
         edge = _record_influence_edge_in_conn(
@@ -3263,8 +3295,17 @@ def _record_run_in_conn(
     # only in the one-capability case — which meant a run declaring TWO capabilities recorded
     # attribution for NEITHER (the multi-capability case was the worst-served one, 2026-08-09).
     # Edges are the many-to-many surface, and `capability` is already a valid influence type.
+    # Compiled capabilities earn accepted credit only through record_capability_consumption
+    # (producer/consumer receipt). record_run may still tag independently proven infrastructure.
+    selected_id = (
+        routing_metadata.get("selected_capability_id")
+        if isinstance(routing_metadata, dict)
+        else None
+    )
     if len(capability_ids) == len(capability_version_ids):
         for cap_id, cap_version in zip(capability_ids, capability_version_ids):
+            if str(cap_id) not in RECORD_RUN_INSTRUMENTED_CAPABILITIES or cap_id == selected_id:
+                continue
             _record_influence_edge_in_conn(
                 c,
                 target_run_id=run_id,

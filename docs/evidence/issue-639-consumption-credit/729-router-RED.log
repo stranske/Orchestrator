@@ -1,0 +1,73 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_router_plan_selection_metadata_without_exercised_credit _________
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-6476/test_router_plan_selection_met0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b22c7a0>
+
+    def test_router_plan_selection_metadata_without_exercised_credit(tmp_path, monkeypatch):
+        import dispatcher
+        import router
+    
+        cap = capabilities._blank_capability("selection-credit")
+        cap.update(
+            {
+                "status": "active",
+                "owner": "orchestrator",
+                "matcher": {"repository": "owner/repo", "task_types": ["implement"]},
+                "entrypoint": "fixture.py:run",
+                "trigger_cadence": "per matching task",
+                "output_artifact": "fixture-result.json",
+                "downstream_consumer": "dispatcher.py",
+                "learning_sink": "feedback capability joins",
+                "last_match": NOW,
+                "last_invocation": NOW,
+                "last_success": NOW,
+                "kill_switch": "ORCH_FIXTURE=0",
+                "rollback": {"transition": "retired", "predecessor": "baseline"},
+                "outcome_links": ["outcome:baseline"],
+                "activation_evidence": {
+                    probe: {"passed": True, "checked_at": NOW, "ref": f"baseline:{probe}"}
+                    for probe in capabilities.ACTIVE_PROBES
+                },
+                "expiry": NOW + 86400,
+                "capability_version_id": "capability-version:selection-credit",
+                "artifact_hash": "sha256:artifact",
+                "lifecycle_policy_hash": "sha256:policy",
+            }
+        )
+        ledger = tmp_path / "capabilities.json"
+        ledger.write_text(
+            json.dumps(
+                {
+                    "schema_version": capabilities.SCHEMA_VERSION,
+                    "capabilities": {cap["capability_id"]: cap},
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(capabilities, "REG", ledger)
+        monkeypatch.setattr(capabilities.load, "__defaults__", (ledger,))
+        monkeypatch.setattr(capabilities.load_declared, "__defaults__", (ledger,))
+        monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+        monkeypatch.setattr(router.claims, "active_claims", lambda: {})
+        result = router.plan(
+            [{"target": "owner/repo#23", "task_type": "implement", "lane": "opener"}],
+            {"agents": {"codex": {"state": "ok"}}},
+            dry_run=True,
+            now=NOW,
+        )
+        assignment = result["assignments"][0]
+        assert assignment["selected_capability_id"] == cap["capability_id"]
+        assert assignment["selected_capability_version_id"] == cap["capability_version_id"]
+>       assert assignment["capability_ids"] == []
+E       AssertionError: assert ['selection-credit'] == []
+E         
+E         Left contains one more item: 'selection-credit'
+E         Use -v to get more diff
+
+tests/test_capability_causal_core.py:502: AssertionError
+tracked test inputs: NOT CHECKED -- /private/tmp/opener-639-proof-20261018T0605 is not a git checkout. In the exec mirror that loses nothing: its tests/ IS `git archive HEAD tests`, so every file in it was tracked
+=========================== short test summary info ============================
+FAILED tests/test_capability_causal_core.py::test_router_plan_selection_metadata_without_exercised_credit
+1 failed in 0.56s

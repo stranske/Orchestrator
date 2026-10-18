@@ -441,6 +441,7 @@ def test_a_causal_promotion_past_the_declaration_survives_reconciliation(
         target_run_id=run_id,
         accepted=True,
         producer="test",
+        receipt_ref="fixture:consumed-output",
     )
     feedback.record_outcome(run_id, adjudicated_verdict="PASS", merged=True, durability="durable")
 
