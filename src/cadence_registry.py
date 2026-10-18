@@ -32,7 +32,7 @@ from typing import Any
 # different period. The hourly sentinel uses minutes instead of days. A genuinely new period is
 # added here, by name, never as a bare number on a row.
 CADENCE_DAYS_FOR: dict[str, int] = {
-    "hourly": -1,  # explicit sub-day sentinel: _due uses find -mmin +50
+    "hourly": -1,  # explicit sub-day sentinel: _due uses find -mmin +30
     "daily": 0,  # due once the stamp is 24h old; at the hourly tick a daily step runs every ~25h
     "weekly": 6,  # due once the stamp is 7 days old
 }
