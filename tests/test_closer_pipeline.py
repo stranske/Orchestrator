@@ -3184,6 +3184,10 @@ def test_expired_read_cutoff_retries_only_audited_native_retained_wait(tmp_path,
         "source_missing",
         "source_null",
         "source_empty",
+        "target_source_null",
+        "target_source_empty",
+        "target_source_scalar",
+        "target_source_wrong",
         "prior_hash",
         "hash_missing",
         "hash_null",
@@ -3242,6 +3246,13 @@ def test_expired_read_cutoff_rejects_unbound_or_uncertain_retained_wait(tmp_path
             )
     elif mutation == "prior_hash":
         anchor["previous_item_sha256"] = "0" * 64
+    elif mutation.startswith("target_source_"):
+        anchor["previous_run_id"] = {
+            "target_source_null": None,
+            "target_source_empty": "",
+            "target_source_scalar": 42,
+            "target_source_wrong": "wrong-origin",
+        }[mutation]
     elif mutation.startswith("hash_"):
         if mutation == "hash_missing":
             anchor.pop("previous_item_sha256")
