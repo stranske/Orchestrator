@@ -72,6 +72,7 @@ def _consumed(cap: dict, n: int, **outcome) -> str:
         target_run_id=run_id,
         accepted=True,
         producer="selftest",
+        receipt_ref="fixture:consumed-output",
     )
     feedback.record_outcome(run_id, **outcome)
     return run_id
@@ -201,6 +202,7 @@ def test_a_capability_on_a_role_run_is_an_association_not_a_second_delivery(ledg
         target_run_id=role_run,
         accepted=True,
         producer="selftest",
+        receipt_ref="fixture:consumed-output",
     )
     # What propagation writes onto a role run when its acting run merges durably.
     feedback.record_outcome(role_run, adjudicated_verdict="PASS", merged=True, durability="durable")
@@ -253,6 +255,7 @@ def test_a_role_run_regression_holds_nothing_back(ledger):
         target_run_id=role_run,
         accepted=True,
         producer="selftest",
+        receipt_ref="fixture:consumed-output",
     )
     # A copy of an acting run's merged-then-reverted outcome.
     feedback.record_outcome(

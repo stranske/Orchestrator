@@ -1,0 +1,13 @@
+Traceback (most recent call last):
+  File "/private/tmp/opener-639-proof-20261018T0605/dispatcher.py", line 5039, in <module>
+    raise SystemExit(main(sys.argv[1:]))
+                     ^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/opener-639-proof-20261018T0605/dispatcher.py", line 4914, in main
+    _selftest()
+  File "/private/tmp/opener-639-proof-20261018T0605/dispatcher.py", line 3418, in _selftest
+    _selftest_capability_dispatch(HANDOFF)
+  File "/private/tmp/opener-639-proof-20261018T0605/dispatcher.py", line 3354, in _selftest_capability_dispatch
+    invoke.assert_called_once()
+  File "/opt/anaconda3/lib/python3.12/unittest/mock.py", line 923, in assert_called_once
+    raise AssertionError(msg)
+AssertionError: Expected 'invoke_compiled_target' to have been called once. Called 0 times.

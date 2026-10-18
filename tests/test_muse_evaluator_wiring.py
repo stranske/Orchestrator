@@ -1,6 +1,8 @@
+import json
 import random
 
 import adapters
+import dispatcher
 import exp_abcd
 import judge_reliability
 
@@ -79,14 +81,15 @@ def test_probation_is_only_for_the_default_panel():
 def test_muse_evaluator_command_is_toolless_private_and_reduced_to_terminal_text(
     tmp_path, monkeypatch
 ):
-    # Command construction uses the real runtime-prelude builder, but never a real login.
-    real_home = tmp_path / "home"
-    login = real_home / ".config" / "muse" / "auth.json"
+    # Command construction installs the runtime auth alias; isolate from the owner's login.
+    home = tmp_path / "home"
+    login = home / ".config" / "muse" / "auth.json"
     login.parent.mkdir(parents=True)
-    (real_home / "Library" / "Keychains").mkdir(parents=True)
-    login.write_text("{}")
-    monkeypatch.setattr(exp_abcd.dispatcher, "REAL_HOME", real_home)
-    monkeypatch.setattr(exp_abcd.dispatcher, "AGENT_RUNTIME_DIR", tmp_path / "runtime")
+    (login.parents[2] / "Library/Keychains").mkdir(parents=True)
+    login.write_text(json.dumps({"providers": {"meta": {"mechanism": "oauth"}}}))
+    monkeypatch.setattr(dispatcher, "REAL_HOME", home)
+    monkeypatch.setattr(dispatcher, "AGENT_RUNTIME_DIR", tmp_path / "runtime")
+    monkeypatch.setattr(adapters, "AGENT_RUNTIME", tmp_path / "runtime")
     prompt = tmp_path / "p.txt"
     prompt.write_text("judge these")
     command = exp_abcd._eval_command("muse", str(prompt), tmp_path / "ws")
