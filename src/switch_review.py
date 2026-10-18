@@ -2033,7 +2033,7 @@ def comparative_routing_line(rep: dict) -> str:
         for agent, value in sorted({"codex": None, "claude": None, **result["lambda"]}.items())
     )
     line = (
-        f"comparative routing: classes_differing {result['classes_differing']} "
+        f"comparative routing: classes_differing {result['classes_differing'] if result['status'] == 'optimal' else 'unmeasured'} "
         f"(window {result['window_days']}d), λ {prices or 'unmeasured'}, status {result['status']}"
     )
     if result["status"] in {"partial", "inputs_unmeasured"}:

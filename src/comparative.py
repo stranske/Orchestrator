@@ -323,13 +323,21 @@ def measure(
         remaining = (1 - reserve) - used
         budget[agent] = max(0.0, remaining)
         sources[agent]["over_reserve"] = remaining < 0
+        # Current pacing blends short-window burn with the period prior. Sparse
+        # history can leave the legacy EWMA null while this rate remains measured.
         burn_key = next(
-            (key for key in ("burn_rate_per_day", "burn_per_day") if _number(pacing.get(key))), None
+            (
+                key
+                for key in ("burn_effective_per_hour", "burn_rate_per_day", "burn_per_day")
+                if _number(pacing.get(key))
+            ),
+            None,
         )
         agent_runs = [row for row in runs if row["agent"] == agent]
         if burn_key is None or pacing[burn_key] < 0:
-            missing("burn_rate_per_day/burn_per_day unmeasured or invalid")
+            missing("burn_effective_per_hour/burn_rate_per_day/burn_per_day unmeasured or invalid")
             continue
+        burn_per_day = pacing[burn_key] * (24 if burn_key == "burn_effective_per_hour" else 1)
         if not agent_runs:
             missing(f"{db_path}: runs[{agent}] window run count unmeasured")
             continue
@@ -373,10 +381,12 @@ def measure(
             )
             if not local:
                 sources[agent]["imputed"].append(task)
-            cost[agent][task] = pacing[burn_key] / (len(agent_runs) / window_days) * multiplier
-        sources[agent][
-            "source"
-        ] = f"{location}.{burn_key} / runs_per_day; local token ratio (1.0 if imputed)"
+            cost[agent][task] = burn_per_day / (len(agent_runs) / window_days) * multiplier
+        sources[agent]["source"] = (
+            f"{location}.{burn_key}"
+            + (" * 24" if burn_key == "burn_effective_per_hour" else "")
+            + " / runs_per_day; local token ratio (1.0 if imputed)"
+        )
         if not cells or any(not _number(v) or not 0 <= v <= 1 for v in cells.values()):
             missing(f"{db_path}: posterior[{agent}] unmeasured or invalid")
             continue
@@ -522,6 +532,11 @@ def report(db_path: Path, path: Path, *, now=None, window_days=WINDOW_DAYS) -> d
         status = "not_testable_slack"
     if not hours:
         errors.append(f"{path}: no event=pacing_snapshot rows in window (ts required)")
+    elif not enough:
+        errors.append(
+            f"measured pacing hour share {measured}/{len(hours)} below {MIN_MEASURED_HOUR_SHARE}"
+        )
+        errors.extend(reason for reasons in hour_reasons.values() for reason in reasons)
     return {
         "classes": classes,
         "classes_differing": differing,
@@ -541,7 +556,7 @@ def format_report(result: dict) -> str:
         for task, row in sorted(result["classes"].items())
     ]
     lines += [
-        f"classes_differing {result['classes_differing']}",
+        f"classes_differing {result['classes_differing'] if result['status'] == 'optimal' else 'unmeasured'}",
         f"status {result['status']}; hours_measured {result['hours_measured']}/{result['hours_observed']} (needs share ≥ {MIN_MEASURED_HOUR_SHARE})",
     ]
     lines += result["reasons"]
