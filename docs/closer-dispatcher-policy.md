@@ -53,6 +53,18 @@ current blockers for all remaining work. Record owners, evidence revisions, next
 actions and resumption conditions. A generic needs-human label is not a decision;
 identify the actual unresolved choice when one exists.
 
+A malformed ordinary worker result or an item-scoped hold can leave an exact target
+in the inner queue's terminal `wait` state. The outer pipeline records this only as
+`validated_inner_wait` when the finished, stop-valid inner receipt is bound to the
+same target, revision, head, durable action ledger and specific source trigger, with
+no uncertain operation. It is neither acceptance nor a fabricated asynchronous
+event. A later cadence prepares fresh source evidence and re-evaluates the target;
+an unverified or changed receipt fails closed. A pre-fix failed action is carried
+forward only when its retained blocked receipt matches this same durable proof;
+the historical invalid stop remains in the audit. Reusing an unchanged wait still
+requires fresh campaign admission and matching evidence producer and semantic
+binding. A changed producer or head returns to normal interpretation.
+
 Before ACTION C finalizes the round, run
 `python3 ~/.codex/orchestrator-mirror/closer_dispatcher.py validate-stop --state "$CLOSER_ROUND_STATE" --assignment ~/.codex/automations/reviewed-repo-automation-controller/closer-assignment.json`.
 The postrun hook independently performs this check before end-round and relay;

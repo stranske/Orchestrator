@@ -8,6 +8,7 @@ import time
 import pytest
 
 import closer_pipeline
+import closer_queue
 from closer_pipeline import run_pipeline, validate_stop
 
 
@@ -41,6 +42,348 @@ def callbacks(*, interpret=None, act=None, exception=None):
         "act": act or (lambda target, ctx: {"status": "completed", "target_complete": True}),
         "exception": exception or (lambda target, ctx: {"reviewed": True}),
     }
+
+
+@pytest.mark.parametrize(
+    ("reason", "labels"),
+    [
+        ("worker_json_invalid", []),
+        ("current item-scoped hold: ['agents:paused']", ["agents:paused"]),
+    ],
+)
+def test_validated_inner_wait_is_stop_valid_and_refreshes_next_cadence(tmp_path, reason, labels):
+    target = "owner/repo#1"
+    path = tmp_path / "pipeline.json"
+    trigger = (
+        "source owner supplies current-head proof or resolves the named finding"
+        if reason == "worker_json_invalid"
+        else "source owner removes agents:paused"
+    )
+    head = ["a" * 40]
+    calls = []
+    interpretation_calls = []
+
+    def prepare(_target, _context):
+        revision = "revision-" + head[0]
+        return {
+            "revision": revision,
+            "identity": target,
+            "semantic_cache_key": "closer-evidence-semantic/v1:"
+            + hashlib.sha256(head[0].encode()).hexdigest(),
+            "snapshot": {"target": target, "revision": revision, "head": head[0], "kind": "pr"},
+        }
+
+    def interpret(_target, _context):
+        interpretation_calls.append(head[0])
+        return {"classification": "deterministic_inner_wait", "substantive_needs": []}
+
+    def act(_target, context):
+        calls.append(head[0])
+        inner_path = context["action_state_path"]
+        receipt = closer_queue.run_round(
+            inner_path,
+            [target],
+            lambda _item: {
+                "target": target,
+                "revision": context["revision"],
+                "action": "wait",
+                "eligible": False,
+                "requires_coordinator": False,
+                "reason": reason,
+                "next_trigger": trigger,
+                "evidence": {"head": head[0], "labels": labels, "sources": []},
+            },
+            lambda *_args: pytest.fail("inner wait must not execute an action"),
+            deadline=time.time() + 30,
+            max_workers=1,
+            max_passes=1,
+        )
+        proof = {
+            "schema": closer_pipeline.INNER_WAIT_SCHEMA,
+            "target": target,
+            "revision": context["revision"],
+            "head": head[0],
+            "reason": reason,
+            "next_trigger": trigger,
+            "inner_path": inner_path,
+            "receipt_sha256": closer_pipeline._digest(receipt),
+        }
+        return {
+            "status": "deferred",
+            "reason": "validated_inner_wait",
+            "next_trigger": trigger,
+            "resource_evidence": {"inner_wait": proof},
+        }
+
+    cb = {
+        "prepare": prepare,
+        "interpret": interpret,
+        "exception": lambda *_: pytest.fail("exception not needed"),
+        "act": act,
+    }
+    first = run(path, [target], cb)
+    assert validate_stop(path, [target])["stop_valid"] is True
+    assert first["targets"][target]["deferred_reason"] == "validated_inner_wait"
+    assert validate_stop(path, [target])["stop_valid"] is True
+    # The old ordinary model result can be cached, but a validated wait still
+    # needs today's fresh admission before reusing it.
+    state = closer_pipeline._load(path)
+    old_prep = first["targets"][target]["results"]["prepare"]
+    cache_key = closer_pipeline._digest(
+        {
+            "schema": "closer-pipeline-semantic-cache/v1",
+            "target": target,
+            "identity": target,
+            "stage": "interpret",
+            "semantic": old_prep["semantic_cache_key"],
+        }
+    )
+    state["cache"][cache_key] = {
+        "target": target,
+        "stage": "interpret",
+        "value": {"classification": "relevant", "substantive_needs": []},
+    }
+    closer_pipeline._save(path, state)
+    run(path, [target], cb)
+    assert interpretation_calls == ["a" * 40, "a" * 40]
+    assert validate_stop(path, [target])["stop_valid"] is True
+    head[0] = "b" * 40
+    run(path, [target], cb)
+    assert validate_stop(path, [target])["stop_valid"] is True
+    assert interpretation_calls == ["a" * 40, "a" * 40, "b" * 40]
+    assert calls == ["a" * 40, "a" * 40, "b" * 40]
+
+
+def test_validated_inner_wait_rejects_spoofed_or_stale_proof(tmp_path):
+    target = "owner/repo#1"
+    path = tmp_path / "pipeline.json"
+    reason = "worker_json_invalid"
+    trigger = "source owner supplies current-head proof or resolves the named finding"
+    snapshot = {"target": target, "revision": "rev", "head": "a" * 40, "kind": "pr"}
+    proof = {
+        "schema": closer_pipeline.INNER_WAIT_SCHEMA,
+        "target": target,
+        "revision": "rev",
+        "head": "a" * 40,
+        "reason": reason,
+        "next_trigger": trigger,
+        "inner_path": str(
+            path.parent / f"{path.stem}.actions" / f"{closer_pipeline._digest(target)}.json"
+        ),
+        "receipt_sha256": "0" * 64,
+    }
+    cb = {
+        "prepare": lambda *_: {"revision": "rev", "identity": target, "snapshot": snapshot},
+        "interpret": lambda *_: {"substantive_needs": []},
+        "exception": lambda *_: pytest.fail("exception not needed"),
+        "act": lambda *_: {
+            "status": "deferred",
+            "reason": "validated_inner_wait",
+            "next_trigger": trigger,
+            "resource_evidence": {"inner_wait": proof},
+        },
+    }
+    receipt = run(path, [target], cb)
+    assert validate_stop(path, [target])["stop_valid"] is False
+    assert receipt["targets"][target]["error"] == "unverified_inner_wait"
+
+
+def test_inner_wait_proof_rejects_changed_head_assignment_row_and_operation(tmp_path):
+    target = "owner/repo#1"
+    path = tmp_path / "pipeline.json"
+    inner_path = path.parent / f"{path.stem}.actions" / f"{closer_pipeline._digest(target)}.json"
+    reason = "worker_json_invalid"
+    trigger = "source owner supplies current-head proof or resolves the named finding"
+    head = "a" * 40
+    snapshot = {"target": target, "revision": "rev", "head": head, "kind": "pr"}
+    receipt = closer_queue.run_round(
+        inner_path,
+        [target],
+        lambda _target: {
+            "target": target,
+            "revision": "rev",
+            "action": "wait",
+            "eligible": False,
+            "requires_coordinator": False,
+            "reason": reason,
+            "next_trigger": trigger,
+            "evidence": {"head": head},
+        },
+        lambda *_: pytest.fail("wait must not execute"),
+        deadline=time.time() + 30,
+        max_workers=1,
+        max_passes=1,
+    )
+    proof = {
+        "schema": closer_pipeline.INNER_WAIT_SCHEMA,
+        "target": target,
+        "revision": "rev",
+        "head": head,
+        "reason": reason,
+        "next_trigger": trigger,
+        "inner_path": str(inner_path),
+        "receipt_sha256": closer_pipeline._digest(receipt),
+    }
+
+    def valid():
+        return closer_pipeline._valid_inner_wait(
+            path, target, "rev", snapshot, reason, trigger, proof
+        )
+
+    assert valid()
+    assert not closer_pipeline._valid_inner_wait(
+        path, target, "rev", {**snapshot, "head": "b" * 40}, reason, trigger, proof
+    )
+    assert not closer_pipeline._valid_inner_wait(
+        path,
+        target,
+        "rev",
+        snapshot,
+        reason,
+        trigger,
+        {**proof, "inner_path": str(tmp_path / "other")},
+    )
+    assert not closer_pipeline._valid_inner_wait(
+        path,
+        target,
+        "rev",
+        snapshot,
+        "generic blocked",
+        trigger,
+        {**proof, "reason": "generic blocked"},
+    )
+    original = closer_queue._read_state(inner_path)
+    for mutate in (
+        lambda state: state["round"].update(assignment_targets=["owner/repo#2"]),
+        lambda state: state["round"].update(status="running"),
+        lambda state: state["items"][target]["evidence"].update(head="b" * 40),
+        lambda state: state["items"][target].update(
+            operation={"id": "unknown", "status": "uncertain"}
+        ),
+        lambda state: state["items"][target].update(operation_history=["unknown"]),
+        lambda state: state["round"]["receipt"]["accounting"][0].update(eligible=True),
+    ):
+        changed = json.loads(json.dumps(original))
+        mutate(changed)
+        closer_queue._atomic_write(inner_path, changed)
+        assert not valid()
+    closer_queue._atomic_write(inner_path, original)
+    assert valid()
+
+
+@pytest.mark.parametrize("tamper", [None, "generic_blocked", "missing_receipt", "uncertain_op"])
+def test_legacy_failed_act_recovers_only_from_exact_durable_wait(tmp_path, tamper):
+    target = "owner/repo#1"
+    path = tmp_path / "pipeline.json"
+    head = "a" * 40
+    reason = "worker_json_invalid"
+    trigger = "source owner supplies current-head proof or resolves the named finding"
+    snapshot = {"target": target, "revision": "rev", "head": head, "kind": "pr"}
+    first_receipt = []
+    interpretation_calls = []
+
+    def inner_wait(context):
+        receipt = closer_queue.run_round(
+            context["action_state_path"],
+            [target],
+            lambda _target: {
+                "target": target,
+                "revision": "rev",
+                "action": "wait",
+                "eligible": False,
+                "requires_coordinator": False,
+                "reason": reason,
+                "next_trigger": trigger,
+                "evidence": {"head": head},
+            },
+            lambda *_: pytest.fail("terminal wait must not execute"),
+            deadline=time.time() + 30,
+            max_workers=1,
+            max_passes=1,
+        )
+        assert receipt["stop_valid"] is True
+        return receipt
+
+    def legacy_act(_target, context):
+        receipt = inner_wait(context)
+        first_receipt.append(receipt)
+        return {
+            "status": "blocked",
+            "reason": reason,
+            "next_trigger": trigger,
+            "queue_receipt": receipt,
+        }
+
+    def interpret(*_):
+        interpretation_calls.append(True)
+        return {"classification": "relevant", "substantive_needs": []}
+
+    cb = {
+        "prepare": lambda *_: {
+            "revision": "rev",
+            "identity": target,
+            "snapshot": snapshot,
+            "semantic_cache_key": "closer-evidence-semantic/v1:" + "1" * 64,
+        },
+        "interpret": interpret,
+        "exception": lambda *_: pytest.fail("exception not needed"),
+        "act": legacy_act,
+    }
+    first = run(path, [target], cb)
+    assert len(interpretation_calls) == 1
+    assert first["targets"][target]["status"] == "failed"
+    assert first["targets"][target]["stage"] == "act"
+    assert not validate_stop(path, [target])["stop_valid"]
+
+    inner_path = path.parent / f"{path.stem}.actions" / f"{closer_pipeline._digest(target)}.json"
+    if tamper == "uncertain_op":
+        inner = closer_queue._read_state(inner_path)
+        inner["items"][target]["operation"] = {"id": "unresolved", "status": "uncertain"}
+        closer_queue._atomic_write(inner_path, inner)
+    elif tamper in {"generic_blocked", "missing_receipt"}:
+        outer = closer_pipeline._load(path)
+        old = next(iter(outer["runs"].values()))["targets"][target]["results"]["act"]
+        if tamper == "generic_blocked":
+            old["reason"] = "generic blocked"
+        else:
+            old.pop("queue_receipt")
+        closer_pipeline._save(path, outer)
+
+    def current_act(_target, context):
+        receipt = inner_wait(context)
+        proof = {
+            "schema": closer_pipeline.INNER_WAIT_SCHEMA,
+            "target": target,
+            "revision": "rev",
+            "head": head,
+            "reason": reason,
+            "next_trigger": trigger,
+            "inner_path": context["action_state_path"],
+            "receipt_sha256": closer_pipeline._digest(receipt),
+        }
+        return {
+            "status": "deferred",
+            "reason": "validated_inner_wait",
+            "next_trigger": trigger,
+            "resource_evidence": {"inner_wait": proof},
+        }
+
+    second = run(path, [target], {**cb, "act": current_act})
+    if tamper:
+        assert second["status"] == "blocked"
+        assert second["reason"] == "prior_run_has_no_valid_stop"
+        assert len(interpretation_calls) == 1
+    else:
+        assert len(interpretation_calls) == 2  # old model cache cannot skip new admission
+        assert second["targets"][target]["deferred_reason"] == "validated_inner_wait"
+        assert validate_stop(path, [target])["stop_valid"]
+        state = closer_pipeline._load(path)
+        newest = next(iter(state["runs"].values()))
+        audit = newest["recovered_invalid_stop"]
+        assert audit["targets"][target]["receipt_sha256"] == closer_pipeline._digest(
+            first_receipt[0]
+        )
+        assert newest["prior_invalid_stop_evidence"]["valid"] is False
 
 
 def run(path, targets, cb=None, *, capacity=None, seconds=2, **kw):
