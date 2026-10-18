@@ -92,6 +92,14 @@ retain their barriers; removed read-only failures remain in the audit. They do
 not become new work. These barriers and the invalid-stop audit must survive
 later cadences and history trimming. Missing or malformed recovery proof fails
 closed; never clear the ledger or invent a resource boundary to admit work.
+An unknown reconciliation outcome retains an explicit reconciliation-only trigger.
+Recovery recognizes the legacy missing-trigger form only with its recorded unknown
+legacy-operation result; it does not establish that the operation never started.
+A compact excluded wait may recover its proof view only from a matching immutable
+audit and the unchanged current native wait validator. Its original compact-row
+hash remains recorded, the prior stop stays invalid, and the item stays excluded.
+Full validated wait proof takes precedence over compact carry on later cadences,
+including cadences whose prior stop is valid. Reassignment requires fresh preparation.
 If an action lacks a derived inner queue operation, reconciliation still checks
 the original legacy queue for an unresolved operation before declaring the
 action not started. Original uncertainty stays quarantined for its queue owner.
