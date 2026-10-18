@@ -32,6 +32,15 @@ import redirect_shadow
 
 ESCALATION_LABELS = {"needs-human", "agent:needs-attention"}
 ESCALATION_LABEL_ORDER = ["needs-human", "agent:needs-attention"]
+CLOSURE_HOLD_LABELS = {
+    "agents:auto-pilot-pause",
+    "agents:paused",
+    "agent:paused",
+    "do-not-merge",
+    "hold",
+    "needs-human",
+    "tracker:durable",
+}
 KEEPALIVE_LABEL = "agents:keepalive"
 PROPOSAL_ACTIONS = {"inspect", "redirect", "decompose"}
 DEFAULT_AC = (
@@ -292,8 +301,8 @@ def _close_verified_issue(
         repo.lower() in holds()
         or issue_target.lower() in holds()
         or any(
-            label["name"] in {"needs-human", "agents:paused", "tracker:durable"}
-            for label in issue.get("labels", [])
+            label["name"] in CLOSURE_HOLD_LABELS
+            for label in [*issue.get("labels", []), *pr["labels"]["nodes"]]
         )
     ):
         row["reason"] = "source issue held"
@@ -325,6 +334,10 @@ def _close_verified_issue(
             or (verdict == "PASS" and fresh_verdict != "PASS")
             or repo.lower() in holds()
             or issue_target.lower() in holds()
+            or any(
+                label["name"] in CLOSURE_HOLD_LABELS
+                for label in [*current.get("labels", []), *fresh["labels"]["nodes"]]
+            )
             or (verdict != "PASS" and not ci_green(repo, sha))
         ):
             row["reason"] = "evidence changed before closure"

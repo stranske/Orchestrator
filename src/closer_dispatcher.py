@@ -17,6 +17,7 @@ import math
 import os
 import re
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -81,6 +82,93 @@ def _parse_low_proposal(output):
     except ValueError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _worker_proposal(result, *, agent):
+    """Read only a completed provider deliverable, never tool output in its stream."""
+    output = result.get("output")
+    direct = _parse_low_proposal(output)
+    if direct:
+        return direct
+    if agent != "codex" or not isinstance(output, str):
+        return {}
+    final = None
+    candidate = None
+    events = []
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            return {}
+        if not isinstance(event, dict):
+            return {}
+        events.append(event)
+        item = event.get("item")
+        if event.get("type") == "item.completed" and isinstance(item, dict):
+            if item.get("type") == "agent_message" and isinstance(item.get("text"), str):
+                candidate = item["text"]
+        if event.get("type") == "turn.completed":
+            final = candidate
+            candidate = None
+    if not events or events[-1].get("type") != "turn.completed" or candidate is not None:
+        return {}
+    return _parse_low_proposal(final)
+
+
+def _worker_actual(result):
+    return {
+        key: result.get(key)
+        for key in (
+            "exit",
+            "model",
+            "profile_id",
+            "run_id",
+            "requested_model",
+            "served_model",
+            "served_model_status",
+            "log",
+        )
+    }
+
+
+def _uncertain_worker(result, *, target, snapshot, prep, context, agent, profile):
+    if not (result.get("outcome_uncertain") is True or result.get("retry_safe") is False):
+        return None
+    # The pipeline independently validates this envelope. Preserve malformed
+    # uncertainty as an unbound hold; raising a read-stage error would make the
+    # unknown invocation eligible for a fresh-cadence retry.
+    return {
+        "status": "uncertain",
+        "classification": "provider_outcome_uncertain",
+        "substantive_needs": [],
+        "authority": False,
+        "provider_outcome": {
+            "schema": (
+                "closer-provider-outcome-uncertain/v1"
+                if result.get("outcome_uncertain") is True
+                else "closer-provider-outcome-unbound/v1"
+            ),
+            "target": target,
+            "head": snapshot.get("head"),
+            "base": snapshot.get("base"),
+            "revision": context.get("revision"),
+            "identity": context.get("identity", target),
+            "semantic_cache_key": prep.get("semantic_cache_key"),
+            "actual": {
+                **_worker_actual(result),
+                "agent": agent,
+                "requested_profile": profile,
+                "outcome_status": result.get("outcome_status"),
+                "retry_safe": result.get("retry_safe"),
+                "error": str(result.get("error") or "")[:1000],
+                "provider_completed": result.get("provider_completed") is True,
+                "raw_exit": result.get("raw_exit"),
+                "completion_persistence": result.get("completion_persistence"),
+            },
+        },
+    }
 
 
 def _event_epoch(value):
@@ -1886,6 +1974,118 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             snap["base"] = packet.get("base")
         return snap, packet
 
+    def completed_retention_hold(
+        result, target, prep, context, error, agent, profile, retained_evidence=None
+    ):
+        # A successful provider invocation already happened. A local evidence
+        # write failure cannot turn its true exit0 into a retryable read error.
+        # The existing unbound-outcome barrier requires reconciliation; this
+        # explicit completed receipt never pretends the provider is still running.
+        output = result.get("output")
+        raw_identity = {}
+        if isinstance(output, str):
+            raw = output.encode()
+            raw_identity = {
+                "output_sha256": hashlib.sha256(raw).hexdigest(),
+                "output_bytes": len(raw),
+            }
+        return {
+            "status": "uncertain",
+            "classification": "completed_response_retention_failed",
+            "substantive_needs": [],
+            "authority": False,
+            "provider_outcome": {
+                "schema": "closer-completed-response-retention/v1",
+                "target": target,
+                "head": (prep.get("snapshot") or {}).get("head"),
+                "revision": context.get("revision"),
+                "identity": context.get("identity", target),
+                "semantic_cache_key": prep.get("semantic_cache_key"),
+                "actual": {
+                    **_worker_actual(result),
+                    "agent": agent,
+                    "requested_profile": profile,
+                    "provider_completed": True,
+                    **raw_identity,
+                },
+                **({"retained_evidence": retained_evidence} if retained_evidence else {}),
+                "retention_error": str(error)[:1000],
+                "next_trigger": "reconcile original completed provider output before any retry",
+            },
+        }
+
+    def retained_worker_text(ref):
+        if not isinstance(ref, dict) or type(ref.get("bytes")) is not int:
+            raise RuntimeError("worker response reference is invalid")
+        path = Path(ref.get("path", ""))
+        if (
+            path.is_symlink()
+            or not path.resolve().is_relative_to(retained_dir.resolve())
+            or not 0 <= ref["bytes"] <= 4 * 1024 * 1024
+        ):
+            raise RuntimeError("worker response reference escaped retained evidence")
+        # Check the opened inode before reading; a small declared size must not
+        # permit an unbounded read of a larger file. O_NOFOLLOW also closes the
+        # leaf-symlink race between the path checks and opening the response.
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size != ref["bytes"]:
+                raise RuntimeError("worker response reference hash or size differs")
+            raw = stream.read(ref["bytes"] + 1)
+        if len(raw) != ref["bytes"] or hashlib.sha256(raw).hexdigest() != ref.get("sha256"):
+            raise RuntimeError("worker response reference hash or size differs")
+        return raw.decode()
+
+    class CompletedResponseReadError(RuntimeError):
+        def __init__(self, error, actual, ref, kind, agent, profile):
+            super().__init__(str(error))
+            self.actual, self.ref, self.kind = actual, ref, kind
+            self.agent, self.profile = agent, profile
+
+    def completed_response_text(ref, actual, kind, agent, profile):
+        try:
+            return retained_worker_text(ref)
+        except (OSError, ValueError, RuntimeError) as error:
+            if (
+                isinstance(actual, dict)
+                and type(actual.get("exit")) is int
+                and actual["exit"] == 0
+                and isinstance(actual.get("run_id"), str)
+                and actual["run_id"]
+            ):
+                raise CompletedResponseReadError(
+                    error, actual, ref, kind, agent, profile
+                ) from error
+            raise
+
+    def readback_hold(error, target, prep, context):
+        return completed_retention_hold(
+            error.actual,
+            target,
+            prep,
+            context,
+            error,
+            error.agent,
+            error.profile,
+            retained_evidence={"kind": error.kind, "ref": error.ref},
+        )
+
+    def full_interpretation(value):
+        if not isinstance(value, dict) or not value.get("proposal_ref"):
+            return value
+        proposal = json.loads(
+            completed_response_text(
+                value["proposal_ref"],
+                value.get("actual"),
+                "proposal_ref",
+                value.get("requested_agent"),
+                value.get("requested_profile"),
+            )
+        )
+        if not isinstance(proposal, dict):
+            raise RuntimeError("retained worker proposal is not an object")
+        return {**value, "proposal": proposal}
+
     def durable_verifier_label_event(target, prep, snapshot, action_state_path):
         if (
             not isinstance(snapshot, dict)
@@ -2349,6 +2549,22 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 }
             raise RuntimeError(dependency.get("reason") or "assignment changed during pipeline")
         deterministic_action = (prep.get("proposal") or {}).get("action")
+        if (
+            deterministic_action == "close_source"
+            and admitted_snapshot.get("target") == target
+            and admitted_snapshot.get("revision") == prep.get("revision")
+            and admitted_snapshot.get("state") == "MERGED"
+            and acceptance_ok(admitted_snapshot, backend.dispositions.get(target))
+        ):
+            action, _reason, eligible, _trigger = backend.select(admitted_snapshot)
+            if action == "close_source" and eligible is True:
+                # A new, fully bound coordinator disposition supersedes an older
+                # nonaccepting refusal. The native queue still refreshes all guards.
+                return {
+                    "classification": "deterministic_close_source",
+                    "substantive_needs": [],
+                    "authority": False,
+                }
         if deterministic_action == "collect_evidence" and durable_verifier_label_event(
             target, prep, admitted_snapshot, context.get("action_state_path")
         ):
@@ -2673,7 +2889,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             return interpret(target, context)
         with route_lock:
             route_lock.notify_all()
-        proposal = _parse_low_proposal(output)
+        proposal = _worker_proposal(result, agent=route["agent"])
         valid = (
             result.get("exit") == 0
             and isinstance(result.get("run_id"), str)
@@ -2734,18 +2950,37 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 needs = list(needs) + [
                     "evidence_bound_exception:" + str(integration.get("reason", "review"))
                 ]
+        proposal_ref = None
+        if valid:
+            proposal_bytes = json.dumps(
+                proposal, ensure_ascii=False, separators=(",", ":")
+            ).encode()
+            if len(proposal_bytes) > 16 * 1024:
+                try:
+                    proposal_ref = closer_evidence._retain_bytes(
+                        retained_dir, proposal_bytes, "proposal.json"
+                    )
+                except OSError as error:
+                    return completed_retention_hold(
+                        result, target, prep, context, error, route["agent"], route["profile_id"]
+                    )
         return {
+            **({"proposal_ref": proposal_ref} if proposal_ref else {}),
             "classification": proposal.get("classification") if valid else "uncertain",
             "substantive_needs": needs,
             "proposal": (
                 proposal
-                if valid
-                else {"raw_excerpt": output[-4000:] if incomplete_assessment else output[:4000]}
+                if valid and not proposal_ref
+                else (
+                    {}
+                    if valid
+                    else {"raw_excerpt": output[-4000:] if incomplete_assessment else output[:4000]}
+                )
             ),
             "requested_agent": route["agent"],
             "requested_profile": route["profile_id"],
             "actual": {
-                **{k: result.get(k) for k in ("exit", "model", "profile_id", "run_id")},
+                **_worker_actual(result),
                 **({"raw_exit": result["raw_exit"]} if incomplete_assessment else {}),
             },
             "authority": False,
@@ -2761,7 +2996,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             # the original proposal and packet before using that disposition.
             **(
                 {"integration_disposition": integration.get("disposition")}
-                if integration.get("status") != "ordinary_nonpass"
+                if integration.get("status") not in {"ordinary_nonpass", "accepted"}
                 else {}
             ),
             "prior_provider_failures": list(low_profile_failures.values()),
@@ -2771,7 +3006,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         # Reuse the existing isolated Codex assessment path and all of its campaign,
         # shed-marker, workspace and no-retry guards. This is only for substantive need.
         prep = context.get("prepare", {})
-        interpreted = context.get("interpret", {})
+        try:
+            interpreted = full_interpretation(context.get("interpret", {}))
+        except CompletedResponseReadError as error:
+            return readback_hold(error, target, prep, context)
         exception_snapshot, _packet = full_snapshot(prep)
         proposal = {
             "interpretation": interpreted.get("proposal"),
@@ -2856,12 +3094,21 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 for pool in strong_pools:
                     route_load["pool:" + pool] = max(0, route_load.get("pool:" + pool, 1) - 1)
         worker_row = result.get("worker") if isinstance(result, dict) else None
+        if isinstance(worker_row, dict):
+            uncertain = _uncertain_worker(
+                worker_row,
+                target=target,
+                snapshot=exception_snapshot,
+                prep=prep,
+                context=context,
+                agent="codex",
+                profile=strong_profile,
+            )
+            if uncertain is not None:
+                return uncertain
         if isinstance(worker_row, dict) and worker_row.get("exit") == 0:
-            try:
-                strong_json = json.loads(worker_row.get("output") or "")
-            except (ValueError, TypeError):
-                strong_json = None
-            if isinstance(strong_json, dict):
+            strong_json = _worker_proposal(worker_row, agent="codex")
+            if strong_json:
                 import closer_disposition
 
                 validated = closer_disposition.integrate_ordinary(
@@ -2885,15 +3132,43 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "reason": (result.get("reason") if isinstance(result, dict) else None)
                 or "strong_worker_unavailable",
             }
+        retained_result = dict(result)
+        if isinstance(worker_row, dict) and isinstance(worker_row.get("output"), str):
+            # Keep the exact native response once, outside the bounded scheduling ledger.
+            # The accepted disposition remains independently validated, not a file pointer.
+            try:
+                output_ref = closer_evidence._retain_bytes(
+                    retained_dir, worker_row["output"].encode(), "worker-output.txt"
+                )
+            except OSError as error:
+                if worker_row.get("exit") == 0:
+                    return completed_retention_hold(
+                        worker_row, target, prep, context, error, "codex", strong_profile
+                    )
+                raise
+            retained_result["worker"] = {
+                **{k: v for k, v in worker_row.items() if k != "output"},
+                "output_ref": output_ref,
+            }
+        validated_ref = None
+        validation_bytes = json.dumps(validated, ensure_ascii=False, separators=(",", ":")).encode()
+        if len(validation_bytes) > 8 * 1024:
+            try:
+                validated_ref = closer_evidence._retain_bytes(
+                    retained_dir, validation_bytes, "validation.json"
+                )
+            except OSError as error:
+                return completed_retention_hold(
+                    worker_row, target, prep, context, error, "codex", strong_profile
+                )
+            validated = {key: validated.get(key) for key in ("status", "reason")}
         return {
+            **({"validated_ref": validated_ref} if validated_ref else {}),
             "status": result.get("status"),
-            "result": result,
+            "result": retained_result,
             "requested_agent": "codex",
             "requested_profile": strong_profile,
-            "actual": {
-                k: (result.get("worker") or {}).get(k)
-                for k in ("exit", "model", "profile_id", "run_id")
-            },
+            "actual": _worker_actual(worker_row or {}),
             "authority": False,
             "validated": validated,
         }
@@ -2915,9 +3190,23 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             assignment_rows=backend.assignment_rows,
             assignment_guard_fn=backend.assignment_guard_fn,
         )
-        interpreted = context.get("interpret", {})
+        interpreted = full_interpretation(context.get("interpret", {}))
         prep = context.get("prepare", {})
         snap, _packet = full_snapshot(prep)
+        if (
+            isinstance(interpreted, dict)
+            and interpreted.get("classification") == "deterministic_close_source"
+            and interpreted.get("authority") is False
+            and interpreted.get("substantive_needs") == []
+            and (prep.get("proposal") or {}).get("action") == "close_source"
+            and snap.get("target") == target
+            and snap.get("revision") == prep.get("revision") == context.get("revision")
+            and snap.get("state") == "MERGED"
+            and acceptance_ok(snap, current.dispositions.get(target))
+        ):
+            native_action, _reason, native_eligible, _trigger = current.select(snap)
+            if native_action == "close_source" and native_eligible is True:
+                return current
         if (
             isinstance(interpreted, dict)
             and interpreted.get("classification") == "deterministic_post_merge_verify"
@@ -2983,7 +3272,25 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "accepted",
                 "ordinary_nonpass",
             }:
-                integration = strong_validated
+                # Re-read the original native response and re-integrate against
+                # the current preparation. A retained validation summary/ref has
+                # no acceptance authority and cannot substitute for these proofs.
+                worker = (strong.get("result") or {}).get("worker") or {}
+                output = completed_response_text(
+                    worker.get("output_ref"),
+                    strong.get("actual"),
+                    "output_ref",
+                    strong.get("requested_agent"),
+                    strong.get("requested_profile"),
+                )
+                original_proposal = _worker_proposal({**worker, "output": output}, agent="codex")
+                integration = closer_disposition.integrate_ordinary(
+                    target,
+                    snap,
+                    prep.get("packet_ref", {}),
+                    prep,
+                    {"actual": strong.get("actual"), "proposal": original_proposal},
+                )
             if integration.get("status") == "accepted" and isinstance(
                 integration.get("disposition"), dict
             ):
@@ -3068,7 +3375,11 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         dependency = _legacy_operation_dependency(state_path, target, prep_snapshot)
         if dependency:
             return dependency
-        current = action_backend(target, context)
+        try:
+            current = action_backend(target, context)
+        except CompletedResponseReadError as error:
+            # This boundary precedes the inner queue and any guarded operation.
+            return readback_hold(error, target, context.get("prepare", {}), context)
         receipt = closer_queue.run_round(
             action_state,
             [target],

@@ -363,6 +363,13 @@ on the exact tree about to go live.
    snapshot change before mutating the live mirror. It never re-reads mutable `SRC` or fetches the
    registry a second time.
 
+The automatic wrapper captures the incumbent generation before verification and supplies that opaque
+identity to the installer. Under the publication lock, a changed incumbent rejects automatic
+publication before any live generation or registry mutation. Reconcile the competing publisher and
+verify again; do not retry with a refreshed token from the completed old verification. Direct installer
+use without the optional token retains deliberate operator rollback behavior. This prevents late
+automatic publication without imposing source-commit ordering on manual installation.
+
 The installer first builds a private deployment payload and checks its complete digest against
 the receipt, including permissions and symlink targets. It validates the copied docs manifest and
 registry JSON before removing any live deployment files. Installation and the separate registry
@@ -452,6 +459,18 @@ if [[ ! -f "$PRE" ]]; then
   exit 3
 fi
 
+# Automatic publication is conditional on the incumbent observed BEFORE verification.
+# Direct installer use without this optional token still permits deliberate rollback.
+CAPTURE_INSTALLER="$SRC/scripts/install_verified_snapshot.py"
+if ! EXPECTED_GENERATION="$(python3 -I "$CAPTURE_INSTALLER" "$MIRROR" --generation-token)"; then
+  echo "NOT SYNCED: cannot capture incumbent mirror generation." >&2
+  exit 3
+fi
+if [[ ! "$EXPECTED_GENERATION" =~ ^generation-v1:[0-9a-f]{64}$ ]]; then
+  echo "NOT SYNCED: invalid incumbent generation token." >&2
+  exit 3
+fi
+
 STAGE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/orch-verified-sync.XXXXXX")"
 trap 'rm -rf "$STAGE_ROOT"' EXIT
 SNAPSHOT="$STAGE_ROOT/mirror"
@@ -488,6 +507,7 @@ echo
 echo "== installing the verified snapshot (SRC is not read again)"
 if python3 -I "$INSTALLER" "$SNAPSHOT" "$MIRROR" \
   --expected-digest "$EXPECTED_DIGEST" \
+  --expected-generation "$EXPECTED_GENERATION" \
   --runtime-registry "$HOME/.codex/orchestrator/repo_review_registry.json"; then
   :
 else
