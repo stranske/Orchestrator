@@ -254,7 +254,8 @@ def _pacing(now: int, field: str) -> Measurement:
     if reader is None:
         return unknown(now, f"#668 capacity.py pacing-report {field} (source absent)")
     # Consume explicit evidence only; an absent/changed schema remains unknown.
-    row = reader().get(field)
+    # Pass the ledger's clock: a reading stamped after `now` is rejected as invalid by measure().
+    row = reader(now).get(field)
     if not isinstance(row, dict) or not row.get("evidence_class"):
         return unknown(now, f"#668 capacity.py pacing-report {field} with evidence class")
     if row.get("value") is None:
