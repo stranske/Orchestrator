@@ -303,15 +303,18 @@ def parse_resets_in_duration(text: str, *, now: int | None = None) -> int | None
 
 
 def provider_reset_at(agent: str, lines: list[str], *, now: int | None = None) -> int | None:
-    """When the provider says it will serve again, from codex's own harness events, or None.
+    """When the provider says it will serve again, or None for the default cooldown.
 
-    The reset is the provider's clock ("try again at Sep 28th, 2026 8:26 PM"), and it may come only
-    from the provider's text: the messages of the harness's `error` and `turn.failed` events among
-    the lines `failure_evidence` keeps. A plain line is never read. A codex run without `--json`
-    (`assess`) prints its transcript as text, and stderr can carry the agent's commands too, so a
-    plain line may be the agent's own work, and a reset read from it would hold the seat until
-    whatever date that work happened to mention. Every other agent's output is plain text; for
-    them the answer is None, and the seat sheds for the cooldown.
+    Codex: the reset is the provider's clock ("try again at Sep 28th, 2026 8:26 PM"), and it may
+    come only from the provider's text: the messages of the harness's `error` and `turn.failed`
+    events among the lines `failure_evidence` keeps. A plain line is never read for codex. A codex
+    run without `--json` (`assess`) prints its transcript as text, and stderr can carry the agent's
+    commands too, so a plain line may be the agent's own work, and a reset read from it would hold
+    the seat until whatever date that work happened to mention.
+
+    Gemini: output is plain text (glog-prefixed agent-executor lines). Parse ``Resets in NhNmNs``
+    from those lines so shed lasts until the provider's stated window rather than DEFAULT_COOLDOWN_S.
+    Every other agent's answer is None, and the seat sheds for the cooldown.
 
     One reading for every observer of a run: the synchronous offload, `adapters.dispatch` and the
     completion reconciler. They share one incident (`_idempotency_key`), and the first to record it
@@ -610,12 +613,24 @@ def _selftest() -> int:
             evidence="quota exhausted",
         )["deduped"]
         assert first["incident_id"]
-        # A reset comes from codex's harness error events only, never a plain line or another agent.
+        # Codex: reset from harness error events only, never a plain line.
         refusal = "You've hit your usage limit. Try again at Jan 5th, 2099 3:11 AM."
         event = json.dumps({"type": "turn.failed", "error": {"message": refusal}})
         assert provider_reset_at("codex", [event]) == parse_relay_reset_at(refusal) is not None
         assert provider_reset_at("codex", [refusal]) is None
         assert provider_reset_at("claude", [event]) is None
+        # Gemini: glog agent-executor Individual quota line is authoritative quota + Resets-in.
+        gemini_line = (
+            "E1018 01:42:33.766065 697 errorreport.go:224] agent executor error: generating and "
+            "executing: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade "
+            "your subscription to increase your limits. Resets in 140h5m6s."
+        )
+        assert classify_provider_failure(gemini_line) == ("quota", "quota_exhausted", "high")
+        assert not is_authoritative_error("handle RESOURCE_EXHAUSTED errors")
+        base = 1_700_000_000
+        assert (
+            provider_reset_at("gemini", [gemini_line], now=base) == base + 140 * 3600 + 5 * 60 + 6
+        )
         print("rate_incidents.py selftest: OK")
         return 0
     finally:

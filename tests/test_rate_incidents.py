@@ -94,6 +94,7 @@ def test_evidence_is_bounded_and_redacted(incident_paths):
         ('{"error":{"status":"RESOURCE_EXHAUSTED"}}', True),
         ("review confirms resource_exhausted handling is covered", False),
         ("the provider returned resource_exhausted in the test fixture", False),
+        ("handle RESOURCE_EXHAUSTED errors", False),
         ("HTTP 429 Too Many Requests", True),
         ("status code: 429", True),
         ("Error 429 from provider", True),
