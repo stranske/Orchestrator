@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
@@ -26,7 +27,11 @@ def _result(
     }
 
 
-def _safe_raw(ref: Any, root: Path) -> bytes | None:
+def _safe_raw(
+    ref: Any, root: Path, *, max_bytes: int = closer_evidence.MAX_SECTION_BYTES
+) -> bytes | None:
+    if not 0 < max_bytes <= closer_evidence.MAX_UNCOMPRESSED_BYTES:
+        return None
     if not isinstance(ref, dict) or not isinstance(ref.get("path"), str):
         return None
     if not isinstance(ref.get("sha256"), str) or not closer_evidence.SHA256.fullmatch(
@@ -52,14 +57,50 @@ def _safe_raw(ref: Any, root: Path) -> bytes | None:
                 except ValueError:
                     continue
                 return None
-        if not path.is_file() or path.stat().st_size > closer_evidence.MAX_SECTION_BYTES:
+        if not path.is_file() or path.stat().st_size > max_bytes:
             return None
-        data = path.read_bytes()
+        with path.open("rb") as source:
+            data = source.read(max_bytes + 1)
     except (OSError, ValueError):
         return None
-    if len(data) != ref.get("bytes") or hashlib.sha256(data).hexdigest() != ref["sha256"]:
+    if (
+        len(data) > max_bytes
+        or len(data) != ref.get("bytes")
+        or hashlib.sha256(data).hexdigest() != ref["sha256"]
+    ):
         return None
     return data
+
+
+def _safe_junit_raw(ref: Any, root: Path) -> bytes | None:
+    """Read one complete CI file under the collector's existing expansion cap."""
+    data = _safe_raw(ref, root, max_bytes=closer_evidence.MAX_UNCOMPRESSED_BYTES)
+    if data is None:
+        return None
+    try:
+        return data if closer_evidence._junit_receipt(data) is not None else None
+    except (ET.ParseError, ValueError):
+        return None
+
+
+def _unsupported_members_only(artifact: Mapping[str, Any]) -> bool:
+    omissions = artifact.get("omissions")
+    reasons = {
+        "file format is not a recognized test or coverage receipt",
+        "JSON format is not a recognized test or coverage receipt",
+        "XML format is not recognized JUnit",
+    }
+    return (
+        artifact.get("status") == "partial"
+        and isinstance(omissions, list)
+        and bool(omissions)
+        and all(
+            isinstance(row, Mapping)
+            and isinstance(row.get("reason"), str)
+            and row["reason"] in reasons
+            for row in omissions
+        )
+    )
 
 
 def _requirements(body: str) -> list[str]:
@@ -145,7 +186,9 @@ def _receipt_index(packet: dict, root: Path) -> dict[tuple[str, str], dict]:
     for artifact in (
         content.get("artifacts", []) if isinstance(content.get("artifacts"), list) else []
     ):
-        if not isinstance(artifact, dict) or artifact.get("status") != "complete":
+        if not isinstance(artifact, dict) or (
+            artifact.get("status") != "complete" and not _unsupported_members_only(artifact)
+        ):
             continue
         if not isinstance(artifact.get("run_id"), int):
             continue
@@ -170,6 +213,8 @@ def _receipt_index(packet: dict, root: Path) -> dict[tuple[str, str], dict]:
             }:
                 continue
             kind = receipt["kind"]
+            if artifact.get("status") != "complete" and kind != "junit":
+                continue
             if kind == "junit" and not (
                 all(
                     type(receipt.get(k)) is int and receipt[k] >= 0
@@ -209,13 +254,22 @@ def _receipt_index(packet: dict, root: Path) -> dict[tuple[str, str], dict]:
             ):
                 continue
             ref = receipt.get("raw")
+            data = _safe_junit_raw(ref, root) if kind == "junit" else _safe_raw(ref, root)
             if (
                 not isinstance(ref, dict)
                 or not isinstance(ref.get("path"), str)
                 or not isinstance(ref.get("sha256"), str)
-                or _safe_raw(ref, root) is None
+                or data is None
             ):
                 continue
+            if kind == "junit":
+                # A partial archive is not complete CI evidence. This individual
+                # file must nevertheless parse in full and match its descriptor.
+                parsed = closer_evidence._junit_receipt(data)
+                if parsed is None or any(
+                    receipt.get(key) != value for key, value in parsed.items()
+                ):
+                    continue
             index[(ref["path"], ref["sha256"])] = {
                 "artifact_id": artifact.get("id"),
                 "run_id": run.get("id"),
@@ -374,7 +428,11 @@ def _proofs_valid(refs: Any, proofs: Any, index: dict, root: Path) -> bool:
         if not isinstance(ref.get("path"), str) or not isinstance(ref.get("sha256"), str):
             return False
         member = index.get((ref.get("path"), ref.get("sha256")))
-        data = _safe_raw(ref, root)
+        data = (
+            _safe_junit_raw(ref, root)
+            if isinstance(member, dict) and member.get("kind") == "junit"
+            else _safe_raw(ref, root)
+        )
         excerpt, relevance = proof.get("excerpt"), proof.get("relevance")
         if (
             member is None
