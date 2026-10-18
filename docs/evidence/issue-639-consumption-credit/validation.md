@@ -109,3 +109,8 @@ acceptance checkbox is claimed complete in this run.
 GitHub readback (`gh pr view`) also failed to connect to `api.github.com`, so this run
 could not verify current PR readiness, check CI Gate/keepalive, or post a blocker comment
 and `needs-human` label. Prior readiness evidence above is historical.
+
+
+## Local validation of native7365e300 — 2026-10-18
+
+Preserved and inspected every new native change after direct implementation/push terminality. Both complete causal/lifecycle files now pass **74 tests** locally, including all nine additions; both edited native Python files pass Black unchanged. Independently collected5000 cases; the real verify `_floor_problems` rejects the old4991 expectation and accepts the reconciled5000 expectation. All ceilings unchanged; passed expectation is not a new full-suite PASS claim. The earlier source and flat-mirror hosted full verify PASS applies to b1955a60; current-head full CI remains required. This local receipt supersedes the preceding runner environment limitations without altering that historical evidence.
