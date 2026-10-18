@@ -48,6 +48,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import math
 import os
 import sqlite3
 import subprocess
@@ -2019,6 +2020,57 @@ def strategy_completed_line(result: dict, costs: dict) -> str:
     return f"  strategy experiment: completed {result.get('exp_id')}{score_bit} {cost_bit}"
 
 
+def comparative_routing_line(rep: dict) -> str:
+    """Read the same hourly shadow report as the export CLI, with unknowns explicit."""
+    import comparative
+    import feedback
+
+    result = rep.get("comparative") or comparative.report(
+        feedback.resolve_db_path(), comparative.history_path(), now=rep.get("generated_at")
+    )
+    prices = " ".join(
+        f"{agent} {value if value is not None else 'unmeasured'}"
+        for agent, value in sorted({"codex": None, "claude": None, **result["lambda"]}.items())
+    )
+    line = (
+        f"comparative routing: classes_differing {result['classes_differing']} "
+        f"(window {result['window_days']}d), λ {prices or 'unmeasured'}, status {result['status']}"
+    )
+    if result["status"] in {"partial", "inputs_unmeasured"}:
+        line += " — unmeasured; " + "; ".join(result["reasons"])
+    return line
+
+
+def experiment_producer_line():
+    import experiment_producer
+
+    m = experiment_producer.producer_summary()
+    verdict = experiment_producer.trial_verdict(summary_fn=lambda: m)
+    state = experiment_producer.read_state()
+    end = state.get("trial_end", "not_started")
+    seconds_left = experiment_producer.trial_window_end(state) - time.time()
+    days_left = (
+        max(0, math.ceil(seconds_left / 86400))
+        if state.get("trial_start")
+        else experiment_producer.COVERAGE_DAYS
+    )
+    reasons = ", ".join(f"{k}={v}" for k, v in sorted(m["skips"].items())) or "none"
+    unknown = "; UNKNOWN " + ", ".join(m["unknowns"]) if m["unknowns"] else ""
+    if verdict == "pending" and state.get("pending_since"):
+        verdict += f" since {state['pending_since']}, resolves fail on {state.get('resolves_on')}"
+    elif state.get("trial_reason"):
+        verdict += f" ({state['trial_reason']})"
+    return (
+        f"  experiment producer: launched {m['launched']}, evaluated {m['evaluated']}, "
+        f"winner_prs {m['winner_prs']}, winner_merged {m['winner_merged']}, "
+        f"post_window_launches={m.get('post_window_launches', 0)}, "
+        f"cells_fresh {m['cells_fresh']}/{m['cells_total']}, "
+        f"skipped {sum(m['skips'].values())} ({reasons}){unknown}; "
+        f"trial_end {end}, verdict {verdict}, days_left {days_left}; "
+        f"winner merge grace {experiment_producer.WINNER_MERGE_GRACE_DAYS}d"
+    )
+
+
 def review_round_snapshot() -> dict:
     """Observe rounds without creating/migrating the Brain during a report."""
     import feedback
@@ -2047,6 +2099,7 @@ def format_report(rep: dict) -> str:
         f"  due for a decision: {rep['raise_count']}",
         "",
     ]
+    lines += [comparative_routing_line(rep), ""]
     loop = rep.get("review_loop") or {}
     if loop.get("status") == "measured":
         lines += [review_loop_share_line(loop["rows"]), ""]
@@ -2080,6 +2133,7 @@ def format_report(rep: dict) -> str:
             ]
     except (OSError, ValueError, TypeError):
         lines += ["  strategy experiment: UNKNOWN — no completed scored evaluation", ""]
+    lines += [experiment_producer_line(), ""]
     if rep.get("adjudicator_shadow"):
         lines += [rep["adjudicator_shadow"], ""]
     if rep.get("adjudicator_live"):
@@ -2641,6 +2695,7 @@ def _selftest() -> None:
         _GH_CALL_RUNNER = saved_runner
     _selftest_gate_expiry()
     _selftest_capacity_shed()
+    _selftest_comparative_line()
     _selftest_worktree_git_refusals()
     proof: dict = {
         "status": "ok",
@@ -2689,6 +2744,35 @@ def _selftest() -> None:
         "rows and states its drained and unmeasured states, the shed sweep names each marker's "
         "drain and removes none, the worktree-git section prints its zero and counts both writers)"
     )
+
+
+def _selftest_comparative_line() -> None:
+    """The comparative line prints a measured block verbatim and an unmeasured one with reasons."""
+    import tempfile
+
+    import comparative
+    import feedback
+
+    measured = {
+        "classes_differing": 1,
+        "window_days": comparative.WINDOW_DAYS,
+        "lambda": {"codex": 0.25, "claude": 0.0},
+        "status": "optimal",
+        "reasons": [],
+    }
+    line = comparative_routing_line({"comparative": measured})
+    assert line.startswith("comparative routing: classes_differing 1 "), line
+    assert "codex 0.25" in line and "status optimal" in line and "unmeasured" not in line, line
+    with tempfile.TemporaryDirectory(prefix="switch-review-comparative-") as directory:
+        root = Path(directory)
+        saved = (comparative.history_path, feedback.resolve_db_path)
+        comparative.history_path = lambda *a: root / "absent.ndjson"
+        feedback.resolve_db_path = lambda *a: root / "absent.db"
+        try:
+            fallback = comparative_routing_line({})
+        finally:
+            comparative.history_path, feedback.resolve_db_path = saved
+    assert "status inputs_unmeasured" in fallback and "— unmeasured;" in fallback, fallback
 
 
 def _selftest_capacity_shed() -> None:
@@ -2861,8 +2945,21 @@ def _selftest_review(gh_calls: list) -> None:
         idle = {r["flag"] for r in rep2["on_but_idle"]}
         assert idle == {"ORCH_RANGE_LANE_ROLLOUT"}, idle
         assert "ORCH_RANGE_LANE_ROLLOUT" not in {r["flag"] for r in rep2["held_off"]}
-        text = format_report(rep2)
+        text = format_report(
+            {
+                **rep2,
+                "comparative": {
+                    "classes_differing": 0,
+                    "window_days": 14,
+                    "lambda": {},
+                    "status": "not_testable_slack",
+                    "reasons": [],
+                },
+            }
+        )
         assert "ON but not triggering" in text and "range-lane failure mode" in text
+        # The complete report carries the comparative line once (integration, not the helper).
+        assert text.count("comparative routing: classes_differing 0") == 1, text
         # ...and the three reviews above were REPORTS: none wrote the ledger. It lacks every
         # declared gate row, so the writing loader would have seeded them all into it on the first.
         assert reg.read_bytes() == saved_ledger, "review() wrote the capability ledger it reads"

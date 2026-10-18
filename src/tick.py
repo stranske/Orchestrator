@@ -31,6 +31,7 @@ import capabilities
 import claims
 import dispatcher
 import exp_abcd
+import experiment_producer
 import feedback
 import outcomes
 import provision
@@ -64,7 +65,7 @@ def _fetch_issue_body(target: str, *, issue_body_fn=None) -> str | None:
 
     try:
         out = subprocess.run(
-            ["gh", "issue", "view", number, "-R", repo, "--json", "title,body,state,labels"],
+            ["gh", "api", f"repos/{repo}/issues/{number}"],
             capture_output=True,
             text=True,
             timeout=60,
@@ -218,24 +219,50 @@ def research_tick(
     if not dry_run:
         claims.reap_stale()
     rng = rng or __import__("random").Random()
+    producer_enabled = env.get("ORCH_EXPERIMENT_PRODUCER", "0") == "1"
+    if not dry_run and producer_enabled:
+        experiment_producer.trial_defaults(active=True)
+    if not dry_run:
+        experiment_producer.trial_verdict()
+        # Shell defaults turn a failed producer OFF; keep its terminal receipt visible
+        # even after every in-flight experiment has drained.
+        if not producer_enabled:
+            hold = experiment_producer.trial_launch_hold()
+            if hold:
+                print(hold, file=sys.stderr)
     active_claims = set(claims.active_claims().keys())
-    plan_out = research_scheduler.build_research_plan(
-        items,
-        cap,
-        learned=learned,
-        hyps=hyps,
-        conn=conn,
-        claimed_targets=active_claims,
-        excluded_targets=excluded_targets,
-        production_reserve=production_reserve,
-        unevaluated_cap=unevaluated_cap,
-        per_subject_cap=per_subject_cap,
-        max_jobs=max_experiments,
-        rng=rng,
-    )
+    if producer_enabled:
+        plan_out = experiment_producer.build_plan(
+            items,
+            cap,
+            learned=learned,
+            claimed_targets=active_claims,
+            excluded_targets=excluded_targets,
+            production_reserve=production_reserve,
+            rng=rng,
+            conn=conn,
+        )
+    else:
+        plan_out = research_scheduler.build_research_plan(
+            items,
+            cap,
+            learned=learned,
+            hyps=hyps,
+            conn=conn,
+            claimed_targets=active_claims,
+            excluded_targets=excluded_targets,
+            production_reserve=production_reserve,
+            unevaluated_cap=unevaluated_cap,
+            per_subject_cap=per_subject_cap,
+            max_jobs=max_experiments,
+            rng=rng,
+        )
     if not dry_run:
         for row in plan_out.get("skipped") or []:
             if row.get("reason"):
+                if producer_enabled:
+                    if not experiment_producer.record_skip(row["reason"], target=row.get("target")):
+                        continue
                 research_subjects.record_event(
                     "rejected",
                     target=row.get("target"),
@@ -255,6 +282,15 @@ def research_tick(
                     conn=conn,
                 )
     if not plan_out.get("planned"):
+        if producer_enabled and not dry_run:
+            experiment_producer.cadence_draw(
+                time.time(),
+                float(env.get("ORCH_EXPERIMENT_RATE_PER_DAY", "2")),
+                rng,
+                cells=plan_out.get("producer_cells", []),
+                skip_reason=(plan_out.get("skipped") or [{"reason": "no_subject"}])[-1]["reason"],
+                count_skip=not bool(plan_out.get("skipped")),
+            )
         return {**_public_research_plan(plan_out), "planned": [], "active": False}
 
     plans, launched = [], []
@@ -274,8 +310,19 @@ def research_tick(
         )
         plans.append(plan)
 
-        if dry_run or env.get("ORCH_RESEARCH_ARM") != "1":
+        if dry_run or not (producer_enabled or env.get("ORCH_RESEARCH_ARM") == "1"):
             continue
+        if producer_enabled:
+            draw = experiment_producer.cadence_draw(
+                time.time(),
+                float(env.get("ORCH_EXPERIMENT_RATE_PER_DAY", "2")),
+                rng,
+                pools=job.get("pools"),
+                cells=plan_out.get("producer_cells", []),
+            )
+            plan["draw"] = draw
+            if not draw["fire"]:
+                continue
         subject_identity = None
         try:
             spec = _fetch_issue_body(target, issue_body_fn=issue_body_fn)
@@ -311,6 +358,8 @@ def research_tick(
             if not admission["eligible"]:
                 plan["active_status"] = "blocked_by_subject_control"
                 plan["blocked_reason"] = admission["reason"]
+                if producer_enabled:
+                    experiment_producer.record_skip(admission["reason"])
                 research_subjects.record_event(
                     "rejected",
                     identity=subject_identity,
@@ -337,6 +386,13 @@ def research_tick(
                     conn=conn,
                 )
                 continue
+            if producer_enabled:
+                plan["issue_status"] = experiment_producer.issue_status(target, True)
+                if "error" in plan["issue_status"]:
+                    plan["active_status"] = "lock_refused"
+                    experiment_producer.record_skip("lock_add_failed")
+                    claims.release(target, "research")
+                    continue
             repo = _target_repo(target)
             exp_id = f"tick-{int(time.time())}-{target.lower().replace('/', '-').replace('#', '-')}"
             spec_dir = Path(tempfile.mkdtemp(prefix="orch-research-spec-"))
@@ -350,13 +406,42 @@ def research_tick(
                 ref=subject_identity["subject_id"],
                 metadata={"target": target, "task_type": task_type},
             )
+            producer_options = (
+                {
+                    "producer_metadata": {
+                        "producer": "experiment_producer",
+                        "subject": target,
+                        "launched_ts": time.time(),
+                        "spec_provenance": "issue_body",
+                    }
+                }
+                if producer_enabled
+                else {}
+            )
             prepare_result = prepare(
                 str(repo),
                 str(spec_file),
                 exp_id,
-                research_v2_arms(arms, item.get("profiles")),
+                job.get("producer_arms") or research_v2_arms(arms, item.get("profiles")),
                 task_type=task_type,
+                **producer_options,
             )
+            if producer_enabled:
+                producer_meta_path = exp_abcd.exp_paths(exp_id) / "meta.json"
+                producer_meta = (
+                    json.loads(producer_meta_path.read_text())
+                    if producer_meta_path.exists()
+                    else {}
+                )
+                producer_meta.update(
+                    producer="experiment_producer",
+                    subject=target,
+                    launched_ts=time.time(),
+                    spec_provenance="issue_body",
+                )
+                producer_meta_path.parent.mkdir(parents=True, exist_ok=True)
+                producer_meta_path.write_text(json.dumps(producer_meta, indent=2))
+                experiment_producer.record_launch()
             launched.append(prepare_result)
             plan["active_status"] = "launched"
             plan["exp_id"] = exp_id
@@ -422,6 +507,8 @@ def research_tick(
                 conn=conn,
             )
             claims.release(target, "research")
+            if producer_enabled:
+                experiment_producer.issue_status(target, False)
     public = _public_research_plan(plan_out)
     return {
         **{k: v for k, v in public.items() if k != "planned"},
@@ -518,6 +605,7 @@ def remote_tick(
     dry_run: bool = True,
     do_ingest: bool = True,
     ingest_dry_run: bool | None = None,
+    research_dry_run: bool | None = None,
     max_delegations: int | None = None,
     env: Mapping[str, str] | None = None,
     research_tick_fn=None,
@@ -694,7 +782,7 @@ def remote_tick(
         items + feed_items,
         cap,
         learned=learned,
-        dry_run=dry_run,
+        dry_run=dry_run if research_dry_run is None else research_dry_run,
         env=env,
         excluded_targets=reserved_targets,
         production_reserve=production_reserve,
@@ -1306,8 +1394,9 @@ def main(argv):
     # active tick therefore INGESTS live (the Brain's evidence) and DELEGATES nothing unless
     # ORCH_DISPATCH_LANE=1 is set deliberately. Announced every run so the state is never silent.
     lane_live = active and os.environ.get(DISPATCH_LANE_ENV, "0") == "1"
+    producer_enabled = os.environ.get("ORCH_EXPERIMENT_PRODUCER", "0") == "1"
     print(
-        f"[tick] mode={'active' if active else 'shadow'} dispatch_lane={'LIVE' if lane_live else 'shadow (' + DISPATCH_LANE_ENV + '=0)'} ingest={'live' if active else 'dry'}",
+        f"[tick] mode={'active' if active else 'shadow'} dispatch_lane={'LIVE' if lane_live else 'shadow (' + DISPATCH_LANE_ENV + '=0)'} ingest={'live' if active else 'dry'} producer={'on' if producer_enabled else 'off'}",
         file=sys.stderr,
     )
     cap = router.load_capacity()
@@ -1318,6 +1407,7 @@ def main(argv):
         learned=router.learned_ranks(),
         dry_run=not lane_live,
         ingest_dry_run=not active,
+        research_dry_run=(not (active and producer_enabled) if producer_enabled else not lane_live),
         research_feed=load_research_feed(),
     )
     out["backlog"] = backlog_age()

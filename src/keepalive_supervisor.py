@@ -168,10 +168,49 @@ def _closure_holds() -> set[str]:
     return {value.lower() for value in backlog.load_scoped_blockers()}
 
 
+def _closure_require_lineage() -> None:
+    import capabilities
+
+    ledger = capabilities.load_declared(capabilities.REG)
+    if not (ledger.get("live-keepalive-supervisor") or {}).get("capability_version_id"):
+        raise RuntimeError("live-keepalive-supervisor lineage unavailable")
+
+
+def _closure_run_id(issue: str, sha: str) -> str:
+    return "supervisor-close:" + hashlib.sha256(f"{issue.lower()}@{sha}".encode()).hexdigest()
+
+
+def _closure_operation_write(path: Path, operation: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    with temporary.open("w") as stream:
+        json.dump(operation, stream)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def _closure_reconcile(path: Path, operation: dict, *, gh, record) -> None:
+    repo, number = _repo_num(operation["issue"])
+    comments = gh(["api", f"repos/{repo}/issues/{number}/comments", "--paginate", "--slurp"])
+    marker = operation["marker"]
+    if not any(marker in comment["body"] for page in comments for comment in page):
+        body = f"{marker}\nConfirmed supervisor closure: {operation['rule']}; merge `{operation['merge_sha']}`."
+        gh(["api", f"repos/{repo}/issues/{number}/comments", "-f", "body=" + body])
+    record(operation["issue"], operation["merge_sha"], operation["rule"])
+    _closure_operation_write(path, {**operation, "phase": "settled"})
+
+
 def _closure_record(issue: str, sha: str, rule: str) -> None:
     import feedback
 
-    run_id = "supervisor-close:" + hashlib.sha256(f"{issue.lower()}@{sha}".encode()).hexdigest()
+    _closure_require_lineage()
+    run_id = _closure_run_id(issue, sha)
     feedback.record_run(
         run_id,
         issue,
@@ -191,7 +230,22 @@ def _closure_record(issue: str, sha: str, rule: str) -> None:
 
 
 def _close_verified_issue(
-    target, repo, number, pr, sha, verdict, edge, *, gh, pr_read, ci_green, gate, record, holds
+    target,
+    repo,
+    number,
+    pr,
+    sha,
+    verdict,
+    edge,
+    *,
+    gh,
+    pr_read,
+    ci_green,
+    gate,
+    record,
+    holds,
+    root,
+    lineage,
 ) -> dict:
     issue_target = f"{repo}#{edge['number']}"
     row = {"target": issue_target, "pr": target, "merge_sha": sha, "closed": False}
@@ -201,6 +255,37 @@ def _close_verified_issue(
     issue["target"] = issue_target
     marker = f"<!-- supervisor-close/v1 {issue_target.lower()}@{sha} -->"
     prior = any(marker in c["body"] for c in pr["comments"]["nodes"])
+    run_id = _closure_run_id(issue_target, sha)
+    operation_path = root / "supervisor-close-operations" / (run_id.split(":")[1] + ".json")
+    if operation_path.exists():
+        operation = json.loads(operation_path.read_text())
+        if any(
+            operation.get(k) != v
+            for k, v in {
+                "issue": issue_target,
+                "pr": target,
+                "merge_sha": sha,
+                "run_id": run_id,
+                "marker": marker,
+            }.items()
+        ):
+            raise ValueError("closure operation identity mismatch")
+        if operation.get("phase") not in {"prepared", "confirmed", "settled"}:
+            raise ValueError("invalid closure operation phase")
+        if operation["phase"] == "confirmed":
+            try:
+                lineage()
+                _closure_reconcile(operation_path, operation, gh=gh, record=record)
+                row["reason"] = "confirmed closure receipt reconciled"
+            except Exception as exc:
+                row.update(reason="confirmed closure receipt pending", outcome_error=str(exc))
+            return row
+        row["reason"] = (
+            "ambiguous closure pending"
+            if operation["phase"] == "prepared"
+            else "closure already settled"
+        )
+        return row
     if issue.get("state") != "open":
         row["reason"] = "issue already closed"
     elif (
@@ -245,22 +330,22 @@ def _close_verified_issue(
             row["reason"] = "evidence changed before closure"
             return row
         # After the final compare, put the identity/rule on both delivery surfaces.
+        lineage()
         # Markers avoid repeating already-posted comments after a partial API failure.
         if not prior:
             body = f"{marker}\nSupervisor closes {issue_target}: {rule}; exact merge `{sha}`."
             gh(["api", f"repos/{repo}/issues/{number}/comments", "-f", "body=" + body])
-        source_comments = gh(
-            [
-                "api",
-                f"repos/{repo}/issues/{edge['number']}/comments",
-                "--paginate",
-                "--slurp",
-            ]
+        operation = dict(
+            issue=issue_target,
+            pr=target,
+            merge_sha=sha,
+            rule=rule,
+            run_id=run_id,
+            marker=marker,
+            phase="prepared",
         )
-        if not any(marker in comment["body"] for page in source_comments for comment in page):
-            body = f"{marker}\nClosing after {target} merged at `{sha}`. Rule: {rule}."
-            gh(["api", f"repos/{repo}/issues/{edge['number']}/comments", "-f", "body=" + body])
-        gh(
+        _closure_operation_write(operation_path, operation)
+        confirmed = gh(
             [
                 "api",
                 f"repos/{repo}/issues/{edge['number']}",
@@ -270,12 +355,14 @@ def _close_verified_issue(
                 "state=closed",
             ]
         )
-        confirmed = gh(["api", f"repos/{repo}/issues/{edge['number']}"])
-        if confirmed.get("state") != "closed":
+        if confirmed.get("state") != "closed" or confirmed.get("number") != edge["number"]:
             raise RuntimeError("issue closure not confirmed")
         row.update(closed=True, reason=rule)
         try:
-            record(issue_target, sha, rule)
+            operation["phase"] = "confirmed"
+            operation["confirmed_at"] = time.time()
+            _closure_operation_write(operation_path, operation)
+            _closure_reconcile(operation_path, operation, gh=gh, record=record)
         except Exception as exc:
             # The external action happened. Preserve its count/budget even if the
             # Brain is unavailable; never fabricate a replacement learning receipt.
@@ -284,7 +371,7 @@ def _close_verified_issue(
 
 
 def _close_verified_target(
-    target: str, *, gh, pr_read, ci_green, gate, record, holds, budget: int
+    target: str, *, gh, pr_read, ci_green, gate, record, holds, budget: int, root, lineage
 ) -> list[dict]:
     repo, number = _repo_num(target)
     pr = pr_read(target)
@@ -323,6 +410,8 @@ def _close_verified_target(
                 gate=gate,
                 record=record,
                 holds=holds,
+                root=root,
+                lineage=lineage,
             )
         except Exception as exc:
             row = {
@@ -346,6 +435,7 @@ def close_verified_issues(
     gate=None,
     record=None,
     holds=None,
+    lineage=None,
 ) -> dict:
     """Bounded opt-in post-merge action on the supervisor's existing cadence."""
     resolved = os.environ if env is None else env
@@ -390,6 +480,12 @@ def close_verified_issues(
             for repo in repos:
                 args += ["--repo", repo]
             targets = [f"{row['repository']['nameWithOwner']}#{row['number']}" for row in gh(args)]
+        pending_targets = []
+        for path in sorted((root / "supervisor-close-operations").glob("*.json")):
+            operation = json.loads(path.read_text())
+            if operation.get("phase") == "confirmed":
+                pending_targets.append(operation["pr"])
+        targets = list(dict.fromkeys(pending_targets + targets))
         gate_fn = gate or _closure_gate
         summary["gate_executions"] = 0
 
@@ -414,6 +510,8 @@ def close_verified_issues(
                     gate=bounded_gate,
                     record=record or _closure_record,
                     holds=holds or _closure_holds,
+                    root=root,
+                    lineage=lineage or _closure_require_lineage,
                     budget=remaining,
                 )
             except Exception as exc:

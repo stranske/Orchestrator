@@ -83,6 +83,7 @@ def closure_fixture(tmp_path, verdict="PASS"):
         gate=lambda *args: {"result": "PASS"},
         record=lambda *args: recorded.append(args),
         holds=lambda: set(),
+        lineage=lambda: None,
     )
     return pr, issue, calls, recorded, options
 
@@ -98,6 +99,112 @@ def test_close_verifier_pass_confirms_action_and_records_outcome(tmp_path):
     # A second run reconciles the same identity, without another external action.
     supervisor.close_verified_issues(**options)
     assert sum("PATCH" in call for call in calls) == 1
+
+
+@pytest.mark.parametrize("failure", ["missing", "unreadable"])
+def test_close_requires_lineage_before_any_external_mutation(tmp_path, monkeypatch, failure):
+    import capabilities
+
+    pr, issue, calls, recorded, options = closure_fixture(tmp_path)
+    options.pop("lineage", None)
+
+    def load(*args):
+        if failure == "unreadable":
+            raise OSError("ledger unreadable")
+        return {}
+
+    monkeypatch.setattr(capabilities, "load_declared", load)
+    result = supervisor.close_verified_issues(**options)
+    assert result["closed"] == 0 and issue["state"] == "open"
+    assert not recorded and not any("-f" in c or "PATCH" in c for c in calls)
+
+
+@pytest.mark.parametrize("failure", ["source_marker", "brain"])
+def test_close_reconciles_confirmed_action_after_receipt_failure(tmp_path, failure):
+    pr, issue, calls, recorded, options = closure_fixture(tmp_path)
+    original = options["gh"]
+
+    def gh(args):
+        if (
+            failure == "source_marker"
+            and issue["state"] == "closed"
+            and args[1].endswith("/issues/7/comments")
+            and "-f" in args
+        ):
+            raise OSError("source marker unavailable")
+        return original(args)
+
+    def record(*args):
+        if failure == "brain":
+            raise OSError("Brain unavailable")
+        recorded.append(args)
+
+    options.update(gh=gh, record=record)
+    first = supervisor.close_verified_issues(**options)
+    assert first["closed"] == 1 and first["errors"] == 1
+    pending = list((tmp_path / "supervisor-close-operations").glob("*.json"))
+    assert len(pending) == 1
+    op = json.loads(pending[0].read_text())
+    assert op["phase"] == "confirmed" and op["issue"] == REPO + "#7"
+    assert op["merge_sha"] == SHA and op["rule"] == "verifier PASS"
+    assert op["run_id"].startswith("supervisor-close:")
+    options.update(gh=original, record=lambda *args: recorded.append(args))
+    second = supervisor.close_verified_issues(**options)
+    assert second["closed"] == 0 and second["errors"] == 0
+    assert len(recorded) == 1 and sum("PATCH" in c for c in calls) == 1
+    assert json.loads(pending[0].read_text())["phase"] == "settled"
+
+
+def test_close_ambiguous_patch_never_infers_actor_from_closed_state(tmp_path):
+    pr, issue, calls, recorded, options = closure_fixture(tmp_path)
+    original = options["gh"]
+
+    def gh(args):
+        if "PATCH" in args:
+            original(args)
+            raise OSError("response lost")
+        return original(args)
+
+    options["gh"] = gh
+    assert supervisor.close_verified_issues(**options)["closed"] == 0
+    options["gh"] = original
+    assert supervisor.close_verified_issues(**options)["closed"] == 0
+    assert not recorded and sum("PATCH" in c for c in calls) == 1
+    pending = list((tmp_path / "supervisor-close-operations").glob("*.json"))
+    assert len(pending) == 1
+    assert json.loads(pending[0].read_text())["phase"] == "prepared"
+
+
+def test_close_reconciles_pending_receipt_outside_search_results(tmp_path):
+    pr, issue, calls, recorded, options = closure_fixture(tmp_path)
+
+    def fail(*args):
+        raise OSError("Brain unavailable")
+
+    options["record"] = fail
+    assert supervisor.close_verified_issues(**options)["closed"] == 1
+    original = options["gh"]
+    options.update(
+        targets=None,
+        gh=lambda args: [] if args[0] == "search" else original(args),
+        record=lambda *args: recorded.append(args),
+    )
+    result = supervisor.close_verified_issues(**options)
+    assert result["closed"] == 0 and result["errors"] == 0
+    assert len(recorded) == 1 and sum("PATCH" in c for c in calls) == 1
+
+
+def test_close_preclose_marker_and_independent_close_do_not_acquire_credit(tmp_path):
+    pr, issue, calls, recorded, options = closure_fixture(tmp_path)
+    pr["comments"]["nodes"].append(
+        {
+            "body": f"<!-- supervisor-close/v1 {REPO.lower()}#7@{SHA} -->",
+            "author": {"login": "stranske"},
+        }
+    )
+    issue["state"] = "closed"
+    assert supervisor.close_verified_issues(**options)["closed"] == 0
+    assert not recorded and not any("PATCH" in c for c in calls)
 
 
 def test_close_gate_rule_requires_green_merge_sha_ci_and_gate(tmp_path):
@@ -446,7 +553,8 @@ def test_close_main_and_stage2_use_same_actor(tmp_path, monkeypatch, capsys):
     assert len(called) == 2
 
 
-def test_close_limits_actual_closures_across_many_source_edges(tmp_path):
+@pytest.mark.parametrize("marker_failure", [False, True])
+def test_close_limits_actual_closures_across_many_source_edges(tmp_path, marker_failure):
     pr, issue, calls, recorded, options = closure_fixture(tmp_path)
     pr["closingIssuesReferences"]["nodes"] = [
         {"number": number, "repository": {"nameWithOwner": REPO}} for number in range(7, 15)
@@ -456,6 +564,12 @@ def test_close_limits_actual_closures_across_many_source_edges(tmp_path):
     def gh(args):
         calls.append(args)
         if args[1].endswith("/comments"):
+            if (
+                marker_failure
+                and "-f" in args
+                and states.get(int(args[1].split("/")[-2])) == "closed"
+            ):
+                raise OSError("source marker unavailable")
             return {} if "-f" in args else [[]]
         number = int(args[1].rsplit("/", 1)[1])
         if "PATCH" in args:
@@ -464,7 +578,7 @@ def test_close_limits_actual_closures_across_many_source_edges(tmp_path):
 
     options["gh"] = gh
     assert supervisor.close_verified_issues(**options)["closed"] == 3
-    assert len(recorded) == 3 and len(states) == 3
+    assert len(recorded) == (0 if marker_failure else 3) and len(states) == 3
 
 
 def test_close_record_failure_keeps_actual_action_and_budget(tmp_path):
