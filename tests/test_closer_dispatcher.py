@@ -452,6 +452,26 @@ def test_disappearing_sources_do_not_confirm_unknown_closure(tmp_path):
     assert backend.reconcile(TARGET, operation("close_source"))["status"] != "completed"
 
 
+def assert_nonpass_accounting_prompt_contract(prompt):
+    for required in (
+        "This path requires at least one supplied nonpass_finding",
+        "Only when ALL supplied nonpass_finding exact finding_id values are confidently accounted for",
+        "wait, collect_evidence, or repair with a validated bound mechanical plan",
+        "substantive_needs [] if there is no OTHER semantic, ownership, security, or routing ambiguity",
+        "missing acceptance proof in each unresolved_missing_evidence resolution's reason",
+        "preserve every raw NON_PASS verdict, and leave decision.criteria empty",
+        "Accounting never grants PASS or acceptance authority",
+        "Resolved duplicate/nonissue claims still require exact raw evidence/proofs",
+        "repair still requires the existing coordinator authorization",
+        "Security/high-risk findings require senior review with classification uncertain and nonempty substantive_needs",
+        "If any finding identity, meaning, ownership, security implication, or safe routing remains uncertain",
+        "return classification uncertain with nonempty substantive_needs",
+        "do not hide uncertainty to fit the accounting path",
+    ):
+        assert required in prompt
+    assert "Otherwise return classification uncertain" not in prompt
+
+
 def test_luna_result_is_advisory_and_cannot_supply_completion_disposition(tmp_path, monkeypatch):
     current = snapshot()
     calls = []
@@ -476,6 +496,37 @@ def test_luna_result_is_advisory_and_cannot_supply_completion_disposition(tmp_pa
     assert backend.dispositions == {}
     assert backend.select(current)[0] == "wait"
     assert backend.gh.calls == []
+
+
+def test_selective_exception_prompt_accounts_for_nonpass_without_pass_authority(
+    tmp_path, monkeypatch
+):
+    current, prompts = snapshot(), []
+    monkeypatch.setitem(sys.modules, "capacity", SimpleNamespace(shed_marker=lambda agent: None))
+    monkeypatch.setitem(sys.modules, "dispatcher", SimpleNamespace())
+
+    def offload(_agent, prompt, **kwargs):
+        prompts.append(prompt)
+        return {"exit": 0, "output": '{"classification":"uncertain"}'}
+
+    backend = closer(
+        tmp_path,
+        current,
+        apply=True,
+        workers=True,
+        workspaces={"o/r": str(tmp_path)},
+        offload_fn=offload,
+    )
+    backend.worker(
+        TARGET,
+        "collect_evidence",
+        current,
+        operation("collect_evidence"),
+        advisory_context={"nonpass_findings": [{"finding_id": "fixture-finding"}]},
+    )
+    assert_nonpass_accounting_prompt_contract(prompts[0])
+    assert "Never claim PASS for a raw NON_PASS verifier result" in prompts[0]
+    assert backend.dispositions == {} and backend.gh.calls == []
 
 
 def test_senior_acceptance_survives_own_source_state_transition(tmp_path):
@@ -2879,6 +2930,12 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
         assert "leave decision.criteria empty" in _prompt
         assert "findings (array of objects, never strings" in _prompt
         assert "evidence gaps as strings in substantive_needs" in _prompt
+        assert_nonpass_accounting_prompt_contract(_prompt)
+        assert "only when every original body and criterion is fully evidenced" in _prompt
+        assert (
+            "If acceptance proof is incomplete and the known NON_PASS accounting contract below does not apply"
+            in _prompt
+        )
         assert "read-only commands such as python3 -c" in _prompt
         if profile == "gemini-low" and kwargs["subject_id"] == first:
             result = {"exit": 1, "run_id": "dispatch-failed-31", "error": "unsupported model"}
