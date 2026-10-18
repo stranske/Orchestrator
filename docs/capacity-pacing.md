@@ -263,8 +263,9 @@ Read-only check: `python3 src/route_weights_export.py --publish-lag`. Each pool 
 pool observation age. Mismatches beyond `PUBLISH_LAG_STALE_S=7200` seconds are stale; a fresh
 first tick prints `held(1/2)`. Unmeasured ages print `unmeasured` without a seconds suffix.
 `all pools in sync` appears only when every state matches; failed remote reads show
-`published=unmeasured`. Observation age alone is not lag. Immediate capacity triggers are
-the damped `state`,
+`published=unmeasured`. Observation age alone is not lag. `window` is static configuration
+and is a silent trigger: a window change waits for the next meaningful trigger or the
+24 h refresh floor. Immediate capacity triggers are the damped `state`,
 `period_end` moves over `PERIOD_END_TOLERANCE_S=3600` seconds against the published baseline,
 and `resets_available`; existing non-capacity triggers such as learned weights
 remain immediate. Usage fractions, routing weights, period starts, reset expiries, reserve,
@@ -284,3 +285,14 @@ This query makes no persistent state or Git-ref writes.
 Check date: 2026-10-19 after one day of production ticks. Successful hourly ticks
 should propagate persistent state changes within two hours; failures/backoff and
 disabled publication can extend that bound.
+
+Read-only production count: `python3 src/route_weights_export.py --publish-history 24h`.
+It reads all pages of the `exports/route-weights` commit history since now minus 24 h via
+`gh api repos/stranske/Orchestrator/commits?sha=exports/route-weights&since=<UTC>` and prints
+`commits_24h=<n> (state flips local: see log) lag=<ok|STALE|held(n/2)|unmeasured>` after
+the per-pool lag details. A failed history fetch prints `commits_24h=unmeasured`; it never
+publishes or updates persistent local state. The coordinator owns the 2026-10-20 check-in
+registration after merge; compare the count with damped state flips in the tick log and
+record other immediate triggers separately. Export start/end UTC times and duration in
+that log make cadence skips measurable. The hourly due threshold is 30 minutes after the
+previous success stamp, allowing for tick jitter and export duration.

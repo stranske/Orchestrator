@@ -482,7 +482,7 @@ _due() {
   [[ ! -f "$1" ]] && return 0
   # -1 is the registry's named hourly period; retain whole-day semantics for existing rows.
   if [[ "$2" == "-1" ]]; then
-    [[ -n "$(find "$1" -mmin +50 2>/dev/null)" ]]
+    [[ -n "$(find "$1" -mmin +30 2>/dev/null)" ]]
   else
     [[ -n "$(find "$1" -mtime +"$2" 2>/dev/null)" ]]
   fi
@@ -1150,7 +1150,9 @@ if _cadence_due route-weights-export && _attempt_ok route-weights-export; then
   else
     echo "  [cadence] route weights export (hourly; shadow — ORCH_ROUTE_WEIGHTS_PUBLISH!=1, remote publish blocked)"
   fi
-  if python3 "$ORCH/route_weights_export.py" --publish \
+  route_weights_export_start=$(date -u +%s)
+  echo "  [cadence] route weights export start $(date -u +%Y-%m-%dT%H:%M:%SZ) duration=0"
+  if python3 "$ORCH/route_weights_export.py" --publish --state-dir "$STAMP_DIR" \
        > "$STAMP_DIR/route-weights-export.log" 2>&1; then
     _mark_success route-weights-export
     sed -n '/^\[cadence\] capacity publish held:/p' "$STAMP_DIR/route-weights-export.log"
@@ -1158,6 +1160,7 @@ if _cadence_due route-weights-export && _attempt_ok route-weights-export; then
     cat "$STAMP_DIR/route-weights-export.log"
     _mark_fail route-weights-export "see $STAMP_DIR/route-weights-export.log"
   fi
+  echo "  [cadence] route weights export end $(date -u +%Y-%m-%dT%H:%M:%SZ) duration=$(( $(date -u +%s) - route_weights_export_start ))"
 fi
 if _cadence_due periodic-report && _attempt_ok periodic-report; then
   echo "  [cadence] periodic dataset report + observability dashboard (weekly)"

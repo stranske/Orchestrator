@@ -47,7 +47,7 @@ MARGIN_S = 5 * 60
 def probe_ages(name):
     # Hourly runs need slack for tick jitter and the post-export stamp.
     if name == "hourly":
-        return ((45 * 60, False), (55 * 60, True))
+        return ((25 * 60, False), (35 * 60, True))
     period = PERIOD_HOURS[name] * 3600
     return ((period - MARGIN_S, False), (period + MARGIN_S, True))
 

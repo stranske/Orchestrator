@@ -291,6 +291,7 @@ _attempt_ok() {{ return {attempt}; }}
 _mark_success() {{ echo SUCCESS; }}
 _mark_fail() {{ echo FAIL; }}
 python3() {{
+  printf '%s\\n' "$@" >> "$STAMP_DIR/export-args"
   if [[ "$2" == "--record-capacity-tick" ]]; then echo OBSERVED; else
     echo '[cadence] capacity publish held: codex local=shed published=ok seen=1/2'
   fi
@@ -303,6 +304,30 @@ python3() {{
         text=True,
         env={"STAMP_DIR": str(tmp_path), "ORCH": str(tmp_path)},
     )
+    calls = (tmp_path / "export-args").read_text().splitlines()
+    assert calls[:4] == [
+        str(tmp_path / "route_weights_export.py"),
+        "--record-capacity-tick",
+        "--state-dir",
+        str(tmp_path),
+    ]
+    if due == 0 and attempt == 0:
+        assert calls[4:] == [
+            str(tmp_path / "route_weights_export.py"),
+            "--publish",
+            "--state-dir",
+            str(tmp_path),
+        ]
+        import re
+
+        assert re.search(
+            r"\[cadence\] route weights export start \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z duration=0",
+            result.stdout,
+        )
+        assert re.search(
+            r"\[cadence\] route weights export end \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z duration=\d+",
+            result.stdout,
+        )
     assert result.stdout.count("OBSERVED") == 1
     assert ("SUCCESS" in result.stdout) == (due == 0 and attempt == 0)
     assert ("seen=1/2" in result.stdout) == (due == 0 and attempt == 0)
@@ -357,7 +382,7 @@ def test_24_hour_ledger_shape_replay_only_refreshes_once(publication, monkeypatc
                         "used_fraction": 0.43 + hour * 0.002,
                         "routing_weight": 0.8 - hour * 0.001,
                         "period_start": NOW - 86400,
-                        "period_end": NOW + 6 * 86400,
+                        "period_end": NOW + 6 * 86400 + (60 if hour % 2 else -60),
                         "resets_available": 0,
                         "measurement": "measured",
                     },
@@ -456,8 +481,12 @@ def test_lag_threshold_and_hold(local_capacity, tmp_path, monkeypatch, capsys, a
     assert "all pools in sync" not in out
 
 
-@pytest.mark.parametrize("delta", [-3600, -60, 60, 3600, -3601, 3601])
-def test_period_end_tolerance_is_against_published_baseline(publication, delta):
+@pytest.mark.parametrize(
+    "delta,loud",
+    [(-3600, False), (-60, False), (60, False), (3600, False), (-3601, True), (3601, True)],
+)
+def test_period_end_tolerance_is_against_published_baseline(publication, delta, loud):
+    assert export.PERIOD_END_TOLERANCE_S >= 3600
     document, remote, _, git = publication
     document["capacity"]["codex"]["pacing"] = {"period_end": NOW + 86400}
     _seed(publication, document)
@@ -465,7 +494,6 @@ def test_period_end_tolerance_is_against_published_baseline(publication, delta):
     head = git(remote, "rev-parse", export.EXPORT_BRANCH)
     incoming = copy.deepcopy(document)
     incoming["capacity"]["codex"]["pacing"]["period_end"] += delta
-    loud = abs(delta) > export.PERIOD_END_TOLERANCE_S
     assert export.publish_document(incoming) == loud
     assert (git(remote, "rev-parse", export.EXPORT_BRANCH) != head) == loud
     assert document == before  # Comparison cannot mutate the baseline.
@@ -509,3 +537,99 @@ def test_unmeasured_published_age_refreshes(publication, tmp_path, capsys, gener
     )
     published = json.loads(git(remote, "show", f"{export.EXPORT_BRANCH}:{export.EXPORT_PATH}"))
     assert published == incoming
+
+
+def test_lag_hold_uses_tick_validity_bound(local_capacity, tmp_path, monkeypatch, capsys):
+    local_capacity.write_text(json.dumps(snapshot("shed", NOW)))
+    monkeypatch.setattr(export, "CAPACITY_TICK_MAX_AGE", 100)
+    monkeypatch.setattr(
+        export,
+        "read_published_export",
+        lambda: {"generated_at": "2033-05-18T00:00:00Z", "capacity": {"codex": {"state": "ok"}}},
+    )
+    (tmp_path / export.CAPACITY_TICK_FILE).write_text(
+        json.dumps({"codex": {"state": "shed", "observed_at": NOW - 101, "seen": 1}})
+    )
+    export.publish_lag(now=NOW, state_dir=tmp_path)
+    codex_line = next(
+        line for line in capsys.readouterr().out.splitlines() if line.startswith("pool codex:")
+    )
+    assert "lag=STALE" in codex_line
+    assert "held(" not in codex_line
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_publish_history_read_only_query(local_capacity, tmp_path, monkeypatch, capsys, failure):
+    local_capacity.write_text(json.dumps(snapshot("ok", NOW)))
+    monkeypatch.setattr(
+        export,
+        "read_published_export",
+        lambda: {
+            "generated_at": "2033-05-18T03:33:20Z",
+            "capacity": export._capacity_block(snapshot("ok", NOW)),
+        },
+    )
+    calls = []
+
+    def fetch(endpoint):
+        calls.append(endpoint)
+        if failure:
+            raise subprocess.CalledProcessError(1, ["gh", "api"])
+        return [{"sha": "a"}, {"sha": "b"}]
+
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    export.publish_history(now=NOW, state_dir=tmp_path, fetcher=fetch)
+    assert calls == [
+        "repos/stranske/Orchestrator/commits?sha=exports/route-weights&since=2033-05-17T03:33:20Z&per_page=100"
+    ]
+    count = "unmeasured" if failure else "2"
+    assert f"commits_24h={count} (state flips local: see log) lag=ok" in capsys.readouterr().out
+    assert before == {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+
+
+def test_publish_history_cli_cannot_enter_write_path(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "route_weights_export.py",
+            "--publish-history",
+            "24h",
+            "--publish",
+            "--state-dir",
+            str(tmp_path),
+        ],
+    )
+    monkeypatch.setattr(export, "publish_history", lambda **kw: calls.append(kw))
+    monkeypatch.setattr(export, "build_document", lambda *a: pytest.fail("history built an export"))
+    monkeypatch.setattr(
+        export, "publish_document", lambda *a, **kw: pytest.fail("history published")
+    )
+    assert export.main() == 0
+    assert calls == [{"state_dir": tmp_path}]
+
+
+def test_publish_history_fetch_paginates_without_mutation(monkeypatch):
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args, 0, json.dumps([[{"sha": "a"}], [{"sha": "b"}]]))
+
+    monkeypatch.setattr(export.subprocess, "run", run)
+    assert export._fetch_publish_commits(
+        "repos/stranske/Orchestrator/commits?sha=exports/route-weights"
+    ) == [{"sha": "a"}, {"sha": "b"}]
+    assert calls == [
+        (
+            [
+                "gh",
+                "api",
+                "--paginate",
+                "--slurp",
+                "repos/stranske/Orchestrator/commits?sha=exports/route-weights",
+            ],
+            {"check": True, "capture_output": True, "text": True, "timeout": 60},
+        )
+    ]

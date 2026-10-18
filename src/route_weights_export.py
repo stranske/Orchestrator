@@ -19,6 +19,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,7 @@ EXPORT_BRANCH = "exports/route-weights"
 EXPORT_PATH = Path("config/route-weights.json")
 CAPACITY_TICK_FILE = "route-weights-capacity-ticks.json"
 CAPACITY_TICK_MAX_AGE = 2 * 3600
+# Semantic mismatch alert allowance; independent of local tick-latch validity.
 PUBLISH_LAG_STALE_S = 7200
 PUBLISH_REFRESH_FLOOR_S = 24 * 3600
 PERIOD_END_TOLERANCE_S = 3600
@@ -432,7 +434,7 @@ def read_published_export(*, remote_url="https://github.com/stranske/Orchestrato
         return value
 
 
-def publish_lag(*, now: int | None = None, state_dir: Path | None = None) -> None:
+def publish_lag(*, now: int | None = None, state_dir: Path | None = None) -> str:
     """Read-only state comparison. Artifact age alone is not semantic lag."""
     current = int(dt.datetime.now(dt.timezone.utc).timestamp()) if now is None else now
     local = _read_object(capacity.OUT)
@@ -449,6 +451,7 @@ def publish_lag(*, now: int | None = None, state_dir: Path | None = None) -> Non
     published_age = _artifact_age(published, current)
     block = _capacity_block(local)
     in_sync = bool(published) and bool(local)
+    lags = []
     for pool, row in block.items():
         remote = published.get("capacity", {}).get(pool, {})
         state = remote.get("state", "unmeasured") if isinstance(remote, dict) else "unmeasured"
@@ -465,7 +468,7 @@ def publish_lag(*, now: int | None = None, state_dir: Path | None = None) -> Non
             and isinstance(tick, dict)
             and tick.get("state") == row["state"]
             and isinstance(tick.get("observed_at"), (int, float))
-            and 0 <= current - tick["observed_at"] <= PUBLISH_LAG_STALE_S
+            and 0 <= current - tick["observed_at"] <= CAPACITY_TICK_MAX_AGE
             and _seen_count(tick) < 2
         )
         lag = (
@@ -482,6 +485,7 @@ def publish_lag(*, now: int | None = None, state_dir: Path | None = None) -> Non
                 else "STALE"
             )
         )
+        lags.append(lag)
         print(
             f"pool {pool}: local={row['state']} published={state} "
             f"published_age={_age_text(published_age)} lag={lag} "
@@ -489,6 +493,52 @@ def publish_lag(*, now: int | None = None, state_dir: Path | None = None) -> Non
         )
     if in_sync:
         print("all pools in sync")
+    if not local or not published or not lags:
+        return "unmeasured"
+    if "STALE" in lags:
+        return "STALE"
+    return next((lag for lag in lags if lag.startswith("held(")), "ok")
+
+
+def _fetch_publish_commits(endpoint: str) -> list[dict[str, Any]]:
+    """Read all commit pages; gh's default GET performs no remote mutation."""
+    response = subprocess.run(
+        ["gh", "api", "--paginate", "--slurp", endpoint],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    pages = json.loads(response.stdout)
+    if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+        raise ValueError("unmeasured commit history")
+    commits = [commit for page in pages for commit in page]
+    if any(not isinstance(commit, dict) or not commit.get("sha") for commit in commits):
+        raise ValueError("unmeasured commit history")
+    return commits
+
+
+def publish_history(
+    *,
+    now: int | None = None,
+    state_dir: Path | None = None,
+    fetcher: Callable[[str], list[dict[str, Any]]] | None = None,
+) -> None:
+    """Report the rolling 24h count and semantic lag without publishing or updating local state."""
+    current = int(dt.datetime.now(dt.timezone.utc).timestamp()) if now is None else now
+    since = (
+        dt.datetime.fromtimestamp(current - 86400, dt.timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    endpoint = f"repos/stranske/Orchestrator/commits?sha={EXPORT_BRANCH}&since={since}&per_page=100"
+    count: int | str
+    try:
+        count = len((fetcher or _fetch_publish_commits)(endpoint))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        count = "unmeasured"
+    lag = publish_lag(now=current, state_dir=state_dir)
+    print(f"commits_24h={count} (state flips local: see log) lag={lag}")
 
 
 def _exploration_block(
@@ -1116,6 +1166,9 @@ def main() -> int:
         "--publish-lag", action="store_true", help="read-only local/published pool states"
     )
     parser.add_argument(
+        "--publish-history", choices=["24h"], help="read-only rolling publication count and lag"
+    )
+    parser.add_argument(
         "--record-capacity-tick", action="store_true", help="observe local state once per tick"
     )
     parser.add_argument("--window-days", type=int, default=comparative.WINDOW_DAYS)
@@ -1136,6 +1189,9 @@ def main() -> int:
     args = parser.parse_args()
     if args.selftest:
         _selftest()
+        return 0
+    if args.publish_history:
+        publish_history(state_dir=args.state_dir)
         return 0
     if args.publish_lag:
         publish_lag(state_dir=args.state_dir)
