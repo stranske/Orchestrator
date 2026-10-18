@@ -775,6 +775,8 @@ class Closer:
         self.offload_fn = offload_fn
         self.advisory = {}
         self.advisory_reasons = {}
+        # Ephemeral helper validation, never populated from a legacy disposition file.
+        self.validated_nonpass_waits = {}
         self.blockers = blockers or {}
         self.blocker_fn = blocker_fn
         self.workers_unavailable = None
@@ -2838,9 +2840,29 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         snap, _packet = full_snapshot(prep)
         if (
             isinstance(interpreted, dict)
+            and interpreted.get("classification") == "deterministic_post_merge_verify"
+            and interpreted.get("authority") is False
+            and interpreted.get("substantive_needs") == []
+            and (prep.get("proposal") or {}).get("action") == "post_merge_verify"
+            and snap.get("target") == target
+            and snap.get("revision") == prep.get("revision") == context.get("revision")
+            and snap.get("kind") == "pr"
+            and snap.get("state") == "MERGED"
+        ):
+            native_action, _reason, native_eligible, _trigger = current.select(snap)
+            if native_action == "post_merge_verify" and native_eligible is True:
+                # This is a native route, not a model assessment. Installing an
+                # advisory wait here would mask the same queue's refreshed label
+                # observation after its guarded verification request succeeds.
+                return current
+        if (
+            isinstance(interpreted, dict)
             and interpreted.get("classification") == "deterministic_post_merge_label_wait"
             and durable_verifier_label_event(target, prep, snap, context.get("action_state_path"))
         ):
+            # The existing native label receipt is the pending work. Do not
+            # launch an evidence worker before the adapter validates that wait.
+            current.workers = False
             return current
         if (
             isinstance(interpreted, dict)
@@ -2864,6 +2886,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "reason": interpreted["reason"],
                 "next_trigger": interpreted["next_trigger"],
             }
+            if proof.get("ordinary_nonpass_ref"):
+                current.validated_nonpass_waits[target] = {
+                    "retained_ref": proof["ordinary_nonpass_ref"]
+                }
             return current
         if isinstance(interpreted, dict):
             import closer_disposition
@@ -2902,6 +2928,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     "head": snap.get("head"),
                     "review_revision": snap.get("review_revision"),
                     "source_digest": source_digest(snap.get("sources", [])),
+                }
+                current.validated_nonpass_waits[target] = {
+                    "disposition": integration["disposition"],
+                    "verifier": snap.get("verifier"),
                 }
                 current.advisory.pop(target, None)
             else:
@@ -3115,6 +3145,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             and (
                 reason == "worker_json_invalid"
                 or str(reason).startswith("current item-scoped hold: ")
+                or (
+                    str(reason).startswith("ordinary NON_PASS disposition retained: ")
+                    and target in current.validated_nonpass_waits
+                )
             )
         ):
             import closer_pipeline
@@ -3123,6 +3157,50 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             inner = closer_queue._read_state(Path(action_state)).get("items", {}).get(target, {})
             fresh_snapshot = inner.get("evidence") if isinstance(inner, dict) else None
             fresh_revision = inner.get("revision") if isinstance(inner, dict) else None
+            nonpass_ref = None
+            if str(reason).startswith(closer_pipeline.NONPASS_WAIT_PREFIX):
+                validated = current.validated_nonpass_waits[target]
+                nonpass_ref = validated.get("retained_ref")
+                if nonpass_ref is None:
+                    disposition = validated.get("disposition")
+                    record = (
+                        {
+                            "schema": closer_pipeline.NONPASS_WAIT_SCHEMA,
+                            "target": target,
+                            "revision": fresh_revision,
+                            "reason": reason,
+                            "next_trigger": next_trigger,
+                            "disposition": disposition,
+                            "disposition_sha256": closer_pipeline._digest(disposition),
+                            "verifier": validated.get("verifier"),
+                            **{
+                                field: fresh_snapshot.get(field)
+                                for field in ("head", "base", "review_revision")
+                            },
+                        }
+                        if isinstance(fresh_snapshot, dict)
+                        else {}
+                    )
+                    if not closer_pipeline._valid_nonpass_wait_record(
+                        record, target, fresh_revision, fresh_snapshot, reason, next_trigger
+                    ):
+                        return {
+                            "status": "blocked",
+                            "reason": "ordinary_nonpass_wait_binding_changed",
+                            "queue_receipt": receipt,
+                        }
+                    raw_record = closer_pipeline._canonical(record)
+                    if len(raw_record) > closer_evidence.MAX_SECTION_BYTES:
+                        return {
+                            "status": "blocked",
+                            "reason": "ordinary_nonpass_wait_proof_too_large",
+                            "queue_receipt": receipt,
+                        }
+                    nonpass_ref = closer_evidence._retain_bytes(
+                        closer_pipeline._nonpass_wait_store(Path(context["state_path"])),
+                        raw_record,
+                        "json",
+                    )
             if (
                 isinstance(prep_snapshot, dict)
                 and isinstance(fresh_snapshot, dict)
@@ -3146,6 +3224,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     "inner_path": str(action_state),
                     "receipt_sha256": closer_pipeline._digest(receipt),
                 }
+                if nonpass_ref is not None:
+                    fresh_proof["ordinary_nonpass_ref"] = nonpass_ref
                 if closer_pipeline._valid_inner_wait(
                     Path(context["state_path"]),
                     target,
@@ -3178,6 +3258,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "inner_path": str(action_state),
                 "receipt_sha256": closer_pipeline._digest(receipt),
             }
+            if nonpass_ref is not None:
+                proof["ordinary_nonpass_ref"] = nonpass_ref
             if closer_pipeline._valid_inner_wait(
                 Path(context["state_path"]),
                 target,

@@ -1779,6 +1779,223 @@ def test_staged_adapter_emits_only_durable_validated_inner_wait(tmp_path, monkey
     assert not backend.gh.calls
 
 
+def ordinary_nonpass_wait_fixture(
+    tmp_path, monkeypatch, *, fresh_revision=False, linked_subject=False
+):
+    # Reuse the native input/comparison corpus fixture; do not stub integration.
+    import test_closer_disposition
+
+    import closer_disposition
+
+    if linked_subject:
+        monkeypatch.setattr(test_closer_disposition, "TARGET", "owner/repo#11")
+    current, packet, ref, prepared, interpreted = test_closer_disposition.fixture(
+        tmp_path,
+        native=True,
+        **({"pr_target": "owner/repo#12"} if linked_subject else {}),
+    )
+    current.update(state="MERGED", labels=[], draft=False, active_threads=0, mergeable="MERGEABLE")
+    prepared.update(
+        snapshot=copy.deepcopy(current),
+        packet_ref=ref,
+        identity=current["target"],
+        semantic_cache_key="closer-evidence-semantic/v1:" + "e" * 64,
+    )
+    interpreted["proposal"]["decision"]["criteria"] = []
+    interpreted["proposal"]["resolutions"] = [
+        {
+            "finding_id": row["finding_id"],
+            "status": "unresolved_missing_evidence",
+            "next_guarded_action": "wait",
+            "reason": "Original acceptance proof is missing; source-owned follow-up required",
+        }
+        for row in closer_disposition.pending_nonpass_findings(current, packet)
+    ]
+    interpreted["substantive_needs"] = []
+    if fresh_revision:
+        current["revision"] = "fresh-same-head-revision"
+    monkeypatch.setattr(adapter, "GitHub", lambda **kwargs: FakeGitHub(current))
+    path = adapter._pipeline_state_path(tmp_path / "state.json")
+    captured = {}
+
+    def pipeline_stub(_path, _targets, **callbacks):
+        context = {
+            "state_path": str(path),
+            "action_state_path": str(
+                path.parent
+                / f"{path.stem}.actions"
+                / f"{closer_pipeline._digest(current['target'])}.json"
+            ),
+            "deadline": time.time() + 60,
+            "revision": prepared["revision"],
+            "identity": prepared["identity"],
+            "prepare": prepared,
+            "interpret": interpreted,
+        }
+        captured["act"] = callbacks["act"]
+        captured["context"] = context
+        captured["first"] = callbacks["act"](current["target"], context)
+        return {"targets": {current["target"]: captured["first"]}}
+
+    monkeypatch.setattr(closer_pipeline, "run_pipeline", pipeline_stub)
+    backend = closer(tmp_path, current)
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [current["target"]], backend, time.time() + 360)
+    return current, prepared, interpreted, path, backend, captured
+
+
+@pytest.mark.parametrize("linked_subject", [False, True])
+def test_helper_accounted_native_nonpass_becomes_typed_wait_without_acceptance(
+    tmp_path, monkeypatch, linked_subject
+):
+    native_pipeline = closer_pipeline.run_pipeline
+    current, prep, interpreted, path, backend, captured = ordinary_nonpass_wait_fixture(
+        tmp_path, monkeypatch, linked_subject=linked_subject
+    )
+    result = captured["first"]
+    assert result["status"] == "deferred" and result["reason"] == "validated_inner_wait"
+    proof = result["resource_evidence"]["inner_wait"]
+    record_ref = proof["ordinary_nonpass_ref"]
+    raw = Path(record_ref["path"]).read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == record_ref["sha256"]
+    record = json.loads(raw)
+    assert record["disposition"]["acceptance_authority"] is False
+    assert len(record["disposition"]["raw_verdicts"]) == 4
+    assert interpreted["proposal"]["decision"]["criteria"] == []
+    assert result["queue_receipt"]["stop_valid"] is True
+    assert (
+        closer_queue._read_state(Path(proof["inner_path"]))["items"][current["target"]]["operation"]
+        is None
+    )
+    assert closer_pipeline._valid_inner_wait(
+        path,
+        current["target"],
+        prep["revision"],
+        prep["snapshot"],
+        proof["reason"],
+        result["next_trigger"],
+        proof,
+    )
+    assert backend.dispositions == {} and backend.gh.calls == []
+
+    # A later deterministic read may reuse only this already validated durable proof.
+    context = copy.deepcopy(captured["context"])
+    context["interpret"] = {
+        "classification": "deterministic_inner_wait",
+        "inner_wait_proof": proof,
+        "reason": proof["reason"],
+        "next_trigger": result["next_trigger"],
+    }
+    repeated = captured["act"](current["target"], context)
+    assert repeated["status"] == "deferred"
+    assert repeated["resource_evidence"]["inner_wait"]["ordinary_nonpass_ref"] == record_ref
+    # Exercise the real outer stage handler too: the typed wait must not become
+    # the former "act returned unsupported or missing status" failed-action row.
+    outer = native_pipeline(
+        path,
+        [current["target"]],
+        prepare=lambda *_: copy.deepcopy(prep),
+        interpret=lambda *_: copy.deepcopy(interpreted),
+        exception=lambda *_: pytest.fail("accounted NON_PASS requires no stronger worker"),
+        act=captured["act"],
+        capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+        deadline=time.time() + 10,
+    )
+    row = outer["targets"][current["target"]]
+    assert row["status"] == "deferred" and row["stage"] == "act"
+    assert row.get("known_completed_action") is not True
+    assert closer_pipeline.validate_stop(path)["valid"] is True
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "prefix_only",
+        "authority",
+        "record_revision",
+        "record_target",
+        "disposition_hash",
+        "finding_id",
+        "native_pass",
+        "native_open",
+        "native_head",
+        "operation",
+        "receipt",
+        "missing_record",
+    ],
+)
+def test_nonpass_wait_requires_exact_retained_disposition_and_current_native_proof(
+    tmp_path, monkeypatch, mutation
+):
+    current, prep, _interpreted, path, _backend, captured = ordinary_nonpass_wait_fixture(
+        tmp_path, monkeypatch
+    )
+    result = captured["first"]
+    proof = copy.deepcopy(result["resource_evidence"]["inner_wait"])
+    record_ref = proof["ordinary_nonpass_ref"]
+    record = json.loads(Path(record_ref["path"]).read_bytes())
+    native_path = Path(proof["inner_path"])
+    native = closer_queue._read_state(native_path)
+    item = native["items"][current["target"]]
+    if mutation == "prefix_only":
+        proof.pop("ordinary_nonpass_ref")
+    elif mutation == "missing_record":
+        Path(record_ref["path"]).unlink()
+    elif mutation.startswith("native_"):
+        if mutation == "native_pass":
+            item["evidence"]["verifier"]["verdict"] = "PASS"
+        elif mutation == "native_open":
+            item["evidence"]["state"] = "OPEN"
+        else:
+            item["evidence"]["head"] = "f" * 40
+    elif mutation == "operation":
+        item["operation"] = {"id": "unknown", "status": "uncertain"}
+    elif mutation == "receipt":
+        native["round"]["receipt"]["accounting"][0]["eligible"] = True
+    else:
+        if mutation == "authority":
+            record["disposition"]["acceptance_authority"] = True
+        elif mutation == "record_revision":
+            record["revision"] = "stale"
+        elif mutation == "record_target":
+            record["target"] = "other/repo#1"
+        elif mutation == "finding_id":
+            record["disposition"]["resolutions"][0]["finding_id"] = "wrong"
+        else:
+            record["disposition_sha256"] = "0" * 64
+        if mutation != "disposition_hash":
+            record["disposition_sha256"] = closer_pipeline._digest(record["disposition"])
+        import closer_evidence
+
+        proof["ordinary_nonpass_ref"] = closer_evidence._retain_bytes(
+            closer_pipeline._nonpass_wait_store(path), closer_pipeline._canonical(record), "json"
+        )
+    native_path.write_text(json.dumps(native))
+    assert not closer_pipeline._valid_inner_wait(
+        path,
+        current["target"],
+        prep["revision"],
+        prep["snapshot"],
+        proof["reason"],
+        result["next_trigger"],
+        proof,
+    )
+
+
+def test_nonpass_wait_same_head_new_revision_requires_fresh_preparation(tmp_path, monkeypatch):
+    current, prep, _interpreted, _path, _backend, captured = ordinary_nonpass_wait_fixture(
+        tmp_path, monkeypatch, fresh_revision=True
+    )
+    assert captured["first"]["status"] == "completed"
+    assert captured["first"]["target_complete"] is False
+    context = copy.deepcopy(captured["context"])
+    context["revision"] = current["revision"]
+    context["prepare"]["revision"] = current["revision"]
+    context["prepare"]["snapshot"] = current
+    second = captured["act"](current["target"], context)
+    assert second["status"] == "deferred" and second["reason"] == "validated_inner_wait"
+
+
 def test_fresh_inner_wait_revision_change_reprepares_before_valid_wait(tmp_path, monkeypatch):
     old = snapshot(labels=["agents:paused"], review_revision="before-fresh-read")
     fresh = snapshot(labels=["agents:paused"], review_revision="after-fresh-read")
