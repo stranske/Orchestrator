@@ -1168,16 +1168,10 @@ def plan(
                     "capability_rng_seed": capability_decision["seed"],
                     "capability_assignment_probability": capability_decision["propensity"],
                     "capability_fallback": capability_decision["fallback"],
-                    "capability_ids": (
-                        [capability_decision["selected_capability_id"]]
-                        if capability_decision["selected_capability_id"]
-                        else []
-                    ),
-                    "capability_version_ids": (
-                        [capability_decision["selected_capability_version_id"]]
-                        if capability_decision["selected_capability_version_id"]
-                        else []
-                    ),
+                    # Selection is routing metadata only; exercised pairs are admitted only after
+                    # invoke_compiled_target (or infrastructure-specific evidence) in dispatcher.
+                    "capability_ids": [],
+                    "capability_version_ids": [],
                 }
             )
 

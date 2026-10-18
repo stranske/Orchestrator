@@ -439,6 +439,80 @@ def test_profile_decision_attaches_only_real_matching_attempt(tmp_path, monkeypa
         feedback.attach_profile_attempt_to_decision(envelope["decision_id"], other_attempt)
 
 
+def test_router_plan_selection_metadata_without_exercised_credit(tmp_path, monkeypatch):
+    import router
+
+    cap = capabilities._blank_capability("selection-credit")
+    cap.update(
+        {
+            "status": "active",
+            "owner": "orchestrator",
+            "matcher": {"repository": "owner/repo", "task_types": ["implement"]},
+            "entrypoint": "fixture.py:run",
+            "trigger_cadence": "per matching task",
+            "output_artifact": "fixture-result.json",
+            "downstream_consumer": "dispatcher.py",
+            "learning_sink": "feedback capability joins",
+            "last_match": NOW,
+            "last_invocation": NOW,
+            "last_success": NOW,
+            "kill_switch": "ORCH_FIXTURE=0",
+            "rollback": {"transition": "retired", "predecessor": "baseline"},
+            "outcome_links": ["outcome:baseline"],
+            "activation_evidence": {
+                probe: {"passed": True, "checked_at": NOW, "ref": f"baseline:{probe}"}
+                for probe in capabilities.ACTIVE_PROBES
+            },
+            "expiry": NOW + 86400,
+            "capability_version_id": "capability-version:selection-credit",
+            "artifact_hash": "sha256:artifact",
+            "lifecycle_policy_hash": "sha256:policy",
+        }
+    )
+    ledger = tmp_path / "capabilities.json"
+    ledger.write_text(
+        json.dumps(
+            {
+                "schema_version": capabilities.SCHEMA_VERSION,
+                "capabilities": {cap["capability_id"]: cap},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(capabilities, "REG", ledger)
+    monkeypatch.setattr(capabilities.load, "__defaults__", (ledger,))
+    monkeypatch.setattr(capabilities.load_declared, "__defaults__", (ledger,))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    result = router.plan(
+        [{"target": "owner/repo#23", "task_type": "implement", "lane": "opener"}],
+        {"agents": {"codex": {"state": "ok"}}},
+        dry_run=True,
+        now=NOW,
+    )
+    assignment = result["assignments"][0]
+    assert assignment["selected_capability_id"] == cap["capability_id"]
+    assert assignment["capability_ids"] == []
+    assert assignment["capability_version_ids"] == []
+    feedback.record_run(
+        "selection-only",
+        "owner/repo#23",
+        "implement",
+        "codex",
+        routing_metadata={
+            "selected_capability_id": assignment["selected_capability_id"],
+            "selected_capability_version_id": assignment["selected_capability_version_id"],
+        },
+        capability_ids=[],
+        capability_version_ids=[],
+    )
+    with feedback._conn() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM influence_edges WHERE target_run_id=? AND influence_type='capability' AND accepted=1",
+            ("selection-only",),
+        ).fetchone()[0]
+    assert count == 0
+
+
 def test_pending_durability_is_not_a_failure_or_promotion_vote(tmp_path, monkeypatch):
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
     ledger = tmp_path / "capabilities.json"

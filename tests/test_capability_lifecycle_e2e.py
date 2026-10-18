@@ -984,3 +984,38 @@ def test_regression_requires_automatic_rollback(regressing_canary: tuple[dict, P
     capability_targets.prepare_rollback(
         current, registry_path=registry, reason="joined outcome regressed"
     )
+
+
+def test_dispatcher_dispatch_workflow_produces_one_accepted_edge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import capabilities
+    import dispatcher
+
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    monkeypatch.setattr(capabilities, "REG", ctx["ledger"])
+    monkeypatch.setattr(capabilities.load, "__defaults__", (ctx["ledger"],))
+    monkeypatch.setattr(capability_lifecycle, "DEFAULT_TARGET_REGISTRY", ctx["registry"])
+    run_id = "dispatch:workflow:1"
+    trigger = ctx["fixture"]["trigger"]
+    d = {
+        "run_id": run_id,
+        "target": trigger["target"],
+        "task_type": trigger["task_type"],
+        "agent": "codex",
+        "routing_metadata": {
+            "selected_capability_id": ctx["capability_id"],
+            "selected_capability_version_id": ctx["version_id"],
+        },
+    }
+    feedback.record_run(run_id, trigger["target"], trigger["task_type"], "codex")
+    result = dispatcher._invoke_selected_compiled_capability(d)
+    assert result is not None
+    assert result.get("invoked") and result.get("accepted")
+    with feedback._conn() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM influence_edges WHERE target_run_id=? "
+            "AND influence_type='capability' AND accepted=1",
+            (run_id,),
+        ).fetchone()[0]
+    assert count == 1

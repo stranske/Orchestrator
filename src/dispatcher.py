@@ -1117,6 +1117,46 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
 # capability's own heartbeat fires on, so a tag means "this ran" for exactly the reason the ledger
 # already records. Without the tag the capability records that it RAN and never how the work turned
 # out, which is what put both of these in `invoked_without_outcomes` with zero edges. (2026-08-21)
+def _invoke_selected_compiled_capability(d: dict) -> dict | None:
+    """Run invoke_compiled_target for the routed selection after the run envelope exists."""
+    routing = d.get("routing_metadata") or {}
+    cap_id = routing.get("selected_capability_id")
+    if not cap_id:
+        return None
+    try:
+        import capabilities
+        import capability_lifecycle
+        from capability_lifecycle import DEFAULT_TARGET_REGISTRY
+    except Exception as exc:
+        return {"invoked": False, "accepted": False, "reason": f"import_failed:{exc}"}
+    target = str(d.get("target") or "")
+    trigger = {
+        "target": target,
+        "task_type": d.get("task_type"),
+        "repository": target.split("#")[0] if "#" in target else target,
+    }
+    try:
+        result = capability_lifecycle.invoke_compiled_target(
+            str(cap_id),
+            trigger=trigger,
+            target_run_id=str(d["run_id"]),
+            ledger_path=capabilities.REG,
+            target_registry_path=DEFAULT_TARGET_REGISTRY,
+            inputs={},
+        )
+    except Exception as exc:
+        result = {"invoked": False, "accepted": False, "reason": f"invoke_failed:{exc}"}
+    if not result.get("invoked") or not result.get("accepted"):
+        metadata = dict(routing)
+        metadata["capability_dispatch_result"] = {
+            "invoked": bool(result.get("invoked")),
+            "accepted": bool(result.get("accepted")),
+            "reason": result.get("reason"),
+        }
+        d["routing_metadata"] = metadata
+    return result
+
+
 def _exercised_capability_ids(assignment: dict, agent: str) -> list[str]:
     out: list[str] = []
     # adapters.build_command: "The agy seat's runtime isolation (--gemini_dir + absolute
@@ -1240,12 +1280,14 @@ def _spawn(d: dict) -> int:
         # or leave an orphan execution_attempt.
         try:
             feedback.record_run(*run_args, **run_kwargs)
+            _invoke_selected_compiled_capability(d)
         except Exception:
             claims.release(d["target"], d["agent"])
             raise
     else:
         try:
             feedback.record_run(*run_args, **run_kwargs)
+            _invoke_selected_compiled_capability(d)
         except Exception as exc:
             adapters.record_ledger(
                 d["agent"],

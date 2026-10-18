@@ -3259,8 +3259,21 @@ def _record_run_in_conn(
     # only in the one-capability case — which meant a run declaring TWO capabilities recorded
     # attribution for NEITHER (the multi-capability case was the worst-served one, 2026-08-09).
     # Edges are the many-to-many surface, and `capability` is already a valid influence type.
+    # Compiled capabilities earn accepted credit only through record_capability_consumption
+    # (producer/consumer receipt). record_run may still tag independently proven infrastructure.
+    _record_run_credited_capability_ids = frozenset(
+        {
+            "agy-runtime-isolation",
+            "thompson-hybrid-routing",
+            "testgen-lane",
+            "codemod-campaign",
+            "cross-repo-coordination",
+        }
+    )
     if len(capability_ids) == len(capability_version_ids):
         for cap_id, cap_version in zip(capability_ids, capability_version_ids):
+            if str(cap_id) not in _record_run_credited_capability_ids:
+                continue
             _record_influence_edge_in_conn(
                 c,
                 target_run_id=run_id,
