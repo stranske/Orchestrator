@@ -25,6 +25,8 @@ target live (clone + worktree) to verify the normal-fs path works, then cleans u
 
 from __future__ import annotations
 
+import argparse
+import json
 import os
 import re
 import shutil
@@ -32,6 +34,7 @@ import subprocess
 import sys
 import uuid
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -46,6 +49,9 @@ REPOS_DIR = Path(
 WORKTREES_DIR = Path(
     os.environ.get("ORCH_WORKTREE_BASE", LOCAL_RUNTIME / "worktrees")
 )  # per-target worktrees
+PROVISION_EVENTS_PATH = Path(
+    os.environ.get("ORCH_PROVISION_EVENTS_PATH", LOCAL_RUNTIME / "provision-events.ndjson")
+)
 
 # Base branch a NEW opener branch is cut from only when it intentionally differs from the repo's
 # default. Repos that follow their default must stay absent: default_branch() queries GitHub, while
@@ -244,13 +250,46 @@ def _pr_head_branch(repo: str, num: int) -> str:
     return out
 
 
-def provision(target: str, lane: str) -> Path:
+def _reclaim_branch_holder(canon: Path, branch: str, wt: Path, event: dict) -> None:
+    """Remove only a clean, idle holder of this branch, never the requested checkout."""
+    _run(["git", "-C", str(canon), "worktree", "prune", "--expire", "now"])
+    listed = _run(["git", "-C", str(canon), "worktree", "list", "--porcelain", "-z"])
+    for record in listed.stdout.split("\0\0"):
+        fields = record.split("\0")
+        if f"branch refs/heads/{branch}" not in fields:
+            continue
+        holder = Path(next(field[9:] for field in fields if field.startswith("worktree ")))
+        if holder.resolve() == wt.resolve():
+            continue
+        event.update(cause="branch-held", holder_path=str(holder))
+        status = _wt_git(holder, ["status", "--porcelain", "--untracked-files=all"])
+        if status.returncode != 0:
+            raise RuntimeError(f"cannot inspect holder {holder}: {status.stderr.strip()}")
+        if status.stdout.strip():
+            raise RuntimeError(
+                f"refusing to reclaim dirty worktree {holder}: {status.stdout.strip()}"
+            )
+        live = _run(["pgrep", "-f", re.escape(str(holder))], check=False)
+        if live.returncode not in (0, 1):
+            raise RuntimeError(f"cannot check live processes for {holder}: {live.stderr.strip()}")
+        if live.returncode == 0:
+            raise RuntimeError(
+                f"refusing to reclaim worktree {holder}: live pid {live.stdout.strip()}"
+            )
+        _run(["git", "-C", str(canon), "worktree", "remove", "--force", str(holder)])
+        _run(["git", "-C", str(canon), "worktree", "prune"])
+        event["outcome"] = "reclaimed"
+        print(f"provision: reclaimed stale worktree {holder} holding {branch}")
+
+
+def _provision(target: str, lane: str, event: dict) -> Path:
     """Ensure a local-disk worktree for the target; return its path (idempotent)."""
     repo, num = parse_target(target)
     canon = ensure_canonical(repo)
     wt = worktree_path(target, lane)
     if (wt / ".git").exists():
         if os.environ.get("ORCH_ALLOW_STALE_WORKTREE_REUSE") == "1":
+            event.update(outcome="reused", cause="existing-worktree")
             return wt
         reuse_error = _existing_worktree_reuse_error(wt)
         if reuse_error:
@@ -258,12 +297,14 @@ def provision(target: str, lane: str) -> Path:
                 f"refusing to reuse stale worktree for {target} ({lane}): "
                 f"{reuse_error}; inspect or remove {wt}"
             )
+        event.update(outcome="reused", cause="existing-worktree")
         return wt  # already provisioned and clean
     WORKTREES_DIR.mkdir(parents=True, exist_ok=True)
 
     if lane == "closer" and num is not None:
         head = _pr_head_branch(repo, num)
-        _run(["git", "-C", str(canon), "fetch", "origin", head], check=False)
+        _run(["git", "-C", str(canon), "fetch", "origin", head])
+        _reclaim_branch_holder(canon, head, wt, event)
         # worktree tracking origin/<head> so the agent's push updates the PR
         _run(
             [
@@ -282,9 +323,119 @@ def provision(target: str, lane: str) -> Path:
     else:  # opener (issue) or repo-level: new branch off the base
         base = base_branch(repo)
         branch = f"orchestrator/issue-{num}" if num is not None else f"orchestrator/{lane}"
-        _run(["git", "-C", str(canon), "fetch", "origin", base], check=False)
-        _run(["git", "-C", str(canon), "worktree", "add", "-b", branch, str(wt), f"origin/{base}"])
+        _run(["git", "-C", str(canon), "fetch", "origin", base])
+        _reclaim_branch_holder(canon, branch, wt, event)
+        exists = _run(
+            ["git", "-C", str(canon), "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+            check=False,
+        )
+        if exists.returncode not in (0, 1):
+            exists.check_returncode()
+        if exists.returncode == 0:
+            if event["outcome"] != "reclaimed":
+                event.update(outcome="reused", cause="branch-exists")
+            ancestor = _run(
+                ["git", "-C", str(canon), "merge-base", "--is-ancestor", f"origin/{base}", branch],
+                check=False,
+            )
+            if ancestor.returncode == 0:
+                _run(["git", "-C", str(canon), "worktree", "add", str(wt), branch])
+            else:
+                if ancestor.returncode != 1:
+                    ancestor.check_returncode()
+                unique = _run(
+                    ["git", "-C", str(canon), "rev-list", branch, "--not", "--remotes"]
+                ).stdout.strip()
+                if unique:
+                    raise RuntimeError(
+                        f"refusing to reset existing branch {branch}: commits absent from every "
+                        f"remote ref: {unique}"
+                    )
+                _run(
+                    [
+                        "git",
+                        "-C",
+                        str(canon),
+                        "worktree",
+                        "add",
+                        "-B",
+                        branch,
+                        str(wt),
+                        f"origin/{base}",
+                    ]
+                )
+        else:
+            _run(
+                [
+                    "git",
+                    "-C",
+                    str(canon),
+                    "worktree",
+                    "add",
+                    "-b",
+                    branch,
+                    str(wt),
+                    f"origin/{base}",
+                ]
+            )
     return wt
+
+
+def provision(target: str, lane: str) -> Path:
+    """Provision a checkout and record exactly one result, including caller-visible failures."""
+    event = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "target": target,
+        "lane": lane,
+        "outcome": "ok",
+        "cause": "provision-error",
+        "holder_path": None,
+    }
+    try:
+        wt = _provision(target, lane, event)
+        if event["outcome"] == "ok":
+            event["cause"] = "new-worktree"
+        return wt
+    except Exception:
+        event["outcome"] = "failed"
+        raise
+    finally:
+        try:
+            PROVISION_EVENTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with PROVISION_EVENTS_PATH.open("a", encoding="utf-8") as ledger:
+                ledger.write(json.dumps(event) + "\n")
+        except OSError as exc:
+            # A full disk must not hide the actual provisioning error from dispatcher.py.
+            print(
+                f"provision: cannot append event to {PROVISION_EVENTS_PATH}: {exc}", file=sys.stderr
+            )
+
+
+def report(days: int) -> None:
+    """Count the measured window; an absent instrument is never a measured zero."""
+    summary = f"provision: failed(branch-held|branch-exists) = {{}} over {days}d"
+    if not PROVISION_EVENTS_PATH.exists():
+        print("unmeasured: no ledger")
+        print(summary.format("unmeasured: no ledger"))
+        return
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    counts: dict[tuple[str, str], int] = {}
+    with PROVISION_EVENTS_PATH.open(encoding="utf-8") as ledger:
+        for line in ledger:
+            event = json.loads(line)
+            ts = datetime.fromisoformat(event["ts"])
+            if since <= ts <= datetime.now(timezone.utc):
+                key = (event["outcome"], event["cause"])
+                counts[key] = counts.get(key, 0) + 1
+    for outcome in ("ok", "reused", "reclaimed", "failed"):
+        print(f"provision: {outcome} = {sum(n for (o, _), n in counts.items() if o == outcome)}")
+    for (outcome, cause), count in sorted(counts.items()):
+        print(f"provision: {outcome}({cause}) = {count}")
+    print(
+        summary.format(
+            sum(counts.get(("failed", cause), 0) for cause in ("branch-held", "branch-exists"))
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +492,15 @@ def _smoke(target: str, lane: str) -> None:
 
 
 def main(argv: list[str]) -> int:
+    if argv and argv[0] == "--report":
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--report", action="store_true")
+        parser.add_argument("--days", type=int, default=7)
+        args = parser.parse_args(argv)
+        if args.days <= 0:
+            parser.error("--days must be positive")
+        report(args.days)
+        return 0
     if "--selftest" in argv:
         _selftest()
         return 0
@@ -351,7 +511,7 @@ def main(argv: list[str]) -> int:
         print(provision(argv[1], argv[2] if len(argv) > 2 else "opener"))
         return 0
     print(
-        "usage: provision.py --selftest | --smoke <owner/repo#N> <opener|closer> | provision <target> <lane>",
+        "usage: provision.py --selftest | --report --days N | --smoke <owner/repo#N> <opener|closer> | provision <target> <lane>",
         file=sys.stderr,
     )
     return 2
