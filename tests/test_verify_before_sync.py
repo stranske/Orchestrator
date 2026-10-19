@@ -84,6 +84,9 @@ seen = {
     "saw_stamp": str((runtime / ".last-periodic-report").is_file()),
     "saw_docs": str((runtime / "local-docs" / "a.md").is_file()),
     "saw_big": str((runtime / "agent-runtime").exists()),
+    "saw_gemini_catalog": str((runtime / "agent-runtime" / "gemini" / "advertised-models.json").is_file()),
+    "saw_big_payload": str((runtime / "agent-runtime" / "big.bin").exists()),
+    "verify_path": env.get("PATH", ""),
     "saw_rows": str(brain.execute("select count(*) from t").fetchone()[0]),
     "verify_args": " ".join(sys.argv[1:]),
 }
@@ -160,6 +163,9 @@ def world(tmp_path: Path) -> dict:
     (state / "local-docs" / "a.md").write_text("policy\n")
     (state / "agent-runtime").mkdir()
     (state / "agent-runtime" / "big.bin").write_bytes(b"x" * (2 * 1024 * 1024))  # over 1 MB
+    catalog = state / "agent-runtime" / "gemini" / "advertised-models.json"
+    catalog.parent.mkdir()
+    catalog.write_text('{"models": ["gemini-4-argon-high"]}\n')
     (state / ".last-periodic-report").write_text("")
     (state / "capabilities.json").write_text('{"capabilities": {"x": {}}}')
     (state / "feedback").mkdir()
@@ -238,6 +244,24 @@ def test_a_green_scratch_mirror_is_verified_and_nothing_live_is_touched(world):
     assert list(world["tmpdir"].iterdir()) == [], list(world["tmpdir"].iterdir())
 
 
+def test_detached_path_keeps_agent_clis_and_copies_only_the_small_model_catalog(world):
+    """The authenticated launcher resets PATH, and the live agent-runtime directory is too large
+    for the general state copy. Restore the user's local CLI directory and the one small catalog
+    the strict verifier needs, while leaving the rest of agent-runtime out of the scratch state."""
+    user_bin = world["home"] / ".local" / "bin"
+    user_bin.mkdir(parents=True)
+    result, record = _run(
+        world,
+        PATH="/usr/bin:/bin",
+        PYTHON=sys.executable,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert record["verify_path"].split(":")[0] == str(user_bin), record
+    assert record["saw_gemini_catalog"] == "True", record
+    assert record["saw_big_payload"] == "False", record
+    assert "not copied, over 1 MB" in result.stdout, result.stdout
+
+
 def test_verify_py_reads_and_writes_only_a_copy_of_the_live_state(world):
     """The `ledger validate` gate rewrites the ledger it loads. Taken before the copy, on the live
     paths, it would write the declarations of a tree that is not deployed into the live ledger,
@@ -256,8 +280,9 @@ def test_verify_py_reads_and_writes_only_a_copy_of_the_live_state(world):
     assert (record["saw_rows"], record["saw_stamp"], record["saw_docs"]) == ("1", "True", "True")
     for key in ("verify_runtime", "verify_statedir", "verify_ledger", "verify_brain"):
         assert world["tmpdir"] in Path(record[key]).parents, (key, record)
-    # A directory over the size bound is skipped and NAMED, never silently absent.
-    assert record["saw_big"] == "False", record
+    # The oversized directory stays out except for the one targeted catalog file.
+    assert record["saw_gemini_catalog"] == "True", record
+    assert record["saw_big_payload"] == "False", record
     assert "not copied, over 1 MB" in result.stdout and "agent-runtime (2 MB)" in result.stdout
 
 

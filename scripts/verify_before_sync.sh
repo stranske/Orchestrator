@@ -59,6 +59,14 @@
 set -uo pipefail
 
 real_home="$HOME"
+# Authenticated detached launchers replace PATH to keep their CLI environment deterministic. The
+# installed agent CLIs used by this machine's verification (agy and cursor-agent) live in the
+# standard per-user bin directory, so restore that one location without disturbing the selected
+# Python shim or the launcher's tool ordering.
+if [[ -d "$real_home/.local/bin" ]]; then
+  PATH="$real_home/.local/bin:$PATH"
+  export PATH
+fi
 mode="verify"
 if [[ "${1:-}" == "--identity" ]]; then
   mode="identity"
@@ -136,6 +144,17 @@ copy_state() {
       fi
     fi
   done
+}
+
+# The agent-runtime tree is intentionally too large to copy wholesale. This small model catalog is
+# a prerequisite for the strict local verifier, though, so carry just that file into the private
+# state copy when it exists. No model cache is written or refreshed by the copy step.
+copy_verifier_prerequisites() {
+  local from="$1" to="$2" cache="agent-runtime/gemini/advertised-models.json"
+  if [[ -f "$from/$cache" ]]; then
+    mkdir -p "$to/$(dirname "$cache")" || return 1
+    cp -p "$from/$cache" "$to/$cache" || return 1
+  fi
 }
 
 # What the sync copies: a non-recursive module glob and selected root files from the WORKING TREE,
@@ -282,6 +301,10 @@ statedir_copy="$runtime_copy"
 say "== scratch copy of the live state ($runtime_src), which verify.py may read AND write"
 if ! copy_state "$runtime_src" "$runtime_copy"; then
   fail "NOTHING VERIFIED: could not copy the live state from $runtime_src"
+  exit 2
+fi
+if ! copy_verifier_prerequisites "$runtime_src" "$runtime_copy"; then
+  fail "NOTHING VERIFIED: could not copy the small agent model catalog to the state copy"
   exit 2
 fi
 if [[ "$statedir_src" != "$runtime_src" ]]; then
