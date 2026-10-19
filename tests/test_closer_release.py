@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
-
 from src.closer_release import ReleaseConflict, ReleaseError, ReleaseRecord
 
 CANDIDATE = "a" * 40
@@ -96,3 +96,129 @@ def test_record_is_bounded_and_atomic_json(tmp_path):
     record.path.write_text("x" * (64 * 1024 + 1))
     with pytest.raises(ReleaseError, match="size bound"):
         record.read()
+
+
+VERIFIER_SOURCE = r'''#!/usr/bin/env bash
+set -eu
+mode=verify
+if [[ "${1:-}" == "--identity" ]]; then mode=identity; shift; fi
+if [[ "$mode" == identity ]]; then source_path="$1"; [[ -d "$source_path" ]]; printf '%s\n' "$SOURCE_FINGERPRINT"; exit 0; fi
+[[ -z "${VERIFY_BEFORE_SYNC_MAX_DIR_MB:-}" ]]
+[[ -z "${VERIFY_BEFORE_SYNC_TREE:-}" ]]
+[[ -z "${VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG:-}" ]]
+[[ "$1" == "--snapshot-out" ]]; snapshot="$2"; shift 2
+[[ "$1" == "--digest-out" ]]; digest="$2"; shift 2
+source_path="$1"
+[[ -d "$source_path" ]]
+if [[ -f "$source_path/fail-verification" ]]; then exit 1; fi
+mkdir -p "$snapshot"
+printf 'candidate payload' > "$snapshot/payload"
+printf '%s\n' "$(printf 'c%.0s' {1..64})" > "$digest"
+if [[ -n "${PUBLISH_DURING_VERIFY:-}" ]]; then printf '%s\n' "$PUBLISH_DURING_VERIFY" > "$GENERATION_STATE"; fi
+printf 'verified source identity: %s\n' "$SOURCE_FINGERPRINT"
+'''
+
+
+FAKE_INSTALLER = r'''import json
+import os
+import shutil
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+state = Path(os.environ["GENERATION_STATE"])
+mirror = Path(args[0])
+
+def token():
+    return "generation-v1:" + state.read_text().strip()
+
+if "--generation-token" in args:
+    print(token())
+    raise SystemExit(0)
+if "--digest" in args:
+    target = mirror / "payload"
+    print("c" * 64 if target.is_file() and target.read_text() == "candidate payload" else "1" * 64)
+    raise SystemExit(0)
+snapshot = mirror
+mirror = Path(args[1])
+expected = args[args.index("--expected-digest") + 1]
+expected_generation = args[args.index("--expected-generation") + 1]
+if token() != expected_generation:
+    print("CAS mismatch", file=sys.stderr)
+    raise SystemExit(2)
+if (snapshot / "payload").read_text() != "candidate payload" or expected != "c" * 64:
+    raise SystemExit(3)
+mirror.mkdir(parents=True, exist_ok=True)
+shutil.copyfile(snapshot / "payload", mirror / "payload")
+state.write_text("d" * 64)
+'''
+
+
+def make_fake_release(tmp_path, monkeypatch, *, extra_env=None):
+    import sys
+
+    source = tmp_path / "source"
+    source.mkdir()
+    if (extra_env or {}).get("FAIL_VERIFY"):
+        (source / "fail-verification").touch()
+    mirror = tmp_path / "mirror"
+    mirror.mkdir()
+    (mirror / "payload").write_text("incumbent payload\n")
+    generation_state = tmp_path / "generation.txt"
+    generation_state.write_text("b" * 64)
+    verifier = tmp_path / "verify.sh"
+    verifier.write_text(VERIFIER_SOURCE)
+    verifier.chmod(0o755)
+    installer = tmp_path / "fake_installer.py"
+    installer.write_text(FAKE_INSTALLER)
+    journal = ReleaseRecord(tmp_path / "release.json")
+    monkeypatch.setenv("GENERATION_STATE", str(generation_state))
+    monkeypatch.setenv("SOURCE_FINGERPRINT", "e" * 40)
+    for name, value in (extra_env or {}).items():
+        monkeypatch.setenv(name, value)
+    result = journal.verify_and_install(
+        candidate_sha=CANDIDATE,
+        lane_owner="closer",
+        source=source,
+        mirror=mirror,
+        verifier=verifier,
+        installer=installer,
+        python=sys.executable,
+        bash="/bin/bash",
+        run_id="fake-run",
+    )
+    return result, journal, mirror, generation_state
+
+
+def test_verify_and_install_runs_gate_then_installs_and_reads_back_generation(tmp_path, monkeypatch):
+    result, journal, mirror, _state = make_fake_release(
+        tmp_path, monkeypatch,
+        extra_env={"VERIFY_BEFORE_SYNC_MAX_DIR_MB": "500", "VERIFY_BEFORE_SYNC_TREE": "BARE EXEC MIRROR"},
+    )
+    assert result["stage"] == "installed"
+    assert result["incumbent_token"] == INCUMBENT
+    assert result["installed_generation"] == GENERATION
+    assert journal.read()["verification"]["snapshot_digest"] == DIGEST
+    assert (mirror / "payload").read_text() == "candidate payload"
+
+
+def test_verify_and_install_fails_closed_when_competing_publisher_wins(tmp_path, monkeypatch):
+    result, journal, mirror, _state = make_fake_release(
+        tmp_path, monkeypatch,
+        extra_env={"PUBLISH_DURING_VERIFY": "f" * 64},
+    )
+    assert result["stage"] == "failed"
+    assert result["incumbent_token"] == INCUMBENT
+    assert result["failure"]["stage"] == "install"
+    assert (mirror / "payload").read_text() == "incumbent payload\n"
+
+
+def test_verify_and_install_records_failed_verdict_and_never_installs(tmp_path, monkeypatch):
+    result, journal, mirror, _state = make_fake_release(
+        tmp_path, monkeypatch, extra_env={"FAIL_VERIFY": "1"},
+    )
+    assert result["stage"] == "failed"
+    assert result["verification"]["verified"] is False
+    assert result["verification"]["exit_code"] == 1
+    assert "verified source identity" not in Path(result["verification"]["log_path"]).read_text()
+    assert (mirror / "payload").read_text() == "incumbent payload\n"

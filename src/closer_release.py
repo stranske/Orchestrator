@@ -11,6 +11,9 @@ import fcntl
 import json
 import os
 import re
+import shutil
+import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -21,6 +24,7 @@ SCHEMA_VERSION = 1
 MAX_RECORD_BYTES = 64 * 1024
 _SHA = re.compile(r"^[0-9a-f]{40,64}$")
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
+_FINGERPRINT = re.compile(r"^[0-9a-f]{40}$")
 _GENERATION = re.compile(r"^generation-v1:[0-9a-f]{64}$")
 _ACTIVE = {"prepared", "verifying", "verified", "installing", "installed", "acceptance_pending", "rollback_pending"}
 _STAGES = _ACTIVE | {"accepted", "rolled_back", "failed"}
@@ -32,6 +36,13 @@ class ReleaseError(RuntimeError):
 
 class ReleaseConflict(ReleaseError):
     """The record is owned by another lane or has changed since it was read."""
+
+
+def _serialized(operation):
+    def wrapped(self, *args, **kwargs):
+        with self._operation_lock():
+            return operation(self, *args, **kwargs)
+    return wrapped
 
 
 class ReleaseRecord:
@@ -118,9 +129,178 @@ class ReleaseRecord:
                                expected_revision=expected_revision, verification=receipt,
                                failure=None if verified else {"stage": "verification", "exit_code": int(exit_code)})
 
+    @_serialized
+    def verify_and_install(
+        self,
+        *,
+        candidate_sha: str,
+        lane_owner: str,
+        source: str | Path,
+        mirror: str | Path,
+        verifier: str | Path,
+        installer: str | Path,
+        python: str | Path | None = None,
+        bash: str | Path | None = None,
+        run_id: str | None = None,
+        timeout: float = 3600,
+    ) -> dict[str, Any]:
+        """Run the repository verifier and installer with a durable CAS journal.
+
+        A new release captures the installer generation token before verification.
+        Restarts reuse the record's original token and, after an interrupted install,
+        accept readback only when the live deployment digest matches the retained
+        verified digest. No verifier ceiling or tree-shape environment override is
+        inherited by the gate subprocess.
+        """
+        source = Path(source).expanduser().resolve(strict=True)
+        mirror = Path(mirror).expanduser().absolute()
+        verifier = Path(verifier).expanduser().resolve(strict=True)
+        installer = Path(installer).expanduser().resolve(strict=True)
+        python = Path(python or sys.executable).expanduser().resolve(strict=True)
+        bash_path = Path(bash or shutil.which("bash") or "").expanduser().resolve(strict=True)
+        if not os.access(python, os.X_OK) or not os.access(bash_path, os.X_OK):
+            raise ValueError("pinned Python and Bash executables must be executable")
+        if timeout <= 0:
+            raise ValueError("timeout must be positive")
+
+        state = self.read()
+        if state is not None and state["stage"] in _ACTIVE:
+            # The call's candidate and owner are checked by begin; its token argument
+            # is deliberately ignored for a resumed record.
+            incumbent = state["incumbent_token"]
+        else:
+            incumbent = _run(
+                [str(python), str(installer), str(mirror), "--generation-token"],
+                env=_child_env(python), timeout=timeout,
+            ).strip()
+            if not _GENERATION.fullmatch(incumbent):
+                raise ReleaseError("installer returned an invalid pre-verification generation token")
+        state = self.begin(candidate_sha, incumbent, lane_owner, run_id=run_id)
+        if state["stage"] in {"accepted", "rolled_back"}:
+            raise ReleaseError(f"release is already terminal: {state['stage']}")
+        artifacts = self.path.parent / (self.path.name + ".artifacts") / state["release_id"]
+        snapshot = artifacts / "verified-snapshot"
+        digest_file = artifacts / "verified-digest.txt"
+        log_file = artifacts / "verification.log"
+
+        if state["stage"] in {"prepared", "verifying"}:
+            if state["stage"] == "prepared":
+                state = self.transition("verifying", lane_owner=lane_owner,
+                                        expected_revision=state["revision"],
+                                        verification={"status": "running", "snapshot_path": str(snapshot),
+                                                      "digest_path": str(digest_file), "log_path": str(log_file)})
+            artifacts.mkdir(parents=True, exist_ok=True)
+            _remove_leaf(snapshot)
+            _remove_leaf(digest_file)
+            before = _run([str(bash_path), str(verifier), "--identity", str(source)],
+                          env=_child_env(python), timeout=timeout).strip()
+            if not _FINGERPRINT.fullmatch(before):
+                return self._verification_failed(state, lane_owner, log_file,
+                                                 "identity", "verifier returned malformed source identity")
+            result = subprocess.run(
+                [str(bash_path), str(verifier), "--snapshot-out", str(snapshot),
+                 "--digest-out", str(digest_file), str(source)],
+                env=_child_env(python), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                timeout=timeout, check=False,
+            )
+            _write_durable(log_file, result.stdout)
+            text = result.stdout.decode("utf-8", "replace")
+            identities = re.findall(r"(?m)^\s*verified source identity: ([0-9a-f]{40})\s*$", text)
+            after = _run([str(bash_path), str(verifier), "--identity", str(source)],
+                         env=_child_env(python), timeout=timeout).strip()
+            valid_artifact = snapshot.is_dir() and digest_file.is_file() and not snapshot.is_symlink()
+            digest = digest_file.read_text(encoding="ascii").strip() if digest_file.is_file() else ""
+            digest_probe = ""
+            if valid_artifact and _DIGEST.fullmatch(digest):
+                digest_probe = _run([str(python), str(installer), str(snapshot), "--digest"],
+                                    env=_child_env(python), timeout=timeout).strip()
+            verified = (result.returncode == 0 and before == after and identities == [before]
+                        and valid_artifact and _DIGEST.fullmatch(digest) is not None
+                        and digest_probe == digest)
+            if not verified:
+                reason = ("verifier failed" if result.returncode else
+                          "source identity or verified snapshot receipt did not match")
+                return self._verification_failed(state, lane_owner, log_file, result.returncode or 3,
+                                                 reason, snapshot=snapshot, digest=digest or None,
+                                                 source_identity=before)
+            state = self.record_verification(
+                lane_owner=lane_owner, expected_revision=state["revision"], verified=True,
+                source_identity=before, snapshot_path=snapshot, snapshot_digest=digest,
+                log_path=log_file, exit_code=0,
+            )
+
+        if state["stage"] == "verified":
+            state = self.transition("installing", lane_owner=lane_owner,
+                                    expected_revision=state["revision"])
+        if state["stage"] != "installing":
+            raise ReleaseError(f"release cannot install from stage {state['stage']}")
+
+        receipt = state.get("verification") or {}
+        snapshot = Path(receipt["snapshot_path"])
+        expected_digest = receipt["snapshot_digest"]
+        current = _run([str(python), str(installer), str(mirror), "--generation-token"],
+                       env=_child_env(python), timeout=timeout).strip()
+        if current != state["incumbent_token"]:
+            if _installed_digest(python, installer, mirror, env=_child_env(python), timeout=timeout) == expected_digest:
+                return self._record_installed(state, lane_owner, python, installer, mirror, timeout)
+            return self._install_failed(state, lane_owner, "incumbent generation changed before install")
+
+        installed = subprocess.run(
+            [str(python), str(installer), str(snapshot), str(mirror),
+             "--expected-digest", expected_digest,
+             "--expected-generation", state["incumbent_token"]],
+            env=_child_env(python), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            timeout=timeout, check=False,
+        )
+        if installed.returncode != 0:
+            if _installed_digest(python, installer, mirror, env=_child_env(python), timeout=timeout) == expected_digest:
+                return self._record_installed(state, lane_owner, python, installer, mirror, timeout)
+            return self._install_failed(state, lane_owner,
+                                        f"installer failed with exit code {installed.returncode}")
+        if _installed_digest(python, installer, mirror, env=_child_env(python), timeout=timeout) != expected_digest:
+            return self._install_failed(state, lane_owner, "installed deployment digest readback failed")
+        return self._record_installed(state, lane_owner, python, installer, mirror, timeout)
+
+    def _verification_failed(self, state, lane_owner, log_file, exit_code, reason,
+                             *, snapshot=None, digest=None, source_identity=None):
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        if not log_file.exists():
+            _write_durable(log_file, (reason + "\n").encode())
+        return self.record_verification(
+            lane_owner=lane_owner, expected_revision=state["revision"], verified=False,
+            source_identity=source_identity, snapshot_path=snapshot, snapshot_digest=digest,
+            log_path=log_file, exit_code=int(exit_code) if isinstance(exit_code, int) else 3,
+        )
+
+    def _install_failed(self, state, lane_owner, reason):
+        return self.transition("failed", lane_owner=lane_owner, expected_revision=state["revision"],
+                               failure={"stage": "install", "reason": reason})
+
+    def _record_installed(self, state, lane_owner, python, installer, mirror, timeout):
+        env = _child_env(python)
+        generation = _run([str(python), str(installer), str(mirror), "--generation-token"],
+                          env=env, timeout=timeout).strip()
+        if not _GENERATION.fullmatch(generation):
+            return self._install_failed(state, lane_owner, "installer returned invalid installed generation")
+        expected_digest = state["verification"]["snapshot_digest"]
+        if _installed_digest(python, installer, mirror, env=env, timeout=timeout) != expected_digest:
+            return self._install_failed(state, lane_owner, "installed deployment digest readback failed")
+        confirmed = _run([str(python), str(installer), str(mirror), "--generation-token"],
+                         env=env, timeout=timeout).strip()
+        if confirmed != generation:
+            return self._install_failed(state, lane_owner, "installed generation changed during readback")
+        return self.transition("installed", lane_owner=lane_owner, expected_revision=state["revision"],
+                               installed_generation=generation)
+
     def _lock(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         stream = self.lock_path.open("a+b")
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        return _LockContext(stream)
+
+    def _operation_lock(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        stream = self.path.with_name(self.path.name + ".publisher.lock").open("a+b")
         fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
         return _LockContext(stream)
 
@@ -173,6 +353,55 @@ class _LockContext:
 
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _child_env(python: Path) -> dict[str, str]:
+    env = dict(os.environ)
+    # The installed verifier's default ceiling is 50 MB and its expected shape is
+    # EXEC MIRROR. Never inherit caller overrides that relax either gate or waive
+    # a floor; only pin the interpreter used by the existing script.
+    for name in ("VERIFY_BEFORE_SYNC_MAX_DIR_MB", "VERIFY_BEFORE_SYNC_TREE",
+                 "VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG"):
+        env.pop(name, None)
+    env["PYTHON"] = str(python)
+    return env
+
+
+def _run(command: list[str], *, env: dict[str, str], timeout: float) -> str:
+    result = subprocess.run(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            timeout=timeout, check=False)
+    if result.returncode:
+        detail = result.stderr.decode("utf-8", "replace").strip()
+        raise ReleaseError(f"command failed ({result.returncode}): {detail}")
+    return result.stdout.decode("utf-8", "replace")
+
+
+def _write_durable(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+    fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _remove_leaf(path: Path) -> None:
+    if path.is_symlink() or (path.exists() and not path.is_dir()):
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+
+def _installed_digest(python: Path, installer: Path, mirror: Path, *, env: dict[str, str], timeout: float) -> str:
+    try:
+        return _run([str(python), str(installer), str(mirror), "--digest"],
+                    env=env, timeout=timeout).strip()
+    except (OSError, ReleaseError):
+        return ""
 
 
 _ALLOWED = {
