@@ -1317,11 +1317,12 @@ def _audited_prior_revision_wait(
     anchors = recovery.get("targets") if isinstance(recovery, Mapping) else None
     anchor = anchors.get(target) if isinstance(anchors, Mapping) else None
     status, reason = item.get("status"), item.get("deferred_reason")
+    pending_kind = item.get("pending_kind")
     pending_field = {
         "ci": "check_run_id",
         "async_operation": "operation_id",
         "external_event": "event_id",
-    }.get(item.get("pending_kind"))
+    }.get(pending_kind if isinstance(pending_kind, str) else "")
     pending_evidence = item.get("pending_evidence")
     recognized_read = (
         status == "deferred"
