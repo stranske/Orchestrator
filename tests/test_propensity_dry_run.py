@@ -97,6 +97,11 @@ def test_useful_dry_run_writes_nothing(tmp_path: Path):
     test FAILS because ``useful --dry-run`` returns 0 with ``recorded: true`` and mutates the
     scratch ledger; restore the reject and this test PASSES again.
     """
+    _assert_useful_dry_run_writes_nothing(tmp_path)
+
+
+def _assert_useful_dry_run_writes_nothing(tmp_path: Path, *, script: Path | None = None):
+    """Share the exact invocation and assertions with the deliberate guard-removal check."""
     ledger = _seeded_ledger(tmp_path)
     before = ledger.read_bytes()
     useful_args = (
@@ -111,7 +116,7 @@ def test_useful_dry_run_writes_nothing(tmp_path: Path):
         "machine_observed",
     )
 
-    ordinary = _run(ledger, *useful_args)
+    ordinary = _run(ledger, *useful_args, script=script)
     assert ordinary.returncode == 0, ordinary.stdout + ordinary.stderr
     assert (
         ledger.read_bytes() != before
@@ -120,11 +125,11 @@ def test_useful_dry_run_writes_nothing(tmp_path: Path):
     ledger = _seeded_ledger(tmp_path)
     before = ledger.read_bytes()
 
-    result = _run(ledger, *useful_args, "--dry-run")
+    result = _run(ledger, *useful_args, "--dry-run", script=script)
 
+    assert ledger.read_bytes() == before, "useful --dry-run mutated the scratch ledger"
     assert result.returncode == 2, result.stdout + result.stderr
     assert "--dry-run is supported only by tick-evidence" in result.stderr
-    assert ledger.read_bytes() == before
 
 
 def test_removing_dry_run_guard_restores_silent_write(tmp_path: Path):
@@ -139,26 +144,8 @@ def test_removing_dry_run_guard_restores_silent_write(tmp_path: Path):
     script = tmp_path / "capability_propensity_unguarded.py"
     script.write_text(broken)
 
-    ledger = _seeded_ledger(tmp_path)
-    before = ledger.read_bytes()
-    result = _run(
-        ledger,
-        "useful",
-        "--capability",
-        "offload",
-        "--experiment",
-        "advice:dryrun-break",
-        "--evidence",
-        "unguarded dry-run must reproduce the silent ledger write",
-        "--provenance",
-        "machine_observed",
-        "--dry-run",
-        script=script,
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert '"recorded": true' in result.stdout
-    assert ledger.read_bytes() != before, "unguarded dry-run must mutate the scratch ledger"
+    with pytest.raises(AssertionError, match="useful --dry-run mutated the scratch ledger"):
+        _assert_useful_dry_run_writes_nothing(tmp_path, script=script)
 
 
 def test_useful_dry_run_does_not_create_an_absent_ledger(tmp_path: Path):
