@@ -101,8 +101,9 @@ def test_dry_run_guard_is_wired_exactly_once():
     assert _without_dry_run_guard(src) != src
 
 
-def test_useful_dry_run_writes_nothing(tmp_path: Path):
-    """A real CLI invocation rejects dry-run before its otherwise-valid verdict can write.
+@pytest.mark.parametrize("not_useful", [False, True], ids=["positive", "negative"])
+def test_useful_dry_run_writes_nothing(tmp_path: Path, not_useful: bool):
+    """Reject dry-run before either a positive or negative verdict can write.
 
     Acceptance contract (verified by break/restore, and by
     ``test_removing_dry_run_guard_restores_silent_write``): strip the early reject and this
@@ -111,12 +112,17 @@ def test_useful_dry_run_writes_nothing(tmp_path: Path):
     """
     for index, (experiment, source) in enumerate(_USEFUL_EXPERIMENTS):
         _assert_useful_dry_run_writes_nothing(
-            tmp_path / str(index), experiment=experiment, source=source
+            tmp_path / str(index), experiment=experiment, source=source, not_useful=not_useful
         )
 
 
 def _assert_useful_dry_run_writes_nothing(
-    tmp_path: Path, *, experiment: str, source: str, script: Path | None = None
+    tmp_path: Path,
+    *,
+    experiment: str,
+    source: str,
+    not_useful: bool,
+    script: Path | None = None,
 ):
     """Share the exact invocation and assertions with the deliberate guard-removal check."""
     ledger = _seeded_ledger(tmp_path)
@@ -132,6 +138,7 @@ def _assert_useful_dry_run_writes_nothing(
         "--provenance",
         "machine_observed",
         *(["--source", source] if source else []),
+        *(["--not-useful"] if not_useful else []),
     )
 
     ordinary = _run(ledger, *useful_args, script=script)
@@ -140,6 +147,10 @@ def _assert_useful_dry_run_writes_nothing(
     assert recorded["recorded"] is True
     assert recorded["experiment"] == experiment
     assert recorded["source"] == (source or "capability_propensity")
+    events = json.loads(ledger.read_text())["capabilities"]["offload"]["event_history"]
+    outcomes = [event for event in events if event["type"] == "outcome"]
+    assert len(outcomes) == 1
+    assert outcomes[0]["metadata"][cp.USEFUL_KEY] is (not not_useful)
     assert (
         ledger.read_bytes() != before
     ), "the control must prove this argv would write without dry-run"
@@ -154,7 +165,8 @@ def _assert_useful_dry_run_writes_nothing(
     assert "--dry-run is supported only by tick-evidence" in result.stderr
 
 
-def test_removing_dry_run_guard_restores_silent_write(tmp_path: Path):
+@pytest.mark.parametrize("not_useful", [False, True], ids=["positive", "negative"])
+def test_removing_dry_run_guard_restores_silent_write(tmp_path: Path, not_useful: bool):
     """Deliberate break: a guard-stripped copy of the CLI writes under ``useful --dry-run``.
 
     Proves ``test_useful_dry_run_writes_nothing`` would catch the production defect if the
@@ -169,7 +181,11 @@ def test_removing_dry_run_guard_restores_silent_write(tmp_path: Path):
     for index, (experiment, source) in enumerate(_USEFUL_EXPERIMENTS):
         with pytest.raises(AssertionError, match="useful --dry-run mutated the scratch ledger"):
             _assert_useful_dry_run_writes_nothing(
-                tmp_path / str(index), experiment=experiment, source=source, script=script
+                tmp_path / str(index),
+                experiment=experiment,
+                source=source,
+                not_useful=not_useful,
+                script=script,
             )
 
 
