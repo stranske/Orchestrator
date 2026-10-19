@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -52,26 +53,29 @@ def _run(
     ledger: Path,
     *args: str,
     script: Path | None = None,
-    use_default_ledger: bool = False,
+    ledger_source: Literal["explicit", "default", "environment"] = "explicit",
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ | {
         "ORCH_CAPABILITY_HEARTBEATS": "0",
         "PYTHONDONTWRITEBYTECODE": "1",
         # A temp script copy lives outside MODULE_DIR; sibling imports still resolve from there.
         "PYTHONPATH": str(paths.MODULE_DIR),
+        "ORCH_LOCAL_RUNTIME": str(ledger.parent),
     }
-    if use_default_ledger:
-        # Exercise the production default without reaching the real user's store. Heartbeats
-        # must also remain harmless when callers have enabled them.
-        env["ORCH_LOCAL_RUNTIME"] = str(ledger.parent)
-        env.pop("ORCH_CAPABILITIES_PATH", None)
+    # Every child stays in scratch state, including deliberate guard-removal controls.
+    env.pop("ORCH_CAPABILITIES_PATH", None)
+    if ledger_source == "environment":
+        env["ORCH_CAPABILITIES_PATH"] = str(ledger)
+        env["ORCH_LOCAL_RUNTIME"] = str(ledger.parent / "fallback-runtime")
+    if ledger_source != "explicit":
+        # Heartbeats must also remain harmless when callers have enabled them.
         env["ORCH_CAPABILITY_HEARTBEATS"] = "1"
     return subprocess.run(
         [
             sys.executable,
             str(script or (paths.MODULE_DIR / "capability_propensity.py")),
             *args,
-            *([] if use_default_ledger else ["--ledger", str(ledger)]),
+            *(["--ledger", str(ledger)] if ledger_source == "explicit" else []),
         ],
         cwd=paths.REPO_ROOT,
         env=env,
@@ -277,13 +281,19 @@ def test_tick_evidence_dry_run_passes_record_false(
 def test_writing_commands_reject_dry_run_before_mutation(
     tmp_path: Path, command_args: tuple[str, ...]
 ):
-    for use_default_ledger in (False, True):
-        store = tmp_path / ("default" if use_default_ledger else "explicit")
-        ledger = _seeded_ledger(store)
-        before = {p.name: p.read_bytes() for p in store.iterdir()}
+    for ledger_source in ("explicit", "default", "environment"):
+        for exists in (False, True):
+            store = tmp_path / ledger_source / ("existing" if exists else "absent")
+            ledger = store / "capabilities.json"
+            if exists:
+                _seeded_ledger(store)
+            before = {p.name: p.read_bytes() for p in store.iterdir()} if exists else None
 
-        result = _run(ledger, *command_args, "--dry-run", use_default_ledger=use_default_ledger)
+            result = _run(ledger, *command_args, "--dry-run", ledger_source=ledger_source)
 
-        assert result.returncode == 2, result.stdout + result.stderr
-        assert "--dry-run is supported only by tick-evidence" in result.stderr
-        assert {p.name: p.read_bytes() for p in store.iterdir()} == before
+            assert result.returncode == 2, result.stdout + result.stderr
+            assert "--dry-run is supported only by tick-evidence" in result.stderr
+            if exists:
+                assert {p.name: p.read_bytes() for p in store.iterdir()} == before
+            else:
+                assert not store.exists(), "dry-run created an absent ledger directory"
