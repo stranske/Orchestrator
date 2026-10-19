@@ -6717,6 +6717,7 @@ def relearn_quality(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DA
                 )
             except Exception:
                 subject_weights = {}
+            stage_rewards = _closer_stage_rewards(c, task_type)
             for agent, prior in priors.items():
                 current_model = _latest_model_for_agent(c, agent)
                 model_expr = _run_model_expr()
@@ -6757,7 +6758,6 @@ def relearn_quality(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DA
                     )
                     if score is not None:
                         eval_q_by_run[run_id] = (score, run_model)
-                stage_rewards = _closer_stage_rewards(c, task_type)
                 weighted_qs = []
                 outcome_n = 0
                 raw_n = 0

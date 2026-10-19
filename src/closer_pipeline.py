@@ -3810,11 +3810,14 @@ def _validate_stop_legacy(
     assignment_targets: Iterable[str] | None = None,
     *,
     now: Callable[[], float] = time.time,
+    expected_run_id: str | None = None,
 ) -> dict[str, Any]:
     """Validate outer pipeline accounting and whether continuation is due.
 
     This deliberately accepts only ``closer-pipeline/v1``. Legacy
     ``closer-queue/v1`` state remains owned by closer_queue.validate_stop.
+    A supplied expected_run_id selects only that exact existing assignment/run;
+    native proof still validates at its original path with no latest fallback.
     """
     path = Path(state_path)
     reasons: list[str] = []
@@ -3832,6 +3835,7 @@ def _validate_stop_legacy(
         for key, value in state["runs"].items()
         if isinstance(value, Mapping)
         and (supplied is None or value.get("assignment") == sorted(supplied))
+        and (expected_run_id is None or key == expected_run_id)
     ]
     if not matches:
         return {

@@ -43,7 +43,7 @@ def lease_shell_block() -> str:
 : "${{CLOSER_NATIVE_LEASE_PY:?CLOSER_NATIVE_LEASE_PY must point at closer_native_lease.py}}"
 CLOSER_NATIVE_LEASE_INTERPRETER="${{CLOSER_NATIVE_LEASE_INTERPRETER:-python3}}"
 HANDOFF_HANDOFF_ROOT="${{HANDOFF_HANDOFF_ROOT:-$HOME/.codex/handoff}}"
-LANE_MUTEX_DIR="${{HANDOFF_LANE_MUTEX_DIR:-$HOME/.codex/handoff/.lane-$lane.lock}}"
+LANE_MUTEX_DIR="${{HANDOFF_LANE_MUTEX_DIR:-$HANDOFF_HANDOFF_ROOT/.lane-$lane.lock}}"
 HANDOFF_LANE_TOKEN=""
 HANDOFF_EXPECTED_LANE_TOKEN=""
 _read_lane_meta_credential() {{
@@ -116,20 +116,39 @@ fi
 """
 
 
-def postrun_trap_replacement() -> str:
+def postrun_trap_replacement(*, repair_tail: bool = True) -> str:
+    tail = "launch_keepalive_label_repair || _tail_rc=$?" if repair_tail else ":"
     return f"""{MARKER_START}
 # HANDOFF_EXACT_TOKEN_V1: release only the original exact meta credential.
 _release_lane_lease_postrun() {{
   : "${{CLOSER_NATIVE_LEASE_PY:?CLOSER_NATIVE_LEASE_PY must point at closer_native_lease.py}}"
   CLOSER_NATIVE_LEASE_INTERPRETER="${{CLOSER_NATIVE_LEASE_INTERPRETER:-python3}}"
   HANDOFF_HANDOFF_ROOT="${{HANDOFF_HANDOFF_ROOT:-$HOME/.codex/handoff}}"
-  _tok="${{HANDOFF_EXPECTED_LANE_TOKEN:-}}"
-  [[ -n "$_tok" ]] || return 0
+  LANE_MUTEX_DIR="${{HANDOFF_LANE_MUTEX_DIR:-$HANDOFF_HANDOFF_ROOT/.lane-$lane.lock}}"
+  local _tok="${{HANDOFF_EXPECTED_LANE_TOKEN:-}}"
+  if [[ -z "$_tok" ]]; then
+    echo "handoff-lease: release refused: missing original credential; lane retained" >&2
+    return 2
+  fi
+  local _rc=0
   "$CLOSER_NATIVE_LEASE_INTERPRETER" "$CLOSER_NATIVE_LEASE_PY" \\
     --handoff-root "$HANDOFF_HANDOFF_ROOT" release --lane "$lane" \\
-    --expected-token "$_tok" --lane-dir "$LANE_MUTEX_DIR" >/dev/null 2>&1 || true
+    --expected-token "$_tok" --lane-dir "$LANE_MUTEX_DIR" >/dev/null || _rc=$?
+  if (( _rc != 0 )); then
+    echo "handoff-lease: release refused rc=$_rc; lane retained" >&2
+  fi
+  return "$_rc"
 }}
-trap '_release_lane_lease_postrun; launch_keepalive_label_repair' EXIT
+_finish_lane_postrun() {{
+  local _body_rc="$1" _release_rc=0 _tail_rc=0
+  trap - EXIT
+  _release_lane_lease_postrun || _release_rc=$?
+  {tail}
+  (( _release_rc == 0 )) || exit "$_release_rc"
+  (( _body_rc == 0 )) || exit "$_body_rc"
+  exit "$_tail_rc"
+}}
+trap '_finish_lane_postrun "$?"' EXIT
 {MARKER_END}"""
 
 
@@ -167,7 +186,11 @@ def patch_postrun(original: bytes) -> bytes:
     anchor = matches[0]
     if not text.startswith("#!/bin/bash"):
         _fail("postrun must keep #!/bin/bash shebang")
-    patched = text.replace(anchor, postrun_trap_replacement(), 1)
+    patched = text.replace(
+        anchor,
+        postrun_trap_replacement(repair_tail="launch_keepalive_label_repair" in anchor),
+        1,
+    )
     if 'rm -rf "$LANE_MUTEX_DIR"' in patched:
         _fail("postrun must not retain lane mutex rm -rf trap")
     return patched.encode("utf-8")

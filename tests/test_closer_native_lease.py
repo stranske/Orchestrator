@@ -242,7 +242,10 @@ def test_generated_postrun_successor_survives_wrong_cleanup(handoff_home, tmp_pa
         "CLOSER_NATIVE_LEASE_PY": str(LEASE_PATH),
         "CLOSER_NATIVE_LEASE_INTERPRETER": sys.executable,
     }
-    subprocess.run(["/bin/bash", str(postrun), "closer", "no_op"], env=env, check=True)
+    result = subprocess.run(
+        ["/bin/bash", str(postrun), "closer", "no_op"], env=env, capture_output=True, text=True
+    )
+    assert result.returncode == 2 and "release refused rc=2" in result.stderr
     assert lane_dir.exists()
     assert lease.read_meta(lane_dir)["token"] == token_b
 
@@ -480,3 +483,96 @@ def test_actual_pinned_runtime_adapter_invokes_rendered_token_helpers(
     assert token == (root / ".lane-closer.lock/meta").read_text()
     assert adapter.postrun(token, time.time() + 15) == 0
     assert not (root / ".lane-closer.lock").exists()
+
+
+@pytest.mark.parametrize("repair_tail", [False, True])
+def test_generated_postrun_preserves_matched_tail_and_cleanup_failure(
+    handoff_home, tmp_path, repair_tail
+):
+    home, root = handoff_home
+    lane = root / ".lane-closer.lock"
+    lease.acquire(root, "closer", "codex", 99, lane_dir_override=str(lane))
+    credential = lease.read_meta_bytes(lane).decode()
+    original = _minimal_postrun()
+    if not repair_tail:
+        original = original.replace(
+            renderer.POSTRUN_TRAP_ANCHORS[0], renderer.POSTRUN_TRAP_ANCHORS[1]
+        )
+        original = original.replace("launch_keepalive_label_repair() { :; }", "")
+    postrun = tmp_path / "postrun.sh"
+    postrun.write_bytes(renderer.patch_postrun(original.encode()))
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "HANDOFF_HANDOFF_ROOT": str(root),
+        "HANDOFF_EXPECTED_LANE_TOKEN": credential,
+        "CLOSER_NATIVE_LEASE_PY": str(LEASE_PATH),
+        "CLOSER_NATIVE_LEASE_INTERPRETER": sys.executable,
+    }
+    # The default must derive from HANDOFF_HANDOFF_ROOT, independently of HOME.
+    env.pop("HANDOFF_LANE_MUTEX_DIR", None)
+    env["HANDOFF_HANDOFF_ROOT"] = str(root)
+    env["HOME"] = str(tmp_path / "different-home")
+    ok = subprocess.run(
+        ["/bin/bash", str(postrun), "closer"], env=env, capture_output=True, text=True
+    )
+    assert ok.returncode == 0, ok.stderr
+    assert "not found" not in ok.stderr and not lane.exists()
+    lease.acquire(root, "closer", "codex", 100, lane_dir_override=str(lane))
+    before = lease.read_meta_bytes(lane)
+    marker = tmp_path / "must-not-execute"
+    env["HANDOFF_EXPECTED_LANE_TOKEN"] = '$(touch "' + str(marker) + '")\nwrong credential\n'
+    refused = subprocess.run(
+        ["/bin/bash", str(postrun), "closer"], env=env, capture_output=True, text=True
+    )
+    assert refused.returncode == 2 and "release refused rc=2" in refused.stderr
+    assert lease.read_meta_bytes(lane) == before and not marker.exists()
+
+
+def test_generated_prerun_default_lane_uses_explicit_handoff_root(handoff_home, tmp_path):
+    home, root = handoff_home
+    custom = tmp_path / "custom-root"
+    custom.mkdir()
+    prerun = tmp_path / "prerun.sh"
+    prerun.write_bytes(renderer.patch_prerun(_minimal_prerun().encode()))
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "HANDOFF_HANDOFF_ROOT": str(custom),
+        "HANDOFF_BIN": str(home / ".codex/bin/handoff.sh"),
+        "CLOSER_NATIVE_LEASE_PY": str(LEASE_PATH),
+        "CLOSER_NATIVE_LEASE_INTERPRETER": sys.executable,
+        "HANDOFF_PRERUN_MUTEX_ONLY": "1",
+        "HANDOFF_REFUSE_EXISTING_LANE": "1",
+    }
+    env.pop("HANDOFF_LANE_MUTEX_DIR", None)
+    result = subprocess.run(
+        ["/bin/bash", str(prerun), "closer"], env=env, capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert not (custom / ".lane-closer.lock").exists()
+    assert not (root / ".lane-closer.lock").exists()
+
+
+def test_postrun_release_shape_error_is_reported_and_propagated(handoff_home, tmp_path):
+    home, root = handoff_home
+    lane = root / ".lane-closer.lock"
+    lease.acquire(root, "closer", "codex", 99, lane_dir_override=str(lane))
+    before = lease.read_meta_bytes(lane)
+    postrun = tmp_path / "postrun.sh"
+    postrun.write_bytes(renderer.patch_postrun(_minimal_postrun().encode()))
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "HANDOFF_HANDOFF_ROOT": str(root),
+        "HANDOFF_LANE_MUTEX_DIR": str(tmp_path / "outside-handoff-root"),
+        "HANDOFF_EXPECTED_LANE_TOKEN": before.decode(),
+        "CLOSER_NATIVE_LEASE_PY": str(LEASE_PATH),
+        "CLOSER_NATIVE_LEASE_INTERPRETER": sys.executable,
+    }
+    result = subprocess.run(
+        ["/bin/bash", str(postrun), "closer"], env=env, capture_output=True, text=True
+    )
+    assert result.returncode == 3
+    assert "release refused rc=3" in result.stderr
+    assert lease.read_meta_bytes(lane) == before

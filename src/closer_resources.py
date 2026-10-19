@@ -888,6 +888,67 @@ def release_target(root: Path, target: str, *, owner: str) -> list[str]:
     return cleared
 
 
+def _release_known_shard_boundary(
+    root, state_path, target, *, owner, now, run_id=None, progress=False
+):
+    """Drain only this executor's intent after its durable known target boundary.
+
+    The target lease remains held. Unknown outcomes and quarantines never gain
+    authority from a callback's return value or an unverified `validated` flag.
+    """
+    import closer_pipeline as cp
+
+    try:
+        doc = cp._load(state_path)
+        current_id, run = max(doc["runs"].items(), key=lambda pair: pair[1]["created"])
+        if run_id is not None and current_id != run_id:
+            return False
+        if run.get("assignment") != [target]:
+            return False
+        row = run["targets"][target]
+        if (
+            row.get("recovery_barrier") is not None
+            or row.get("error") is not None
+            or (
+                row.get("provider_outcome_uncertain") is not None
+                and row.get("provider_outcome_uncertain") is not False
+            )
+            or row.get("stage") == "exception"
+            or row.get("status") in {"uncertain", "failed", "parked"}
+        ):
+            return False
+        act = row.get("results", {}).get("act")
+        if isinstance(act, Mapping) and (
+            act.get("status") in {"unknown", "uncertain", "running", "submitted"}
+            or act.get("outcome_uncertain") is True
+        ):
+            return False
+        if progress:
+            if not (
+                row.get("stage") == "prepare"
+                and row.get("status") in {"queued", "running"}
+                and row.get("known_completed_action") is True
+                and isinstance(act, Mapping)
+                and act.get("status") == "completed"
+                and isinstance(row.get("progress_key"), str)
+                and row["progress_key"]
+                and act.get("progress_key") == row["progress_key"]
+            ):
+                return False
+        else:
+            if _unresolved_effect(Path(state_path), target, row) is not None:
+                return False
+            if row.get("status") not in {"completed", "pending", "deferred"}:
+                return False
+            verdict = cp._validate_stop_legacy(state_path, [target], now=now)
+            if verdict.get("run_id") != current_id or verdict.get("valid") is not True:
+                return False
+        release_target(root, target, owner=owner)
+        return True
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
+
+
 # --------------------------------------------------------------------------- shared pools
 
 
@@ -1006,22 +1067,13 @@ def validate_stop(
         shard_state = shard_dir(root, target) / "state.json"
         try:
             doc = cp._load(shard_state)
-            chosen = doc["runs"][run_id]
+            doc["runs"][run_id]
         except (OSError, ValueError, KeyError, TypeError) as exc:
             reasons.append(f"unreadable_shard_run:{target}:{type(exc).__name__}")
             continue
-        created = float(chosen.get("created", 0))
-        doc["runs"] = {
-            k: v
-            for k, v in doc["runs"].items()
-            if isinstance(v, Mapping) and float(v.get("created", 0)) <= created
-        }
-        import tempfile as _tf
-
-        with _tf.TemporaryDirectory() as scratch:
-            copy = Path(scratch) / "state.json"
-            copy.write_text(json.dumps(doc), encoding="utf-8")
-            verdict = cp.validate_stop(copy, [target], now=now)
+        # Native receipts bind their original shard location. Select this exact
+        # recorded run in place, never relocate its proof or substitute latest.
+        verdict = cp._validate_stop_legacy(shard_state, [target], now=now, expected_run_id=run_id)
         if verdict.get("run_id") != run_id:
             reasons.append(f"run_binding_lost:{target}")
         if not verdict.get("valid"):
@@ -1164,11 +1216,19 @@ def run_scoped(
                 row = _fenced_row("resource_contested")
             elif lease is not None:
                 try:
+
+                    def known_progress_prepare(name, context):
+                        lease.check(now)
+                        _release_known_shard_boundary(
+                            root, lease.state_path, target, owner=owner, now=now, progress=True
+                        )
+                        return prepare(name, context)
+
                     with fenced(lease, now):
                         receipt = cp._run_pipeline_legacy(
                             lease.state_path,
                             [target],
-                            prepare=gated(prepare, "io"),
+                            prepare=gated(known_progress_prepare, "io"),
                             interpret=gated(interpret, "low"),
                             act=gated(guarded_act, "io"),
                             exception=gated(exception, "exception"),
@@ -1188,8 +1248,16 @@ def run_scoped(
                     if found_row is not None and receipt.get("run_id"):
                         run_ids[target] = receipt["run_id"]
                         run_deadlines[target] = receipt.get("deadline", deadline)
-                    if found_row is not None and found_row.get("status") == "completed":
-                        release_target(root, target, owner=owner)  # durable completion only
+                    if found_row is not None and receipt.get("run_id"):
+                        lease.check(now)
+                        _release_known_shard_boundary(
+                            root,
+                            lease.state_path,
+                            target,
+                            owner=owner,
+                            now=now,
+                            run_id=receipt["run_id"],
+                        )
                 except StaleLease as exc:
                     row = _fenced_row("stale_lease", str(exc))
                 except Exception as exc:  # shard unreadable/incompatible: fence, never clear

@@ -39,7 +39,9 @@ def test_each_qualified_provider_can_do_substantive_work(task, agent):
 
 
 def test_needed_cold_jobs_sample_equally_admissible_providers():
-    selections = [pick("closer_exception", capacity(), rng=random.Random(n)) for n in range(60)]
+    cap = capacity()
+    cap["agents"]["codex"]["pacing"] = {"state": "ok", "routing_weight": 1.0}
+    selections = [pick("closer_exception", cap, rng=random.Random(n)) for n in range(60)]
     assert {p["agent"] for p in selections} == AGENTS
     assert all(set(p["eligible_provider_ids"]) == AGENTS for p in selections)
     assert all(p["cold_start"] and p["evidence_state"] == "sparse" for p in selections)

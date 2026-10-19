@@ -111,13 +111,24 @@ def test_capacity_is_scoped_to_selected_profile_and_its_pools():
     assert router._closer_profile_capacity(profile, cap)
 
 
-def test_native_stage_quality_changes_existing_routing_posterior_without_outcome(brain):
+def test_native_stage_quality_changes_existing_routing_posterior_without_outcome(
+    brain, monkeypatch
+):
     import time
 
+    stage_reward_calls = []
+    original_stage_rewards = feedback._closer_stage_rewards
+
+    def count_stage_reward_lookup(conn, task_type):
+        stage_reward_calls.append(task_type)
+        return original_stage_rewards(conn, task_type)
+
+    monkeypatch.setattr(feedback, "_closer_stage_rewards", count_stage_reward_lookup)
     with feedback._conn() as conn:
         conn.execute("UPDATE runs SET ts=? WHERE run_id='native-run'", (int(time.time()),))
     record(validation={"status": "accepted"})
     version = feedback.relearn_quality({"closer_interpret": {"codex": 0.5, "claude": 0.5}})
+    assert stage_reward_calls == ["closer_interpret"]
     with feedback._conn() as conn:
         row = conn.execute(
             "SELECT posterior,n_obs,rationale FROM route_weights WHERE version=? AND agent='codex'",

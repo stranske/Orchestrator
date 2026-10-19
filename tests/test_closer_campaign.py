@@ -329,3 +329,19 @@ def test_hook_installer_patches_exact_shape_only(tmp_path):
         hook.render("def main():\n    pass\n", "/m.json")
     with pytest.raises(SystemExit):
         hook.render(src + src, "/m.json")
+
+
+def test_begin_checks_and_creates_before_another_owner_can_interleave(tmp_path, monkeypatch):
+    campaign = cc.Campaign(tmp_path / "new.campaign.json")
+    original = campaign.update
+
+    def interleaved_update(mutate, **kwargs):
+        cc.Campaign(campaign.path).begin("camp", ["target"], owner="other", release_pin=DIGEST)
+        return original(mutate, **kwargs)
+
+    monkeypatch.setattr(campaign, "update", interleaved_update)
+    created = campaign.begin("camp", ["target"], owner="first", release_pin=DIGEST)
+    assert created["owner"] == "first" and created["revision"] == 1
+    with pytest.raises(cc.CampaignError, match="owned"):
+        cc.Campaign(campaign.path).begin("camp", ["target"], owner="other", release_pin=DIGEST)
+    assert campaign.read() == created

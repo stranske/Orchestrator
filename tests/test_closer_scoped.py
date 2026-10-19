@@ -836,3 +836,312 @@ def test_unresolved_read_or_provider_boundary_cannot_disappear_with_stage_change
     else:
         row["error"] = closer_pipeline.READ_INTERRUPTED_BARRIER_ERROR
     assert closer_resources._unresolved_effect(tmp_path / "state", "o/r#1", row) == expected
+
+
+@pytest.mark.parametrize("continuation", ["pending", "progress"])
+def test_own_intents_release_only_after_durable_known_continuation(tmp_path, continuation):
+    state = tmp_path / "state.json"
+    target = "example/repo#1"
+    actions = []
+
+    def act(name, context):
+        actions.append(name)
+        if len(actions) == 1:
+            if continuation == "pending":
+                return {
+                    "status": "pending",
+                    "pending_kind": "external_event",
+                    "next_trigger": "event_changed",
+                    "pending_evidence": {"event_id": "native-event"},
+                }
+            return {"status": "completed", "progress_key": "exact-known-step"}
+        return {"status": "completed", "target_complete": True}
+
+    kwargs = dict(
+        coordinator_mode="resource_scoped",
+        prepare=lambda *_: {"revision": "rev", "identity": target},
+        interpret=lambda *_: {"substantive_needs": []},
+        exception=lambda *_: pytest.fail("exception must not run"),
+        act=act,
+        capacity_fn=lambda: {"io": 2, "low": 1, "exception": 1},
+        resource_keys=lambda *_: ["branch:example/repo@feature"],
+    )
+    first = closer_pipeline.run_pipeline(state, [target], deadline=time.time() + 20, **kwargs)
+    root = closer_resources.scoped_root(state)
+    assert closer_resources.unknown_reservations(root) == {}
+    if continuation == "pending":
+        assert first["targets"][target]["status"] == "pending"
+        second = closer_pipeline.run_pipeline(state, [target], deadline=time.time() + 20, **kwargs)
+        assert second["targets"][target]["status"] == "completed"
+    else:
+        assert first["targets"][target]["status"] == "completed"
+    assert actions == [target, target]
+    assert closer_resources.unknown_reservations(root) == {}
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "unverified_pending",
+        "unverified_deferred",
+        "read_barrier",
+        "act_barrier",
+        "provider_uncertain",
+        "exception",
+        "unknown_act",
+        "wrong_run",
+    ],
+)
+def test_continuation_release_retains_unknown_or_quarantined_intents(tmp_path, bad):
+    state = tmp_path / "state.json"
+    target = "example/repo#1"
+    root = closer_resources.open_root(state, pipeline_schema=closer_pipeline.SCHEMA)
+    with closer_resources.reserve(
+        root, ["pr:" + target], target=target, owner="owner", deadline=9e9
+    ):
+        pass
+    row = {
+        "status": "pending",
+        "stage": "act",
+        "pending_kind": "external_event",
+        "deferred_next_trigger": "event_changed",
+        "pending_evidence": {"event_id": "native-event"},
+        "results": {},
+    }
+    if bad == "unverified_pending":
+        row["pending_evidence"] = {}
+    elif bad == "unverified_deferred":
+        row.update(status="deferred", deferred_reason="worker_capacity", resource_evidence={})
+    elif bad.endswith("barrier"):
+        row["recovery_barrier"] = {
+            "schema": "closer-unverified-"
+            + ("read" if bad.startswith("read") else "act")
+            + "-barrier/v1"
+        }
+    elif bad == "provider_uncertain":
+        row["provider_outcome_uncertain"] = {"actual": {"run_id": "unresolved"}}
+    elif bad == "exception":
+        row["stage"] = "exception"
+    elif bad == "unknown_act":
+        row["results"]["act"] = {"status": "unknown"}
+    doc = closer_pipeline._empty()
+    doc["runs"] = {
+        "run": {
+            "created": time.time(),
+            "deadline": time.time() + 20,
+            "assignment": [target],
+            "targets": {target: row},
+        }
+    }
+    closer_pipeline._save(state, doc)
+    assert not closer_resources._release_known_shard_boundary(
+        root,
+        state,
+        target,
+        owner="owner",
+        now=time.time,
+        run_id="other" if bad == "wrong_run" else "run",
+    )
+    assert closer_resources.unknown_reservations(root) == {"pr:" + target: target}
+
+
+def test_known_continuation_never_releases_foreign_owner_or_hides_other_unknown(tmp_path):
+    state = tmp_path / "state.json"
+    target = "example/repo#1"
+    root = closer_resources.open_root(state, pipeline_schema=closer_pipeline.SCHEMA)
+    with closer_resources.reserve(
+        root, ["pr:" + target], target=target, owner="foreign", deadline=9e9
+    ):
+        pass
+    row = {
+        "status": "pending",
+        "stage": "act",
+        "pending_kind": "external_event",
+        "deferred_next_trigger": "event_changed",
+        "pending_evidence": {"event_id": "native-event"},
+        "results": {},
+    }
+    doc = closer_pipeline._empty()
+    doc["runs"] = {
+        "run": {
+            "created": time.time(),
+            "deadline": time.time() + 20,
+            "assignment": [target],
+            "targets": {target: row},
+        }
+    }
+    closer_pipeline._save(state, doc)
+    closer_resources._release_known_shard_boundary(
+        root, state, target, owner="new-owner", now=time.time, run_id="run"
+    )
+    assert closer_resources.unknown_reservations(root) == {"pr:" + target: target}
+    assert (
+        "unresolved_resource_reservations"
+        in closer_pipeline.validate_stop(state, [target])["reasons"]
+    )
+
+
+def test_strict_native_no_operation_wait_releases_current_intent(tmp_path):
+    import closer_queue
+
+    state = tmp_path / "state.json"
+    target = "example/repo#1"
+    head = "a" * 40
+    trigger = "source owner supplies current-head proof or resolves the named finding"
+    calls = []
+
+    def act(name, context):
+        calls.append(name)
+        receipt = closer_queue.run_round(
+            context["action_state_path"],
+            [target],
+            lambda _: {
+                "target": target,
+                "revision": "rev",
+                "action": "wait",
+                "eligible": False,
+                "requires_coordinator": False,
+                "reason": "worker_json_invalid",
+                "next_trigger": trigger,
+                "evidence": {"head": head},
+            },
+            lambda *_: pytest.fail("native wait must not mutate"),
+            deadline=time.time() + 20,
+            max_workers=1,
+            max_passes=1,
+        )
+        proof = {
+            "schema": closer_pipeline.INNER_WAIT_SCHEMA,
+            "target": target,
+            "revision": "rev",
+            "head": head,
+            "reason": "worker_json_invalid",
+            "next_trigger": trigger,
+            "inner_path": context["action_state_path"],
+            "receipt_sha256": closer_pipeline._digest(receipt),
+        }
+        return {
+            "status": "deferred",
+            "reason": "validated_inner_wait",
+            "next_trigger": trigger,
+            "resource_evidence": {"inner_wait": proof},
+            "queue_receipt": receipt,
+        }
+
+    kwargs = dict(
+        coordinator_mode="resource_scoped",
+        prepare=lambda *_: {
+            "revision": "rev",
+            "identity": target,
+            "snapshot": {"target": target, "revision": "rev", "head": head, "kind": "pr"},
+        },
+        interpret=lambda *_: {"substantive_needs": []},
+        exception=lambda *_: pytest.fail("no exception"),
+        act=act,
+        capacity_fn=lambda: {"io": 2, "low": 1, "exception": 1},
+        resource_keys=lambda *_: ["branch:example/repo@feature"],
+    )
+    for _ in range(2):
+        receipt = closer_pipeline.run_pipeline(state, [target], deadline=time.time() + 20, **kwargs)
+        assert receipt["targets"][target]["deferred_reason"] == "validated_inner_wait"
+        assert closer_pipeline.validate_stop_scoped(state, receipt["round_id"], [target])["valid"]
+        assert closer_resources.unknown_reservations(closer_resources.scoped_root(state)) == {}
+    assert calls == [target, target]
+    shard = closer_resources.shard_dir(closer_resources.scoped_root(state), target) / "state.json"
+    native = shard.parent / f"{shard.stem}.actions" / f"{closer_pipeline._digest(target)}.json"
+    original_native = native.read_bytes()
+    changed = closer_queue._read_state(native)
+    changed["items"][target]["operation"] = {"id": "unresolved", "status": "uncertain"}
+    closer_queue._atomic_write(native, changed)
+    verdict = closer_pipeline.validate_stop_scoped(state, receipt["round_id"], [target])
+    assert not verdict["valid"]
+    assert any("unverified_inner_wait" in reason for reason in verdict["reasons"])
+    native.write_bytes(original_native)
+    assert closer_pipeline.validate_stop_scoped(state, receipt["round_id"], [target])["valid"]
+
+
+@pytest.mark.parametrize(
+    "tamper", ["act_progress", "known_completion", "retained_error", "empty_uncertainty"]
+)
+def test_progress_release_requires_exact_durable_completion_binding(tmp_path, tamper):
+    state = tmp_path / "state.json"
+    target = "example/repo#1"
+    root = closer_resources.open_root(state, pipeline_schema=closer_pipeline.SCHEMA)
+    with closer_resources.reserve(
+        root, ["pr:" + target], target=target, owner="owner", deadline=9e9
+    ):
+        pass
+    row = {
+        "status": "running",
+        "stage": "prepare",
+        "known_completed_action": True,
+        "progress_key": "exact-step",
+        "results": {"act": {"status": "completed", "progress_key": "exact-step"}},
+    }
+    if tamper == "act_progress":
+        row["results"]["act"]["progress_key"] = "different-step"
+    elif tamper == "known_completion":
+        row["known_completed_action"] = False
+    elif tamper == "retained_error":
+        row["error"] = "act returned unsupported or missing status"
+    else:
+        row["provider_outcome_uncertain"] = {}
+    doc = closer_pipeline._empty()
+    doc["runs"] = {
+        "run": {
+            "created": time.time(),
+            "deadline": time.time() + 20,
+            "assignment": [target],
+            "targets": {target: row},
+        }
+    }
+    closer_pipeline._save(state, doc)
+    assert not closer_resources._release_known_shard_boundary(
+        root, state, target, owner="owner", now=time.time, progress=True
+    )
+    assert closer_resources.unknown_reservations(root) == {"pr:" + target: target}
+
+
+def test_named_stop_selects_exact_original_run_and_never_substitutes_latest(tmp_path):
+    state = tmp_path / "state.json"
+    target = "example/repo#1"
+    old = {
+        "created": 1,
+        "deadline": 2,
+        "assignment": [target],
+        "targets": {
+            target: {
+                "status": "pending",
+                "stage": "act",
+                "pending_kind": "external_event",
+                "deferred_next_trigger": "fresh_event",
+                "pending_evidence": {"event_id": "recorded-native-event"},
+            }
+        },
+    }
+    doc = closer_pipeline._empty()
+    doc["runs"] = {
+        "recorded": old,
+        "newer": {
+            "created": 3,
+            "deadline": 4,
+            "assignment": [target],
+            "targets": {target: {"status": "completed"}},
+        },
+    }
+    closer_pipeline._save(state, doc)
+    before = state.read_bytes()
+    original = closer_pipeline._validate_stop_legacy(state, [target], expected_run_id="recorded")
+    assert (
+        original["valid"] and original["run_id"] == "recorded" and original["continuation_required"]
+    )
+    assert closer_pipeline._validate_stop_legacy(state, [target])["run_id"] == "newer"
+    assert closer_pipeline._validate_stop_legacy(state, [target], expected_run_id="missing")[
+        "reasons"
+    ] == ["no_matching_pipeline_run"]
+    old["targets"][target]["pending_evidence"] = {}
+    closer_pipeline._save(state, doc)
+    verdict = closer_pipeline._validate_stop_legacy(state, [target], expected_run_id="recorded")
+    assert not verdict["valid"] and verdict["run_id"] == "recorded"
+    assert "unverifiable_pending_work:" + target in verdict["reasons"]
+    assert before != state.read_bytes()

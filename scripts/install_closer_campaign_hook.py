@@ -39,18 +39,38 @@ def _load_pinned_closer_campaign():
 
     try:
         manifest = _json.loads(_Path(CLOSER_CAMPAIGN_MANIFEST).read_text())
-        base = _Path(manifest["module_dir"])
-        for name, digest in manifest["modules"].items():
+        base = _Path(manifest["module_dir"]).resolve()
+        modules = manifest["modules"]
+        required = ("claims.py", "closer_release.py", "closer_runtime_binding.py",
+                    "closer_campaign.py", "router.py", "execution_profiles.py",
+                    "closer_distribution_package.py")
+        if not all(name in modules for name in required):
+            return None
+        for name, digest in modules.items():
+            if _Path(name).name != name or not name.endswith(".py"):
+                return None
             if hashlib.sha256((base / name).read_bytes()).hexdigest() != digest:
                 return None
+            loaded = _sys.modules.get(_Path(name).stem)
+            if loaded is not None and _Path(getattr(loaded, "__file__", "")).resolve() != (base / name).resolve():
+                return None
+        _sys.dont_write_bytecode = True
+        # Always move the pin first, even if it was already later in the path.
+        _sys.path[:] = [str(base)] + [item for item in _sys.path if item != str(base)]
+        # Lazy imports resolve from this verified closure without eagerly importing
+        # unrelated routing/capacity modules into the controller process.
         for name in ("claims", "closer_release", "closer_runtime_binding", "closer_campaign"):
             path = str(base / (name + ".py"))
+            if name + ".py" not in modules:
+                return None
             loaded = _sys.modules.get(name)
             if loaded is not None:
-                if getattr(loaded, "__file__", None) != path:
+                if _Path(getattr(loaded, "__file__", "")).resolve() != _Path(path).resolve():
                     return None
                 continue
             spec = importlib.util.spec_from_file_location(name, path)
+            if spec is None or spec.loader is None:
+                return None
             module = importlib.util.module_from_spec(spec)
             _sys.modules[name] = module
             spec.loader.exec_module(module)

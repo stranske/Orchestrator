@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import sys
@@ -235,6 +236,7 @@ def host_binding_from_public(
     public: Mapping[str, Any],
     *,
     install_root: Path,
+    campaign_root: str | Path | None = None,
     core_binding: Mapping[str, Any] | None = None,
     python: str | None = None,
     policy: Mapping[str, Any] | None = None,
@@ -250,12 +252,24 @@ def host_binding_from_public(
         "python": python or sys.executable,
         "version": RUNTIME_VERSION,
     }
+    state_root = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
+    root = (
+        Path(
+            campaign_root
+            or os.environ.get("ORCH_CLOSER_CAMPAIGN_DIR")
+            or state_root / "closer-campaigns"
+        )
+        .expanduser()
+        .resolve()
+    )
     command = [
         runtime["python"],
         str(install_root / "closer_launcher.py"),
         "run",
         "--manifest",
         str(install_root / "host-manifest.json"),
+        "--root",
+        str(root),
     ]
     manifest: dict[str, Any] = {
         "schema_version": 1,

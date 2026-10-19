@@ -757,7 +757,7 @@ def select_agent(
                     "invocation",
                     ref=f"{task_type}:{entry_agent(challenger)}",
                 )
-    if pacing_active and not explored:
+    if pacing_active and not explored and not cold_start:
         picked, pacing_decision = _pacing_choice(scored, cap, learned, rng)
     _, entry, st, _idx = picked
     result = {

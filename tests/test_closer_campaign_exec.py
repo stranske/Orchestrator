@@ -251,7 +251,7 @@ def test_release_worker_exception_is_unknown(tmp_path):
 # ---- manifest, pin, harness (real subprocesses)
 
 
-def pinned_dir(tmp_path, dispatcher="import sys\nsys.exit(0)\n"):
+def pinned_dir(tmp_path, dispatcher="import sys\nif __name__ == '__main__': sys.exit(0)\n"):
     d = tmp_path / "installed"
     d.mkdir()
     for name in (
@@ -462,14 +462,21 @@ def render_and_load(tmp_path, d, manifest_path):
 
 def test_hook_loads_pinned_module_and_falls_back_on_digest_mismatch(tmp_path, monkeypatch):
     d = pinned_dir(tmp_path)
+    # The hook's known lazy dependencies are part of its declared closure.
+    for name in ("router", "execution_profiles", "closer_distribution_package"):
+        (d / (name + ".py")).write_text("# pinned lazy fixture\n")
     m, path = manifest_for(d, tmp_path)
-    for name in ("claims", "closer_release", "closer_runtime_binding", "closer_campaign"):
-        monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.syspath_prepend(str(d))
+    monkeypatch.setattr(sys, "dont_write_bytecode", sys.dont_write_bytecode)
+    for filename in m["modules"]:
+        name = Path(filename).stem
+        monkeypatch.setitem(sys.modules, name, None)
+        monkeypatch.delitem(sys.modules, name)
     ns = render_and_load(tmp_path, d, path)
     loaded = ns["_load_pinned_closer_campaign"]()
     assert loaded is not None and Path(loaded.__file__) == d / "closer_campaign.py"
-    for name in ("claims", "closer_release", "closer_runtime_binding", "closer_campaign"):
-        monkeypatch.delitem(sys.modules, name, raising=False)
+    for filename in m["modules"]:
+        monkeypatch.delitem(sys.modules, Path(filename).stem, raising=False)
     (d / "claims.py").write_text("# tampered\n")
     assert ns["_load_pinned_closer_campaign"]() is None
 
@@ -496,3 +503,19 @@ def test_controller_entry_default_tick_runs_then_fallback(tmp_path, monkeypatch)
     (tmp_path / "closer-campaigns" / "pin.manifest.json").write_text("{}")
     assert cc.tick_safe()[0]["kind"] == "error"  # never raises into the controller
     assert cc.controller_entry(["y"], lambda a: 6) == 6
+
+
+def test_manifest_pinned_tick_command_runs_with_explicit_root(tmp_path):
+    directory = pinned_dir(tmp_path)
+    root = tmp_path / "empty-campaigns"
+    manifest = cc.make_manifest(
+        directory, candidate_sha=CAND, state_versions={"campaign": 1}, campaign_root=root
+    )
+    assert manifest["command"][-2:] == ["--root", str(root.resolve())]
+    assert manifest["command_digest"] == cc.sha256_json(manifest["command"])
+    cc.write_manifest(root / "pin.manifest.json", manifest)
+    done = subprocess.run(manifest["command"], capture_output=True, text=True, timeout=20)
+    assert done.returncode == 0, done.stderr
+    report = json.loads(done.stdout)
+    assert report[0]["kind"] == "held"
+    assert report[0]["reason"] == "version not qualified"

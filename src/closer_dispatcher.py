@@ -2340,25 +2340,15 @@ def _pipeline_capacity():
                         low_pools.add(pool)
     # Exception work is now admitted through any eligible agent with capability-qualified
     # approved registered profiles. Check all eligible agents (excluding Aider).
-    exception = 0
-    eligible_agents = ("codex", "claude", "gemini", "cursor", "vibe", "muse")
-    for agent_name in eligible_agents:
-        agent_row = report["agents"].get(agent_name, {})
-        if agent_row.get("state") in {"ok", "warn"}:
-            # Check if this agent has at least one valid closer/offload profile
-            import execution_profiles
+    import execution_profiles
 
-            profiles = execution_profiles.profiles_for_agent(agent_name, transport="offload")
-            for profile in profiles:
-                if str(profile.get("agent", "")).casefold() != "aider":
-                    profile_state = (
-                        report.get("profiles", {}).get(profile["profile_id"], {}).get("state")
-                    )
-                    if profile_state in {"ok", "warn"}:
-                        exception = 1
-                        break
-            if exception:
-                break
+    exception = int(
+        any(
+            _profile_exception_qualified(report, profile, repair=False)
+            for agent_name in _EXCEPTION_ELIGIBLE_AGENTS
+            for profile in execution_profiles.profiles_for_agent(agent_name, transport="offload")
+        )
+    )
     return {"io": io_capacity, "low": min(4, len(low_pools)), "exception": exception}
 
 
@@ -3356,23 +3346,43 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             )[:9000]
         )
         started = time.monotonic()
-        result, route = _execute_profile_route(
-            route,
-            lambda chosen: dispatcher.offload(
-                chosen["agent"],
-                prompt,
-                mode="assess",
-                profile_id=chosen["profile_id"],
-                timeout=max(5, min(120, int(context["deadline"] - time.time()))),
-                task_type="closer_interpret",
-                subject_id=target,
-                max_network_retries=0,
-            ),
-            lane="low",
-            load=route_load,
-            deadline=context["deadline"],
-            unavailable_profiles=failed_low_profiles,
-        )
+        import closer_resources
+
+        try:
+            result, route = _execute_profile_route(
+                route,
+                lambda chosen: dispatcher.offload(
+                    chosen["agent"],
+                    prompt,
+                    mode="assess",
+                    profile_id=chosen["profile_id"],
+                    timeout=max(5, min(120, int(context["deadline"] - time.time()))),
+                    task_type="closer_interpret",
+                    subject_id=target,
+                    max_network_retries=0,
+                ),
+                lane="low",
+                load=route_load,
+                deadline=context["deadline"],
+                unavailable_profiles=failed_low_profiles,
+            )
+        except closer_resources.ResourceBlocked:
+            return {
+                "status": "deferred",
+                "reason": "worker_capacity",
+                "next_trigger": "capacity_recheck",
+                "resource_evidence": {
+                    "capacity": {
+                        "lane": "low",
+                        "available": 0,
+                        "required": 1,
+                        "sampled_at": time.time(),
+                    }
+                },
+                "classification": "capacity_deferred",
+                "substantive_needs": [],
+                "authority": False,
+            }
         result["_closer_elapsed_seconds"] = time.monotonic() - started
         import closer_stage_feedback
 

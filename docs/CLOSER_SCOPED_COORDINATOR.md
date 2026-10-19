@@ -53,9 +53,9 @@ validate accounting; they do not perform native helper cleanup.
 
 Tests exercise the actual CLI through subprocesses, mixed-mode first use, disjoint progress,
 same-resource aliases, stale/expired writes, crash unknowns, capacity/auth failures, exact profile
-pools, original-budget recovery, and incompatible-contract refusal. The integrated closer suite
-passed 1,037 tests before this documentation correction. Collection measured 6,063 non-slow tests;
-the pass floor is an expectation, and every skip/exemption ceiling is unchanged.
+pools, original-budget recovery, and incompatible-contract refusal. Collection is governed by
+`.verify-floor.json` and reconciled on main; the pass floor is an expectation, and every
+skip/exemption ceiling is unchanged.
 
 The sleep-only timing fixture is not eligible-work throughput evidence. Active-worker promotion,
 supported desktop/controller qualification, installed helper migration, and a real approved

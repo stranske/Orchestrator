@@ -321,6 +321,54 @@ class TestExceptionCallbackIdentity:
         assert worker_calls[0]["profile_id"] == "claude-offload-assess"
 
 
+class TestInterpretationCapacityDeferral:
+    def test_route_reservation_exhaustion_is_a_capacity_deferral(self, tmp_path, monkeypatch):
+        from test_closer_dispatcher import TARGET, FakeGitHub, snapshot
+
+        import closer_pipeline
+        import closer_resources
+
+        fake_gh = FakeGitHub(snapshot())
+        backend = adapter.Closer(fake_gh, state_path=tmp_path / "state.json")
+        monkeypatch.setattr(adapter, "GitHub", lambda **_kwargs: fake_gh)
+        callbacks = {}
+
+        def capture(_path, _targets, **kwargs):
+            callbacks.update(kwargs)
+            return {"targets": {}}
+
+        monkeypatch.setattr(closer_pipeline, "run_pipeline", capture)
+        route = {
+            "agent": "gemini",
+            "profile_id": "gemini-offload-low",
+            "pools": ["gemini-pool"],
+            "mode": "assess",
+        }
+        monkeypatch.setattr(adapter, "_pipeline_low_route", lambda **_kwargs: (route, "available"))
+        args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+        adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 600)
+        deadline = time.time() + 180
+        prep = callbacks["prepare"](TARGET, {"deadline": deadline})
+        context = {
+            "prepare": prep,
+            "deadline": deadline,
+            "revision": prep["revision"],
+            "identity": prep["identity"],
+            "work_key": "capacity-deferral",
+        }
+
+        def blocked(*_args, **_kwargs):
+            raise closer_resources.ResourceBlocked("capacity changed during reservation")
+
+        monkeypatch.setattr(adapter, "_execute_profile_route", blocked)
+        result = callbacks["interpret"](TARGET, context)
+        assert result["status"] == "deferred"
+        assert result["reason"] == "worker_capacity"
+        assert result["classification"] == "capacity_deferred"
+        assert result["authority"] is False
+        assert closer_pipeline._valid_worker_capacity(result["resource_evidence"], time.time())
+
+
 class TestPipelineCapacity:
     """Tests for _pipeline_capacity checking all eligible agents."""
 
@@ -344,6 +392,7 @@ class TestPipelineCapacity:
                 "muse": {"state": "shed"},
             },
             profiles_state={"gemini-profile-1": {"state": "ok"}},
+            pools_state={"pool-1": {"state": "ok"}},
         )
         monkeypatch.setattr(adapter, "_fresh_capacity_report", lambda: report)
 
@@ -352,7 +401,7 @@ class TestPipelineCapacity:
             "profile_id": "gemini-profile-1",
             "agent": "gemini",
             "capacity_pool_ids": ["pool-1"],
-            "reasoning_effort": "low",
+            "reasoning_effort": "medium",
         }
         monkeypatch.setattr(
             execution_profiles,

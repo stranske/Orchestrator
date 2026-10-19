@@ -201,15 +201,20 @@ class Campaign:
         stream = self._locked()
         try:
             current = self._read_unlocked()
+            if current is not None:
+                if current["campaign_id"] != campaign_id or current["owner"] != owner:
+                    raise CampaignError("campaign is owned by another id or runner")
+                if current["release_pin"] != release_pin:
+                    raise CampaignError(
+                        "campaign is pinned to a different release; reconcile first"
+                    )
+                return current
+            fresh["revision"] = 1
+            fresh["updated_at"] = _now()
+            self._write_unlocked(fresh)
+            return fresh
         finally:
             stream.close()
-        if current is not None:
-            if current["campaign_id"] != campaign_id or current["owner"] != owner:
-                raise CampaignError("campaign is owned by another id or runner")
-            if current["release_pin"] != release_pin:
-                raise CampaignError("campaign is pinned to a different release; reconcile first")
-            return current
-        return self.update(lambda d: None, create=fresh)
 
     def takeover(self, owner: str, *, pid_alive=claims._pid_alive) -> dict[str, Any]:
         """New owner, new generation: only when every worker is terminal.
@@ -1426,6 +1431,7 @@ def make_manifest(
     portable: dict[str, str] | None = None,
     modules: tuple[str, ...] = PINNED_MODULES,
     policy: dict[str, Any] | None = None,
+    campaign_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Bind installed module digests, runtime, command and state versions to a candidate."""
     module_dir = Path(module_dir).expanduser().resolve()
@@ -1437,7 +1443,17 @@ def make_manifest(
             [python, "-c", "import sys;print(sys.version)"], capture_output=True, text=True
         ).stdout.strip(),
     }
-    command = [str(python), str(module_dir / "closer_campaign.py"), "tick"]
+    state_root = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
+    root = (
+        Path(
+            campaign_root
+            or os.environ.get("ORCH_CLOSER_CAMPAIGN_DIR")
+            or state_root / "closer-campaigns"
+        )
+        .expanduser()
+        .resolve()
+    )
+    command = [str(python), str(module_dir / "closer_campaign.py"), "tick", "--root", str(root)]
     manifest = {
         "schema_version": MANIFEST_SCHEMA,
         "contract": CONTRACT,
@@ -2083,6 +2099,7 @@ def main(argv: list[str] | None = None) -> int:
     mm.add_argument("--candidate-sha", required=True)
     mm.add_argument("--state-version", action="append", required=True, help="name=int")
     mm.add_argument("--out", required=True)
+    mm.add_argument("--root", help="campaign directory (defaults to --out parent)")
     hr = sub.add_parser("harness-receipt", help="produce a subprocess lifecycle receipt")
     hr.add_argument("--manifest", required=True)
     hr.add_argument("--workdir", required=True)
@@ -2128,7 +2145,10 @@ def main(argv: list[str] | None = None) -> int:
         write_manifest(
             args.out,
             make_manifest(
-                args.module_dir, candidate_sha=args.candidate_sha, state_versions=versions
+                args.module_dir,
+                candidate_sha=args.candidate_sha,
+                state_versions=versions,
+                campaign_root=args.root or Path(args.out).parent,
             ),
         )
         return 0
