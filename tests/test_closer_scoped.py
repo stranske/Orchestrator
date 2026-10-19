@@ -708,3 +708,32 @@ def test_affirmative_native_no_effect_wait_is_preserved_without_discharging_barr
         )
         == "unverified_act_outcome"
     )
+
+
+@pytest.mark.parametrize("location", ["run", "carry"])
+def test_forward_malformed_legacy_row_holds_unknown_inventory(tmp_path, location):
+    state, log = tmp_path / "s.json", tmp_path / "events"
+    doc = {"runs": {}, "carry": {}}
+    if location == "run":
+        doc["runs"]["old"] = {"targets": {"o/r#1": None}}
+    else:
+        doc["carry"]["o/r#1"] = None
+    state.write_text(json.dumps(doc))
+    before = state.read_bytes()
+    found, error = closer_resources.legacy_unresolved(state)
+    assert found == {} and error is not None
+    assert "not an object" in error
+    result = finish(
+        spawn(
+            {
+                "state": str(state),
+                "mode": "resource_scoped",
+                "targets": ["o/r#1", "other/repo#2"],
+                "log": str(log),
+            }
+        )
+    )
+    assert {row["deferred_reason"] for row in result["targets"].values()} == {
+        "legacy_state_unreadable"
+    }
+    assert state.read_bytes() == before and not log.exists()

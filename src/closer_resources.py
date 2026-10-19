@@ -381,15 +381,17 @@ def legacy_unresolved(state_path: str | Path) -> tuple[dict[str, str], str | Non
         found: dict[str, str] = {}
         for run in runs.values():
             for target, row in (run.get("targets") or {}).items():
-                if isinstance(row, Mapping):
-                    reason = _unresolved_effect(path, target, row)
-                    if reason:
-                        found[canonical_target(target)] = "legacy_" + reason
-        for target, row in carry.items():
-            if isinstance(row, Mapping):
+                if not isinstance(row, Mapping):
+                    raise ValueError(f"legacy row for {target!r} is not an object")
                 reason = _unresolved_effect(path, target, row)
                 if reason:
                     found[canonical_target(target)] = "legacy_" + reason
+        for target, row in carry.items():
+            if not isinstance(row, Mapping):
+                raise ValueError(f"legacy carry row for {target!r} is not an object")
+            reason = _unresolved_effect(path, target, row)
+            if reason:
+                found[canonical_target(target)] = "legacy_" + reason
         return found, None
     except (OSError, ValueError, AttributeError, TypeError) as exc:
         return {}, f"legacy ledger unreadable: {exc}"
