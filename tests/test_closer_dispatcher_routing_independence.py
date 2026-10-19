@@ -330,6 +330,8 @@ class TestInterpretationCapacityDeferral:
 
         fake_gh = FakeGitHub(snapshot())
         backend = adapter.Closer(fake_gh, state_path=tmp_path / "state.json")
+        # This case begins after admission; never depend on the host's controller.
+        monkeypatch.setattr(backend, "campaign_admission", lambda *_args: {"allowed": True})
         monkeypatch.setattr(adapter, "GitHub", lambda **_kwargs: fake_gh)
         callbacks = {}
 
@@ -357,11 +359,15 @@ class TestInterpretationCapacityDeferral:
             "work_key": "capacity-deferral",
         }
 
-        def blocked(*_args, **_kwargs):
+        reservation_attempts = []
+
+        def blocked(*_args, **kwargs):
+            reservation_attempts.append(kwargs["lane"])
             raise closer_resources.ResourceBlocked("capacity changed during reservation")
 
         monkeypatch.setattr(adapter, "_execute_profile_route", blocked)
         result = callbacks["interpret"](TARGET, context)
+        assert reservation_attempts == ["low"]
         assert result["status"] == "deferred"
         assert result["reason"] == "worker_capacity"
         assert result["classification"] == "capacity_deferred"
