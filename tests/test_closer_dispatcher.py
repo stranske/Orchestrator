@@ -15,6 +15,7 @@ import pytest
 
 import claims
 import closer_dispatcher as adapter
+import closer_evidence
 import closer_pipeline
 import closer_queue
 
@@ -115,6 +116,81 @@ def test_pipeline_keeps_local_io_capacity_when_github_capacity_is_unavailable(mo
         adapter.gh_capacity, "state", lambda *_args: (_ for _ in ()).throw(ConnectionError())
     )
     assert adapter._pipeline_capacity() == {"io": 4, "low": 0, "exception": 0}
+
+
+def test_staged_prepare_reuses_retained_packet_during_github_outage(tmp_path, monkeypatch):
+    current = snapshot(base=MERGE)
+    state = tmp_path / "state.json"
+    packet = {
+        "schema": "closer-evidence/v1",
+        "head": HEAD,
+        "base": MERGE,
+        "bindings": {"source": closer_evidence._hash(current["sources"])},
+        "manifest": {"packet_sha256": "retained"},
+        "sections": {"source": {"status": "complete", "content": current["sources"]}},
+    }
+    packet_path = tmp_path / "packet.json"
+    packet_bytes = json.dumps(packet).encode()
+    packet_path.write_bytes(packet_bytes)
+    snapshot_path = tmp_path / "snapshot.json"
+    snapshot_bytes = json.dumps(current).encode()
+    snapshot_path.write_bytes(snapshot_bytes)
+    prior = {
+        "revision": current["revision"],
+        "snapshot": {"target": TARGET, "revision": current["revision"]},
+        "packet_ref": {
+            "path": str(packet_path),
+            "sha256": hashlib.sha256(packet_bytes).hexdigest(),
+        },
+        "snapshot_ref": {
+            "path": str(snapshot_path),
+            "sha256": hashlib.sha256(snapshot_bytes).hexdigest(),
+        },
+    }
+    adapter._pipeline_state_path(state).write_text(
+        json.dumps({"runs": {"prior": {"targets": {TARGET: {"results": {"prepare": prior}}}}}})
+    )
+
+    class OfflineGitHub:
+        def __init__(self, *, deadline):
+            self.deadline = deadline
+
+        def snapshot(self, _target):
+            raise ConnectionError("offline")
+
+    monkeypatch.setattr(adapter, "GitHub", OfflineGitHub)
+    monkeypatch.setattr(
+        closer_evidence,
+        "validate_packet",
+        lambda p: isinstance(p, dict) and p.get("schema") == "closer-evidence/v1",
+    )
+    monkeypatch.setattr(closer_evidence, "drift_sample", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        closer_evidence,
+        "collect_evidence",
+        lambda *_a, **_k: pytest.fail("retained packet must be reused"),
+    )
+    prepared = {}
+
+    def run_pipeline(_path, targets, **callbacks):
+        prepared.update(callbacks["prepare"](targets[0], {"deadline": time.time() + 30}))
+        return {"valid": True}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "closer_pipeline",
+        SimpleNamespace(
+            run_pipeline=run_pipeline,
+            EVIDENCE_REFUSAL_REASONS=closer_pipeline.EVIDENCE_REFUSAL_REASONS,
+        ),
+    )
+    backend = closer(tmp_path, current)
+    backend.local_first = True
+    args = SimpleNamespace(state=str(state), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 330)
+    assert prepared["snapshot"]["_local_cached"] is True
+    assert prepared["remote_fresh"] is False
+    assert prepared["revision"] == current["revision"]
 
 
 class FakeGitHub:
