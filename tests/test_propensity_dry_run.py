@@ -310,6 +310,8 @@ def test_tick_evidence_dry_run_preserves_ledger_and_state(
             "the outcome contradicted the earlier verdict",
             "--provenance",
             "machine_observed",
+            "--corroboration",
+            "the follow-up check contradicted the recorded verdict",
         ),
         (
             "decline",
@@ -325,11 +327,13 @@ def test_tick_evidence_dry_run_preserves_ledger_and_state(
             "--experiment",
             "advice:dryrun0006",
             "--direction",
-            "refutes",
+            "landed",
             "--evidence",
-            "the consult did not change the delivery",
+            "the hand-done delivery passed its acceptance checks",
             "--provenance",
             "machine_observed",
+            "--corroboration",
+            "the acceptance check confirmed the delivered result",
         ),
         ("find", "--defect", "dry-run guard", "--artifact", "tests/test_propensity_dry_run.py"),
         (
@@ -357,12 +361,24 @@ def test_tick_evidence_dry_run_preserves_ledger_and_state(
 def test_writing_commands_reject_dry_run_before_mutation(
     tmp_path: Path, command_args: tuple[str, ...]
 ):
+    """Reject valid writes, including late verdicts and the separate consult-outcome store."""
     for ledger_source in ("explicit", "default", "environment"):
         for exists in (False, True):
             store = tmp_path / ledger_source / ("existing" if exists else "absent")
             ledger = store / "capabilities.json"
             if exists:
                 _seeded_ledger(store)
+                if command_args[0] == "late-outcome":
+                    experiment = command_args[command_args.index("--experiment") + 1]
+                    assert cp.record_trigger("offload", experiment, path=ledger)
+                    assert cp.record_usefulness(
+                        "offload",
+                        experiment,
+                        useful=True,
+                        evidence="the initial review found the missing check",
+                        provenance="machine_observed",
+                        path=ledger,
+                    )
             before = {p.name: p.read_bytes() for p in store.iterdir()} if exists else None
 
             result = _run(ledger, *command_args, "--dry-run", ledger_source=ledger_source)
@@ -373,3 +389,20 @@ def test_writing_commands_reject_dry_run_before_mutation(
                 assert {p.name: p.read_bytes() for p in store.iterdir()} == before
             else:
                 assert not store.exists(), "dry-run created an absent ledger directory"
+
+            if ledger_source == "explicit" and exists and command_args[0] in {
+                "trigger",
+                "useful",
+                "late-outcome",
+                "decline",
+                "consult-outcome",
+                "record-repair",
+            }:
+                ordinary = _run(ledger, *command_args)
+                assert ordinary.returncode == 0, ordinary.stdout + ordinary.stderr
+                recorded = json.loads(ordinary.stdout)
+                result_key = "attached" if command_args[0] == "late-outcome" else "recorded"
+                assert recorded[result_key] is True, recorded
+                assert {p.name: p.read_bytes() for p in store.iterdir()} != before, (
+                    "the control must prove this argv writes without dry-run"
+                )
