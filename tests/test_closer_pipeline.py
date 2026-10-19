@@ -1091,6 +1091,7 @@ def test_changed_assignment_carries_unknown_action_for_reconciliation(tmp_path):
         or {"outcome": "confirmed_completed", "target_complete": True},
         capacity_fn=lambda: {"io": 2, "low": 2, "exception": 1},
         deadline=time.time() + 2,
+        priority_targets={"b"},
     )
     assert receipt["assignment"] == ["b"]
     assert "a" in receipt["carry_targets"]
@@ -2775,6 +2776,40 @@ def test_explicit_priority_advances_guarded_target_without_dropping_others(tmp_p
     assert set(prepared) == {"a", "b", "z"}
     assert all(row["status"] == "completed" for row in receipt["targets"].values())
     assert validate_stop(tmp_path / "state.json", ["a", "b", "z"])["valid"]
+
+
+@pytest.mark.parametrize("prioritized,expected_first", [(False, "a"), (True, "z")])
+def test_resumed_backlog_priority_preserves_other_interpretations(
+    tmp_path, prioritized, expected_first
+):
+    path = tmp_path / "state.json"
+    first = run(
+        path,
+        ["a", "b", "z"],
+        capacity={"io": 2, "low": 0, "exception": 1},
+        seconds=0.12,
+    )
+    doc = json.loads(path.read_text())
+    prior = doc["runs"][first["run_id"]]
+    prior["deadline"] = time.time() + 2
+    for target, row in prior["targets"].items():
+        assert "prepare" in row["results"]
+        row.update(status="queued", stage="interpret", last_scheduled=100 if target == "z" else 0)
+    path.write_text(json.dumps(doc))
+
+    interpreted = []
+    cb = callbacks(interpret=lambda target, context: interpreted.append(target) or {})
+    result = run(
+        path,
+        ["a", "b", "z"],
+        cb,
+        priority_targets={"z"} if prioritized else (),
+        max_low_workers=1,
+    )
+    assert interpreted[0] == expected_first
+    assert set(interpreted) == {"a", "b", "z"}
+    assert all(row["status"] == "completed" for row in result["targets"].values())
+    assert validate_stop(path, ["a", "b", "z"])["valid"]
 
 
 def test_capacity_shape_fails_closed(tmp_path):
