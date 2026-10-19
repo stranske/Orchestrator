@@ -14,7 +14,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-LEASE_MODULE = ROOT / "src/closer_native_lease.py"
+MODULE_DIR = ROOT / "src" if (ROOT / "src").is_dir() else ROOT
+LEASE_MODULE = MODULE_DIR / "closer_native_lease.py"
 
 PRERUN_MUTEX_START = "# --- Per-lane round mutex"
 PRERUN_MUTEX_END = "# Capture both stdout and stderr; route by exit code below."

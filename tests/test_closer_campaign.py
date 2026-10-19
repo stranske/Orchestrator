@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-import install_closer_campaign_hook as hook
+from scripts import install_closer_campaign_hook as hook
 
 import closer_campaign as cc
 from closer_release import ReleaseRecord

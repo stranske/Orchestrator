@@ -249,7 +249,17 @@ for _closer_task, _closer_efforts in {
             else ["workspace-write", "read-only"]
         ),
         "agents": [
-            {"agent": agent, "mode": "full", "late": False}
+            {
+                "agent": agent,
+                # A compatibility hint for mode-only consumers, not a profile/model
+                # preference. Exact selected profiles retain their own model/effort.
+                "mode": (
+                    "composer"
+                    if agent == "cursor"
+                    else "cheap" if _closer_task == "closer_interpret" else "mid"
+                ),
+                "late": False,
+            }
             for agent in ("codex", "claude", "gemini", "muse", "cursor", "vibe")
         ],
     }

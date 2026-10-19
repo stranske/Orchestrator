@@ -13,7 +13,8 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-LEASE_PATH = ROOT / "src/closer_native_lease.py"
+MODULE_DIR = ROOT / "src" if (ROOT / "src").is_dir() else ROOT
+LEASE_PATH = MODULE_DIR / "closer_native_lease.py"
 RENDER_PATH = ROOT / "scripts/render_closer_native_hooks.py"
 CANONICAL_PRERUN = Path.home() / ".codex/bin/handoff-prerun.sh"
 CANONICAL_POSTRUN = Path.home() / ".codex/bin/handoff-postrun.sh"
