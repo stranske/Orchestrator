@@ -169,7 +169,11 @@ def test_new_valid_acceptance_supersedes_a_durable_nonaccepting_refusal(
             "action_state_path": str(
                 path.parent / f"{path.stem}.actions" / f"{pipeline._digest(TARGET)}.json"
             ),
-            "deadline": time.time() + (0.05 if barrier == "claim_held" else 30),
+            # claim_held must keep a full action budget so the inner queue reaches
+            # the refused claim (unverified_claim_conflict → RuntimeError). A
+            # sub-second cutoff races observe/setup under xdist and can stop as a
+            # valid receipt_reserve deferral instead, which is a flake not a proof.
+            "deadline": time.time() + 30,
         }
         if barrier == "claim_held":
             with pytest.raises(RuntimeError, match="valid continuation boundary"):
