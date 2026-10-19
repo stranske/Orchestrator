@@ -332,6 +332,39 @@ def fenced(lease: Lease, now: Callable[[], float] = time.time):
 _UNRESOLVED = {"running", "uncertain"}
 
 
+def _unresolved_effect(path: Path, target: str, row: Mapping[str, Any]) -> str | None:
+    """Mode switches cannot turn an explicit unknown effect into fresh authority."""
+    if row.get("status") in _UNRESOLVED:
+        return f"{row['status']}_outcome"
+    if row.get("status") != "failed" or row.get("stage") != "act":
+        return None
+    barrier = row.get("recovery_barrier")
+    results = row.get("results")
+    act = results.get("act") if isinstance(results, Mapping) else None
+    explicit_unknown = (
+        barrier is not None
+        or row.get("error") == "act returned unsupported or missing status"
+        or bool(row.get("provider_outcome_uncertain"))
+        or (
+            isinstance(act, Mapping)
+            and (
+                act.get("status") in {"unknown", "uncertain", "running", "submitted"}
+                or act.get("outcome_uncertain") is True
+            )
+        )
+    )
+    if not explicit_unknown:
+        return None
+    # An existing strict receipt can affirmatively prove a pre-fix no-operation
+    # wait. A durable recovery barrier is never discharged by this read-only guard.
+    if barrier is None:
+        import closer_pipeline as cp
+
+        if cp._legacy_failed_act_wait_proof(path, target, row):
+            return None
+    return "unverified_act_outcome"
+
+
 def legacy_unresolved(state_path: str | Path) -> tuple[dict[str, str], str | None]:
     """Targets the LEGACY ledger leaves unresolved, read-only.
 
@@ -348,11 +381,15 @@ def legacy_unresolved(state_path: str | Path) -> tuple[dict[str, str], str | Non
         found: dict[str, str] = {}
         for run in runs.values():
             for target, row in (run.get("targets") or {}).items():
-                if isinstance(row, Mapping) and row.get("status") in _UNRESOLVED:
-                    found[canonical_target(target)] = f"legacy_{row['status']}_outcome"
+                if isinstance(row, Mapping):
+                    reason = _unresolved_effect(path, target, row)
+                    if reason:
+                        found[canonical_target(target)] = "legacy_" + reason
         for target, row in carry.items():
-            if isinstance(row, Mapping) and row.get("status") in _UNRESOLVED:
-                found[canonical_target(target)] = f"legacy_{row['status']}_outcome"
+            if isinstance(row, Mapping):
+                reason = _unresolved_effect(path, target, row)
+                if reason:
+                    found[canonical_target(target)] = "legacy_" + reason
         return found, None
     except (OSError, ValueError, AttributeError, TypeError) as exc:
         return {}, f"legacy ledger unreadable: {exc}"
@@ -433,8 +470,15 @@ def scoped_rollback_report(state_path: str | Path) -> tuple[dict[str, str], list
                 for target, row in run["targets"].items():
                     if not isinstance(row, dict):
                         raise ValueError(f"row for {target!r} is not an object")
-                    if row.get("status") in _UNRESOLVED:
-                        found[canonical_target(target)] = f"scoped_{row['status']}_outcome"
+                    reason = _unresolved_effect(state, target, row)
+                    if reason:
+                        found[canonical_target(target)] = "scoped_" + reason
+            for target, row in doc.get("carry", {}).items():
+                if not isinstance(row, Mapping):
+                    raise ValueError(f"carry row for {target!r} is not an object")
+                reason = _unresolved_effect(state, target, row)
+                if reason:
+                    found[canonical_target(target)] = "scoped_" + reason
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             malformed.append(f"{shard.name}: {type(exc).__name__}: {exc}"[:200])
     return found, malformed

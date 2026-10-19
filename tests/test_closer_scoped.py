@@ -615,3 +615,96 @@ def test_save_rechecks_expiry_after_serialization(tmp_path, monkeypatch):
         assert not lease.state_path.exists()
     finally:
         lease.release()
+
+
+def _captured_failed_act_shape(*, barrier):
+    # Sanitized shape from the actual current queue: compact failed act after an
+    # unsupported return, with no affirmative completed/no-effect receipt.
+    row = {
+        "status": "failed",
+        "stage": "act",
+        "results": {},
+        "error": "act returned unsupported or missing status",
+        "revision": "retained-revision",
+        "identity": "retained-identity",
+    }
+    if barrier:
+        row["recovery_barrier"] = {
+            "schema": "closer-unverified-act-barrier/v1",
+            "source_run_id": "original-run",
+            "item_sha256": "a" * 64,
+            "act_result_sha256": "b" * 64,
+            "revision": row["revision"],
+            "identity": row["identity"],
+            "work_key": "original-work",
+        }
+    return row
+
+
+@pytest.mark.parametrize("barrier", [False, True])
+@pytest.mark.parametrize("direction", ["forward", "rollback"])
+@pytest.mark.parametrize("location", ["run", "carry"])
+def test_mode_switch_retains_captured_failed_act_unknown_and_disjoint_progress(
+    tmp_path, barrier, direction, location
+):
+    state, log = tmp_path / "s.json", tmp_path / "events"
+    target, other = "o/r#1", "other/repo#2"
+    row = _captured_failed_act_shape(barrier=barrier)
+    doc = {"schema": closer_pipeline.SCHEMA, "cache": {}, "carry": {}, "runs": {}}
+    if location == "run":
+        doc["runs"] = {"original": {"created": 1, "deadline": 2, "targets": {target: row}}}
+    else:
+        doc["carry"][target] = row
+    if direction == "forward":
+        retained = state
+    else:
+        root = closer_resources.open_root(state, pipeline_schema=closer_pipeline.SCHEMA)
+        retained = closer_resources.shard_dir(root, target) / "state.json"
+        retained.parent.mkdir(parents=True, exist_ok=True)
+    retained.write_text(json.dumps(doc))
+    before = retained.read_bytes()
+    result = finish(
+        spawn(
+            {
+                "state": str(state),
+                "targets": [target, other],
+                "log": str(log),
+                "mode": "resource_scoped" if direction == "forward" else "legacy",
+            }
+        )
+    )
+    prefix = "legacy" if direction == "forward" else "scoped"
+    assert result["targets"][target]["deferred_reason"] == prefix + "_unverified_act_outcome"
+    assert result["targets"][other]["status"] == "completed"
+    assert retained.read_bytes() == before
+    assert acts(log) == [other]
+    events = [json.loads(line) for line in log.read_text().splitlines()]
+    assert not any(event["t"] == target for event in events)
+
+
+@pytest.mark.parametrize("stage", ["prepare", "interpret"])
+def test_failed_read_is_not_misclassified_as_unknown_act(tmp_path, stage):
+    state = tmp_path / "s.json"
+    row = _captured_failed_act_shape(barrier=True)
+    row["stage"] = stage
+    state.write_text(json.dumps({"runs": {"old": {"targets": {"o/r#1": row}}}, "carry": {}}))
+    assert closer_resources.legacy_unresolved(state) == ({}, None)
+
+
+def test_affirmative_native_no_effect_wait_is_preserved_without_discharging_barrier(
+    tmp_path, monkeypatch
+):
+    target = "o/r#1"
+    monkeypatch.setattr(closer_pipeline, "_legacy_failed_act_wait_proof", lambda *a: True)
+    assert (
+        closer_resources._unresolved_effect(
+            tmp_path / "s", target, _captured_failed_act_shape(barrier=False)
+        )
+        is None
+    )
+    assert (
+        closer_resources._unresolved_effect(
+            tmp_path / "s", target, _captured_failed_act_shape(barrier=True)
+        )
+        == "unverified_act_outcome"
+    )
