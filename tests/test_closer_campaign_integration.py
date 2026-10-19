@@ -8,16 +8,16 @@ import shutil
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 import pytest
+from closer_core_support import core_source
 from test_closer_campaign import DIGEST
 from test_closer_campaign_exec import Port, manifest_for, pinned_dir
 
 import claims
 import closer_campaign as cc
 
-DRAFT = Path("/tmp/closer-independent-20261019/portable/scripts/closer_runtime.py")
+DRAFT = core_source() / "scripts/closer_runtime.py"
 
 
 @pytest.fixture(autouse=True)

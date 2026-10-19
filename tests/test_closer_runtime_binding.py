@@ -40,7 +40,9 @@ def bundle(tmp_path, monkeypatch):
     # Offline conformance is separate from production dependency qualification.
     monkeypatch.setattr(rb, "dependency_problems", lambda: [])
     # Snapshot every closed owned source/schema before executing; no import from draft.
-    source = Path(__file__).resolve().parents[2] / "portable"
+    from closer_core_support import core_source
+
+    source = core_source()
     if not source.is_dir():
         pytest.skip("independent Core source unavailable for snapshot")
     root = tmp_path / "core"
@@ -337,12 +339,12 @@ def test_real_packager_relocates_actual_runtime_core_and_launcher(bundle, tmp_pa
     import subprocess
     import sys
 
+    # Use the independent Core packager's REAL API from an immutable copied file.
+    from closer_core_support import core_source
+
     import closer_distribution_package as package
 
-    # Use the independent Core packager's REAL API from an immutable copied file.
-    source = (
-        Path(__file__).resolve().parents[2] / "distribution/core/scripts/closer_core_package.py"
-    )
+    source = core_source() / "scripts/closer_core_package.py"
     if not source.is_file():
         pytest.skip("independent Core packager source unavailable")
     copied = tmp_path / "core_packager.py"
