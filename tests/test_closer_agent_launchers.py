@@ -17,6 +17,12 @@ import execution_profiles
 MODULE_DIR = Path(campaign.__file__).resolve().parent
 
 
+@pytest.fixture(autouse=True)
+def stubbed_profile_binary(monkeypatch):
+    # Stubbed transports only construct argv; their tests must not need a host CLI.
+    monkeypatch.setattr(cal.adapters, "CODEX_PROFILE_BIN", Path(sys.executable))
+
+
 def _trusted_gates():
     return {
         "qualify_fn": lambda _m, _r: [],
@@ -335,6 +341,7 @@ def test_materialized_launcher_agent_cli_inventory_subprocess(tmp_path):
 
 def test_cli_probe_uses_injected_runner(monkeypatch):
     monkeypatch.setattr(cal.shutil, "which", lambda _binary: "/fixture/codex")
+
     class Proc:
         returncode = 0
         stdout = stderr = ""
@@ -604,3 +611,24 @@ def test_full_native_provenance_is_retained(tmp_path):
     assert result["offload"] == native
     assert result["queue_action_accepted"] is False
     assert result["desktop_qualified"] is False
+
+
+def test_missing_profile_cli_returns_prelaunch_refusal(tmp_path, monkeypatch):
+    _, path, root, install = host_runtime_fixture(tmp_path)
+    monkeypatch.setattr(cal.adapters, "CODEX_PROFILE_BIN", tmp_path / "missing-cli")
+    monkeypatch.setattr(cal.adapters, "CODEX_PROFILE_BIN_EXPLICIT", True)
+    calls = []
+    result = cal.run_cli(
+        "codex",
+        PROFILE,
+        "x",
+        manifest_path=path,
+        root=root,
+        own_launcher_path=install / "closer_launcher.py",
+        **_trusted_gates(),
+        offload_fn=lambda *a, **kw: calls.append(True),
+    )
+    assert result["prelaunch_refused"] is True
+    assert result["provider_started"] is False
+    assert "CLI command preparation refused" in result["detail"]
+    assert not calls

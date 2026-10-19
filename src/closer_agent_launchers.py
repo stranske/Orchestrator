@@ -538,14 +538,17 @@ def plan_cli_run(
     mode = profile_offload_mode(profile)
     bound_cmd = expected_host_launcher_command(loaded, manifest_path=manifest_path, root=root)
     bound_prompt = build_bound_request_prompt(prompt, bound_cmd)
-    argv = adapters.build_command(
-        profile["agent"],
-        bound_prompt,
-        mode,
-        cwd=cwd,
-        profile=profile,
-        transport="offload",
-    )
+    try:
+        argv = adapters.build_command(
+            profile["agent"],
+            bound_prompt,
+            mode,
+            cwd=cwd,
+            profile=profile,
+            transport="offload",
+        )
+    except (RuntimeError, OSError, ValueError) as exc:
+        return None, [f"CLI command preparation refused: {exc}"]
     hint = (
         "Invoke only this hash-verified runtime launcher command; it does not grant "
         "queue actions or promotion:\n" + " ".join(shlex.quote(x) for x in bound_cmd)
