@@ -75,7 +75,7 @@ def test_run_gate_never_runs_non_allowlisted_command(monkeypatch, tmp_path) -> N
     accepted = promotion._run_gate(["pytest", "tests/test_unit.py"], tmp_path)
     assert accepted["ok"] is True
     assert accepted["argv"] == ["pytest", "tests/test_unit.py"]
-    assert calls == [([ "pytest", "tests/test_unit.py"], str(tmp_path))]
+    assert calls == [(["pytest", "tests/test_unit.py"], str(tmp_path))]
     assert promotion._safe_command(["npm", "--prefix", "../escape", "test"]) is False
     assert promotion._safe_command(["npm", "--prefix", "frontend", "run", "test"]) is True
 
@@ -106,9 +106,7 @@ def test_verify_synthesis_records_unallowlisted_local_command_without_spawning(
     def fail_if_local_verify_runs(*_args, **_kwargs):
         raise AssertionError("rejected command must not reach local verification")
 
-    monkeypatch.setattr(
-        promotion.local_verify, "verify", fail_if_local_verify_runs
-    )
+    monkeypatch.setattr(promotion.local_verify, "verify", fail_if_local_verify_runs)
 
     result = promotion.verify_synthesis(state, tmp_path)
 
