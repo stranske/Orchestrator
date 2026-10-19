@@ -18,7 +18,9 @@ import execution_profiles
 
 def install_strong_capacity(monkeypatch):
     monkeypatch.setattr(adapter, "_pipeline_capacity", lambda: {"io": 2, "low": 1, "exception": 1})
-    monkeypatch.setattr(execution_profiles, "default_codex_profile", lambda *_a, **_k: "offline-strong")
+    monkeypatch.setattr(
+        execution_profiles, "default_codex_profile", lambda *_a, **_k: "offline-strong"
+    )
     report = {
         "generated_at": time.time(),
         "agents": {
