@@ -482,7 +482,7 @@ def dispatcher_delegate(
         review_loop=True,
         review_round=review_round,
         review_run_id=review_run_id,
-        **({"continue_pr": continue_pr} if continue_pr is not None else {}),
+        continue_pr=continue_pr,
     )
 
 
