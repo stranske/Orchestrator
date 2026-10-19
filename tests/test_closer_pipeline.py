@@ -2753,6 +2753,30 @@ def test_fair_completion_service_and_concurrent_lanes(tmp_path):
     assert all(x["status"] == "completed" for x in receipt["targets"].values())
 
 
+def test_explicit_priority_advances_guarded_target_without_dropping_others(tmp_path):
+    prepared = []
+    cb = callbacks()
+    original_prepare = cb["prepare"]
+
+    def prepare(target, context):
+        prepared.append(target)
+        return original_prepare(target, context)
+
+    cb["prepare"] = prepare
+    receipt = run(
+        tmp_path / "state.json",
+        ["a", "b", "z"],
+        cb,
+        priority_targets={"z"},
+        max_io_workers=1,
+        max_low_workers=1,
+    )
+    assert prepared[0] == "z"
+    assert set(prepared) == {"a", "b", "z"}
+    assert all(row["status"] == "completed" for row in receipt["targets"].values())
+    assert validate_stop(tmp_path / "state.json", ["a", "b", "z"])["valid"]
+
+
 def test_capacity_shape_fails_closed(tmp_path):
     cb = callbacks()
     receipt = run_pipeline(

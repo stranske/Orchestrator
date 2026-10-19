@@ -3816,6 +3816,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         # the outer pipeline stops new callbacks at the action cutoff, while
         # the inner queue receives the full deadline and reserves 300 seconds.
         deadline=deadline - receipt_reserve,
+        priority_targets=set(backend.dispositions).intersection(targets) if not shadow else (),
         max_io_workers=4,
         max_low_workers=min(2, args.max_workers),
         max_exception_workers=1,
