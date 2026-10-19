@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 
 import pytest
-from src.closer_release import ReleaseConflict, ReleaseError, ReleaseRecord
+
+from closer_release import ReleaseConflict, ReleaseError, ReleaseRecord
 
 CANDIDATE = "a" * 40
 INCUMBENT = "generation-v1:" + "b" * 64
