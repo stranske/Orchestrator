@@ -38,10 +38,20 @@ ORCHESTRATE = paths.REPO_ROOT / "orchestrate.sh"
 # What each name MEANS, in hours. It lives here, not in the registry, because it is the meaning of the
 # word and no convention changes it: the registry says which N spells "daily", this says how long a
 # day is. A name the registry adds without an entry here fails the first test by name.
-PERIOD_HOURS = {"daily": 24, "weekly": 7 * 24}
+PERIOD_HOURS = {"hourly": 1, "daily": 24, "weekly": 7 * 24}
 # How far either side of a period to probe. Minutes, not seconds: `find` measures from its own start,
 # a moment after the stamps are aged, and the tick only looks once an hour anyway.
 MARGIN_S = 5 * 60
+
+
+def probe_ages(name):
+    # Hourly runs need slack for tick jitter and the post-export stamp.
+    if name == "hourly":
+        return ((25 * 60, False), (35 * 60, True))
+    period = PERIOD_HOURS[name] * 3600
+    return ((period - MARGIN_S, False), (period + MARGIN_S, True))
+
+
 STAMPED = tuple(row for row in cadence_registry.CADENCE_STEPS if row.get("success_stamp"))
 
 
@@ -119,8 +129,7 @@ def test_each_named_cadence_fires_at_the_period_its_name_means(tmp_path: Path) -
     assert not unmeant, f"CADENCE_DAYS_FOR names {unmeant} with no period in PERIOD_HOURS; add one"
     wrong = []
     for name, days in named.items():
-        period_s = PERIOD_HOURS[name] * 3600
-        for age_s, expected in ((period_s - MARGIN_S, False), (period_s + MARGIN_S, True)):
+        for age_s, expected in probe_ages(name):
             state = _aged(tmp_path / f"{name}-{age_s}", {"stamp"}, age_s)
             due = "probe" in _replay(state, {"probe": f'_due "$STAMP_DIR/stamp" {days}'})
             if due != expected:
@@ -153,16 +162,14 @@ def test_every_stamped_step_declares_a_named_cadence_and_fires_at_it(tmp_path: P
                 f"and `_cadence_due` runs it once its stamp is {when} old. Named: {spellings}; "
                 "name any other period in cadence_registry.CADENCE_DAYS_FOR first"
             )
-    periods = {PERIOD_HOURS[name_of[row["cadence_days"]]] * 3600 for row in named}
     due_at = {
         age_s: _stamps_due(tmp_path, age_s)
-        for period_s in periods
-        for age_s in (period_s - MARGIN_S, period_s + MARGIN_S)
+        for name in {name_of[row["cadence_days"]] for row in named}
+        for age_s, _ in probe_ages(name)
     }
     for row in named:
         name = name_of[row["cadence_days"]]
-        period_s = PERIOD_HOURS[name] * 3600
-        for age_s, expected in ((period_s - MARGIN_S, False), (period_s + MARGIN_S, True)):
+        for age_s, expected in probe_ages(name):
             due = row["key"] in due_at[age_s]
             if due != expected:
                 wrong.append(
@@ -221,6 +228,8 @@ def test_inspect_cadence_staleness_sits_between_due_and_a_missed_run(tmp_path: P
         # Just due is not late; a whole run missed is. Anywhere between is the report's own grace.
         for missed, expected in ((0, "fresh"), (1, "stale")):
             age_s = (1 + missed) * period_s + MARGIN_S
+            if period_s == 3600 and missed:
+                age_s = cadence_registry.HOURLY_STALE_AFTER_S + MARGIN_S
             state = _aged(tmp_path / f"{row['key']}-{missed}", {row["success_stamp"]}, age_s)
             # Measured as the step runs when re-enabled: a retired step is never late, it is
             # `retired`, and tests/test_cadence_retirement.py holds that verdict.

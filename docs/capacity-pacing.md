@@ -246,3 +246,53 @@ seat's writable sandbox; the append was denied. The fallback checkpoint is
 `/private/tmp/pacing-followup-codex-CHECKPOINT.md`. Source merge, runtime deployment,
 healthy polling, relay consumption and completed-period passes remain separate
 verification boundaries.
+
+## Capacity publication cadence
+
+The route-weights export attempts publication hourly; `relearn` remains weekly.
+The owner switch `ORCH_ROUTE_WEIGHTS_PUBLISH=1` is still required. Worsening and
+recovery states each need two consecutive local tick observations before the
+published capacity row changes. The second tick drains the hold; changing state,
+missing/stale input or a gap over two hours resets it. Repeated reads of the same
+snapshot do not count as another tick. The tick records observations independently
+of publication backoff and prints `local`, `published` and `seen=<n>/2` when held.
+
+Read-only check: `python3 src/route_weights_export.py --publish-lag`. Each pool prints
+`pool <p>: local=<state> published=<state> published_age=<s>s lag=<ok|STALE|held(n/2)>`.
+`published_age` measures the artifact `generated_at`; `observed_age` additionally labels the
+pool observation age. Mismatches beyond `PUBLISH_LAG_STALE_S=7200` seconds are stale; a fresh
+first tick prints `held(1/2)`. Unmeasured ages print `unmeasured` without a seconds suffix.
+`all pools in sync` appears only when every state matches; failed remote reads show
+`published=unmeasured`. Observation age alone is not lag. `window` is static configuration
+and is a silent trigger: a window change waits for the next meaningful trigger or the
+24 h refresh floor. Immediate capacity triggers are the damped `state`,
+`period_end` moves over `PERIOD_END_TOLERANCE_S=3600` seconds against the published baseline,
+and `resets_available`; existing non-capacity triggers such as learned weights
+remain immediate. Usage fractions, routing weights, period starts, reset expiries, reserve,
+measurement/source/staleness and burn diagnostics remain published but cannot trigger a push.
+The refresh floor is 24 h for non-state diagnostic diffs (`PUBLISH_REFRESH_FLOOR_S`).
+Comparative/lambda drift and every `comparative_*` ranking/reserve row field do not trigger
+a push; they ship with the next trigger or refresh. A refresh carries diagnostics once the
+published `generated_at` is over 24 hours old, or its age is unmeasured, keeping the artifact
+inside consumers' 14-day freshness limit when ticks/publication succeed. Unchanged and refresh
+logs print `published_age=<s>/floor=<s>`, including an explicit `refresh` marker when due.
+Worst-case published `used_fraction`/`observed_at` staleness is about 25 h (24 h plus one tick)
+without another trigger. The 2 h bound for a held pool is persistent state-change propagation,
+not absolute diagnostic age: the retained row may already be old, and repeated state flaps
+can extend that age. An accepted state push carries fresh numbers. Workflows reads only
+capacity state; gating on `observed_at` freshness would be misled.
+This query makes no persistent state or Git-ref writes.
+Check date: 2026-10-19 after one day of production ticks. Successful hourly ticks
+should propagate persistent state changes within two hours; failures/backoff and
+disabled publication can extend that bound.
+
+Read-only production count: `python3 src/route_weights_export.py --publish-history 24h`.
+It reads all pages of the `exports/route-weights` commit history since now minus 24 h via
+`gh api repos/stranske/Orchestrator/commits?sha=exports/route-weights&since=<UTC>` and prints
+`commits_24h=<n> (state flips local: see log) lag=<ok|STALE|held(n/2)|unmeasured>` after
+the per-pool lag details. A failed history fetch prints `commits_24h=unmeasured`; it never
+publishes or updates persistent local state. The coordinator owns the 2026-10-20 check-in
+registration after merge; compare the count with damped state flips in the tick log and
+record other immediate triggers separately. Export start/end UTC times and duration in
+that log make cadence skips measurable. The hourly due threshold is 30 minutes after the
+previous success stamp, allowing for tick jitter and export duration.

@@ -321,8 +321,8 @@ def test_legacy_export_without_capacity_is_republished_when_capacity_is_added(
     assert set(published["capacity"]) == set(capacity.AGENTS)
 
 
-def test_semantic_compare_keeps_state_and_window_drops_observed_at() -> None:
-    """Publish when state/window move; tick-only observed_at refresh stays silent."""
+def test_semantic_compare_keeps_state_drops_window_and_observed_at() -> None:
+    """State changes trigger; window and observation clocks stay silent."""
     base = {
         "schema": export.SCHEMA,
         "generated_at": "2026-10-16T00:00:00Z",
@@ -351,7 +351,7 @@ def test_semantic_compare_keeps_state_and_window_drops_observed_at() -> None:
     }
     assert export._semantic_for_compare(base) == export._semantic_for_compare(later_observed)
     assert export._semantic_for_compare(base) != export._semantic_for_compare(shed)
-    assert export._semantic_for_compare(base) != export._semantic_for_compare(window)
+    assert export._semantic_for_compare(base) == export._semantic_for_compare(window)
 
 
 def test_capacity_observed_at_only_change_does_not_trigger_write_document(tmp_path: Path) -> None:
@@ -375,7 +375,7 @@ def test_capacity_observed_at_only_change_does_not_trigger_write_document(tmp_pa
     )
 
 
-def test_capacity_window_change_triggers_write_document(tmp_path: Path) -> None:
+def test_capacity_window_change_does_not_trigger_write_document(tmp_path: Path) -> None:
     database = tmp_path / "weights.db"
     export._fixture_db(database)
     target = tmp_path / "route-weights.json"
@@ -396,7 +396,7 @@ def test_capacity_window_change_triggers_write_document(tmp_path: Path) -> None:
         export.write_document(
             target, export.build_document(database, now=100, capacity_snapshot=second)
         )
-        is True
+        is False
     )
 
 
@@ -578,6 +578,15 @@ def test_publish_guard_preserves_remote_until_explicit_override(
             return cls.fromtimestamp(200000, tz=tz)
 
     monkeypatch.setattr(export.dt, "datetime", FixedDateTime)
+    if regression == "capacity-only":
+        # State-only publication still obeys the independent two-tick latch.
+        local = tmp_path / "capacity.json"
+        monkeypatch.setattr(export.capacity, "OUT", local)
+        for timestamp in (196400, 200000):
+            local.write_text(
+                json.dumps({"generated_at": timestamp, "agents": {"muse": {"state": "shed"}}})
+            )
+            assert export.record_capacity_tick(tmp_path / "state", now=timestamp)
     hold_path = tmp_path / "state" / "route-weights-regression-hold.json"
     if aged:
         export.write_document(

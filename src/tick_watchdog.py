@@ -552,7 +552,7 @@ def cadence_phrase(
             "no cadence outcome recorded on this machine",
             f"  ALERT: tick-watchdog: no cadence step has recorded an outcome in the "
             f"{fmt_duration(watched)} this machine's ticks have been watched (since "
-            f"{_iso(watched_since)}), past the {fmt_duration(bound_s)} a daily step may go — ticks "
+            f"{_iso(watched_since)}), past the {fmt_duration(bound_s)} the shortest cadence step may go — ticks "
             "are starting and reaching no cadence step; the lines after each tick header say "
             "where they stop",
         )
@@ -564,8 +564,8 @@ def cadence_phrase(
     return (
         suffix,
         f"  ALERT: tick-watchdog: no cadence step has recorded an outcome for {fmt_duration(age)} "
-        f"(newest: {what} at {_iso(float(newest['ts']))}), past the {fmt_duration(bound_s)} a "
-        "daily step may go — ticks are starting and reaching no cadence step; the lines after "
+        f"(newest: {what} at {_iso(float(newest['ts']))}), past the {fmt_duration(bound_s)} the "
+        "shortest cadence step may go — ticks are starting and reaching no cadence step; the lines after "
         "each tick header say where they stop",
     )
 

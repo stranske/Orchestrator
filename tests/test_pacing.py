@@ -786,7 +786,12 @@ def test_export_ignores_volatile_pacing_but_publishes_capacity_changes():
     assert route_weights_export._semantic_for_compare(
         base
     ) == route_weights_export._semantic_for_compare(other)
+    # The published pool state is the damped trigger; pacing.state alone is diagnostic.
     pace["state"] = "ok"
+    assert route_weights_export._semantic_for_compare(
+        base
+    ) == route_weights_export._semantic_for_compare(other)
+    other["capacity"]["codex"]["state"] = "ok"
     assert route_weights_export._semantic_for_compare(
         base
     ) != route_weights_export._semantic_for_compare(other)
@@ -886,6 +891,12 @@ def test_export_schedule_and_weight_drift_wait_for_regular_cadence():
         base
     ) == route_weights_export._semantic_for_compare(other)
     other["capacity"]["codex"]["pacing"]["used_fraction"] = 0.2
+    assert route_weights_export._semantic_for_compare(
+        base
+    ) == route_weights_export._semantic_for_compare(other)
+
+    # A real period rollover still triggers, without waiting for the refresh floor.
+    other["capacity"]["codex"]["pacing"]["period_end"] = START + pacing.PERIOD_SECONDS
     assert route_weights_export._semantic_for_compare(
         base
     ) != route_weights_export._semantic_for_compare(other)
