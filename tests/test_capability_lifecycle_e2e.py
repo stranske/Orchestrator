@@ -441,19 +441,31 @@ def test_invocation_ineligible_refusals_write_nothing(
     now, ledger, registry = ctx["now"], ctx["ledger"], ctx["registry"]
     cap_id, version_id = ctx["capability_id"], ctx["version_id"]
     if case == "expired_ledger":
-        _mutate_json(ledger, "capabilities", cap_id, expiry=now - 1)
+        _mutate_json(ledger, "capabilities", cap_id, expiry=now)
     elif case == "expired_artifact":
         payload = json.loads(registry.read_text(encoding="utf-8"))
-        payload["targets"][version_id]["artifact"]["lifecycle"]["expires_at"] = now - 1
+        payload["targets"][version_id]["artifact"]["lifecycle"]["expires_at"] = now
         registry.write_text(json.dumps(payload), encoding="utf-8")
     elif case == "kill_switch":
-        monkeypatch.setenv("ORCH_CAPABILITY_WORKFLOW_ENABLED", "0")
+        # Use the ledger declaration even when the conventional switch allows execution.
+        _mutate_json(ledger, "capabilities", cap_id, kill_switch="ORCH_FIXTURE_WORKFLOW_STOP=1")
+        monkeypatch.setenv("ORCH_FIXTURE_WORKFLOW_STOP", "1")
+        monkeypatch.setenv("ORCH_CAPABILITY_WORKFLOW_ENABLED", "1")
     elif case == "ledger_rollback_pending":
         _mutate_json(ledger, "capabilities", cap_id, rollback_pending={"reason": "regressed"})
     else:
         binding = capability_targets.get_binding(version_id, registry_path=registry)
         capability_targets.prepare_rollback(binding, registry_path=registry, reason="regressed")
     before = capability_targets.get_binding(version_id, registry_path=registry)
+    paths = (ledger, registry, Path(before["binding_path"]))
+    before_bytes = {path: path.read_bytes() for path in paths}
+
+    def unexpected_production(*args, **kwargs):
+        raise AssertionError("ineligible invocation must refuse before production or consumption")
+
+    monkeypatch.setattr(compiler, "dry_run_workflow_rail", unexpected_production)
+    monkeypatch.setattr(compiler, "consume_workflow_output", unexpected_production)
+    monkeypatch.setattr(feedback, "record_capability_consumption", unexpected_production)
     result = capability_lifecycle.invoke_compiled_target(
         cap_id,
         trigger=ctx["fixture"]["trigger"],
@@ -468,6 +480,20 @@ def test_invocation_ineligible_refusals_write_nothing(
     assert after["invocations"] == before["invocations"] == []
     assert "causal_edge" not in result
     assert feedback.capability_causal_evidence(cap_id, version_id) == []
+    assert {path: path.read_bytes() for path in paths} == before_bytes
+
+    direct = capability_targets.invoke_target(
+        before,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=registry,
+        ledger_path=ledger,
+        target_run_id=f"direct:{case}",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=now,
+    )
+    assert direct == {"matched": True, "invoked": False, "reason": reason}, direct
+    assert feedback.capability_causal_evidence(cap_id, version_id) == []
+    assert {path: path.read_bytes() for path in paths} == before_bytes
 
 
 @pytest.mark.parametrize("kind", ["role", "workflow", "skill", "playbook", "gate"])
