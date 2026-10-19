@@ -416,6 +416,7 @@ def after_writer(
             review_brief(pr_url, str(result["output"])),
             round_number + 1,
             run_id,
+            pr_number,
         )
     except Exception as exc:
         return {"status": "review_redispatch_failed", "merge_eligible": False, "reason": str(exc)}
@@ -462,7 +463,13 @@ def dispatcher_offload(reviewer: str, prompt: str, target: str) -> dict:
 
 
 def dispatcher_delegate(
-    implementer: str, target: str, lane: str, brief: str, review_round: int, review_run_id: str
+    implementer: str,
+    target: str,
+    lane: str,
+    brief: str,
+    review_round: int,
+    review_run_id: str,
+    continue_pr: int | None = None,
 ) -> dict:
     import dispatcher
 
@@ -475,6 +482,7 @@ def dispatcher_delegate(
         review_loop=True,
         review_round=review_round,
         review_run_id=review_run_id,
+        **({"continue_pr": continue_pr} if continue_pr is not None else {}),
     )
 
 

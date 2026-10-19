@@ -1748,12 +1748,16 @@ def linked_open_prs(target: str) -> list[int] | None:
         linked = set()
         rest_numbers = set()
         closing = re.compile(
-            r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*"
+            r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*"
             rf"(?:#|{re.escape(repo)}#|https://github\.com/{re.escape(repo)}/issues/)"
             rf"{number}\b",
             re.IGNORECASE,
         )
-        branch = re.compile(rf"^(codex|claude|cursor|gemini|muse|aider|orch)/issue-{number}(-.*)?$")
+        prefixes = "|".join(
+            re.escape(prefix)
+            for prefix in sorted({*AGENT_PERSONAS, "claude", "orch", "orchestrator"})
+        )
+        branch = re.compile(rf"^(?:{prefixes})/issue-{number}(-.*)?$")
         for page in rest_pages:
             if not isinstance(page, list):
                 raise ValueError("invalid REST PR page")
@@ -1889,10 +1893,14 @@ def delegate(
     linked = linked_open_prs(target)
     if linked is None:
         reason = _linked_pr_read_error.get() or "GitHub linked-PR read failed"
-        return {"error": f"linked: unknown ({reason}); pass continue_pr=<N> or retry"}
+        return {"error": f"linked: unknown ({reason}); retry when GitHub access recovers"}
     if (linked or continue_pr is not None) and (
         type(continue_pr) is not int or continue_pr not in linked
     ):
+        if not linked:
+            return {
+                "error": f"linked: continue_pr={continue_pr!r} is not an open PR linked to {target}"
+            }
         names = ", ".join(f"#{n}" for n in linked)
         return {
             "error": f"linked: open PR {names or '(none)'} close {target}; "

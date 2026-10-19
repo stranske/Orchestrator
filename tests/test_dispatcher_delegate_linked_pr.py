@@ -115,7 +115,7 @@ def test_read_failure_fails_closed_with_override_message(world, continuation):
     answers, _, claim, reap, spawn = world
     answers["graph"] = subprocess.CompletedProcess([], 1, "", "HTTP 502")
     error = delegate(continue_pr=continuation)["error"]
-    assert error == "linked: unknown (gh exit 1: HTTP 502); pass continue_pr=<N> or retry"
+    assert error == "linked: unknown (gh exit 1: HTTP 502); retry when GitHub access recovers"
     claim.assert_not_called()
     reap.assert_not_called()
     spawn.assert_not_called()
@@ -125,11 +125,16 @@ def test_read_failure_fails_closed_with_override_message(world, continuation):
     "body,branch",
     [
         ("cLoSeS#731", "feature"),
+        ("Closes: #731", "feature"),
+        ("Fixes: #731", "feature"),
+        ("Resolves: o/r#731", "feature"),
         ("Fixed o/r#731", "feature"),
         ("Resolves https://github.com/o/r/issues/731", "feature"),
         (None, "codex/issue-731"),
         ("", "orch/issue-731-repair"),
         ("", "muse/issue-731"),
+        ("", "vibe/issue-731"),
+        ("", "orchestrator/issue-731-fix"),
     ],
 )
 def test_rest_linkage_rules(world, body, branch):
@@ -155,7 +160,9 @@ def test_unrelated_references_do_not_block(world, body, branch):
     answers["rest"] = [[rest_pr(body=body, branch=branch)]]
     answers["graph"] = [graph_page(refs=())]
     assert "error" not in delegate()
-    assert "error" in delegate(continue_pr=734)
+    assert delegate(continue_pr=734)["error"] == (
+        "linked: continue_pr=734 is not an open PR linked to o/r#731"
+    )
 
 
 def test_graphql_linkage_matches_repository_and_survives_rest_without_links(world):
