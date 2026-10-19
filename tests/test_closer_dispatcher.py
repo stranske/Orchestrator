@@ -157,7 +157,10 @@ def test_pipeline_keeps_local_io_capacity_when_github_capacity_is_unavailable(mo
     assert adapter._pipeline_capacity() == {"io": 4, "low": 0, "exception": 0}
 
 
-def test_staged_prepare_reuses_retained_packet_during_github_outage(tmp_path, monkeypatch):
+@pytest.mark.parametrize("stale_binding", [None, "source", "reviews", "dispositions"])
+def test_staged_prepare_reuses_retained_packet_during_github_outage(
+    tmp_path, monkeypatch, stale_binding
+):
     current = snapshot(base=MERGE)
     state = tmp_path / "state.json"
     packet = {
@@ -172,6 +175,8 @@ def test_staged_prepare_reuses_retained_packet_during_github_outage(tmp_path, mo
         "manifest": {"packet_sha256": "retained"},
         "sections": {"source": {"status": "complete", "content": current["sources"]}},
     }
+    if stale_binding:
+        packet["bindings"][stale_binding] = "stale-binding"
     packet_path = tmp_path / "packet.json"
     packet_bytes = json.dumps(packet).encode()
     packet_path.write_bytes(packet_bytes)
@@ -230,10 +235,15 @@ def test_staged_prepare_reuses_retained_packet_during_github_outage(tmp_path, mo
     backend = closer(tmp_path, current)
     backend.local_first = True
     args = SimpleNamespace(state=str(state), max_workers=1, shadow=False)
-    adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 330)
-    assert prepared["snapshot"]["_local_cached"] is True
-    assert prepared["remote_fresh"] is False
-    assert prepared["revision"] == current["revision"]
+    if stale_binding:
+        with pytest.raises(ConnectionError, match="offline"):
+            adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 330)
+        assert prepared == {}
+    else:
+        adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 330)
+        assert prepared["snapshot"]["_local_cached"] is True
+        assert prepared["remote_fresh"] is False
+        assert prepared["revision"] == current["revision"]
 
 
 class FakeGitHub:
