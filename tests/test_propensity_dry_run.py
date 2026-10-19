@@ -390,19 +390,24 @@ def test_writing_commands_reject_dry_run_before_mutation(
             else:
                 assert not store.exists(), "dry-run created an absent ledger directory"
 
-            if ledger_source == "explicit" and exists and command_args[0] in {
-                "trigger",
-                "useful",
-                "late-outcome",
-                "decline",
-                "consult-outcome",
-                "record-repair",
-            }:
+            if (
+                ledger_source == "explicit"
+                and exists
+                and command_args[0]
+                in {
+                    "trigger",
+                    "useful",
+                    "late-outcome",
+                    "decline",
+                    "consult-outcome",
+                    "record-repair",
+                }
+            ):
                 ordinary = _run(ledger, *command_args)
                 assert ordinary.returncode == 0, ordinary.stdout + ordinary.stderr
                 recorded = json.loads(ordinary.stdout)
                 result_key = "attached" if command_args[0] == "late-outcome" else "recorded"
                 assert recorded[result_key] is True, recorded
-                assert {p.name: p.read_bytes() for p in store.iterdir()} != before, (
-                    "the control must prove this argv writes without dry-run"
-                )
+                assert {
+                    p.name: p.read_bytes() for p in store.iterdir()
+                } != before, "the control must prove this argv writes without dry-run"
