@@ -21,6 +21,9 @@ The existing codemod/range rails accept a versioned add-only gitignore campaign:
 per-repo work orders, exact-target previews, guarded one-off dispatch, and attributed outcome
 reporting. See [the campaign contract](docs/CODEMOD_CAMPAIGN.md).
 
+Local infrastructure delegates default to `orch/` branches; product delegates retain agent
+prefixes. See [branch overrides and stale-worktree recovery](docs/DELEGATE_PROVISIONING.md).
+
 ## How it runs (execution topology)
 
 ```
