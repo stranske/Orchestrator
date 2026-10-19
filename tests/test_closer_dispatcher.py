@@ -15,6 +15,7 @@ import pytest
 
 import claims
 import closer_dispatcher as adapter
+import closer_evidence
 import closer_pipeline
 import closer_queue
 
@@ -68,6 +69,181 @@ def snapshot(**overrides):
     result.update(overrides)
     result["revision"] = adapter.digest(result)
     return result
+
+
+def test_local_packet_progresses_with_github_unavailable_but_remote_action_waits(
+    tmp_path, monkeypatch
+):
+    class OfflineGitHub:
+        deadline = time.time() + 30
+
+        def __init__(self):
+            self.calls = 0
+
+        def snapshot(self, _target):
+            self.calls += 1
+            raise ConnectionError("GitHub unavailable")
+
+    gh = OfflineGitHub()
+    local = snapshot()
+    backend = adapter.Closer(
+        gh,
+        state_path=tmp_path / "queue.json",
+        seed_snapshots={TARGET: local},
+        local_first=True,
+        apply=True,
+        workers=True,
+    )
+    backend.select = lambda _s: ("review", "local review", True, None)
+    backend.worker = lambda *_args, **_kwargs: {"status": "completed", "local_result": True}
+    observed = backend.observe(TARGET)
+    assert observed["action"] == "review" and observed["eligible"]
+    result = backend.execute(TARGET, "review", observed, {"deadline": time.time() + 20})
+    assert result["status"] == "completed" and result["local_result"]
+    assert gh.calls == 0
+
+    backend.select = lambda _s: ("merge", "remote merge", True, None)
+    observed = backend.observe(TARGET)
+    remote = backend.execute(TARGET, "merge", observed, {"deadline": time.time() + 20})
+    assert remote["status"] == "not_started"
+    assert remote["next_trigger"] == "targeted_remote_freshness_recheck"
+    assert gh.calls == 1
+
+
+def test_offline_retained_packet_runs_through_durable_queue(tmp_path):
+    class OfflineGitHub:
+        def __init__(self):
+            self.calls = 0
+
+        def snapshot(self, _target):
+            self.calls += 1
+            raise ConnectionError("offline")
+
+    gh = OfflineGitHub()
+    backend = adapter.Closer(
+        gh,
+        state_path=tmp_path / "queue.json",
+        seed_snapshots={TARGET: snapshot()},
+        local_first=True,
+        apply=True,
+        workers=True,
+    )
+    backend.select = lambda _s: ("review", "local review", True, None)
+    backend.worker = lambda *_args, **_kwargs: {"status": "completed", "local_result": True}
+    receipt = closer_queue.run_round(
+        backend.state_path,
+        [TARGET],
+        backend.observe,
+        backend.execute,
+        reconcile=backend.reconcile,
+        deadline=time.time() + 360,
+        max_workers=1,
+        max_passes=1,
+    )
+    row = next(row for row in receipt["accounting"] if row["target"] == TARGET)
+    assert row["action"] == "review"
+    assert row["operation_status"] == "completed"
+    assert row["status"] == "deferred" and row["reason"] == "no_progress"
+    durable = closer_queue._read_state(backend.state_path)["items"][TARGET]
+    assert durable["operation"]["result"]["local_result"] is True
+    assert gh.calls == 0
+
+
+def test_pipeline_keeps_local_io_capacity_when_github_capacity_is_unavailable(monkeypatch):
+    monkeypatch.setattr(adapter, "_fresh_capacity_report", lambda: None)
+    monkeypatch.setattr(
+        adapter.gh_capacity, "state", lambda *_args: (_ for _ in ()).throw(ConnectionError())
+    )
+    assert adapter._pipeline_capacity() == {"io": 4, "low": 0, "exception": 0}
+
+
+@pytest.mark.parametrize("stale_binding", [None, "source", "reviews", "dispositions"])
+def test_staged_prepare_reuses_retained_packet_during_github_outage(
+    tmp_path, monkeypatch, stale_binding
+):
+    current = snapshot(base=MERGE)
+    state = tmp_path / "state.json"
+    packet = {
+        "schema": "closer-evidence/v1",
+        "head": HEAD,
+        "base": MERGE,
+        "bindings": {
+            "source": closer_evidence._hash(current["sources"]),
+            "reviews": closer_evidence._hash(current["review_revision"]),
+            "dispositions": closer_evidence._hash({}),
+        },
+        "manifest": {"packet_sha256": "retained"},
+        "sections": {"source": {"status": "complete", "content": current["sources"]}},
+    }
+    if stale_binding:
+        packet["bindings"][stale_binding] = "stale-binding"
+    packet_path = tmp_path / "packet.json"
+    packet_bytes = json.dumps(packet).encode()
+    packet_path.write_bytes(packet_bytes)
+    snapshot_path = tmp_path / "snapshot.json"
+    snapshot_bytes = json.dumps(current).encode()
+    snapshot_path.write_bytes(snapshot_bytes)
+    prior = {
+        "revision": current["revision"],
+        "snapshot": {"target": TARGET, "revision": current["revision"]},
+        "packet_ref": {
+            "path": str(packet_path),
+            "sha256": hashlib.sha256(packet_bytes).hexdigest(),
+        },
+        "snapshot_ref": {
+            "path": str(snapshot_path),
+            "sha256": hashlib.sha256(snapshot_bytes).hexdigest(),
+        },
+    }
+    adapter._pipeline_state_path(state).write_text(
+        json.dumps({"runs": {"prior": {"targets": {TARGET: {"results": {"prepare": prior}}}}}})
+    )
+
+    class OfflineGitHub:
+        def __init__(self, *, deadline):
+            self.deadline = deadline
+
+        def snapshot(self, _target):
+            raise ConnectionError("offline")
+
+    monkeypatch.setattr(adapter, "GitHub", OfflineGitHub)
+    monkeypatch.setattr(
+        closer_evidence,
+        "validate_packet",
+        lambda p: isinstance(p, dict) and p.get("schema") == "closer-evidence/v1",
+    )
+    monkeypatch.setattr(closer_evidence, "drift_sample", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        closer_evidence,
+        "collect_evidence",
+        lambda *_a, **_k: pytest.fail("retained packet must be reused"),
+    )
+    prepared = {}
+
+    def run_pipeline(_path, targets, **callbacks):
+        prepared.update(callbacks["prepare"](targets[0], {"deadline": time.time() + 30}))
+        return {"valid": True}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "closer_pipeline",
+        SimpleNamespace(
+            run_pipeline=run_pipeline,
+            EVIDENCE_REFUSAL_REASONS=closer_pipeline.EVIDENCE_REFUSAL_REASONS,
+        ),
+    )
+    backend = closer(tmp_path, current)
+    backend.local_first = True
+    args = SimpleNamespace(state=str(state), max_workers=1, shadow=False)
+    if stale_binding:
+        with pytest.raises(ConnectionError, match="offline"):
+            adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 330)
+        assert prepared == {}
+    else:
+        adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 330)
+        assert prepared["snapshot"]["_local_cached"] is True
+        assert prepared["remote_fresh"] is False
+        assert prepared["revision"] == current["revision"]
 
 
 class FakeGitHub:
