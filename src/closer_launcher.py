@@ -93,8 +93,7 @@ def load_runtime(manifest: dict):
             raise RuntimeError(
                 f"pinned Runtime dependency already loaded from another package: {name}"
             )
-    if base not in sys.path:
-        sys.path.insert(0, base)
+    sys.path[:] = [base] + [item for item in sys.path if item != base]
     spec = importlib.util.spec_from_file_location("closer_campaign", manifest["module_path"])
     if spec is None or spec.loader is None:
         raise RuntimeError("pinned Runtime has no supported Python loader")
@@ -114,7 +113,28 @@ def main(argv: list[str] | None = None) -> int:
     child.add_argument("--dir", required=True)
     child.add_argument("--role", required=True)
     child.add_argument("--manifest", required=True)
+    agent_cli = sub.add_parser(
+        "agent-cli",
+        help="concrete per-agent CLI inventory/readiness/plan/run (closer_agent_launchers)",
+    )
+    agent_cli.add_argument("--manifest", required=True)
+    agent_cli.add_argument("rest", nargs=argparse.REMAINDER)
     args = p.parse_args(argv)
+    if args.command == "agent-cli":
+        manifest = json.loads(Path(args.manifest).read_text())
+        problems = pin_problems(manifest)
+        if problems:
+            print(json.dumps({"launcher": "refused", "problems": problems}))
+            return 78
+        load_runtime(manifest)
+        import closer_agent_launchers
+
+        rest = list(args.rest)
+        if rest[:1] == ["--"]:
+            rest = rest[1:]
+        if rest and rest[0] in {"plan", "run"} and "--manifest" not in rest:
+            rest.extend(["--manifest", args.manifest])
+        return closer_agent_launchers.main(rest or ["--help"], required_manifest_path=args.manifest)
     manifest = json.loads(Path(args.manifest).read_text())
     problems = pin_problems(manifest)
     if args.command == "compat-child":
