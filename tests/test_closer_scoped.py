@@ -1145,3 +1145,70 @@ def test_named_stop_selects_exact_original_run_and_never_substitutes_latest(tmp_
     assert not verdict["valid"] and verdict["run_id"] == "recorded"
     assert "unverifiable_pending_work:" + target in verdict["reasons"]
     assert before != state.read_bytes()
+
+
+def test_release_skips_corrupt_intents_but_drains_exact_known_owned_keys(tmp_path):
+    state = tmp_path / "state.json"
+    target = "example/repo#1"
+    root = closer_resources.open_root(state, pipeline_schema=closer_pipeline.SCHEMA)
+    keys = ["pr:" + target, "branch:example/repo@feature"]
+    with closer_resources.reserve(root, keys, target=target, owner="owner", deadline=9e9):
+        pass
+    bad = closer_resources._reservation_base(root) / "000-corrupt-first"
+    bad.mkdir()
+    raw = b"not-json"
+    (bad / "intent.json").write_bytes(raw)
+    assert set(closer_resources.release_target(root, target, owner="owner")) == set(keys)
+    assert (bad / "intent.json").read_bytes() == raw
+    unknown = closer_resources.unknown_reservations(root)
+    assert any(key.startswith("unreadable:") for key in unknown)
+    row = {
+        "status": "completed",
+        "stage": "act",
+        "results": {"act": {"status": "completed", "target_complete": True}},
+    }
+    doc = closer_pipeline._empty()
+    doc["runs"] = {
+        "run": {
+            "created": time.time(),
+            "deadline": time.time() + 20,
+            "assignment": [target],
+            "targets": {target: row},
+        }
+    }
+    closer_pipeline._save(state, doc)
+    assert (
+        "unresolved_resource_reservations"
+        in closer_pipeline.validate_stop(state, [target])["reasons"]
+    )
+
+
+def test_release_known_boundary_keeps_bool_contract_on_resourceblocked(tmp_path, monkeypatch):
+    state = tmp_path / "state.json"
+    target = "example/repo#1"
+    row = {
+        "status": "completed",
+        "stage": "act",
+        "results": {"act": {"status": "completed", "target_complete": True}},
+    }
+    doc = closer_pipeline._empty()
+    doc["runs"] = {
+        "run": {
+            "created": time.time(),
+            "deadline": time.time() + 20,
+            "assignment": [target],
+            "targets": {target: row},
+        }
+    }
+    closer_pipeline._save(state, doc)
+
+    def blocked(*args, **kwargs):
+        raise closer_resources.ResourceBlocked("unreadable retained intent")
+
+    monkeypatch.setattr(closer_resources, "release_target", blocked)
+    assert (
+        closer_resources._release_known_shard_boundary(
+            closer_resources.scoped_root(state), state, target, owner="owner", now=time.time
+        )
+        is False
+    )

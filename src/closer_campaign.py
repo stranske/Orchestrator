@@ -1432,6 +1432,7 @@ def make_manifest(
     modules: tuple[str, ...] = PINNED_MODULES,
     policy: dict[str, Any] | None = None,
     campaign_root: str | Path | None = None,
+    manifest_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Bind installed module digests, runtime, command and state versions to a candidate."""
     module_dir = Path(module_dir).expanduser().resolve()
@@ -1453,7 +1454,16 @@ def make_manifest(
         .expanduser()
         .resolve()
     )
-    command = [str(python), str(module_dir / "closer_campaign.py"), "tick", "--root", str(root)]
+    pinned_manifest = Path(manifest_path or root / "pin.manifest.json").expanduser().resolve()
+    command = [
+        str(python),
+        str(module_dir / "closer_campaign.py"),
+        "tick",
+        "--root",
+        str(root),
+        "--manifest",
+        str(pinned_manifest),
+    ]
     manifest = {
         "schema_version": MANIFEST_SCHEMA,
         "contract": CONTRACT,
@@ -1511,7 +1521,18 @@ def write_manifest(path: str | Path, manifest: dict[str, Any]) -> None:
     problems = validate_manifest(manifest)
     if problems:
         raise CampaignError("; ".join(problems))
-    _atomic_write(Path(path), manifest)
+    output = Path(path).expanduser().resolve()
+    command = manifest.get("command", [])
+    if not isinstance(command, list) or command.count("--manifest") != 1:
+        raise CampaignError("manifest command must bind its output path")
+    index = command.index("--manifest")
+    if (
+        index + 1 >= len(command)
+        or not isinstance(command[index + 1], str)
+        or Path(command[index + 1]).expanduser().resolve() != output
+    ):
+        raise CampaignError("manifest output differs from its pinned command path")
+    _atomic_write(output, manifest)
 
 
 def verify_modules(manifest: dict[str, Any]) -> list[str]:
@@ -2099,7 +2120,7 @@ def main(argv: list[str] | None = None) -> int:
     mm.add_argument("--candidate-sha", required=True)
     mm.add_argument("--state-version", action="append", required=True, help="name=int")
     mm.add_argument("--out", required=True)
-    mm.add_argument("--root", help="campaign directory (defaults to --out parent)")
+    mm.add_argument("--root", help="campaign directory (defaults to configured campaign root)")
     hr = sub.add_parser("harness-receipt", help="produce a subprocess lifecycle receipt")
     hr.add_argument("--manifest", required=True)
     hr.add_argument("--workdir", required=True)
@@ -2148,7 +2169,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.module_dir,
                 candidate_sha=args.candidate_sha,
                 state_versions=versions,
-                campaign_root=args.root or Path(args.out).parent,
+                campaign_root=args.root,
+                manifest_path=args.out,
             ),
         )
         return 0

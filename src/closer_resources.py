@@ -874,7 +874,12 @@ def release_target(root: Path, target: str, *, owner: str) -> list[str]:
             if not _poll_lock(handle, time.time() + 1.0, time.time):
                 continue
             try:
-                intent = _read_intent(directory / "intent.json")
+                try:
+                    intent = _read_intent(directory / "intent.json")
+                except ResourceBlocked:
+                    # Preserve and report this unknown via unknown_reservations;
+                    # it cannot prevent releasing separately proven owned keys.
+                    continue
                 if (
                     intent is not None
                     and intent.get("target") == owned
@@ -945,7 +950,7 @@ def _release_known_shard_boundary(
                 return False
         release_target(root, target, owner=owner)
         return True
-    except (OSError, ValueError, TypeError, KeyError):
+    except (OSError, ValueError, TypeError, KeyError, ResourceBlocked):
         return False
 
 

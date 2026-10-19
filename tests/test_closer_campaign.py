@@ -332,16 +332,84 @@ def test_hook_installer_patches_exact_shape_only(tmp_path):
 
 
 def test_begin_checks_and_creates_before_another_owner_can_interleave(tmp_path, monkeypatch):
+    import select
+    import subprocess
+
     campaign = cc.Campaign(tmp_path / "new.campaign.json")
-    original = campaign.update
+    original_lock, original_write = campaign._locked, campaign._write_unlocked
+    used = {"attempt": False, "release": False, "write": False}
+    peer_result = []
+    child_code = """
+import fcntl, json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[3])
+import closer_campaign as cc
+path = Path(sys.argv[1])
+with path.with_name(path.name + '.lock').open('a+b') as lock:
+    try:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print('ATTEMPT_BLOCKED', flush=True)
+    else:
+        print('ATTEMPT_FREE', flush=True)
+        fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+try:
+    result = cc.Campaign(path).begin('camp', ['target'], owner='other', release_pin=sys.argv[2])
+    print(json.dumps({'status': 'created', 'owner': result['owner']}), flush=True)
+except cc.CampaignError as exc:
+    print(json.dumps({'status': 'refused', 'reason': str(exc)}), flush=True)
+"""
+    peer = None
 
-    def interleaved_update(mutate, **kwargs):
-        cc.Campaign(campaign.path).begin("camp", ["target"], owner="other", release_pin=DIGEST)
-        return original(mutate, **kwargs)
+    class FirstRelease:
+        def __init__(self, stream):
+            self.stream = stream
 
-    monkeypatch.setattr(campaign, "update", interleaved_update)
-    created = campaign.begin("camp", ["target"], owner="first", release_pin=DIGEST)
-    assert created["owner"] == "first" and created["revision"] == 1
-    with pytest.raises(cc.CampaignError, match="owned"):
-        cc.Campaign(campaign.path).begin("camp", ["target"], owner="other", release_pin=DIGEST)
-    assert campaign.read() == created
+        def close(self):
+            self.stream.close()
+            used["release"] = True
+            output, error = peer.communicate(timeout=10)
+            assert peer.returncode == 0, error
+            peer_result.append(json.loads(output))
+
+    def first_lock():
+        nonlocal peer
+        stream = original_lock()
+        if peer is not None:
+            return stream
+        peer = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                child_code,
+                str(campaign.path),
+                DIGEST,
+                str(Path(cc.__file__).parent),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert select.select([peer.stdout], [], [], 10)[0], "competitor never attempted ownership"
+        assert peer.stdout.readline().strip() == "ATTEMPT_BLOCKED"
+        used["attempt"] = True
+        return FirstRelease(stream)
+
+    def observed_write(doc):
+        used["write"] = True
+        assert used["attempt"]
+        original_write(doc)
+
+    monkeypatch.setattr(campaign, "_locked", first_lock)
+    monkeypatch.setattr(campaign, "_write_unlocked", observed_write)
+    try:
+        created = campaign.begin("camp", ["target"], owner="first", release_pin=DIGEST)
+        assert used == {"attempt": True, "release": True, "write": True}
+        assert peer_result[0]["status"] == "refused"
+        assert "owned" in peer_result[0]["reason"]
+        assert created["owner"] == "first" and created["revision"] == 1
+        assert campaign.read() == created
+    finally:
+        if peer is not None and peer.poll() is None:
+            peer.kill()
+            peer.communicate(timeout=10)

@@ -275,8 +275,10 @@ def pinned_dir(tmp_path, dispatcher="import sys\nif __name__ == '__main__': sys.
 
 
 def manifest_for(d, tmp_path):
-    m = cc.make_manifest(d, candidate_sha=CAND, state_versions={"campaign": 1, "release": 1})
     path = tmp_path / "pin.manifest.json"
+    m = cc.make_manifest(
+        d, candidate_sha=CAND, state_versions={"campaign": 1, "release": 1}, manifest_path=path
+    )
     cc.write_manifest(path, m)
     return m, path
 
@@ -511,7 +513,8 @@ def test_manifest_pinned_tick_command_runs_with_explicit_root(tmp_path):
     manifest = cc.make_manifest(
         directory, candidate_sha=CAND, state_versions={"campaign": 1}, campaign_root=root
     )
-    assert manifest["command"][-2:] == ["--root", str(root.resolve())]
+    assert manifest["command"][3:5] == ["--root", str(root.resolve())]
+    assert manifest["command"][-2:] == ["--manifest", str(root.resolve() / "pin.manifest.json")]
     assert manifest["command_digest"] == cc.sha256_json(manifest["command"])
     cc.write_manifest(root / "pin.manifest.json", manifest)
     done = subprocess.run(manifest["command"], capture_output=True, text=True, timeout=20)
@@ -519,3 +522,38 @@ def test_manifest_pinned_tick_command_runs_with_explicit_root(tmp_path):
     report = json.loads(done.stdout)
     assert report[0]["kind"] == "held"
     assert report[0]["reason"] == "version not qualified"
+
+
+def test_manifest_binds_arbitrary_output_and_configured_root(tmp_path, monkeypatch):
+    directory = pinned_dir(tmp_path)
+    root = tmp_path / "configured-campaigns"
+    output = tmp_path / "different" / "custom-name.json"
+    monkeypatch.setenv("ORCH_CLOSER_CAMPAIGN_DIR", str(root))
+    assert (
+        cc.main(
+            [
+                "make-manifest",
+                "--module-dir",
+                str(directory),
+                "--candidate-sha",
+                CAND,
+                "--state-version",
+                "campaign=1",
+                "--out",
+                str(output),
+            ]
+        )
+        == 0
+    )
+    manifest = cc.load_manifest(output)
+    assert manifest["command"][3:5] == ["--root", str(root.resolve())]
+    assert manifest["command"][-2:] == ["--manifest", str(output.resolve())]
+    calls = []
+    monkeypatch.setattr(
+        cc, "tick", lambda root, manifest, **kwargs: calls.append((root, manifest)) or []
+    )
+    assert cc.main(manifest["command"][2:]) == 0
+    assert calls == [(str(root.resolve()), str(output.resolve()))]
+    with pytest.raises(cc.CampaignError, match="output differs"):
+        cc.write_manifest(tmp_path / "wrong-output.json", manifest)
+    assert not (tmp_path / "wrong-output.json").exists()
