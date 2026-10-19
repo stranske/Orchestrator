@@ -359,11 +359,12 @@ subscription meter (under 1% to 1%) and added nothing there. So `_agent_runtime_
 variable by name, and `adapters.auth_health("muse")` reads that record so `capacity._classify` sheds the seat when the login is
 missing or has no active subscription (an unreadable record is not a failure). Meta documents the credential
 order as the env key, then a stored key, then the stored browser session. Verified 2026-10-18 on Muse
-Code 1.4.10 in a disposable Debian container with the file credential backend: after a device-code OAuth
-login record (`providers.meta` held `mechanism`, `storage`, `obtained_via`, `subs_active`, `user_email`),
+Code 1.4.10 in a disposable Debian container with the file credential backend: starting from a synthetic
+OAuth-shaped fixture (`providers.meta` held `mechanism`, `storage`, `obtained_via`, `subs_active`,
+`user_email`; no real login or credentials were mounted),
 `muse auth set --api-key-stdin` replaced that block with `providers.meta` containing only `api_key` (no
-`mechanism` field). The login does not coexist with a stored key; `muse logout` documents one saved
-credential per provider. The gate admits only an OAuth login record (no `api_key` field) and refuses any
+`mechanism` field). The seeded OAuth fields do not coexist with a stored key. This probe establishes the file-backend
+replacement operation, not a fresh real OAuth login; `muse logout` documents one saved credential per provider. The gate admits only an OAuth login record (no `api_key` field) and refuses any
 other shape.
 `agent_auth_check` counts the seat usable only when the login records an active
 subscription (`subs_active`), reading the file's shape without logging credential values. The child uses

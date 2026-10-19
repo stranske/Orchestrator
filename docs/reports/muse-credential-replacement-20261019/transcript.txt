@@ -1,0 +1,4 @@
+Muse Code 1.4.10 (1.4.10-R6427.1)
+{"phase": "before", "seed": "synthetic OAuth-shaped fixture; no actual login", "root_fields": ["providers", "schema_version"], "provider_fields": ["mechanism", "obtained_via", "storage", "subs_active", "user_email"], "mechanism": "oauth"}
+credentials saved for provider meta
+{"phase": "after", "root_fields": ["providers", "schema_version"], "provider_fields": ["api_key"], "mechanism": null, "oauth_marker_retained": false, "subs_active_retained": false, "fake_key_field_present": true}

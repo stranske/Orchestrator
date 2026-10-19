@@ -742,7 +742,7 @@ def test_muse_record_that_is_not_an_oauth_login_is_not_admitted(tmp_path, monkey
 
 
 def test_muse_gate_refuses_the_record_shape_a_stored_key_leaves(tmp_path, monkeypatch):
-    """Post-`muse auth set` shape from a disposable Linux file-backend run (Muse 1.4.10, 2026-10-18):
+    """Post-`muse auth set` shape from the retained disposable Linux fixture probe (Muse 1.4.10):
     schema_version plus providers.meta.api_key only — no mechanism or subs_active."""
     path = tmp_path / "auth.json"
     path.write_text(
