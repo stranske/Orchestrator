@@ -896,24 +896,43 @@ def test_compiled_invocation_malformed_ledger_expiry_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ctx = _registered_workflow(tmp_path, monkeypatch)
-    _mutate_json(ctx["ledger"], "capabilities", ctx["capability_id"], expiry="not-a-timestamp")
-    result = capability_lifecycle.invoke_compiled_target(
-        ctx["capability_id"],
-        trigger=ctx["fixture"]["trigger"],
-        target_run_id="workflow:malformed-expiry:1",
-        ledger_path=ctx["ledger"],
-        target_registry_path=ctx["registry"],
-        inputs=ctx["fixture"]["inputs"],
-        timestamp=ctx["now"],
-    )
-    assert result == {"matched": True, "invoked": False, "reason": "expired"}, result
-    assert (
-        capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])[
-            "invocations"
-        ]
-        == []
-    )
-    assert "causal_edge" not in result
+    binding = capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("invalid ledger expiry must refuse before the producer")
+
+    monkeypatch.setattr(compiler, "dry_run_workflow_rail", forbidden)
+    monkeypatch.setattr(compiler, "consume_workflow_output", forbidden)
+    for expiry in ("not-a-timestamp", float("inf"), float("-inf"), float("nan")):
+        _mutate_json(ctx["ledger"], "capabilities", ctx["capability_id"], expiry=expiry)
+        before = (ctx["ledger"].read_bytes(), ctx["registry"].read_bytes())
+        result = capability_lifecycle.invoke_compiled_target(
+            ctx["capability_id"],
+            trigger=ctx["fixture"]["trigger"],
+            target_run_id="workflow:malformed-expiry:1",
+            ledger_path=ctx["ledger"],
+            target_registry_path=ctx["registry"],
+            inputs=ctx["fixture"]["inputs"],
+            timestamp=ctx["now"],
+        )
+        direct = capability_targets.invoke_target(
+            binding,
+            trigger=ctx["fixture"]["trigger"],
+            registry_path=ctx["registry"],
+            ledger_path=ctx["ledger"],
+            inputs=ctx["fixture"]["inputs"],
+            timestamp=ctx["now"],
+        )
+        assert result == direct == {"matched": True, "invoked": False, "reason": "expired"}
+        assert (ctx["ledger"].read_bytes(), ctx["registry"].read_bytes()) == before
+        assert (
+            capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])[
+                "invocations"
+            ]
+            == []
+        )
+        assert "causal_edge" not in result
+        assert feedback.capability_causal_evidence(ctx["capability_id"], ctx["version_id"]) == []
 
 
 def test_compiled_invocation_unreadable_ledger_refuses_without_writes(

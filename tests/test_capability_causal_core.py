@@ -329,16 +329,20 @@ def test_capability_expiry_malformed_expiry_fails_closed_without_sweep():
             "lifecycle_policy_hash": "sha256:policy",
         }
     )
-    assert capabilities.capability_expired(cap, NOW) is True
-    decision = capabilities.capability_routing_decision(
-        {"repository": "owner/repo", "task_type": "implement", "lane": "opener"},
-        capabilities_by_id={"expiring": cap},
-        seed=7,
-        now=NOW,
-    )
-    assert decision["selected_capability_id"] is None
-    assert decision["fallback"] == "baseline"
-    assert decision["rejection_reasons"]["expiring"] == ["expired"]
+    # JSON readers also accept non-finite numeric values. Their integer
+    # conversion must refuse expiry instead of raising before routing fallback.
+    for expiry in ("not-a-timestamp", float("inf"), float("-inf"), float("nan")):
+        cap["expiry"] = expiry
+        assert capabilities.capability_expired(cap, NOW) is True
+        decision = capabilities.capability_routing_decision(
+            {"repository": "owner/repo", "task_type": "implement", "lane": "opener"},
+            capabilities_by_id={"expiring": cap},
+            seed=7,
+            now=NOW,
+        )
+        assert decision["selected_capability_id"] is None
+        assert decision["fallback"] == "baseline"
+        assert decision["rejection_reasons"]["expiring"] == ["expired"]
 
 
 def test_router_plan_expiry_is_read_only_and_rejects_expired_row(tmp_path, monkeypatch):
