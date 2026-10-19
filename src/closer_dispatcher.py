@@ -2313,6 +2313,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 and local.get("base") == prior.get("base")
                 and prior.get("bindings", {}).get("source")
                 == closer_evidence._hash(local.get("sources") or [])
+                and prior.get("bindings", {}).get("reviews")
+                == closer_evidence._hash(local.get("review_revision"))
+                and prior.get("bindings", {}).get("dispositions")
+                == closer_evidence._hash(backend.dispositions.get(target, {}))
             ):
                 snap = {**local, "_local_cached": True}
                 packet = prior

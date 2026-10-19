@@ -164,7 +164,11 @@ def test_staged_prepare_reuses_retained_packet_during_github_outage(tmp_path, mo
         "schema": "closer-evidence/v1",
         "head": HEAD,
         "base": MERGE,
-        "bindings": {"source": closer_evidence._hash(current["sources"])},
+        "bindings": {
+            "source": closer_evidence._hash(current["sources"]),
+            "reviews": closer_evidence._hash(current["review_revision"]),
+            "dispositions": closer_evidence._hash({}),
+        },
         "manifest": {"packet_sha256": "retained"},
         "sections": {"source": {"status": "complete", "content": current["sources"]}},
     }
