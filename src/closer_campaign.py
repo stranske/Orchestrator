@@ -778,6 +778,7 @@ class ActionSpec:
     # revision; the adapter forwards them unchanged and Core's validation is the authority.
     guard_versions: tuple[tuple[str, Any], ...] = (("authority", 2),)
     blocking_labels: tuple[str, ...] = ()
+    native_binding: dict[str, Any] | None = None
 
 
 class CoreOperationAdapter(Protocol):
@@ -822,7 +823,14 @@ def submit_effect(
         return "unknown"
     handle = verdict["handle"]
     try:
-        adapter.record_intent(handle, {"action": spec.action, "head_sha": spec.head_sha})
+        adapter.record_intent(
+            handle,
+            {
+                "action": spec.action,
+                "head_sha": spec.head_sha,
+                **({"native_binding": spec.native_binding} if spec.native_binding else {}),
+            },
+        )
     except PermissionError:
         return "denied"
     except Exception:
@@ -908,7 +916,10 @@ class PinnedCoreAdapter:
             base_sha=s.base_sha,
             criteria_fingerprint=s.criteria_fingerprint,
             review_revision=s.review_revision,
-            guard_versions=dict(s.guard_versions),
+            guard_versions={
+                **dict(s.guard_versions),
+                **({"native_binding": sha256_json(s.native_binding)} if s.native_binding else {}),
+            },
             blocking_labels=s.blocking_labels,
         )
 

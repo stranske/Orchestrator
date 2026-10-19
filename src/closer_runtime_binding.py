@@ -313,8 +313,170 @@ class RuntimeBinding:
         self.transport = transport
         self.adapters: dict[str, Any] = {}
 
+    def _adapter(self, repository):
+        from closer_campaign import PinnedCoreAdapter
+
+        repository = repository.lower()
+        adapter = self.adapters.get(repository)
+        if adapter is None:
+            token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+            if self.transport is None and not token:
+                raise BindingError("shared Core requires independently supplied env token")
+            request = self.transport or self.bundle.github.NativeGitHubTransport(token)
+            store = self.bundle.github.GitHubContentsOperationStore(request, repository)
+            adapter = PinnedCoreAdapter(self.bundle.runtime, ".", store=store)
+            self.adapters[repository] = adapter
+        if not adapter.shared:
+            raise BindingError("local Core store cannot authorize remote effects")
+        return adapter
+
+    def _native_pr(self, repository, number):
+        """Fixed GET observation, separate from the authority Contents transport."""
+        path = f"repos/{repository}/pulls/{number}"
+        if self.transport is not None:  # trusted offline transport injection
+            return self.transport("GET", "/" + path, None)
+        producer = self.bundle.runtime._load_producer()
+        return producer.Evidence(producer.native_gh_pages).one(path)
+
+    def _recover(self, adapter, record, holder):
+        """Reconcile the stored operation, never a spec rebuilt from a fresh snapshot."""
+        from closer_campaign import sha256_json
+
+        core = self.bundle.runtime
+        if record.get("denial") or record.get("status") == "denied":
+            return {"status": "blocked", "reason": "Core denied/no_fallback fence"}
+        binding = (record.get("mutation_intent") or {}).get("native_binding")
+        if (
+            not isinstance(binding, dict)
+            or record["guard_versions"].get("native_binding") != sha256_json(binding)
+            or binding.get("head") != record["head_sha"]
+            or binding.get("criteria_fingerprint") != record["criteria_fingerprint"]
+            or binding.get("review_revision") != record["review_revision"]
+            or binding.get("pr_target") != f"{record['repository']}#{record['target']['number']}"
+            or (binding.get("action") == "merge" and record["action"] != "merge")
+            or (
+                binding.get("action") in {"initiate_verify", "post_merge_verify"}
+                and record["action"] != "verify_request"
+            )
+            or binding.get("action") not in {"merge", "initiate_verify", "post_merge_verify"}
+        ):
+            return {"status": "unknown", "reason": "original native binding unavailable"}
+        if record["status"] == "succeeded":
+            return {"status": "completed", "core_reconciled": True, "already_completed": True}
+        if record["status"] not in {"intent_recorded", "submitted", "uncertain"}:
+            return {"status": "unknown", "reason": "Core operation has no submitted effect"}
+        try:
+            pr = self._native_pr(record["repository"], record["target"]["number"])
+            observed = (
+                (pr.get("head") or {}).get("sha") == binding["head"]
+                and pr.get("merged") is True
+                and re.fullmatch(r"[0-9a-f]{40}", str(pr.get("merge_commit_sha", ""))) is not None
+            )
+            if record["action"] == "verify_request":
+                observed = (
+                    observed
+                    and re.fullmatch(r"[0-9a-f]{40}", str(binding.get("merge", ""))) is not None
+                    and pr.get("merge_commit_sha") == binding["merge"]
+                    and any(
+                        isinstance(label, dict) and label.get("name") == "verify:compare"
+                        for label in pr.get("labels", [])
+                    )
+                )
+            if not observed:
+                return {"status": "unknown", "reason": "original native effect not observed"}
+            spec = core.spec_from_record(record)
+            evidence = core.ReconciliationEvidence(
+                operation_key=record["operation_key"],
+                target_fence_key=record["target_fence_key"],
+                head_sha=record["head_sha"],
+                action=record["action"],
+                result="desired_result_observed",
+                source=f"repos/{record['repository']}/pulls/{record['target']['number']}",
+                observation_digest=_digest(pr),
+                context=json.dumps(
+                    {"native_binding": binding, "merge": pr.get("merge_commit_sha")}, sort_keys=True
+                ),
+            )
+            core.reconcile_unknown(
+                adapter.store,
+                record["target_fence_key"],
+                expected_revision=record["lease"]["revision"],
+                expected_epoch=record["lease"]["epoch"],
+                spec=spec,
+                executor=core.ExecutorIdentity("orchestrator_local", holder),
+                evidence=evidence,
+            )
+        except Exception as exc:
+            return {
+                "status": "unknown",
+                "reason": f"Core readback unresolved: {type(exc).__name__}",
+            }
+        return {"status": "completed", "core_reconciled": True, "evidence": pr}
+
+    def reconcile(self, target, operation):
+        """Native Closer.reconcile integration seam; never submits a native effect.
+
+        The operation's retained original binding is checked against the Core intent.
+        Readback can drain an expired attempt; it never grants execution time or resets denial.
+        """
+        problem = policy_problem(self.policy)
+        if problem:
+            return {"status": "blocked", "reason": problem}
+        action = operation.get("action")
+        canonical = {
+            "merge": "merge",
+            "initiate_verify": "verify_request",
+            "post_merge_verify": "verify_request",
+        }.get(action)
+        original = operation.get("binding") or {}
+        try:
+            pr_target = original.get("pr_target", target).lower()
+            repository, number = pr_target.split("#")
+            adapter = self._adapter(repository)
+            core = self.bundle.runtime
+            # Target/action alone selects the retained record. Its spec is reconstructed
+            # only by _recover after the original queue binding has matched.
+            spec = core.OperationSpec(
+                repository,
+                int(number),
+                canonical,
+                "0" * 40,
+                None,
+                "0" * 64,
+                "lookup",
+                {"authority": 2},
+            )
+            record = adapter.store.read(core.canonical_target_fence_key(spec))
+            if record and (record.get("denial") or record["status"] == "denied"):
+                return {"status": "blocked", "reason": "Core denied/no_fallback fence"}
+            native = ((record or {}).get("mutation_intent") or {}).get("native_binding") or {}
+            if (
+                canonical is None
+                or not record
+                or native.get("action") != action
+                or original.get("head") != native.get("head")
+                or original.get("review_revision") != native.get("review_revision")
+                or (
+                    native.get("queue_operation_id") is not None
+                    and operation.get("id") != native["queue_operation_id"]
+                )
+                or (
+                    operation.get("revision") is not None
+                    and operation["revision"] != native.get("revision")
+                )
+                or original.get("source_targets", []) != native.get("source_targets", [])
+                or (canonical == "verify_request" and original.get("merge") != native.get("merge"))
+            ):
+                return {"status": "unknown", "reason": "original queue/Core binding differs"}
+            return self._recover(adapter, record, operation["owner"])
+        except Exception as exc:
+            return {
+                "status": "unknown",
+                "reason": f"Core reconciliation unavailable: {type(exc).__name__}",
+            }
+
     def execute(self, target, action, snapshot, operation, native_effect):
-        from closer_campaign import ActionSpec, PinnedCoreAdapter, sha256_json, submit_effect
+        from closer_campaign import ActionSpec, sha256_json, submit_effect
 
         dependencies = dependency_problems()
         if dependencies:
@@ -334,33 +496,30 @@ class RuntimeBinding:
             return {"status": "blocked", "reason": reason}
         canonical = {
             "merge": "merge",
-            "initiate_verify": "verify",
-            "post_merge_verify": "verify",
+            "initiate_verify": "verify_request",
+            "post_merge_verify": "verify_request",
         }.get(action)
         if canonical is None:
             return {"status": "blocked", "reason": f"Core capability unsupported: {action}"}
         pr_target = snapshot.get("pr_target", target)
         try:
             repository, number = pr_target.split("#")
-            token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-            if self.transport is None and not token:
-                return {
-                    "status": "blocked",
-                    "reason": "shared Core requires independently supplied env token",
-                }
-            adapter = self.adapters.get(repository.lower())
-            if adapter is None:
-                request = self.transport or self.bundle.github.NativeGitHubTransport(token)
-                store = self.bundle.github.GitHubContentsOperationStore(request, repository)
-                # Branch is prepared independently; never bootstrap state as a side effect
-                # of construction or silently substitute a local store on an outage.
-                adapter = PinnedCoreAdapter(self.bundle.runtime, ".", store=store)
-                self.adapters[repository.lower()] = adapter
-            if not adapter.shared:
-                return {
-                    "status": "blocked",
-                    "reason": "local Core store cannot authorize remote effects",
-                }
+            adapter = self._adapter(repository)
+            native_binding = {
+                "action": action,
+                "pr_target": f"{repository.lower()}#{int(number)}",
+                "head": snapshot["head"],
+                "merge": snapshot.get("merge"),
+                "criteria": snapshot.get("criteria", snapshot.get("revision")),
+                "criteria_fingerprint": sha256_json(
+                    snapshot.get("criteria", snapshot.get("revision"))
+                ),
+                "review_revision": snapshot["review_revision"],
+                "revision": snapshot.get("revision"),
+                "queue_operation_id": operation.get("id"),
+                "source_targets": [row["target"] for row in snapshot.get("sources", [])],
+                "sources": snapshot.get("sources", []),
+            }
             spec = ActionSpec(
                 repository,
                 int(number),
@@ -370,9 +529,30 @@ class RuntimeBinding:
                 snapshot["review_revision"],
                 snapshot.get("base"),
                 blocking_labels=tuple(snapshot.get("labels") or []),
+                native_binding=native_binding,
             )
         except (KeyError, ValueError, TypeError, BindingError) as exc:
             return {"status": "blocked", "reason": f"Core binding unavailable: {exc}"}
+        # Exact same completed operation is idempotent; a different spec cannot
+        # borrow the old observation, including changed criteria or merge identity.
+        try:
+            ospec = adapter._spec(spec)
+            existing = adapter.store.read(adapter.target_fence_key(spec))
+            if existing is not None and existing.get("status") in {
+                "intent_recorded",
+                "submitted",
+                "uncertain",
+                "succeeded",
+                "denied",
+            }:
+                if existing.get("denial") or existing["status"] == "denied":
+                    return {"status": "blocked", "reason": "Core denied/no_fallback fence"}
+                if existing["operation_key"] == self.bundle.runtime.canonical_operation_key(ospec):
+                    return self._recover(adapter, existing, operation["owner"])
+                if existing["status"] != "succeeded":
+                    return {"status": "unknown", "reason": "prior Core spec remains unresolved"}
+        except Exception as exc:
+            return {"status": "blocked", "reason": f"Core read unavailable: {type(exc).__name__}"}
         result: dict[str, Any] = {}
 
         class NativePort:
@@ -384,10 +564,16 @@ class RuntimeBinding:
                 return "ok" if result.get("status") == "completed" else "unknown"
 
         outcome = submit_effect(adapter, NativePort(), spec, {}, holder=operation["owner"])
-        if outcome == "ok":
-            return result
+        if outcome in {"ok", "unknown"}:
+            try:
+                record = adapter.store.read(adapter.target_fence_key(spec))
+                recovered = self._recover(adapter, record, operation["owner"]) if record else {}
+            except Exception:
+                recovered = {}
+            if recovered.get("status") == "completed":
+                return {**result, **recovered}
         return {
-            "status": "unknown" if outcome == "unknown" else "blocked",
+            "status": "unknown" if outcome in {"ok", "unknown"} else "blocked",
             "reason": f"shared Core fence: {outcome}",
             "native_result": result,
         }

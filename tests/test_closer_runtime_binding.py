@@ -141,9 +141,7 @@ def test_actual_execute_uses_shared_core_and_retains_unknown_across_heads(bundle
     calls = []
     backend.initiate_verify = lambda *a: calls.append(a) or {"status": "completed"}
     op = {"owner": "one", "deadline": time.time() + 30}
-    assert (
-        backend.execute("Org/Repo#7", "post_merge_verify", dict(snap), op)["status"] == "completed"
-    )
+    assert backend.execute("Org/Repo#7", "post_merge_verify", dict(snap), op)["status"] == "unknown"
     assert binding.adapters["org/repo"].shared
     snap.update(head="b" * 40, revision="r2")
     assert backend.execute("Org/Repo#7", "post_merge_verify", dict(snap), op)["status"] == "unknown"
@@ -488,7 +486,8 @@ def test_real_merge_caller_keeps_native_guard_and_ac_hardblock(
     assert result["native_result"]["reason"] == "acceptance evidence changed" and not calls
     # A different exact target can proceed, with the unchanged guard CLI.
     monkeypatch.setattr(cd, "acceptance_ok", lambda *a: True)
-    assert backend.execute("o/r#2", "merge", snap, op)["status"] == "completed"
+    assert backend.execute("o/r#2", "merge", snap, op)["status"] == "unknown"
+    # Native success without independent readback remains fenced.
     assert Path(calls[0][1]).name == "merge_guard.py"
     assert calls[0][-3:] == ["--expected-head", "a" * 40, "--confirm-merge"]
 
