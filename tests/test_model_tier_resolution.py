@@ -1402,9 +1402,19 @@ def test_closer_legacy_modes_keep_neutral_provider_and_stage_policy(task_type):
 
 @pytest.mark.parametrize("task_type", ["closer_interpret", "closer_exception", "closer_repair"])
 @pytest.mark.parametrize("agent", ["codex", "gemini"])
-def test_closer_selected_profile_is_not_downgraded_by_legacy_mode(task_type, agent, tmp_path):
+def test_closer_selected_profile_is_not_downgraded_by_legacy_mode(
+    task_type, agent, tmp_path, monkeypatch
+):
     # The model/effort candidate set is neutral. A cheap/mid compatibility mode
     # cannot turn a selected exact Sol/Argon profile into the adapter's tier model.
+    if agent == "codex":
+        # This test inspects argv only; a CI worker needs no authenticated CLI.
+        # The sentinel fails if a future change accidentally executes it.
+        binary = tmp_path / "codex-argv-only"
+        binary.write_text("#!/bin/sh\nexit 99\n")
+        binary.chmod(0o700)
+        monkeypatch.setattr(adapters, "CODEX_PROFILE_BIN", binary)
+        monkeypatch.setattr(adapters, "CODEX_PROFILE_BIN_EXPLICIT", True)
     profiles = execution_profiles.profiles_for_agent(agent, transport="local")
     efforts = router.ROUTE_TABLE[task_type]["reasoning_efforts"]
     family = "gpt-6.1-sol" if agent == "codex" else "gemini-4-argon"
