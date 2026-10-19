@@ -176,6 +176,31 @@ def test_execute_exception_is_reconciled_not_retried(tmp_path):
     assert state["items"]["org/repo#1"]["operation"]["status"] == "uncertain"
 
 
+def test_pre_action_remote_read_failure_is_confirmed_not_started(tmp_path):
+    path = tmp_path / "queue.json"
+    target = "org/repo#1"
+    calls = []
+
+    def observe(_target):
+        return _snapshot("same", "merge")
+
+    def execute(*_args):
+        calls.append("pre_action_read")
+        return {
+            "status": "not_started",
+            "reason": "remote freshness unavailable",
+            "next_trigger": "targeted_remote_freshness_recheck",
+        }
+
+    first = _run(path, [target], observe, execute, owner="offline-round")
+    state = json.loads(path.read_text())
+    operation = state["items"][target]["operation"]
+    assert calls == ["pre_action_read"]
+    assert operation["status"] == "confirmed_not_started"
+    assert operation["next_trigger"] == "targeted_remote_freshness_recheck"
+    assert not first["stop_valid"]
+
+
 def test_completed_result_at_same_revision_is_preserved_without_repeat(tmp_path):
     path = tmp_path / "queue.json"
     calls = []
