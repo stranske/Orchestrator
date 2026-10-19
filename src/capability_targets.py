@@ -64,10 +64,18 @@ def _load_registry(path: Path) -> dict[str, Any]:
     return payload
 
 
-def get_binding(capability_version_id: str, *, registry_path: Path) -> dict[str, Any] | None:
-    """Return a detached copy of one target binding."""
-    row = _load_registry(Path(registry_path))["targets"].get(capability_version_id)
-    return json.loads(json.dumps(row)) if row else None
+def get_binding(capability_version_id: str, *, registry_path: Path, missing: Any = None) -> Any:
+    """Return a detached copy of one target binding.
+
+    A present but corrupt (non-mapping or falsy) row is returned as stored so
+    invocation guards can refuse it as invalid instead of mistaking it for a
+    missing binding. An absent row returns ``missing`` (by default ``None``);
+    callers can supply a sentinel to distinguish absence from a stored null.
+    """
+    targets = _load_registry(Path(registry_path))["targets"]
+    if capability_version_id not in targets:
+        return missing
+    return json.loads(json.dumps(targets[capability_version_id]))
 
 
 def _binding_path(registry_path: Path, capability_version_id: str) -> Path:
@@ -250,6 +258,25 @@ def _kill_switch_triggered(declared: Any, env: Mapping[str, str]) -> bool:
     return False
 
 
+def _valid_kill_switch(declared: Any) -> bool:
+    """Return whether a declared switch can actually be evaluated.
+
+    A malformed declaration must not silently behave like an inactive switch:
+    callers use this as a fail-closed eligibility guard.
+    """
+    if isinstance(declared, str):
+        return re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", declared.strip()) is not None
+    if isinstance(declared, Mapping):
+        name = declared.get("env")
+        value = declared.get("disabled_value", declared.get("value", "1"))
+        return (
+            isinstance(name, str)
+            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is not None
+            and not isinstance(value, (Mapping, list, tuple, set))
+        )
+    return False
+
+
 def _artifact_mapping(binding: Mapping[str, Any]) -> Mapping[str, Any]:
     artifact = binding.get("artifact")
     if isinstance(artifact, Mapping):
@@ -309,6 +336,8 @@ def _binding_artifact(binding: Mapping[str, Any]) -> tuple[Mapping[str, Any], bo
             return capability_compiler.validate_skill_package(Path(binding["artifact"])), False
         except Exception:
             return {}, True
+    if not isinstance(binding.get("artifact"), Mapping):
+        return {}, True
     return _artifact_mapping(binding), False
 
 
@@ -320,8 +349,17 @@ def _binding_ineligible(
     binding: Mapping[str, Any], now: int, env: Mapping[str, str] | None = None
 ) -> str | None:
     """Fail-closed refusal for a direct binding invocation, or None if eligible."""
-    if (binding.get("rollback") or {}).get("phase") == "pending":
-        return "rollback_pending"
+    if not isinstance(binding, Mapping):
+        return "artifact_invalid"
+    rollback = binding.get("rollback")
+    if rollback is not None:
+        # A rollback declaration that is not a mapping cannot prove no
+        # rollback is pending, so it refuses as pending rather than raising.
+        if not isinstance(rollback, Mapping) or rollback.get("phase") not in (
+            "applied",
+            "verified",
+        ):
+            return "rollback_pending"
     artifact, skill_invalid = _binding_artifact(binding)
     if skill_invalid:
         return "artifact_invalid"
@@ -341,6 +379,8 @@ def _binding_ineligible(
         artifact.get("kill_switch"),
         lifecycle.get("kill_switch"),
     ):
+        if declared is not None and not _valid_kill_switch(declared):
+            return "kill_switch"
         if _kill_switch_triggered(declared, env_map):
             return "kill_switch"
     return None
@@ -359,23 +399,37 @@ def _ledger_ineligible(
     The ledger is read raw (``create=False``, read-only); a missing file or
     missing row carries no ledger condition, while an unreadable ledger fails
     closed as ``ledger_unreadable`` and an unparseable expiry as ``expired``.
+    A non-mapping row for the binding's own capability is likewise
+    ``ledger_unreadable``; unrelated non-mapping rows are skipped.
+    Ledger keys equal their mapping row's ``capability_id``. Corrupt rows
+    have no fields, so their key is the only available capability identity.
+    Mapping rows are matched by version first, then by either the row's
+    ``capability_id`` field or its ledger key, so a drifted field cannot
+    hide the binding's own row from expiry/kill-switch/rollback checks.
     """
     if ledger_path is None or not Path(ledger_path).exists():
         return None
+    if not isinstance(binding, Mapping):
+        return "ledger_unreadable"
     try:
         import capabilities
 
         rows = capabilities.load(Path(ledger_path), create=False)
     except Exception:
         return "ledger_unreadable"
+    own_id = binding.get("capability_id")
     cap = None
-    for row in rows.values():
+    for key, row in rows.items():
         if not isinstance(row, Mapping):
+            # The binding's own row is unreadable: it cannot prove the row is
+            # eligible, so fail closed instead of treating it as absent.
+            if key == own_id:
+                return "ledger_unreadable"
             continue
         if row.get("capability_version_id") == binding.get("capability_version_id"):
             cap = row
             break
-        if cap is None and row.get("capability_id") == binding.get("capability_id"):
+        if cap is None and (row.get("capability_id") == own_id or key == own_id):
             cap = row
     if cap is None:
         return None
@@ -384,7 +438,12 @@ def _ledger_ineligible(
     if capabilities.capability_expired(cap, int(now)):
         return "expired"
     env_map: Mapping[str, str] = os.environ if env is None else env
-    if _kill_switch_triggered(cap.get("kill_switch"), env_map):
+    declared_switch = cap.get("kill_switch")
+    if declared_switch is not None and not _valid_kill_switch(declared_switch):
+        # As in the lifecycle guard, an unevaluable kill-switch declaration
+        # cannot prove the switch is not triggered, so it refuses.
+        return "kill_switch"
+    if _kill_switch_triggered(declared_switch, env_map):
         return "kill_switch"
     return None
 
@@ -403,8 +462,23 @@ def invoke_target(
 ) -> dict[str, Any]:
     """Run the actual target producer and consumer and retain their receipts."""
     now = int(timestamp or time.time())
-    current = _load_registry(Path(registry_path))["targets"].get(binding["capability_version_id"])
-    if not current or not current.get("enabled"):
+    if not isinstance(binding, Mapping) or not isinstance(
+        binding.get("capability_version_id"), str
+    ):
+        # A binding argument without its immutable version identity cannot be
+        # matched to a registry row, so it refuses instead of raising.
+        return {"matched": True, "invoked": False, "reason": "artifact_invalid"}
+    targets = _load_registry(Path(registry_path))["targets"]
+    version_id = binding["capability_version_id"]
+    if version_id not in targets:
+        return {"matched": False, "invoked": False, "reason": "binding_disabled"}
+    current = targets[version_id]
+    if not isinstance(current, Mapping):
+        # A present registry row that is not a mapping is corrupt, not disabled.
+        return {"matched": True, "invoked": False, "reason": "artifact_invalid"}
+    if current.get("capability_version_id") != version_id:
+        return {"matched": True, "invoked": False, "reason": "artifact_invalid"}
+    if not current.get("enabled"):
         return {"matched": False, "invoked": False, "reason": "binding_disabled"}
     ineligible = _binding_ineligible(current, now, env)
     if ineligible:
@@ -412,6 +486,18 @@ def invoke_target(
     ineligible = _ledger_ineligible(current, ledger_path, now, env)
     if ineligible:
         return {"matched": True, "invoked": False, "reason": ineligible}
+    invocations = current.get("invocations")
+    if (
+        current.get("kind") not in TARGET_KINDS
+        or current.get("artifact") is None
+        or not isinstance(invocations, list)
+        or not isinstance(current.get("binding_path"), str)
+        or not current.get("binding_path")
+    ):
+        # A binding without a known kind, artifact, usable invocation history,
+        # or binding destination refuses before any producer or writer runs.
+        # instead of raising KeyError downstream or after the producer runs.
+        return {"matched": True, "invoked": False, "reason": "artifact_invalid"}
     if not _matches(current, trigger):
         return {"matched": False, "invoked": False, "reason": "selector_mismatch"}
     supplied = dict(inputs or {})
@@ -637,6 +723,11 @@ def verify_rollback(binding: Mapping[str, Any], *, registry_path: Path) -> dict[
 
 
 def _selftest() -> None:
+    invalid_bindings: tuple[Any, ...] = (None, "corrupt", 17, ["corrupt"])
+    for malformed in invalid_bindings:
+        assert _binding_ineligible(malformed, 100, {}) == "artifact_invalid"
+    for rollback in ("pending", 123, ["pending"]):
+        assert _binding_ineligible({"rollback": rollback}, 100, {}) == "rollback_pending"
     # Invalid declarations refuse before Path/package matching, including direct
     # invocation callers that do not pass through the compiled-target lifecycle.
     invalid_artifacts: tuple[Any, ...] = (None, 17, {}, [])
@@ -663,6 +754,31 @@ def _selftest() -> None:
             predecessor="workflow:manual",
             lifecycle_policy={"mode": "shadow", "tasks_per_day": 1},
         )
+        ledger = root / "corrupt-ledger.json"
+        import capabilities
+
+        payload = {
+            "schema_version": capabilities.SCHEMA_VERSION,
+            "capabilities": {"unrelated": "corrupt"},
+        }
+        ledger.write_text(json.dumps(payload))
+        before = ledger.read_bytes()
+        assert _ledger_ineligible(binding, ledger, 100, {}) is None
+        assert ledger.read_bytes() == before
+        payload["capabilities"] = {binding["capability_id"]: "corrupt"}
+        ledger.write_text(json.dumps(payload))
+        assert _ledger_ineligible(binding, ledger, 100, {}) == "ledger_unreadable"
+        # A mapping row under the binding's key is still own-row even when its
+        # capability_id field has drifted away from that key.
+        drifted = {
+            "capability_id": "drifted-other-id",
+            "status": "active",
+            "expiry": 10**12,
+            "rollback_pending": {"reason": "selftest"},
+        }
+        payload["capabilities"] = {binding["capability_id"]: drifted}
+        ledger.write_text(json.dumps(payload))
+        assert _ledger_ineligible(binding, ledger, 100, {}) == "rollback_pending"
         result = invoke_target(
             binding,
             trigger={"task_type": plan["selector"]["value"][0]},

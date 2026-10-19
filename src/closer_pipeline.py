@@ -2120,13 +2120,19 @@ def _load(path: Path) -> dict[str, Any]:
 
 
 def _save(path: Path, doc: Mapping[str, Any]) -> None:
-    encoded = json.dumps(doc, ensure_ascii=False, allow_nan=False)
+    # Serialize once, compactly: the scheduler persists the whole state on
+    # every stage launch/completion, so re-encoding it pretty-printed for
+    # every write made large assignments quadratic in wall time. Readers
+    # only ever ``json.loads`` this file, so the layout is not a contract.
+    encoded = json.dumps(
+        doc, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")
+    )
     if len(encoded.encode()) > 8 * 1024 * 1024:
         raise ValueError("pipeline state exceeds 8 MiB; retain large evidence externally")
     fd, temp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(doc, stream, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False)
+            stream.write(encoded)
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())

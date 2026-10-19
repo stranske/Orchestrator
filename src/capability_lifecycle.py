@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -229,12 +230,20 @@ def _invocation_ineligible(
         return "rollback_pending"
     if capabilities.capability_expired(cap, int(now)):
         return "expired"
+    if binding is not None and not isinstance(binding, Mapping):
+        return "artifact_invalid"
     if binding is not None:
         artifact_expiry = capability_targets._binding_expires_at(binding)
         if artifact_expiry is not None and int(now) >= artifact_expiry:
             return "expired"
     env_map: Mapping[str, str] = os.environ if env is None else env
-    if capability_targets._kill_switch_triggered(cap.get("kill_switch"), env_map):
+    declared_switch = cap.get("kill_switch")
+    if declared_switch is not None and not capability_targets._valid_kill_switch(declared_switch):
+        # A kill-switch declaration that is neither the ``ENV=value`` string
+        # ``_record`` writes nor a mapping cannot prove the switch is not
+        # triggered, so it refuses as ``kill_switch`` rather than passing.
+        return "kill_switch"
+    if capability_targets._kill_switch_triggered(declared_switch, env_map):
         return "kill_switch"
     if binding is not None:
         return capability_targets._binding_ineligible(binding, int(now), env_map)
@@ -255,34 +264,65 @@ def invoke_compiled_target(
     """Invoke a matching real producer/consumer and write its version-exact edge."""
     now = int(timestamp or time.time())
     try:
-        cap = capabilities.load(Path(ledger_path), create=False).get(capability_id)
+        rows = capabilities.load(Path(ledger_path), create=False)
     except Exception:
         return {"matched": False, "invoked": False, "reason": "ledger_unreadable"}
-    if not cap:
+    if capability_id not in rows:
         raise ValueError(f"unknown capability: {capability_id}")
-    if expected_version_id is not None and cap.get("capability_version_id") != expected_version_id:
+    cap = rows[capability_id]
+    if not isinstance(cap, Mapping):
+        return {"matched": False, "invoked": False, "reason": "ledger_unreadable"}
+    status = cap.get("status")
+    if not isinstance(status, str) or status not in {
+        "wired",
+        "shadow",
+        "exercised",
+        "canary",
+        "active",
+    }:
+        return {"matched": False, "invoked": False, "reason": f"status:{status}"}
+    version_id = cap.get("capability_version_id")
+    if not isinstance(version_id, str) or not re.fullmatch(
+        r"capability-version:[0-9a-f]{32}", version_id
+    ):
+        # A corrupt row without its immutable version identity cannot be
+        # matched to a binding, so it refuses as unreadable, not a KeyError.
+        return {"matched": False, "invoked": False, "reason": "ledger_unreadable"}
+    if expected_version_id is not None and version_id != expected_version_id:
         return {"matched": False, "invoked": False, "reason": "selected_version_mismatch"}
-    if cap["status"] not in {"wired", "shadow", "exercised", "canary", "active"}:
-        return {"matched": False, "invoked": False, "reason": f"status:{cap['status']}"}
     ineligible = _invocation_ineligible(cap, None, now)
     if ineligible:
         return {"matched": True, "invoked": False, "reason": ineligible}
+    missing_binding = object()
     binding = capability_targets.get_binding(
-        cap["capability_version_id"], registry_path=Path(target_registry_path)
+        version_id, registry_path=Path(target_registry_path), missing=missing_binding
     )
-    if not binding:
+    if binding is missing_binding:
         raise ValueError("lifecycle version has no target binding")
+    if not isinstance(binding, Mapping):
+        return {"matched": True, "invoked": False, "reason": "artifact_invalid"}
     ineligible = _invocation_ineligible(cap, binding, now)
     if ineligible:
         return {"matched": True, "invoked": False, "reason": ineligible}
-    if cap["status"] == "canary":
-        limit = int((cap.get("lifecycle_policy") or {}).get("tasks_per_day") or 1)
-        recent = sum(
-            1
-            for row in binding.get("invocations") or []
-            if int(row.get("invoked_at") or 0) >= now - 86400
-            and row.get("lifecycle_stage") == "canary"
-        )
+    if status == "canary":
+        # The quota logic itself is unchanged for well-formed rows; a policy
+        # or invocation history that cannot be parsed cannot prove quota
+        # remains, so it refuses as exhausted instead of raising.
+        policy = cap.get("lifecycle_policy")
+        invocations = binding.get("invocations")
+        if (policy is not None and not isinstance(policy, Mapping)) or (
+            not isinstance(invocations, list)
+            or not all(isinstance(row, Mapping) for row in invocations)
+        ):
+            return {"matched": True, "invoked": False, "reason": "canary_quota_exhausted"}
+        try:
+            limit = int((policy or {}).get("tasks_per_day") or 1)
+            canary_rows = [row for row in invocations if row.get("lifecycle_stage") == "canary"]
+            if any("invoked_at" not in row for row in canary_rows):
+                return {"matched": True, "invoked": False, "reason": "canary_quota_exhausted"}
+            recent = sum(1 for row in canary_rows if int(row["invoked_at"]) >= now - 86400)
+        except (TypeError, ValueError, OverflowError):
+            return {"matched": True, "invoked": False, "reason": "canary_quota_exhausted"}
         if recent >= limit:
             return {"matched": True, "invoked": False, "reason": "canary_quota_exhausted"}
     result = capability_targets.invoke_target(
@@ -292,7 +332,7 @@ def invoke_compiled_target(
         ledger_path=Path(ledger_path),
         target_run_id=target_run_id,
         inputs=inputs,
-        lifecycle_stage=cap["status"],
+        lifecycle_stage=status,
         timestamp=now,
     )
     if result.get("invoked") and result.get("accepted"):
@@ -300,11 +340,11 @@ def invoke_compiled_target(
             return {**result, "accepted": False, "reason": "consumption_receipt_missing"}
         edge = feedback.record_capability_consumption(
             capability_id=capability_id,
-            capability_version_id=cap["capability_version_id"],
+            capability_version_id=version_id,
             source_run_id=f"capability-producer:{result['invocation_id']}",
             target_run_id=target_run_id,
             accepted=True,
-            producer=f"capability_lifecycle:{cap['status']}",
+            producer=f"capability_lifecycle:{status}",
             receipt_ref=result["consumer_ref"],
         )
         result["causal_edge"] = edge

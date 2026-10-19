@@ -1037,7 +1037,7 @@ def capability_expired(cap: Mapping[str, Any], now: int | None = None) -> bool:
     current = int(time.time()) if now is None else int(now)
     try:
         return current >= int(expiry)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return True
 
 
