@@ -4111,20 +4111,36 @@ def test_interrupted_reads_restart_without_promoting_unknown_assessment(tmp_path
         assert current["prior_invalid_stop_evidence"]["valid"] is False
 
 
-@pytest.mark.parametrize("status", ["queued", "running"])
+@pytest.mark.parametrize(
+    "stage,status",
+    [
+        ("prepare", "queued"),
+        ("prepare", "running"),
+        ("interpret", "queued"),
+        ("interpret", "running"),
+        ("exception", "running"),
+    ],
+)
+@pytest.mark.parametrize("changed_revision", [False, True])
 @pytest.mark.parametrize("barrier", [False, True])
-def test_interrupted_prepare_preserves_audited_wait_and_action_barrier(tmp_path, status, barrier):
+def test_interrupted_read_preserves_audited_wait_and_action_barrier(
+    tmp_path, stage, status, changed_revision, barrier
+):
     path = tmp_path / "pipeline.json"
     at, target, _inner, prior_barrier = changed_read_origin_fixture(path, legacy_barrier=barrier)
     state = closer_pipeline._load(path)
     old = next(iter(state["runs"].values()))
     row = old["targets"][target]
-    # Reproduce an interrupted next preparation, before its revision changed.
-    revision = old["recovered_invalid_stop"]["targets"][target]["revision"]
+    # Exercise an interrupted read both before and after fresh preparation.
+    revision = (
+        row["revision"]
+        if changed_revision
+        else old["recovered_invalid_stop"]["targets"][target]["revision"]
+    )
     row["revision"] = revision
     row["results"]["prepare"]["revision"] = revision
     row["results"]["prepare"]["snapshot"]["revision"] = revision
-    row.update(status=status, stage="prepare")
+    row.update(status=status, stage=stage)
     old.pop("receipt_summary")
     closer_pipeline._save(path, state)
     calls = []
@@ -4134,12 +4150,20 @@ def test_interrupted_prepare_preserves_audited_wait_and_action_barrier(tmp_path,
     for index in range(3):
         result = run(path, [target, f"fresh-{index}"], cb, now=lambda: at + index * 20)
         assert result.get("status") != "blocked"
-        if barrier:
+        if (
+            barrier
+            or changed_revision
+            or (status == "running" and stage in {"interpret", "exception"})
+        ):
             assert target not in calls
             current = next(iter(closer_pipeline._load(path)["runs"].values()))
             retained = current["targets"][target]
-            assert retained["recovery_barrier"]["prior_recovery_barrier"] == prior_barrier
-            assert retained["error"] == closer_pipeline.READ_INTERRUPTED_BARRIER_ERROR
+            assert retained["recovery_barrier"].get("prior_recovery_barrier") == prior_barrier
+            assert retained["error"] == (
+                closer_pipeline.READ_ORIGIN_BARRIER_ERROR
+                if changed_revision
+                else closer_pipeline.READ_INTERRUPTED_BARRIER_ERROR
+            )
         else:
             assert target in calls
 

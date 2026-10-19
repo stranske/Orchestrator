@@ -39,6 +39,17 @@ READ_INTERRUPTED_BARRIER_ERROR = "interrupted read lacks a verified terminal bou
 READ_BARRIER_TRIGGER = "reconcile_retained_read_before_retry"
 
 
+def _interrupted_read(previous: Mapping[str, Any], item: Mapping[str, Any]) -> bool:
+    """Recognize receipt-less reads without treating queued exception work as proven."""
+    return previous.get("receipt_summary") is None and (
+        (
+            item.get("status") in {"queued", "running"}
+            and item.get("stage") in {"prepare", "interpret"}
+        )
+        or (item.get("status") == "running" and item.get("stage") == "exception")
+    )
+
+
 def _canonical(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
 
@@ -818,11 +829,7 @@ def _audited_retained_wait(
                 and item.get("error") == PRELAUNCH_ROUTE_BUSY_ERROR
                 and failed_read_terminal_proven
             )
-            or (
-                summary is None
-                and item.get("status") in {"queued", "running"}
-                and item.get("stage") == "prepare"
-            )
+            or _interrupted_read(previous, item)
         )
         or item.get("known_completed_action") is True
         or item.get("provider_outcome_uncertain")
@@ -1330,13 +1337,8 @@ def _audited_prior_revision_wait(
         "external_event": "event_id",
     }.get(pending_kind if isinstance(pending_kind, str) else "")
     pending_evidence = item.get("pending_evidence")
-    interrupted_unstarted_read = (
-        previous.get("receipt_summary") is None
-        and status in {"queued", "running"}
-        and item.get("stage") == "prepare"
-    )
     recognized_read = (
-        interrupted_unstarted_read
+        _interrupted_read(previous, item)
         or (
             status == "deferred"
             and reason
@@ -1614,11 +1616,7 @@ def _expired_invalid_round_recovery(
         elif status == "completed":
             pass
         elif (
-            previous.get("receipt_summary") is None
-            and status in {"queued", "running"}
-            and (
-                stage in {"prepare", "interpret"} or (stage == "exception" and status == "running")
-            )
+            _interrupted_read(previous, item)
             and (no_action or retained_read_wait)
             and not item.get("provider_outcome_uncertain")
             and _valid_retained_act_barrier(
