@@ -303,6 +303,7 @@ def test_after_writer_fix_first_sets_failure_and_redispatches_verbatim(monkeypat
     assert out["status"] == "fix_first_redispatched"
     assert [row[2] for row in statuses] == ["pending", "failure"]
     assert raw in calls[0][3]
+    assert calls[0][-1] == 9
     assert "PR_URL=https://github.com/o/r/pull/9" in calls[0][3]
 
 
@@ -543,6 +544,7 @@ def test_production_repair_chain_preserves_agent_findings_and_round_budget(
                 "review_loop": True,
                 "review_round": number + 1,
                 "review_run_id": "root-run",
+                "continue_pr": 9,
             }
 
     accepted = final_verdict == "MERGE-WHEN-GREEN"

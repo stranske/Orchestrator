@@ -29,6 +29,8 @@ def dispatch_world(tmp_path, monkeypatch):
     monkeypatch.setattr(roles, "activate_dispatch_roles", lambda a, prompt, **k: {"prompt": prompt})
     monkeypatch.setattr(dispatcher, "_agent_runtime_prelude", lambda *_: "")
     monkeypatch.setattr(dispatcher, "_auth_prelude", lambda *_: "")
+    # This fixture exercises provisioning, not the separately tested GitHub read.
+    monkeypatch.setattr(dispatcher, "linked_open_prs", lambda _: [])
     monkeypatch.setattr(dispatcher.claims, "reap_stale", lambda: None)
     monkeypatch.setattr(dispatcher.claims, "claim", lambda *_: True)
     monkeypatch.setattr(dispatcher.claims, "release", lambda *_: None)

@@ -12,6 +12,7 @@ import dispatcher
 @pytest.fixture(autouse=True)
 def isolated_dispatcher_boundaries(tmp_path, monkeypatch):
     """A boundary regression may never launch a process or touch live runtime state."""
+    monkeypatch.setattr(dispatcher, "linked_open_prs", lambda _target: [])
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
     monkeypatch.setenv(dispatcher.credential_redaction.SECRET_FILES_ENV, "")
@@ -393,6 +394,7 @@ def test_main_delegate_preserves_profile_lineage_and_exit_status(tmp_path, monke
         "kwargs": {
             "task_type": "testgen",
             "profile_id": "profile-1",
+            "continue_pr": None,
             "influenced_by_role_run_ids": ["role-1", "role-2"],
         },
     }

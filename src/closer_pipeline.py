@@ -34,6 +34,7 @@ NONPASS_WAIT_SCHEMA = "closer-ordinary-nonpass-wait/v1"
 NONPASS_WAIT_PREFIX = "ordinary NON_PASS disposition retained: "
 READ_BARRIER_SCHEMA = "closer-unverified-read-barrier/v1"
 READ_BARRIER_ERROR = "expired read deferral lacks a verified terminal resource boundary"
+READ_ORIGIN_BARRIER_ERROR = "expired read retained a historical wait from another revision"
 READ_BARRIER_TRIGGER = "reconcile_retained_read_before_retry"
 
 
@@ -1264,22 +1265,151 @@ def _inherited_unstarted_wait_deferral(
     )
 
 
+def _valid_retained_act_barrier(
+    barrier: Any, history: list[dict[str, Any]], identity: Any, target: str
+) -> bool:
+    """Check an existing action barrier before retaining it inside a read barrier."""
+    if barrier is None:
+        return True
+    if (
+        not isinstance(barrier, Mapping)
+        or barrier.get("schema") != "closer-unverified-act-barrier/v1"
+        or not isinstance(barrier.get("source_run_id"), str)
+        or not barrier["source_run_id"]
+        or not isinstance(barrier.get("work_key"), str)
+        or not barrier["work_key"]
+        or any(
+            not isinstance(barrier.get(key), str)
+            or len(barrier[key]) != 64
+            or any(char not in "0123456789abcdef" for char in barrier[key])
+            for key in ("item_sha256", "act_result_sha256")
+        )
+    ):
+        return False
+    return any(
+        record.get("schema") == "closer-expired-invalid-round-recovery/v1"
+        and isinstance(record.get("targets"), Mapping)
+        and isinstance(record["targets"].get(target), Mapping)
+        and record.get("source_run_id") == barrier.get("source_run_id")
+        and record["targets"][target].get("item_sha256") == barrier.get("item_sha256")
+        and record["targets"][target].get("revision") == barrier.get("revision")
+        and record["targets"][target].get("identity") == barrier.get("identity") == identity
+        and record["targets"][target].get("work_key") == barrier.get("work_key")
+        and _digest(record["targets"][target].get("act_result")) == barrier.get("act_result_sha256")
+        for record in history
+    )
+
+
+def _audited_prior_revision_wait(
+    path: Path,
+    previous: Mapping[str, Any],
+    target: str,
+    item: Mapping[str, Any],
+    history: list[dict[str, Any]],
+    historical_now: float,
+    source_run_id: str,
+) -> bool:
+    """Prove only the old no-operation origin; never authorize current-revision work."""
+    results = item.get("results")
+    prepared = results.get("prepare") if isinstance(results, Mapping) else None
+    snapshot = prepared.get("snapshot") if isinstance(prepared, Mapping) else None
+    recovery = previous.get("recovered_invalid_stop")
+    anchors = recovery.get("targets") if isinstance(recovery, Mapping) else None
+    anchor = anchors.get(target) if isinstance(anchors, Mapping) else None
+    status, reason = item.get("status"), item.get("deferred_reason")
+    pending_kind = item.get("pending_kind")
+    pending_field = {
+        "ci": "check_run_id",
+        "async_operation": "operation_id",
+        "external_event": "event_id",
+    }.get(pending_kind if isinstance(pending_kind, str) else "")
+    pending_evidence = item.get("pending_evidence")
+    recognized_read = (
+        status == "deferred"
+        and reason
+        in {"deadline_exhausted", "worker_capacity", "provider_failure", "github_capacity"}
+    ) or (
+        status == "pending"
+        and pending_field is not None
+        and isinstance(pending_evidence, Mapping)
+        and isinstance(pending_evidence.get(pending_field), str)
+        and bool(pending_evidence[pending_field])
+    )
+    if (
+        not recognized_read
+        or item.get("stage") not in {"prepare", "interpret", "exception"}
+        or item.get("fresh_inner_wait_admission") is not True
+        or not isinstance(results, Mapping)
+        or not isinstance(prepared, Mapping)
+        or not isinstance(snapshot, Mapping)
+        or not isinstance(anchor, Mapping)
+        or not isinstance(anchor.get("revision"), str)
+        or not anchor["revision"]
+        or not isinstance(item.get("revision"), str)
+        or not item["revision"]
+        or anchor["revision"] == item.get("revision")
+        or prepared.get("revision") != item.get("revision")
+        or prepared.get("identity") != item.get("identity")
+        or snapshot.get("target") != target
+        or snapshot.get("revision") != item.get("revision")
+        or snapshot.get("head") != anchor.get("head")
+        or not _valid_retained_act_barrier(
+            item.get("recovery_barrier"), history, item.get("identity"), target
+        )
+    ):
+        return False
+    # This minimal view is used solely to validate the immutable old wait. It
+    # is not saved, supplied to a model, or passed to a current action callback.
+    origin = {
+        **item,
+        # This shape selects only the native immutable wait-proof validator.
+        # It says nothing about the validity of the current read's boundary.
+        "status": "deferred",
+        "deferred_reason": "deadline_exhausted",
+        "revision": anchor["revision"],
+        "results": {
+            **results,
+            "prepare": {
+                "revision": anchor["revision"],
+                "snapshot": {
+                    "target": target,
+                    "revision": anchor["revision"],
+                    "head": anchor.get("head"),
+                    "kind": snapshot.get("kind"),
+                    "wait_proof_only": True,
+                },
+            },
+        },
+    }
+    return _audited_retained_wait(
+        path, previous, target, origin, history, historical_now, source_run_id
+    )
+
+
 def _valid_read_recovery_barrier(
     target: str, item: Mapping[str, Any], history: list[dict[str, Any]]
 ) -> bool:
     """Retain an audited read barrier without authorizing any callback or retry."""
     barrier = item.get("recovery_barrier")
     results = item.get("results")
+    reason = barrier.get("reason") if isinstance(barrier, Mapping) else None
+    expected_error = (
+        READ_ORIGIN_BARRIER_ERROR
+        if reason == "historical_wait_revision_changed"
+        else READ_BARRIER_ERROR
+    )
     if (
         item.get("status") != "failed"
         or item.get("stage") not in {"prepare", "interpret", "exception"}
-        or item.get("error") != READ_BARRIER_ERROR
+        or item.get("error") != expected_error
         or item.get("deferred_next_trigger") != READ_BARRIER_TRIGGER
         or item.get("known_completed_action") is True
         or item.get("provider_outcome_uncertain")
         or not isinstance(results, Mapping)
         or not isinstance(barrier, Mapping)
         or barrier.get("schema") != READ_BARRIER_SCHEMA
+        or reason
+        not in (None, "terminal_resource_boundary_invalid", "historical_wait_revision_changed")
         or not isinstance(barrier.get("source_run_id"), str)
         or not barrier["source_run_id"]
         or any(
@@ -1299,10 +1429,24 @@ def _valid_read_recovery_barrier(
             and isinstance(row, Mapping)
             and row.get("item_sha256") == barrier.get("item_sha256")
             and row.get("recovery") == "quarantine_read"
-            and row.get("status") == "deferred"
+            and row.get("status")
+            in (
+                {"deferred", "pending"}
+                if reason == "historical_wait_revision_changed"
+                else {"deferred"}
+            )
             and row.get("stage") == item.get("stage")
-            and row.get("deferred_reason") == item.get("deferred_reason") == "deadline_exhausted"
+            and row.get("deferred_reason") == item.get("deferred_reason")
+            and (
+                reason == "historical_wait_revision_changed"
+                or row.get("deferred_reason") == "deadline_exhausted"
+            )
+            and row.get("pending_kind") == item.get("pending_kind")
+            and row.get("pending_evidence") == item.get("pending_evidence")
             and row.get("resource_evidence") == item.get("resource_evidence")
+            and barrier.get("prior_recovery_barrier") == row.get("recovery_barrier")
+            and (row.get("read_barrier_reason") or "terminal_resource_boundary_invalid")
+            == (reason or "terminal_resource_boundary_invalid")
             and all(
                 row.get(key) == item.get(key) == barrier.get(key)
                 for key in ("revision", "identity", "work_key")
@@ -1374,6 +1518,7 @@ def _expired_invalid_round_recovery(
     retryable: set[str] = set()
     waits: set[str] = set()
     quarantined: set[str] = set()
+    changed_wait_origins: set[str] = set()
     uncertain: set[str] = set()
     pending: set[str] = set()
     audited: dict[str, Any] = {}
@@ -1395,11 +1540,38 @@ def _expired_invalid_round_recovery(
         retained_read_wait = not no_action and _audited_retained_wait(
             path, previous, target, item, history, historical_now, run_id
         )
-        if (
+        prior_revision_wait = (
+            not no_action
+            and not retained_read_wait
+            and _audited_prior_revision_wait(
+                path, previous, target, item, history, historical_now, run_id
+            )
+        )
+        if prior_revision_wait:
+            # Quarantine the exact current read; an immutable old no-operation
+            # wait cannot authorize any callback after its revision changes.
+            expected.update(
+                value
+                for value in (
+                    f"premature_deadline_deferral:{target}",
+                    f"unverified_deadline_boundary:{target}",
+                    f"unverified_resource_deferral:{target}",
+                    f"unverified_provider_failure:{target}",
+                    f"unverified_github_capacity_deferral:{target}",
+                    f"unmatched_github_capacity_trigger:{target}",
+                )
+                if value in reasons
+            )
+            quarantined.add(target)
+            changed_wait_origins.add(target)
+            if status == "pending":
+                pending.add(target)
+        elif (
             status == "failed"
             and stage in {"prepare", "interpret", "exception"}
             and (
-                item.get("recovery_barrier") is not None or item.get("error") == READ_BARRIER_ERROR
+                item.get("recovery_barrier") is not None
+                or item.get("error") in {READ_BARRIER_ERROR, READ_ORIGIN_BARRIER_ERROR}
             )
         ):
             if not _valid_read_recovery_barrier(target, item, history):
@@ -1413,6 +1585,7 @@ def _expired_invalid_round_recovery(
             and stage in {"prepare", "interpret", "exception"}
             and (no_action or retained_read_wait)
             and item.get("deferred_reason") == "deadline_exhausted"
+            and not item.get("provider_outcome_uncertain")
         ):
             invalid_reason = f"unverified_deadline_boundary:{target}"
             inherited_unstarted_wait = (
@@ -1431,11 +1604,22 @@ def _expired_invalid_round_recovery(
                     )
                 )
             )
-            if premature_reason in reasons or invalid_retained_boundary:
+            if no_action and premature_reason in reasons:
+                # The round is now expired and this read retained no action.
+                # Audit the false old cutoff without authorizing a mutation.
+                if invalid_reason not in reasons:
+                    return False, set(), set(), set(), set(), {}
+                expected.update({premature_reason, invalid_reason})
+                retryable.add(target)
+            elif premature_reason in reasons or invalid_retained_boundary:
                 # The old stop remains invalid. Keep this exact read non-runnable
                 # rather than let its false deadline block disjoint fresh work.
                 recognized = {invalid_reason, premature_reason}.intersection(reasons)
                 if not recognized:
+                    return False, set(), set(), set(), set(), {}
+                if not _valid_retained_act_barrier(
+                    item.get("recovery_barrier"), history, item.get("identity"), target
+                ):
                     return False, set(), set(), set(), set(), {}
                 expected.update(recognized)
                 quarantined.add(target)
@@ -1739,6 +1923,19 @@ def _expired_invalid_round_recovery(
             material["restored_wait_source_sha256"] = _digest(original_item)
         material_sha256 = _digest(material)
         audited[target] = {
+            **(
+                {
+                    "recovery_barrier": item.get("recovery_barrier"),
+                    "read_barrier_reason": (
+                        "historical_wait_revision_changed"
+                        if target in changed_wait_origins
+                        else (item.get("recovery_barrier") or {}).get("reason")
+                        or "terminal_resource_boundary_invalid"
+                    ),
+                }
+                if target in quarantined and stage in {"prepare", "interpret", "exception"}
+                else {}
+            ),
             "item_sha256": _digest(original_item),
             "material_sha256": material_sha256,
             "status": status,
@@ -1785,8 +1982,13 @@ def _expired_invalid_round_recovery(
         fresh_material = {
             target: row
             for target, row in audited.items()
-            if row["status"] not in {"completed", "pending"}
-            and (target, row["material_sha256"]) not in recorded
+            if (
+                row["status"] not in {"completed", "pending"}
+                and (target, row["material_sha256"]) not in recorded
+            )
+            # A newly created read barrier pins this exact source run and row.
+            # Older identical material cannot satisfy that new origin pointer.
+            or (row["recovery"] == "quarantine_read" and row["status"] in {"deferred", "pending"})
         }
         history_entry = (
             dict(audit)
@@ -2229,7 +2431,9 @@ def _run_pipeline_impl(
             if recovery_audit is not None and previous is not None:
                 # Compact carry is a derived view, not a replacement for the
                 # audited preparation needed to reconcile an original operation.
-                for old_target in recovery_uncertain | recovered_wait_targets:
+                for old_target in (
+                    recovery_uncertain | recovered_wait_targets | recovery_quarantined
+                ):
                     latest[old_target] = recovery_audit.get("restored_wait_items", {}).get(
                         old_target, previous["targets"][old_target]
                     )
@@ -2262,7 +2466,11 @@ def _run_pipeline_impl(
                     item["fresh_inner_wait_admission"] = True
                 if recovery_audit is not None and old_target in recovery_quarantined:
                     audit_row = recovery_audit["targets"][old_target]
-                    if "recovery_barrier" not in item:
+                    prior_barrier = item.get("recovery_barrier")
+                    read_barrier = audit_row["recovery"] == "quarantine_read"
+                    if not isinstance(prior_barrier, Mapping) or (
+                        read_barrier and prior_barrier.get("schema") != READ_BARRIER_SCHEMA
+                    ):
                         item["recovery_barrier"] = {
                             "schema": (
                                 READ_BARRIER_SCHEMA
@@ -2276,10 +2484,21 @@ def _run_pipeline_impl(
                             "work_key": audit_row["work_key"],
                             "act_result_sha256": _digest(audit_row["act_result"]),
                         }
+                        if read_barrier:
+                            item["recovery_barrier"]["reason"] = audit_row["read_barrier_reason"]
+                            if prior_barrier is not None:
+                                item["recovery_barrier"]["prior_recovery_barrier"] = _bounded(
+                                    prior_barrier
+                                )
                     if item["recovery_barrier"].get("schema") == READ_BARRIER_SCHEMA:
                         item.update(
                             status="failed",
-                            error=READ_BARRIER_ERROR,
+                            error=(
+                                READ_ORIGIN_BARRIER_ERROR
+                                if item["recovery_barrier"].get("reason")
+                                == "historical_wait_revision_changed"
+                                else READ_BARRIER_ERROR
+                            ),
                             deferred_next_trigger=READ_BARRIER_TRIGGER,
                         )
                 if item.get("status") == "running":
