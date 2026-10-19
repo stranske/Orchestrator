@@ -3518,11 +3518,12 @@ def _run_pipeline_legacy(
     round_deadline_exception: type[BaseException] | None = None,
     round_capacity_exception: type[BaseException] | None = None,
     now: Callable[[], float] = time.time,
+    _terminal_boundary: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run the scheduler while guaranteeing its process lease is always released."""
     held: list[Any] = []
     try:
-        return _run_pipeline_impl(
+        receipt = _run_pipeline_impl(
             state_path,
             targets,
             prepare=prepare,
@@ -3541,6 +3542,12 @@ def _run_pipeline_legacy(
             now=now,
             _run_lock_ref=held,
         )
+        # Keep the process runlock across durable stop validation and this owner's
+        # alias cleanup. A successor must not observe a completed run while its
+        # still-live predecessor is between receipt persistence and advertisement release.
+        if _terminal_boundary is not None and held and not held[0].closed:
+            _terminal_boundary(receipt)
+        return receipt
     finally:
         if held:
             run_lock = held[0]
@@ -3624,21 +3631,26 @@ def run_pipeline(state_path: str | Path, targets: Iterable[str], **kwargs: Any) 
                     return original_act(target, ctx)
 
             kwargs["act"] = guarded_act
-            receipt = _run_pipeline_legacy(state_path, runnable, **kwargs)
-            # Preserve legacy's existing known asynchronous waits. Its advertisement
-            # ends only after the durable ledger validates those native continuation
-            # proofs. Scoped Core intents still require their COMPLETE receipt.
-            if resource_keys is not None and _validate_stop_legacy(
-                state_path, runnable, now=now
-            ).get("valid"):
-                closer_resources.release_legacy_boundary(
-                    closer_resources.scoped_root(state_path), owner
-                )
-            for target, row in receipt.get("targets", {}).items():
-                if row.get("status") == "completed":
-                    closer_resources.release_target(
-                        closer_resources.scoped_root(state_path), target, owner=owner
+
+            def terminal_boundary(receipt):
+                # Preserve legacy's existing known asynchronous waits. Its advertisement
+                # ends only after the durable ledger validates those native continuation
+                # proofs. Scoped Core intents still require their COMPLETE receipt.
+                if resource_keys is not None and _validate_stop_legacy(
+                    state_path, runnable, now=now
+                ).get("valid"):
+                    closer_resources.release_legacy_boundary(
+                        closer_resources.scoped_root(state_path), owner
                     )
+                for target, row in receipt.get("targets", {}).items():
+                    if row.get("status") == "completed":
+                        closer_resources.release_target(
+                            closer_resources.scoped_root(state_path), target, owner=owner
+                        )
+
+            receipt = _run_pipeline_legacy(
+                state_path, runnable, _terminal_boundary=terminal_boundary, **kwargs
+            )
             if fenced_rows:
                 receipt["targets"] = {**receipt.get("targets", {}), **fenced_rows}
                 receipt["scoped_rollback"] = {"fenced_targets": sorted(fenced_rows), "drainable": 0}

@@ -9,7 +9,9 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+ROOT = Path(__file__).resolve().parents[1]
+MODULES = ROOT / "src" if (ROOT / "src").is_dir() else ROOT
+sys.path.insert(0, str(MODULES))
 
 import closer_dispatcher as d  # noqa: E402
 import closer_evidence  # noqa: E402
@@ -132,6 +134,44 @@ def main():
         closer_resources.reserve = instrument(closer_resources.reserve)
         closer_resources.legacy_reserve = instrument(closer_resources.legacy_reserve)
 
+    if spec.get("observe_runlock"):
+        import fcntl
+
+        native_flock = fcntl.flock
+        runlock = Path(
+            str(d._pipeline_state_path(spec["state"], shadow=spec.get("shadow", True))) + ".runlock"
+        )
+
+        def observed_flock(handle, flags):
+            try:
+                return native_flock(handle, flags)
+            except BlockingIOError:
+                fd = handle if isinstance(handle, int) else handle.fileno()
+                if runlock.exists() and (os.fstat(fd).st_dev, os.fstat(fd).st_ino) == (
+                    runlock.stat().st_dev,
+                    runlock.stat().st_ino,
+                ):
+                    event("runlock_contested")
+                    (directory / "runlock.contested").touch()
+                raise
+
+        fcntl.flock = observed_flock
+
+    if spec.get("hold") == "release_boundary":
+        native_release = closer_resources.release_legacy_boundary
+
+        def held_release(*a, **kw):
+            barrier("release_boundary")
+            return native_release(*a, **kw)
+
+        closer_resources.release_legacy_boundary = held_release
+
+    # External campaign permits are a fixture boundary, like fake GitHub/offload.
+    # Never depend on a developer's ~/.codex automation being installed in CI.
+    d.Closer.campaign_admission = lambda self, target, snapshot, remaining: {
+        "allowed": True,
+        "timeout": remaining,
+    }
     d.GitHub = GitHub
     d._pipeline_capacity = lambda: {"io": 4, "low": 2, "exception": 1}
     d._closer_learned = lambda *_: None

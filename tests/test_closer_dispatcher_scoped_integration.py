@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -15,7 +16,9 @@ import closer_resources as resources
 import execution_profiles as profiles
 
 WORKER = Path(__file__).with_name("closer_dispatcher_scoped_worker.py")
-CLI = WORKER.parents[1] / "src" / "closer_dispatcher.py"
+ROOT = WORKER.parents[1]
+MODULES = ROOT / "src" if (ROOT / "src").is_dir() else ROOT
+CLI = MODULES / "closer_dispatcher.py"
 
 
 def start(tmp_path, name, **kw):
@@ -31,6 +34,7 @@ def start(tmp_path, name, **kw):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env={**os.environ, "HOME": str(tmp_path / "isolated-home"), "PATH": ""},
     )
 
 
@@ -411,3 +415,23 @@ def test_canonical_duplicate_legacy_targets_fail_before_any_nested_lock(tmp_path
     with pytest.raises(ValueError, match="canonically"):
         closer_pipeline.run_pipeline(tmp_path / "s", ["O/R#1", "o/r#1"], coordinator_mode="legacy")
     assert not (tmp_path / "s.coordination").exists()
+
+
+def test_legacy_runlock_covers_durable_boundary_and_owner_cleanup(tmp_path):
+    first = start(tmp_path, "a", target="one/repo#1", mode="legacy", hold="release_boundary")
+    second = None
+    try:
+        wait(tmp_path / "a" / "release_boundary.entered")
+        second = start(tmp_path, "b", target="two/repo#2", mode="legacy", observe_runlock=True)
+        marker = tmp_path / "b" / "runlock.contested"
+        until = time.time() + 10
+        while not marker.exists():
+            assert second.poll() is None, finish(second)
+            assert time.time() < until, "second legacy caller never contested the owned runlock"
+            time.sleep(0.01)
+        assert "prepare" not in events(tmp_path / "b")
+    finally:
+        (tmp_path / "a" / "release").touch()
+    assert finish(first)["targets"]["one/repo#1"]["status"] == "completed"
+    assert second is not None
+    assert finish(second)["targets"]["two/repo#2"]["status"] == "completed"
