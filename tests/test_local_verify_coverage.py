@@ -261,3 +261,45 @@ def test_changed_paths_and_candidate_copy_handle_rename_and_directories(monkeypa
     (worktree / "tests" / "nested" / "extra.py").write_text("nested = True\n")
     assert local_verify._copy_candidate_paths(worktree, destination, ["tests"]) == ["tests"]
     assert (destination / "tests" / "nested" / "extra.py").read_text() == "nested = True\n"
+
+
+def test_verify_reports_runner_errors_without_calling_the_overlay(monkeypatch, tmp_path):
+    monkeypatch.setattr(local_verify, "_changed_paths", lambda *_args: ["tests/test_feature.py"])
+    monkeypatch.setattr(
+        local_verify,
+        "_run",
+        lambda *_args: {"ok": False, "returncode": 1, "stdout_tail": "1 passed", "stderr_tail": ""},
+    )
+    monkeypatch.setattr(
+        local_verify,
+        "_pytest_failure_cause",
+        lambda _run: {"test_failure": False, "cause": "coverage floor", "remedy": "use --no-cov"},
+    )
+    result = local_verify.verify(tmp_path, test_cmd="pytest tests/test_feature.py")
+    assert result["verdict"] == "ERROR"
+    assert result["reason"] == "coverage floor"
+    assert result["red"] is None
+
+
+def test_verify_marks_a_red_overlay_invalid_when_candidate_test_was_not_copied(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(local_verify, "_changed_paths", lambda *_args: ["tests/test_feature.py"])
+    runs = iter(
+        [
+            {"ok": True, "returncode": 0, "stdout_tail": "green", "stderr_tail": ""},
+            {"ok": False, "returncode": 1, "stdout_tail": "red", "stderr_tail": ""},
+        ]
+    )
+    monkeypatch.setattr(local_verify, "_run", lambda *_args: next(runs))
+    monkeypatch.setattr(local_verify, "_extract_base", lambda *_args: None)
+    monkeypatch.setattr(local_verify, "_copy_candidate_paths", lambda *_args: [])
+    monkeypatch.setattr(
+        local_verify,
+        "_analyse_nodes",
+        lambda *_args: {"verdict": "PASS", "hollow_nodes": [], "counts": {"nodes": 1}},
+    )
+    result = local_verify.verify(tmp_path, test_cmd="pytest tests/test_feature.py")
+    assert result["verdict"] == "PASS"
+    assert result["demonstration_valid"] is False
+    assert "NOT A VALID DEMONSTRATION" in result["reason"]
