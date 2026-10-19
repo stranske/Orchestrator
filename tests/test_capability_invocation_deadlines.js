@@ -41,13 +41,19 @@ registered = lifecycle.register_compiled_target(
 cap_id = registered["capability"]["capability_id"]
 version_id = registered["capability"]["capability_version_id"]
 deadline = int(time.time()) + 3600
-ledger_deadline = deadline + (60 if case["earlier"] == "artifact" else 0)
-artifact_deadline = deadline + (60 if case["earlier"] == "ledger" else 0)
+
+def deadline_for(source):
+    return deadline if case["earlier"] in (source, "equal") else deadline + 60
+
 rows = json.loads(ledger.read_text())
-rows["capabilities"][cap_id]["expiry"] = ledger_deadline
+rows["capabilities"][cap_id]["expiry"] = deadline_for("ledger")
 ledger.write_text(json.dumps(rows))
 bindings = json.loads(registry.read_text())
-bindings["targets"][version_id]["artifact"]["lifecycle"]["expires_at"] = artifact_deadline
+stored = bindings["targets"][version_id]
+stored["artifact"]["lifecycle"]["expires_at"] = deadline_for("artifact")
+stored["artifact"]["expires_at"] = deadline_for("artifact_top_level")
+stored["lifecycle_policy"]["expires_at"] = deadline_for("policy_expires_at")
+stored["lifecycle_policy"]["expiry"] = deadline_for("policy_expiry")
 registry.write_text(json.dumps(bindings))
 binding = targets.get_binding(version_id, registry_path=registry)
 run_id = "workflow:deadline-boundary"
@@ -88,7 +94,10 @@ print(json.dumps({
 `;
 
 for (const entrypoint of ['compiled', 'direct']) {
-  for (const earlier of ['ledger', 'artifact', 'equal']) {
+  // Put each supported deadline first while every other deadline remains live.
+  for (const earlier of [
+    'ledger', 'artifact', 'artifact_top_level', 'policy_expires_at', 'policy_expiry', 'equal',
+  ]) {
     for (const offset of [-1, 0, 1]) {
       test(`${entrypoint}: ${earlier} deadline, offset ${offset}`, (t) => {
         const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'invocation-deadlines-'));
