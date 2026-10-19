@@ -7,6 +7,8 @@ It never performs network I/O; callers must supply authenticated, trusted events
 from __future__ import annotations
 
 import json
+import hashlib
+import re
 import time
 from pathlib import Path
 from typing import Any, Mapping
@@ -17,6 +19,18 @@ SCHEMA = "closer-change-feed/v1"
 KINDS = frozenset({"commit_head", "checks", "reviews", "labels_holds", "issues", "verifier"})
 MAX_EVENT_IDS = 10_000
 MAX_EVENT_BYTES = 128 * 1024
+SHA = re.compile(r"[0-9a-f]{40}")
+HEX_DIGEST = re.compile(r"[0-9a-f]{64}")
+
+PAYLOAD_FIELDS = {
+    "commit_head": {"head", "base", "head_branch", "head_repository"},
+    "checks": {"checks", "pending_check_run_ids", "pending_check_head"},
+    "reviews": {"review_revision", "active_threads", "threads"},
+    "labels_holds": {"labels", "label_events", "label_events_complete", "draft", "mergeable"},
+    "issues": {"sources"},
+    "verifier": {"verifier", "verifier_history_complete", "verifier_runs",
+                 "verifier_run_identity_unknown", "verifier_comment_excerpts"},
+}
 
 
 def _journal_path(state_path: Path) -> Path:
@@ -44,6 +58,19 @@ def _read_journal(path: Path) -> dict[str, Any]:
 def _atomic_write(path: Path, value: Mapping[str, Any]) -> None:
     # Queue lock is held by caller. Reuse the queue's fsync + replace semantics.
     closer_queue._atomic_write(path, value)
+
+
+def _local_revision(previous: Any, changes: Mapping[str, Any], head: Any) -> str:
+    current = [
+        {"kind": kind, "event_id": row.get("event_id"), "sequence": row.get("sequence"),
+         "head": row.get("head"), "payload": row.get("payload")}
+        for kind, row in changes.items()
+        if isinstance(row, Mapping) and row.get("head") == head
+    ]
+    current.sort(key=lambda row: row["kind"])
+    canonical = json.dumps({"previous_revision": previous, "changes": current},
+                           sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _validate_event(target: str, event: Mapping[str, Any]) -> dict[str, Any]:
@@ -74,13 +101,110 @@ def _validate_event(target: str, event: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(complete, bool) or not isinstance(missed, bool):
         raise ValueError("complete and missed_events must be booleans")
     copied = closer_queue._json_copy(dict(payload), limit=MAX_EVENT_BYTES)
+    unsupported = set(copied) - PAYLOAD_FIELDS[kind]
+    if unsupported:
+        raise ValueError(f"unsupported {kind} payload fields: {', '.join(sorted(unsupported))}")
     if "target" in copied and copied["target"] != target:
         raise ValueError("event payload target does not match requested target")
     if "head" in copied and copied["head"] != head:
         raise ValueError("event payload head does not match event binding")
+    _validate_payload(kind, copied, head)
     return {"source": source, "event_id": event_id, "kind": kind,
             "sequence": sequence, "head": head, "payload": copied,
             "complete": complete, "missed_events": missed}
+
+
+def _validate_payload(kind: str, payload: Mapping[str, Any], head: str) -> None:
+    """Validate category values so one event cannot impersonate another signal."""
+    def string_list(value: Any, name: str) -> None:
+        if not isinstance(value, list) or len(value) > 500 or any(
+            not isinstance(row, str) or len(row) > 500 for row in value
+        ):
+            raise ValueError(f"{name} must be a bounded list of strings")
+
+    if kind == "commit_head":
+        if "head" in payload and (not isinstance(payload["head"], str) or not SHA.fullmatch(payload["head"])):
+            raise ValueError("commit_head head must be a full commit SHA")
+        if "base" in payload and payload["base"] is not None and (
+            not isinstance(payload["base"], str) or not SHA.fullmatch(payload["base"])
+        ):
+            raise ValueError("commit_head base must be null or a full commit SHA")
+        for key in ("head_branch", "head_repository"):
+            if key in payload and payload[key] is not None and not isinstance(payload[key], str):
+                raise ValueError(f"{key} must be a string or null")
+        if payload.get("head_repository") and not re.fullmatch(r"[^/#]+/[^/#]+", payload["head_repository"]):
+            raise ValueError("head_repository must be owner/name")
+    elif kind == "checks":
+        if "checks" in payload and payload["checks"] not in (None, "SUCCESS", "FAILURE", "ERROR", "PENDING"):
+            raise ValueError("checks must be a recognized rollup state or null")
+        if "pending_check_run_ids" in payload:
+            ids = payload["pending_check_run_ids"]
+            if not isinstance(ids, list) or len(ids) > 100 or any(type(i) is not int or i <= 0 for i in ids):
+                raise ValueError("pending_check_run_ids must be positive integer IDs")
+        if "pending_check_head" in payload and payload["pending_check_head"] not in (None, head):
+            raise ValueError("pending_check_head must match the event head")
+    elif kind == "reviews":
+        if "review_revision" in payload and (
+            not isinstance(payload["review_revision"], str)
+            or not HEX_DIGEST.fullmatch(payload["review_revision"])
+        ):
+            raise ValueError("review_revision must be a SHA-256 digest")
+        if "active_threads" in payload and (type(payload["active_threads"]) is not int or not 0 <= payload["active_threads"] <= 1000):
+            raise ValueError("active_threads must be a bounded non-negative integer")
+        if "threads" in payload:
+            rows = payload["threads"]
+            if not isinstance(rows, list) or len(rows) > 100 or any(
+                not isinstance(row, dict) or not isinstance(row.get("id"), str)
+                or type(row.get("isResolved")) is not bool
+                or type(row.get("isOutdated")) is not bool
+                for row in rows
+            ):
+                raise ValueError("threads must contain bounded, validated review thread rows")
+    elif kind == "labels_holds":
+        if "labels" in payload:
+            string_list(payload["labels"], "labels")
+        if "label_events_complete" in payload and type(payload["label_events_complete"]) is not bool:
+            raise ValueError("label_events_complete must be boolean")
+        if "draft" in payload and type(payload["draft"]) is not bool:
+            raise ValueError("draft must be boolean")
+        if "mergeable" in payload and payload["mergeable"] not in (None, "MERGEABLE", "CONFLICTING", "UNKNOWN"):
+            raise ValueError("mergeable must be a recognized state or null")
+        if "label_events" in payload:
+            rows = payload["label_events"]
+            if not isinstance(rows, list) or len(rows) > 100 or any(
+                not isinstance(row, dict) or not isinstance(row.get("id"), str)
+                or not isinstance(row.get("label"), str)
+                for row in rows
+            ):
+                raise ValueError("label_events must contain bounded event rows")
+    elif kind == "issues":
+        rows = payload.get("sources")
+        if not isinstance(rows, list) or len(rows) > 8 or any(
+            not isinstance(row, dict) or not isinstance(row.get("target"), str)
+            or row.get("state") not in ("open", "closed")
+            or not isinstance(row.get("body", ""), str)
+            or not isinstance(row.get("labels", []), list)
+            or any(not isinstance(label, str) for label in row.get("labels", []))
+            for row in rows
+        ):
+            raise ValueError("sources must be a bounded list of validated issue rows")
+    elif kind == "verifier":
+        if "verifier" in payload:
+            marker = payload["verifier"]
+            if marker is not None and (
+                not isinstance(marker, dict)
+                or marker.get("verdict") not in ("PASS", "CONCERNS", "FAIL", "NON_PASS")
+                or not SHA.fullmatch(str(marker.get("head_sha", "")))
+                or not SHA.fullmatch(str(marker.get("evaluated_sha", "")))
+            ):
+                raise ValueError("verifier must be null or a merge-bound validated decision")
+        for key in ("verifier_history_complete", "verifier_run_identity_unknown"):
+            if key in payload and type(payload[key]) is not bool:
+                raise ValueError(f"{key} must be boolean")
+        for key in ("verifier_runs", "verifier_comment_excerpts"):
+            if key in payload and (not isinstance(payload[key], list) or len(payload[key]) > 100
+                                   or any(not isinstance(row, dict) for row in payload[key])):
+                raise ValueError(f"{key} must be a bounded list of objects")
 
 
 def apply_change(state_path: str | Path, target: str, event: Mapping[str, Any], *,
@@ -151,6 +275,10 @@ def apply_change(state_path: str | Path, target: str, event: Mapping[str, Any], 
             incomplete.discard(row["kind"])
             target_journal["incomplete"] = sorted(incomplete)
             target_journal["reconciliation_needed"] = bool(incomplete)
+        previous_revision = item.get("revision", evidence.get("revision"))
+        revision = _local_revision(previous_revision, remote, evidence.get("head"))
+        item["revision"] = revision
+        evidence["revision"] = revision
         closer_queue._atomic_write(path, state)
         journal["event_ids"] = (journal["event_ids"] + [row["event_id"]])[-MAX_EVENT_IDS:]
         _atomic_write(journal_path, journal)

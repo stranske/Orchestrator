@@ -23,7 +23,7 @@ def _state(path, *, head=HEAD, evidence=None):
 def _event(event_id, sequence, kind="checks", *, head=HEAD, payload=None, **extra):
     return {"trusted": True, "source": "authenticated-webhook", "target": TARGET,
             "event_id": event_id, "sequence": sequence, "kind": kind,
-            "head": head, "payload": payload or {"state": "success"}, **extra}
+            "head": head, "payload": payload or {"checks": "SUCCESS"}, **extra}
 
 
 def test_duplicate_events_are_idempotent(tmp_path):
@@ -34,8 +34,8 @@ def test_duplicate_events_are_idempotent(tmp_path):
     assert feed.apply_change(state, TARGET, event)["status"] == "duplicate"
     cached = feed.read_cached(state, TARGET)
     assert cached["snapshot"]["local_packet"] == {"status": "usable"}
-    assert cached["snapshot"]["state"] == "success"
-    assert cached["remote_changes"]["checks"]["payload"] == {"state": "success"}
+    assert cached["snapshot"]["checks"] == "SUCCESS"
+    assert cached["remote_changes"]["checks"]["payload"] == {"checks": "SUCCESS"}
     journal = json.loads(state.with_name("queue.json.changes.json").read_text())
     assert journal["event_ids"] == ["evt-1"]
 
@@ -43,10 +43,10 @@ def test_duplicate_events_are_idempotent(tmp_path):
 def test_out_of_order_and_head_mismatch_fail_closed(tmp_path):
     state = tmp_path / "queue.json"
     _state(state)
-    feed.apply_change(state, TARGET, _event("evt-2", 2, payload={"state": "failure"}))
-    result = feed.apply_change(state, TARGET, _event("evt-1", 1, payload={"state": "success"}))
+    feed.apply_change(state, TARGET, _event("evt-2", 2, payload={"checks": "FAILURE"}))
+    result = feed.apply_change(state, TARGET, _event("evt-1", 1, payload={"checks": "SUCCESS"}))
     assert result["status"] == "out_of_order"
-    assert feed.read_cached(state, TARGET)["snapshot"]["state"] == "failure"
+    assert feed.read_cached(state, TARGET)["snapshot"]["checks"] == "FAILURE"
     try:
         feed.apply_change(state, TARGET, _event("wrong-head", 3, head="b" * 40))
     except ValueError as exc:
@@ -114,3 +114,35 @@ def test_new_head_invalidates_old_head_dependent_changes(tmp_path):
     assert "checks" not in cached["remote_changes"]
     assert "checks" in cached["incomplete_categories"]
     assert cached["reconciliation_needed"] is True
+
+
+def test_category_allowlist_rejects_state_spoof_and_revision_payload(tmp_path):
+    state = tmp_path / "queue.json"
+    _state(state)
+    for event in (
+        _event("spoof-state", 1, kind="checks", payload={"state": "CLOSED"}),
+        _event("spoof-revision", 1, kind="checks", payload={"revision": "forged"}),
+    ):
+        try:
+            feed.apply_change(state, TARGET, event)
+        except ValueError as exc:
+            assert "unsupported" in str(exc)
+        else:
+            raise AssertionError("unsupported category field must be rejected")
+
+
+def test_applied_deltas_advance_stable_local_revision(tmp_path):
+    state = tmp_path / "queue.json"
+    _state(state, evidence={"revision": "base-revision"})
+    feed.apply_change(state, TARGET, _event("checks-1", 1))
+    after_first = closer_queue._read_state(state)["items"][TARGET]
+    revision_one = after_first["revision"]
+    assert revision_one == after_first["evidence"]["revision"]
+    assert revision_one != "base-revision"
+    feed.apply_change(state, TARGET, _event("checks-1", 1))
+    assert closer_queue._read_state(state)["items"][TARGET]["revision"] == revision_one
+    feed.apply_change(state, TARGET, _event("reviews-1", 1, kind="reviews",
+                                            payload={"active_threads": 0}))
+    after_second = closer_queue._read_state(state)["items"][TARGET]
+    assert after_second["revision"] == after_second["evidence"]["revision"]
+    assert after_second["revision"] != revision_one
