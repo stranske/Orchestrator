@@ -46,6 +46,8 @@ class OfflineDelivery:
             labels=[],
             verifier=None,
             verifier_history_complete=True,
+            head_branch="codex/issue-2-offline",
+            head_repository="owner/repo",
         )
         self.refresh()
         self.deadline = time.time() + 600
@@ -56,6 +58,16 @@ class OfflineDelivery:
             )
         self.archive = stream.getvalue()
         monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
+
+        # These lifecycle tests simulate routing. Real profile/pool execution is
+        # covered separately through test_closer_dispatcher_scoped_integration.
+        def semantic_route(route, invoke, *, load, **_kwargs):
+            try:
+                return invoke(route), route
+            finally:
+                adapter._release_route_load(route, load)
+
+        monkeypatch.setattr(adapter, "_execute_profile_route", semantic_route)
         monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "brain-state"))
         monkeypatch.setattr(claims, "claim", lambda *a, **kw: True)
         monkeypatch.setattr(claims, "release", lambda *a, **kw: True)

@@ -938,6 +938,8 @@ class Closer:
         assignment_guard_fn=None,
         seed_snapshots=None,
         local_first=False,
+        runtime_binding=None,
+        require_runtime_binding=False,
     ):
         self.gh = github
         self.state_path = Path(state_path)
@@ -960,6 +962,8 @@ class Closer:
         self.assignment_guard_fn = assignment_guard_fn
         self.seed_snapshots = seed_snapshots or {}
         self.local_first = local_first
+        self.runtime_binding = runtime_binding
+        self.require_runtime_binding = require_runtime_binding
 
     def _local_snapshot(self, target):
         cached = self.seed_snapshots.get(target)
@@ -1290,73 +1294,85 @@ class Closer:
         pr_target = fresh.get("pr_target", target)
         if action in {"collect_evidence", "review", "disposition", "repair"}:
             return self.worker(target, action, fresh, operation)
-        if action in {"initiate_verify", "post_merge_verify"}:
-            return self.initiate_verify(pr_target, fresh)
-        if action == "merge":
-            if not acceptance_ok(fresh, self.dispositions.get(target)):
-                return {"status": "blocked", "reason": "acceptance evidence changed"}
-            import paths
 
-            # The existing guard remains the sole terminal merge path. Bound its process;
-            # a timeout is an uncertain operation, reconciled before any retry.
-            timeout = max(1, int(operation["deadline"] - time.time()))
-            proc = self.run_fn(
-                [
-                    sys.executable,
-                    str(paths.MODULE_DIR / "merge_guard.py"),
-                    pr_target,
-                    "--expected-head",
-                    fresh["head"],
-                    "--confirm-merge",
-                ],
-                timeout=timeout,
-            )
-            try:
-                result = json.loads(proc.stdout)
-            except ValueError:
-                raise RuntimeError("merge guard outcome unknown; inspect remote state") from None
-            return {
-                "status": (
-                    "completed"
-                    if result.get("merge_executed") and not result.get("blocked")
-                    else "blocked"
-                ),
-                "result": result,
-            }
-        if action == "respond_review":
-            decision = self.dispositions[target]
-            if decision.get("review_revision") != fresh["review_revision"] or not evidence_file_ok(
-                decision["response"]
-            ):
-                return {"status": "stale", "reason": "review or integrated response changed"}
-            repo, number = pr_target.split("#")
-            body = Path(decision["response"]["path"]).read_text()
-            marker = f"<!-- closer-operation:{operation['id']} -->"
-            thread_ids = decision.get("resolve_threads", [])
-            active_ids = {t["id"] for t in fresh["threads"] if not t["isResolved"]}
-            if not isinstance(thread_ids, list) or not set(thread_ids).issubset(active_ids):
-                return {
-                    "status": "blocked",
-                    "reason": "integrated review thread identities invalid",
-                }
-            self.gh.api(
-                f"repos/{repo}/issues/{number}/comments",
-                method="POST",
-                fields={"body": body + "\n" + marker},
-            )
-            for thread in thread_ids:
-                query = (
-                    "mutation { resolveReviewThread(input:{threadId:"
-                    + json.dumps(thread)
-                    + "}) {thread{id isResolved}}}"
+        def native_effect():
+            if action in {"initiate_verify", "post_merge_verify"}:
+                return self.initiate_verify(pr_target, fresh)
+            if action == "merge":
+                if not acceptance_ok(fresh, self.dispositions.get(target)):
+                    return {"status": "blocked", "reason": "acceptance evidence changed"}
+                import paths
+
+                # The existing guard remains the sole terminal merge path. Bound its process;
+                # a timeout is an uncertain operation, reconciled before any retry.
+                timeout = max(1, int(operation["deadline"] - time.time()))
+                proc = self.run_fn(
+                    [
+                        sys.executable,
+                        str(paths.MODULE_DIR / "merge_guard.py"),
+                        pr_target,
+                        "--expected-head",
+                        fresh["head"],
+                        "--confirm-merge",
+                    ],
+                    timeout=timeout,
                 )
-                self.gh.api("graphql", method="POST", fields={"query": query}, resource="graphql")
-            return {"status": "completed", "operation_marker": marker}
-        if action == "close_source":
-            return self.close_sources(
-                pr_target, fresh, owner=operation["owner"], decision_target=target
-            )
-        return {"status": "blocked", "reason": f"unsupported action {action}"}
+                try:
+                    result = json.loads(proc.stdout)
+                except ValueError:
+                    raise RuntimeError(
+                        "merge guard outcome unknown; inspect remote state"
+                    ) from None
+                return {
+                    "status": (
+                        "completed"
+                        if result.get("merge_executed") and not result.get("blocked")
+                        else "blocked"
+                    ),
+                    "result": result,
+                }
+            if action == "respond_review":
+                decision = self.dispositions[target]
+                if decision.get("review_revision") != fresh[
+                    "review_revision"
+                ] or not evidence_file_ok(decision["response"]):
+                    return {"status": "stale", "reason": "review or integrated response changed"}
+                repo, number = pr_target.split("#")
+                body = Path(decision["response"]["path"]).read_text()
+                marker = f"<!-- closer-operation:{operation['id']} -->"
+                thread_ids = decision.get("resolve_threads", [])
+                active_ids = {t["id"] for t in fresh["threads"] if not t["isResolved"]}
+                if not isinstance(thread_ids, list) or not set(thread_ids).issubset(active_ids):
+                    return {
+                        "status": "blocked",
+                        "reason": "integrated review thread identities invalid",
+                    }
+                self.gh.api(
+                    f"repos/{repo}/issues/{number}/comments",
+                    method="POST",
+                    fields={"body": body + "\n" + marker},
+                )
+                for thread in thread_ids:
+                    query = (
+                        "mutation { resolveReviewThread(input:{threadId:"
+                        + json.dumps(thread)
+                        + "}) {thread{id isResolved}}}"
+                    )
+                    self.gh.api(
+                        "graphql", method="POST", fields={"query": query}, resource="graphql"
+                    )
+                return {"status": "completed", "operation_marker": marker}
+            if action == "close_source":
+                return self.close_sources(
+                    pr_target, fresh, owner=operation["owner"], decision_target=target
+                )
+            return {"status": "blocked", "reason": f"unsupported action {action}"}
+
+        if self.require_runtime_binding or self.runtime_binding is not None:
+            if self.runtime_binding is None:
+                return {"status": "blocked", "reason": "pinned shared Core binding required"}
+            return self.runtime_binding.execute(target, action, fresh, operation, native_effect)
+        return native_effect()  # deployed legacy invocation retains its native guards
 
     def initiate_verify(self, target, snapshot):
         if snapshot["state"] != "MERGED" or not SHA.fullmatch(str(snapshot.get("merge"))):
@@ -1512,19 +1528,43 @@ class Closer:
         import capacity
         import dispatcher
 
-        marker = capacity.shed_marker("codex")
-        if marker and marker.get("state") != "expired":
-            return {"status": "deferred", "reason": f"Codex capacity marker: {marker}"}
+        pipeline_reserved = profile_id is not None and action == "disposition"
+        repair_action = action == "repair"
         workspace = self.workspaces.get(target) or self.workspaces.get(target.split("#")[0])
         if not workspace or not Path(workspace).is_dir():
             return {"status": "blocked", "reason": "no explicit authorized repository workspace"}
         repair_plan = self.dispositions.get(target, {}).get("repair", {})
         repair = (
-            action == "repair"
+            repair_action
             and repair_plan.get("head") == snapshot.get("head")
             and bool(repair_plan.get("prompt"))
             and bool(repair_plan.get("paths"))
         )
+        if pipeline_reserved:
+            route = _validated_pipeline_exception_route(profile_id)
+            route_status = "available" if route else "unknown"
+        else:
+            route, route_status = _exception_route(
+                repair=repair, substantive=action == "disposition", with_status=True
+            )
+        if not route:
+            if route_status == "unknown":
+                return {
+                    "status": "deferred",
+                    "reason": "fresh usable capacity required",
+                    "next_trigger": "capacity refresh through existing controller",
+                }
+            for agent_name in _EXCEPTION_ELIGIBLE_AGENTS:
+                marker = capacity.shed_marker(agent_name)
+                if marker and marker.get("state") != "expired":
+                    return {
+                        "status": "deferred",
+                        "reason": f"{agent_name} capacity marker: {marker}",
+                    }
+            return {
+                "status": "deferred",
+                "reason": "no eligible exception agent capacity available",
+            }
         if repair:
             head = subprocess.run(
                 ["git", "-C", workspace, "rev-parse", "HEAD"],
@@ -1564,24 +1604,26 @@ class Closer:
             ):
                 return {"status": "blocked", "reason": "repair plan has unsafe paths"}
 
-        if self.offload_fn is None:
-            # Read the existing capacity report, never scan protected agent sessions here.
-            report = (
+        if self.offload_fn is None and not pipeline_reserved:
+            report_path = (
                 Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex/handoff"))
                 / "capacity.json"
             )
             try:
-                capacity_doc = json.loads(report.read_text())
-                seat = capacity_doc["agents"]["codex"]
-                if time.time() - capacity_doc["generated_at"] > 1800 or seat["state"] not in {
-                    "ok",
-                    "warn",
-                }:
-                    return {"status": "deferred", "reason": "fresh usable Codex capacity required"}
-            except (OSError, ValueError, KeyError):
+                capacity_doc = json.loads(report_path.read_text())
+                if time.time() - float(capacity_doc["generated_at"]) > 1800:
+                    return {"status": "deferred", "reason": "fresh usable capacity required"}
+                selected_agent = route["agent"]
+                seat = capacity_doc["agents"].get(selected_agent, {})
+                if seat.get("state") not in {"ok", "warn"}:
+                    return {
+                        "status": "deferred",
+                        "reason": f"fresh usable {selected_agent} capacity required",
+                    }
+            except (OSError, ValueError, KeyError, TypeError):
                 return {
                     "status": "deferred",
-                    "reason": "Codex capacity unknown; refresh through existing controller",
+                    "reason": "capacity unknown; refresh through existing controller",
                 }
 
         prompt = (
@@ -1682,17 +1724,87 @@ class Closer:
                     "next_trigger": admission.get("next_trigger"),
                 }
             remaining = admission["timeout"]
-        result = (self.offload_fn or dispatcher.offload)(
-            "codex",
-            prompt,
-            cwd=workspace,
-            mode="mid" if repair else "assess",
-            profile_id=profile_id or ("codex-5.6-terra-medium" if repair else "codex-6-luna-low"),
-            timeout=remaining,
-            isolate=repair,
-            task_type="mechanical" if repair else "review",
-            subject_id=target,
-            max_network_retries=0,
+        selected_agent = route["agent"]
+        selected_profile_id = route["profile_id"]
+        if profile_id and not pipeline_reserved:
+            import execution_profiles
+
+            explicit = execution_profiles.get_profile(profile_id)
+            if (
+                explicit
+                and str(explicit.get("agent", "")).casefold() == selected_agent
+                and _profile_exception_qualified(
+                    _fresh_capacity_report(), explicit, repair=repair_action
+                )
+            ):
+                selected_profile_id = profile_id
+        selected_mode = route.get("mode") or ("mid" if repair else "assess")
+
+        started = time.monotonic()
+
+        def invoke(chosen):
+            return (self.offload_fn or dispatcher.offload)(
+                chosen["agent"],
+                prompt,
+                cwd=workspace,
+                mode=chosen.get("mode") or selected_mode,
+                profile_id=chosen["profile_id"],
+                timeout=remaining,
+                isolate=True,
+                task_type=(
+                    "closer_repair"
+                    if repair
+                    else (
+                        "closer_exception"
+                        if pipeline_reserved or action == "disposition"
+                        else "closer_interpret"
+                    )
+                ),
+                subject_id=target,
+                max_network_retries=0,
+            )
+
+        if pipeline_reserved:
+            result = invoke(route)  # outer staged callback holds these exact pools
+        else:
+            import execution_profiles
+
+            explicit_profile = execution_profiles.get_profile(selected_profile_id)
+            route = {
+                **route,
+                "profile_id": selected_profile_id,
+                "pools": list(explicit_profile.get("capacity_pool_ids") or []),
+            }
+            result, route = _execute_profile_route(
+                route,
+                invoke,
+                lane="exception" if repair or action == "disposition" else "low",
+                load={},
+                deadline=operation["deadline"],
+                repair=repair,
+            )
+            selected_agent = route["agent"]
+            selected_profile_id = route["profile_id"]
+        result["_closer_elapsed_seconds"] = time.monotonic() - started
+        import closer_stage_feedback
+
+        closer_stage_feedback.record_stage(
+            result,
+            task_type=(
+                "closer_repair"
+                if repair
+                else (
+                    "closer_exception"
+                    if pipeline_reserved or action == "disposition"
+                    else "closer_interpret"
+                )
+            ),
+            target=target,
+            head=snapshot.get("head"),
+            agent=selected_agent,
+            profile_id=selected_profile_id,
+            basis={"revision": snapshot.get("revision"), "operation": operation.get("id")},
+            capacity_context=route.get("capacity"),
         )
         failure_details = str(result.get("error") or "") + "\n" + str(result.get("output") or "")
         if result.get("exit") != 0 and re.search(
@@ -1700,7 +1812,7 @@ class Closer:
             failure_details,
             re.I,
         ):
-            self.workers_unavailable = "requested Codex worker profile unavailable; inspect saved failure, no silent fallback"
+            self.workers_unavailable = f"requested {selected_agent} worker profile unavailable; inspect saved failure, no silent fallback"
         if result.get("exit") == 0:
             self.pending_integration[target] = {
                 "id": operation["id"],
@@ -1716,8 +1828,14 @@ class Closer:
 
     def reconcile(self, target, operation):
         """Unknown remote writes are never repeated just because the previous process died."""
-        s = self.gh.snapshot(target)
         action = operation.get("action")
+        if action in {"merge", "initiate_verify", "post_merge_verify"} and (
+            self.require_runtime_binding or self.runtime_binding is not None
+        ):
+            if self.runtime_binding is None:
+                return {"status": "blocked", "reason": "required runtime binding unavailable"}
+            return self.runtime_binding.reconcile(target, operation)
+        s = self.gh.snapshot(target)
         binding = operation.get("binding") or {}
         if not binding or binding.get("pr_target", target) != s.get("pr_target", target):
             return {"status": "unknown", "reason": "operation identity unavailable or changed"}
@@ -1806,6 +1924,83 @@ def _fresh_capacity_report():
         return None
 
 
+_EXCEPTION_ELIGIBLE_AGENTS = ("codex", "claude", "gemini", "cursor", "vibe", "muse")
+
+
+def _exception_effort_tier(repair: bool, substantive: bool = True) -> set[str]:
+    return {"medium", "high"} if repair or substantive else {"none", "minimal", "low"}
+
+
+def _profile_exception_qualified(
+    report, profile, *, repair: bool, substantive: bool = True
+) -> bool:
+    if not report or not profile:
+        return False
+    agent = str(profile.get("agent", "")).casefold()
+    if agent not in _EXCEPTION_ELIGIBLE_AGENTS:
+        return False
+    if report.get("agents", {}).get(agent, {}).get("state") not in {"ok", "warn"}:
+        return False
+    profile_id = profile["profile_id"]
+    if report.get("profiles", {}).get(profile_id, {}).get("state") not in {"ok", "warn"}:
+        return False
+    if profile.get("reasoning_effort") not in _exception_effort_tier(repair, substantive):
+        return False
+    pools = profile.get("capacity_pool_ids") or []
+    if not pools:
+        return False
+    return all(
+        report.get("pools", {}).get(pool, {}).get("state") in {"ok", "warn"} for pool in pools
+    )
+
+
+def _validated_pipeline_exception_route(profile_id: str):
+    import execution_profiles
+
+    profile = execution_profiles.get_profile(profile_id)
+    if not profile or not _profile_exception_qualified(
+        _fresh_capacity_report(), profile, repair=False
+    ):
+        return None
+    agent = str(profile.get("agent", "")).casefold()
+    return {
+        "agent": agent,
+        "profile_id": profile_id,
+        "pools": list(profile.get("capacity_pool_ids") or []),
+        "mode": "assess",
+    }
+
+
+def _pick_exception_profile(candidates, pick, repair: bool):
+    selected_id = (pick or {}).get("selected_profile_id")
+    return next((p for p in candidates if p["profile_id"] == selected_id), None)
+
+
+def _closer_learned(task_type):
+    import router
+
+    return (router.learned_ranks() or {}).get(task_type)
+
+
+def _qualified_capacity(report, available_profiles):
+    """Keep profile selection inside the already capacity-qualified candidate set."""
+    import execution_profiles
+
+    allowed = {p["profile_id"] for rows in available_profiles.values() for p in rows}
+    known = set(execution_profiles.PROFILE_REGISTRY) | set(report.get("profiles", {})) | allowed
+    return {
+        **report,
+        "profiles": {
+            key: (
+                report.get("profiles", {}).get(key, {})
+                if key in allowed
+                else {"state": "unknown", "reason": "profile outside qualified closer candidates"}
+            )
+            for key in known
+        },
+    }
+
+
 def _pipeline_low_route(*, load=None, unavailable_profiles=None, with_status=False):
     """Choose a currently usable low-effort profile through the existing router."""
     load = load if load is not None else {}
@@ -1862,13 +2057,14 @@ def _pipeline_low_route(*, load=None, unavailable_profiles=None, with_status=Fal
             status = "busy" if busy_unfailed_profile else "exhausted"
             return (None, status) if with_status else None
         pick = router.select_agent(
-            "review",
-            report,
+            "closer_interpret",
+            _qualified_capacity(report, available_profiles),
             only=eligible,
             allow_warn=True,
             profile_transport="offload",
             load=load or {},
             per_agent_cap=1,
+            learned=_closer_learned("closer_interpret"),
         )
         if not pick:
             status = "busy" if any(load.get(agent, 0) for agent in eligible) else "exhausted"
@@ -1877,7 +2073,10 @@ def _pipeline_low_route(*, load=None, unavailable_profiles=None, with_status=Fal
         if not candidates:
             return (None, "exhausted") if with_status else None
         load[pick["agent"]] = load.get(pick["agent"], 0) + 1
-        selected = candidates[0]
+        selected = _pick_exception_profile(candidates, pick, False)
+        if selected is None:
+            load[pick["agent"]] -= 1
+            return (None, "unknown") if with_status else None
         pools = list(selected.get("capacity_pool_ids") or [])
         for pool in pools:
             load["pool:" + pool] = load.get("pool:" + pool, 0) + 1
@@ -1890,8 +2089,222 @@ def _pipeline_low_route(*, load=None, unavailable_profiles=None, with_status=Fal
         return (route, "available") if with_status else route
 
 
+def _exception_route(
+    *, load=None, unavailable_profiles=None, repair=False, substantive=True, with_status=False
+):
+    """Choose a currently usable exception/repair profile through the existing router."""
+    load = load if load is not None else {}
+    import execution_profiles
+    import router
+
+    mode = "mid" if repair else "assess"
+    efforts = _exception_effort_tier(repair, substantive)
+    task_type = (
+        "closer_repair" if repair else "closer_exception" if substantive else "closer_interpret"
+    )
+
+    with _PIPELINE_ROUTE_LOCK:
+        report = _fresh_capacity_report()
+        if report is None:
+            return (None, "unknown") if with_status else None
+        unavailable_profiles = set(unavailable_profiles or ())
+        eligible = set()
+        available_profiles = {}
+        busy_unfailed_profile = False
+
+        for agent in _EXCEPTION_ELIGIBLE_AGENTS:
+            row = report["agents"].get(agent, {})
+            if row.get("state") not in {"ok", "warn"}:
+                continue
+            profiles = execution_profiles.profiles_for_agent(agent, transport="offload")
+            profiles = [
+                p
+                for p in profiles
+                if str(p.get("agent", "")).casefold() != "aider"
+                and p.get("reasoning_effort") in efforts
+                and p["profile_id"] not in unavailable_profiles
+                and report.get("profiles", {}).get(p["profile_id"], {}).get("state")
+                in {"ok", "warn"}
+                and bool(p.get("capacity_pool_ids"))
+                and all(
+                    report.get("pools", {}).get(pool, {}).get("state") in {"ok", "warn"}
+                    for pool in p.get("capacity_pool_ids", [])
+                )
+            ]
+            unfailed_profiles = profiles
+            profiles = [
+                p
+                for p in profiles
+                if not any(
+                    load.get("pool:" + pool, 0) for pool in (p.get("capacity_pool_ids") or [])
+                )
+            ]
+            if unfailed_profiles and not profiles:
+                busy_unfailed_profile = True
+            if profiles:
+                eligible.add(agent)
+                available_profiles[agent] = profiles
+
+        if not eligible:
+            status = "busy" if busy_unfailed_profile else "exhausted"
+            return (None, status) if with_status else None
+
+        pick = router.select_agent(
+            task_type,
+            _qualified_capacity(report, available_profiles),
+            only=eligible,
+            allow_warn=True,
+            profile_transport="offload",
+            load=load or {},
+            per_agent_cap=1,
+            learned=_closer_learned(task_type),
+        )
+        if not pick:
+            status = "busy" if any(load.get(agent, 0) for agent in eligible) else "exhausted"
+            return (None, status) if with_status else None
+
+        candidates = available_profiles.get(pick["agent"], [])
+        if not candidates:
+            return (None, "exhausted") if with_status else None
+
+        selected = _pick_exception_profile(candidates, pick, repair)
+        if not selected:
+            return (None, "exhausted") if with_status else None
+
+        load[pick["agent"]] = load.get(pick["agent"], 0) + 1
+        pools = list(selected.get("capacity_pool_ids") or [])
+        for pool in pools:
+            load["pool:" + pool] = load.get("pool:" + pool, 0) + 1
+
+        route = {
+            "agent": pick["agent"],
+            "profile_id": selected["profile_id"],
+            "capacity": pick,
+            "pools": pools,
+            "mode": mode,
+        }
+        return (route, "available") if with_status else route
+
+
 _PIPELINE_ROUTE_LOCK = threading.Lock()
 _PIPELINE_ROUTE_CONDITION = threading.Condition(_PIPELINE_ROUTE_LOCK)
+
+
+def _release_route_load(route, load):
+    with _PIPELINE_ROUTE_CONDITION:
+        for key in [route["agent"], *("pool:" + p for p in route.get("pools", []))]:
+            load[key] = max(0, load.get(key, 1) - 1)
+        _PIPELINE_ROUTE_CONDITION.notify_all()
+
+
+def _execute_profile_route(
+    route, invoke, *, lane, load, deadline, unavailable_profiles=(), repair=False
+):
+    """Reserve registry pools across processes, recheck cached capacity, invoke exactly once.
+
+    One slot per pool matches the existing router's exclusive pool-load admission. Low and
+    strong profiles share these same names. A held pool excludes every profile using it;
+    only a qualified profile on another pool can be selected. No provider/auth retry here.
+    """
+    import closer_resources
+    import execution_profiles
+
+    root = (
+        Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex/handoff"))
+        / "closer-profile-execution"
+    )
+    excluded = set(unavailable_profiles)
+    blocked_pools = set()
+    picker = _pipeline_low_route if lane == "low" else _exception_route
+    while route:
+        invoked = False
+        try:
+            with contextlib.ExitStack() as slots:
+                try:
+                    profile = execution_profiles.get_profile(route["profile_id"])
+                except ValueError as exc:
+                    raise closer_resources.ResourceBlocked("unknown execution profile") from exc
+                pools = sorted(set((profile or {}).get("capacity_pool_ids") or []))
+                if not pools or pools != sorted(set(route.get("pools") or [])):
+                    raise closer_resources.ResourceBlocked("profile pool binding changed")
+                for pool in pools:
+                    name = hashlib.sha256(pool.encode()).hexdigest()
+                    try:
+                        slots.enter_context(
+                            closer_resources.pool_slot(
+                                root, name, 1, deadline=min(deadline, time.time())
+                            )
+                        )
+                    except closer_resources.ResourceBlocked:
+                        blocked_pools.add(pool)
+                        raise
+                report = _fresh_capacity_report()
+                qualified = _profile_exception_qualified(
+                    report, profile, repair=repair, substantive=lane != "low"
+                )
+                if not qualified:
+                    raise closer_resources.ResourceBlocked(
+                        "capacity changed after pool reservation"
+                    )
+                # Do not catch provider failures: execution happened, and unknown costs stay unknown.
+                invoked = True
+                return invoke(route), route
+        except closer_resources.ResourceBlocked:
+            if invoked:
+                raise
+            excluded.add(route["profile_id"])
+        finally:
+            _release_route_load(route, load)
+        for agent in _EXCEPTION_ELIGIBLE_AGENTS:
+            for profile in execution_profiles.profiles_for_agent(agent, transport="offload"):
+                if blocked_pools.intersection(profile.get("capacity_pool_ids") or []):
+                    excluded.add(profile["profile_id"])
+        route, _status = picker(
+            load=load,
+            unavailable_profiles=excluded,
+            with_status=True,
+            **({"repair": repair} if lane != "low" else {}),
+        )
+        if route and route["profile_id"] in excluded:
+            _release_route_load(route, load)
+            raise closer_resources.ResourceBlocked("router returned an excluded execution profile")
+    raise closer_resources.ResourceBlocked("no qualified unreserved execution profile pool")
+
+
+def _prepared_resource_keys(target, prep, snapshot, workspaces):
+    """Bind mutation aliases to retained prepared evidence and authorized workspace mapping.
+
+    These keys confer no authority. The native queue still refreshes actual head, assignment,
+    claims and authorization immediately before an operation.
+    """
+    import closer_resources
+
+    if snapshot.get("target") != target or snapshot.get("revision") != prep.get("revision"):
+        raise closer_resources.ResourceBlocked("prepared snapshot identity mismatch")
+    keys = []
+    pr_target = snapshot.get("pr_target") or target
+    if snapshot.get("kind") != "issue":
+        if not SHA.fullmatch(snapshot.get("head") or ""):
+            raise closer_resources.ResourceBlocked("prepared PR head is missing")
+        if not TARGET.fullmatch(pr_target):
+            raise closer_resources.ResourceBlocked("prepared PR identity is missing")
+        keys.append("pr:" + pr_target)
+        branch = snapshot.get("head_branch")
+        repo = snapshot.get("head_repository")
+        if not repo or not branch:
+            raise closer_resources.ResourceBlocked("prepared branch is missing")
+        keys.append(f"branch:{repo}@{branch}")
+    sources = snapshot.get("sources")
+    if not isinstance(sources, list):
+        raise closer_resources.ResourceBlocked("prepared source inventory is missing")
+    for source in sources:
+        if not isinstance(source, dict) or not TARGET.fullmatch(source.get("target") or ""):
+            raise closer_resources.ResourceBlocked("prepared source identity is missing")
+        keys.append("issue:" + source["target"])
+    workspace = workspaces.get(target) or workspaces.get(target.split("#")[0])
+    if workspace:
+        keys.append("worktree:" + str(Path(workspace).resolve()))
+    return keys
 
 
 def _pipeline_capacity():
@@ -1925,16 +2338,17 @@ def _pipeline_capacity():
                 for pool in pools:
                     if report.get("pools", {}).get(pool, {}).get("state") in {"ok", "warn"}:
                         low_pools.add(pool)
-    # Exception work is admitted only through the current Codex assessment guard and
-    # existing campaign permits; the actual callback rechecks that admission.
-    codex = report["agents"].get("codex", {})
+    # Exception work is now admitted through any eligible agent with capability-qualified
+    # approved registered profiles. Check all eligible agents (excluding Aider).
     import execution_profiles
 
-    strong_profile = execution_profiles.default_codex_profile("closer")
-    strong_state = (
-        report.get("profiles", {}).get(strong_profile, {}).get("state", codex.get("state"))
+    exception = int(
+        any(
+            _profile_exception_qualified(report, profile, repair=False)
+            for agent_name in _EXCEPTION_ELIGIBLE_AGENTS
+            for profile in execution_profiles.profiles_for_agent(agent_name, transport="offload")
+        )
     )
-    exception = 1 if codex.get("state") in {"ok", "warn"} and strong_state in {"ok", "warn"} else 0
     return {"io": io_capacity, "low": min(4, len(low_pools)), "exception": exception}
 
 
@@ -2080,6 +2494,22 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         if packet:
             snap["base"] = packet.get("base")
         return snap, packet
+
+    def resource_keys(target, context):
+        import closer_resources
+
+        prep = context.get("prepare") or {}
+        ref = prep.get("snapshot_ref") or {}
+        try:
+            data = Path(ref["path"]).read_bytes()
+            if hashlib.sha256(data).hexdigest() != ref.get("sha256"):
+                raise ValueError("snapshot digest mismatch")
+            snapshot = json.loads(data)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise closer_resources.ResourceBlocked(
+                "retained operation snapshot unavailable"
+            ) from exc
+        return _prepared_resource_keys(target, prep, snapshot, backend.workspaces)
 
     def completed_retention_hold(
         result, target, prep, context, error, agent, profile, retained_evidence=None
@@ -2915,22 +3345,57 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 separators=(",", ":"),
             )[:9000]
         )
+        started = time.monotonic()
+        import closer_resources
+
         try:
-            result = dispatcher.offload(
-                route["agent"],
-                prompt,
-                mode="assess",
-                profile_id=route["profile_id"],
-                timeout=max(5, min(120, int(context["deadline"] - time.time()))),
-                task_type="review",
-                subject_id=target,
-                max_network_retries=0,
+            result, route = _execute_profile_route(
+                route,
+                lambda chosen: dispatcher.offload(
+                    chosen["agent"],
+                    prompt,
+                    mode="assess",
+                    profile_id=chosen["profile_id"],
+                    timeout=max(5, min(120, int(context["deadline"] - time.time()))),
+                    task_type="closer_interpret",
+                    subject_id=target,
+                    max_network_retries=0,
+                ),
+                lane="low",
+                load=route_load,
+                deadline=context["deadline"],
+                unavailable_profiles=failed_low_profiles,
             )
-        finally:
-            with route_lock:
-                route_load[route["agent"]] = max(0, route_load.get(route["agent"], 1) - 1)
-                for pool in route.get("pools", []):
-                    route_load["pool:" + pool] = max(0, route_load.get("pool:" + pool, 1) - 1)
+        except closer_resources.ResourceBlocked:
+            return {
+                "status": "deferred",
+                "reason": "worker_capacity",
+                "next_trigger": "capacity_recheck",
+                "resource_evidence": {
+                    "capacity": {
+                        "lane": "low",
+                        "available": 0,
+                        "required": 1,
+                        "sampled_at": time.time(),
+                    }
+                },
+                "classification": "capacity_deferred",
+                "substantive_needs": [],
+                "authority": False,
+            }
+        result["_closer_elapsed_seconds"] = time.monotonic() - started
+        import closer_stage_feedback
+
+        closer_stage_feedback.record_stage(
+            result,
+            task_type="closer_interpret",
+            target=target,
+            head=snap.get("head"),
+            agent=route["agent"],
+            profile_id=route["profile_id"],
+            basis=prep,
+            capacity_context=route.get("capacity"),
+        )
         output = str(result.get("output") or "")
         if result.get("outcome_uncertain") is True or result.get("retry_safe") is False:
             if (
@@ -3027,12 +3492,23 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                         sort_keys=True,
                     ).encode()
                 ).hexdigest()
+            auth_error = result.get("auth_required") is True or bool(
+                re.search(
+                    r"\b(?:authentication (?:failed|required)|unauthorized|invalid api key|expired (?:access )?token|http(?: status)?[ :=]+401)\b",
+                    "\n".join(str(result.get(k) or "") for k in ("error", "stderr_tail")),
+                    re.I,
+                )
+            )
             failure = {
                 "profile_id": route["profile_id"],
                 "agent": route["agent"],
                 "run_id": result.get("run_id"),
                 "exit": result.get("exit"),
-                "category": evidence.get("category") or "transport_error",
+                "category": (
+                    "authentication"
+                    if auth_error
+                    else evidence.get("category") or "transport_error"
+                ),
                 "subcategory": evidence.get("subcategory") or "unclassified_failure",
                 "evidence_hash": evidence_hash,
                 "is_authoritative": evidence.get("is_authoritative") is True,
@@ -3040,13 +3516,34 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             with route_lock:
                 failed_low_profiles.add(route["profile_id"])
                 low_profile_failures[route["profile_id"]] = failure
+                import execution_profiles
+
+                failed_pools = set(route.get("pools") or [])
+                for agent in _EXCEPTION_ELIGIBLE_AGENTS:
+                    for profile in execution_profiles.profiles_for_agent(
+                        agent, transport="offload"
+                    ):
+                        if failed_pools.intersection(profile.get("capacity_pool_ids") or []):
+                            failed_low_profiles.add(profile["profile_id"])
                 route_lock.notify_all()
             if run_drift:
                 with drift_lock:
                     drift_claimed = False
-            # Re-enter preparation/route admission for this same target. The
-            # failed profile is round-suppressed, so this is bounded by the
-            # finite set of existing eligible low profiles.
+            # Authentication failures require an external repair, never another invocation.
+            if any(
+                "auth" in str(failure.get(field, "")).lower()
+                for field in ("category", "subcategory")
+            ):
+                return {
+                    "status": "deferred",
+                    "reason": "provider_failure",
+                    "next_trigger": "provider authentication repaired outside this round",
+                    "resource_evidence": {"provider_failure": failure},
+                    "classification": "provider_failure",
+                    "substantive_needs": [],
+                    "authority": False,
+                }
+            # Pool aliases were suppressed before selecting another qualified provider.
             return interpret(target, context)
         with route_lock:
             route_lock.notify_all()
@@ -3111,6 +3608,17 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 needs = list(needs) + [
                     "evidence_bound_exception:" + str(integration.get("reason", "review"))
                 ]
+        closer_stage_feedback.record_stage(
+            result,
+            task_type="closer_interpret",
+            target=target,
+            head=snap.get("head"),
+            agent=route["agent"],
+            profile_id=route["profile_id"],
+            basis=prep,
+            validation=integration,
+            structurally_invalid=not valid and not incomplete_assessment,
+        )
         proposal_ref = None
         if valid:
             proposal_bytes = json.dumps(
@@ -3180,29 +3688,32 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             "packet_ref": prep.get("packet_ref"),
             "evidence_manifest": prep.get("evidence_summary", {}),
         }
-        import execution_profiles
-
-        strong_profile = execution_profiles.default_codex_profile("closer")
-        # Strong Codex work reserves its real shared pool under the same lock/load
-        # map used by low workers. Capacity lanes never double-count that pool.
-        cap = _fresh_capacity_report()
-        strong_row = (cap or {}).get("profiles", {}).get(strong_profile, {})
-        strong_pools = list(
-            (
-                strong_row.get("capacity_pool_ids")
-                or (execution_profiles.PROFILE_REGISTRY.get(strong_profile) or {}).get(
-                    "capacity_pool_ids"
-                )
-                or []
-            )
+        route, route_status = _exception_route(
+            load=route_load,
+            repair=False,
+            unavailable_profiles=failed_low_profiles,
+            with_status=True,
         )
-        with route_lock:
-            if not cap or strong_row.get("state") not in {"ok", "warn"} or not strong_pools:
-                raise RuntimeError("strong profile capacity became unknown before reservation")
-            if any(
-                (cap.get("pools", {}).get(pool) or {}).get("state") not in {"ok", "warn"}
-                for pool in strong_pools
-            ):
+        if not route:
+            if route_status == "busy":
+                occupied = max(
+                    (route_load.get(key, 0) for key in route_load if str(key).startswith("pool:")),
+                    default=0,
+                )
+                return {
+                    "status": "deferred",
+                    "reason": "worker_capacity",
+                    "resource_evidence": {
+                        "capacity": {
+                            "lane": "exception",
+                            "active": occupied,
+                            "limit": 1,
+                            "sampled_at": time.time(),
+                        }
+                    },
+                    "next_trigger": "shared exception pool becomes available",
+                }
+            if route_status == "unknown":
                 return {
                     "status": "deferred",
                     "reason": "worker_capacity",
@@ -3216,25 +3727,22 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     },
                     "next_trigger": "fresh shared-pool capacity snapshot",
                 }
-            occupied = max((route_load.get("pool:" + pool, 0) for pool in strong_pools), default=0)
-            if occupied:
-                return {
-                    "status": "deferred",
-                    "reason": "worker_capacity",
-                    "resource_evidence": {
-                        "capacity": {
-                            "lane": "exception",
-                            "active": occupied,
-                            "limit": 1,
-                            "sampled_at": time.time(),
-                        }
-                    },
-                    "next_trigger": "shared Codex pool becomes available",
-                }
-            for pool in strong_pools:
-                route_load["pool:" + pool] = route_load.get("pool:" + pool, 0) + 1
-        try:
-            result = backend.worker(
+            return {
+                "status": "deferred",
+                "reason": "worker_capacity",
+                "resource_evidence": {
+                    "capacity": {
+                        "lane": "exception",
+                        "available": 0,
+                        "required": 1,
+                        "sampled_at": time.time(),
+                    }
+                },
+                "next_trigger": "capacity_recheck",
+            }
+        result, route = _execute_profile_route(
+            route,
+            lambda chosen: backend.worker(
                 target,
                 "disposition",
                 exception_snapshot,
@@ -3243,17 +3751,20 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     "id": context.get("work_key", "pipeline-exception"),
                     "revision": context.get("revision"),
                 },
-                profile_id=strong_profile,
+                profile_id=chosen["profile_id"],
                 advisory_context={
                     **proposal,
                     "evidence": prep.get("evidence_summary", {}),
                     "packet_ref": prep.get("packet_ref"),
                 },
-            )
-        finally:
-            with route_lock:
-                for pool in strong_pools:
-                    route_load["pool:" + pool] = max(0, route_load.get("pool:" + pool, 1) - 1)
+            ),
+            lane="exception",
+            load=route_load,
+            deadline=context["deadline"],
+            unavailable_profiles=failed_low_profiles,
+        )
+        route_agent = route["agent"]
+        route_profile = route["profile_id"]
         worker_row = result.get("worker") if isinstance(result, dict) else None
         if isinstance(worker_row, dict):
             uncertain = _uncertain_worker(
@@ -3262,13 +3773,13 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 snapshot=exception_snapshot,
                 prep=prep,
                 context=context,
-                agent="codex",
-                profile=strong_profile,
+                agent=route_agent,
+                profile=route_profile,
             )
             if uncertain is not None:
                 return uncertain
         if isinstance(worker_row, dict) and worker_row.get("exit") == 0:
-            strong_json = _worker_proposal(worker_row, agent="codex")
+            strong_json = _worker_proposal(worker_row, agent=route_agent)
             if strong_json:
                 import closer_disposition
 
@@ -3293,6 +3804,22 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "reason": (result.get("reason") if isinstance(result, dict) else None)
                 or "strong_worker_unavailable",
             }
+        if isinstance(worker_row, dict):
+            import closer_stage_feedback
+
+            closer_stage_feedback.record_stage(
+                worker_row,
+                task_type="closer_exception",
+                target=target,
+                head=exception_snapshot.get("head"),
+                agent=route_agent,
+                profile_id=route_profile,
+                basis=prep,
+                validation=validated,
+                structurally_invalid=worker_row.get("exit") == 0
+                and not _worker_proposal(worker_row, agent=route_agent),
+                parent_run_id=(context.get("interpret", {}).get("actual") or {}).get("run_id"),
+            )
         retained_result = dict(result)
         if isinstance(worker_row, dict) and isinstance(worker_row.get("output"), str):
             # Keep the exact native response once, outside the bounded scheduling ledger.
@@ -3304,7 +3831,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             except OSError as error:
                 if worker_row.get("exit") == 0:
                     return completed_retention_hold(
-                        worker_row, target, prep, context, error, "codex", strong_profile
+                        worker_row, target, prep, context, error, route_agent, route_profile
                     )
                 raise
             retained_result["worker"] = {
@@ -3320,15 +3847,15 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 )
             except OSError as error:
                 return completed_retention_hold(
-                    worker_row, target, prep, context, error, "codex", strong_profile
+                    worker_row, target, prep, context, error, route_agent, route_profile
                 )
             validated = {key: validated.get(key) for key in ("status", "reason")}
         return {
             **({"validated_ref": validated_ref} if validated_ref else {}),
             "status": result.get("status"),
             "result": retained_result,
-            "requested_agent": "codex",
-            "requested_profile": strong_profile,
+            "requested_agent": route_agent,
+            "requested_profile": route_profile,
             "actual": _worker_actual(worker_row or {}),
             "authority": False,
             "validated": validated,
@@ -3354,6 +3881,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             assignment_guard_fn=backend.assignment_guard_fn,
             seed_snapshots={target: snap} if isinstance(snap, dict) else {},
             local_first=bool(isinstance(snap, dict) and snap.get("_local_cached")),
+            runtime_binding=backend.runtime_binding,
+            require_runtime_binding=backend.require_runtime_binding,
         )
         interpreted = full_interpretation(context.get("interpret", {}))
         if (
@@ -3446,7 +3975,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     strong.get("requested_agent"),
                     strong.get("requested_profile"),
                 )
-                original_proposal = _worker_proposal({**worker, "output": output}, agent="codex")
+                original_proposal = _worker_proposal(
+                    {**worker, "output": output},
+                    agent=strong.get("requested_agent") or "codex",
+                )
                 integration = closer_disposition.integrate_ordinary(
                     target,
                     snap,
@@ -3543,11 +4075,35 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         except CompletedResponseReadError as error:
             # This boundary precedes the inner queue and any guarded operation.
             return readback_hold(error, target, context.get("prepare", {}), context)
+        execute = current.execute
+        if (
+            getattr(args, "coordinator_mode", "legacy") == "resource_scoped"
+            or Path(str(pipeline_path) + ".coordination/reservations").exists()
+            or Path(str(pipeline_path) + ".scoped").exists()
+        ):
+            reserved_keys = set(resource_keys(target, context))
+            prepared_full, _packet = full_snapshot(context.get("prepare") or {})
+
+            def execute_bound(name, action, observed, operation):
+                import closer_resources
+
+                actual = _prepared_resource_keys(
+                    name, {"revision": observed.get("revision")}, observed, backend.workspaces
+                )
+                if observed.get("head") != prepared_full.get("head") or not set(actual).issubset(
+                    reserved_keys
+                ):
+                    raise closer_resources.ResourceBlocked(
+                        "actual operation changed prepared head/resource bindings"
+                    )
+                return current.execute(name, action, observed, operation)
+
+            execute = execute_bound
         receipt = closer_queue.run_round(
             action_state,
             [target],
             current.observe,
-            current.execute,
+            execute,
             reconcile=current.reconcile,
             # The pipeline owns a five-minute receipt reserve. Preserve the
             # callback cutoff while giving the inner queue the same full deadline.
@@ -3944,6 +4500,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
     pipeline = closer_pipeline.run_pipeline(
         pipeline_path,
         targets,
+        coordinator_mode=getattr(args, "coordinator_mode", "legacy"),
+        coordinator_contract_pin=getattr(args, "coordinator_contract_pin", None),
+        resource_keys=resource_keys,
+        coordination_admission=getattr(args, "_coordination_admission", None),
         prepare=prepare,
         interpret=(
             (
@@ -4001,6 +4561,9 @@ def main(argv=None):
     run.add_argument("--apply", action="store_true")
     run.add_argument("--workers", action="store_true")
     run.add_argument(
+        "--runtime-manifest", help="private pinned Runtime/Core binding (new launchers)"
+    )
+    run.add_argument(
         "--pipeline",
         action="store_true",
         help="run staged evidence and low-cost interpretation before the guarded queue",
@@ -4010,18 +4573,36 @@ def main(argv=None):
         action="store_true",
         help="collect staged evidence and bounded proposals without queue actions or model calls",
     )
+    run.add_argument("--coordinator-mode", choices=("legacy", "resource_scoped"), default="legacy")
+    run.add_argument(
+        "--coordinator-contract-pin",
+        help="JSON object pinning scoped schema/layout/pipeline_schema",
+    )
     run.add_argument("--dispositions")
     run.add_argument("--workspaces", help="JSON mapping repo to authorized local workspace")
     validate = sub.add_parser("validate-stop")
     validate.add_argument("--state", required=True)
     validate.add_argument("--assignment")
     validate.add_argument("--shadow", action="store_true")
+    validate.add_argument("--round-id", help="exact resource-scoped ACTION C round receipt")
     args = p.parse_args(argv)
     import closer_queue
 
     if args.command == "validate-stop":
         targets = targets_from_assignment(args.assignment) if args.assignment else None
         pipeline_path = _pipeline_state_path(args.state, shadow=args.shadow)
+        import closer_resources
+
+        if args.round_id or closer_resources.scoped_root(pipeline_path).exists():
+            import closer_pipeline
+
+            result = (
+                closer_pipeline.validate_stop_scoped(pipeline_path, args.round_id, targets)
+                if args.round_id
+                else {"valid": False, "stop_valid": False, "reasons": ["scoped_round_id_required"]}
+            )
+            print(json.dumps(result, sort_keys=True))
+            return 0 if result.get("valid") else 78
         if pipeline_path.is_file():
             import closer_pipeline
 
@@ -4037,15 +4618,64 @@ def main(argv=None):
             print(json.dumps(result, sort_keys=True))
             return 78
         result = closer_queue.validate_stop(args.state, assignment_targets=targets)
+        unknown = closer_resources.unknown_reservations(closer_resources.scoped_root(pipeline_path))
+        if unknown:
+            result = {
+                **result,
+                "valid": False,
+                "stop_valid": False,
+                "continuation_required": True,
+                "unknown_reservations": unknown,
+                "reasons": [*result.get("reasons", []), "unresolved_resource_reservations"],
+            }
         print(json.dumps(result, sort_keys=True))
         return 0 if result.get("valid") else 78
     if not 10 <= args.budget_seconds <= 2700 or not 1 <= args.max_workers <= 4:
         p.error("budget must be 10..2700 seconds; workers 1..4")
+    if args.coordinator_mode == "resource_scoped" and not (args.pipeline or args.shadow):
+        p.error("resource_scoped requires --pipeline or --shadow")
+    if args.coordinator_contract_pin:
+        try:
+            args.coordinator_contract_pin = json.loads(args.coordinator_contract_pin)
+            if not isinstance(args.coordinator_contract_pin, dict):
+                raise ValueError("pin must be an object")
+        except ValueError as exc:
+            p.error(str(exc))
+    if args.coordinator_mode == "resource_scoped":
+        import closer_pipeline
+        import closer_resources
+
+        required_pin = {
+            "schema": closer_resources.CONTRACT_SCHEMA,
+            "layout": closer_resources.LAYOUT,
+            "pipeline_schema": closer_pipeline.SCHEMA,
+            "coordination_gates": 1,
+        }
+        if json.dumps(args.coordinator_contract_pin, sort_keys=True) != json.dumps(
+            required_pin, sort_keys=True
+        ):
+            p.error(
+                "resource_scoped requires the complete current --coordinator-contract-pin: "
+                + json.dumps(required_pin)
+            )
     assignment_rows = assignment_rows_from_file(args.assignment)
     targets = list(assignment_rows)
+    import closer_resources
+
+    pipeline_path = _pipeline_state_path(args.state, shadow=args.shadow)
+    with closer_resources.coordination_admission(
+        pipeline_path, targets, mode=args.coordinator_mode
+    ) as admission:
+        args._coordination_admission = admission
+        return _main_admitted(args, p, assignment_rows, targets)
+
+
+def _main_admitted(args, p, assignment_rows, targets):
+    import closer_queue
+
     deadline = time.time() + args.budget_seconds + 300
     budget_admission = None
-    if Path(args.state).exists():
+    if args._coordination_admission.runnable and Path(args.state).exists():
         try:
             previous_state = closer_queue._read_state(Path(args.state))
         except Exception as exc:
@@ -4091,8 +4721,15 @@ def main(argv=None):
             raise RuntimeError("scoped blocker inventory unreadable; preserve owners") from exc
 
     blockers = read_blockers()
+    runtime_binding = None
+    if args.runtime_manifest:
+        from closer_runtime_binding import binding_from_manifest
+
+        runtime_binding = binding_from_manifest(args.runtime_manifest)
     backend = Closer(
         GitHub(deadline=deadline),
+        runtime_binding=runtime_binding,
+        require_runtime_binding=args.runtime_manifest is not None,
         state_path=args.state,
         apply=args.apply,
         workers=args.workers,
@@ -4121,9 +4758,28 @@ def main(argv=None):
         result = _run_staged_pipeline(args, targets, backend, deadline)
         import closer_pipeline
 
-        validation = closer_pipeline.validate_stop(
-            _pipeline_state_path(args.state, shadow=args.shadow), assignment_targets=targets
-        )
+        if args.coordinator_mode == "resource_scoped":
+            validation = closer_pipeline.validate_stop_scoped(
+                _pipeline_state_path(args.state, shadow=args.shadow),
+                result.get("round_id"),
+                targets,
+            )
+            result["action_c"] = {
+                "round_id": result.get("round_id"),
+                "validate_stop_args": [
+                    "validate-stop",
+                    "--state",
+                    args.state,
+                    "--round-id",
+                    result.get("round_id"),
+                    *(["--shadow"] if args.shadow else []),
+                ],
+                "native_cleanup_performed": False,
+            }
+        else:
+            validation = closer_pipeline.validate_stop(
+                _pipeline_state_path(args.state, shadow=args.shadow), assignment_targets=targets
+            )
         result["validation"] = validation
         if budget_admission is not None:
             result["budget_admission"] = budget_admission
@@ -4133,16 +4789,66 @@ def main(argv=None):
         # Inventory only: no claims, provider calls, queue writes, or scheduling changes.
         print(json.dumps({"inventory": [backend.observe(t) for t in targets]}, sort_keys=True))
         return 0
-    result = closer_queue.run_round(
-        args.state,
-        targets,
-        backend.observe,
-        backend.execute,
-        reconcile=backend.reconcile,
-        deadline=deadline,
-        receipt_reserve_seconds=PIPELINE_RECEIPT_RESERVE_SECONDS,
-        max_workers=args.max_workers,
-    )
+    import closer_resources
+
+    # Old non-staged callers must cooperate with the same stable target gates too.
+    # Fresh native observations supply exact alias reservations in either mode.
+    # Read-only inventory above remains available.
+    with contextlib.ExitStack() as gates:
+        held = {}
+        runnable = []
+        for target in sorted(targets, key=closer_resources.canonical_target):
+            try:
+                gates.enter_context(
+                    closer_resources.admission_gate(
+                        args._coordination_admission,
+                        _pipeline_state_path(args.state),
+                        target,
+                        mode="legacy",
+                    )
+                )
+                runnable.append(target)
+            except closer_resources.ResourceBlocked:
+                held[target] = "resource_contested"
+        root = closer_resources.scoped_root(_pipeline_state_path(args.state))
+        fenced, runnable = closer_resources.rollback_fence(
+            _pipeline_state_path(args.state), runnable
+        )
+        held.update({target: row.get("deferred_reason") for target, row in fenced.items()})
+        owner = f"raw-legacy:{os.getpid()}:{threading.get_ident()}:{time.time_ns()}"
+
+        def execute_reserved(target, action, observed, operation):
+            keys = [
+                *closer_resources.default_resource_keys(target),
+                *_prepared_resource_keys(
+                    target, {"revision": observed.get("revision")}, observed, backend.workspaces
+                ),
+            ]
+            with closer_resources.legacy_reserve(
+                root, keys, target=target, owner=owner, deadline=deadline
+            ):
+                return backend.execute(target, action, observed, operation)
+
+        if runnable:
+            result = closer_queue.run_round(
+                args.state,
+                runnable,
+                backend.observe,
+                execute_reserved,
+                reconcile=backend.reconcile,
+                deadline=deadline,
+                receipt_reserve_seconds=PIPELINE_RECEIPT_RESERVE_SECONDS,
+                max_workers=args.max_workers,
+            )
+            if result.get("stop_valid"):
+                closer_resources.release_legacy_boundary(root, owner)
+        else:
+            result = {"stop_valid": False, "valid": False}
+        if held:
+            result.update(stop_valid=False, valid=False, held=held)
+        unknown = closer_resources.unknown_reservations(root)
+        if unknown:
+            result.update(stop_valid=False, valid=False, unknown_reservations=unknown)
     print(json.dumps(result, sort_keys=True))
     return 0 if result.get("stop_valid") else 78
 

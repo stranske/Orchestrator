@@ -14,10 +14,13 @@ import json
 import math
 import os
 import tempfile
+import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
+
+import closer_resources
 
 SCHEMA = "closer-pipeline/v1"
 UNBOUND_UNCERTAIN_PROVIDER_ERROR = "provider_outcome_uncertainty_without_valid_bound_run"
@@ -501,6 +504,7 @@ def _bounded(value: Any, *, limit: int = 128 * 1024) -> Any:
 
 
 AUDIT_ARCHIVE_SCHEMA = "closer-invalid-stop-audit-archive/v1"
+NATIVE_WAIT_AUDIT_SCHEMA = "closer-native-wait-continuation-audit/v1"
 
 
 def _audit_archive_dir(path: Path) -> Path:
@@ -571,7 +575,9 @@ def _resolved_audit_history(path: Path, previous: Mapping[str, Any]) -> list[dic
         raise ValueError("invalid pipeline audit history")
     archived = _archived_history(path, previous.get("invalid_stop_archive"))
     if archived and (
-        not local or local[0].get("schema") != "closer-expired-invalid-round-recovery/v1"
+        not local
+        or local[0].get("schema")
+        not in {"closer-expired-invalid-round-recovery/v1", NATIVE_WAIT_AUDIT_SCHEMA}
     ):
         raise ValueError("pipeline audit archive lost its origin")
     return local[:1] + archived + local[1:] if archived else local
@@ -730,6 +736,90 @@ def _legacy_failed_act_wait_proof(path: Path, target: str, item: Mapping[str, An
         and item.get("error") == "act returned unsupported or missing status"
         and _retained_blocked_act_wait_proof(path, target, item)
     )
+
+
+def _validated_wait_audit_origin(history, target, item):
+    """Find the immutable origin for an already native-validated retained wait."""
+    results = item.get("results")
+    act = results.get("act") if isinstance(results, Mapping) else None
+    if (
+        not isinstance(act, Mapping)
+        or not isinstance(item.get("identity"), str)
+        or not item["identity"].strip()
+        or not isinstance(item.get("revision"), str)
+        or not item["revision"]
+    ):
+        return None
+    for record in history:
+        if not isinstance(record, Mapping):
+            continue
+        if record.get("schema") not in {
+            "closer-expired-invalid-round-recovery/v1",
+            NATIVE_WAIT_AUDIT_SCHEMA,
+        }:
+            continue
+        source = record.get("source_run_id")
+        rows = record.get("targets")
+        row = rows.get(target) if isinstance(rows, Mapping) else None
+        digest = row.get("item_sha256") if isinstance(row, Mapping) else None
+        if (
+            isinstance(source, str)
+            and bool(source.strip())
+            and isinstance(digest, str)
+            and len(digest) == 64
+            and all(char in "0123456789abcdef" for char in digest)
+            and row.get("recovery") == "validated_inner_wait"
+            and row.get("act_result") == act
+            and row.get("revision") == item.get("revision")
+            and row.get("identity") == item.get("identity")
+        ):
+            return {"previous_run_id": source, "previous_item_sha256": digest}
+    return None
+
+
+def _native_wait_origin_record(path, target, item, previous, source_run_id, prior_stop, now):
+    """Record a current observed no-operation boundary; never label it expired."""
+    if (
+        item.get("known_completed_action") is True
+        or item.get("provider_outcome_uncertain")
+        or item.get("recovery_barrier") is not None
+        or not _legacy_failed_act_wait_proof(path, target, item)
+    ):
+        return None
+    try:
+        act = _bounded(item["results"]["act"], limit=32 * 1024)
+        row = {
+            "item_sha256": _digest(item),
+            "status": item.get("status"),
+            "stage": item.get("stage"),
+            "revision": item.get("revision"),
+            "identity": item.get("identity"),
+            "work_key": item.get("work_key"),
+            "error": item.get("error"),
+            "resource_evidence": item.get("resource_evidence"),
+            "provider_outcome_uncertain": item.get("provider_outcome_uncertain"),
+            "recovery_barrier": item.get("recovery_barrier"),
+            "act_result": act,
+            "act_receipt_sha256": _digest(act["queue_receipt"]),
+            "recovery": "validated_inner_wait",
+        }
+        return _bounded(
+            {
+                "schema": NATIVE_WAIT_AUDIT_SCHEMA,
+                "boundary": "validated_nonmutating_native_wait",
+                "acceptance_authority": False,
+                "source_run_id": source_run_id,
+                "source_created": previous.get("created"),
+                "source_deadline": previous.get("deadline"),
+                "source_assignment": list(previous.get("assignment", [])),
+                "recorded_at": now(),
+                "prior_stop": prior_stop,
+                "targets": {target: row},
+            },
+            limit=512 * 1024,
+        )
+    except (ValueError, TypeError, KeyError):
+        return None
 
 
 def _historical_validated_wait_result(
@@ -2120,6 +2210,9 @@ def _load(path: Path) -> dict[str, Any]:
 
 
 def _save(path: Path, doc: Mapping[str, Any]) -> None:
+    fence = closer_resources.fence_for(path)
+    if fence is not None:
+        fence()  # scoped mode: a stale or expired lease holder must not commit
     encoded = json.dumps(doc, ensure_ascii=False, allow_nan=False)
     if len(encoded.encode()) > 8 * 1024 * 1024:
         raise ValueError("pipeline state exceeds 8 MiB; retain large evidence externally")
@@ -2130,6 +2223,8 @@ def _save(path: Path, doc: Mapping[str, Any]) -> None:
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
+        if fence is not None:
+            fence()  # serialization/fsync may have crossed the lease deadline
         os.replace(temp, path)
         dfd = os.open(path.parent, os.O_RDONLY)
         try:
@@ -2381,6 +2476,11 @@ def _run_pipeline_impl(
                     "metrics": {"capacity_samples": [], "peak_active": {}},
                 },
             )
+            try:
+                origin_history = _resolved_audit_history(path, previous) if previous else []
+            except (ValueError, OSError):
+                # Unavailable immutable history cannot establish a wait origin.
+                origin_history = []
             if prior_invalid_stop_evidence is not None:
                 run["prior_invalid_stop_evidence"] = prior_invalid_stop_evidence
                 if recovered_wait_targets and previous is not None:
@@ -2409,8 +2509,47 @@ def _run_pipeline_impl(
                                 else None
                             )
                         )
+                        available_origins = []
+                        if isinstance(recovery_audit, Mapping) and isinstance(
+                            recovery_audit.get("history_entry"), Mapping
+                        ):
+                            available_origins.append(recovery_audit["history_entry"])
+                        available_origins.extend(origin_history)
+                        origin = _validated_wait_audit_origin(available_origins, target, old_item)
+                        if origin is None and (
+                            not recovery_audit or recovery_audit.get("native_wait_provenance_only")
+                        ):
+                            observed = _native_wait_origin_record(
+                                path, target, old_item, previous, previous_run_id, prior_stop, now
+                            )
+                            if observed is not None:
+                                if recovery_audit:
+                                    recovery_audit["history_entry"]["targets"].update(
+                                        observed["targets"]
+                                    )
+                                else:
+                                    recovery_audit = {
+                                        "history_entry": observed,
+                                        "native_wait_provenance_only": True,
+                                    }
+                                origin = _validated_wait_audit_origin(
+                                    [recovery_audit["history_entry"]], target, old_item
+                                )
+                        if origin is None:
+                            return {
+                                "schema": "closer-pipeline-receipt/v1",
+                                "authority": False,
+                                "status": "blocked",
+                                "reason": "validated_wait_audit_origin_unavailable",
+                                "target": target,
+                                "continuation_required": True,
+                                "finished_at": now(),
+                                "targets": {},
+                            }
+                        if origin["previous_run_id"] == previous_run_id:
+                            origin = {"previous_item_sha256": origin["previous_item_sha256"]}
                         wait_records[target] = {
-                            "previous_item_sha256": _digest(previous["targets"][target]),
+                            **origin,
                             "restored_wait_view": old_item is not previous["targets"][target],
                             "previous_error": old_item.get("error"),
                             "revision": old_item.get("revision"),
@@ -2431,12 +2570,6 @@ def _run_pipeline_impl(
                         "targets": wait_records,
                     }
             if previous is not None:
-                try:
-                    origin_history = _resolved_audit_history(path, previous)
-                except (ValueError, OSError):
-                    # The ordinary archive-staging error path below reports the
-                    # unavailable history; it cannot authorize origin reuse.
-                    origin_history = []
                 retained_read_targets = {
                     target
                     for target, item in previous.get("targets", {}).items()
@@ -3492,7 +3625,7 @@ def _run_pipeline_impl(
         return receipt
 
 
-def run_pipeline(
+def _run_pipeline_legacy(
     state_path: str | Path,
     targets: Iterable[str],
     *,
@@ -3510,11 +3643,12 @@ def run_pipeline(
     round_deadline_exception: type[BaseException] | None = None,
     round_capacity_exception: type[BaseException] | None = None,
     now: Callable[[], float] = time.time,
+    _terminal_boundary: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run the scheduler while guaranteeing its process lease is always released."""
     held: list[Any] = []
     try:
-        return _run_pipeline_impl(
+        receipt = _run_pipeline_impl(
             state_path,
             targets,
             prepare=prepare,
@@ -3533,6 +3667,12 @@ def run_pipeline(
             now=now,
             _run_lock_ref=held,
         )
+        # Keep the process runlock across durable stop validation and this owner's
+        # alias cleanup. A successor must not observe a completed run while its
+        # still-live predecessor is between receipt persistence and advertisement release.
+        if _terminal_boundary is not None and held and not held[0].closed:
+            _terminal_boundary(receipt)
+        return receipt
     finally:
         if held:
             run_lock = held[0]
@@ -3542,21 +3682,142 @@ def run_pipeline(
                 run_lock.close()
 
 
+def run_pipeline(state_path: str | Path, targets: Iterable[str], **kwargs: Any) -> dict[str, Any]:
+    """Run the scheduler. ``coordinator_mode`` is ``legacy`` (default; one round lock and one
+    shared ledger) or ``resource_scoped`` (opt-in; per-target leases and shards, see
+    ``closer_resources.run_scoped``). Unset, it reads ``ORCH_CLOSER_COORDINATOR_MODE``."""
+    mode = closer_resources.resolve_mode(kwargs.pop("coordinator_mode", None))
+    contract_pin = kwargs.pop("coordinator_contract_pin", None)
+    admission = kwargs.pop("coordination_admission", None)
+    if mode == "legacy":
+        if contract_pin is not None:
+            raise ValueError("coordinator_contract_pin applies to resource_scoped mode only")
+        assigned = list(targets)
+        canonical = [closer_resources.canonical_target(t) for t in assigned]
+        if len(set(canonical)) != len(canonical):
+            raise ValueError("targets must be unique when compared canonically")
+        resource_keys = kwargs.pop("resource_keys", None)
+        kwargs.pop("pool_lease", None)
+        now = kwargs.get("now", time.time)
+        owner = f"legacy:{os.getpid()}:{threading.get_ident()}:{now()}"
+        with contextlib.ExitStack() as gates:
+            held_rows = {}
+            gated_targets = []
+            for target in sorted(assigned, key=closer_resources.canonical_target):
+                try:
+                    gates.enter_context(
+                        closer_resources.admission_gate(
+                            admission, state_path, target, mode="legacy"
+                        )
+                    )
+                    gated_targets.append(target)
+                except closer_resources.ResourceBlocked:
+                    held_rows[target] = closer_resources._fenced_row("resource_contested")
+            fenced_rows, runnable = closer_resources.rollback_fence(state_path, gated_targets)
+            fenced_rows.update(held_rows)
+            if not runnable:
+                return closer_resources.legacy_refusal_receipt(
+                    state_path, assigned, fenced_rows, float(kwargs.get("deadline", 0)), now
+                )
+            original_act = kwargs["act"]
+
+            def guarded_act(target, ctx):
+                if (
+                    resource_keys is None
+                    and not closer_resources.scoped_root(state_path).exists()
+                    and not closer_resources.unknown_reservations(
+                        closer_resources.scoped_root(state_path)
+                    )
+                ):
+                    return original_act(target, ctx)
+                if resource_keys is None:
+                    with closer_resources.mutation_reservation(
+                        state_path,
+                        target,
+                        ctx,
+                        None,
+                        owner=owner,
+                        deadline=kwargs["deadline"],
+                        now=now,
+                    ):
+                        return original_act(target, ctx)
+                keys = [
+                    *closer_resources.default_resource_keys(target),
+                    *resource_keys(target, ctx),
+                ]
+                with closer_resources.legacy_reserve(
+                    closer_resources.scoped_root(state_path),
+                    keys,
+                    target=target,
+                    owner=owner,
+                    deadline=kwargs["deadline"],
+                    now=now,
+                ):
+                    return original_act(target, ctx)
+
+            kwargs["act"] = guarded_act
+
+            def terminal_boundary(receipt):
+                # Preserve legacy's existing known asynchronous waits. Its advertisement
+                # ends only after the durable ledger validates those native continuation
+                # proofs. Scoped Core intents still require their COMPLETE receipt.
+                if resource_keys is not None and _validate_stop_legacy(
+                    state_path, runnable, now=now
+                ).get("valid"):
+                    closer_resources.release_legacy_boundary(
+                        closer_resources.scoped_root(state_path), owner
+                    )
+                for target, row in receipt.get("targets", {}).items():
+                    if row.get("status") == "completed":
+                        closer_resources.release_target(
+                            closer_resources.scoped_root(state_path), target, owner=owner
+                        )
+
+            receipt = _run_pipeline_legacy(
+                state_path, runnable, _terminal_boundary=terminal_boundary, **kwargs
+            )
+            if fenced_rows:
+                receipt["targets"] = {**receipt.get("targets", {}), **fenced_rows}
+                receipt["scoped_rollback"] = {"fenced_targets": sorted(fenced_rows), "drainable": 0}
+            return receipt
+    return closer_resources.run_scoped(
+        state_path, targets, contract_pin=contract_pin, coordination_admission=admission, **kwargs
+    )
+
+
+def validate_stop_scoped(
+    state_path: str | Path,
+    round_id: str,
+    assignment_targets: Iterable[str] | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """``validate_stop`` for one named resource-scoped round (see closer_resources.validate_stop)."""
+    return closer_resources.validate_stop(state_path, round_id, assignment_targets, **kwargs)
+
+
+def scoped_capability() -> dict[str, Any]:
+    """Version-pin capability for a release installer (integration unproved here)."""
+    return closer_resources.capability(SCHEMA)
+
+
 def _save_state_locked(path: Path, state: Mapping[str, Any]) -> None:
     """Persist a state already read while holding the coordinator lock."""
     _save(path, state)
 
 
-def validate_stop(
+def _validate_stop_legacy(
     state_path: str | Path,
     assignment_targets: Iterable[str] | None = None,
     *,
     now: Callable[[], float] = time.time,
+    expected_run_id: str | None = None,
 ) -> dict[str, Any]:
     """Validate outer pipeline accounting and whether continuation is due.
 
     This deliberately accepts only ``closer-pipeline/v1``. Legacy
     ``closer-queue/v1`` state remains owned by closer_queue.validate_stop.
+    A supplied expected_run_id selects only that exact existing assignment/run;
+    native proof still validates at its original path with no latest fallback.
     """
     path = Path(state_path)
     reasons: list[str] = []
@@ -3574,6 +3835,7 @@ def validate_stop(
         for key, value in state["runs"].items()
         if isinstance(value, Mapping)
         and (supplied is None or value.get("assignment") == sorted(supplied))
+        and (expected_run_id is None or key == expected_run_id)
     ]
     if not matches:
         return {
@@ -3763,3 +4025,19 @@ def validate_stop(
         "deadline": float(deadline),
         "reasons": reasons,
     }
+
+
+def validate_stop(state_path, assignment_targets=None, **kwargs):
+    """Legacy accounting plus the common mutation-intent fence (never ignore unknowns)."""
+    result = _validate_stop_legacy(state_path, assignment_targets, **kwargs)
+    unknown = closer_resources.unknown_reservations(closer_resources.scoped_root(state_path))
+    if unknown:
+        result = {
+            **result,
+            "valid": False,
+            "stop_valid": False,
+            "continuation_required": True,
+            "reasons": [*result.get("reasons", []), "unresolved_resource_reservations"],
+            "unknown_reservations": unknown,
+        }
+    return result

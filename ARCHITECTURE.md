@@ -32,6 +32,34 @@ invalidate prior evidence, and verifier requests are deduplicated. Source closur
 composes the separately owned supervisor actor when deployed and explicitly enabled;
 this coordinator does not enable it. Deployment uses the existing mirror sync and
 canonical local prompt renderers, preserving demand scheduling and safety gates.
+**Runtime ownership and the campaign layer (`src/closer_campaign.py`, 2026-10-19).** The Orchestrator
+owns the closer *runtime*: capacity routing, parallel bounded workers, handoffs, recovery, release
+management and desktop adapters, and it distributes that runtime by pinned manifest. Workflows owns
+the portable closer *core* (process, evidence, action safeguards, basic runner); the Orchestrator
+loads a closed hash-bound Workflows package through `CoreBundle`. Remote actions use
+`GitHubContentsOperationStore`/`NativeGitHubTransport` through `submit_effect`; a local Core
+store supports offline preparation only. No private alternate action lock exists. Names are descriptive;
+no repository is renamed. A runtime manifest binds module digests, runtime, command, candidate and
+state versions, and declares the Core contract (`closer-operation/v1`). Rails: durable campaign
+record -> `reconcile` -> `next_action` -> bounded `worker` (existing dispatcher, existing `claims`)
+-> durable result; the scheduled controller tick (`controller_entry`, loaded from the pinned path and
+digests by `scripts/install_closer_campaign_hook.py`) resumes every `*.campaign.json` after worker
+death or capacity failure. Uncertain dispatched writes reconcile and are never retried. See
+[the campaign contract](docs/CLOSER_CAMPAIGN.md).
+
+The optional pinned dispatcher binding propagates into each child action backend. Native
+freshness, Tasks/AC, exact-head merge guard and verifier rules still run inside the Core
+intent fence. Core currently supports merge and verify; review responses and source
+closure hold for unsupported capabilities. Old deployed invocations retain their native
+behavior until migration. Worker pauses precede scheduler, delegate and effect entrypoints;
+controller ACTIVE cannot override a paused or unknown worker. Desktop qualification needs
+a registered observer reading native app/run events plus hash-bound phase artifacts.
+Launcher/harness receipts remain insufficient. The native round wrapper reserves its
+original deadline for one A/B/C, but the installed postrun's unconditional cleanup lacks
+a token-safe adapter: new apply rounds remain held rather than risking successor cleanup.
+Source/schema pins and relocatable package checks prove packaging, not desktop acceptance.
+
+
 See [the operating contract](docs/CLOSER_DISPATCHER.md) for trusted disposition input,
 resource bounds, recovery and separate operational acceptance.
 
