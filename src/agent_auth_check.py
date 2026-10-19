@@ -85,10 +85,10 @@ def _login_present(agent: str, key: str, text: str) -> bool:
         meta = providers.get("meta") if isinstance(providers, dict) else None
         if not isinstance(meta, dict):
             return False
-        # `muse auth set` replaces the OAuth login on the file backend (verified 2026-10-18 in a
-        # disposable Linux container: providers.meta ends up with only `api_key`, no mechanism).
-        # Refuse that shape explicitly so a record cannot pass on subs_active left over from an
-        # older file or a hand-edited hybrid.
+        # `muse auth set` replaces the OAuth login on the file backend (verified 2026-10-19 in a
+        # disposable Linux container with TBH_CREDENTIAL_BACKEND=file: providers.meta ends up with
+        # only `api_key`, no mechanism). Refuse that shape explicitly so a record cannot pass on
+        # subs_active left over from an older file or a hand-edited hybrid.
         if "api_key" in meta:
             return False
         return meta.get("mechanism") == "oauth" and meta.get(key) is True
@@ -338,6 +338,16 @@ def _selftest() -> None:
     _good = '{"providers":{"meta":{"mechanism":"oauth","subs_active":true}}}'
     assert _login_present("muse", "subs_active", _good) is True
     assert _login_present("muse", "subs_active", _good.replace("true", "false")) is False
+    # Observed post-`muse auth set` shape (file backend): only api_key remains. A hybrid that still
+    # carries subs_active must also fail — deliberate break: `return meta.get(key) is True` admits
+    # the hybrid and fails tests/test_muse_backend.py::test_muse_gate_refuses_the_record_shape_a_stored_key_leaves.
+    _stored_key = '{"schema_version":1,"providers":{"meta":{"api_key":"not-a-real-key"}}}'
+    _hybrid = (
+        '{"schema_version":1,"providers":{"meta":{"api_key":"not-a-real-key",'
+        '"mechanism":"oauth","subs_active":true}}}'
+    )
+    assert _login_present("muse", "subs_active", _stored_key) is False
+    assert _login_present("muse", "subs_active", _hybrid) is False
     for _shape in (
         "[]",
         "null",
