@@ -685,8 +685,9 @@ def test_mode_switch_retains_captured_failed_act_unknown_and_disjoint_progress(
 @pytest.mark.parametrize("stage", ["prepare", "interpret"])
 def test_failed_read_is_not_misclassified_as_unknown_act(tmp_path, stage):
     state = tmp_path / "s.json"
-    row = _captured_failed_act_shape(barrier=True)
+    row = _captured_failed_act_shape(barrier=False)
     row["stage"] = stage
+    row["error"] = "ordinary read failed before external execution"
     state.write_text(json.dumps({"runs": {"old": {"targets": {"o/r#1": row}}}, "carry": {}}))
     assert closer_resources.legacy_unresolved(state) == ({}, None)
 
@@ -737,3 +738,101 @@ def test_forward_malformed_legacy_row_holds_unknown_inventory(tmp_path, location
         "legacy_state_unreadable"
     }
     assert state.read_bytes() == before and not log.exists()
+
+
+@pytest.mark.parametrize("direction", ["forward", "rollback"])
+@pytest.mark.parametrize("location", ["run", "carry"])
+def test_read_quarantines_fence_mode_switch_without_blocking_disjoint(
+    tmp_path, direction, location
+):
+    state, log = tmp_path / "s.json", tmp_path / "events"
+    rows = {}
+    errors = [
+        closer_pipeline.READ_BARRIER_ERROR,
+        closer_pipeline.READ_INTERRUPTED_BARRIER_ERROR,
+        closer_pipeline.READ_ORIGIN_BARRIER_ERROR,
+    ]
+    for index, error in enumerate(errors):
+        target = f"example/repo#{index + 1}"
+        rows[target] = {
+            "status": "failed",
+            "stage": "interpret" if index < 2 else "prepare",
+            "error": error,
+            "identity": target,
+            "revision": "retained-revision",
+            "results": {},
+            "recovery_barrier": {
+                "schema": closer_pipeline.READ_BARRIER_SCHEMA,
+                "source_run_id": "retained-original-run",
+                "item_sha256": "a" * 64,
+                "act_result_sha256": "b" * 64,
+                "revision": "retained-revision",
+                "identity": target,
+                "work_key": "original-work",
+                "reason": "unverified_terminal_boundary",
+            },
+        }
+    doc = {
+        "schema": closer_pipeline.SCHEMA,
+        "cache": {},
+        "carry": rows if location == "carry" else {},
+        "runs": (
+            {"original": {"created": 1, "deadline": 2, "targets": rows}}
+            if location == "run"
+            else {}
+        ),
+    }
+    if direction == "forward":
+        retained = state
+    else:
+        root = closer_resources.open_root(state, pipeline_schema=closer_pipeline.SCHEMA)
+        retained = closer_resources.shard_dir(root, next(iter(rows))) / "state.json"
+        retained.parent.mkdir(parents=True, exist_ok=True)
+    retained.write_text(json.dumps(doc))
+    before = retained.read_bytes()
+    other = "other/repo#999"
+    result = finish(
+        spawn(
+            {
+                "state": str(state),
+                "targets": [*rows, other],
+                "log": str(log),
+                "mode": "resource_scoped" if direction == "forward" else "legacy",
+            }
+        )
+    )
+    prefix = "legacy" if direction == "forward" else "scoped"
+    for target in rows:
+        assert result["targets"][target]["deferred_reason"] == prefix + "_unverified_read_outcome"
+        assert result["targets"][target]["scoped_fence"] is True
+    assert result["targets"][other]["status"] == "completed"
+    assert retained.read_bytes() == before
+    assert acts(log) == [other]
+    assert not any(json.loads(line)["t"] in rows for line in log.read_text().splitlines())
+
+
+@pytest.mark.parametrize("stage", ["prepare", "interpret", "exception", "act", "reconcile"])
+@pytest.mark.parametrize(
+    "marker", ["read_barrier", "act_barrier", "provider_uncertain", "read_error"]
+)
+def test_unresolved_read_or_provider_boundary_cannot_disappear_with_stage_change(
+    tmp_path, stage, marker
+):
+    row = {"status": "failed", "stage": stage, "error": "ordinary failure", "results": {}}
+    expected = "unverified_read_outcome"
+    if marker.endswith("barrier"):
+        row["recovery_barrier"] = {
+            "schema": (
+                closer_pipeline.READ_BARRIER_SCHEMA
+                if marker == "read_barrier"
+                else "closer-unverified-act-barrier/v1"
+            )
+        }
+        if marker == "act_barrier":
+            expected = "unverified_act_outcome"
+    elif marker == "provider_uncertain":
+        row["provider_outcome_uncertain"] = {"actual": {"run_id": "retained-provider-run"}}
+        expected = "provider_uncertain_outcome"
+    else:
+        row["error"] = closer_pipeline.READ_INTERRUPTED_BARRIER_ERROR
+    assert closer_resources._unresolved_effect(tmp_path / "state", "o/r#1", row) == expected

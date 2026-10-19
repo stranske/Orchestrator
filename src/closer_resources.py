@@ -336,32 +336,45 @@ def _unresolved_effect(path: Path, target: str, row: Mapping[str, Any]) -> str |
     """Mode switches cannot turn an explicit unknown effect into fresh authority."""
     if row.get("status") in _UNRESOLVED:
         return f"{row['status']}_outcome"
+    # A scheduler stage/status change cannot discharge an explicitly retained
+    # quarantine or a provider's unknown outcome. Both mode directions use this
+    # same per-target predicate before admitting any callback.
+    barrier = row.get("recovery_barrier")
+    if barrier is not None:
+        if isinstance(barrier, Mapping):
+            if barrier.get("schema") == "closer-unverified-read-barrier/v1":
+                return "unverified_read_outcome"
+            if barrier.get("schema") == "closer-unverified-act-barrier/v1":
+                return "unverified_act_outcome"
+        return "unverified_recovery_outcome"
+    uncertainty = row.get("provider_outcome_uncertain")
+    if uncertainty is not None and uncertainty is not False:
+        return "provider_uncertain_outcome"
+    if row.get("error") in {
+        "expired read deferral lacks a verified terminal resource boundary",
+        "expired read retained a historical wait from another revision",
+        "interrupted read lacks a verified terminal boundary",
+    }:
+        return "unverified_read_outcome"
     if row.get("status") != "failed" or row.get("stage") != "act":
         return None
-    barrier = row.get("recovery_barrier")
     results = row.get("results")
     act = results.get("act") if isinstance(results, Mapping) else None
-    explicit_unknown = (
-        barrier is not None
-        or row.get("error") == "act returned unsupported or missing status"
-        or bool(row.get("provider_outcome_uncertain"))
-        or (
-            isinstance(act, Mapping)
-            and (
-                act.get("status") in {"unknown", "uncertain", "running", "submitted"}
-                or act.get("outcome_uncertain") is True
-            )
+    explicit_unknown = row.get("error") == "act returned unsupported or missing status" or (
+        isinstance(act, Mapping)
+        and (
+            act.get("status") in {"unknown", "uncertain", "running", "submitted"}
+            or act.get("outcome_uncertain") is True
         )
     )
     if not explicit_unknown:
         return None
     # An existing strict receipt can affirmatively prove a pre-fix no-operation
     # wait. A durable recovery barrier is never discharged by this read-only guard.
-    if barrier is None:
-        import closer_pipeline as cp
+    import closer_pipeline as cp
 
-        if cp._legacy_failed_act_wait_proof(path, target, row):
-            return None
+    if cp._legacy_failed_act_wait_proof(path, target, row):
+        return None
     return "unverified_act_outcome"
 
 
