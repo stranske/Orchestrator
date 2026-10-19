@@ -504,6 +504,7 @@ def _bounded(value: Any, *, limit: int = 128 * 1024) -> Any:
 
 
 AUDIT_ARCHIVE_SCHEMA = "closer-invalid-stop-audit-archive/v1"
+NATIVE_WAIT_AUDIT_SCHEMA = "closer-native-wait-continuation-audit/v1"
 
 
 def _audit_archive_dir(path: Path) -> Path:
@@ -574,7 +575,9 @@ def _resolved_audit_history(path: Path, previous: Mapping[str, Any]) -> list[dic
         raise ValueError("invalid pipeline audit history")
     archived = _archived_history(path, previous.get("invalid_stop_archive"))
     if archived and (
-        not local or local[0].get("schema") != "closer-expired-invalid-round-recovery/v1"
+        not local
+        or local[0].get("schema")
+        not in {"closer-expired-invalid-round-recovery/v1", NATIVE_WAIT_AUDIT_SCHEMA}
     ):
         raise ValueError("pipeline audit archive lost its origin")
     return local[:1] + archived + local[1:] if archived else local
@@ -733,6 +736,90 @@ def _legacy_failed_act_wait_proof(path: Path, target: str, item: Mapping[str, An
         and item.get("error") == "act returned unsupported or missing status"
         and _retained_blocked_act_wait_proof(path, target, item)
     )
+
+
+def _validated_wait_audit_origin(history, target, item):
+    """Find the immutable origin for an already native-validated retained wait."""
+    results = item.get("results")
+    act = results.get("act") if isinstance(results, Mapping) else None
+    if (
+        not isinstance(act, Mapping)
+        or not isinstance(item.get("identity"), str)
+        or not item["identity"].strip()
+        or not isinstance(item.get("revision"), str)
+        or not item["revision"]
+    ):
+        return None
+    for record in history:
+        if not isinstance(record, Mapping):
+            continue
+        if record.get("schema") not in {
+            "closer-expired-invalid-round-recovery/v1",
+            NATIVE_WAIT_AUDIT_SCHEMA,
+        }:
+            continue
+        source = record.get("source_run_id")
+        rows = record.get("targets")
+        row = rows.get(target) if isinstance(rows, Mapping) else None
+        digest = row.get("item_sha256") if isinstance(row, Mapping) else None
+        if (
+            isinstance(source, str)
+            and bool(source.strip())
+            and isinstance(digest, str)
+            and len(digest) == 64
+            and all(char in "0123456789abcdef" for char in digest)
+            and row.get("recovery") == "validated_inner_wait"
+            and row.get("act_result") == act
+            and row.get("revision") == item.get("revision")
+            and row.get("identity") == item.get("identity")
+        ):
+            return {"previous_run_id": source, "previous_item_sha256": digest}
+    return None
+
+
+def _native_wait_origin_record(path, target, item, previous, source_run_id, prior_stop, now):
+    """Record a current observed no-operation boundary; never label it expired."""
+    if (
+        item.get("known_completed_action") is True
+        or item.get("provider_outcome_uncertain")
+        or item.get("recovery_barrier") is not None
+        or not _legacy_failed_act_wait_proof(path, target, item)
+    ):
+        return None
+    try:
+        act = _bounded(item["results"]["act"], limit=32 * 1024)
+        row = {
+            "item_sha256": _digest(item),
+            "status": item.get("status"),
+            "stage": item.get("stage"),
+            "revision": item.get("revision"),
+            "identity": item.get("identity"),
+            "work_key": item.get("work_key"),
+            "error": item.get("error"),
+            "resource_evidence": item.get("resource_evidence"),
+            "provider_outcome_uncertain": item.get("provider_outcome_uncertain"),
+            "recovery_barrier": item.get("recovery_barrier"),
+            "act_result": act,
+            "act_receipt_sha256": _digest(act["queue_receipt"]),
+            "recovery": "validated_inner_wait",
+        }
+        return _bounded(
+            {
+                "schema": NATIVE_WAIT_AUDIT_SCHEMA,
+                "boundary": "validated_nonmutating_native_wait",
+                "acceptance_authority": False,
+                "source_run_id": source_run_id,
+                "source_created": previous.get("created"),
+                "source_deadline": previous.get("deadline"),
+                "source_assignment": list(previous.get("assignment", [])),
+                "recorded_at": now(),
+                "prior_stop": prior_stop,
+                "targets": {target: row},
+            },
+            limit=512 * 1024,
+        )
+    except (ValueError, TypeError, KeyError):
+        return None
 
 
 def _historical_validated_wait_result(
@@ -2389,6 +2476,11 @@ def _run_pipeline_impl(
                     "metrics": {"capacity_samples": [], "peak_active": {}},
                 },
             )
+            try:
+                origin_history = _resolved_audit_history(path, previous) if previous else []
+            except (ValueError, OSError):
+                # Unavailable immutable history cannot establish a wait origin.
+                origin_history = []
             if prior_invalid_stop_evidence is not None:
                 run["prior_invalid_stop_evidence"] = prior_invalid_stop_evidence
                 if recovered_wait_targets and previous is not None:
@@ -2417,8 +2509,47 @@ def _run_pipeline_impl(
                                 else None
                             )
                         )
+                        available_origins = []
+                        if isinstance(recovery_audit, Mapping) and isinstance(
+                            recovery_audit.get("history_entry"), Mapping
+                        ):
+                            available_origins.append(recovery_audit["history_entry"])
+                        available_origins.extend(origin_history)
+                        origin = _validated_wait_audit_origin(available_origins, target, old_item)
+                        if origin is None and (
+                            not recovery_audit or recovery_audit.get("native_wait_provenance_only")
+                        ):
+                            observed = _native_wait_origin_record(
+                                path, target, old_item, previous, previous_run_id, prior_stop, now
+                            )
+                            if observed is not None:
+                                if recovery_audit:
+                                    recovery_audit["history_entry"]["targets"].update(
+                                        observed["targets"]
+                                    )
+                                else:
+                                    recovery_audit = {
+                                        "history_entry": observed,
+                                        "native_wait_provenance_only": True,
+                                    }
+                                origin = _validated_wait_audit_origin(
+                                    [recovery_audit["history_entry"]], target, old_item
+                                )
+                        if origin is None:
+                            return {
+                                "schema": "closer-pipeline-receipt/v1",
+                                "authority": False,
+                                "status": "blocked",
+                                "reason": "validated_wait_audit_origin_unavailable",
+                                "target": target,
+                                "continuation_required": True,
+                                "finished_at": now(),
+                                "targets": {},
+                            }
+                        if origin["previous_run_id"] == previous_run_id:
+                            origin = {"previous_item_sha256": origin["previous_item_sha256"]}
                         wait_records[target] = {
-                            "previous_item_sha256": _digest(previous["targets"][target]),
+                            **origin,
                             "restored_wait_view": old_item is not previous["targets"][target],
                             "previous_error": old_item.get("error"),
                             "revision": old_item.get("revision"),
@@ -2439,12 +2570,6 @@ def _run_pipeline_impl(
                         "targets": wait_records,
                     }
             if previous is not None:
-                try:
-                    origin_history = _resolved_audit_history(path, previous)
-                except (ValueError, OSError):
-                    # The ordinary archive-staging error path below reports the
-                    # unavailable history; it cannot authorize origin reuse.
-                    origin_history = []
                 retained_read_targets = {
                     target
                     for target, item in previous.get("targets", {}).items()
