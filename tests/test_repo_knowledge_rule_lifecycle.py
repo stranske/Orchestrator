@@ -100,6 +100,11 @@ def test_managed_rule_and_bundle_apply_preview_duplicate_and_removal(tmp_path) -
         ]
         is True
     )
+    stored_registry = json.loads(registry.read_text())
+    assert all(
+        item.get("rule_id") != "rule-1"
+        for item in stored_registry["repos"]["owner/repo"]["validation"]
+    )
 
     bundle = tmp_path / "bundle.json"
     assert repo_knowledge.update_capability_bundle(bundle, manifest, apply=True)["written"] is True
