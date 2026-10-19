@@ -4085,6 +4085,7 @@ def test_pipeline_budget_proof_exception_is_diagnosed_without_renewal(tmp_path, 
         ("prepare", "running"),
         ("interpret", "queued"),
         ("interpret", "running"),
+        ("exception", "running"),
     ],
 )
 def test_expired_interrupted_read_can_receive_independent_cli_budget(tmp_path, stage, status):

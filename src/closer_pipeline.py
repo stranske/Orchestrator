@@ -1616,7 +1616,9 @@ def _expired_invalid_round_recovery(
         elif (
             previous.get("receipt_summary") is None
             and status in {"queued", "running"}
-            and stage in {"prepare", "interpret"}
+            and (
+                stage in {"prepare", "interpret"} or (stage == "exception" and status == "running")
+            )
             and (no_action or retained_read_wait)
             and not item.get("provider_outcome_uncertain")
             and _valid_retained_act_barrier(
@@ -1625,7 +1627,7 @@ def _expired_invalid_round_recovery(
         ):
             expected.add(f"actionable_pipeline_work:{target}:{stage}")
             if item.get("recovery_barrier") is not None or (
-                status == "running" and stage == "interpret"
+                status == "running" and stage in {"interpret", "exception"}
             ):
                 # A missing return is not proof that its provider finished. Keep
                 # the exact assessment non-runnable while disjoint reads advance.
@@ -2002,7 +2004,7 @@ def _expired_invalid_round_recovery(
                             "interrupted_read"
                             if previous.get("receipt_summary") is None
                             and status in {"queued", "running"}
-                            and stage in {"prepare", "interpret"}
+                            and stage in {"prepare", "interpret", "exception"}
                             else (item.get("recovery_barrier") or {}).get("reason")
                             or "terminal_resource_boundary_invalid"
                         )
@@ -2275,7 +2277,7 @@ def _run_pipeline_impl(
                     for old_item in previous.get("targets", {}).values():
                         if (
                             previous.get("receipt_summary") is None
-                            and old_item.get("stage") in {"prepare", "interpret"}
+                            and old_item.get("stage") in {"prepare", "interpret", "exception"}
                             and old_item.get("status") in {"queued", "running"}
                         ):
                             # Preserve the interrupted read's actual boundary

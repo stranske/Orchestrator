@@ -4069,8 +4069,16 @@ def test_new_read_barrier_keeps_exact_audit_even_when_material_was_previously_re
         assert item["recovery_excluded"]
 
 
-@pytest.mark.parametrize("status", ["queued", "running"])
-@pytest.mark.parametrize("stage", ["prepare", "interpret"])
+@pytest.mark.parametrize(
+    "stage,status",
+    [
+        ("prepare", "queued"),
+        ("prepare", "running"),
+        ("interpret", "queued"),
+        ("interpret", "running"),
+        ("exception", "running"),
+    ],
+)
 def test_interrupted_reads_restart_without_promoting_unknown_assessment(tmp_path, status, stage):
     path = tmp_path / "pipeline.json"
     at = 1_800_000_000.0
@@ -4080,7 +4088,7 @@ def test_interrupted_reads_restart_without_promoting_unknown_assessment(tmp_path
     target = "owner/repo#deadline-0"
     old["targets"][target].update(status=status, stage=stage)
     closer_pipeline._save(path, state)
-    unknown = status == "running" and stage == "interpret"
+    unknown = status == "running" and stage in {"interpret", "exception"}
     calls = []
     cb = callbacks()
     ordinary = cb["prepare"]
@@ -4208,3 +4216,23 @@ def test_interrupted_capacity_recovery_proves_original_in_round_throttle(tmp_pat
     stop = validate_stop(path, old["assignment"], now=lambda: at)
     recovered = closer_pipeline._expired_invalid_round_recovery(stop, old, path, "interrupted", at)
     assert recovered[0] is (tamper is None)
+
+
+def test_interrupted_queued_exception_is_not_normalized_into_retryable_deadline(tmp_path):
+    path = tmp_path / "pipeline.json"
+    at = 1_800_000_000.0
+    interrupted_round_fixture(path, at)
+    state = closer_pipeline._load(path)
+    old = state["runs"]["interrupted"]
+    target = "owner/repo#deadline-0"
+    old["targets"][target].update(status="queued", stage="exception")
+    closer_pipeline._save(path, state)
+    cb = {
+        k: lambda *_: pytest.fail("unproved exception boundary must block admission")
+        for k in ("prepare", "interpret", "exception", "act")
+    }
+    result = run(path, [target, "fresh"], cb, now=lambda: at)
+    assert result.get("status") == "blocked"
+    assert result["reason"] == "prior_run_has_no_valid_stop"
+    retained = closer_pipeline._load(path)["runs"]["interrupted"]["targets"][target]
+    assert retained["stage"] == "exception" and retained["status"] == "queued"
