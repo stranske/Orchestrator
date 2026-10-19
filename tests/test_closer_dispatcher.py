@@ -4076,3 +4076,40 @@ def test_pipeline_budget_proof_exception_is_diagnosed_without_renewal(tmp_path, 
         state["round"]["deadline"],
         f"pipeline_adoption_unverifiable:{type(error).__name__}",
     )
+
+
+@pytest.mark.parametrize(
+    "stage,status",
+    [
+        ("prepare", "queued"),
+        ("prepare", "running"),
+        ("interpret", "queued"),
+        ("interpret", "running"),
+        ("exception", "running"),
+    ],
+)
+def test_expired_interrupted_read_can_receive_independent_cli_budget(tmp_path, stage, status):
+    import closer_pipeline
+
+    legacy = _terminal_queue_state(tmp_path)
+    legacy["items"][TARGET]["revision"] = "later-assessment"
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(legacy))
+    path = _adopted_pipeline(tmp_path)
+    state = closer_pipeline._load(path)
+    previous = next(iter(state["runs"].values()))
+    previous.pop("receipt_summary")
+    previous["targets"][TARGET] = {
+        "status": status,
+        "stage": stage,
+        "results": {},
+        "metrics": {"waits": 0, "errors": 0},
+    }
+    closer_pipeline._save(path, state)
+    before = state_path.read_bytes(), path.read_bytes()
+    requested = time.time() + 310
+    assert adapter._deadline_with_pipeline_round(requested, legacy, state_path) == (
+        requested,
+        "expired_pipeline_recovery",
+    )
+    assert before == (state_path.read_bytes(), path.read_bytes())

@@ -35,7 +35,19 @@ NONPASS_WAIT_PREFIX = "ordinary NON_PASS disposition retained: "
 READ_BARRIER_SCHEMA = "closer-unverified-read-barrier/v1"
 READ_BARRIER_ERROR = "expired read deferral lacks a verified terminal resource boundary"
 READ_ORIGIN_BARRIER_ERROR = "expired read retained a historical wait from another revision"
+READ_INTERRUPTED_BARRIER_ERROR = "interrupted read lacks a verified terminal boundary"
 READ_BARRIER_TRIGGER = "reconcile_retained_read_before_retry"
+
+
+def _interrupted_read(previous: Mapping[str, Any], item: Mapping[str, Any]) -> bool:
+    """Recognize receipt-less reads without treating queued exception work as proven."""
+    return previous.get("receipt_summary") is None and (
+        (
+            item.get("status") in {"queued", "running"}
+            and item.get("stage") in {"prepare", "interpret"}
+        )
+        or (item.get("status") == "running" and item.get("stage") == "exception")
+    )
 
 
 def _canonical(value: Any) -> bytes:
@@ -817,6 +829,7 @@ def _audited_retained_wait(
                 and item.get("error") == PRELAUNCH_ROUTE_BUSY_ERROR
                 and failed_read_terminal_proven
             )
+            or _interrupted_read(previous, item)
         )
         or item.get("known_completed_action") is True
         or item.get("provider_outcome_uncertain")
@@ -1325,15 +1338,19 @@ def _audited_prior_revision_wait(
     }.get(pending_kind if isinstance(pending_kind, str) else "")
     pending_evidence = item.get("pending_evidence")
     recognized_read = (
-        status == "deferred"
-        and reason
-        in {"deadline_exhausted", "worker_capacity", "provider_failure", "github_capacity"}
-    ) or (
-        status == "pending"
-        and pending_field is not None
-        and isinstance(pending_evidence, Mapping)
-        and isinstance(pending_evidence.get(pending_field), str)
-        and bool(pending_evidence[pending_field])
+        _interrupted_read(previous, item)
+        or (
+            status == "deferred"
+            and reason
+            in {"deadline_exhausted", "worker_capacity", "provider_failure", "github_capacity"}
+        )
+        or (
+            status == "pending"
+            and pending_field is not None
+            and isinstance(pending_evidence, Mapping)
+            and isinstance(pending_evidence.get(pending_field), str)
+            and bool(pending_evidence[pending_field])
+        )
     )
     if (
         not recognized_read
@@ -1396,7 +1413,9 @@ def _valid_read_recovery_barrier(
     expected_error = (
         READ_ORIGIN_BARRIER_ERROR
         if reason == "historical_wait_revision_changed"
-        else READ_BARRIER_ERROR
+        else (
+            READ_INTERRUPTED_BARRIER_ERROR if reason == "interrupted_read" else READ_BARRIER_ERROR
+        )
     )
     if (
         item.get("status") != "failed"
@@ -1409,7 +1428,12 @@ def _valid_read_recovery_barrier(
         or not isinstance(barrier, Mapping)
         or barrier.get("schema") != READ_BARRIER_SCHEMA
         or reason
-        not in (None, "terminal_resource_boundary_invalid", "historical_wait_revision_changed")
+        not in (
+            None,
+            "terminal_resource_boundary_invalid",
+            "historical_wait_revision_changed",
+            "interrupted_read",
+        )
         or not isinstance(barrier.get("source_run_id"), str)
         or not barrier["source_run_id"]
         or any(
@@ -1431,14 +1455,22 @@ def _valid_read_recovery_barrier(
             and row.get("recovery") == "quarantine_read"
             and row.get("status")
             in (
-                {"deferred", "pending"}
-                if reason == "historical_wait_revision_changed"
-                else {"deferred"}
+                {"queued", "running"}
+                if reason == "interrupted_read"
+                else (
+                    {"deferred", "pending", "queued", "running"}
+                    if reason == "historical_wait_revision_changed"
+                    else {"deferred"}
+                )
+            )
+            and (
+                row.get("status") not in {"queued", "running"}
+                or record.get("source_receipt_missing") is True
             )
             and row.get("stage") == item.get("stage")
             and row.get("deferred_reason") == item.get("deferred_reason")
             and (
-                reason == "historical_wait_revision_changed"
+                reason in {"historical_wait_revision_changed", "interrupted_read"}
                 or row.get("deferred_reason") == "deadline_exhausted"
             )
             and row.get("pending_kind") == item.get("pending_kind")
@@ -1548,6 +1580,8 @@ def _expired_invalid_round_recovery(
             )
         )
         if prior_revision_wait:
+            if previous.get("receipt_summary") is None and status in {"queued", "running"}:
+                expected.add(f"actionable_pipeline_work:{target}:{stage}")
             # Quarantine the exact current read; an immutable old no-operation
             # wait cannot authorize any callback after its revision changes.
             expected.update(
@@ -1571,7 +1605,8 @@ def _expired_invalid_round_recovery(
             and stage in {"prepare", "interpret", "exception"}
             and (
                 item.get("recovery_barrier") is not None
-                or item.get("error") in {READ_BARRIER_ERROR, READ_ORIGIN_BARRIER_ERROR}
+                or item.get("error")
+                in {READ_BARRIER_ERROR, READ_ORIGIN_BARRIER_ERROR, READ_INTERRUPTED_BARRIER_ERROR}
             )
         ):
             if not _valid_read_recovery_barrier(target, item, history):
@@ -1580,6 +1615,23 @@ def _expired_invalid_round_recovery(
             quarantined.add(target)
         elif status == "completed":
             pass
+        elif (
+            _interrupted_read(previous, item)
+            and (no_action or retained_read_wait)
+            and not item.get("provider_outcome_uncertain")
+            and _valid_retained_act_barrier(
+                item.get("recovery_barrier"), history, item.get("identity"), target
+            )
+        ):
+            expected.add(f"actionable_pipeline_work:{target}:{stage}")
+            if item.get("recovery_barrier") is not None or (
+                status == "running" and stage in {"interpret", "exception"}
+            ):
+                # A missing return is not proof that its provider finished. Keep
+                # the exact assessment non-runnable while disjoint reads advance.
+                quarantined.add(target)
+            else:
+                retryable.add(target)
         elif (
             status == "deferred"
             and stage in {"prepare", "interpret", "exception"}
@@ -1655,7 +1707,24 @@ def _expired_invalid_round_recovery(
         ):
             resource = item.get("resource_evidence")
             if not _valid_github_capacity_evidence(resource, historical_now):
-                return False, set(), set(), set(), set(), {}
+                # An interrupted round has no terminal timestamp. Validate its
+                # read-only throttle at its own in-round observation, rather
+                # than requiring the old reset window to remain fresh forever.
+                capacity = (
+                    resource.get("github_capacity") if isinstance(resource, Mapping) else None
+                )
+                observed = capacity.get("observed_at") if isinstance(capacity, Mapping) else None
+                if not (
+                    summary is None
+                    and isinstance(observed, (int, float))
+                    and not isinstance(observed, bool)
+                    and float(previous["created"]) <= observed <= float(previous["deadline"])
+                    and _valid_github_capacity_evidence(resource, observed)
+                ):
+                    return False, set(), set(), set(), set(), {}
+                invalid_reason = f"unverified_github_capacity_deferral:{target}"
+                if invalid_reason in reasons:
+                    expected.add(invalid_reason)
             capacity = resource["github_capacity"]
             expected_trigger = f"retry_after_github_reset:{float(capacity['reset_at_epoch']):.3f}"
             if item.get("deferred_next_trigger") != expected_trigger:
@@ -1929,8 +1998,14 @@ def _expired_invalid_round_recovery(
                     "read_barrier_reason": (
                         "historical_wait_revision_changed"
                         if target in changed_wait_origins
-                        else (item.get("recovery_barrier") or {}).get("reason")
-                        or "terminal_resource_boundary_invalid"
+                        else (
+                            "interrupted_read"
+                            if previous.get("receipt_summary") is None
+                            and status in {"queued", "running"}
+                            and stage in {"prepare", "interpret", "exception"}
+                            else (item.get("recovery_barrier") or {}).get("reason")
+                            or "terminal_resource_boundary_invalid"
+                        )
                     ),
                 }
                 if target in quarantined and stage in {"prepare", "interpret", "exception"}
@@ -1966,6 +2041,7 @@ def _expired_invalid_round_recovery(
                 "schema": "closer-expired-invalid-round-recovery/v1",
                 "source_run_id": run_id,
                 "source_deadline": previous.get("deadline"),
+                "source_receipt_missing": previous.get("receipt_summary") is None,
                 "source_assignment": list(assignment),
                 "prior_stop": prior_stop,
                 "targets": audited,
@@ -1988,7 +2064,10 @@ def _expired_invalid_round_recovery(
             )
             # A newly created read barrier pins this exact source run and row.
             # Older identical material cannot satisfy that new origin pointer.
-            or (row["recovery"] == "quarantine_read" and row["status"] in {"deferred", "pending"})
+            or (
+                row["recovery"] == "quarantine_read"
+                and row["status"] in {"deferred", "pending", "queued", "running"}
+            )
         }
         history_entry = (
             dict(audit)
@@ -2194,6 +2273,15 @@ def _run_pipeline_impl(
                 previous_assignment = previous.get("assignment", [])
                 if float(previous.get("deadline", 0)) <= now():
                     for old_item in previous.get("targets", {}).values():
+                        if (
+                            previous.get("receipt_summary") is None
+                            and old_item.get("stage") in {"prepare", "interpret", "exception"}
+                            and old_item.get("status") in {"queued", "running"}
+                        ):
+                            # Preserve the interrupted read's actual boundary
+                            # for recovery: a running assessment is not an
+                            # unstarted deadline deferral.
+                            continue
                         if old_item.get("status") == "queued":
                             old_item.update(
                                 status="deferred",
@@ -2491,7 +2579,11 @@ def _run_pipeline_impl(
                                 READ_ORIGIN_BARRIER_ERROR
                                 if item["recovery_barrier"].get("reason")
                                 == "historical_wait_revision_changed"
-                                else READ_BARRIER_ERROR
+                                else (
+                                    READ_INTERRUPTED_BARRIER_ERROR
+                                    if item["recovery_barrier"].get("reason") == "interrupted_read"
+                                    else READ_BARRIER_ERROR
+                                )
                             ),
                             deferred_next_trigger=READ_BARRIER_TRIGGER,
                         )
