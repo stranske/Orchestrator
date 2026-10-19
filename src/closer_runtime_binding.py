@@ -248,6 +248,13 @@ class CoreBundle:
         ):
             raise BindingError("Core package descriptor/pin incompatible")
         self.sources = {}
+        actual_files = {
+            str(path.relative_to(self.root))
+            for path in self.root.rglob("*")
+            if path.is_file() or path.is_symlink()
+        }
+        if actual_files != set(CORE_FILES) | {"closer-core-package.json"}:
+            raise BindingError("Core tree differs from closed package files")
         for name, digest in files.items():
             path = self.root / name
             data = path.read_bytes()

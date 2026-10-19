@@ -7,7 +7,7 @@ Core source, native GitHub store/transport, helper dependencies and operation sc
 `PinnedPortable` single-file loading remains an offline compatibility/testing API. Thin desktop launchers pin a compatible runtime manifest; a runtime manifest
 declares `contract = closer-operation/v1`, state versions, and machine compatibility receipts.
 
-## Executing paths (all local, all tested)
+## Executing paths and validation boundaries
 
 | Path | Entry | Notes |
 |---|---|---|
@@ -102,3 +102,19 @@ Relocation tests invoke the real Core CLI and Runtime/Launcher, preserve the mis
 policy hold, and reject source/schema drift. No release upload, install, or desktop
 acceptance is claimed. Declared dependency installation and live scheduled successor,
 replacement and guarded response completion remain unverified.
+
+
+## Staged ownership rollout
+
+The resource-scoped pipeline mode is opt-in. It retains durable resource intents
+across callback returns and releases only the current executor's reservations after
+a durable completed receipt. Historical unknowns need independent, resource-bound
+reconciliation. Exact-target leases and explicit named-round stop receipts preserve
+original deadlines. A legacy/scoped transition must also preserve resource exclusions;
+the installed lane protections remain in place until actual entry-path, shared-pool,
+rollback and runtime-promotion validation completes.
+
+Native helper previews use `HANDOFF_EXACT_TOKEN_V1`. Runtime pins both scripts and
+the lease module; acquisition refuses every existing owner, and cleanup compares the
+complete original meta credential. Temporary stub-shell tests exercise the actual
+Runtime adapter and real lease module. They do not qualify an installed desktop runner.

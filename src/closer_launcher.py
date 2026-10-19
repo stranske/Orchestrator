@@ -69,11 +69,20 @@ def pin_problems(manifest: dict, *, own_path: str | None = None) -> list[str]:
     core = (manifest.get("distribution") or {}).get("core") or {}
     if core.get("owner") != "Workflows":
         problems.append("distribution does not name Workflows as Core owner")
+    if manifest.get("public_runtime_descriptor"):
+        actual = {
+            str(path.relative_to(base))
+            for path in base.rglob("*")
+            if path.is_file() and path.suffix in {".py", ".pyc", ".pyo"}
+        }
+        if actual != set(manifest.get("modules") or {}):
+            problems.append("Runtime tree contains undeclared executable code")
     return problems
 
 
 def load_runtime(manifest: dict):
     """Import the pinned closer_campaign by path; claims etc. resolve from the same dir."""
+    sys.dont_write_bytecode = True
     base = str(Path(manifest["module_dir"]))
     for name in manifest["modules"]:
         loaded = sys.modules.get(Path(name).stem)

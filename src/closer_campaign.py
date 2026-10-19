@@ -40,7 +40,11 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-import claims
+# Published packages remain immutable, including their Python import artifacts.
+if (Path(__file__).resolve().parent / "closer-runtime-package.json").is_file():
+    sys.dont_write_bytecode = True
+
+import claims  # noqa: E402
 
 STATE_SCHEMA = 1
 MANIFEST_SCHEMA = 1
@@ -1341,6 +1345,7 @@ LAUNCHER_VERSION = "1"
 PINNED_MODULES = (
     "closer_campaign.py",
     "closer_runtime_binding.py",
+    "closer_native_lease.py",
     "closer_launcher.py",
     "closer_release.py",
     "claims.py",
@@ -1522,6 +1527,13 @@ def verify_modules(manifest: dict[str, Any]) -> list[str]:
                 raise ValueError("public descriptor path escapes package")
             public = json.loads((base / public_name).read_text())
             problems.extend(validate_public_runtime_descriptor(public))
+            actual_code = {
+                str(path.relative_to(base))
+                for path in base.rglob("*")
+                if path.is_file() and path.suffix in {".py", ".pyc", ".pyo"}
+            }
+            if actual_code != set(manifest.get("modules") or {}):
+                problems.append("Runtime tree contains undeclared executable code")
             if public.get("modules") != manifest.get("modules") or public.get(
                 "package_digest"
             ) != manifest.get("package_digest"):

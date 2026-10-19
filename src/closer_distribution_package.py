@@ -157,11 +157,21 @@ def validate_public_runtime_descriptor(descriptor: Mapping[str, Any]) -> list[st
         problems.append("launcher version mismatch")
     if launcher.get("compatible_contract") != CONTRACT:
         problems.append("launcher contract mismatch")
+    if (
+        launcher.get("module") != "closer_launcher.py"
+        or launcher.get("compatible_runtime") != RUNTIME_VERSION
+        or launcher.get("sha256") != (modules or {}).get("closer_launcher.py")
+    ):
+        problems.append("launcher differs from the owned Runtime entrypoint")
     core = descriptor.get("supported_core") or {}
     if core.get("owner") != "Workflows":
         problems.append("supported_core must name Workflows as owner")
     if core.get("contract") != CONTRACT:
         problems.append("supported_core contract mismatch")
+    if not _DIGEST.fullmatch(str(core.get("package_digest", ""))):
+        problems.append("supported_core package digest must be pinned")
+    if descriptor.get("state_digest") != sha256_json(descriptor.get("state_versions") or {}):
+        problems.append("state_digest does not bind state_versions")
     digest = descriptor.get("package_digest")
     if not _DIGEST.fullmatch(str(digest or "")):
         problems.append("invalid package_digest")
@@ -205,7 +215,9 @@ def materialize_runtime_tree(
         raise DistributionPackageError("; ".join(problems))
     dest = dest.resolve()
     if dest.exists():
-        shutil.rmtree(dest)
+        raise DistributionPackageError(
+            "destination exists; use a fresh immutable Runtime directory"
+        )
     dest.mkdir(parents=True)
     for name, digest in descriptor["modules"].items():
         src = module_dir / name

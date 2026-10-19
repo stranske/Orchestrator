@@ -109,3 +109,21 @@ def test_capacity_is_scoped_to_selected_profile_and_its_pools():
     assert not router._closer_profile_capacity(profile, cap)
     cap["pools"][profile["capacity_pool_ids"][0]] = {"state": "ok"}
     assert router._closer_profile_capacity(profile, cap)
+
+
+def test_native_stage_quality_changes_existing_routing_posterior_without_outcome(brain):
+    import time
+
+    with feedback._conn() as conn:
+        conn.execute("UPDATE runs SET ts=? WHERE run_id='native-run'", (int(time.time()),))
+    record(validation={"status": "accepted"})
+    version = feedback.relearn_quality({"closer_interpret": {"codex": 0.5, "claude": 0.5}})
+    with feedback._conn() as conn:
+        row = conn.execute(
+            "SELECT posterior,n_obs,rationale FROM route_weights WHERE version=? AND agent='codex'",
+            (version,),
+        ).fetchone()
+        assert row[0] > 0.5 and row[1] == 1
+        assert "outcome_runs=0" in row[2]
+        assert conn.execute("SELECT COUNT(*) FROM outcomes").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM costs").fetchone()[0] == 0
