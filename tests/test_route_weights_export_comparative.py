@@ -449,7 +449,12 @@ def test_diagnostic_drift_does_not_publish(agents_fixture, tmp_path, field):
     assert export.write_document(target, first)
     assert not export.write_document(target, second)
     second["comparative"]["inputs"]["cost_source_by_agent"]["codex"]["imputed"] = []
+    assert not export.write_document(target, second)  # Comparative provenance is also shadow-only.
+    assert json.loads(target.read_text()) == first
+    # Actual learned routing changes remain an immediate trigger and carry fresh diagnostics.
+    second["task_types"]["implement"]["ranking"][0]["posterior"] += 0.01
     assert export.write_document(target, second)
+    assert json.loads(target.read_text()) == second
 
 
 @pytest.fixture

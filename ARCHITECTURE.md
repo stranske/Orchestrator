@@ -1644,7 +1644,7 @@ for redirect linking does not prove an authorised apply. Missing or unreadable e
 UNKNOWN. The snapshot date remains visible; a newer heartbeat marks an old finding as history.
 No alarm is cleared, no regression rule changes, and no owner question or automated action is added.
 Route export (`route_weights_export.py`, schema `orchestrator.route-weights/v1` on branch
-`exports/route-weights`) records invocation on every daily run and success only after an actual
+`exports/route-weights`) runs hourly (weekly `relearn` is unchanged), records invocation on each run and success only after an actual
 publication; the published JSON preserves existing v1 routing values and adds additive
 `capacity_schema` (`orchestrator.route-weights-capacity/v1`) plus a `capacity` block with per-agent
 `state`, `window`, and `observed_at` from the capacity snapshot's own `generated_at`, plus
@@ -1674,9 +1674,45 @@ selection for the separate relay follow-up; it prints the agent on stdout and ev
 `capacity.py pacing-report` queries completed-period usage, incidents with another pool ok, and
 non-Codex dispatch share in constrained versus ok hours; missing populations stay unmeasured.
 `switch_review` prints that weekly check. Reset inventory and calibration are local runtime data;
-see `docs/capacity-pacing.md`. Semantic change detection includes capacity state, weekly usage and reset changes,
-excluding observation clocks, reasons and burn/schedule/projection drift, so a shed or recovered seat republishes without touching posteriors or
-`exploration.policy_version`. Rail exercise records invocation without
+see `docs/capacity-pacing.md`. Semantic change detection includes damped capacity state, period-end moves over one hour and
+usable-reset counts; usage, clocks, burn/schedule/projection drift and diagnostic weights are silent. A capacity
+state change (worsening or recovery) is held until two consecutive tick snapshots show that state.
+`route_weights_export.py --record-capacity-tick` reads local `capacity.json` on every tick, before
+publication due/backoff checks, and persists state/count/observation time in
+`$ORCH_STATE_DIR/route-weights-capacity-ticks.json` beside the cadence stamps. A different state,
+a missing/stale snapshot or an observation gap over two hours resets the count; re-reading the same
+snapshot does not increment it. The second distinct tick is the drain. While held, the complete
+published pool row is retained (including its pacing state), and the tick prints both quantities:
+`[cadence] capacity publish held: <pool> local=<state> published=<state> seen=<n>/2`.
+An initial publication or malformed-capacity repair establishes the baseline. Publication still requires
+`ORCH_ROUTE_WEIGHTS_PUBLISH=1`, preserves evidence gates and failure backoff, and immediately pushes
+damped state, `period_end` moves over `PERIOD_END_TOLERANCE_S=3600` seconds, or
+`resets_available` changes against the
+fetched remote artifact, along with existing non-capacity triggers (including learned weights).
+Usage, routing-weight, burn-rate, measurement and other capacity diagnostics do not trigger pushes;
+they remain in the published block and ride along with a trigger or a refresh once the published
+`generated_at` is over 24 hours old (`PUBLISH_REFRESH_FLOOR_S`), or its age is unmeasured.
+The refresh floor is 24 h for non-state diagnostic diffs; comparative/lambda drift and all
+`comparative_*` ranking/reserve row fields do not trigger pushes. They still ship with the next
+trigger or refresh. Worst-case published `used_fraction`/`observed_at` staleness is about 25 h
+(24 h plus one tick) without another trigger. The 2 h hold bound measures propagation of a
+persistent state change, not absolute diagnostic age: a held row retains its previously
+published numbers, which may already be old. Repeated state flaps can extend that age.
+An accepted state push carries fresh numbers. Workflows uses only capacity state; a consumer
+gating on `observed_at` freshness would be misled by this diagnostic age. Posteriors and
+`exploration.policy_version`
+are untouched by damping. `python3 src/route_weights_export.py --publish-lag` reads the local snapshot
+and fetches the same remote branch into disposable storage, without persistent writes, heartbeats
+or publication. It prints local snapshot age and each pool's local/published state, published
+artifact `generated_at` age (`published_age`), optional pool observation age (`observed_age`)
+and `lag=ok|STALE|held(n/2)` (stale mismatches exceed `PUBLISH_LAG_STALE_S=7200` seconds);
+an unchanged old artifact can still be in sync. Fetch failure
+prints `published=unmeasured`; only a fully measured match prints `all pools in sync`.
+With hourly successful ticks, a persistent state change reaches publication within two ticks
+(default at most two hours). Switch-off, failed/backed-off publication and skipped ticks can extend
+that bound and remain visible as lag. Recheck the live local/published comparison on 2026-10-19;
+merge and offline tests alone do not prove a day of successful production ticks.
+Rail exercise records invocation without
 `--record`, which governs exercise verdicts only.
 The learner and exporter share feedback.py's instance DB selection: explicit DB, DB environment,
 runtime environment, state environment, then shared default (with private `DB_PATH` patches
@@ -1732,9 +1768,10 @@ runs. A missing third agent cannot block this pass number. The window verdict re
 against that share and their reasons print separately. Measured slack prints
 `not_testable_slack`; otherwise the report prints classes_differing N. This is observed-hour
 coverage, not a claim that absent hours were measured. The CLI returns before heartbeat,
-export writes or publication. Comparative republishing compares status, entry ranks, lambda
-rounded to three decimals, and cost-source/imputed provenance, excluding diagnostic drift.
-Switch review reads the same report and prints one summary line.
+export writes or publication. The published comparative block and every `comparative_*`
+ranking/reserve field are shadow diagnostics: none triggers republication. They ride along
+with a meaningful routing/capacity change or the 24 h refresh floor. Switch review computes
+the same report from local snapshot/Brain inputs and prints one summary line.
 The live pass number requires at least one differing class with measured Codex and Claude prices
 over the 14-day pacing-history window, checked no earlier than 2026-11-07 and 14 days after
 the first #668 state. Fixture success does not meet that live pass number or enable consumption.

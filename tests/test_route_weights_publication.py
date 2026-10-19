@@ -5,6 +5,7 @@ import os
 import sqlite3
 import subprocess
 import tempfile
+import time
 import unittest
 from contextlib import closing
 from pathlib import Path
@@ -87,7 +88,7 @@ class CapacityPublicationTests(unittest.TestCase):
         export._fixture_db(database)
         previous = export.build_document(
             database,
-            now=100,
+            now=int(time.time()),
             capacity_snapshot=snapshot,
             include_capacity=change != "legacy",
         )
@@ -107,11 +108,22 @@ class CapacityPublicationTests(unittest.TestCase):
             snapshot["agents"]["codex"]["state"] = capacity.SHED
         elif change == "window":
             snapshot["agents"]["codex"]["window"] = "1h"
-        document = export.build_document(database, now=101, capacity_snapshot=snapshot)
-        should_publish = change in {"state", "window", "legacy"}
+        document = export.build_document(
+            database, now=int(time.time()) + 1, capacity_snapshot=snapshot
+        )
+        should_publish = change in {"state", "legacy"}
+        state_dir = root / "stamps"
+        if change == "state":
+            # A state change is semantic only after two actual local tick observations.
+            local = root / "capacity.json"
+            now = int(time.time())
+            with patch.object(capacity, "OUT", local):
+                for observed in (now - 3600, now):
+                    local.write_text(json.dumps({**snapshot, "generated_at": observed}))
+                    self.assertTrue(export.record_capacity_tick(state_dir, now=observed))
 
         with patch.object(export.provision, "ensure_canonical", return_value=canonical):
-            self.assertIs(export.publish_document(document), should_publish)
+            self.assertIs(export.publish_document(document, state_dir=state_dir), should_publish)
             published_head = _git(remote, "rev-parse", export.EXPORT_BRANCH)
             self.assertIs(published_head != previous_head, should_publish)
             published = json.loads(
@@ -127,8 +139,8 @@ class CapacityPublicationTests(unittest.TestCase):
                     str(export.EXPORT_PATH),
                 )
 
-            # A daily rerun uses the existing local branch and must not create another commit.
-            self.assertIs(export.publish_document(document), False)
+            # An hourly rerun uses the existing local branch and must not create another commit.
+            self.assertIs(export.publish_document(document, state_dir=state_dir), False)
             self.assertEqual(_git(remote, "rev-parse", export.EXPORT_BRANCH), published_head)
 
 

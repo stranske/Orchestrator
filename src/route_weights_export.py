@@ -9,6 +9,7 @@ whenever the export is missing, malformed, stale, or insufficiently evidenced.
 from __future__ import annotations
 
 import argparse
+import copy
 import datetime as dt
 import hashlib
 import json
@@ -18,6 +19,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +38,12 @@ CAPACITY_SCHEMA = "orchestrator.route-weights-capacity/v1"
 DEFAULT_MIN_OBSERVATIONS = comparative.MIN_OBS
 EXPORT_BRANCH = "exports/route-weights"
 EXPORT_PATH = Path("config/route-weights.json")
+CAPACITY_TICK_FILE = "route-weights-capacity-ticks.json"
+CAPACITY_TICK_MAX_AGE = 2 * 3600
+# Semantic mismatch alert allowance; independent of local tick-latch validity.
+PUBLISH_LAG_STALE_S = 7200
+PUBLISH_REFRESH_FLOOR_S = 24 * 3600
+PERIOD_END_TOLERANCE_S = 3600
 WEEK_SECONDS = 7 * 86400
 # Owner q-1ca1d09d255e987b (2026-10-17): extend once if either policy is under-sampled.
 EXPLORATION_WINDOW_END = "20261117"
@@ -290,6 +298,249 @@ def _capacity_block(snapshot: dict[str, Any]) -> dict[str, Any]:
     return block
 
 
+def _read_object(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _seen_count(tick: dict) -> int:
+    try:
+        return max(0, min(2, int(tick.get("seen", 0))))
+    except (TypeError, ValueError, OverflowError):
+        return 1
+
+
+def _artifact_age(document: dict, now: int) -> int | None:
+    try:
+        generated = dt.datetime.fromisoformat(document["generated_at"].replace("Z", "+00:00"))
+        return max(0, int(now - generated.timestamp()))
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
+def _age_text(age: int | None) -> str:
+    return "unmeasured" if age is None else f"{age}s"
+
+
+def record_capacity_tick(state_dir: Path, *, now: int | None = None) -> bool:
+    """Observe the tick-written local snapshot once, independently of publication retries.
+
+    A changed state or a missed (>2h) observation resets the count to one. Reading
+    the same snapshot again cannot drain the latch. The second distinct tick
+    observation of that state is the only automatic drain, in either direction.
+    """
+    current = int(dt.datetime.now(dt.timezone.utc).timestamp()) if now is None else now
+    snapshot = _read_object(capacity.OUT)
+    observed = snapshot.get("generated_at")
+    valid = isinstance(observed, (int, float)) and 0 <= current - observed <= CAPACITY_TICK_MAX_AGE
+    previous = _read_object(state_dir / CAPACITY_TICK_FILE)
+    ticks = {}
+    if valid:
+        for pool, row in _capacity_block(snapshot).items():
+            old = previous.get(pool, {})
+            seen = 1
+            if (
+                isinstance(old, dict)
+                and old.get("state") == row["state"]
+                and isinstance(old.get("observed_at"), (int, float))
+                and 0 <= observed - old["observed_at"] <= CAPACITY_TICK_MAX_AGE
+            ):
+                seen = _seen_count(old)
+                if observed > old["observed_at"]:
+                    seen = min(2, seen + 1)
+            ticks[pool] = {"state": row["state"], "observed_at": observed, "seen": seen}
+    # A missing/stale local snapshot invalidates the previous observation.
+    write_document(state_dir / CAPACITY_TICK_FILE, ticks)
+    return bool(valid)
+
+
+def damp_capacity_states(
+    document: dict, published: dict | None, state_dir: Path, *, now=None
+) -> dict:
+    """Retain the published row until its proposed state has two local tick observations."""
+    current = int(dt.datetime.now(dt.timezone.utc).timestamp()) if now is None else now
+    ticks = _read_object(state_dir / CAPACITY_TICK_FILE)
+    result = copy.deepcopy(document)
+    baseline = (published or {}).get("capacity")
+    baseline = baseline if isinstance(baseline, dict) else {}
+    for pool, row in document.get("capacity", {}).items():
+        old = baseline.get(pool)
+        # Establish/repair an absent or malformed baseline before damping later state changes.
+        if not isinstance(old, dict):
+            continue
+        if row.get("state") == old.get("state"):
+            continue
+        tick = ticks.get(pool, {})
+        seen = 0
+        if (
+            isinstance(tick, dict)
+            and tick.get("state") == row.get("state")
+            and isinstance(tick.get("observed_at"), (int, float))
+            and 0 <= current - tick["observed_at"] <= CAPACITY_TICK_MAX_AGE
+        ):
+            seen = _seen_count(tick)
+        if seen < 2:
+            print(
+                f"[cadence] capacity publish held: {pool} local={row.get('state')} "
+                f"published={old.get('state', 'unmeasured')} seen={seen}/2"
+            )
+            result["capacity"][pool] = copy.deepcopy(old)
+    return result
+
+
+def _fetch_export(checkout: Path) -> None:
+    subprocess.run(
+        ["git", "-C", str(checkout), "fetch", "--prune", "origin"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+def read_published_export(*, remote_url="https://github.com/stranske/Orchestrator.git") -> dict:
+    """Fetch the remote publication into disposable storage; no persistent refs/state writes."""
+    with tempfile.TemporaryDirectory(prefix="route-weights-read-") as directory:
+        checkout = Path(directory)
+        subprocess.run(["git", "init", "--bare", str(checkout)], check=True, capture_output=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(checkout),
+                "remote",
+                "add",
+                "-t",
+                EXPORT_BRANCH,
+                "origin",
+                remote_url,
+            ],
+            check=True,
+            capture_output=True,
+        )
+        _fetch_export(checkout)
+        artifact = subprocess.run(
+            ["git", "-C", str(checkout), "show", f"origin/{EXPORT_BRANCH}:{EXPORT_PATH}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        value = json.loads(artifact.stdout)
+        if not isinstance(value, dict) or not isinstance(value.get("capacity"), dict):
+            raise ValueError("unmeasured publication")
+        return value
+
+
+def publish_lag(*, now: int | None = None, state_dir: Path | None = None) -> str:
+    """Read-only state comparison. Artifact age alone is not semantic lag."""
+    current = int(dt.datetime.now(dt.timezone.utc).timestamp()) if now is None else now
+    local = _read_object(capacity.OUT)
+    try:
+        published = read_published_export()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        published = {}
+    local_time = local.get("generated_at")
+    local_age = max(0, int(current - local_time)) if isinstance(local_time, (int, float)) else None
+    print(f"local capacity age={_age_text(local_age)}")
+    ticks = _read_object(
+        (state_dir or Path.home() / ".codex" / "orchestrator") / CAPACITY_TICK_FILE
+    )
+    published_age = _artifact_age(published, current)
+    block = _capacity_block(local)
+    in_sync = bool(published) and bool(local)
+    lags = []
+    for pool, row in block.items():
+        remote = published.get("capacity", {}).get(pool, {})
+        state = remote.get("state", "unmeasured") if isinstance(remote, dict) else "unmeasured"
+        observed = remote.get("observed_at") if isinstance(remote, dict) else None
+        age = (
+            max(0, int(current - observed)) if isinstance(observed, (int, float)) else "unmeasured"
+        )
+        matches = bool(local) and row["state"] == state
+        in_sync = in_sync and matches
+        tick = ticks.get(pool, {})
+        held = (
+            not matches
+            and state != "unmeasured"
+            and isinstance(tick, dict)
+            and tick.get("state") == row["state"]
+            and isinstance(tick.get("observed_at"), (int, float))
+            and 0 <= current - tick["observed_at"] <= CAPACITY_TICK_MAX_AGE
+            and _seen_count(tick) < 2
+        )
+        lag = (
+            f"held({_seen_count(tick)}/2)"
+            if held
+            else (
+                "ok"
+                if matches
+                or (
+                    state != "unmeasured"
+                    and published_age is not None
+                    and published_age <= PUBLISH_LAG_STALE_S
+                )
+                else "STALE"
+            )
+        )
+        lags.append(lag)
+        print(
+            f"pool {pool}: local={row['state']} published={state} "
+            f"published_age={_age_text(published_age)} lag={lag} "
+            f"observed_age={_age_text(age if isinstance(age, int) else None)}"
+        )
+    if in_sync:
+        print("all pools in sync")
+    if not local or not published or not lags:
+        return "unmeasured"
+    if "STALE" in lags:
+        return "STALE"
+    return next((lag for lag in lags if lag.startswith("held(")), "ok")
+
+
+def _fetch_publish_commits(endpoint: str) -> list[dict[str, Any]]:
+    """Read all commit pages; gh's default GET performs no remote mutation."""
+    response = subprocess.run(
+        ["gh", "api", "--paginate", "--slurp", endpoint],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    pages = json.loads(response.stdout)
+    if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+        raise ValueError("unmeasured commit history")
+    commits = [commit for page in pages for commit in page]
+    if any(not isinstance(commit, dict) or not commit.get("sha") for commit in commits):
+        raise ValueError("unmeasured commit history")
+    return commits
+
+
+def publish_history(
+    *,
+    now: int | None = None,
+    state_dir: Path | None = None,
+    fetcher: Callable[[str], list[dict[str, Any]]] | None = None,
+) -> None:
+    """Report the rolling 24h count and semantic lag without publishing or updating local state."""
+    current = int(dt.datetime.now(dt.timezone.utc).timestamp()) if now is None else now
+    since = (
+        dt.datetime.fromtimestamp(current - 86400, dt.timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    endpoint = f"repos/stranske/Orchestrator/commits?sha={EXPORT_BRANCH}&since={since}&per_page=100"
+    count: int | str
+    try:
+        count = len((fetcher or _fetch_publish_commits)(endpoint))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        count = "unmeasured"
+    lag = publish_lag(now=current, state_dir=state_dir)
+    print(f"commits_24h={count} (state flips local: see log) lag={lag}")
+
+
 def _exploration_block(
     version: int,
     by_task: dict[str, list[sqlite3.Row]],
@@ -473,80 +724,89 @@ def _attach_comparative_ranks(
 
 
 def _semantic_for_compare(document: dict[str, Any]) -> dict[str, Any]:
-    """Compare export semantics without timestamp-only churn.
+    """Keep actionable routing/capacity content; comparative fields are shadow diagnostics.
 
-    Exploration fields (including rate) remain publishable even within the same day.
-    Dictionary capacity rows drop ``observed_at`` so a tick-only refresh does not
-    republish. Non-dict or otherwise malformed rows are kept so the next write
-    can repair them instead of comparing as equal after they were filtered out.
+    Keep malformed structures visible for repair. Other diagnostics ship on a
+    meaningful trigger or the refresh floor. Period-end tolerance is pairwise
+    against the published baseline in _same_semantics, never a clock bucket.
     """
-    semantic = {key: value for key, value in document.items() if key != "generated_at"}
+    semantic = {
+        key: value for key, value in document.items() if key not in ("generated_at", "comparative")
+    }
     capacity_block = semantic.get("capacity")
     if isinstance(capacity_block, dict):
         compared: dict[str, Any] = {}
         for agent, entry in capacity_block.items():
             if isinstance(entry, dict):
-                compared[agent] = {
-                    key: value for key, value in entry.items() if key != "observed_at"
-                }
-                pace = entry.get("pacing")
+                compared[agent] = {"state": entry.get("state")}
+                pace = entry.get("pacing", {})
                 if isinstance(pace, dict):
                     compared[agent]["pacing"] = {
                         key: value
                         for key, value in pace.items()
-                        if key
-                        not in (
-                            "ts",
-                            "reason",
-                            "burn_rate_per_day",
-                            "burn_per_day",
-                            "fyi",
-                            "allowed_fraction",
-                            "projected_fraction",
-                            "routing_weight",
-                        )
+                        if key in ("period_end", "resets_available")
                     }
+                elif "pacing" in entry:
+                    compared[agent]["pacing"] = pace
             else:
                 compared[agent] = entry
         semantic["capacity"] = compared
-    block = semantic.get("comparative")
-    if isinstance(block, dict) and isinstance(block.get("inputs"), dict):
-        sources = block["inputs"].get("cost_source_by_agent", {})
-        semantic["comparative"] = {
-            "status": block.get("status"),
-            "lambda": {
-                a: round(v, 3) if isinstance(v, (int, float)) else v
-                for a, v in block.get("lambda", {}).items()
-            },
-            "provenance": {
-                a: {key: row.get(key) for key in ("source", "imputed")}
-                for a, row in sources.items()
-            },
-        }
-        # Entry ranks already participate in task_types/reserve comparisons.
-        # Diagnostic reasons can change each tick while the unknown rank is stable.
-        for key in ("task_types", "reserve"):
-            section = semantic.get(key, {})
-            semantic[key] = {
-                task: (
-                    {
-                        **entry,
-                        "ranking": [
-                            {k: v for k, v in row.items() if k != "comparative_reason"}
-                            for row in entry["ranking"]
-                        ],
-                    }
-                    if key == "task_types"
-                    else [
-                        {k: v for k, v in row.items() if k != "comparative_reason"} for row in entry
-                    ]
-                )
-                for task, entry in section.items()
-            }
+
+    for key in ("task_types", "reserve"):
+        if key in semantic:
+            semantic[key] = _without_comparative_rows(semantic[key], rankings=key == "task_types")
     return semantic
 
 
-def write_document(path: Path, document: dict[str, Any]) -> bool:
+def _without_comparative_rows(section, *, rankings):
+    if not isinstance(section, dict):
+        return section
+
+    def without_comparative(row):
+        return (
+            {key: value for key, value in row.items() if not key.startswith("comparative_")}
+            if isinstance(row, dict)
+            else row
+        )
+
+    result = {}
+    for task, entry in section.items():
+        if rankings and isinstance(entry, dict):
+            entry = dict(entry)
+            if isinstance(entry.get("ranking"), list):
+                entry["ranking"] = [without_comparative(row) for row in entry["ranking"]]
+        elif not rankings and isinstance(entry, list):
+            entry = [without_comparative(row) for row in entry]
+        result[task] = entry
+    return result
+
+
+def _same_semantics(document: dict, published: dict) -> bool:
+    proposed = _semantic_for_compare(document)
+    baseline = _semantic_for_compare(published)
+    incoming = proposed.get("capacity")
+    previous = baseline.get("capacity")
+    if isinstance(incoming, dict) and isinstance(previous, dict):
+        for pool, row in incoming.items():
+            old = previous.get(pool)
+            if not isinstance(row, dict) or not isinstance(old, dict):
+                continue
+            pace, old_pace = row.get("pacing"), old.get("pacing")
+            if not isinstance(pace, dict) or not isinstance(old_pace, dict):
+                continue
+            end, old_end = pace.get("period_end"), old_pace.get("period_end")
+            if (
+                isinstance(end, (int, float))
+                and not isinstance(end, bool)
+                and isinstance(old_end, (int, float))
+                and not isinstance(old_end, bool)
+                and abs(end - old_end) <= PERIOD_END_TOLERANCE_S
+            ):
+                pace["period_end"] = old_end
+    return proposed == baseline
+
+
+def write_document(path: Path, document: dict[str, Any], *, refresh: bool = False) -> bool:
     """Write only semantic changes, retaining the earlier timestamp on an unchanged export."""
     if path.exists():
         try:
@@ -554,7 +814,7 @@ def write_document(path: Path, document: dict[str, Any]) -> bool:
         except json.JSONDecodeError:
             existing = None
         if isinstance(existing, dict):
-            if _semantic_for_compare(existing) == _semantic_for_compare(document):
+            if not refresh and _same_semantics(document, existing):
                 return False
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
@@ -577,7 +837,8 @@ def publish_document(
         print("publish_guard: --allow-evidence-regression requested", file=sys.stderr)
 
     canonical = provision.ensure_canonical("stranske/Orchestrator")
-    subprocess.run(["git", "-C", str(canonical), "fetch", "--prune", "origin"], check=True)
+    _fetch_export(canonical)
+    published = None
     remote_ref = f"origin/{EXPORT_BRANCH}"
     has_remote = (
         subprocess.run(
@@ -667,9 +928,28 @@ def publish_document(
         subprocess.run(
             ["git", "-C", str(canonical), "switch", "-c", EXPORT_BRANCH, "origin/main"], check=True
         )
+    document = damp_capacity_states(
+        document, published, state_dir or Path.home() / ".codex" / "orchestrator"
+    )
+    # A diagnostic-only refresh is allowed only after the published artifact ages 24h.
+    now = int(dt.datetime.fromisoformat(_now().replace("Z", "+00:00")).timestamp())
+    published_age = _artifact_age(published or {}, now)
+    semantic_equal = published is not None and _same_semantics(document, published)
+    refresh = semantic_equal and (published_age is None or published_age > PUBLISH_REFRESH_FLOOR_S)
+    # Compare the fetched remote artifact before touching a potentially divergent local shadow.
+    if semantic_equal and not refresh:
+        print(
+            f"unchanged published_age={_age_text(published_age)}/floor={PUBLISH_REFRESH_FLOOR_S}s"
+        )
+        return False
+    if refresh:
+        print(f"refresh published_age={_age_text(published_age)}/floor={PUBLISH_REFRESH_FLOOR_S}s")
+        document = {**document, "generated_at": _now()}
     target = canonical / EXPORT_PATH
-    if not write_document(target, document):
-        print("unchanged")
+    if not write_document(target, document, refresh=refresh):
+        print(
+            f"unchanged published_age={_age_text(published_age)}/floor={PUBLISH_REFRESH_FLOOR_S}s"
+        )
         return False
     subprocess.run(["git", "-C", str(canonical), "add", str(EXPORT_PATH)], check=True)
     identity = (
@@ -766,7 +1046,7 @@ def _selftest() -> None:
             )
             is False
         )
-        # State and window each republish independently; observed_at alone does not.
+        # State triggers publication; window and observed_at are carried on other triggers.
         shed_snapshot = json.loads(json.dumps(capacity_snapshot))
         shed_agent = next(iter(capacity.AGENTS))
         current_state = shed_snapshot["agents"][shed_agent]["state"]
@@ -789,7 +1069,7 @@ def _selftest() -> None:
                     db_path, minimum=20, now=fixed_now, capacity_snapshot=window_snapshot
                 ),
             )
-            is True
+            is False
         )
         observed_only = json.loads(json.dumps(window_snapshot))
         observed_only["generated_at"] = int(observed_only.get("generated_at") or 0) + 3600
@@ -882,6 +1162,15 @@ def main() -> int:
     )
     parser.add_argument("--feedback-db", type=Path)
     parser.add_argument("--comparative-report", action="store_true")
+    parser.add_argument(
+        "--publish-lag", action="store_true", help="read-only local/published pool states"
+    )
+    parser.add_argument(
+        "--publish-history", choices=["24h"], help="read-only rolling publication count and lag"
+    )
+    parser.add_argument(
+        "--record-capacity-tick", action="store_true", help="observe local state once per tick"
+    )
     parser.add_argument("--window-days", type=int, default=comparative.WINDOW_DAYS)
     parser.add_argument(
         "--pacing-history",
@@ -901,6 +1190,18 @@ def main() -> int:
     if args.selftest:
         _selftest()
         return 0
+    if args.publish_history:
+        publish_history(state_dir=args.state_dir)
+        return 0
+    if args.publish_lag:
+        publish_lag(state_dir=args.state_dir)
+        return 0
+    if args.record_capacity_tick:
+        return (
+            0
+            if record_capacity_tick(args.state_dir or Path.home() / ".codex" / "orchestrator")
+            else 1
+        )
     db_path = feedback.resolve_db_path(args.feedback_db)
     if args.comparative_report:
         if args.window_days < 1:
@@ -917,7 +1218,7 @@ def main() -> int:
         return 0
     document = build_document(db_path, args.min_observations)
     # Credit INVOCATION only after the document builds; `success` below records publication's
-    # result. A success alone moves `last_success` only, so this daily step exported every day from
+    # result. A success alone moves `last_success` only, so the former daily step exported every day from
     # 2026-09-04 while the firing monitor read it as silent since its one consult trial. Guarded: a
     # ledger fault must not stop the export a remote consumer reads.
     try:

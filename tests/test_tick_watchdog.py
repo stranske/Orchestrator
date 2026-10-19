@@ -346,7 +346,7 @@ def test_newest_outcome_is_the_newest_of_any_step_success_or_failure() -> None:
     assert cadence_registry.newest_outcome({"steps": []}) is None
     # ONE stale rule: the watchdog's bound is the registry's own rule for its shortest step.
     assert cadence_registry.shortest_stale_after_s() == cadence_registry.stale_after_seconds(
-        {"cadence_days": 0}
+        {"cadence_days": cadence_registry.CADENCE_DAYS_FOR["hourly"]}
     )
 
 
