@@ -554,6 +554,8 @@ def test_production_native_script_adapter_uses_pins_and_exact_token_without_runn
             "# offline artifact for pinned adapter protocol test\n# HANDOFF_EXACT_TOKEN_V1\n"
         )
         scripts[phase] = {"path": str(path), "sha256": rb._hash(path)}
+    module = Path(rb.__file__).with_name("closer_native_lease.py")
+    scripts["lease_module"] = {"path": str(module), "sha256": rb._hash(module)}
     cfg = {
         "native_hooks": scripts,
         "handoff_agent": "codex",

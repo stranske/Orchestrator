@@ -26,6 +26,9 @@ CORE_FILES = (
     "scripts/api_client.py",
     "scripts/reusable_ci_scope.py",
     "fixtures/closer-operation/v1/operation.schema.json",
+    ".github/workflows/reusable-10-ci-python.yml",
+    ".github/workflows/selftest-reusable-ci.yml",
+    ".github/workflows/maint-62-integration-consumer.yml",
 )
 CORE_DEPENDENCIES = {"jsonschema": ">=4.22.0", "PyYAML": "6.0.3", "requests": "2.34.2"}
 DESKTOP_UNSUPPORTED = "desktop observer unsupported: no registered desktop app/run metadata reader"
@@ -425,6 +428,17 @@ class PinnedNativeHooks:
         pin = cfg.get("native_hooks") or {}
         self.cfg, self.runner, self.now = cfg, runner, now
         self.scripts = {}
+        module_pin = pin.get("lease_module") or {}
+        self.lease_module = Path(module_pin.get("path", ""))
+        self.lease_digest = module_pin.get("sha256")
+        if (
+            self.lease_module.resolve()
+            != Path(__file__).with_name("closer_native_lease.py").resolve()
+            or not self.lease_module.is_file()
+            or _hash(self.lease_module) != self.lease_digest
+        ):
+            raise BindingError("native exact-token lease module missing or outside pinned Runtime")
+        self.script_digests = {}
         for phase in ("prerun", "postrun"):
             entry = pin.get(phase) or {}
             path = Path(entry.get("path", ""))
@@ -443,6 +457,7 @@ class PinnedNativeHooks:
                     "for exact-token cleanup; preserving lane and successor owners"
                 )
             self.scripts[phase] = path
+            self.script_digests[phase] = entry["sha256"]
         actor = cfg.get("handoff_agent")
         if actor not in {"codex", "claude_code", "cursor", "gemini", "muse"}:
             raise BindingError("native ACTION A/C actor identity missing/unsupported")
@@ -460,8 +475,21 @@ class PinnedNativeHooks:
         )
         self.lane = handoff / ".lane-closer.lock"
         self.env["HANDOFF_LANE_MUTEX_DIR"] = str(self.lane)
+        self.env["HANDOFF_HANDOFF_ROOT"] = str(handoff)
+        self.env["CLOSER_NATIVE_LEASE_PY"] = str(self.lease_module)
+        self.env["CLOSER_NATIVE_LEASE_INTERPRETER"] = sys.executable
+
+    def _pins_match(self) -> bool:
+        try:
+            return _hash(self.lease_module) == self.lease_digest and all(
+                _hash(path) == self.script_digests[phase] for phase, path in self.scripts.items()
+            )
+        except OSError:
+            return False
 
     def prerun(self, deadline: float) -> tuple[int, str | None]:
+        if not self._pins_match():
+            return 65, None
         if self.lane.exists():
             return 65, None  # unknown or expired owner is still an owner
         result = self.runner(
@@ -486,6 +514,8 @@ class PinnedNativeHooks:
             return False
 
     def postrun(self, token: str, deadline: float) -> int:
+        if not self._pins_match():
+            return 65
         if not self.owns(token):
             return 65  # C attempt refuses before launching cleanup against a successor
         result = self.runner(

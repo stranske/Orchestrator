@@ -19,6 +19,8 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
+import closer_resources
+
 SCHEMA = "closer-pipeline/v1"
 UNBOUND_UNCERTAIN_PROVIDER_ERROR = "provider_outcome_uncertainty_without_valid_bound_run"
 STAGES = ("prepare", "interpret", "exception", "act", "reconcile")
@@ -2120,6 +2122,9 @@ def _load(path: Path) -> dict[str, Any]:
 
 
 def _save(path: Path, doc: Mapping[str, Any]) -> None:
+    fence = closer_resources.fence_for(path)
+    if fence is not None:
+        fence()  # scoped mode: a stale or expired lease holder must not commit
     encoded = json.dumps(doc, ensure_ascii=False, allow_nan=False)
     if len(encoded.encode()) > 8 * 1024 * 1024:
         raise ValueError("pipeline state exceeds 8 MiB; retain large evidence externally")
@@ -2130,6 +2135,8 @@ def _save(path: Path, doc: Mapping[str, Any]) -> None:
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
+        if fence is not None:
+            fence()  # serialization/fsync may have crossed the lease deadline
         os.replace(temp, path)
         dfd = os.open(path.parent, os.O_RDONLY)
         try:
@@ -3492,7 +3499,7 @@ def _run_pipeline_impl(
         return receipt
 
 
-def run_pipeline(
+def _run_pipeline_legacy(
     state_path: str | Path,
     targets: Iterable[str],
     *,
@@ -3540,6 +3547,44 @@ def run_pipeline(
                 with contextlib.suppress(OSError):
                     fcntl.flock(run_lock.fileno(), fcntl.LOCK_UN)
                 run_lock.close()
+
+
+def run_pipeline(state_path: str | Path, targets: Iterable[str], **kwargs: Any) -> dict[str, Any]:
+    """Run the scheduler. ``coordinator_mode`` is ``legacy`` (default; one round lock and one
+    shared ledger) or ``resource_scoped`` (opt-in; per-target leases and shards, see
+    ``closer_resources.run_scoped``). Unset, it reads ``ORCH_CLOSER_COORDINATOR_MODE``."""
+    mode = closer_resources.resolve_mode(kwargs.pop("coordinator_mode", None))
+    contract_pin = kwargs.pop("coordinator_contract_pin", None)
+    if mode == "legacy":
+        if contract_pin is not None:
+            raise ValueError("coordinator_contract_pin applies to resource_scoped mode only")
+        assigned = list(targets)
+        # Rollback guard: a scoped root that still holds running/uncertain (or unreadable) shards
+        # keeps its affected targets away from legacy; disjoint targets run as before.
+        fenced_rows, runnable = closer_resources.rollback_fence(state_path, assigned)
+        if not fenced_rows:
+            return _run_pipeline_legacy(state_path, assigned, **kwargs)
+        if not runnable:
+            return closer_resources.legacy_refusal_receipt(
+                state_path, assigned, fenced_rows, float(kwargs.get("deadline", 0)), kwargs.get("now", time.time)
+            )
+        receipt = _run_pipeline_legacy(state_path, runnable, **kwargs)
+        receipt["targets"] = {**receipt.get("targets", {}), **fenced_rows}
+        receipt["scoped_rollback"] = {"fenced_targets": sorted(fenced_rows), "drainable": 0}
+        return receipt
+    return closer_resources.run_scoped(state_path, targets, contract_pin=contract_pin, **kwargs)
+
+
+def validate_stop_scoped(
+    state_path: str | Path, round_id: str, assignment_targets: Iterable[str] | None = None, **kwargs: Any
+) -> dict[str, Any]:
+    """``validate_stop`` for one named resource-scoped round (see closer_resources.validate_stop)."""
+    return closer_resources.validate_stop(state_path, round_id, assignment_targets, **kwargs)
+
+
+def scoped_capability() -> dict[str, Any]:
+    """Version-pin capability for a release installer (integration unproved here)."""
+    return closer_resources.capability(SCHEMA)
 
 
 def _save_state_locked(path: Path, state: Mapping[str, Any]) -> None:
