@@ -300,7 +300,8 @@ def test_inventory_lists_profiles_without_default():
         assert row["registered_profile_ids"]
 
 
-def test_readiness_cli_distinct_from_desktop_qualified():
+def test_readiness_cli_distinct_from_desktop_qualified(monkeypatch):
+    monkeypatch.setattr(cal.shutil, "which", lambda _binary: "/fixture/codex")
     ready = cal.readiness(
         "codex",
         execution_profiles.default_codex_profile("offload", "mid"),
@@ -332,7 +333,8 @@ def test_materialized_launcher_agent_cli_inventory_subprocess(tmp_path):
     assert len(payload["bindings"]) == len(cal.APPROVED_AGENTS)
 
 
-def test_cli_probe_uses_injected_runner():
+def test_cli_probe_uses_injected_runner(monkeypatch):
+    monkeypatch.setattr(cal.shutil, "which", lambda _binary: "/fixture/codex")
     class Proc:
         returncode = 0
         stdout = stderr = ""
