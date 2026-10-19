@@ -267,6 +267,71 @@ def _deadline_with_legacy_round(requested_deadline, state_doc, state_path):
     return min(requested_deadline, previous_deadline)
 
 
+def _deadline_with_pipeline_round(requested_deadline, legacy_state, state_path):
+    """Scope an adopted pipeline budget separately from the unchanged legacy queue.
+
+    Legacy assessment writes can invalidate its old accounting receipt. That is
+    still a legacy barrier, not permission to extend its round or replay an
+    operation. The pipeline must prove its own prior continuation, and every
+    action still checks the original legacy operation dependency.
+    """
+    legacy_bound = _deadline_with_legacy_round(requested_deadline, legacy_state, state_path)
+    sampled_at = time.time()
+    if legacy_bound >= sampled_at:
+        return legacy_bound, "legacy_window_retained"
+    import closer_pipeline
+
+    path = _pipeline_state_path(state_path)
+    try:
+        state = closer_pipeline._load(path)
+        candidates = [
+            (run_id, run)
+            for run_id, run in state["runs"].items()
+            if isinstance(run_id, str)
+            and run_id
+            and isinstance(run, dict)
+            and _finite_number(run.get("created"))
+            and _finite_number(run.get("deadline"))
+            and run["created"] <= run["deadline"]
+        ]
+        if not candidates or len(candidates) != len(state["runs"]):
+            return legacy_bound, "missing_or_malformed_pipeline_runs"
+        run_id, previous = max(candidates, key=lambda pair: pair[1]["created"])
+        if previous["deadline"] > sampled_at:
+            # Another adopted round retains its original window. Do not use
+            # this caller to renew it or preempt its owner.
+            return legacy_bound, "prior_pipeline_window_active"
+        summary = previous.get("receipt_summary")
+        if (
+            not isinstance(summary, dict)
+            or summary.get("schema") != "closer-pipeline-receipt/v1"
+            or summary.get("run_id") != run_id
+            or summary.get("deadline") != previous["deadline"]
+            or not _finite_number(summary.get("finished_at"))
+            or not previous["created"] <= summary["finished_at"] <= sampled_at
+        ):
+            return legacy_bound, "pipeline_receipt_binding_invalid"
+        historical_now = summary["finished_at"]
+        closer_pipeline._resolved_audit_history(path, previous)
+        prior = closer_pipeline.validate_stop(
+            path, assignment_targets=previous.get("assignment"), now=lambda: historical_now
+        )
+        if not isinstance(prior, dict):
+            return legacy_bound, "pipeline_stop_receipt_invalid"
+        if prior.get("valid") is True:
+            return requested_deadline, "valid_pipeline_stop"
+        if closer_pipeline._safe_prior_continuation(prior, previous, path)[0]:
+            return requested_deadline, "safe_pipeline_continuation"
+        if closer_pipeline._expired_invalid_round_recovery(
+            prior, previous, path, run_id, sampled_at
+        )[0]:
+            return requested_deadline, "expired_pipeline_recovery"
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError) as exc:
+        # Unverifiable adoption retains the old bound and a bounded diagnostic.
+        return legacy_bound, f"pipeline_adoption_unverifiable:{type(exc).__name__}"
+    return legacy_bound, "no_pipeline_continuation_proof"
+
+
 def _confirmed_post_merge_label_event(target, operation, evidence):
     """Find a real label event bound to a durable completed merge-verification request."""
     if not isinstance(operation, dict) or not isinstance(evidence, dict):
@@ -3978,6 +4043,7 @@ def main(argv=None):
     assignment_rows = assignment_rows_from_file(args.assignment)
     targets = list(assignment_rows)
     deadline = time.time() + args.budget_seconds + 300
+    budget_admission = None
     if Path(args.state).exists():
         try:
             previous_state = closer_queue._read_state(Path(args.state))
@@ -3985,7 +4051,22 @@ def main(argv=None):
             raise RuntimeError(
                 "legacy closer state is unreadable; refusing to renew its execution budget"
             ) from exc
-        deadline = _deadline_with_legacy_round(deadline, previous_state, args.state)
+        requested_deadline = deadline
+        if args.pipeline:
+            deadline, admission_reason = _deadline_with_pipeline_round(
+                deadline, previous_state, args.state
+            )
+            budget_admission = {
+                "reason": admission_reason,
+                "scope": "pipeline",
+                "requested_deadline": requested_deadline,
+                "selected_deadline": deadline,
+                "legacy_deadline": (previous_state.get("round") or {}).get("deadline"),
+                "legacy_state_digest": digest(previous_state),
+                "legacy_round_renewed": False,
+            }
+        else:
+            deadline = _deadline_with_legacy_round(deadline, previous_state, args.state)
     handoff = (
         Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex/handoff")) / "lane-handoff.json"
     )
@@ -4043,6 +4124,8 @@ def main(argv=None):
             _pipeline_state_path(args.state, shadow=args.shadow), assignment_targets=targets
         )
         result["validation"] = validation
+        if budget_admission is not None:
+            result["budget_admission"] = budget_admission
         print(json.dumps(result, sort_keys=True))
         return 0 if validation.get("valid") is True else 78
     if not args.apply:
