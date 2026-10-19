@@ -110,6 +110,45 @@ def test_local_packet_progresses_with_github_unavailable_but_remote_action_waits
     assert gh.calls == 1
 
 
+def test_offline_retained_packet_runs_through_durable_queue(tmp_path):
+    class OfflineGitHub:
+        def __init__(self):
+            self.calls = 0
+
+        def snapshot(self, _target):
+            self.calls += 1
+            raise ConnectionError("offline")
+
+    gh = OfflineGitHub()
+    backend = adapter.Closer(
+        gh,
+        state_path=tmp_path / "queue.json",
+        seed_snapshots={TARGET: snapshot()},
+        local_first=True,
+        apply=True,
+        workers=True,
+    )
+    backend.select = lambda _s: ("review", "local review", True, None)
+    backend.worker = lambda *_args, **_kwargs: {"status": "completed", "local_result": True}
+    receipt = closer_queue.run_round(
+        backend.state_path,
+        [TARGET],
+        backend.observe,
+        backend.execute,
+        reconcile=backend.reconcile,
+        deadline=time.time() + 360,
+        max_workers=1,
+        max_passes=1,
+    )
+    row = next(row for row in receipt["accounting"] if row["target"] == TARGET)
+    assert row["action"] == "review"
+    assert row["operation_status"] == "completed"
+    assert row["status"] == "deferred" and row["reason"] == "no_progress"
+    durable = closer_queue._read_state(backend.state_path)["items"][TARGET]
+    assert durable["operation"]["result"]["local_result"] is True
+    assert gh.calls == 0
+
+
 def test_pipeline_keeps_local_io_capacity_when_github_capacity_is_unavailable(monkeypatch):
     monkeypatch.setattr(adapter, "_fresh_capacity_report", lambda: None)
     monkeypatch.setattr(
