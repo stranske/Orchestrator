@@ -61,7 +61,7 @@ mutation body through `RuntimeBinding.execute` → `submit_effect`. The producti
 constructs Core's GitHub Contents CAS store and native transport from an already supplied
 GH_TOKEN/GITHUB_TOKEN only. It never reads credentials elsewhere or substitutes a local
 store. Original merge guard and Tasks/AC evidence remain mandatory. `initiate_verify` and
-`post_merge_verify` normalize to Core's `verify` action. `respond_review` and `close_source`
+`post_merge_verify` normalize to Core's `verify_request` action. `respond_review` and `close_source`
 are explicit unsupported capabilities; `reconcile` is never a mutation alias. Submitted
 success/unknown operations remain Core barriers until independently reconciled.
 
