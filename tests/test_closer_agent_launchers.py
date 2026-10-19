@@ -424,7 +424,7 @@ def test_cli_readiness_does_not_require_nonexistent_manifest_argument(monkeypatc
     assert cal.main(["readiness", "--agent", "codex", "--profile", PROFILE]) == 0
 
 
-def test_policy_change_after_preparation_is_checked_before_dispatch(tmp_path, monkeypatch):
+def test_manifest_change_after_preparation_is_checked_before_dispatch(tmp_path, monkeypatch):
     manifest, path, root, install = host_runtime_fixture(tmp_path)
     policy_calls = []
     called = []
@@ -632,3 +632,102 @@ def test_missing_profile_cli_returns_prelaunch_refusal(tmp_path, monkeypatch):
     assert result["provider_started"] is False
     assert "CLI command preparation refused" in result["detail"]
     assert not calls
+
+
+def test_binding_omitted_from_pin_never_imports_pythonpath_fallback(tmp_path):
+    import os
+
+    host, path, _, install = host_runtime_fixture(tmp_path)
+    host["modules"].pop("closer_agent_launchers.py")
+    (install / "closer_agent_launchers.py").unlink()
+    path.write_text(json.dumps(host))
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    marker = tmp_path / "foreign-imported"
+    (foreign / "closer_agent_launchers.py").write_text(
+        "from pathlib import Path\nPath(" + repr(str(marker)) + ").touch()\n"
+        "def main(*args, **kwargs): return 0\n"
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(install / "closer_launcher.py"),
+            "agent-cli",
+            "--manifest",
+            str(path),
+            "inventory",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={**os.environ, "PYTHONPATH": str(foreign)},
+    )
+    assert proc.returncode == 78, (proc.stdout, proc.stderr)
+    assert "agent CLI binding is not in the pinned module set" in proc.stdout
+    assert not marker.exists()
+
+
+def test_dynamic_policy_pause_is_rechecked_with_unchanged_manifest(tmp_path):
+    _, path, root, install = host_runtime_fixture(tmp_path)
+    before = path.read_bytes()
+    policy_calls = []
+    offload_calls = []
+
+    def policy(value):
+        policy_calls.append(value.copy())
+        return "worker paused" if len(policy_calls) == 2 else None
+
+    result = cal.run_cli(
+        "codex",
+        PROFILE,
+        "bounded review",
+        manifest_path=path,
+        root=root,
+        own_launcher_path=install / "closer_launcher.py",
+        policy_fn=policy,
+        qualify_fn=lambda *args: [],
+        native_probe=lambda *args: None,
+        offload_fn=lambda *args, **kwargs: offload_calls.append(True),
+    )
+    assert len(policy_calls) == 2
+    assert "runtime policy held: worker paused" in result["detail"]
+    assert not offload_calls
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("alter_public_descriptor", [False, True])
+def test_missing_dependency_never_imports_pythonpath_fallback(tmp_path, alter_public_descriptor):
+    import os
+
+    host, path, _, install = host_runtime_fixture(tmp_path)
+    host["modules"].pop("adapters.py")
+    (install / "adapters.py").unlink()
+    path.write_text(json.dumps(host))
+    if alter_public_descriptor:
+        descriptor = install / "closer-runtime-package.json"
+        public = json.loads(descriptor.read_text())
+        public["modules"].pop("adapters.py")
+        descriptor.write_text(json.dumps(public))
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    marker = tmp_path / "foreign-adapters-imported"
+    (foreign / "adapters.py").write_text(
+        "from pathlib import Path\nPath(" + repr(str(marker)) + ").touch()\n"
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(install / "closer_launcher.py"),
+            "agent-cli",
+            "--manifest",
+            str(path),
+            "inventory",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={**os.environ, "PYTHONPATH": str(foreign)},
+    )
+    assert not marker.exists(), (proc.stdout, proc.stderr)
+    assert proc.returncode == 78
+    assert "public Runtime descriptor differs" in proc.stdout

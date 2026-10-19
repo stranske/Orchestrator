@@ -40,8 +40,9 @@ runs `policy_problem`, `qualify`, and `native_barrier` before any provider attem
 
 Shared entry: `closer_launcher.py agent-cli --manifest HOST_MANIFEST inventory` (or `readiness`,
 `plan`, `run`). The shared launcher verifies its complete package before importing the binding.
-An inner plan/run manifest must name the same file. The dispatcher rechecks the manifest and
-policy after preparation and preserves the full native result. Exit codes alone do not prove
+An inner plan/run manifest must name the same file. `run_cli` rechecks the manifest and
+policy after preparation, immediately before `dispatcher.offload`, and preserves the full
+native result. Exit codes alone do not prove
 a provider never started; uncertain submissions require reconciliation. Timeouts must be
 explicit integers from 1 through 900 seconds (default 30).
 

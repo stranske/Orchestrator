@@ -399,10 +399,7 @@ def verify_runtime_manifest(
     problems.extend(_manifest_consistency(manifest, loaded))
     effective = loaded
     own = str(own_launcher_path or Path(__file__).with_name("closer_launcher.py"))
-    if own:
-        problems.extend(closer_launcher.pin_problems(dict(effective), own_path=own))
-    else:
-        problems.append("manifest launcher.path missing for pin check")
+    problems.extend(closer_launcher.pin_problems(dict(effective), own_path=own))
     import closer_campaign as campaign
 
     problems.extend(campaign.verify_modules(dict(effective)))
