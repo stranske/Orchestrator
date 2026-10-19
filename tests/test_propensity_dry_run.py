@@ -16,10 +16,10 @@ from typing import Literal
 
 import pytest
 
+import cadence_registry
 import capabilities
 import capability_advisor
 import capability_propensity as cp
-import cadence_registry
 import paths
 
 # Smallest unique fragment that is ABSENT if the early reject is deleted.  No newlines, no
