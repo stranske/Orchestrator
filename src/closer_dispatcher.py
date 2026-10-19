@@ -938,6 +938,8 @@ class Closer:
         assignment_guard_fn=None,
         seed_snapshots=None,
         local_first=False,
+        runtime_binding=None,
+        require_runtime_binding=False,
     ):
         self.gh = github
         self.state_path = Path(state_path)
@@ -960,6 +962,8 @@ class Closer:
         self.assignment_guard_fn = assignment_guard_fn
         self.seed_snapshots = seed_snapshots or {}
         self.local_first = local_first
+        self.runtime_binding = runtime_binding
+        self.require_runtime_binding = require_runtime_binding
 
     def _local_snapshot(self, target):
         cached = self.seed_snapshots.get(target)
@@ -1290,73 +1294,85 @@ class Closer:
         pr_target = fresh.get("pr_target", target)
         if action in {"collect_evidence", "review", "disposition", "repair"}:
             return self.worker(target, action, fresh, operation)
-        if action in {"initiate_verify", "post_merge_verify"}:
-            return self.initiate_verify(pr_target, fresh)
-        if action == "merge":
-            if not acceptance_ok(fresh, self.dispositions.get(target)):
-                return {"status": "blocked", "reason": "acceptance evidence changed"}
-            import paths
 
-            # The existing guard remains the sole terminal merge path. Bound its process;
-            # a timeout is an uncertain operation, reconciled before any retry.
-            timeout = max(1, int(operation["deadline"] - time.time()))
-            proc = self.run_fn(
-                [
-                    sys.executable,
-                    str(paths.MODULE_DIR / "merge_guard.py"),
-                    pr_target,
-                    "--expected-head",
-                    fresh["head"],
-                    "--confirm-merge",
-                ],
-                timeout=timeout,
-            )
-            try:
-                result = json.loads(proc.stdout)
-            except ValueError:
-                raise RuntimeError("merge guard outcome unknown; inspect remote state") from None
-            return {
-                "status": (
-                    "completed"
-                    if result.get("merge_executed") and not result.get("blocked")
-                    else "blocked"
-                ),
-                "result": result,
-            }
-        if action == "respond_review":
-            decision = self.dispositions[target]
-            if decision.get("review_revision") != fresh["review_revision"] or not evidence_file_ok(
-                decision["response"]
-            ):
-                return {"status": "stale", "reason": "review or integrated response changed"}
-            repo, number = pr_target.split("#")
-            body = Path(decision["response"]["path"]).read_text()
-            marker = f"<!-- closer-operation:{operation['id']} -->"
-            thread_ids = decision.get("resolve_threads", [])
-            active_ids = {t["id"] for t in fresh["threads"] if not t["isResolved"]}
-            if not isinstance(thread_ids, list) or not set(thread_ids).issubset(active_ids):
-                return {
-                    "status": "blocked",
-                    "reason": "integrated review thread identities invalid",
-                }
-            self.gh.api(
-                f"repos/{repo}/issues/{number}/comments",
-                method="POST",
-                fields={"body": body + "\n" + marker},
-            )
-            for thread in thread_ids:
-                query = (
-                    "mutation { resolveReviewThread(input:{threadId:"
-                    + json.dumps(thread)
-                    + "}) {thread{id isResolved}}}"
+        def native_effect():
+            if action in {"initiate_verify", "post_merge_verify"}:
+                return self.initiate_verify(pr_target, fresh)
+            if action == "merge":
+                if not acceptance_ok(fresh, self.dispositions.get(target)):
+                    return {"status": "blocked", "reason": "acceptance evidence changed"}
+                import paths
+
+                # The existing guard remains the sole terminal merge path. Bound its process;
+                # a timeout is an uncertain operation, reconciled before any retry.
+                timeout = max(1, int(operation["deadline"] - time.time()))
+                proc = self.run_fn(
+                    [
+                        sys.executable,
+                        str(paths.MODULE_DIR / "merge_guard.py"),
+                        pr_target,
+                        "--expected-head",
+                        fresh["head"],
+                        "--confirm-merge",
+                    ],
+                    timeout=timeout,
                 )
-                self.gh.api("graphql", method="POST", fields={"query": query}, resource="graphql")
-            return {"status": "completed", "operation_marker": marker}
-        if action == "close_source":
-            return self.close_sources(
-                pr_target, fresh, owner=operation["owner"], decision_target=target
-            )
-        return {"status": "blocked", "reason": f"unsupported action {action}"}
+                try:
+                    result = json.loads(proc.stdout)
+                except ValueError:
+                    raise RuntimeError(
+                        "merge guard outcome unknown; inspect remote state"
+                    ) from None
+                return {
+                    "status": (
+                        "completed"
+                        if result.get("merge_executed") and not result.get("blocked")
+                        else "blocked"
+                    ),
+                    "result": result,
+                }
+            if action == "respond_review":
+                decision = self.dispositions[target]
+                if decision.get("review_revision") != fresh[
+                    "review_revision"
+                ] or not evidence_file_ok(decision["response"]):
+                    return {"status": "stale", "reason": "review or integrated response changed"}
+                repo, number = pr_target.split("#")
+                body = Path(decision["response"]["path"]).read_text()
+                marker = f"<!-- closer-operation:{operation['id']} -->"
+                thread_ids = decision.get("resolve_threads", [])
+                active_ids = {t["id"] for t in fresh["threads"] if not t["isResolved"]}
+                if not isinstance(thread_ids, list) or not set(thread_ids).issubset(active_ids):
+                    return {
+                        "status": "blocked",
+                        "reason": "integrated review thread identities invalid",
+                    }
+                self.gh.api(
+                    f"repos/{repo}/issues/{number}/comments",
+                    method="POST",
+                    fields={"body": body + "\n" + marker},
+                )
+                for thread in thread_ids:
+                    query = (
+                        "mutation { resolveReviewThread(input:{threadId:"
+                        + json.dumps(thread)
+                        + "}) {thread{id isResolved}}}"
+                    )
+                    self.gh.api(
+                        "graphql", method="POST", fields={"query": query}, resource="graphql"
+                    )
+                return {"status": "completed", "operation_marker": marker}
+            if action == "close_source":
+                return self.close_sources(
+                    pr_target, fresh, owner=operation["owner"], decision_target=target
+                )
+            return {"status": "blocked", "reason": f"unsupported action {action}"}
+
+        if self.require_runtime_binding or self.runtime_binding is not None:
+            if self.runtime_binding is None:
+                return {"status": "blocked", "reason": "pinned shared Core binding required"}
+            return self.runtime_binding.execute(target, action, fresh, operation, native_effect)
+        return native_effect()  # deployed legacy invocation retains its native guards
 
     def initiate_verify(self, target, snapshot):
         if snapshot["state"] != "MERGED" or not SHA.fullmatch(str(snapshot.get("merge"))):
@@ -3354,6 +3370,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             assignment_guard_fn=backend.assignment_guard_fn,
             seed_snapshots={target: snap} if isinstance(snap, dict) else {},
             local_first=bool(isinstance(snap, dict) and snap.get("_local_cached")),
+            runtime_binding=backend.runtime_binding,
+            require_runtime_binding=backend.require_runtime_binding,
         )
         interpreted = full_interpretation(context.get("interpret", {}))
         if (
@@ -4001,6 +4019,9 @@ def main(argv=None):
     run.add_argument("--apply", action="store_true")
     run.add_argument("--workers", action="store_true")
     run.add_argument(
+        "--runtime-manifest", help="private pinned Runtime/Core binding (new launchers)"
+    )
+    run.add_argument(
         "--pipeline",
         action="store_true",
         help="run staged evidence and low-cost interpretation before the guarded queue",
@@ -4091,8 +4112,15 @@ def main(argv=None):
             raise RuntimeError("scoped blocker inventory unreadable; preserve owners") from exc
 
     blockers = read_blockers()
+    runtime_binding = None
+    if args.runtime_manifest:
+        from closer_runtime_binding import binding_from_manifest
+
+        runtime_binding = binding_from_manifest(args.runtime_manifest)
     backend = Closer(
         GitHub(deadline=deadline),
+        runtime_binding=runtime_binding,
+        require_runtime_binding=args.runtime_manifest is not None,
         state_path=args.state,
         apply=args.apply,
         workers=args.workers,

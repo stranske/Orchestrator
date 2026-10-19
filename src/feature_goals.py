@@ -97,7 +97,25 @@ FEATURES = (
     _goal(
         "dedup-guard", "G1", "duplicate open PRs per issue over 72 hours", "duplicate_prs", "zero"
     ),
+    Goal(
+        "closer-campaign",
+        "G1",
+        "independently observed desktop-qualified guarded remote completion",
+        "feature_goals.py:closer_campaign_completion",
+        "increase",
+        True,
+        "owner, 2026-10-19",
+    ),
 )
+
+
+def closer_campaign_completion(now: int) -> Measurement:
+    return Measurement(
+        None,
+        "unmeasured",
+        now,
+        "would need registered desktop observer and exact pinned remote completion receipt",
+    )
 
 
 def unknown(now: int, query: str) -> Measurement:
