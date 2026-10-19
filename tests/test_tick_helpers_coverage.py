@@ -3,8 +3,40 @@
 from __future__ import annotations
 
 import json
+import socket
+import subprocess
 
+import pytest
+
+import dispatcher
+import gh_capacity
 import tick
+
+
+@pytest.fixture(autouse=True)
+def isolated_runtime(tmp_path, monkeypatch):
+    """These helper tests may only use private state and in-process work."""
+    state = tmp_path / "state"
+    runtime = tmp_path / "runtime"
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(runtime))
+    calls = []
+
+    def forbidden(*args, **kwargs):
+        calls.append((args, kwargs))
+        pytest.fail("helper coverage attempted external process, provider, or network work")
+
+    for name in ("run", "Popen"):
+        monkeypatch.setattr(subprocess, name, forbidden)
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(socket.socket, "connect_ex", forbidden)
+    monkeypatch.setattr(socket, "create_connection", forbidden)
+    monkeypatch.setattr(gh_capacity, "gh_run", forbidden)
+    monkeypatch.setattr(dispatcher, "delegate", forbidden)
+    monkeypatch.setattr(dispatcher, "offload", forbidden)
+    monkeypatch.setattr(tick.exp_abcd, "EXP_DIR", state / "experiments")
+    yield
+    assert calls == []
 
 
 def test_target_helpers_reject_malformed_targets_and_split_valid_targets() -> None:
