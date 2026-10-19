@@ -1069,6 +1069,45 @@ def test_ledger_ineligible_skips_unrelated_non_mapping_row(
     assert registry.read_bytes() == registry_before
 
 
+def test_ledger_ineligible_matches_own_row_by_key_when_capability_id_field_drifts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A mapping row under the binding's ledger key must still be judged even
+    # when its capability_id field no longer matches that key.
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    ledger, registry = ctx["ledger"], ctx["registry"]
+    payload = json.loads(ledger.read_text(encoding="utf-8"))
+    own = payload["capabilities"][ctx["capability_id"]]
+    own["capability_id"] = "drifted-other-id"
+    own["rollback_pending"] = {"reason": "regressed"}
+    # Drop the version pin so lookup cannot short-circuit on version identity.
+    own.pop("capability_version_id", None)
+    ledger.write_text(json.dumps(payload), encoding="utf-8")
+    before = ledger.read_bytes()
+    registry_before = registry.read_bytes()
+    binding = capability_targets.get_binding(ctx["version_id"], registry_path=registry)
+    assert (
+        capability_targets._ledger_ineligible(binding, ledger, ctx["now"], {}) == "rollback_pending"
+    )
+    result = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=registry,
+        ledger_path=ledger,
+        target_run_id="direct:drifted-capability-id",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "rollback_pending"}, result
+    assert (
+        capability_targets.get_binding(ctx["version_id"], registry_path=registry)["invocations"]
+        == []
+    )
+    assert "causal_edge" not in result
+    assert ledger.read_bytes() == before
+    assert registry.read_bytes() == registry_before
+
+
 def test_direct_invoke_target_non_mapping_own_row_refuses_without_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1102,6 +1141,7 @@ def test_compiled_invocation_non_mapping_row_refuses_without_writes(
     payload = json.loads(ctx["ledger"].read_text(encoding="utf-8"))
     payload["capabilities"][ctx["capability_id"]] = row
     ctx["ledger"].write_text(json.dumps(payload), encoding="utf-8")
+    ledger_before = ctx["ledger"].read_bytes()
     registry_before = ctx["registry"].read_bytes()
     result = capability_lifecycle.invoke_compiled_target(
         ctx["capability_id"],
@@ -1114,6 +1154,7 @@ def test_compiled_invocation_non_mapping_row_refuses_without_writes(
     )
     assert result == {"matched": False, "invoked": False, "reason": "ledger_unreadable"}, result
     assert "causal_edge" not in result
+    assert ctx["ledger"].read_bytes() == ledger_before
     assert ctx["registry"].read_bytes() == registry_before
 
 
@@ -1234,7 +1275,15 @@ def test_direct_invoke_target_malformed_ledger_kill_switch_refuses_without_write
 
 
 @pytest.mark.parametrize(
-    "policy", [["canary"], {"tasks_per_day": "not-a-count"}, {"tasks_per_day": {"x": 1}}]
+    "policy",
+    [
+        ["canary"],
+        {"tasks_per_day": "not-a-count"},
+        {"tasks_per_day": {"x": 1}},
+        # Non-finite quotas raise OverflowError on int(); refuse, do not raise.
+        {"tasks_per_day": float("inf")},
+        {"tasks_per_day": float("-inf")},
+    ],
 )
 def test_compiled_canary_malformed_policy_refuses_without_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy

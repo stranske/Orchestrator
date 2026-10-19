@@ -403,6 +403,9 @@ def _ledger_ineligible(
     ``ledger_unreadable``; unrelated non-mapping rows are skipped.
     Ledger keys equal their mapping row's ``capability_id``. Corrupt rows
     have no fields, so their key is the only available capability identity.
+    Mapping rows are matched by version first, then by either the row's
+    ``capability_id`` field or its ledger key, so a drifted field cannot
+    hide the binding's own row from expiry/kill-switch/rollback checks.
     """
     if ledger_path is None or not Path(ledger_path).exists():
         return None
@@ -414,18 +417,19 @@ def _ledger_ineligible(
         rows = capabilities.load(Path(ledger_path), create=False)
     except Exception:
         return "ledger_unreadable"
+    own_id = binding.get("capability_id")
     cap = None
     for key, row in rows.items():
         if not isinstance(row, Mapping):
             # The binding's own row is unreadable: it cannot prove the row is
             # eligible, so fail closed instead of treating it as absent.
-            if key == binding.get("capability_id"):
+            if key == own_id:
                 return "ledger_unreadable"
             continue
         if row.get("capability_version_id") == binding.get("capability_version_id"):
             cap = row
             break
-        if cap is None and row.get("capability_id") == binding.get("capability_id"):
+        if cap is None and (row.get("capability_id") == own_id or key == own_id):
             cap = row
     if cap is None:
         return None
@@ -762,6 +766,17 @@ def _selftest() -> None:
         payload["capabilities"] = {binding["capability_id"]: "corrupt"}
         ledger.write_text(json.dumps(payload))
         assert _ledger_ineligible(binding, ledger, 100, {}) == "ledger_unreadable"
+        # A mapping row under the binding's key is still own-row even when its
+        # capability_id field has drifted away from that key.
+        drifted = {
+            "capability_id": "drifted-other-id",
+            "status": "active",
+            "expiry": 10**12,
+            "rollback_pending": {"reason": "selftest"},
+        }
+        payload["capabilities"] = {binding["capability_id"]: drifted}
+        ledger.write_text(json.dumps(payload))
+        assert _ledger_ineligible(binding, ledger, 100, {}) == "rollback_pending"
         result = invoke_target(
             binding,
             trigger={"task_type": plan["selector"]["value"][0]},
