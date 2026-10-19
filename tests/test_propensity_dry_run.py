@@ -6,6 +6,7 @@ it before opening a ledger, emitting a heartbeat, or performing a write.
 
 from __future__ import annotations
 
+import ast
 import os
 import subprocess
 import sys
@@ -22,17 +23,21 @@ import paths
 # a second site would let the first disappear without this needle going silent.
 _DRY_RUN_GUARD_NEEDLE = 'if args.dry_run and args.command != "tick-evidence"'
 _DRY_RUN_ERROR_NEEDLE = 'ap.error("--dry-run is supported only by tick-evidence")'
-_DRY_RUN_GUARD_BLOCK = (
-    '    if args.dry_run and args.command != "tick-evidence":\n'
-    "        # This is intentionally a parser error rather than a per-command convention.  "
-    "The global\n"
-    "        # flag used to be accepted by every recording command but only tick-evidence "
-    "honored it,\n"
-    "        # which made a dry-run spelling silently mutate the ledger.  Reject before any "
-    "command can\n"
-    "        # load a store, emit a heartbeat, or reach a writer.\n"
-    f"        {_DRY_RUN_ERROR_NEEDLE}\n"
-)
+
+
+def _without_dry_run_guard(src: str) -> str:
+    """Remove the actual guard structurally, independent of comments or indentation."""
+    expected = ast.parse(_DRY_RUN_GUARD_NEEDLE + ": pass").body[0]
+    guards = [
+        node
+        for node in ast.walk(ast.parse(src))
+        if isinstance(node, ast.If) and ast.dump(node.test) == ast.dump(expected.test)
+    ]
+    assert len(guards) == 1, "break fixture must find exactly one early reject"
+    guard = guards[0]
+    assert ast.dump(guard.body[0]) == ast.dump(ast.parse(_DRY_RUN_ERROR_NEEDLE).body[0])
+    lines = src.splitlines(keepends=True)
+    return "".join(lines[: guard.lineno - 1] + lines[guard.end_lineno :])
 
 
 def _seeded_ledger(tmp_path: Path) -> Path:
@@ -81,7 +86,7 @@ def test_dry_run_guard_is_wired_exactly_once():
     src = Path(cp.__file__).read_text()
     assert src.count(_DRY_RUN_GUARD_NEEDLE) == 1, src.count(_DRY_RUN_GUARD_NEEDLE)
     assert src.count(_DRY_RUN_ERROR_NEEDLE) == 1, src.count(_DRY_RUN_ERROR_NEEDLE)
-    assert _DRY_RUN_GUARD_BLOCK in src
+    assert _without_dry_run_guard(src) != src
 
 
 def test_useful_dry_run_writes_nothing(tmp_path: Path):
@@ -129,8 +134,7 @@ def test_removing_dry_run_guard_restores_silent_write(tmp_path: Path):
     early reject were deleted.  The live module is never mutated; only a temp copy is stripped.
     """
     src = Path(cp.__file__).read_text()
-    assert _DRY_RUN_GUARD_BLOCK in src, "break fixture is stale: guard block not found"
-    broken = src.replace(_DRY_RUN_GUARD_BLOCK, "", 1)
+    broken = _without_dry_run_guard(src)
     assert _DRY_RUN_GUARD_NEEDLE not in broken, "strip must remove the only guard site"
     script = tmp_path / "capability_propensity_unguarded.py"
     script.write_text(broken)
