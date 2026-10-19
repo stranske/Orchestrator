@@ -4580,7 +4580,9 @@ def role_activation_metrics(*, conn: sqlite3.Connection | None = None) -> dict:
             status = result.get("selector_status")
             if status in out:
                 out[status] += 1
-            for key in ("matched", "invoked", "disagreement"):
+            # ``invoked`` is already represented by the selector status above.
+            # Counting its redundant payload boolean would report every invocation twice.
+            for key in ("matched", "disagreement"):
                 if result.get(key) is True:
                     out[key] += 1
             if result.get("accepted") is True:
