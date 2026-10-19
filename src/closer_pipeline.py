@@ -1797,15 +1797,33 @@ def _expired_invalid_round_recovery(
         ):
             resource = item.get("resource_evidence")
             if not _valid_github_capacity_evidence(resource, historical_now):
-                # An interrupted round has no terminal timestamp. Validate its
-                # read-only throttle at its own in-round observation, rather
-                # than requiring the old reset window to remain fresh forever.
+                # A throttle can expire before a terminal receipt is written.
+                # Its original observation proves only read scheduling, never
+                # today's stop or an action. Completed rounds additionally need
+                # an exact receipt binding and a wholly unstarted prepare row.
                 capacity = (
                     resource.get("github_capacity") if isinstance(resource, Mapping) else None
                 )
                 observed = capacity.get("observed_at") if isinstance(capacity, Mapping) else None
+                completed_unstarted_prepare = (
+                    isinstance(summary, Mapping)
+                    and summary.get("schema") == "closer-pipeline-receipt/v1"
+                    and summary.get("run_id") == run_id
+                    and summary.get("deadline") == previous["deadline"]
+                    and isinstance(finished_at, (int, float))
+                    and not isinstance(finished_at, bool)
+                    and math.isfinite(float(finished_at))
+                    and float(previous["created"]) <= finished_at <= now_value
+                    and isinstance(observed, (int, float))
+                    and not isinstance(observed, bool)
+                    and observed <= finished_at
+                    and no_action
+                    and not results
+                    and not item.get("provider_outcome_uncertain")
+                    and item.get("recovery_barrier") is None
+                )
                 if not (
-                    summary is None
+                    (summary is None or completed_unstarted_prepare)
                     and isinstance(observed, (int, float))
                     and not isinstance(observed, bool)
                     and float(previous["created"]) <= observed <= float(previous["deadline"])
