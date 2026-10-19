@@ -1619,7 +1619,13 @@ def main(argv: list[str] | None = None) -> int:
         if not re.fullmatch(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", repo):
             raise ValueError(f"Invalid repository format: {repo}")
         if repo.lower() not in registry_set:
-            raise ValueError(f"Repository {repo} is not in the registered consumer repos list.")
+            # Skip, do not raise: a hardcoded cohort that names one deregistered repo (Collab-Admin,
+            # 2026-10-07..10-18) otherwise failed the whole daily step on every tick.
+            print(
+                f"Skipping {repo}: not in the registered consumer repos list.",
+                file=sys.stderr,
+            )
+            continue
         validated_cohort.append(repo)
 
     # Deduplicate case-insensitively while preserving order

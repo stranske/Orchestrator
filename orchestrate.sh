@@ -1230,7 +1230,6 @@ if [[ "${mode}" == "active" ]] && _cadence_due consumer-sync-artifact-ingest && 
          "${consumer_sync_phase_args[@]}" \
          --repository "stranske/Template" \
          --repository "stranske/Ready" \
-         --repository "stranske/Collab-Admin" \
          --repository "stranske/learning-management-system" \
          --repository "stranske/Fine-Art-Archive" >> "$STAMP_DIR/consumer-sync-artifact-ingest.log" 2>&1; then
       _mark_success consumer-sync-artifact-ingest
