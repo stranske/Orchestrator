@@ -179,7 +179,10 @@ def test_useful_dry_run_does_not_create_an_absent_ledger(tmp_path: Path):
     assert not ledger.parent.exists()
 
 
-def test_tick_evidence_dry_run_passes_record_false(monkeypatch: pytest.MonkeyPatch, capsys):
+def test_tick_evidence_dry_run_passes_record_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+):
+    """Dry-run changes only recording; ledger and budget still reach the tick guard."""
     seen: dict[str, object] = {}
 
     def guarded(**kwargs):
@@ -188,9 +191,25 @@ def test_tick_evidence_dry_run_passes_record_false(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(cp, "tick_evidence_guarded", guarded)
 
-    assert cp.main(["tick-evidence", "--dry-run", "--json"]) == 0
-    assert seen["record"] is False
-    assert capsys.readouterr().out == '{\n  "recorded": false\n}\n'
+    ledger = tmp_path / "capabilities.json"
+    for dry_run in (True, False):
+        seen.clear()
+        assert (
+            cp.main(
+                [
+                    "tick-evidence",
+                    "--json",
+                    "--ledger",
+                    str(ledger),
+                    "--budget-seconds",
+                    "0",
+                    *(["--dry-run"] if dry_run else []),
+                ]
+            )
+            == 0
+        )
+        assert seen == {"record": not dry_run, "budget_s": 0, "path": ledger}
+        assert capsys.readouterr().out == '{\n  "recorded": false\n}\n'
 
 
 @pytest.mark.parametrize(
