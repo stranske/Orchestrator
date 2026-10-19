@@ -212,7 +212,11 @@ class TestExceptionRoute:
         import router
 
         # Mock router to return an agent
-        monkeypatch.setattr(router, "select_agent", lambda *args, **kwargs: {"agent": "cursor", "selected_profile_id": "cursor-profile-1"})
+        monkeypatch.setattr(
+            router,
+            "select_agent",
+            lambda *args, **kwargs: {"agent": "cursor", "selected_profile_id": "cursor-profile-1"},
+        )
 
         # Mock execution_profiles
         mock_profile = {
@@ -256,6 +260,9 @@ class TestExceptionCallbackIdentity:
             "mode": "assess",
         }
         worker_calls = []
+        monkeypatch.setattr(
+            adapter, "_execute_profile_route", lambda route, invoke, **kw: (invoke(route), route)
+        )
 
         def exception_route(**kwargs):
             load = kwargs.get("load") or {}

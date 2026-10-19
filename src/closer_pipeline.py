@@ -14,6 +14,7 @@ import json
 import math
 import os
 import tempfile
+import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
@@ -3555,28 +3556,103 @@ def run_pipeline(state_path: str | Path, targets: Iterable[str], **kwargs: Any) 
     ``closer_resources.run_scoped``). Unset, it reads ``ORCH_CLOSER_COORDINATOR_MODE``."""
     mode = closer_resources.resolve_mode(kwargs.pop("coordinator_mode", None))
     contract_pin = kwargs.pop("coordinator_contract_pin", None)
+    admission = kwargs.pop("coordination_admission", None)
     if mode == "legacy":
         if contract_pin is not None:
             raise ValueError("coordinator_contract_pin applies to resource_scoped mode only")
         assigned = list(targets)
-        # Rollback guard: a scoped root that still holds running/uncertain (or unreadable) shards
-        # keeps its affected targets away from legacy; disjoint targets run as before.
-        fenced_rows, runnable = closer_resources.rollback_fence(state_path, assigned)
-        if not fenced_rows:
-            return _run_pipeline_legacy(state_path, assigned, **kwargs)
-        if not runnable:
-            return closer_resources.legacy_refusal_receipt(
-                state_path, assigned, fenced_rows, float(kwargs.get("deadline", 0)), kwargs.get("now", time.time)
-            )
-        receipt = _run_pipeline_legacy(state_path, runnable, **kwargs)
-        receipt["targets"] = {**receipt.get("targets", {}), **fenced_rows}
-        receipt["scoped_rollback"] = {"fenced_targets": sorted(fenced_rows), "drainable": 0}
-        return receipt
-    return closer_resources.run_scoped(state_path, targets, contract_pin=contract_pin, **kwargs)
+        canonical = [closer_resources.canonical_target(t) for t in assigned]
+        if len(set(canonical)) != len(canonical):
+            raise ValueError("targets must be unique when compared canonically")
+        resource_keys = kwargs.pop("resource_keys", None)
+        kwargs.pop("pool_lease", None)
+        now = kwargs.get("now", time.time)
+        owner = f"legacy:{os.getpid()}:{threading.get_ident()}:{now()}"
+        with contextlib.ExitStack() as gates:
+            held_rows = {}
+            gated_targets = []
+            for target in sorted(assigned, key=closer_resources.canonical_target):
+                try:
+                    gates.enter_context(
+                        closer_resources.admission_gate(
+                            admission, state_path, target, mode="legacy"
+                        )
+                    )
+                    gated_targets.append(target)
+                except closer_resources.ResourceBlocked:
+                    held_rows[target] = closer_resources._fenced_row("resource_contested")
+            fenced_rows, runnable = closer_resources.rollback_fence(state_path, gated_targets)
+            fenced_rows.update(held_rows)
+            if not runnable:
+                return closer_resources.legacy_refusal_receipt(
+                    state_path, assigned, fenced_rows, float(kwargs.get("deadline", 0)), now
+                )
+            original_act = kwargs["act"]
+
+            def guarded_act(target, ctx):
+                if (
+                    resource_keys is None
+                    and not closer_resources.scoped_root(state_path).exists()
+                    and not closer_resources.unknown_reservations(
+                        closer_resources.scoped_root(state_path)
+                    )
+                ):
+                    return original_act(target, ctx)
+                if resource_keys is None:
+                    with closer_resources.mutation_reservation(
+                        state_path,
+                        target,
+                        ctx,
+                        None,
+                        owner=owner,
+                        deadline=kwargs["deadline"],
+                        now=now,
+                    ):
+                        return original_act(target, ctx)
+                keys = [
+                    *closer_resources.default_resource_keys(target),
+                    *resource_keys(target, ctx),
+                ]
+                with closer_resources.legacy_reserve(
+                    closer_resources.scoped_root(state_path),
+                    keys,
+                    target=target,
+                    owner=owner,
+                    deadline=kwargs["deadline"],
+                    now=now,
+                ):
+                    return original_act(target, ctx)
+
+            kwargs["act"] = guarded_act
+            receipt = _run_pipeline_legacy(state_path, runnable, **kwargs)
+            # Preserve legacy's existing known asynchronous waits. Its advertisement
+            # ends only after the durable ledger validates those native continuation
+            # proofs. Scoped Core intents still require their COMPLETE receipt.
+            if resource_keys is not None and _validate_stop_legacy(
+                state_path, runnable, now=now
+            ).get("valid"):
+                closer_resources.release_legacy_boundary(
+                    closer_resources.scoped_root(state_path), owner
+                )
+            for target, row in receipt.get("targets", {}).items():
+                if row.get("status") == "completed":
+                    closer_resources.release_target(
+                        closer_resources.scoped_root(state_path), target, owner=owner
+                    )
+            if fenced_rows:
+                receipt["targets"] = {**receipt.get("targets", {}), **fenced_rows}
+                receipt["scoped_rollback"] = {"fenced_targets": sorted(fenced_rows), "drainable": 0}
+            return receipt
+    return closer_resources.run_scoped(
+        state_path, targets, contract_pin=contract_pin, coordination_admission=admission, **kwargs
+    )
 
 
 def validate_stop_scoped(
-    state_path: str | Path, round_id: str, assignment_targets: Iterable[str] | None = None, **kwargs: Any
+    state_path: str | Path,
+    round_id: str,
+    assignment_targets: Iterable[str] | None = None,
+    **kwargs: Any,
 ) -> dict[str, Any]:
     """``validate_stop`` for one named resource-scoped round (see closer_resources.validate_stop)."""
     return closer_resources.validate_stop(state_path, round_id, assignment_targets, **kwargs)
@@ -3592,7 +3668,7 @@ def _save_state_locked(path: Path, state: Mapping[str, Any]) -> None:
     _save(path, state)
 
 
-def validate_stop(
+def _validate_stop_legacy(
     state_path: str | Path,
     assignment_targets: Iterable[str] | None = None,
     *,
@@ -3808,3 +3884,19 @@ def validate_stop(
         "deadline": float(deadline),
         "reasons": reasons,
     }
+
+
+def validate_stop(state_path, assignment_targets=None, **kwargs):
+    """Legacy accounting plus the common mutation-intent fence (never ignore unknowns)."""
+    result = _validate_stop_legacy(state_path, assignment_targets, **kwargs)
+    unknown = closer_resources.unknown_reservations(closer_resources.scoped_root(state_path))
+    if unknown:
+        result = {
+            **result,
+            "valid": False,
+            "stop_valid": False,
+            "continuation_required": True,
+            "reasons": [*result.get("reasons", []), "unresolved_resource_reservations"],
+            "unknown_reservations": unknown,
+        }
+    return result

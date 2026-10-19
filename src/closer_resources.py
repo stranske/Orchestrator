@@ -83,6 +83,8 @@ def capability(pipeline_schema: str) -> dict[str, Any]:
         "pool_lease_callback": True,
         "scoped_validate_stop": True,
         "proven_runtime_promotion": False,
+        "coordination_gates": 1,
+        "requires_terminal_uncooperative_writers": True,
     }
 
 
@@ -176,8 +178,15 @@ def open_root(
     used; a root that differs is refused, never migrated in place.
     """
     root = scoped_root(state_path)
-    want = {"schema": CONTRACT_SCHEMA, "layout": LAYOUT, "pipeline_schema": pipeline_schema}
-    if pin is not None and any(want.get(k) != v for k, v in pin.items()):
+    want = {
+        "schema": CONTRACT_SCHEMA,
+        "layout": LAYOUT,
+        "pipeline_schema": pipeline_schema,
+        "coordination_gates": 1,
+    }
+    if pin is not None and any(
+        type(want.get(k)) is not type(v) or want.get(k) != v for k, v in pin.items()
+    ):
         raise IncompatibleStateContract(f"worker pin {dict(pin)!r} does not match {want!r}")
     contract = root / "contract.json"
     if not contract.exists():
@@ -200,7 +209,7 @@ def open_root(
     except (OSError, ValueError) as exc:
         raise IncompatibleStateContract(f"unreadable scoped contract: {exc}") from exc
     comparable = {k: found.get(k) for k in want} if isinstance(found, dict) else None
-    if comparable != want:
+    if json.dumps(comparable, sort_keys=True) != json.dumps(want, sort_keys=True):
         raise IncompatibleStateContract(f"scoped root contract {found!r} != supported {want!r}")
     (root / "targets").mkdir(parents=True, exist_ok=True)
     return root
@@ -382,6 +391,23 @@ def scoped_rollback_report(state_path: str | Path) -> tuple[dict[str, str], list
     base = root / "targets"
     if not (root / "contract.json").exists() or not base.is_dir():
         return found, ["scoped root without contract or targets directory"]
+    try:
+        import closer_pipeline as cp
+
+        contract = json.loads((root / "contract.json").read_text(encoding="utf-8"))
+        expected = {
+            "schema": CONTRACT_SCHEMA,
+            "layout": LAYOUT,
+            "pipeline_schema": cp.SCHEMA,
+            "coordination_gates": 1,
+        }
+        if not isinstance(contract, dict) or any(
+            type(contract.get(k)) is not type(v) or contract.get(k) != v
+            for k, v in expected.items()
+        ):
+            return found, ["incompatible scoped coordination contract"]
+    except (OSError, ValueError) as exc:
+        return found, [f"unreadable scoped coordination contract: {exc}"]
     for shard in sorted(p for p in base.iterdir() if p.is_dir()):
         try:
             lease_doc = None
@@ -444,6 +470,107 @@ def rollback_fence(state_path: str | Path, targets) -> tuple[dict[str, dict[str,
     return rows, [t for t in ordered if t not in rows]
 
 
+@contextlib.contextmanager
+def coordination_gate(state_path: str | Path, target: str, *, mode="resource_scoped"):
+    """Stable pre-state-read target gate shared by both cooperating modes.
+
+    Old installed writers do not speak this protocol: promotion requires their terminality.
+    Never use elapsed time as evidence that such a writer has stopped.
+    """
+    path = Path(str(state_path) + ".coordination")
+    path.mkdir(parents=True, exist_ok=True)
+    name = hashlib.sha256(canonical_target(target).encode()).hexdigest()
+    with (path / name).open("a+") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            # Preserve legacy's existing wait-for-prior-round behavior for another
+            # cooperating legacy caller. This is advisory only; flock still decides.
+            handle.seek(0)
+            incumbent = handle.read()
+            if (
+                mode != "legacy"
+                or incumbent != "legacy"
+                or not _poll_lock(handle, time.time() + RESOURCE_WAIT_SECONDS, time.time)
+            ):
+                raise ResourceBlocked("resource_contested") from exc
+        handle.seek(0)
+        handle.truncate()
+        handle.write(mode)
+        handle.flush()
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+class _CoordinationAdmission:
+    """Internal live capability: exact target gates remain owned by the CLI stack."""
+
+    def __init__(self, state_path):
+        self.state_path = Path(state_path).resolve()
+        self.runnable = set()
+        self.active = True
+
+    @contextlib.contextmanager
+    def gate(self, state_path, target, *, mode="resource_scoped"):
+        if (
+            not self.active
+            or Path(state_path).resolve() != self.state_path
+            or canonical_target(target) not in self.runnable
+        ):
+            raise ResourceBlocked("resource_contested")
+        yield
+
+
+@contextlib.contextmanager
+def coordination_admission(state_path, targets, *, mode="legacy"):
+    """Acquire before any admission read; lower layers reuse only these live gates."""
+    admission = _CoordinationAdmission(state_path)
+    try:
+        with contextlib.ExitStack() as stack:
+            for target in sorted(set(targets), key=canonical_target):
+                try:
+                    stack.enter_context(coordination_gate(state_path, target, mode=mode))
+                except ResourceBlocked:
+                    continue
+                admission.runnable.add(canonical_target(target))
+            yield admission
+    finally:
+        admission.active = False
+
+
+def admission_gate(admission, state_path, target, *, mode="resource_scoped"):
+    if admission is None:
+        return coordination_gate(state_path, target, mode=mode)
+    if not isinstance(admission, _CoordinationAdmission):
+        raise ResourceBlocked("invalid coordination admission")
+    return admission.gate(state_path, target, mode=mode)
+
+
+@contextlib.contextmanager
+def mutation_reservation(state_path, target, context, resource_keys, *, owner, deadline, now):
+    """Same mutation keys in either mode; unresolved aliases never disappear on rollback."""
+    root = scoped_root(state_path)
+    keys = default_resource_keys(target)
+    if resource_keys is not None:
+        extra = resource_keys(target, context)
+        if extra is None or isinstance(extra, (str, bytes)):
+            raise ResourceBlocked("resource_keys must return an iterable of keys")
+        keys.extend(extra)
+    else:
+        # Without a prepared proposal we cannot prove branch/source disjointness.
+        repo = canonical_target(target).split("#")[0]
+        for key in unknown_reservations(root):
+            if key.startswith(("unreadable:", "worktree:")) or (
+                key.startswith(("issue:", "branch:"))
+                and key.split(":", 1)[-1].split("#")[0].split("@")[0] == repo
+            ):
+                raise ResourceBlocked("unknown resource aliases require prepared operation keys")
+    with reserve(root, keys, target=target, owner=owner, deadline=deadline, now=now):
+        yield
+
+
 def legacy_refusal_receipt(
     state_path: str | Path, targets, rows: Mapping[str, Any], deadline: float, now=time.time
 ) -> dict[str, Any]:
@@ -464,8 +591,20 @@ def legacy_refusal_receipt(
 # --------------------------------------------------------------------------- reservations
 
 
+def _reservation_base(root: Path) -> Path:
+    # Coordination exists before the first scoped root. Cooperating legacy writers
+    # must reserve aliases too, without opting their JSON ledger into scoped mode.
+    if root.name.endswith(".scoped"):
+        return root.with_name(root.name[: -len(".scoped")] + ".coordination") / "reservations"
+    return root / "reservations"
+
+
+def _reservation_bases(root: Path) -> list[Path]:
+    return list(dict.fromkeys([_reservation_base(root), root / "reservations"]))
+
+
 def _key_dir(root: Path, key: str) -> Path:
-    return root / "reservations" / hashlib.sha256(key.encode()).hexdigest()[:24]
+    return _reservation_base(root) / hashlib.sha256(key.encode()).hexdigest()[:24]
 
 
 def _poll_lock(handle, deadline: float, now) -> bool:
@@ -522,11 +661,13 @@ def reserve(
                 handle.close()
                 raise ResourceBlocked(f"resource {key} held by another effect")
             held.append((key, handle, directory / "intent.json"))
-            intent = _read_intent(directory / "intent.json")
-            if intent is not None:
-                raise ResourceBlocked(
-                    f"resource {key} carries an unresolved effect of {intent.get('target')!r}"
-                )
+            for base in _reservation_bases(root):
+                for filename in ("intent.json", "legacy-intent.json"):
+                    intent = _read_intent(base / directory.name / filename)
+                    if intent is not None:
+                        raise ResourceBlocked(
+                            f"resource {key} carries an unresolved effect of {intent.get('target')!r}"
+                        )
         for key, _handle, path in held:
             if key.split(":", 1)[0] in DURABLE_KINDS:
                 _atomic_write(
@@ -566,18 +707,93 @@ def reserve(
             handle.close()
 
 
+@contextlib.contextmanager
+def legacy_reserve(root, keys, *, target, owner, deadline, now=time.time):
+    """Advertise a cooperating legacy executor under its existing JSON/runlock protocol.
+
+    This is not a Core operation intent. The same live legacy executor may perform its
+    next guarded operation while its durable legacy ledger advances. Other executors,
+    including scoped ones, cannot enter. A crash or invalid stop retains the advertisement.
+    Core intents are never adopted, including those with the same target/owner.
+    """
+    held = []
+    try:
+        for key in sorted({normalize_key(k) for k in keys}):
+            directory = _key_dir(root, key)
+            directory.mkdir(parents=True, exist_ok=True)
+            handle = (directory / "lock").open("a+")
+            if not _poll_lock(handle, deadline, now):
+                handle.close()
+                raise ResourceBlocked(f"resource {key} held by another executor")
+            held.append((key, handle, directory))
+            for base in _reservation_bases(root):
+                if _read_intent(base / directory.name / "intent.json") is not None:
+                    raise ResourceBlocked(f"resource {key} carries a Core operation intent")
+                prior = _read_intent(base / directory.name / "legacy-intent.json")
+                if prior is not None and (
+                    prior.get("owner") != owner or prior.get("target") != canonical_target(target)
+                ):
+                    raise ResourceBlocked(f"resource {key} carries an unresolved legacy executor")
+        for key, _handle, directory in held:
+            if key.split(":", 1)[0] in DURABLE_KINDS:
+                _atomic_write(
+                    directory / "legacy-intent.json",
+                    {
+                        "key": key,
+                        "owner": owner,
+                        "target": canonical_target(target),
+                        "state": "legacy_executor",
+                        "at": now(),
+                    },
+                )
+        yield
+    finally:
+        for _key, handle, _directory in reversed(held):
+            fcntl.flock(handle, fcntl.LOCK_UN)
+            handle.close()
+
+
+def release_legacy_boundary(root, owner):
+    """Remove only this legacy executor's advertisements after its durable valid stop.
+
+    The caller must validate the existing native/legacy continuation proofs first.
+    No Core intent is read as completion or removed here.
+    """
+    base = _reservation_base(root)
+    for directory in sorted(base.iterdir()) if base.is_dir() else []:
+        with (directory / "lock").open("a+") as handle:
+            if not _poll_lock(handle, time.time() + 1.0, time.time):
+                continue
+            try:
+                path = directory / "legacy-intent.json"
+                intent = _read_intent(path)
+                if intent is not None and intent.get("owner") == owner:
+                    path.unlink()
+                    _fsync_dir(directory)
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 def unknown_reservations(root: Path) -> dict[str, str]:
     """``{key: target}`` for every intent left behind (in_flight with no live holder is unknown)."""
     found: dict[str, str] = {}
-    base = root / "reservations"
-    for directory in sorted(base.iterdir()) if base.is_dir() else []:
-        try:
-            intent = _read_intent(directory / "intent.json")
-        except ResourceBlocked:
-            found[f"unreadable:{directory.name}"] = "?"
-            continue
-        if intent is not None:
-            found[str(intent.get("key"))] = str(intent.get("target"))
+    directories = [
+        directory
+        for base in _reservation_bases(root)
+        for directory in (sorted(base.iterdir()) if base.is_dir() else [])
+    ]
+    for directory in directories:
+        for filename in ("intent.json", "legacy-intent.json"):
+            try:
+                intent = _read_intent(directory / filename)
+            except ResourceBlocked:
+                found[f"unreadable:{directory.name}:{filename}"] = "?"
+                continue
+            if intent is not None:
+                key = str(intent.get("key"))
+                if key in found:
+                    key = "historical:" + key
+                found[key] = str(intent.get("target"))
     return found
 
 
@@ -588,9 +804,13 @@ def release_target(root: Path, target: str, *, owner: str) -> list[str]:
     reconciliation. Completion of a newer attempt cannot silently drain them.
     """
     cleared = []
-    base = root / "reservations"
     owned = canonical_target(target)
-    for directory in sorted(base.iterdir()) if base.is_dir() else []:
+    directories = [
+        directory
+        for base in _reservation_bases(root)
+        for directory in (sorted(base.iterdir()) if base.is_dir() else [])
+    ]
+    for directory in directories:
         with (directory / "lock").open("a+") as handle:
             if not _poll_lock(handle, time.time() + 1.0, time.time):
                 continue
@@ -694,6 +914,15 @@ def validate_stop(
     root = scoped_root(state_path)
     path = _round_dir(root) / f"{round_id}.json"
     try:
+        contract = json.loads((root / "contract.json").read_text(encoding="utf-8"))
+        expected = {
+            "schema": CONTRACT_SCHEMA,
+            "layout": LAYOUT,
+            "pipeline_schema": cp.SCHEMA,
+            "coordination_gates": 1,
+        }
+        if not isinstance(contract, dict) or any(contract.get(k) != v for k, v in expected.items()):
+            raise ValueError("incompatible scoped staging capability")
         receipt = json.loads(path.read_text(encoding="utf-8"))
         assignment = receipt["assignment"]
         run_ids = receipt["run_ids"]
@@ -739,6 +968,10 @@ def validate_stop(
         if not verdict.get("valid"):
             reasons.extend(f"{target}:{r}" for r in verdict.get("reasons", ["invalid"]))
         continuation = continuation or bool(verdict.get("continuation_required"))
+    unknown = unknown_reservations(root)
+    if unknown:
+        reasons.append("unresolved_resource_reservations")
+        continuation = True
     valid = not reasons
     return {
         "valid": valid,
@@ -774,6 +1007,7 @@ def run_scoped(
     round_capacity_exception=None,
     resource_keys=None,
     pool_lease=None,
+    coordination_admission=None,
     now: Callable[[], float] = time.time,
 ) -> dict[str, Any]:
     """Resource-scoped coordinator: one lease and one state shard per target.
@@ -808,7 +1042,6 @@ def run_scoped(
 
     started = now()
     root = open_root(state_path, pipeline_schema=cp.SCHEMA, pin=contract_pin)
-    legacy_rows, legacy_error = legacy_unresolved(state_path)
     owner = f"{os.getpid()}:{threading.get_ident()}:{started}"
     round_id = hashlib.sha256(
         json.dumps([sorted(canonical), started, owner], sort_keys=True).encode()
@@ -826,13 +1059,9 @@ def run_scoped(
         return call
 
     def guarded_act(target, ctx):
-        keys = list(default_resource_keys(target))
-        if resource_keys is not None:
-            extra = resource_keys(target, ctx)
-            if isinstance(extra, (str, bytes)) or extra is None:
-                raise ResourceBlocked("resource_keys must return an iterable of keys")
-            keys.extend(extra)
-        with reserve(root, keys, target=target, owner=owner, deadline=deadline, now=now):
+        with mutation_reservation(
+            state_path, target, ctx, resource_keys, owner=owner, deadline=deadline, now=now
+        ):
             return act(target, ctx)
 
     results: dict[str, dict[str, Any]] = {}
@@ -842,6 +1071,15 @@ def run_scoped(
     guard = threading.Lock()
 
     def work(target: str) -> None:
+        try:
+            with admission_gate(coordination_admission, state_path, target):
+                work_locked(target)
+        except ResourceBlocked as exc:
+            with guard:
+                results[target] = _fenced_row("resource_contested", str(exc))
+
+    def work_locked(target: str) -> None:
+        legacy_rows, legacy_error = legacy_unresolved(state_path)
         began = now()
         key = canonical_target(target)
         if legacy_error is not None:

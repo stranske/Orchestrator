@@ -1741,26 +1741,50 @@ class Closer:
         selected_mode = route.get("mode") or ("mid" if repair else "assess")
 
         started = time.monotonic()
-        result = (self.offload_fn or dispatcher.offload)(
-            selected_agent,
-            prompt,
-            cwd=workspace,
-            mode=selected_mode,
-            profile_id=selected_profile_id,
-            timeout=remaining,
-            isolate=True,
-            task_type=(
-                "closer_repair"
-                if repair
-                else (
-                    "closer_exception"
-                    if pipeline_reserved or action == "disposition"
-                    else "closer_interpret"
-                )
-            ),
-            subject_id=target,
-            max_network_retries=0,
-        )
+
+        def invoke(chosen):
+            return (self.offload_fn or dispatcher.offload)(
+                chosen["agent"],
+                prompt,
+                cwd=workspace,
+                mode=chosen.get("mode") or selected_mode,
+                profile_id=chosen["profile_id"],
+                timeout=remaining,
+                isolate=True,
+                task_type=(
+                    "closer_repair"
+                    if repair
+                    else (
+                        "closer_exception"
+                        if pipeline_reserved or action == "disposition"
+                        else "closer_interpret"
+                    )
+                ),
+                subject_id=target,
+                max_network_retries=0,
+            )
+
+        if pipeline_reserved:
+            result = invoke(route)  # outer staged callback holds these exact pools
+        else:
+            import execution_profiles
+
+            explicit_profile = execution_profiles.get_profile(selected_profile_id)
+            route = {
+                **route,
+                "profile_id": selected_profile_id,
+                "pools": list(explicit_profile.get("capacity_pool_ids") or []),
+            }
+            result, route = _execute_profile_route(
+                route,
+                invoke,
+                lane="exception" if repair or action == "disposition" else "low",
+                load={},
+                deadline=operation["deadline"],
+                repair=repair,
+            )
+            selected_agent = route["agent"]
+            selected_profile_id = route["profile_id"]
         result["_closer_elapsed_seconds"] = time.monotonic() - started
         import closer_stage_feedback
 
@@ -1804,8 +1828,14 @@ class Closer:
 
     def reconcile(self, target, operation):
         """Unknown remote writes are never repeated just because the previous process died."""
-        s = self.gh.snapshot(target)
         action = operation.get("action")
+        if action in {"merge", "initiate_verify", "post_merge_verify"} and (
+            self.require_runtime_binding or self.runtime_binding is not None
+        ):
+            if self.runtime_binding is None:
+                return {"status": "blocked", "reason": "required runtime binding unavailable"}
+            return self.runtime_binding.reconcile(target, operation)
+        s = self.gh.snapshot(target)
         binding = operation.get("binding") or {}
         if not binding or binding.get("pr_target", target) != s.get("pr_target", target):
             return {"status": "unknown", "reason": "operation identity unavailable or changed"}
@@ -2160,6 +2190,123 @@ _PIPELINE_ROUTE_LOCK = threading.Lock()
 _PIPELINE_ROUTE_CONDITION = threading.Condition(_PIPELINE_ROUTE_LOCK)
 
 
+def _release_route_load(route, load):
+    with _PIPELINE_ROUTE_CONDITION:
+        for key in [route["agent"], *("pool:" + p for p in route.get("pools", []))]:
+            load[key] = max(0, load.get(key, 1) - 1)
+        _PIPELINE_ROUTE_CONDITION.notify_all()
+
+
+def _execute_profile_route(
+    route, invoke, *, lane, load, deadline, unavailable_profiles=(), repair=False
+):
+    """Reserve registry pools across processes, recheck cached capacity, invoke exactly once.
+
+    One slot per pool matches the existing router's exclusive pool-load admission. Low and
+    strong profiles share these same names. A held pool excludes every profile using it;
+    only a qualified profile on another pool can be selected. No provider/auth retry here.
+    """
+    import closer_resources
+    import execution_profiles
+
+    root = (
+        Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex/handoff"))
+        / "closer-profile-execution"
+    )
+    excluded = set(unavailable_profiles)
+    blocked_pools = set()
+    picker = _pipeline_low_route if lane == "low" else _exception_route
+    while route:
+        invoked = False
+        try:
+            with contextlib.ExitStack() as slots:
+                try:
+                    profile = execution_profiles.get_profile(route["profile_id"])
+                except ValueError as exc:
+                    raise closer_resources.ResourceBlocked("unknown execution profile") from exc
+                pools = sorted(set((profile or {}).get("capacity_pool_ids") or []))
+                if not pools or pools != sorted(set(route.get("pools") or [])):
+                    raise closer_resources.ResourceBlocked("profile pool binding changed")
+                for pool in pools:
+                    name = hashlib.sha256(pool.encode()).hexdigest()
+                    try:
+                        slots.enter_context(
+                            closer_resources.pool_slot(
+                                root, name, 1, deadline=min(deadline, time.time())
+                            )
+                        )
+                    except closer_resources.ResourceBlocked:
+                        blocked_pools.add(pool)
+                        raise
+                report = _fresh_capacity_report()
+                qualified = _profile_exception_qualified(
+                    report, profile, repair=repair, substantive=lane != "low"
+                )
+                if not qualified:
+                    raise closer_resources.ResourceBlocked(
+                        "capacity changed after pool reservation"
+                    )
+                # Do not catch provider failures: execution happened, and unknown costs stay unknown.
+                invoked = True
+                return invoke(route), route
+        except closer_resources.ResourceBlocked:
+            if invoked:
+                raise
+            excluded.add(route["profile_id"])
+        finally:
+            _release_route_load(route, load)
+        for agent in _EXCEPTION_ELIGIBLE_AGENTS:
+            for profile in execution_profiles.profiles_for_agent(agent, transport="offload"):
+                if blocked_pools.intersection(profile.get("capacity_pool_ids") or []):
+                    excluded.add(profile["profile_id"])
+        route, _status = picker(
+            load=load,
+            unavailable_profiles=excluded,
+            with_status=True,
+            **({"repair": repair} if lane != "low" else {}),
+        )
+        if route and route["profile_id"] in excluded:
+            _release_route_load(route, load)
+            raise closer_resources.ResourceBlocked("router returned an excluded execution profile")
+    raise closer_resources.ResourceBlocked("no qualified unreserved execution profile pool")
+
+
+def _prepared_resource_keys(target, prep, snapshot, workspaces):
+    """Bind mutation aliases to retained prepared evidence and authorized workspace mapping.
+
+    These keys confer no authority. The native queue still refreshes actual head, assignment,
+    claims and authorization immediately before an operation.
+    """
+    import closer_resources
+
+    if snapshot.get("target") != target or snapshot.get("revision") != prep.get("revision"):
+        raise closer_resources.ResourceBlocked("prepared snapshot identity mismatch")
+    keys = []
+    pr_target = snapshot.get("pr_target") or target
+    if snapshot.get("kind") != "issue":
+        if not SHA.fullmatch(snapshot.get("head") or ""):
+            raise closer_resources.ResourceBlocked("prepared PR head is missing")
+        if not TARGET.fullmatch(pr_target):
+            raise closer_resources.ResourceBlocked("prepared PR identity is missing")
+        keys.append("pr:" + pr_target)
+        branch = snapshot.get("head_branch")
+        repo = snapshot.get("head_repository")
+        if not repo or not branch:
+            raise closer_resources.ResourceBlocked("prepared branch is missing")
+        keys.append(f"branch:{repo}@{branch}")
+    sources = snapshot.get("sources")
+    if not isinstance(sources, list):
+        raise closer_resources.ResourceBlocked("prepared source inventory is missing")
+    for source in sources:
+        if not isinstance(source, dict) or not TARGET.fullmatch(source.get("target") or ""):
+            raise closer_resources.ResourceBlocked("prepared source identity is missing")
+        keys.append("issue:" + source["target"])
+    workspace = workspaces.get(target) or workspaces.get(target.split("#")[0])
+    if workspace:
+        keys.append("worktree:" + str(Path(workspace).resolve()))
+    return keys
+
+
 def _pipeline_capacity():
     """Keep local preparation/reconciliation available when remote capacity is absent.
 
@@ -2357,6 +2504,22 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         if packet:
             snap["base"] = packet.get("base")
         return snap, packet
+
+    def resource_keys(target, context):
+        import closer_resources
+
+        prep = context.get("prepare") or {}
+        ref = prep.get("snapshot_ref") or {}
+        try:
+            data = Path(ref["path"]).read_bytes()
+            if hashlib.sha256(data).hexdigest() != ref.get("sha256"):
+                raise ValueError("snapshot digest mismatch")
+            snapshot = json.loads(data)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise closer_resources.ResourceBlocked(
+                "retained operation snapshot unavailable"
+            ) from exc
+        return _prepared_resource_keys(target, prep, snapshot, backend.workspaces)
 
     def completed_retention_hold(
         result, target, prep, context, error, agent, profile, retained_evidence=None
@@ -3193,22 +3356,23 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             )[:9000]
         )
         started = time.monotonic()
-        try:
-            result = dispatcher.offload(
-                route["agent"],
+        result, route = _execute_profile_route(
+            route,
+            lambda chosen: dispatcher.offload(
+                chosen["agent"],
                 prompt,
                 mode="assess",
-                profile_id=route["profile_id"],
+                profile_id=chosen["profile_id"],
                 timeout=max(5, min(120, int(context["deadline"] - time.time()))),
                 task_type="closer_interpret",
                 subject_id=target,
                 max_network_retries=0,
-            )
-        finally:
-            with route_lock:
-                route_load[route["agent"]] = max(0, route_load.get(route["agent"], 1) - 1)
-                for pool in route.get("pools", []):
-                    route_load["pool:" + pool] = max(0, route_load.get("pool:" + pool, 1) - 1)
+            ),
+            lane="low",
+            load=route_load,
+            deadline=context["deadline"],
+            unavailable_profiles=failed_low_profiles,
+        )
         result["_closer_elapsed_seconds"] = time.monotonic() - started
         import closer_stage_feedback
 
@@ -3318,12 +3482,23 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                         sort_keys=True,
                     ).encode()
                 ).hexdigest()
+            auth_error = result.get("auth_required") is True or bool(
+                re.search(
+                    r"\b(?:authentication (?:failed|required)|unauthorized|invalid api key|expired (?:access )?token|http(?: status)?[ :=]+401)\b",
+                    "\n".join(str(result.get(k) or "") for k in ("error", "stderr_tail")),
+                    re.I,
+                )
+            )
             failure = {
                 "profile_id": route["profile_id"],
                 "agent": route["agent"],
                 "run_id": result.get("run_id"),
                 "exit": result.get("exit"),
-                "category": evidence.get("category") or "transport_error",
+                "category": (
+                    "authentication"
+                    if auth_error
+                    else evidence.get("category") or "transport_error"
+                ),
                 "subcategory": evidence.get("subcategory") or "unclassified_failure",
                 "evidence_hash": evidence_hash,
                 "is_authoritative": evidence.get("is_authoritative") is True,
@@ -3331,13 +3506,34 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             with route_lock:
                 failed_low_profiles.add(route["profile_id"])
                 low_profile_failures[route["profile_id"]] = failure
+                import execution_profiles
+
+                failed_pools = set(route.get("pools") or [])
+                for agent in _EXCEPTION_ELIGIBLE_AGENTS:
+                    for profile in execution_profiles.profiles_for_agent(
+                        agent, transport="offload"
+                    ):
+                        if failed_pools.intersection(profile.get("capacity_pool_ids") or []):
+                            failed_low_profiles.add(profile["profile_id"])
                 route_lock.notify_all()
             if run_drift:
                 with drift_lock:
                     drift_claimed = False
-            # Re-enter preparation/route admission for this same target. The
-            # failed profile is round-suppressed, so this is bounded by the
-            # finite set of existing eligible low profiles.
+            # Authentication failures require an external repair, never another invocation.
+            if any(
+                "auth" in str(failure.get(field, "")).lower()
+                for field in ("category", "subcategory")
+            ):
+                return {
+                    "status": "deferred",
+                    "reason": "provider_failure",
+                    "next_trigger": "provider authentication repaired outside this round",
+                    "resource_evidence": {"provider_failure": failure},
+                    "classification": "provider_failure",
+                    "substantive_needs": [],
+                    "authority": False,
+                }
+            # Pool aliases were suppressed before selecting another qualified provider.
             return interpret(target, context)
         with route_lock:
             route_lock.notify_all()
@@ -3485,6 +3681,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         route, route_status = _exception_route(
             load=route_load,
             repair=False,
+            unavailable_profiles=failed_low_profiles,
             with_status=True,
         )
         if not route:
@@ -3533,11 +3730,9 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 },
                 "next_trigger": "capacity_recheck",
             }
-        route_agent = route["agent"]
-        route_profile = route["profile_id"]
-        route_pools = list(route.get("pools") or [])
-        try:
-            result = backend.worker(
+        result, route = _execute_profile_route(
+            route,
+            lambda chosen: backend.worker(
                 target,
                 "disposition",
                 exception_snapshot,
@@ -3546,18 +3741,20 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     "id": context.get("work_key", "pipeline-exception"),
                     "revision": context.get("revision"),
                 },
-                profile_id=route_profile,
+                profile_id=chosen["profile_id"],
                 advisory_context={
                     **proposal,
                     "evidence": prep.get("evidence_summary", {}),
                     "packet_ref": prep.get("packet_ref"),
                 },
-            )
-        finally:
-            with route_lock:
-                for pool in route_pools:
-                    route_load["pool:" + pool] = max(0, route_load.get("pool:" + pool, 1) - 1)
-                route_lock.notify_all()
+            ),
+            lane="exception",
+            load=route_load,
+            deadline=context["deadline"],
+            unavailable_profiles=failed_low_profiles,
+        )
+        route_agent = route["agent"]
+        route_profile = route["profile_id"]
         worker_row = result.get("worker") if isinstance(result, dict) else None
         if isinstance(worker_row, dict):
             uncertain = _uncertain_worker(
@@ -3868,11 +4065,35 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         except CompletedResponseReadError as error:
             # This boundary precedes the inner queue and any guarded operation.
             return readback_hold(error, target, context.get("prepare", {}), context)
+        execute = current.execute
+        if (
+            getattr(args, "coordinator_mode", "legacy") == "resource_scoped"
+            or Path(str(pipeline_path) + ".coordination/reservations").exists()
+            or Path(str(pipeline_path) + ".scoped").exists()
+        ):
+            reserved_keys = set(resource_keys(target, context))
+            prepared_full, _packet = full_snapshot(context.get("prepare") or {})
+
+            def execute_bound(name, action, observed, operation):
+                import closer_resources
+
+                actual = _prepared_resource_keys(
+                    name, {"revision": observed.get("revision")}, observed, backend.workspaces
+                )
+                if observed.get("head") != prepared_full.get("head") or not set(actual).issubset(
+                    reserved_keys
+                ):
+                    raise closer_resources.ResourceBlocked(
+                        "actual operation changed prepared head/resource bindings"
+                    )
+                return current.execute(name, action, observed, operation)
+
+            execute = execute_bound
         receipt = closer_queue.run_round(
             action_state,
             [target],
             current.observe,
-            current.execute,
+            execute,
             reconcile=current.reconcile,
             # The pipeline owns a five-minute receipt reserve. Preserve the
             # callback cutoff while giving the inner queue the same full deadline.
@@ -4269,6 +4490,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
     pipeline = closer_pipeline.run_pipeline(
         pipeline_path,
         targets,
+        coordinator_mode=getattr(args, "coordinator_mode", "legacy"),
+        coordinator_contract_pin=getattr(args, "coordinator_contract_pin", None),
+        resource_keys=resource_keys,
+        coordination_admission=getattr(args, "_coordination_admission", None),
         prepare=prepare,
         interpret=(
             (
@@ -4338,18 +4563,36 @@ def main(argv=None):
         action="store_true",
         help="collect staged evidence and bounded proposals without queue actions or model calls",
     )
+    run.add_argument("--coordinator-mode", choices=("legacy", "resource_scoped"), default="legacy")
+    run.add_argument(
+        "--coordinator-contract-pin",
+        help="JSON object pinning scoped schema/layout/pipeline_schema",
+    )
     run.add_argument("--dispositions")
     run.add_argument("--workspaces", help="JSON mapping repo to authorized local workspace")
     validate = sub.add_parser("validate-stop")
     validate.add_argument("--state", required=True)
     validate.add_argument("--assignment")
     validate.add_argument("--shadow", action="store_true")
+    validate.add_argument("--round-id", help="exact resource-scoped ACTION C round receipt")
     args = p.parse_args(argv)
     import closer_queue
 
     if args.command == "validate-stop":
         targets = targets_from_assignment(args.assignment) if args.assignment else None
         pipeline_path = _pipeline_state_path(args.state, shadow=args.shadow)
+        import closer_resources
+
+        if args.round_id or closer_resources.scoped_root(pipeline_path).exists():
+            import closer_pipeline
+
+            result = (
+                closer_pipeline.validate_stop_scoped(pipeline_path, args.round_id, targets)
+                if args.round_id
+                else {"valid": False, "stop_valid": False, "reasons": ["scoped_round_id_required"]}
+            )
+            print(json.dumps(result, sort_keys=True))
+            return 0 if result.get("valid") else 78
         if pipeline_path.is_file():
             import closer_pipeline
 
@@ -4365,15 +4608,64 @@ def main(argv=None):
             print(json.dumps(result, sort_keys=True))
             return 78
         result = closer_queue.validate_stop(args.state, assignment_targets=targets)
+        unknown = closer_resources.unknown_reservations(closer_resources.scoped_root(pipeline_path))
+        if unknown:
+            result = {
+                **result,
+                "valid": False,
+                "stop_valid": False,
+                "continuation_required": True,
+                "unknown_reservations": unknown,
+                "reasons": [*result.get("reasons", []), "unresolved_resource_reservations"],
+            }
         print(json.dumps(result, sort_keys=True))
         return 0 if result.get("valid") else 78
     if not 10 <= args.budget_seconds <= 2700 or not 1 <= args.max_workers <= 4:
         p.error("budget must be 10..2700 seconds; workers 1..4")
+    if args.coordinator_mode == "resource_scoped" and not (args.pipeline or args.shadow):
+        p.error("resource_scoped requires --pipeline or --shadow")
+    if args.coordinator_contract_pin:
+        try:
+            args.coordinator_contract_pin = json.loads(args.coordinator_contract_pin)
+            if not isinstance(args.coordinator_contract_pin, dict):
+                raise ValueError("pin must be an object")
+        except ValueError as exc:
+            p.error(str(exc))
+    if args.coordinator_mode == "resource_scoped":
+        import closer_pipeline
+        import closer_resources
+
+        required_pin = {
+            "schema": closer_resources.CONTRACT_SCHEMA,
+            "layout": closer_resources.LAYOUT,
+            "pipeline_schema": closer_pipeline.SCHEMA,
+            "coordination_gates": 1,
+        }
+        if json.dumps(args.coordinator_contract_pin, sort_keys=True) != json.dumps(
+            required_pin, sort_keys=True
+        ):
+            p.error(
+                "resource_scoped requires the complete current --coordinator-contract-pin: "
+                + json.dumps(required_pin)
+            )
     assignment_rows = assignment_rows_from_file(args.assignment)
     targets = list(assignment_rows)
+    import closer_resources
+
+    pipeline_path = _pipeline_state_path(args.state, shadow=args.shadow)
+    with closer_resources.coordination_admission(
+        pipeline_path, targets, mode=args.coordinator_mode
+    ) as admission:
+        args._coordination_admission = admission
+        return _main_admitted(args, p, assignment_rows, targets)
+
+
+def _main_admitted(args, p, assignment_rows, targets):
+    import closer_queue
+
     deadline = time.time() + args.budget_seconds + 300
     budget_admission = None
-    if Path(args.state).exists():
+    if args._coordination_admission.runnable and Path(args.state).exists():
         try:
             previous_state = closer_queue._read_state(Path(args.state))
         except Exception as exc:
@@ -4456,9 +4748,28 @@ def main(argv=None):
         result = _run_staged_pipeline(args, targets, backend, deadline)
         import closer_pipeline
 
-        validation = closer_pipeline.validate_stop(
-            _pipeline_state_path(args.state, shadow=args.shadow), assignment_targets=targets
-        )
+        if args.coordinator_mode == "resource_scoped":
+            validation = closer_pipeline.validate_stop_scoped(
+                _pipeline_state_path(args.state, shadow=args.shadow),
+                result.get("round_id"),
+                targets,
+            )
+            result["action_c"] = {
+                "round_id": result.get("round_id"),
+                "validate_stop_args": [
+                    "validate-stop",
+                    "--state",
+                    args.state,
+                    "--round-id",
+                    result.get("round_id"),
+                    *(["--shadow"] if args.shadow else []),
+                ],
+                "native_cleanup_performed": False,
+            }
+        else:
+            validation = closer_pipeline.validate_stop(
+                _pipeline_state_path(args.state, shadow=args.shadow), assignment_targets=targets
+            )
         result["validation"] = validation
         if budget_admission is not None:
             result["budget_admission"] = budget_admission
@@ -4468,16 +4779,66 @@ def main(argv=None):
         # Inventory only: no claims, provider calls, queue writes, or scheduling changes.
         print(json.dumps({"inventory": [backend.observe(t) for t in targets]}, sort_keys=True))
         return 0
-    result = closer_queue.run_round(
-        args.state,
-        targets,
-        backend.observe,
-        backend.execute,
-        reconcile=backend.reconcile,
-        deadline=deadline,
-        receipt_reserve_seconds=PIPELINE_RECEIPT_RESERVE_SECONDS,
-        max_workers=args.max_workers,
-    )
+    import closer_resources
+
+    # Old non-staged callers must cooperate with the same stable target gates too.
+    # Fresh native observations supply exact alias reservations in either mode.
+    # Read-only inventory above remains available.
+    with contextlib.ExitStack() as gates:
+        held = {}
+        runnable = []
+        for target in sorted(targets, key=closer_resources.canonical_target):
+            try:
+                gates.enter_context(
+                    closer_resources.admission_gate(
+                        args._coordination_admission,
+                        _pipeline_state_path(args.state),
+                        target,
+                        mode="legacy",
+                    )
+                )
+                runnable.append(target)
+            except closer_resources.ResourceBlocked:
+                held[target] = "resource_contested"
+        root = closer_resources.scoped_root(_pipeline_state_path(args.state))
+        fenced, runnable = closer_resources.rollback_fence(
+            _pipeline_state_path(args.state), runnable
+        )
+        held.update({target: row.get("deferred_reason") for target, row in fenced.items()})
+        owner = f"raw-legacy:{os.getpid()}:{threading.get_ident()}:{time.time_ns()}"
+
+        def execute_reserved(target, action, observed, operation):
+            keys = [
+                *closer_resources.default_resource_keys(target),
+                *_prepared_resource_keys(
+                    target, {"revision": observed.get("revision")}, observed, backend.workspaces
+                ),
+            ]
+            with closer_resources.legacy_reserve(
+                root, keys, target=target, owner=owner, deadline=deadline
+            ):
+                return backend.execute(target, action, observed, operation)
+
+        if runnable:
+            result = closer_queue.run_round(
+                args.state,
+                runnable,
+                backend.observe,
+                execute_reserved,
+                reconcile=backend.reconcile,
+                deadline=deadline,
+                receipt_reserve_seconds=PIPELINE_RECEIPT_RESERVE_SECONDS,
+                max_workers=args.max_workers,
+            )
+            if result.get("stop_valid"):
+                closer_resources.release_legacy_boundary(root, owner)
+        else:
+            result = {"stop_valid": False, "valid": False}
+        if held:
+            result.update(stop_valid=False, valid=False, held=held)
+        unknown = closer_resources.unknown_reservations(root)
+        if unknown:
+            result.update(stop_valid=False, valid=False, unknown_reservations=unknown)
     print(json.dumps(result, sort_keys=True))
     return 0 if result.get("stop_valid") else 78
 

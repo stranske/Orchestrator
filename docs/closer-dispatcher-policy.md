@@ -134,3 +134,65 @@ all non-prompt TOML fields, and runs the normal Claude prompt renderer plus each
 installed Cursor/Muse renderer. All resulting caches are checked against source
 and restored on failure when their bytes still belong to the installer. No install
 or renderer starts workers.
+
+## Staged resource-scoped dispatcher integration
+
+The production CLI defaults explicitly to `--coordinator-mode legacy`. Opt in only
+with `--pipeline --apply --workers --coordinator-mode resource_scoped` (or use
+`--shadow` for evidence-only testing), and supply the complete contract pin:
+
+```json
+{"schema":"closer-scoped-state/v1","layout":1,"pipeline_schema":"closer-pipeline/v1","coordination_gates":1}
+```
+
+Pass that JSON as `--coordinator-contract-pin`. The staging capability is mandatory:
+an older scoped root without `coordination_gates: 1` is incompatible and is never
+migrated in place. Existing uncooperative installed writers must be proven terminal
+before promotion. Their elapsed runtime is not terminal evidence. This change does
+not install or promote a runtime, change controller scheduling, or establish a live
+canary result. Non-staged legacy callers and old installed code are not evidence of
+this staging capability; require their terminality before enabling a mixed deployment.
+The compatibility guarantee here covers the cooperating staged dispatcher paths.
+
+Both cooperating modes acquire stable per-target gates beside the pipeline ledger
+before inspecting state. Legacy retains its JSON round lock; scoped writers use
+separate item shards. Mutation intents use `<pipeline>.coordination/reservations`,
+which exists independently of the scoped root, including for cooperating legacy
+writers before first scoped use. Historical intents in the scoped root are still
+read and fenced. Legacy stop validation checks these common unknowns too.
+A cooperating legacy executor advertises its aliases in `legacy-intent.json`
+under the same key locks. It may advance its existing guarded JSON queue, and its
+advertisement is removed only after that durable ledger validates a known native
+continuation or completion boundary. A crash or invalid stop retains it. This
+separate compatibility protocol never adopts or clears a Core `intent.json`:
+every Core intent, including one for the same target, still blocks a new reservation
+until its current owner has written the required durable COMPLETE receipt.
+Target gates are held through item work, with no fleet-wide
+exclusive lock across provider calls. Before mutation, both modes reserve the same
+PR, source issue, branch and authorized workspace keys derived from retained,
+hash-checked prepared snapshots. Issue-to-PR aliases reserve the delivery PR and
+all source issues. The native operation seam also rejects a changed head or resource
+binding; native queue claims, authorization checks and exact-head guards still run.
+An unknown branch/source reservation conservatively holds legacy mutations when
+prepared aliases are unavailable. Read/preparation work remains possible. Non-staged
+legacy apply cannot resume through an existing scoped root.
+
+Profile execution holds one cross-process slot for every exact registry
+`capacity_pool_ids` entry beneath the common `HANDOFF_DIR/closer-profile-execution`.
+This preserves the existing router's exclusive pool admission: different low/strong
+profiles and all six approved agents share the same pool identity. All coordinators
+must use the same common handoff directory. The existing cached `capacity.json` is
+read again after reservation. A held pool excludes every profile using it; fallback
+retains the lane's qualified reasoning effort. Failed pools are suppressed for the
+round, authentication errors are not retried, and uncertain executions retain their
+native receipt and unknown cost fields. No global capacity refresh is performed.
+
+Every scoped receipt names its exact `round_id` and returns an `action_c` object
+with the arguments for `validate-stop --state ... --round-id ...` (plus `--shadow`
+when appropriate). The native ACTION C hook must pass this ID explicitly; there is
+no global latest-round selection. If a scoped root exists, missing IDs refuse legacy
+validator fallback. Empty assignments, fenced targets and unresolved resource intents
+cannot produce a valid stop. `native_cleanup_performed` remains false: the receipt
+is a handoff seam, not evidence of installed cleanup. Historical uncertain intents
+remain held until a separately verified, resource/head-bound reconciliation exists;
+this integration exposes no clearing shortcut.

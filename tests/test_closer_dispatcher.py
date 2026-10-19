@@ -28,6 +28,14 @@ MERGE = "b" * 40
 @pytest.fixture(autouse=True)
 def no_live_state_or_provider(monkeypatch, tmp_path):
     monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "private-handoff"))
+
+    def semantic_route(route, invoke, *, load, **_kwargs):
+        try:
+            return invoke(route), route
+        finally:
+            adapter._release_route_load(route, load)
+
+    monkeypatch.setattr(adapter, "_execute_profile_route", semantic_route)
     monkeypatch.setattr(claims, "claim", lambda *a, **kw: True)
     monkeypatch.setattr(claims, "release", lambda *a, **kw: True)
     monkeypatch.setattr(claims, "update_metadata", lambda *a, **kw: True)
@@ -48,6 +56,8 @@ def snapshot(**overrides):
         "kind": "pr",
         "state": "OPEN",
         "head": HEAD,
+        "head_branch": "feature",
+        "head_repository": "o/r",
         "merge": None,
         "body": "Delivery",
         "draft": False,
@@ -544,9 +554,9 @@ def test_pause_label_blocks_automatic_completion(tmp_path, where):
 
 def test_unparsed_normative_acceptance_prose_cannot_disappear(tmp_path):
     current = snapshot()
-    current["sources"][0][
-        "body"
-    ] += "\n\nThe migration must preserve every existing consumer override."
+    current["sources"][0]["body"] += (
+        "\n\nThe migration must preserve every existing consumer override."
+    )
     decision = integrated(tmp_path, current)
     prose = "The migration must preserve every existing consumer override."
     decision["criteria"] = [row for row in decision["criteria"] if row["criterion"] != prose]
@@ -1706,9 +1716,9 @@ def test_integration_ack_is_bound_but_never_supplies_acceptance_or_merge(tmp_pat
     backend.dispositions[TARGET] = {**integrated(tmp_path, current), **ack}
     assert backend.select(current)[0] == "merge"
     assert backend.gh.calls == [] and len(calls) == 1
-    backend.dispositions[TARGET][
-        "followup_task"
-    ] = "Collect newly requested source-specific evidence"
+    backend.dispositions[TARGET]["followup_task"] = (
+        "Collect newly requested source-specific evidence"
+    )
     assert backend.observe(TARGET)["operation_binding"] != original_binding
 
 
@@ -2867,6 +2877,8 @@ def test_busy_shared_exception_pool_returns_valid_fresh_capacity_proof(tmp_path,
             "pools": {"codex-subscription": {"state": "ok"}},
         },
     )
+    # Routing is stubbed in this semantic test; the execution-pool suite uses real profiles.
+    monkeypatch.setattr(execution_profiles, "profiles_for_agent", lambda *a, **kw: [])
     entered = threading.Event()
     release = threading.Event()
 
@@ -4173,3 +4185,82 @@ def test_expired_interrupted_read_can_receive_independent_cli_budget(tmp_path, s
         "expired_pipeline_recovery",
     )
     assert before == (state_path.read_bytes(), path.read_bytes())
+
+
+@pytest.mark.parametrize("changed", [None, "head", "branch", "source"])
+def test_scoped_native_operation_seam_rechecks_prepared_head_and_aliases(
+    tmp_path, monkeypatch, changed
+):
+    import closer_resources
+
+    current = snapshot(head_branch="feature", head_repository="o/r")
+    gh = FakeGitHub(current)
+    monkeypatch.setattr(adapter, "GitHub", lambda **kw: gh)
+    monkeypatch.setattr(
+        closer_evidence,
+        "collect_evidence",
+        lambda *a, **kw: {
+            "schema": "closer-evidence/v1",
+            "sections": {},
+            "manifest": {"packet_sha256": "x"},
+        },
+    )
+    monkeypatch.setattr(closer_evidence, "validate_packet", lambda *a: False)
+    calls = []
+    # Only the native effect is synthetic; the dispatcher's head/resource binding stays real.
+    monkeypatch.setattr(
+        adapter.Closer, "execute", lambda *a: calls.append(a) or {"status": "completed"}
+    )
+
+    def native_queue_stub(_path, targets, observe, execute, **kw):
+        observed = observe(TARGET)
+        execute(
+            TARGET, observed["action"], observed, {"id": "offline", "deadline": time.time() + 20}
+        )
+        return {"stop_valid": True, "accounting": [{"target": TARGET, "status": "complete"}]}
+
+    monkeypatch.setattr(closer_queue, "run_round", native_queue_stub)
+
+    def pipeline_stub(_path, _targets, **callbacks):
+        prep = callbacks["prepare"](TARGET, {"deadline": time.time() + 30})
+        callbacks["resource_keys"](TARGET, {"prepare": prep})
+        if changed == "head":
+            gh.current["head"] = "f" * 40
+        elif changed == "branch":
+            gh.current["head_branch"] = "other"
+        elif changed == "source":
+            gh.current["sources"] = [
+                {
+                    "target": "o/r#99",
+                    "body": "## Acceptance criteria\n- Preserve behavior",
+                    "state": "open",
+                }
+            ]
+        gh.current["revision"] = adapter.digest(gh.current)
+        context = {
+            "prepare": prep,
+            "interpret": {},
+            "deadline": time.time() + 30,
+            "revision": prep["revision"],
+            "state_path": str(_path),
+            "action_state_path": str(tmp_path / "action.json"),
+        }
+        if changed:
+            with pytest.raises(closer_resources.ResourceBlocked, match="actual operation changed"):
+                callbacks["act"](TARGET, context)
+            assert not calls
+        else:
+            assert callbacks["act"](TARGET, context)["target_complete"] is True
+            assert calls
+        return {}
+
+    monkeypatch.setattr(closer_pipeline, "run_pipeline", pipeline_stub)
+    backend = closer(tmp_path, current, apply=True, workers=True)
+    args = SimpleNamespace(
+        state=str(tmp_path / "state"),
+        shadow=False,
+        max_workers=1,
+        coordinator_mode="resource_scoped",
+        coordinator_contract_pin=None,
+    )
+    adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 330)
