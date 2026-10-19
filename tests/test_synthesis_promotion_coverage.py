@@ -40,8 +40,9 @@ def test_completion_probe_requires_a_success_marker_and_new_head(tmp_path, monke
     )
 
     marker.write_text("not json")
-    reason = promotion.default_completion_probe(state)["reason"]
-    assert reason.startswith("invalid completion marker:")
+    invalid_result = promotion.default_completion_probe(state)
+    assert invalid_result["status"] == "interrupted"
+    assert invalid_result["reason"].startswith("invalid completion marker:")
 
     marker.write_text(json.dumps({"rc": 9}))
     assert promotion.default_completion_probe(state) == {
