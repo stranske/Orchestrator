@@ -7,6 +7,7 @@ it before opening a ledger, emitting a heartbeat, or performing a write.
 from __future__ import annotations
 
 import ast
+import json
 import os
 import subprocess
 import sys
@@ -24,6 +25,11 @@ import paths
 # a second site would let the first disappear without this needle going silent.
 _DRY_RUN_GUARD_NEEDLE = 'if args.dry_run and args.command != "tick-evidence"'
 _DRY_RUN_ERROR_NEEDLE = 'ap.error("--dry-run is supported only by tick-evidence")'
+_USEFUL_EXPERIMENTS = (
+    ("advice:dryrun0001", ""),
+    ("run:keepalive:stranske/Counter_Risk#1146:codex", "production_run"),
+    ("role:dry-run-review", "production_run"),
+)
 
 
 def _without_dry_run_guard(src: str) -> str:
@@ -101,10 +107,15 @@ def test_useful_dry_run_writes_nothing(tmp_path: Path):
     test FAILS because ``useful --dry-run`` returns 0 with ``recorded: true`` and mutates the
     scratch ledger; restore the reject and this test PASSES again.
     """
-    _assert_useful_dry_run_writes_nothing(tmp_path)
+    for index, (experiment, source) in enumerate(_USEFUL_EXPERIMENTS):
+        _assert_useful_dry_run_writes_nothing(
+            tmp_path / str(index), experiment=experiment, source=source
+        )
 
 
-def _assert_useful_dry_run_writes_nothing(tmp_path: Path, *, script: Path | None = None):
+def _assert_useful_dry_run_writes_nothing(
+    tmp_path: Path, *, experiment: str, source: str, script: Path | None = None
+):
     """Share the exact invocation and assertions with the deliberate guard-removal check."""
     ledger = _seeded_ledger(tmp_path)
     before = ledger.read_bytes()
@@ -113,15 +124,20 @@ def _assert_useful_dry_run_writes_nothing(tmp_path: Path, *, script: Path | None
         "--capability",
         "offload",
         "--experiment",
-        "advice:dryrun0001",
+        experiment,
         "--evidence",
         "the advisory review found the missing edge before merge",
         "--provenance",
         "machine_observed",
+        *(["--source", source] if source else []),
     )
 
     ordinary = _run(ledger, *useful_args, script=script)
     assert ordinary.returncode == 0, ordinary.stdout + ordinary.stderr
+    recorded = json.loads(ordinary.stdout)
+    assert recorded["recorded"] is True
+    assert recorded["experiment"] == experiment
+    assert recorded["source"] == (source or "capability_propensity")
     assert (
         ledger.read_bytes() != before
     ), "the control must prove this argv would write without dry-run"
@@ -148,8 +164,11 @@ def test_removing_dry_run_guard_restores_silent_write(tmp_path: Path):
     script = tmp_path / "capability_propensity_unguarded.py"
     script.write_text(broken)
 
-    with pytest.raises(AssertionError, match="useful --dry-run mutated the scratch ledger"):
-        _assert_useful_dry_run_writes_nothing(tmp_path, script=script)
+    for index, (experiment, source) in enumerate(_USEFUL_EXPERIMENTS):
+        with pytest.raises(AssertionError, match="useful --dry-run mutated the scratch ledger"):
+            _assert_useful_dry_run_writes_nothing(
+                tmp_path / str(index), experiment=experiment, source=source, script=script
+            )
 
 
 def test_useful_dry_run_does_not_create_an_absent_ledger(tmp_path: Path):
