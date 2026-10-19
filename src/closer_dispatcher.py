@@ -302,7 +302,7 @@ def _deadline_with_pipeline_round(requested_deadline, legacy_state, state_path):
             # this caller to renew it or preempt its owner.
             return legacy_bound, "prior_pipeline_window_active"
         summary = previous.get("receipt_summary")
-        if (
+        if summary is not None and (
             not isinstance(summary, dict)
             or summary.get("schema") != "closer-pipeline-receipt/v1"
             or summary.get("run_id") != run_id
@@ -311,17 +311,18 @@ def _deadline_with_pipeline_round(requested_deadline, legacy_state, state_path):
             or not previous["created"] <= summary["finished_at"] <= sampled_at
         ):
             return legacy_bound, "pipeline_receipt_binding_invalid"
-        historical_now = summary["finished_at"]
+        historical_now = summary["finished_at"] if summary is not None else sampled_at
         closer_pipeline._resolved_audit_history(path, previous)
         prior = closer_pipeline.validate_stop(
             path, assignment_targets=previous.get("assignment"), now=lambda: historical_now
         )
         if not isinstance(prior, dict):
             return legacy_bound, "pipeline_stop_receipt_invalid"
-        if prior.get("valid") is True:
-            return requested_deadline, "valid_pipeline_stop"
-        if closer_pipeline._safe_prior_continuation(prior, previous, path)[0]:
-            return requested_deadline, "safe_pipeline_continuation"
+        if summary is not None:
+            if prior.get("valid") is True:
+                return requested_deadline, "valid_pipeline_stop"
+            if closer_pipeline._safe_prior_continuation(prior, previous, path)[0]:
+                return requested_deadline, "safe_pipeline_continuation"
         if closer_pipeline._expired_invalid_round_recovery(
             prior, previous, path, run_id, sampled_at
         )[0]:

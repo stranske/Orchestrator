@@ -4067,3 +4067,144 @@ def test_new_read_barrier_keeps_exact_audit_even_when_material_was_previously_re
         history = closer_pipeline._resolved_audit_history(path, latest)
         assert closer_pipeline._valid_read_recovery_barrier(target, item, history)
         assert item["recovery_excluded"]
+
+
+@pytest.mark.parametrize("status", ["queued", "running"])
+@pytest.mark.parametrize("stage", ["prepare", "interpret"])
+def test_interrupted_reads_restart_without_promoting_unknown_assessment(tmp_path, status, stage):
+    path = tmp_path / "pipeline.json"
+    at = 1_800_000_000.0
+    interrupted_round_fixture(path, at)
+    state = closer_pipeline._load(path)
+    old = state["runs"]["interrupted"]
+    target = "owner/repo#deadline-0"
+    old["targets"][target].update(status=status, stage=stage)
+    closer_pipeline._save(path, state)
+    unknown = status == "running" and stage == "interpret"
+    calls = []
+    cb = callbacks()
+    ordinary = cb["prepare"]
+    cb["prepare"] = lambda name, ctx: calls.append(name) or ordinary(name, ctx)
+    for index in range(3):
+        result = run(path, [target, f"fresh-{index}"], cb, now=lambda: at + index * 20)
+        assert result.get("status") != "blocked"
+        current = next(iter(closer_pipeline._load(path)["runs"].values()))
+        if unknown:
+            assert target not in calls
+            retained = current["targets"][target]
+            assert retained["status"] == "failed"
+            assert retained["error"] == closer_pipeline.READ_INTERRUPTED_BARRIER_ERROR
+            assert closer_pipeline._valid_read_recovery_barrier(
+                target, retained, closer_pipeline._resolved_audit_history(path, current)
+            )
+        else:
+            assert target in calls
+        assert f"fresh-{index}" in calls
+        assert current["prior_invalid_stop_evidence"]["valid"] is False
+
+
+@pytest.mark.parametrize("status", ["queued", "running"])
+@pytest.mark.parametrize("barrier", [False, True])
+def test_interrupted_prepare_preserves_audited_wait_and_action_barrier(tmp_path, status, barrier):
+    path = tmp_path / "pipeline.json"
+    at, target, _inner, prior_barrier = changed_read_origin_fixture(path, legacy_barrier=barrier)
+    state = closer_pipeline._load(path)
+    old = next(iter(state["runs"].values()))
+    row = old["targets"][target]
+    # Reproduce an interrupted next preparation, before its revision changed.
+    revision = old["recovered_invalid_stop"]["targets"][target]["revision"]
+    row["revision"] = revision
+    row["results"]["prepare"]["revision"] = revision
+    row["results"]["prepare"]["snapshot"]["revision"] = revision
+    row.update(status=status, stage="prepare")
+    old.pop("receipt_summary")
+    closer_pipeline._save(path, state)
+    calls = []
+    cb = callbacks()
+    ordinary = cb["prepare"]
+    cb["prepare"] = lambda name, ctx: calls.append(name) or ordinary(name, ctx)
+    for index in range(3):
+        result = run(path, [target, f"fresh-{index}"], cb, now=lambda: at + index * 20)
+        assert result.get("status") != "blocked"
+        if barrier:
+            assert target not in calls
+            current = next(iter(closer_pipeline._load(path)["runs"].values()))
+            retained = current["targets"][target]
+            assert retained["recovery_barrier"]["prior_recovery_barrier"] == prior_barrier
+            assert retained["error"] == closer_pipeline.READ_INTERRUPTED_BARRIER_ERROR
+        else:
+            assert target in calls
+
+
+@pytest.mark.parametrize(
+    "tamper", ["active", "uncertain", "action", "exception", "receipt", "barrier"]
+)
+def test_interrupted_read_does_not_release_unproved_boundaries(tmp_path, tamper):
+    path = tmp_path / "pipeline.json"
+    at = 1_800_000_000.0
+    interrupted_round_fixture(path, at)
+    state = closer_pipeline._load(path)
+    old = state["runs"]["interrupted"]
+    row = old["targets"]["owner/repo#deadline-0"]
+    row.update(status="queued", stage="prepare")
+    if tamper == "active":
+        old["deadline"] = at + 10
+    elif tamper == "uncertain":
+        row["provider_outcome_uncertain"] = True
+    elif tamper == "action":
+        row["results"]["act"] = {"status": "completed"}
+    elif tamper == "exception":
+        row["stage"] = "exception"
+    elif tamper == "receipt":
+        old["receipt_summary"] = {"finished_at": at}
+    else:
+        row["recovery_barrier"] = {"schema": "closer-unverified-act-barrier/v1"}
+    closer_pipeline._save(path, state)
+    stop = validate_stop(path, old["assignment"], now=lambda: at)
+    assert not closer_pipeline._expired_invalid_round_recovery(stop, old, path, "interrupted", at)[
+        0
+    ]
+
+
+@pytest.mark.parametrize("tamper", [None, "future", "before_round", "reset", "trigger"])
+def test_interrupted_capacity_recovery_proves_original_in_round_throttle(tmp_path, tamper):
+    path = tmp_path / "pipeline.json"
+    at = 1_800_000_000.0
+    interrupted_round_fixture(path, at)
+    state = closer_pipeline._load(path)
+    old = state["runs"]["interrupted"]
+    row = old["targets"]["owner/repo#deadline-0"]
+    observed = at - 2000
+    if tamper == "future":
+        observed = at + 1
+    elif tamper == "before_round":
+        observed = old["created"] - 1
+    cap = {
+        "observed_at": observed,
+        "reset_at_epoch": observed + 60,
+        "resource": "core",
+        "throttle": {
+            "state": "shed",
+            "action": "defer",
+            "resource": "core",
+            "reason": "reserve",
+            "source": "native",
+            "remaining": 0,
+            "limit": 60,
+            "reset_in_s": 60,
+        },
+    }
+    if tamper == "reset":
+        cap["reset_at_epoch"] += 10
+    row.update(
+        stage="prepare",
+        deferred_reason="github_capacity",
+        resource_evidence={"github_capacity": cap},
+        deferred_next_trigger=f"retry_after_github_reset:{cap['reset_at_epoch']:.3f}",
+    )
+    if tamper == "trigger":
+        row["deferred_next_trigger"] = "retry"
+    closer_pipeline._save(path, state)
+    stop = validate_stop(path, old["assignment"], now=lambda: at)
+    recovered = closer_pipeline._expired_invalid_round_recovery(stop, old, path, "interrupted", at)
+    assert recovered[0] is (tamper is None)
