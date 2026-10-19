@@ -85,6 +85,12 @@ def _login_present(agent: str, key: str, text: str) -> bool:
         meta = providers.get("meta") if isinstance(providers, dict) else None
         if not isinstance(meta, dict):
             return False
+        # `muse auth set` replaces the OAuth login on the file backend (verified 2026-10-18 in a
+        # disposable Linux container: providers.meta ends up with only `api_key`, no mechanism).
+        # Refuse that shape explicitly so a record cannot pass on subs_active left over from an
+        # older file or a hand-edited hybrid.
+        if "api_key" in meta:
+            return False
         return meta.get("mechanism") == "oauth" and meta.get(key) is True
     return any(line.strip().lstrip("export ").startswith(key + "=") for line in text.splitlines())
 
