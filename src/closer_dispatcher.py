@@ -2316,13 +2316,18 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             ):
                 snap = {**local, "_local_cached": True}
                 packet = prior
-            if cached and cached.get("reconciliation_needed"):
+            observed_at = (cached or {}).get("observed_at")
+            refresh_due = (
+                not isinstance(observed_at, (int, float)) or time.time() - observed_at >= 900
+            )
+            if snap is not None and ((cached or {}).get("reconciliation_needed") or refresh_due):
                 try:
                     snap = gh.snapshot(target)
                     packet = None
                 except Exception:
-                    # A gap affects remote-dependent decisions, but it does not
-                    # erase the packet used by independent local analysis.
+                    # The remote scan is bounded to one attempt per preparation.
+                    # A gap or stale cache cannot authorize remote actions, but
+                    # neither erases the retained packet for local analysis.
                     pass
         if snap is None:
             snap = gh.snapshot(target)

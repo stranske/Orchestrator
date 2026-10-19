@@ -14,11 +14,18 @@ GENERATION = "generation-v1:" + "d" * 64
 
 def start_verified(record: ReleaseRecord, tmp_path):
     state = record.begin(CANDIDATE, INCUMBENT, "closer", run_id="run-1")
-    verifying = record.transition("verifying", lane_owner="closer", expected_revision=state["revision"])
+    verifying = record.transition(
+        "verifying", lane_owner="closer", expected_revision=state["revision"]
+    )
     return record.record_verification(
-        lane_owner="closer", expected_revision=verifying["revision"], verified=True,
-        source_identity="e" * 64, snapshot_path=tmp_path / "snapshot",
-        snapshot_digest=DIGEST, log_path=tmp_path / "verify.log", exit_code=0,
+        lane_owner="closer",
+        expected_revision=verifying["revision"],
+        verified=True,
+        source_identity="e" * 64,
+        snapshot_path=tmp_path / "snapshot",
+        snapshot_digest=DIGEST,
+        log_path=tmp_path / "verify.log",
+        exit_code=0,
     )
 
 
@@ -26,11 +33,18 @@ def test_record_survives_restart_and_preserves_original_incumbent_token(tmp_path
     path = tmp_path / "release.json"
     first = ReleaseRecord(path)
     initial = first.begin(CANDIDATE, INCUMBENT, "closer", run_id="run-1")
-    verifying = first.transition("verifying", lane_owner="closer", expected_revision=initial["revision"])
+    verifying = first.transition(
+        "verifying", lane_owner="closer", expected_revision=initial["revision"]
+    )
     verified = first.record_verification(
-        lane_owner="closer", expected_revision=verifying["revision"], verified=True,
-        source_identity="e" * 64, snapshot_path=tmp_path / "verified", snapshot_digest=DIGEST,
-        log_path=tmp_path / "verify.log", exit_code=0,
+        lane_owner="closer",
+        expected_revision=verifying["revision"],
+        verified=True,
+        source_identity="e" * 64,
+        snapshot_path=tmp_path / "verified",
+        snapshot_digest=DIGEST,
+        log_path=tmp_path / "verify.log",
+        exit_code=0,
     )
 
     restarted = ReleaseRecord(path)
@@ -52,11 +66,18 @@ def test_competing_publisher_cannot_take_active_record(tmp_path):
 def test_failed_verification_is_durable_and_cannot_install(tmp_path):
     record = ReleaseRecord(tmp_path / "release.json")
     initial = record.begin(CANDIDATE, INCUMBENT, "closer")
-    verifying = record.transition("verifying", lane_owner="closer", expected_revision=initial["revision"])
+    verifying = record.transition(
+        "verifying", lane_owner="closer", expected_revision=initial["revision"]
+    )
     failed = record.record_verification(
-        lane_owner="closer", expected_revision=verifying["revision"], verified=False,
-        source_identity=None, snapshot_path=None, snapshot_digest=None,
-        log_path=tmp_path / "verify.log", exit_code=1,
+        lane_owner="closer",
+        expected_revision=verifying["revision"],
+        verified=False,
+        source_identity=None,
+        snapshot_path=None,
+        snapshot_digest=None,
+        log_path=tmp_path / "verify.log",
+        exit_code=1,
     )
     assert failed["stage"] == "failed"
     assert ReleaseRecord(record.path).read()["failure"] == {"stage": "verification", "exit_code": 1}
@@ -67,24 +88,50 @@ def test_failed_verification_is_durable_and_cannot_install(tmp_path):
 def test_install_acceptance_rollback_stages_and_revision_cas(tmp_path):
     record = ReleaseRecord(tmp_path / "release.json")
     verified = start_verified(record, tmp_path)
-    installing = record.transition("installing", lane_owner="closer", expected_revision=verified["revision"])
-    installed = record.transition("installed", lane_owner="closer", expected_revision=installing["revision"],
-                                  installed_generation=GENERATION)
-    pending = record.transition("acceptance_pending", lane_owner="closer", expected_revision=installed["revision"])
-    accepted = record.transition("accepted", lane_owner="closer", expected_revision=pending["revision"],
-                                 live_acceptance={"accepted": True, "evidence": "health check passed"})
+    installing = record.transition(
+        "installing", lane_owner="closer", expected_revision=verified["revision"]
+    )
+    installed = record.transition(
+        "installed",
+        lane_owner="closer",
+        expected_revision=installing["revision"],
+        installed_generation=GENERATION,
+    )
+    pending = record.transition(
+        "acceptance_pending", lane_owner="closer", expected_revision=installed["revision"]
+    )
+    accepted = record.transition(
+        "accepted",
+        lane_owner="closer",
+        expected_revision=pending["revision"],
+        live_acceptance={"accepted": True, "evidence": "health check passed"},
+    )
     assert accepted["stage"] == "accepted"
     with pytest.raises(ReleaseConflict, match="revision changed"):
-        record.transition("rollback_pending", lane_owner="closer", expected_revision=installed["revision"])
+        record.transition(
+            "rollback_pending", lane_owner="closer", expected_revision=installed["revision"]
+        )
 
     rollback_record = ReleaseRecord(tmp_path / "rollback.json")
     verified2 = start_verified(rollback_record, tmp_path)
-    installing2 = rollback_record.transition("installing", lane_owner="closer", expected_revision=verified2["revision"])
-    installed2 = rollback_record.transition("installed", lane_owner="closer", expected_revision=installing2["revision"],
-                                             installed_generation=GENERATION)
-    rollback = rollback_record.transition("rollback_pending", lane_owner="closer", expected_revision=installed2["revision"],
-                                          rollback={"reason": "acceptance failed", "restore_token": INCUMBENT})
-    done = rollback_record.transition("rolled_back", lane_owner="closer", expected_revision=rollback["revision"])
+    installing2 = rollback_record.transition(
+        "installing", lane_owner="closer", expected_revision=verified2["revision"]
+    )
+    installed2 = rollback_record.transition(
+        "installed",
+        lane_owner="closer",
+        expected_revision=installing2["revision"],
+        installed_generation=GENERATION,
+    )
+    rollback = rollback_record.transition(
+        "rollback_pending",
+        lane_owner="closer",
+        expected_revision=installed2["revision"],
+        rollback={"reason": "acceptance failed", "restore_token": INCUMBENT},
+    )
+    done = rollback_record.transition(
+        "rolled_back", lane_owner="closer", expected_revision=rollback["revision"]
+    )
     assert done["rollback"]["restore_token"] == INCUMBENT
 
 
@@ -98,7 +145,7 @@ def test_record_is_bounded_and_atomic_json(tmp_path):
         record.read()
 
 
-VERIFIER_SOURCE = r'''#!/usr/bin/env bash
+VERIFIER_SOURCE = r"""#!/usr/bin/env bash
 set -eu
 mode=verify
 if [[ "${1:-}" == "--identity" ]]; then mode=identity; shift; fi
@@ -116,10 +163,10 @@ printf 'candidate payload' > "$snapshot/payload"
 printf '%s\n' "$(printf 'c%.0s' {1..64})" > "$digest"
 if [[ -n "${PUBLISH_DURING_VERIFY:-}" ]]; then printf '%s\n' "$PUBLISH_DURING_VERIFY" > "$GENERATION_STATE"; fi
 printf 'verified source identity: %s\n' "$SOURCE_FINGERPRINT"
-'''
+"""
 
 
-FAKE_INSTALLER = r'''import json
+FAKE_INSTALLER = r"""import json
 import os
 import shutil
 import sys
@@ -151,7 +198,7 @@ if (snapshot / "payload").read_text() != "candidate payload" or expected != "c" 
 mirror.mkdir(parents=True, exist_ok=True)
 shutil.copyfile(snapshot / "payload", mirror / "payload")
 state.write_text("d" * 64)
-'''
+"""
 
 
 def make_fake_release(tmp_path, monkeypatch, *, extra_env=None):
@@ -190,10 +237,16 @@ def make_fake_release(tmp_path, monkeypatch, *, extra_env=None):
     return result, journal, mirror, generation_state
 
 
-def test_verify_and_install_runs_gate_then_installs_and_reads_back_generation(tmp_path, monkeypatch):
+def test_verify_and_install_runs_gate_then_installs_and_reads_back_generation(
+    tmp_path, monkeypatch
+):
     result, journal, mirror, _state = make_fake_release(
-        tmp_path, monkeypatch,
-        extra_env={"VERIFY_BEFORE_SYNC_MAX_DIR_MB": "500", "VERIFY_BEFORE_SYNC_TREE": "BARE EXEC MIRROR"},
+        tmp_path,
+        monkeypatch,
+        extra_env={
+            "VERIFY_BEFORE_SYNC_MAX_DIR_MB": "500",
+            "VERIFY_BEFORE_SYNC_TREE": "BARE EXEC MIRROR",
+        },
     )
     assert result["stage"] == "installed"
     assert result["incumbent_token"] == INCUMBENT
@@ -204,7 +257,8 @@ def test_verify_and_install_runs_gate_then_installs_and_reads_back_generation(tm
 
 def test_verify_and_install_fails_closed_when_competing_publisher_wins(tmp_path, monkeypatch):
     result, journal, mirror, _state = make_fake_release(
-        tmp_path, monkeypatch,
+        tmp_path,
+        monkeypatch,
         extra_env={"PUBLISH_DURING_VERIFY": "f" * 64},
     )
     assert result["stage"] == "failed"
@@ -215,7 +269,9 @@ def test_verify_and_install_fails_closed_when_competing_publisher_wins(tmp_path,
 
 def test_verify_and_install_records_failed_verdict_and_never_installs(tmp_path, monkeypatch):
     result, journal, mirror, _state = make_fake_release(
-        tmp_path, monkeypatch, extra_env={"FAIL_VERIFY": "1"},
+        tmp_path,
+        monkeypatch,
+        extra_env={"FAIL_VERIFY": "1"},
     )
     assert result["stage"] == "failed"
     assert result["verification"]["verified"] is False
