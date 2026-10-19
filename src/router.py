@@ -35,7 +35,7 @@ import random
 import sys
 import time
 from pathlib import Path
-from typing import Any, Tuple, TypedDict, Union
+from typing import Any, NotRequired, Tuple, TypedDict, Union
 
 import adapters
 import capabilities
@@ -92,6 +92,9 @@ class RouteSpec(TypedDict):
 
     role: str
     agents: list[RouteEntry]
+    neutral_prior: NotRequired[bool]
+    reasoning_efforts: NotRequired[list[str]]
+    permission_modes: NotRequired[list[str]]
 
 
 Score = Tuple[Union[int, float], ...]
@@ -229,6 +232,28 @@ ROUTE_TABLE: dict = {
     },
 }
 
+# Closer requirements describe the work, not a preferred provider. These cells
+# get equal priors in the existing learner; allocations are temporary decisions.
+for _closer_task, _closer_efforts in {
+    "closer_interpret": ["none", "minimal", "low"],
+    "closer_exception": ["medium", "high"],
+    "closer_repair": ["medium", "high"],
+}.items():
+    ROUTE_TABLE[_closer_task] = {
+        "role": "code" if _closer_task == "closer_repair" else "review",
+        "neutral_prior": True,
+        "reasoning_efforts": _closer_efforts,
+        "permission_modes": (
+            ["workspace-write"]
+            if _closer_task == "closer_repair"
+            else ["workspace-write", "read-only"]
+        ),
+        "agents": [
+            {"agent": agent, "mode": "full", "late": False}
+            for agent in ("codex", "claude", "gemini", "muse", "cursor", "vibe")
+        ],
+    }
+
 # The public route table remains a generic mapping for compatibility with its existing consumers;
 # this private view records the invariant enforced by the static table above.
 _ROUTE_TABLE_TYPED: dict[str, RouteSpec] = ROUTE_TABLE
@@ -250,6 +275,31 @@ def _automatic_profiles(entry: RouteEntry, *, transport: str) -> list[dict]:
         return []
     expected_model = health["model"]
     return [profile for profile in profiles if profile["requested_model"] == expected_model]
+
+
+def _route_profiles(entry: RouteEntry, spec: RouteSpec, transport: str) -> list[dict]:
+    efforts = spec.get("reasoning_efforts")
+    if efforts is None:
+        return _automatic_profiles(entry, transport=transport)
+    return [
+        profile
+        for profile in execution_profiles.profiles_for_agent(entry["agent"], transport=transport)
+        if profile["reasoning_effort"] in efforts
+        and profile.get("permission_mode")
+        in spec.get("permission_modes", [profile.get("permission_mode")])
+    ]
+
+
+def _closer_profile_capacity(profile: dict, cap: dict) -> bool:
+    agent = cap.get("agents", {}).get(profile["agent"], {})
+    pools = profile.get("capacity_pool_ids") or []
+    return bool(
+        agent.get("state") in {"ok", "warn"}
+        and (agent.get("auth") or {}).get("authenticated") is not False
+        and cap.get("profiles", {}).get(profile["profile_id"], {}).get("state") in {"ok", "warn"}
+        and pools
+        and all(cap.get("pools", {}).get(pool, {}).get("state") in {"ok", "warn"} for pool in pools)
+    )
 
 
 def _state(cap: dict, agent: str) -> str:
@@ -572,6 +622,12 @@ def select_agent(
     if not spec:
         return None
     load = load or {}
+    neutral = bool(spec.get("neutral_prior"))
+    if neutral and learned is None:
+        learned = {
+            entry["agent"]: {"rank": 0, "n_obs": 0, "posterior": 0.5, "score": 0.5}
+            for entry in spec["agents"]
+        }
     scored: list[ScoredSelection] = []
     pacing_active = any(_measured_pacing(r) for r in cap.get("agents", {}).values())
     for idx, entry in enumerate(spec["agents"]):
@@ -579,9 +635,15 @@ def select_agent(
             continue
         # backup-only seats (aider): never auto-selected; reachable only when a caller explicitly
         # restricts to them via `only` (e.g. only={"aider"}). Keeps them as on-demand overflow capacity.
-        if entry["agent"] in BACKUP_AGENTS and not (only and entry["agent"] in only):
+        if (
+            not neutral
+            and entry["agent"] in BACKUP_AGENTS
+            and not (only and entry["agent"] in only)
+        ):
             continue
         st = _state(cap, entry["agent"])
+        if neutral and st not in {"ok", "warn"}:
+            continue
         if st == "unknown" or (st == "shed" and not _pacing_shed_fallback(cap, entry["agent"])):
             continue
         if st == "warn" and not allow_warn:
@@ -589,7 +651,9 @@ def select_agent(
         raw_agent_profiles = execution_profiles.profiles_for_agent(
             entry["agent"], transport=profile_transport
         )
-        agent_profiles = _automatic_profiles(entry, transport=profile_transport)
+        agent_profiles = _route_profiles(entry, spec, profile_transport)
+        if neutral and not agent_profiles:
+            continue
         if (
             entry["agent"] == "gemini"
             and not agent_profiles
@@ -602,9 +666,13 @@ def select_agent(
             entry.get("mode")
         ):
             agent_profiles = []
-        elif entry["agent"] == "codex":
+        elif entry["agent"] == "codex" and not neutral:
             preferred = execution_profiles.default_codex_profile(task_type, entry.get("mode"))
             agent_profiles = [p for p in agent_profiles if p["profile_id"] == preferred]
+        if neutral:
+            agent_profiles = [p for p in agent_profiles if _closer_profile_capacity(p, cap)]
+            if not agent_profiles:
+                continue
         if agent_profiles and not any(
             (
                 cap.get("profiles", {}).get(profile["profile_id"], {}).get("state", st)
@@ -623,7 +691,15 @@ def select_agent(
             over_cap,
             0 if not entry["late"] else 1,
             0 if st == "ok" else 1,
-            _capacity_policy_bias(task_type, entry["agent"], cap),
+            (
+                (
+                    1
+                    if _policy(cap, entry["agent"]) == "reserve"
+                    else -1 if _policy(cap, entry["agent"]) == "drain" else 0
+                )
+                if neutral
+                else _capacity_policy_bias(task_type, entry["agent"], cap)
+            ),
             _drain_urgency(entry["agent"], cap),
         )  # 16(e): continuous pacing within the tier
         # Stable table rank is the legacy learned-rank fallback.
@@ -637,6 +713,14 @@ def select_agent(
     picked = scored[0]
     explored = False
     rng = rng or random
+    cold_start = neutral and not any(
+        _learned_n_obs(learned, entry["agent"]) > 0 for entry in spec["agents"]
+    )
+    if cold_start:
+        # Sample only an equally admissible capacity tier. This is allocation of
+        # an already-needed job, not extra comparison/benchmark dispatches.
+        tier = scored[0][0][:5]
+        picked = rng.choice([row for row in scored if row[0][:5] == tier])
     pacing_decision = None
     # Draw legacy exploration first so pacing cannot consume or suppress the
     # unrelated pools' exploration share. Pace only the exploitation choice.
@@ -673,11 +757,27 @@ def select_agent(
         **({"pacing_decision": pacing_decision} if pacing_decision else {}),
         "exploration": explored,
         "exploration_mode": _exploration_mode(exploration_mode) if explored else "",
+        **(
+            {
+                "neutral_prior": True,
+                "cold_start": cold_start,
+                "evidence_state": (
+                    "sparse"
+                    if max((_learned_n_obs(learned, e["agent"]) for e in spec["agents"]), default=0)
+                    < feedback.PRIOR_STRENGTH
+                    else "observed"
+                ),
+                "eligible_provider_ids": sorted({r[1]["agent"] for r in scored}),
+            }
+            if neutral
+            else {}
+        ),
     }
-    profiles = _automatic_profiles(entry, transport=profile_transport)
+    profiles = _route_profiles(entry, spec, profile_transport)
     if (
         entry["agent"] == "gemini"
         and not profiles
+        and not neutral
         and (
             profile_transport != "remote"
             or execution_profiles.profiles_for_agent("gemini", transport=profile_transport)
@@ -693,7 +793,7 @@ def select_agent(
         result["reasoning_effort"] = execution_profiles.get_profile(
             execution_profiles.default_codex_profile(task_type, entry.get("mode"))
         )["reasoning_effort"]
-    elif entry["agent"] == "codex":
+    elif entry["agent"] == "codex" and not neutral:
         preferred = execution_profiles.default_codex_profile(task_type, entry.get("mode"))
         profiles = [profile for profile in profiles if profile["profile_id"] == preferred]
     if profiles:
@@ -701,9 +801,13 @@ def select_agent(
         gates = {
             profile_id: {
                 "eligible": (
-                    cap.get("profiles", {}).get(profile_id, {}).get("state", st)
-                    not in ("shed", "unknown")
-                    or (st == "shed" and _pacing_shed_fallback(cap, entry["agent"]))
+                    _closer_profile_capacity(execution_profiles.get_profile(profile_id), cap)
+                    if neutral
+                    else (
+                        cap.get("profiles", {}).get(profile_id, {}).get("state", st)
+                        not in ("shed", "unknown")
+                        or (st == "shed" and _pacing_shed_fallback(cap, entry["agent"]))
+                    )
                 ),
                 "capacity_state": cap.get("profiles", {}).get(profile_id, {}).get("state", st),
             }
@@ -713,10 +817,12 @@ def select_agent(
             profile["profile_id"]: (
                 float(profile_scores.get(profile["profile_id"], 0.0))
                 if profile_scores
-                else float(profile.get("prior_offset") or 0.0)
+                else 0.0 if neutral else float(profile.get("prior_offset") or 0.0)
             )
             for profile in profiles
         }
+        if neutral and profile_seed is None:
+            profile_seed = int(rng.random() * (2**32))
         envelope = execution_profiles.select_profile(
             task_type,
             (causal_context or {}).get("target"),
@@ -724,11 +830,15 @@ def select_agent(
             rng_seed=int(profile_seed or 0),
             scores=static_scores,
             gate_results=gates,
-            exploration=explored,
+            exploration=explored or cold_start,
             exploration_policy=(
-                f"{_exploration_mode(exploration_mode)}-profile"
-                if explored
-                else "deterministic-profile-prior"
+                "neutral-cold-start"
+                if cold_start
+                else (
+                    f"{_exploration_mode(exploration_mode)}-profile"
+                    if explored or cold_start
+                    else "deterministic-profile-prior"
+                )
             ),
             causal_context=causal_context,
         )

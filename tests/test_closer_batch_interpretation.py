@@ -18,15 +18,37 @@ import execution_profiles
 
 def install_strong_capacity(monkeypatch):
     monkeypatch.setattr(adapter, "_pipeline_capacity", lambda: {"io": 2, "low": 1, "exception": 1})
-    monkeypatch.setattr(execution_profiles, "default_codex_profile", lambda _: "offline-strong")
-    monkeypatch.setattr(
-        adapter,
-        "_fresh_capacity_report",
-        lambda: {
-            "profiles": {"offline-strong": {"state": "ok", "capacity_pool_ids": ["offline-pool"]}},
-            "pools": {"offline-pool": {"state": "ok"}},
+    monkeypatch.setattr(execution_profiles, "default_codex_profile", lambda *_a, **_k: "offline-strong")
+    report = {
+        "generated_at": time.time(),
+        "agents": {
+            agent: {"state": "ok"}
+            for agent in ("codex", "claude", "gemini", "cursor", "vibe", "muse")
         },
-    )
+        "profiles": {"offline-strong": {"state": "ok", "capacity_pool_ids": ["offline-pool"]}},
+        "pools": {"offline-pool": {"state": "ok"}},
+    }
+    monkeypatch.setattr(adapter, "_fresh_capacity_report", lambda: report)
+
+    def exception_route(**kwargs):
+        load = kwargs.get("load") or {}
+        pools = ["offline-pool"]
+        if any(load.get("pool:" + pool, 0) for pool in pools):
+            return (None, "busy")
+        load["codex"] = load.get("codex", 0) + 1
+        for pool in pools:
+            load["pool:" + pool] = load.get("pool:" + pool, 0) + 1
+        return (
+            {
+                "agent": "codex",
+                "profile_id": "offline-strong",
+                "pools": pools,
+                "mode": "assess",
+            },
+            "available",
+        )
+
+    monkeypatch.setattr(adapter, "_exception_route", exception_route)
 
 
 def callbacks_for(delivery, monkeypatch):
