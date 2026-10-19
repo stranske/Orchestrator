@@ -1528,19 +1528,43 @@ class Closer:
         import capacity
         import dispatcher
 
-        marker = capacity.shed_marker("codex")
-        if marker and marker.get("state") != "expired":
-            return {"status": "deferred", "reason": f"Codex capacity marker: {marker}"}
+        pipeline_reserved = profile_id is not None and action == "disposition"
+        repair_action = action == "repair"
         workspace = self.workspaces.get(target) or self.workspaces.get(target.split("#")[0])
         if not workspace or not Path(workspace).is_dir():
             return {"status": "blocked", "reason": "no explicit authorized repository workspace"}
         repair_plan = self.dispositions.get(target, {}).get("repair", {})
         repair = (
-            action == "repair"
+            repair_action
             and repair_plan.get("head") == snapshot.get("head")
             and bool(repair_plan.get("prompt"))
             and bool(repair_plan.get("paths"))
         )
+        if pipeline_reserved:
+            route = _validated_pipeline_exception_route(profile_id)
+            route_status = "available" if route else "unknown"
+        else:
+            route, route_status = _exception_route(
+                repair=repair, substantive=action == "disposition", with_status=True
+            )
+        if not route:
+            if route_status == "unknown":
+                return {
+                    "status": "deferred",
+                    "reason": "fresh usable capacity required",
+                    "next_trigger": "capacity refresh through existing controller",
+                }
+            for agent_name in _EXCEPTION_ELIGIBLE_AGENTS:
+                marker = capacity.shed_marker(agent_name)
+                if marker and marker.get("state") != "expired":
+                    return {
+                        "status": "deferred",
+                        "reason": f"{agent_name} capacity marker: {marker}",
+                    }
+            return {
+                "status": "deferred",
+                "reason": "no eligible exception agent capacity available",
+            }
         if repair:
             head = subprocess.run(
                 ["git", "-C", workspace, "rev-parse", "HEAD"],
@@ -1580,24 +1604,26 @@ class Closer:
             ):
                 return {"status": "blocked", "reason": "repair plan has unsafe paths"}
 
-        if self.offload_fn is None:
-            # Read the existing capacity report, never scan protected agent sessions here.
-            report = (
+        if self.offload_fn is None and not pipeline_reserved:
+            report_path = (
                 Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex/handoff"))
                 / "capacity.json"
             )
             try:
-                capacity_doc = json.loads(report.read_text())
-                seat = capacity_doc["agents"]["codex"]
-                if time.time() - capacity_doc["generated_at"] > 1800 or seat["state"] not in {
-                    "ok",
-                    "warn",
-                }:
-                    return {"status": "deferred", "reason": "fresh usable Codex capacity required"}
-            except (OSError, ValueError, KeyError):
+                capacity_doc = json.loads(report_path.read_text())
+                if time.time() - float(capacity_doc["generated_at"]) > 1800:
+                    return {"status": "deferred", "reason": "fresh usable capacity required"}
+                selected_agent = route["agent"]
+                seat = capacity_doc["agents"].get(selected_agent, {})
+                if seat.get("state") not in {"ok", "warn"}:
+                    return {
+                        "status": "deferred",
+                        "reason": f"fresh usable {selected_agent} capacity required",
+                    }
+            except (OSError, ValueError, KeyError, TypeError):
                 return {
                     "status": "deferred",
-                    "reason": "Codex capacity unknown; refresh through existing controller",
+                    "reason": "capacity unknown; refresh through existing controller",
                 }
 
         prompt = (
@@ -1698,17 +1724,63 @@ class Closer:
                     "next_trigger": admission.get("next_trigger"),
                 }
             remaining = admission["timeout"]
+        selected_agent = route["agent"]
+        selected_profile_id = route["profile_id"]
+        if profile_id and not pipeline_reserved:
+            import execution_profiles
+
+            explicit = execution_profiles.get_profile(profile_id)
+            if (
+                explicit
+                and str(explicit.get("agent", "")).casefold() == selected_agent
+                and _profile_exception_qualified(
+                    _fresh_capacity_report(), explicit, repair=repair_action
+                )
+            ):
+                selected_profile_id = profile_id
+        selected_mode = route.get("mode") or ("mid" if repair else "assess")
+
+        started = time.monotonic()
         result = (self.offload_fn or dispatcher.offload)(
-            "codex",
+            selected_agent,
             prompt,
             cwd=workspace,
-            mode="mid" if repair else "assess",
-            profile_id=profile_id or ("codex-5.6-terra-medium" if repair else "codex-6-luna-low"),
+            mode=selected_mode,
+            profile_id=selected_profile_id,
             timeout=remaining,
-            isolate=repair,
-            task_type="mechanical" if repair else "review",
+            isolate=True,
+            task_type=(
+                "closer_repair"
+                if repair
+                else (
+                    "closer_exception"
+                    if pipeline_reserved or action == "disposition"
+                    else "closer_interpret"
+                )
+            ),
             subject_id=target,
             max_network_retries=0,
+        )
+        result["_closer_elapsed_seconds"] = time.monotonic() - started
+        import closer_stage_feedback
+
+        closer_stage_feedback.record_stage(
+            result,
+            task_type=(
+                "closer_repair"
+                if repair
+                else (
+                    "closer_exception"
+                    if pipeline_reserved or action == "disposition"
+                    else "closer_interpret"
+                )
+            ),
+            target=target,
+            head=snapshot.get("head"),
+            agent=selected_agent,
+            profile_id=selected_profile_id,
+            basis={"revision": snapshot.get("revision"), "operation": operation.get("id")},
+            capacity_context=route.get("capacity"),
         )
         failure_details = str(result.get("error") or "") + "\n" + str(result.get("output") or "")
         if result.get("exit") != 0 and re.search(
@@ -1716,7 +1788,7 @@ class Closer:
             failure_details,
             re.I,
         ):
-            self.workers_unavailable = "requested Codex worker profile unavailable; inspect saved failure, no silent fallback"
+            self.workers_unavailable = f"requested {selected_agent} worker profile unavailable; inspect saved failure, no silent fallback"
         if result.get("exit") == 0:
             self.pending_integration[target] = {
                 "id": operation["id"],
@@ -1822,6 +1894,83 @@ def _fresh_capacity_report():
         return None
 
 
+_EXCEPTION_ELIGIBLE_AGENTS = ("codex", "claude", "gemini", "cursor", "vibe", "muse")
+
+
+def _exception_effort_tier(repair: bool, substantive: bool = True) -> set[str]:
+    return {"medium", "high"} if repair or substantive else {"none", "minimal", "low"}
+
+
+def _profile_exception_qualified(
+    report, profile, *, repair: bool, substantive: bool = True
+) -> bool:
+    if not report or not profile:
+        return False
+    agent = str(profile.get("agent", "")).casefold()
+    if agent not in _EXCEPTION_ELIGIBLE_AGENTS:
+        return False
+    if report.get("agents", {}).get(agent, {}).get("state") not in {"ok", "warn"}:
+        return False
+    profile_id = profile["profile_id"]
+    if report.get("profiles", {}).get(profile_id, {}).get("state") not in {"ok", "warn"}:
+        return False
+    if profile.get("reasoning_effort") not in _exception_effort_tier(repair, substantive):
+        return False
+    pools = profile.get("capacity_pool_ids") or []
+    if not pools:
+        return False
+    return all(
+        report.get("pools", {}).get(pool, {}).get("state") in {"ok", "warn"} for pool in pools
+    )
+
+
+def _validated_pipeline_exception_route(profile_id: str):
+    import execution_profiles
+
+    profile = execution_profiles.get_profile(profile_id)
+    if not profile or not _profile_exception_qualified(
+        _fresh_capacity_report(), profile, repair=False
+    ):
+        return None
+    agent = str(profile.get("agent", "")).casefold()
+    return {
+        "agent": agent,
+        "profile_id": profile_id,
+        "pools": list(profile.get("capacity_pool_ids") or []),
+        "mode": "assess",
+    }
+
+
+def _pick_exception_profile(candidates, pick, repair: bool):
+    selected_id = (pick or {}).get("selected_profile_id")
+    return next((p for p in candidates if p["profile_id"] == selected_id), None)
+
+
+def _closer_learned(task_type):
+    import router
+
+    return (router.learned_ranks() or {}).get(task_type)
+
+
+def _qualified_capacity(report, available_profiles):
+    """Keep profile selection inside the already capacity-qualified candidate set."""
+    import execution_profiles
+
+    allowed = {p["profile_id"] for rows in available_profiles.values() for p in rows}
+    known = set(execution_profiles.PROFILE_REGISTRY) | set(report.get("profiles", {})) | allowed
+    return {
+        **report,
+        "profiles": {
+            key: (
+                report.get("profiles", {}).get(key, {})
+                if key in allowed
+                else {"state": "unknown", "reason": "profile outside qualified closer candidates"}
+            )
+            for key in known
+        },
+    }
+
+
 def _pipeline_low_route(*, load=None, unavailable_profiles=None, with_status=False):
     """Choose a currently usable low-effort profile through the existing router."""
     load = load if load is not None else {}
@@ -1878,13 +2027,14 @@ def _pipeline_low_route(*, load=None, unavailable_profiles=None, with_status=Fal
             status = "busy" if busy_unfailed_profile else "exhausted"
             return (None, status) if with_status else None
         pick = router.select_agent(
-            "review",
-            report,
+            "closer_interpret",
+            _qualified_capacity(report, available_profiles),
             only=eligible,
             allow_warn=True,
             profile_transport="offload",
             load=load or {},
             per_agent_cap=1,
+            learned=_closer_learned("closer_interpret"),
         )
         if not pick:
             status = "busy" if any(load.get(agent, 0) for agent in eligible) else "exhausted"
@@ -1893,7 +2043,10 @@ def _pipeline_low_route(*, load=None, unavailable_profiles=None, with_status=Fal
         if not candidates:
             return (None, "exhausted") if with_status else None
         load[pick["agent"]] = load.get(pick["agent"], 0) + 1
-        selected = candidates[0]
+        selected = _pick_exception_profile(candidates, pick, False)
+        if selected is None:
+            load[pick["agent"]] -= 1
+            return (None, "unknown") if with_status else None
         pools = list(selected.get("capacity_pool_ids") or [])
         for pool in pools:
             load["pool:" + pool] = load.get("pool:" + pool, 0) + 1
@@ -1902,6 +2055,103 @@ def _pipeline_low_route(*, load=None, unavailable_profiles=None, with_status=Fal
             "profile_id": selected["profile_id"],
             "capacity": pick,
             "pools": pools,
+        }
+        return (route, "available") if with_status else route
+
+
+def _exception_route(
+    *, load=None, unavailable_profiles=None, repair=False, substantive=True, with_status=False
+):
+    """Choose a currently usable exception/repair profile through the existing router."""
+    load = load if load is not None else {}
+    import execution_profiles
+    import router
+
+    mode = "mid" if repair else "assess"
+    efforts = _exception_effort_tier(repair, substantive)
+    task_type = (
+        "closer_repair" if repair else "closer_exception" if substantive else "closer_interpret"
+    )
+
+    with _PIPELINE_ROUTE_LOCK:
+        report = _fresh_capacity_report()
+        if report is None:
+            return (None, "unknown") if with_status else None
+        unavailable_profiles = set(unavailable_profiles or ())
+        eligible = set()
+        available_profiles = {}
+        busy_unfailed_profile = False
+
+        for agent in _EXCEPTION_ELIGIBLE_AGENTS:
+            row = report["agents"].get(agent, {})
+            if row.get("state") not in {"ok", "warn"}:
+                continue
+            profiles = execution_profiles.profiles_for_agent(agent, transport="offload")
+            profiles = [
+                p
+                for p in profiles
+                if str(p.get("agent", "")).casefold() != "aider"
+                and p.get("reasoning_effort") in efforts
+                and p["profile_id"] not in unavailable_profiles
+                and report.get("profiles", {}).get(p["profile_id"], {}).get("state")
+                in {"ok", "warn"}
+                and bool(p.get("capacity_pool_ids"))
+                and all(
+                    report.get("pools", {}).get(pool, {}).get("state") in {"ok", "warn"}
+                    for pool in p.get("capacity_pool_ids", [])
+                )
+            ]
+            unfailed_profiles = profiles
+            profiles = [
+                p
+                for p in profiles
+                if not any(
+                    load.get("pool:" + pool, 0) for pool in (p.get("capacity_pool_ids") or [])
+                )
+            ]
+            if unfailed_profiles and not profiles:
+                busy_unfailed_profile = True
+            if profiles:
+                eligible.add(agent)
+                available_profiles[agent] = profiles
+
+        if not eligible:
+            status = "busy" if busy_unfailed_profile else "exhausted"
+            return (None, status) if with_status else None
+
+        pick = router.select_agent(
+            task_type,
+            _qualified_capacity(report, available_profiles),
+            only=eligible,
+            allow_warn=True,
+            profile_transport="offload",
+            load=load or {},
+            per_agent_cap=1,
+            learned=_closer_learned(task_type),
+        )
+        if not pick:
+            status = "busy" if any(load.get(agent, 0) for agent in eligible) else "exhausted"
+            return (None, status) if with_status else None
+
+        candidates = available_profiles.get(pick["agent"], [])
+        if not candidates:
+            return (None, "exhausted") if with_status else None
+
+        selected = _pick_exception_profile(candidates, pick, repair)
+        if not selected:
+            return (None, "exhausted") if with_status else None
+
+        load[pick["agent"]] = load.get(pick["agent"], 0) + 1
+        pools = list(selected.get("capacity_pool_ids") or [])
+        for pool in pools:
+            load["pool:" + pool] = load.get("pool:" + pool, 0) + 1
+
+        route = {
+            "agent": pick["agent"],
+            "profile_id": selected["profile_id"],
+            "capacity": pick,
+            "pools": pools,
+            "mode": mode,
         }
         return (route, "available") if with_status else route
 
@@ -1941,16 +2191,27 @@ def _pipeline_capacity():
                 for pool in pools:
                     if report.get("pools", {}).get(pool, {}).get("state") in {"ok", "warn"}:
                         low_pools.add(pool)
-    # Exception work is admitted only through the current Codex assessment guard and
-    # existing campaign permits; the actual callback rechecks that admission.
-    codex = report["agents"].get("codex", {})
-    import execution_profiles
+    # Exception work is now admitted through any eligible agent with capability-qualified
+    # approved registered profiles. Check all eligible agents (excluding Aider).
+    exception = 0
+    eligible_agents = ("codex", "claude", "gemini", "cursor", "vibe", "muse")
+    for agent_name in eligible_agents:
+        agent_row = report["agents"].get(agent_name, {})
+        if agent_row.get("state") in {"ok", "warn"}:
+            # Check if this agent has at least one valid closer/offload profile
+            import execution_profiles
 
-    strong_profile = execution_profiles.default_codex_profile("closer")
-    strong_state = (
-        report.get("profiles", {}).get(strong_profile, {}).get("state", codex.get("state"))
-    )
-    exception = 1 if codex.get("state") in {"ok", "warn"} and strong_state in {"ok", "warn"} else 0
+            profiles = execution_profiles.profiles_for_agent(agent_name, transport="offload")
+            for profile in profiles:
+                if str(profile.get("agent", "")).casefold() != "aider":
+                    profile_state = (
+                        report.get("profiles", {}).get(profile["profile_id"], {}).get("state")
+                    )
+                    if profile_state in {"ok", "warn"}:
+                        exception = 1
+                        break
+            if exception:
+                break
     return {"io": io_capacity, "low": min(4, len(low_pools)), "exception": exception}
 
 
@@ -2931,6 +3192,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 separators=(",", ":"),
             )[:9000]
         )
+        started = time.monotonic()
         try:
             result = dispatcher.offload(
                 route["agent"],
@@ -2938,7 +3200,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 mode="assess",
                 profile_id=route["profile_id"],
                 timeout=max(5, min(120, int(context["deadline"] - time.time()))),
-                task_type="review",
+                task_type="closer_interpret",
                 subject_id=target,
                 max_network_retries=0,
             )
@@ -2947,6 +3209,19 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 route_load[route["agent"]] = max(0, route_load.get(route["agent"], 1) - 1)
                 for pool in route.get("pools", []):
                     route_load["pool:" + pool] = max(0, route_load.get("pool:" + pool, 1) - 1)
+        result["_closer_elapsed_seconds"] = time.monotonic() - started
+        import closer_stage_feedback
+
+        closer_stage_feedback.record_stage(
+            result,
+            task_type="closer_interpret",
+            target=target,
+            head=snap.get("head"),
+            agent=route["agent"],
+            profile_id=route["profile_id"],
+            basis=prep,
+            capacity_context=route.get("capacity"),
+        )
         output = str(result.get("output") or "")
         if result.get("outcome_uncertain") is True or result.get("retry_safe") is False:
             if (
@@ -3127,6 +3402,17 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 needs = list(needs) + [
                     "evidence_bound_exception:" + str(integration.get("reason", "review"))
                 ]
+        closer_stage_feedback.record_stage(
+            result,
+            task_type="closer_interpret",
+            target=target,
+            head=snap.get("head"),
+            agent=route["agent"],
+            profile_id=route["profile_id"],
+            basis=prep,
+            validation=integration,
+            structurally_invalid=not valid and not incomplete_assessment,
+        )
         proposal_ref = None
         if valid:
             proposal_bytes = json.dumps(
@@ -3196,29 +3482,31 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             "packet_ref": prep.get("packet_ref"),
             "evidence_manifest": prep.get("evidence_summary", {}),
         }
-        import execution_profiles
-
-        strong_profile = execution_profiles.default_codex_profile("closer")
-        # Strong Codex work reserves its real shared pool under the same lock/load
-        # map used by low workers. Capacity lanes never double-count that pool.
-        cap = _fresh_capacity_report()
-        strong_row = (cap or {}).get("profiles", {}).get(strong_profile, {})
-        strong_pools = list(
-            (
-                strong_row.get("capacity_pool_ids")
-                or (execution_profiles.PROFILE_REGISTRY.get(strong_profile) or {}).get(
-                    "capacity_pool_ids"
-                )
-                or []
-            )
+        route, route_status = _exception_route(
+            load=route_load,
+            repair=False,
+            with_status=True,
         )
-        with route_lock:
-            if not cap or strong_row.get("state") not in {"ok", "warn"} or not strong_pools:
-                raise RuntimeError("strong profile capacity became unknown before reservation")
-            if any(
-                (cap.get("pools", {}).get(pool) or {}).get("state") not in {"ok", "warn"}
-                for pool in strong_pools
-            ):
+        if not route:
+            if route_status == "busy":
+                occupied = max(
+                    (route_load.get(key, 0) for key in route_load if str(key).startswith("pool:")),
+                    default=0,
+                )
+                return {
+                    "status": "deferred",
+                    "reason": "worker_capacity",
+                    "resource_evidence": {
+                        "capacity": {
+                            "lane": "exception",
+                            "active": occupied,
+                            "limit": 1,
+                            "sampled_at": time.time(),
+                        }
+                    },
+                    "next_trigger": "shared exception pool becomes available",
+                }
+            if route_status == "unknown":
                 return {
                     "status": "deferred",
                     "reason": "worker_capacity",
@@ -3232,23 +3520,22 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     },
                     "next_trigger": "fresh shared-pool capacity snapshot",
                 }
-            occupied = max((route_load.get("pool:" + pool, 0) for pool in strong_pools), default=0)
-            if occupied:
-                return {
-                    "status": "deferred",
-                    "reason": "worker_capacity",
-                    "resource_evidence": {
-                        "capacity": {
-                            "lane": "exception",
-                            "active": occupied,
-                            "limit": 1,
-                            "sampled_at": time.time(),
-                        }
-                    },
-                    "next_trigger": "shared Codex pool becomes available",
-                }
-            for pool in strong_pools:
-                route_load["pool:" + pool] = route_load.get("pool:" + pool, 0) + 1
+            return {
+                "status": "deferred",
+                "reason": "worker_capacity",
+                "resource_evidence": {
+                    "capacity": {
+                        "lane": "exception",
+                        "available": 0,
+                        "required": 1,
+                        "sampled_at": time.time(),
+                    }
+                },
+                "next_trigger": "capacity_recheck",
+            }
+        route_agent = route["agent"]
+        route_profile = route["profile_id"]
+        route_pools = list(route.get("pools") or [])
         try:
             result = backend.worker(
                 target,
@@ -3259,7 +3546,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     "id": context.get("work_key", "pipeline-exception"),
                     "revision": context.get("revision"),
                 },
-                profile_id=strong_profile,
+                profile_id=route_profile,
                 advisory_context={
                     **proposal,
                     "evidence": prep.get("evidence_summary", {}),
@@ -3268,8 +3555,9 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             )
         finally:
             with route_lock:
-                for pool in strong_pools:
+                for pool in route_pools:
                     route_load["pool:" + pool] = max(0, route_load.get("pool:" + pool, 1) - 1)
+                route_lock.notify_all()
         worker_row = result.get("worker") if isinstance(result, dict) else None
         if isinstance(worker_row, dict):
             uncertain = _uncertain_worker(
@@ -3278,13 +3566,13 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 snapshot=exception_snapshot,
                 prep=prep,
                 context=context,
-                agent="codex",
-                profile=strong_profile,
+                agent=route_agent,
+                profile=route_profile,
             )
             if uncertain is not None:
                 return uncertain
         if isinstance(worker_row, dict) and worker_row.get("exit") == 0:
-            strong_json = _worker_proposal(worker_row, agent="codex")
+            strong_json = _worker_proposal(worker_row, agent=route_agent)
             if strong_json:
                 import closer_disposition
 
@@ -3309,6 +3597,22 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "reason": (result.get("reason") if isinstance(result, dict) else None)
                 or "strong_worker_unavailable",
             }
+        if isinstance(worker_row, dict):
+            import closer_stage_feedback
+
+            closer_stage_feedback.record_stage(
+                worker_row,
+                task_type="closer_exception",
+                target=target,
+                head=exception_snapshot.get("head"),
+                agent=route_agent,
+                profile_id=route_profile,
+                basis=prep,
+                validation=validated,
+                structurally_invalid=worker_row.get("exit") == 0
+                and not _worker_proposal(worker_row, agent=route_agent),
+                parent_run_id=(context.get("interpret", {}).get("actual") or {}).get("run_id"),
+            )
         retained_result = dict(result)
         if isinstance(worker_row, dict) and isinstance(worker_row.get("output"), str):
             # Keep the exact native response once, outside the bounded scheduling ledger.
@@ -3320,7 +3624,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             except OSError as error:
                 if worker_row.get("exit") == 0:
                     return completed_retention_hold(
-                        worker_row, target, prep, context, error, "codex", strong_profile
+                        worker_row, target, prep, context, error, route_agent, route_profile
                     )
                 raise
             retained_result["worker"] = {
@@ -3336,15 +3640,15 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 )
             except OSError as error:
                 return completed_retention_hold(
-                    worker_row, target, prep, context, error, "codex", strong_profile
+                    worker_row, target, prep, context, error, route_agent, route_profile
                 )
             validated = {key: validated.get(key) for key in ("status", "reason")}
         return {
             **({"validated_ref": validated_ref} if validated_ref else {}),
             "status": result.get("status"),
             "result": retained_result,
-            "requested_agent": "codex",
-            "requested_profile": strong_profile,
+            "requested_agent": route_agent,
+            "requested_profile": route_profile,
             "actual": _worker_actual(worker_row or {}),
             "authority": False,
             "validated": validated,
@@ -3464,7 +3768,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     strong.get("requested_agent"),
                     strong.get("requested_profile"),
                 )
-                original_proposal = _worker_proposal({**worker, "output": output}, agent="codex")
+                original_proposal = _worker_proposal(
+                    {**worker, "output": output},
+                    agent=strong.get("requested_agent") or "codex",
+                )
                 integration = closer_disposition.integrate_ordinary(
                     target,
                     snap,

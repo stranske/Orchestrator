@@ -536,6 +536,7 @@ MAX_COMPLETION_LIST_ITEMS = 32
 MAX_COMPLETION_STRING_CHARS = 256
 MAX_COMPLETION_ARTIFACTS = 16
 COMPLETION_PAYLOAD_FIELDS = {
+    "closer_stage",
     "changed_path_classes",
     "command_ids",
     "test_ids",
@@ -577,6 +578,7 @@ VALID_INFLUENCE_TYPES = {
     "experiment",
 }
 VALID_COMPLETION_EVENT_TYPES = {
+    "closer_stage",
     "decision",
     "attempt",
     "completion",
@@ -600,6 +602,9 @@ VALID_COMPLETION_PHASES = {
     "durability",
 }
 VALID_COMPLETION_PRODUCERS = {
+    "closer_disposition.integrate_ordinary",
+    "closer_dispatcher.response_binding",
+    "closer_dispatcher.worker",
     "feedback.record_run",
     "feedback.execution_attempt",
     "feedback.record_outcome",
@@ -649,6 +654,35 @@ VALID_COMPLETION_STATUSES = {
     "unknown",
 }
 COMPLETION_NESTED_FIELDS = {
+    "closer_stage": {
+        "validation_status",
+        "task_category",
+        "served_model",
+        "source_completion",
+        "parent_run_id",
+        "guarded_operation_success",
+        "attempts",
+        "target",
+        "capacity_ledger_run_id",
+        "actual_marginal_dollars",
+        "capacity_pool_ids",
+        "measured_usage",
+        "observed_cost_usd",
+        "opportunity_cost",
+        "requested_reasoning_effort",
+        "head_sha",
+        "independent_validation",
+        "basis_digest",
+        "requested_profile_id",
+        "elapsed_seconds",
+        "agent",
+        "requested_model",
+        "served_model_status",
+        "capacity_context",
+        "accepted",
+        "repair_review_overhead_seconds",
+        "validator",
+    },
     "verification": {
         "verifier_verdict",
         "adjudicated_verdict",
@@ -2630,6 +2664,53 @@ def outcome_is_terminal(*, verifier_verdict, adjudicated_verdict, merged, durabi
         or verdict.startswith("FAIL")
         or str(verifier_verdict or "").upper() in VERIFIER_FAILURES
     )
+
+
+def _closer_stage_rewards(conn: sqlite3.Connection, task_type: str) -> dict[str, float]:
+    """Independent stage acceptance, separate from merge/durability labels.
+
+    Only registered closer categories and native validator events qualify. Raw
+    completion, provider failures, uncertainty and missing measurements do not.
+    """
+    if task_type not in {"closer_interpret", "closer_exception", "closer_repair"}:
+        return {}
+    rewards: dict[str, float] = {}
+    rows = conn.execute(
+        "SELECT e.run_id,e.producer,e.status,e.payload_json,r.routing_metadata,r.agent "
+        "FROM completion_events e JOIN runs r ON r.run_id=e.run_id "
+        "WHERE r.task_type=? AND e.event_type='closer_stage' AND e.phase='verification' "
+        "AND e.validation_status='accepted' ORDER BY e.updated_ts DESC,e.event_id DESC",
+        (task_type,),
+    )
+    for run_id, producer, status, raw, raw_metadata, agent in rows:
+        if run_id in rewards or producer not in {
+            "closer_disposition.integrate_ordinary",
+            "closer_dispatcher.response_binding",
+        }:
+            continue
+        try:
+            payload = json.loads(raw).get("closer_stage", {})
+            metadata = json.loads(raw_metadata or "{}")
+            accepted = payload.get("accepted")
+            if (
+                type(accepted) is not bool
+                or payload.get("independent_validation") is not True
+                or payload.get("validator") != producer
+                or payload.get("task_category") != task_type
+                or payload.get("agent") != agent
+                or payload.get("requested_profile_id") != metadata.get("selected_profile_id")
+                or str(payload.get("target", "")).casefold()
+                != str(metadata.get("subject_id", "")).casefold()
+                or not metadata.get("subject_id")
+                or not re.fullmatch(r"[0-9a-f]{40}", str(payload.get("head_sha", "")))
+                or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("basis_digest", "")))
+                or status != ("pass" if accepted else "fail")
+            ):
+                continue
+        except (ValueError, TypeError, AttributeError):
+            continue
+        rewards[run_id] = float(accepted)
+    return rewards
 
 
 def outcome_is_durable_success(
@@ -6676,6 +6757,7 @@ def relearn_quality(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DA
                     )
                     if score is not None:
                         eval_q_by_run[run_id] = (score, run_model)
+                stage_rewards = _closer_stage_rewards(c, task_type)
                 weighted_qs = []
                 outcome_n = 0
                 raw_n = 0
@@ -6706,6 +6788,12 @@ def relearn_quality(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DA
                         # eval scores stay usable even on infra-classified runs (judges scored
                         # the arm's real diff); only the OUTCOME label below is infra noise.
                         q, run_model = eval_q_by_run[run_id]
+                        raw_n += 1
+                    elif run_id in stage_rewards:
+                        # Closer response quality is learned under its own task
+                        # category. It does not mark the implementation merged,
+                        # source criteria complete, or a native action accepted.
+                        q = stage_rewards[run_id]
                         raw_n += 1
                     elif _has_outcome_evidence(
                         durability, adjudicated, verifier, failure_class=failure_class
