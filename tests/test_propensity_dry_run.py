@@ -17,7 +17,9 @@ from typing import Literal
 import pytest
 
 import capabilities
+import capability_advisor
 import capability_propensity as cp
+import cadence_registry
 import paths
 
 # Smallest unique fragment that is ABSENT if the early reject is deleted.  No newlines, no
@@ -224,6 +226,61 @@ def test_tick_evidence_dry_run_passes_record_false(
         )
         assert seen == {"record": not dry_run, "budget_s": 0, "path": ledger}
         assert capsys.readouterr().out == '{\n  "recorded": false\n}\n'
+
+
+@pytest.mark.parametrize("phase", ["baselined", "evaluated"])
+def test_tick_evidence_dry_run_preserves_ledger_and_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys, phase: str
+):
+    """Exercise the real evaluator on both first-seen and regenerated artifacts."""
+    ledger = _seeded_ledger(tmp_path)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    artifact = state_dir / "offload.json"
+    artifact.write_text(json.dumps({"findings": [{"id": "first"}]}))
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("ORCH_CAPABILITY_HEARTBEATS", "0")
+    monkeypatch.delenv("ORCH_TICK_EVIDENCE_DISABLED", raising=False)
+    monkeypatch.setitem(
+        capability_advisor.SURFACE_BINDINGS, cp.TICK_SURFACE, {"offload": "scratch binding"}
+    )
+    monkeypatch.setitem(
+        cadence_registry.STEP_BY_KEY,
+        "offload",
+        {"artifact": artifact.name, "cadence_days": 0},
+    )
+    monkeypatch.setitem(cp.TICK_FINDING_FIELDS, "offload", {"findings": ("id",)})
+    argv = ["tick-evidence", "--json", "--ledger", str(ledger)]
+
+    if phase == "evaluated":
+        assert cp.main(argv) == 0
+        baseline = json.loads(capsys.readouterr().out)
+        assert [row["capability_id"] for row in baseline["baselined"]] == ["offload"]
+        artifact.write_text(json.dumps({"findings": [{"id": "regenerated"}]}))
+        regenerated_at = int(artifact.stat().st_mtime) + 2
+        os.utime(artifact, (regenerated_at, regenerated_at))
+
+    def snapshot():
+        return {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+
+    before = snapshot()
+    for _ in range(2):
+        assert cp.main([*argv, "--dry-run"]) == 0
+        report = json.loads(capsys.readouterr().out)
+        assert report["consulted"] is True, report
+        assert [row["capability_id"] for row in report[phase]] == ["offload"], report
+        for counter in ("matches_recorded", "triggers_recorded", "verdicts_recorded"):
+            assert report[counter] == 0, report
+        assert snapshot() == before, "tick-evidence --dry-run wrote ledger or tick state"
+
+    # The same artifact must still be pending after inspection, and a recording run consumes it.
+    assert cp.main(argv) == 0
+    recorded = json.loads(capsys.readouterr().out)
+    assert [row["capability_id"] for row in recorded[phase]] == ["offload"], recorded
+    assert snapshot() != before, "the recording control must persist its tick state"
+    if phase == "baselined":
+        assert ledger.read_bytes() != before[ledger.relative_to(tmp_path)]
+        assert recorded["triggers_recorded"] == 1, recorded
 
 
 @pytest.mark.parametrize(
