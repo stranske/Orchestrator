@@ -1809,6 +1809,7 @@ def _run_pipeline_impl(
     reconcile: Callable[[str, Mapping[str, Any]], Mapping[str, Any]] | None = None,
     capacity_fn: Callable[[], Mapping[str, Any]],
     deadline: float,
+    priority_targets: Iterable[str] = (),
     max_io_workers: int = 4,
     max_low_workers: int = 2,
     max_exception_workers: int = 1,
@@ -1834,6 +1835,9 @@ def _run_pipeline_impl(
         raise ValueError(
             f"at most {MAX_TARGETS} assigned targets fit the bounded coordinator window"
         )
+    priority = frozenset(priority_targets)
+    if not priority.issubset(target_list):
+        raise ValueError("priority targets must belong to the current assignment")
     if not isinstance(deadline, (int, float)) or isinstance(deadline, bool):
         raise ValueError("deadline must be an epoch timestamp")
     bounds = {"io": max_io_workers, "low": max_low_workers, "exception": max_exception_workers}
@@ -2798,13 +2802,18 @@ def _run_pipeline_impl(
                 if remaining > 0:
                     time.sleep(remaining)
                 break
-            # A target can have only one stage in flight. Fair round-robin order
-            # rotates by target and stage age so slow early items do not block others.
+            # An explicit coordinator disposition can advance through its next
+            # stage without waiting behind every older advisory interpretation.
+            # Within each class, retain fair round-robin ordering. Priority
+            # changes scheduling only; every evidence and action guard remains.
             with _locked(path):
                 state = _load(path)
                 current = state["runs"][run_id]
                 rows = current["targets"]
-                base_order = sorted(rows, key=lambda t: (rows[t].get("last_scheduled", 0), t))
+                base_order = sorted(
+                    rows,
+                    key=lambda t: (t not in priority, rows[t].get("last_scheduled", 0), t),
+                )
                 io_prepare: list[str] = []
                 io_ready: list[str] = []
                 other_lanes: list[str] = []
@@ -3096,6 +3105,7 @@ def run_pipeline(
     reconcile: Callable[[str, Mapping[str, Any]], Mapping[str, Any]] | None = None,
     capacity_fn: Callable[[], Mapping[str, Any]],
     deadline: float,
+    priority_targets: Iterable[str] = (),
     max_io_workers: int = 4,
     max_low_workers: int = 2,
     max_exception_workers: int = 1,
@@ -3116,6 +3126,7 @@ def run_pipeline(
             reconcile=reconcile,
             capacity_fn=capacity_fn,
             deadline=deadline,
+            priority_targets=priority_targets,
             max_io_workers=max_io_workers,
             max_low_workers=max_low_workers,
             max_exception_workers=max_exception_workers,
