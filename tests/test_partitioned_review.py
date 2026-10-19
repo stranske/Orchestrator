@@ -220,6 +220,95 @@ def test_fixed_schema_rejects_raw_name_scan_false_positive() -> None:
     )
 
 
+def test_corpus_validation_rejects_malformed_items_and_refs() -> None:
+    corpus = _corpus([_item("CW-1", "source-pr-61")])
+    corpus["unexpected"] = True
+    corpus["schema_version"] = 0
+    corpus["review_id"] = " "
+    corpus["shared_context"] = ["", 3]
+    corpus["items"] = [
+        "not-an-item",
+        {
+            "item_id": " CW-1 ",
+            "assertion_key": " ",
+            "group_key": " ",
+            "assertion": " ",
+            "context": 2,
+            "source_refs": [{"kind": "", "ref": "", "revision": 2, "extra": True}],
+            "extra": True,
+        },
+        _item("CW-1", "source-pr-62"),
+    ]
+
+    errors = review.validate_corpus(corpus)
+
+    for expected in (
+        "unknown keys",
+        "schema_version",
+        "review_id",
+        "shared_context[0]",
+        "must be an object",
+        "duplicates",
+        "source_refs[0] has unknown keys",
+        "revision must be a non-empty string or null",
+    ):
+        assert any(expected in error for error in errors), errors
+
+
+def test_plan_and_result_validation_fail_closed_for_tampering() -> None:
+    plan = review.partition_corpus(
+        _corpus([_item("CW-1", "source-pr-61")]), max_prompt_chars=12_000
+    )
+    partition = plan["partitions"][0]
+    result = _result(plan, partition)
+
+    bad_plan = json.loads(json.dumps(plan))
+    bad_plan["limits"] = {"max_items": 0}
+    bad_plan["partitions"][0]["items"][0]["group_key"] = "wrong-group"
+    bad_plan["partitions"][0]["partition_digest"] = "tampered"
+    bad_plan["plan_sha256"] = "tampered"
+    errors = review.validate_plan(bad_plan)
+    assert any("limits must contain exactly" in error for error in errors)
+    assert any("group_key must match" in error for error in errors)
+    assert any("partition_digest does not match" in error for error in errors)
+    assert any("plan_sha256 does not match" in error for error in errors)
+
+    bad_result = json.loads(json.dumps(result))
+    finding = bad_result["categories"]["removed_product_surfaces"][0]
+    finding["assertion_key"] = "wrong"
+    finding["disposition"] = "not-a-disposition"
+    finding["summary"] = " "
+    finding["confidence"] = "certain"
+    finding["recommended_action"] = 3
+    finding["evidence"] = [{"type": "bad", "ref": "", "observation": ""}]
+    errors = review.validate_partition_result(bad_result, plan, partition)
+    for expected in (
+        "assertion_key",
+        "disposition",
+        "summary",
+        "confidence",
+        "recommended_action",
+        "evidence[0]",
+    ):
+        assert any(expected in error for error in errors), errors
+
+
+def test_atomic_json_and_partition_arguments_are_safe(tmp_path: Path) -> None:
+    destination = tmp_path / "nested" / "result.json"
+    review._atomic_json(destination, {"answer": [42]})
+    assert review._read_json(destination) == {"answer": [42]}
+
+    corpus = _corpus([_item("CW-1", "source-pr-61")])
+    for kwargs, message in (
+        ({"max_items": 0}, "max_items"),
+        ({"max_prompt_chars": 1999}, "max_prompt_chars"),
+        ({"overlap": 0}, "overlap"),
+        ({"overlap": 2, "witness_agents": ["same", "same"]}, "distinct"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            review.partition_corpus(corpus, **kwargs)
+
+
 def test_timeout_provenance_is_retained_and_synthesis_fails_closed(tmp_path: Path) -> None:
     plan = review.partition_corpus(
         _corpus(
