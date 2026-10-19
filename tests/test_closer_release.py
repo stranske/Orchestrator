@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -209,6 +210,29 @@ def make_fake_release(tmp_path, monkeypatch, *, extra_env=None):
     source.mkdir()
     if (extra_env or {}).get("FAIL_VERIFY"):
         (source / "fail-verification").touch()
+    (source / "README.md").write_text("frozen release fixture\n")
+    subprocess.run(["git", "-C", str(source), "init", "-q"], check=True)
+    subprocess.run(["git", "-C", str(source), "add", "-A"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(source),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "frozen fixture",
+        ],
+        check=True,
+    )
+    candidate = subprocess.check_output(
+        ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
+    ).strip()
+    if (extra_env or {}).get("DIRTY_SOURCE"):
+        (source / "untracked.txt").write_text("not frozen\n")
     mirror = tmp_path / "mirror"
     mirror.mkdir()
     (mirror / "payload").write_text("incumbent payload\n")
@@ -225,7 +249,7 @@ def make_fake_release(tmp_path, monkeypatch, *, extra_env=None):
     for name, value in (extra_env or {}).items():
         monkeypatch.setenv(name, value)
     result = journal.verify_and_install(
-        candidate_sha=CANDIDATE,
+        candidate_sha=CANDIDATE if (extra_env or {}).get("WRONG_CANDIDATE") else candidate,
         lane_owner="closer",
         source=source,
         mirror=mirror,
@@ -279,3 +303,17 @@ def test_verify_and_install_records_failed_verdict_and_never_installs(tmp_path, 
     assert result["verification"]["exit_code"] == 1
     assert "verified source identity" not in Path(result["verification"]["log_path"]).read_text()
     assert (mirror / "payload").read_text() == "incumbent payload\n"
+
+
+@pytest.mark.parametrize(
+    ("flag", "reason"),
+    [
+        ("WRONG_CANDIDATE", "does not match source HEAD"),
+        ("DIRTY_SOURCE", "uncommitted or untracked"),
+    ],
+)
+def test_release_refuses_unbound_source_before_install(tmp_path, monkeypatch, flag, reason):
+    with pytest.raises(ReleaseError, match=reason):
+        make_fake_release(tmp_path, monkeypatch, extra_env={flag: "1"})
+    assert not (tmp_path / "release.json").exists()
+    assert (tmp_path / "mirror" / "payload").read_text() == "incumbent payload\n"

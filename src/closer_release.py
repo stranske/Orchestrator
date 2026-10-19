@@ -197,6 +197,21 @@ class ReleaseRecord:
         if timeout <= 0:
             raise ValueError("timeout must be positive")
 
+        verifier_env = _child_env(python)
+        source_head = _run(
+            ["git", "-C", str(source), "rev-parse", "HEAD"],
+            env=verifier_env,
+            timeout=timeout,
+        ).strip()
+        if source_head != candidate_sha:
+            raise ReleaseError("release candidate does not match source HEAD")
+        if _run(
+            ["git", "-C", str(source), "status", "--porcelain", "--untracked-files=all"],
+            env=verifier_env,
+            timeout=timeout,
+        ).strip():
+            raise ReleaseError("release source has uncommitted or untracked files")
+
         state = self.read()
         if state is not None and state["stage"] in _ACTIVE:
             # The call's candidate and owner are checked by begin; its token argument
