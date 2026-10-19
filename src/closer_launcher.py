@@ -80,6 +80,57 @@ def pin_problems(manifest: dict, *, own_path: str | None = None) -> list[str]:
     return problems
 
 
+def agent_cli_descriptor_problems(manifest: dict) -> list[str]:
+    """Check the closed public package using only stdlib before importing its code."""
+    if "closer_agent_launchers.py" not in (manifest.get("modules") or {}):
+        return ["agent CLI binding is not in the pinned module set"]
+    if manifest.get("public_runtime_descriptor") != "closer-runtime-package.json":
+        return ["agent CLI requires the closed public Runtime descriptor"]
+    try:
+        public = json.loads(
+            (Path(manifest["module_dir"]) / "closer-runtime-package.json").read_text()
+        )
+        modules = public["modules"]
+        expected = hashlib.sha256(
+            json.dumps(
+                [
+                    "closer-runtime",
+                    "Orchestrator",
+                    "1",
+                    LAUNCHER_VERSION,
+                    CONTRACT,
+                    public["candidate_sha"],
+                    sorted(modules.items()),
+                    hashlib.sha256(
+                        json.dumps(
+                            public["state_versions"], sort_keys=True, separators=(",", ":")
+                        ).encode()
+                    ).hexdigest(),
+                    public["supported_core"],
+                ],
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        if (
+            public.get("schema_version") != 1
+            or public.get("package_kind") != "closer-runtime"
+            or public.get("owner") != "Orchestrator"
+            or public.get("contract") != CONTRACT
+            or public.get("runtime_version") != "1"
+            or (public.get("launcher") or {}).get("version") != LAUNCHER_VERSION
+            or modules != manifest.get("modules")
+            or public.get("candidate_sha") != manifest.get("candidate_sha")
+            or public.get("state_versions") != manifest.get("state_versions")
+            or public.get("package_digest") != expected
+            or manifest.get("package_digest") != expected
+        ):
+            return ["agent CLI public Runtime descriptor differs from pinned host package"]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return ["agent CLI public Runtime descriptor unreadable or invalid"]
+    return []
+
+
 def load_runtime(manifest: dict):
     """Import the pinned closer_campaign by path; claims etc. resolve from the same dir."""
     sys.dont_write_bytecode = True
@@ -93,8 +144,7 @@ def load_runtime(manifest: dict):
             raise RuntimeError(
                 f"pinned Runtime dependency already loaded from another package: {name}"
             )
-    if base not in sys.path:
-        sys.path.insert(0, base)
+    sys.path[:] = [base] + [item for item in sys.path if item != base]
     spec = importlib.util.spec_from_file_location("closer_campaign", manifest["module_path"])
     if spec is None or spec.loader is None:
         raise RuntimeError("pinned Runtime has no supported Python loader")
@@ -114,7 +164,33 @@ def main(argv: list[str] | None = None) -> int:
     child.add_argument("--dir", required=True)
     child.add_argument("--role", required=True)
     child.add_argument("--manifest", required=True)
+    agent_cli = sub.add_parser(
+        "agent-cli",
+        help="concrete per-agent CLI inventory/readiness/plan/run (closer_agent_launchers)",
+    )
+    agent_cli.add_argument("--manifest", required=True)
+    agent_cli.add_argument("rest", nargs=argparse.REMAINDER)
     args = p.parse_args(argv)
+    if args.command == "agent-cli":
+        manifest = json.loads(Path(args.manifest).read_text())
+        problems = pin_problems(manifest)
+        problems.extend(agent_cli_descriptor_problems(manifest))
+        if problems:
+            print(json.dumps({"launcher": "refused", "problems": problems}))
+            return 78
+        load_runtime(manifest)
+        import closer_agent_launchers
+
+        expected = (Path(manifest["module_dir"]) / "closer_agent_launchers.py").resolve()
+        if Path(closer_agent_launchers.__file__).resolve() != expected:
+            print(json.dumps({"launcher": "refused", "problems": ["agent CLI binding not pinned"]}))
+            return 78
+        rest = list(args.rest)
+        if rest[:1] == ["--"]:
+            rest = rest[1:]
+        if rest and rest[0] in {"plan", "run"} and "--manifest" not in rest:
+            rest.extend(["--manifest", args.manifest])
+        return closer_agent_launchers.main(rest or ["--help"], required_manifest_path=args.manifest)
     manifest = json.loads(Path(args.manifest).read_text())
     problems = pin_problems(manifest)
     if args.command == "compat-child":
