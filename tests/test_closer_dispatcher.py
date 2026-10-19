@@ -3891,8 +3891,10 @@ def _adopted_pipeline(tmp_path, *, active=False):
 
 
 def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, capsys
 ):
+    start = time.time()
+    monkeypatch.setattr(adapter.time, "time", lambda: start)
     state = _terminal_queue_state(tmp_path)
     state_path = tmp_path / "legacy-queue.json"
     state["items"][TARGET]["revision"] = "later-assessment"
@@ -3929,7 +3931,17 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
         )
         == 0
     )
-    assert seen[0] > time.time()
+    admission = json.loads(capsys.readouterr().out)["budget_admission"]
+    assert seen == [start + 10 + 300]
+    assert admission == {
+        "reason": "valid_pipeline_stop",
+        "scope": "pipeline",
+        "requested_deadline": start + 310,
+        "selected_deadline": start + 310,
+        "legacy_deadline": state["round"]["deadline"],
+        "legacy_state_digest": adapter.digest(state),
+        "legacy_round_renewed": False,
+    }
     assert state_path.read_bytes() == before
     assert (
         adapter._deadline_with_legacy_round(time.time() + 310, state, state_path)
@@ -3990,10 +4002,9 @@ def test_independent_pipeline_budget_requires_its_own_admission_proof(tmp_path, 
         closer_pipeline._save(path, state)
     legacy_before = state_path.read_bytes()
     pipeline_before = path.read_bytes() if path.exists() else None
-    assert (
-        adapter._deadline_with_pipeline_round(time.time() + 310, legacy, state_path)
-        == legacy["round"]["deadline"]
-    )
+    selected, reason = adapter._deadline_with_pipeline_round(time.time() + 310, legacy, state_path)
+    assert selected == legacy["round"]["deadline"]
+    assert reason and reason != "valid_pipeline_stop"
     assert state_path.read_bytes() == legacy_before
     assert (path.read_bytes() if path.exists() else None) == pipeline_before
 
@@ -4011,7 +4022,57 @@ def test_fresh_pipeline_budget_never_releases_a_legacy_operation_barrier(tmp_pat
     _adopted_pipeline(tmp_path)
     before = state_path.read_bytes()
     requested = time.time() + 310
-    assert adapter._deadline_with_pipeline_round(requested, state, state_path) == requested
+    assert adapter._deadline_with_pipeline_round(requested, state, state_path) == (
+        requested,
+        "valid_pipeline_stop",
+    )
     with pytest.raises(RuntimeError, match="reconcile it in the original closer queue"):
         adapter._legacy_operation_dependency(state_path, TARGET, snapshot())
     assert state_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("branch", ["safe_pipeline_continuation", "expired_pipeline_recovery"])
+def test_pipeline_budget_reports_native_admission_branch(tmp_path, monkeypatch, branch):
+    import closer_pipeline
+
+    state = _terminal_queue_state(tmp_path)
+    state["items"][TARGET]["revision"] = "later-assessment"
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(state))
+    _adopted_pipeline(tmp_path)
+    monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_k: {"valid": False})
+    monkeypatch.setattr(
+        closer_pipeline,
+        "_safe_prior_continuation",
+        lambda *_a: (branch == "safe_pipeline_continuation", False, set()),
+    )
+    monkeypatch.setattr(
+        closer_pipeline,
+        "_expired_invalid_round_recovery",
+        lambda *_a: (branch == "expired_pipeline_recovery",),
+    )
+    requested = time.time() + 310
+    assert adapter._deadline_with_pipeline_round(requested, state, state_path) == (
+        requested,
+        branch,
+    )
+
+
+@pytest.mark.parametrize("error", [AttributeError("bad proof"), RuntimeError("unreadable proof")])
+def test_pipeline_budget_proof_exception_is_diagnosed_without_renewal(tmp_path, monkeypatch, error):
+    import closer_pipeline
+
+    state = _terminal_queue_state(tmp_path)
+    state["items"][TARGET]["revision"] = "later-assessment"
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(state))
+    _adopted_pipeline(tmp_path)
+
+    def reject(*_a, **_k):
+        raise error
+
+    monkeypatch.setattr(closer_pipeline, "validate_stop", reject)
+    assert adapter._deadline_with_pipeline_round(time.time() + 310, state, state_path) == (
+        state["round"]["deadline"],
+        f"pipeline_adoption_unverifiable:{type(error).__name__}",
+    )

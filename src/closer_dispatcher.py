@@ -278,7 +278,7 @@ def _deadline_with_pipeline_round(requested_deadline, legacy_state, state_path):
     legacy_bound = _deadline_with_legacy_round(requested_deadline, legacy_state, state_path)
     sampled_at = time.time()
     if legacy_bound >= sampled_at:
-        return legacy_bound
+        return legacy_bound, "legacy_window_retained"
     import closer_pipeline
 
     path = _pipeline_state_path(state_path)
@@ -295,12 +295,12 @@ def _deadline_with_pipeline_round(requested_deadline, legacy_state, state_path):
             and run["created"] <= run["deadline"]
         ]
         if not candidates or len(candidates) != len(state["runs"]):
-            return legacy_bound
+            return legacy_bound, "missing_or_malformed_pipeline_runs"
         run_id, previous = max(candidates, key=lambda pair: pair[1]["created"])
         if previous["deadline"] > sampled_at:
             # Another adopted round retains its original window. Do not use
             # this caller to renew it or preempt its owner.
-            return legacy_bound
+            return legacy_bound, "prior_pipeline_window_active"
         summary = previous.get("receipt_summary")
         if (
             not isinstance(summary, dict)
@@ -310,24 +310,26 @@ def _deadline_with_pipeline_round(requested_deadline, legacy_state, state_path):
             or not _finite_number(summary.get("finished_at"))
             or not previous["created"] <= summary["finished_at"] <= sampled_at
         ):
-            return legacy_bound
+            return legacy_bound, "pipeline_receipt_binding_invalid"
         historical_now = summary["finished_at"]
         closer_pipeline._resolved_audit_history(path, previous)
         prior = closer_pipeline.validate_stop(
             path, assignment_targets=previous.get("assignment"), now=lambda: historical_now
         )
+        if not isinstance(prior, dict):
+            return legacy_bound, "pipeline_stop_receipt_invalid"
         if prior.get("valid") is True:
-            return requested_deadline
+            return requested_deadline, "valid_pipeline_stop"
         if closer_pipeline._safe_prior_continuation(prior, previous, path)[0]:
-            return requested_deadline
+            return requested_deadline, "safe_pipeline_continuation"
         if closer_pipeline._expired_invalid_round_recovery(
             prior, previous, path, run_id, sampled_at
         )[0]:
-            return requested_deadline
-    except (OSError, ValueError, TypeError, KeyError):
-        # Missing, malformed or unverifiable adoption cannot renew any budget.
-        pass
-    return legacy_bound
+            return requested_deadline, "expired_pipeline_recovery"
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError) as exc:
+        # Unverifiable adoption retains the old bound and a bounded diagnostic.
+        return legacy_bound, f"pipeline_adoption_unverifiable:{type(exc).__name__}"
+    return legacy_bound, "no_pipeline_continuation_proof"
 
 
 def _confirmed_post_merge_label_event(target, operation, evidence):
@@ -4050,13 +4052,12 @@ def main(argv=None):
                 "legacy closer state is unreadable; refusing to renew its execution budget"
             ) from exc
         requested_deadline = deadline
-        deadline = (
-            _deadline_with_pipeline_round(deadline, previous_state, args.state)
-            if args.pipeline
-            else _deadline_with_legacy_round(deadline, previous_state, args.state)
-        )
         if args.pipeline:
+            deadline, admission_reason = _deadline_with_pipeline_round(
+                deadline, previous_state, args.state
+            )
             budget_admission = {
+                "reason": admission_reason,
                 "scope": "pipeline",
                 "requested_deadline": requested_deadline,
                 "selected_deadline": deadline,
@@ -4064,6 +4065,8 @@ def main(argv=None):
                 "legacy_state_digest": digest(previous_state),
                 "legacy_round_renewed": False,
             }
+        else:
+            deadline = _deadline_with_legacy_round(deadline, previous_state, args.state)
     handoff = (
         Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex/handoff")) / "lane-handoff.json"
     )
