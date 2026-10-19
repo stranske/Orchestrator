@@ -870,6 +870,8 @@ class Closer:
         run_fn=None,
         assignment_rows=None,
         assignment_guard_fn=None,
+        seed_snapshots=None,
+        local_first=False,
     ):
         self.gh = github
         self.state_path = Path(state_path)
@@ -890,12 +892,36 @@ class Closer:
         self.pending_integration = {}
         self.assignment_rows = assignment_rows or {}
         self.assignment_guard_fn = assignment_guard_fn
+        self.seed_snapshots = seed_snapshots or {}
+        self.local_first = local_first
+
+    def _local_snapshot(self, target):
+        cached = self.seed_snapshots.get(target)
+        if not isinstance(cached, dict) or cached.get("target") != target:
+            return None
+        # A retained packet supports local analysis. It never grants remote-action
+        # authority: execute() still obtains a fresh exact remote observation.
+        return {**cached, "_local_cached": True}
 
     def observe(self, target):
         try:
-            s = self.gh.snapshot(target)
+            s = self._local_snapshot(target) if self.local_first else None
+            if s is None:
+                try:
+                    s = self.gh.snapshot(target)
+                except Exception:
+                    s = self._local_snapshot(target)
+                    if s is None:
+                        raise
             pending = self.integration_pending(target, s)
             action, reason, eligible, trigger = self.select(s)
+            if s.get("_local_cached") and action == "complete":
+                action, reason, eligible, trigger = (
+                    "wait",
+                    "local completion awaits remote confirmation",
+                    False,
+                    "targeted remote completion check",
+                )
             return {
                 **s,
                 "action": action,
@@ -1170,8 +1196,22 @@ class Closer:
                     "reason": dependency.get("reason") or "assignment changed before action",
                     "next_trigger": "refresh closer assignment",
                 }
-        # Refresh immediately at mutation boundary, not just at inventory time.
-        fresh = self.gh.snapshot(target)
+        # Packet-only work can progress offline. Every remote mutation still has
+        # an exact live observation before its first side effect.
+        local_actions = {"collect_evidence", "review", "disposition", "repair"}
+        if snapshot.get("_local_cached") and action in local_actions:
+            fresh = snapshot
+        else:
+            try:
+                fresh = self.gh.snapshot(target)
+            except Exception as exc:
+                # This read precedes every remote mutation, so the operation is
+                # known not to have started. Preserve its durable intent for retry.
+                return {
+                    "status": "not_started",
+                    "reason": f"remote freshness unavailable: {type(exc).__name__}",
+                    "next_trigger": "targeted_remote_freshness_recheck",
+                }
         if fresh["revision"] != snapshot["revision"]:
             return {
                 "status": "stale",
@@ -1789,25 +1829,15 @@ _PIPELINE_ROUTE_CONDITION = threading.Condition(_PIPELINE_ROUTE_LOCK)
 
 
 def _pipeline_capacity():
-    """Return independent conservative pool sizes from the fresh existing seat report."""
+    """Keep local preparation/reconciliation available when remote capacity is absent.
+
+    GitHub.api still gates each actual remote call. The IO pool also performs
+    retained-packet work and must not be set to zero by a remote rate bucket.
+    """
     report = _fresh_capacity_report()
-    try:
-        gh_status, gh_state = gh_capacity.state("core")
-        remaining = int(gh_state.get("remaining", 0) or 0)
-        if gh_status == gh_capacity.OK:
-            io_capacity = 4
-        elif gh_status == gh_capacity.LOW and remaining > 0:
-            pace = max(0.25, float(gh_state.get("pace_s", 0) or 0))
-            io_capacity = min(4, max(1, int(1 / pace)))
-        elif gh_status == gh_capacity.SHED:
-            # An authoritative shed marker is measured zero capacity.
-            io_capacity = 0
-        else:
-            raise RuntimeError("GitHub capacity is unknown; refresh the existing rate ledger")
-    except Exception as exc:
-        raise RuntimeError(f"GitHub capacity unavailable: {type(exc).__name__}") from None
+    io_capacity = 4
     if report is None:
-        raise RuntimeError("fresh profile/pool capacity report unavailable")
+        return {"io": io_capacity, "low": 0, "exception": 0}
     # Count distinct currently usable low-effort pools. The shared reservation
     # lock arbitrates any overlap with the strong exception lane at dispatch time.
     low_pools = set()
@@ -1941,6 +1971,17 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 packet = None
             if closer_evidence.validate_packet(packet):
                 return packet
+        return None
+
+    def previous_snapshot(target):
+        runs = state_doc.get("runs", {}) if isinstance(state_doc, dict) else {}
+        for run in reversed(list(runs.values())):
+            prep = (((run.get("targets") or {}).get(target) or {}).get("results") or {}).get(
+                "prepare", {}
+            )
+            snapshot, packet = full_snapshot(prep)
+            if isinstance(snapshot, dict) and snapshot.get("target") == target and packet:
+                return snapshot
         return None
 
     def load_packet(prep):
@@ -2252,7 +2293,39 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         # Each target receives its own GitHub adapter, avoiding shared deadline mutation
         # when independent IO workers overlap.
         gh = GitHub(deadline=float(context["deadline"]))
-        snap = gh.snapshot(target)
+        packet = None
+        snap = None
+        cached = None
+        if backend.local_first:
+            try:
+                import closer_change_feed
+
+                cached = closer_change_feed.read_cached(backend.state_path, target)
+            except (OSError, ValueError, TimeoutError):
+                cached = None
+            prior = previous_packet(target)
+            local = (cached or {}).get("snapshot") or previous_snapshot(target)
+            if (
+                isinstance(local, dict)
+                and prior is not None
+                and local.get("target") == target
+                and local.get("head") == prior.get("head")
+                and local.get("base") == prior.get("base")
+                and prior.get("bindings", {}).get("source")
+                == closer_evidence._hash(local.get("sources") or [])
+            ):
+                snap = {**local, "_local_cached": True}
+                packet = prior
+            if cached and cached.get("reconciliation_needed"):
+                try:
+                    snap = gh.snapshot(target)
+                    packet = None
+                except Exception:
+                    # A gap affects remote-dependent decisions, but it does not
+                    # erase the packet used by independent local analysis.
+                    pass
+        if snap is None:
+            snap = gh.snapshot(target)
         assignment_row = backend.assignment_rows.get(target, {})
 
         def artifact_fetch(artifact, *, deadline, max_bytes):
@@ -2413,16 +2486,17 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "end_cursor": cursor,
             }
 
-        packet = closer_evidence.collect_evidence(
-            snap,
-            gh.api,
-            retained_dir,
-            previous=previous_packet(target),
-            deadline=time.monotonic() + max(1, float(context["deadline"]) - time.time()),
-            dispositions=backend.dispositions.get(target, {}),
-            artifact_fetch=artifact_fetch,
-            review_threads_fetch=review_threads_fetch,
-        )
+        if packet is None:
+            packet = closer_evidence.collect_evidence(
+                snap,
+                gh.api,
+                retained_dir,
+                previous=previous_packet(target),
+                deadline=time.monotonic() + max(1, float(context["deadline"]) - time.time()),
+                dispositions=backend.dispositions.get(target, {}),
+                artifact_fetch=artifact_fetch,
+                review_threads_fetch=review_threads_fetch,
+            )
         action, reason, eligible, trigger = backend.select(snap)
         snapshot_bytes = json.dumps(
             snap, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -2442,6 +2516,16 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             "path": str(manifest_path),
             "sha256": hashlib.sha256(manifest_bytes).hexdigest(),
         }
+        if backend.local_first and not snap.get("_local_cached"):
+            import closer_change_feed
+
+            closer_change_feed.record_snapshot(
+                backend.state_path,
+                target,
+                snap,
+                packet_ref=packet_ref,
+                expected_watermarks=(cached or {}).get("watermarks") if cached else None,
+            )
         drift = (
             closer_evidence.drift_sample(packet, recurring=True)
             if closer_evidence.validate_packet(packet)
@@ -2495,8 +2579,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     "active_threads",
                     "mergeable",
                     "verifier",
+                    "_local_cached",
                 )
             },
+            "remote_fresh": not snap.get("_local_cached", False),
             "packet_ref": packet_ref,
             "snapshot_ref": snapshot_ref,
             "evidence_summary": {
@@ -3175,6 +3261,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
 
     def action_backend(target, context):
         action_state = Path(context["action_state_path"])
+        prep = context.get("prepare", {})
+        snap, _packet = full_snapshot(prep)
         current = Closer(
             GitHub(deadline=float(context["deadline"])),
             state_path=action_state,
@@ -3189,10 +3277,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             run_fn=backend.run_fn,
             assignment_rows=backend.assignment_rows,
             assignment_guard_fn=backend.assignment_guard_fn,
+            seed_snapshots={target: snap} if isinstance(snap, dict) else {},
+            local_first=bool(isinstance(snap, dict) and snap.get("_local_cached")),
         )
         interpreted = full_interpretation(context.get("interpret", {}))
-        prep = context.get("prepare", {})
-        snap, _packet = full_snapshot(prep)
         if (
             isinstance(interpreted, dict)
             and interpreted.get("classification") == "deterministic_close_source"
@@ -3932,6 +4020,7 @@ def main(argv=None):
             if args.workspaces
             else known_workspaces(targets)
         ),
+        local_first=bool(args.pipeline),
     )
     if args.pipeline and args.shadow:
         p.error("choose --pipeline or --shadow")

@@ -70,6 +70,53 @@ def snapshot(**overrides):
     return result
 
 
+def test_local_packet_progresses_with_github_unavailable_but_remote_action_waits(
+    tmp_path, monkeypatch
+):
+    class OfflineGitHub:
+        deadline = time.time() + 30
+
+        def __init__(self):
+            self.calls = 0
+
+        def snapshot(self, _target):
+            self.calls += 1
+            raise ConnectionError("GitHub unavailable")
+
+    gh = OfflineGitHub()
+    local = snapshot()
+    backend = adapter.Closer(
+        gh,
+        state_path=tmp_path / "queue.json",
+        seed_snapshots={TARGET: local},
+        local_first=True,
+        apply=True,
+        workers=True,
+    )
+    backend.select = lambda _s: ("review", "local review", True, None)
+    backend.worker = lambda *_args, **_kwargs: {"status": "completed", "local_result": True}
+    observed = backend.observe(TARGET)
+    assert observed["action"] == "review" and observed["eligible"]
+    result = backend.execute(TARGET, "review", observed, {"deadline": time.time() + 20})
+    assert result["status"] == "completed" and result["local_result"]
+    assert gh.calls == 0
+
+    backend.select = lambda _s: ("merge", "remote merge", True, None)
+    observed = backend.observe(TARGET)
+    remote = backend.execute(TARGET, "merge", observed, {"deadline": time.time() + 20})
+    assert remote["status"] == "not_started"
+    assert remote["next_trigger"] == "targeted_remote_freshness_recheck"
+    assert gh.calls == 1
+
+
+def test_pipeline_keeps_local_io_capacity_when_github_capacity_is_unavailable(monkeypatch):
+    monkeypatch.setattr(adapter, "_fresh_capacity_report", lambda: None)
+    monkeypatch.setattr(
+        adapter.gh_capacity, "state", lambda *_args: (_ for _ in ()).throw(ConnectionError())
+    )
+    assert adapter._pipeline_capacity() == {"io": 4, "low": 0, "exception": 0}
+
+
 class FakeGitHub:
     def __init__(self, current, responses=None):
         self.current = current

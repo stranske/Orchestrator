@@ -5,7 +5,6 @@ import json
 import closer_change_feed as feed
 import closer_queue
 
-
 TARGET = "acme/widgets#42"
 HEAD = "a" * 40
 
@@ -21,9 +20,17 @@ def _state(path, *, head=HEAD, evidence=None):
 
 
 def _event(event_id, sequence, kind="checks", *, head=HEAD, payload=None, **extra):
-    return {"trusted": True, "source": "authenticated-webhook", "target": TARGET,
-            "event_id": event_id, "sequence": sequence, "kind": kind,
-            "head": head, "payload": payload or {"checks": "SUCCESS"}, **extra}
+    return {
+        "trusted": True,
+        "source": "authenticated-webhook",
+        "target": TARGET,
+        "event_id": event_id,
+        "sequence": sequence,
+        "kind": kind,
+        "head": head,
+        "payload": payload or {"checks": "SUCCESS"},
+        **extra,
+    }
 
 
 def test_duplicate_events_are_idempotent(tmp_path):
@@ -83,8 +90,9 @@ def test_offline_and_mixed_targets_use_only_their_local_queue_entries(tmp_path):
     assert cached["change_feed"]["offline_safe"] is True
     assert set(cached["incomplete_categories"]) == set(feed.KINDS)
     assert feed.read_cached(state, other)["snapshot"]["local_packet"] == "other"
-    feed.apply_change(state, TARGET, _event("reviews-1", 1, kind="reviews",
-                                            payload={"threads": []}))
+    feed.apply_change(
+        state, TARGET, _event("reviews-1", 1, kind="reviews", payload={"threads": []})
+    )
     assert "reviews" in feed.read_cached(state, TARGET)["remote_changes"]
     assert "reviews" not in feed.read_cached(state, other)["remote_changes"]
 
@@ -107,8 +115,11 @@ def test_new_head_invalidates_old_head_dependent_changes(tmp_path):
     _state(state)
     feed.apply_change(state, TARGET, _event("checks-1", 1))
     new_head = "d" * 40
-    feed.apply_change(state, TARGET, _event("head-2", 2, kind="commit_head",
-                                            head=new_head, payload={"head": new_head}))
+    feed.apply_change(
+        state,
+        TARGET,
+        _event("head-2", 2, kind="commit_head", head=new_head, payload={"head": new_head}),
+    )
     cached = feed.read_cached(state, TARGET)
     assert cached["snapshot"]["head"] == new_head
     assert "checks" not in cached["remote_changes"]
@@ -141,8 +152,48 @@ def test_applied_deltas_advance_stable_local_revision(tmp_path):
     assert revision_one != "base-revision"
     feed.apply_change(state, TARGET, _event("checks-1", 1))
     assert closer_queue._read_state(state)["items"][TARGET]["revision"] == revision_one
-    feed.apply_change(state, TARGET, _event("reviews-1", 1, kind="reviews",
-                                            payload={"active_threads": 0}))
+    feed.apply_change(
+        state, TARGET, _event("reviews-1", 1, kind="reviews", payload={"active_threads": 0})
+    )
     after_second = closer_queue._read_state(state)["items"][TARGET]
     assert after_second["revision"] == after_second["evidence"]["revision"]
     assert after_second["revision"] != revision_one
+
+
+def test_full_packet_reconciliation_keeps_pending_intent_and_closes_gap(tmp_path):
+    state = tmp_path / "queue.json"
+    _state(state, evidence={"target": TARGET, "revision": "base"})
+    current = closer_queue._read_state(state)
+    current["items"][TARGET]["operation"] = {
+        "id": "remote-intent",
+        "status": "uncertain",
+        "action": "merge",
+    }
+    closer_queue._atomic_write(state, current)
+    feed.apply_change(state, TARGET, _event("gap", 4, missed_events=True))
+    watermarks = feed.read_cached(state, TARGET)["watermarks"]
+    fresh = {"target": TARGET, "head": HEAD, "revision": "fresh", "checks": "SUCCESS"}
+    assert feed.record_snapshot(
+        state,
+        TARGET,
+        fresh,
+        packet_ref={"sha256": "packet"},
+        expected_watermarks=watermarks,
+    )
+    cached = feed.read_cached(state, TARGET)
+    assert cached["snapshot"]["revision"] == "fresh"
+    assert not cached["incomplete_categories"]
+    assert not cached["reconciliation_needed"]
+    persisted = closer_queue._read_state(state)["items"][TARGET]
+    assert persisted["operation"]["id"] == "remote-intent"
+    assert persisted["packet_ref"] == {"sha256": "packet"}
+
+
+def test_full_packet_cas_does_not_overwrite_change_arriving_during_fetch(tmp_path):
+    state = tmp_path / "queue.json"
+    _state(state, evidence={"target": TARGET, "revision": "base"})
+    baseline = feed.read_cached(state, TARGET)["watermarks"]
+    feed.apply_change(state, TARGET, _event("later-check", 1))
+    stale = {"target": TARGET, "head": HEAD, "revision": "stale", "checks": "PENDING"}
+    assert not feed.record_snapshot(state, TARGET, stale, expected_watermarks=baseline)
+    assert feed.read_cached(state, TARGET)["snapshot"]["checks"] == "SUCCESS"
