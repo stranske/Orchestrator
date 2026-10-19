@@ -491,9 +491,11 @@ def invoke_target(
         current.get("kind") not in TARGET_KINDS
         or current.get("artifact") is None
         or not isinstance(invocations, list)
+        or not isinstance(current.get("binding_path"), str)
+        or not current.get("binding_path")
     ):
-        # A binding without a known kind, any artifact, or a usable
-        # invocation history cannot be invoked; it refuses as invalid
+        # A binding without a known kind, artifact, usable invocation history,
+        # or binding destination refuses before any producer or writer runs.
         # instead of raising KeyError downstream or after the producer runs.
         return {"matched": True, "invoked": False, "reason": "artifact_invalid"}
     if not _matches(current, trigger):

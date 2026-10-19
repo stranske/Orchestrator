@@ -1368,7 +1368,7 @@ def test_compiled_canary_unusable_timestamp_refuses_without_writes(
     assert ctx["registry"].read_bytes() == registry_before
 
 
-@pytest.mark.parametrize("field", ["kind", "artifact"])
+@pytest.mark.parametrize("field", ["kind", "artifact", "binding_path"])
 def test_direct_invoke_target_missing_binding_shape_refuses_without_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str
 ) -> None:
@@ -1397,7 +1397,15 @@ def test_direct_invoke_target_missing_binding_shape_refuses_without_writes(
 
 
 @pytest.mark.parametrize(
-    "field, value", [("artifact", []), ("invocations", None), ("invocations", {})]
+    "field, value",
+    [
+        ("artifact", []),
+        ("invocations", None),
+        ("invocations", {}),
+        ("binding_path", None),
+        ("binding_path", ""),
+        ("binding_path", 17),
+    ],
 )
 def test_direct_invoke_target_corrupt_binding_values_refuse_without_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value
