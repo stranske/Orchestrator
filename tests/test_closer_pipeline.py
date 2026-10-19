@@ -3270,8 +3270,6 @@ def test_expired_read_cutoff_retries_only_audited_native_retained_wait(tmp_path,
         "known_completed",
         "provider_uncertainty",
         "action_stage",
-        "early",
-        "deadline",
     ],
 )
 def test_expired_read_cutoff_rejects_unbound_or_uncertain_retained_wait(tmp_path, mutation):
@@ -3346,13 +3344,116 @@ def test_expired_read_cutoff_rejects_unbound_or_uncertain_retained_wait(tmp_path
         row["provider_outcome_uncertain"] = {"unknown": True}
     elif mutation == "action_stage":
         row["stage"] = "act"
-    elif mutation == "early":
-        row["resource_evidence"]["observed_at"] = old["deadline"] - 1
-    else:
-        row["resource_evidence"]["deadline"] = old["deadline"] + 1
     closer_pipeline._save(path, state)
     prior = validate_stop(path, old["assignment"], now=lambda: at)
     assert not closer_pipeline._expired_invalid_round_recovery(prior, old, path, "prior", at)[0]
+
+
+@pytest.mark.parametrize("boundary", ["early", "deadline", "early_finished"])
+@pytest.mark.parametrize("retained_act", [True, False])
+def test_invalid_read_boundary_preserves_nonaction_retry_and_quarantines_retained_action(
+    tmp_path, boundary, retained_act
+):
+    path = tmp_path / "pipeline.json"
+    at, target, _inner = retained_read_wait_fixture(path)
+    state = closer_pipeline._load(path)
+    old = next(iter(state["runs"].values()))
+    row = old["targets"][target]
+    if not retained_act:
+        row["results"].pop("act")
+    if boundary == "deadline":
+        row["resource_evidence"]["deadline"] = old["deadline"] + 1
+    else:
+        row["resource_evidence"]["observed_at"] = old["deadline"] - 1
+        if boundary == "early_finished":
+            old["receipt_summary"]["finished_at"] = old["deadline"] - 1
+    original = closer_pipeline._bounded(row)
+    closer_pipeline._save(path, state)
+    calls = []
+
+    def prepare(name, context):
+        calls.append(name)
+        return callbacks()["prepare"](name, context)
+
+    for fresh, when in (("fresh", at), ("later", at + 20)):
+        result = run(
+            path,
+            [target, fresh],
+            {**callbacks(), "prepare": prepare},
+            seconds=10,
+            now=lambda: when,
+        )
+        assert result.get("status") != "blocked"
+        assert fresh in calls
+        latest = next(iter(closer_pipeline._load(path)["runs"].values()))
+        blocked = latest["targets"][target]
+        if not retained_act:
+            assert target in calls
+            assert blocked["status"] == "completed"
+            assert blocked.get("recovery_barrier") is None
+            return
+        assert target not in calls
+        assert blocked["status"] == "failed"
+        assert blocked["stage"] == "interpret"
+        assert blocked["error"] == closer_pipeline.READ_BARRIER_ERROR
+        assert blocked["deferred_next_trigger"] == closer_pipeline.READ_BARRIER_TRIGGER
+        assert blocked["recovery_barrier"]["schema"] == closer_pipeline.READ_BARRIER_SCHEMA
+        assert latest["prior_invalid_stop_evidence"]["valid"] is False
+        history = closer_pipeline._resolved_audit_history(path, latest)
+        assert any(
+            entry.get("targets", {}).get(target, {}).get("item_sha256")
+            == closer_pipeline._digest(original)
+            for entry in history
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["revision", "source", "item_hash", "act_hash", "schema", "missing", "resource", "uncertain"],
+)
+def test_quarantined_read_barrier_rejects_changed_binding(tmp_path, mutation):
+    path = tmp_path / "pipeline.json"
+    at, target, _inner = retained_read_wait_fixture(path)
+    state = closer_pipeline._load(path)
+    old = next(iter(state["runs"].values()))
+    old["targets"][target]["resource_evidence"]["observed_at"] = old["deadline"] - 1
+    closer_pipeline._save(path, state)
+    assert (
+        run(path, [target, "fresh"], callbacks(), seconds=10, now=lambda: at).get("status")
+        != "blocked"
+    )
+    state = closer_pipeline._load(path)
+    latest = next(iter(state["runs"].values()))
+    row = latest["targets"][target]
+    if mutation == "revision":
+        row["revision"] = "changed"
+    elif mutation == "resource":
+        row["resource_evidence"]["observed_at"] = 0
+    elif mutation == "uncertain":
+        row["provider_outcome_uncertain"] = {"status": "unknown"}
+    elif mutation == "missing":
+        row.pop("recovery_barrier")
+    else:
+        key = {
+            "source": "source_run_id",
+            "item_hash": "item_sha256",
+            "act_hash": "act_result_sha256",
+        }.get(mutation, mutation)
+        row["recovery_barrier"][key] = "changed"
+    # Exercise the compact carry used by the production next-cadence constructor.
+    state["carry"][target] = closer_pipeline._carry_item(row)
+    closer_pipeline._save(path, state)
+    called = []
+    result = run(
+        path,
+        [target, "later"],
+        callbacks(act=lambda name, _context: called.append(name) or {"status": "completed"}),
+        seconds=10,
+        now=lambda: at + 20,
+    )
+    assert result.get("status") == "blocked"
+    assert result["reason"] == "prior_run_has_no_valid_stop"
+    assert not called
 
 
 def test_compact_paused_wait_recovery_preserves_exclusion_and_audit_across_cadences(tmp_path):
