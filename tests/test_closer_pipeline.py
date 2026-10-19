@@ -3457,6 +3457,176 @@ def test_legacy_unknown_reconciliation_metadata_is_reconcile_only(tmp_path, muta
     assert calls == [target, target]
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        None,
+        "not_started",
+        "unknown_other_reason",
+        "missing_audit",
+        "changed_identity",
+        "changed_revision",
+        "changed_work_key",
+        "bad_capacity",
+        "resolved_operation",
+        "wrong_trigger",
+    ],
+)
+def test_expired_reconcile_capacity_deferral_retains_original_uncertainty(tmp_path, mutation):
+    path = tmp_path / "pipeline.json"
+    at = 1_800_000_000.0
+    assignment, _removed = interrupted_round_fixture(path, at)
+    target = "owner/repo#uncertain-act-0"
+    state = closer_pipeline._load(path)
+    state["runs"]["interrupted"]["targets"][target].update(
+        revision="recorded-revision",
+        identity="original-operation-binding",
+        work_key="original-operation-key",
+        results={
+            "reconcile": {
+                "outcome": "unknown",
+                "reason": "legacy uncertain operation lacks external-run or live-owner proof; "
+                "reconcile it in the original closer queue",
+            }
+        },
+    )
+    closer_pipeline._save(path, state)
+    first = run(
+        path,
+        assignment,
+        callbacks(act=lambda *_: pytest.fail("no action capacity")),
+        capacity={"io": 0, "low": 2, "exception": 1},
+        seconds=10,
+        now=lambda: at,
+        reconcile=lambda *_: pytest.fail("no reconciliation capacity"),
+    )
+    assert first.get("status") != "blocked"
+    state = closer_pipeline._load(path)
+    run_id, previous = max(state["runs"].items(), key=lambda entry: entry[1]["created"])
+    item = previous["targets"][target]
+    assert (item["status"], item["stage"], item["deferred_reason"]) == (
+        "deferred",
+        "reconcile",
+        "worker_capacity",
+    )
+    original_history = json.loads(json.dumps(previous["invalid_stop_history"]))
+    if mutation == "missing_audit":
+        previous["invalid_stop_history"] = []
+    elif mutation == "not_started":
+        item["results"].pop("reconcile")
+    elif mutation == "unknown_other_reason":
+        item["results"]["reconcile"]["reason"] = "current owner could not prove completion"
+    elif mutation == "changed_identity":
+        item["identity"] = "different-operation"
+    elif mutation == "changed_revision":
+        item["revision"] = "different-revision"
+    elif mutation == "changed_work_key":
+        item["work_key"] = "different-operation-key"
+    elif mutation == "bad_capacity":
+        item["resource_evidence"]["capacity"]["available"] = 1
+    elif mutation == "resolved_operation":
+        item["results"]["reconcile"] = {"outcome": "confirmed_not_started"}
+    elif mutation == "wrong_trigger":
+        item["deferred_next_trigger"] = "fresh_action"
+    closer_pipeline._save(path, state)
+    prior = validate_stop(path, previous["assignment"], now=lambda: at + 20)
+    recovered = closer_pipeline._expired_invalid_round_recovery(
+        prior, previous, path, run_id, at + 20
+    )
+    safe = mutation in {None, "not_started", "unknown_other_reason"}
+    assert recovered[0] is safe
+    if not safe:
+        return
+    assert target in recovered[4]
+    assert recovered[5]["targets"][target]["recovery"] == "reconcile_only"
+    calls = []
+    second = run(
+        path,
+        [target],
+        callbacks(act=lambda *_: pytest.fail("uncertain operation cannot act")),
+        seconds=10,
+        now=lambda: at + 20,
+        reconcile=lambda name, _ctx: calls.append(name) or {"outcome": "unknown"},
+    )
+    assert second.get("status") != "blocked"
+    assert calls == [target]
+    latest = max(closer_pipeline._load(path)["runs"].values(), key=lambda row: row["created"])
+    assert latest["invalid_stop_history"][: len(original_history)] == original_history
+    assert latest["targets"][target]["status"] == "uncertain"
+
+
+@pytest.mark.parametrize("assigned", [True, False])
+def test_valid_stop_reconcile_capacity_wait_never_restarts_at_action(tmp_path, assigned):
+    path = tmp_path / "pipeline.json"
+    at = 1_800_000_000.0
+    target = "owner/repo#uncertain"
+    closer_pipeline._save(
+        path,
+        {
+            "schema": closer_pipeline.SCHEMA,
+            "runs": {
+                "interrupted": {
+                    "created": at - 20,
+                    "deadline": at - 10,
+                    "assignment": [target],
+                    "targets": {
+                        target: {
+                            "status": "uncertain",
+                            "stage": "act",
+                            "revision": "old-revision",
+                            "identity": "original-operation",
+                            "work_key": "original-key",
+                            "deferred_next_trigger": "reconcile_before_retry",
+                            "results": {"prepare": {"snapshot": {"target": target}}},
+                            "metrics": {"waits": 0, "errors": 0},
+                        }
+                    },
+                }
+            },
+            "carry": {},
+            "cache": {},
+        },
+    )
+    first = run(
+        path,
+        [target],
+        callbacks(act=lambda *_: pytest.fail("no action capacity")),
+        capacity={"io": 0, "low": 2, "exception": 1},
+        seconds=10,
+        now=lambda: at,
+        reconcile=lambda *_: pytest.fail("no reconciliation capacity"),
+    )
+    assert first.get("status") != "blocked"
+    wait = first["targets"][target]
+    assert (wait["status"], wait["stage"], wait["deferred_reason"]) == (
+        "deferred",
+        "reconcile",
+        "worker_capacity",
+    )
+    assert validate_stop(path, [target], now=lambda: at)["valid"]
+    calls = []
+    second = run(
+        path,
+        [target] if assigned else ["owner/repo#other"],
+        callbacks(
+            act=lambda name, _ctx: (
+                pytest.fail("uncertain operation cannot act")
+                if name == target
+                else {"status": "completed", "target_complete": True}
+            )
+        ),
+        seconds=10,
+        now=lambda: at + 20,
+        reconcile=lambda name, _ctx: calls.append(name) or {"outcome": "unknown"},
+    )
+    assert second.get("status") != "blocked"
+    assert calls == ([target] if assigned else [])
+    latest = max(closer_pipeline._load(path)["runs"].values(), key=lambda row: row["created"])
+    if not assigned:
+        assert latest["targets"][target]["recovery_excluded"] is True
+        assert latest["targets"][target]["status"] == "uncertain"
+
+
 def test_restored_excluded_wait_survives_consecutive_valid_stop_cadences(tmp_path):
     path = tmp_path / "pipeline.json"
     at, target, _inner = compact_paused_wait_fixture(path)

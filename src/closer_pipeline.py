@@ -1505,6 +1505,46 @@ def _expired_invalid_round_recovery(
                 quarantined.add(target)
         elif (
             status == "deferred"
+            and stage == "reconcile"
+            and item.get("deferred_reason") == "worker_capacity"
+        ):
+            # A recovered uncertain operation can be queued for reconciliation
+            # and then lose its I/O slot before the callback runs. The capacity
+            # sample is only scheduling evidence: preserve the audited original
+            # operation as reconciliation-only on the next cadence.
+            reconciliation = results.get("reconcile")
+            if (
+                not no_action
+                or item.get("provider_outcome_uncertain")
+                or item.get("deferred_next_trigger") != "capacity_recheck"
+                or not _valid_worker_capacity(item.get("resource_evidence"), historical_now)
+                or (
+                    reconciliation is not None
+                    and (
+                        not isinstance(reconciliation, Mapping)
+                        or reconciliation.get("outcome") != "unknown"
+                    )
+                )
+                or not all(
+                    isinstance(item.get(key), str) and item[key]
+                    for key in ("revision", "identity", "work_key")
+                )
+                or not any(
+                    isinstance(record, Mapping)
+                    and isinstance(record.get("targets"), Mapping)
+                    and isinstance(record["targets"].get(target), Mapping)
+                    and record["targets"][target].get("recovery") == "reconcile_only"
+                    and all(
+                        record["targets"][target].get(key) == item[key]
+                        for key in ("revision", "identity", "work_key")
+                    )
+                    for record in history
+                )
+            ):
+                return False, set(), set(), set(), set(), {}
+            uncertain.add(target)
+        elif (
+            status == "deferred"
             and stage in {"act", "reconcile"}
             and item.get("deferred_reason") == "deadline_exhausted"
             and no_action
@@ -2153,6 +2193,21 @@ def _run_pipeline_impl(
                         }
                 if item.get("status") == "running":
                     item.update(status="uncertain" if item.get("stage") == "act" else "pending")
+                if (
+                    prior_stop is not None
+                    and prior_stop.get("valid") is True
+                    and item.get("status") == "deferred"
+                    and item.get("stage") == "reconcile"
+                    and item.get("deferred_reason") == "worker_capacity"
+                    and item.get("deferred_next_trigger") == "capacity_recheck"
+                    and isinstance(item.get("results"), Mapping)
+                    and "act" not in item["results"]
+                    and item.get("known_completed_action") is not True
+                    and not item.get("provider_outcome_uncertain")
+                ):
+                    # A valid stop can still have an unrun reconciliation. Its
+                    # capacity deferral is never permission to restart at act.
+                    item.update(status="uncertain", deferred_next_trigger="reconcile_before_retry")
                 if old_target in assignment:
                     item.pop("recovery_excluded", None)
                     if item.get("status") not in {"uncertain", "failed"} or (
@@ -2160,7 +2215,13 @@ def _run_pipeline_impl(
                     ):
                         item.update(status="queued", stage="prepare")
                 else:
-                    if old_target in recovery_quarantined | recovery_uncertain | prior_wait_targets:
+                    if (
+                        old_target in recovery_quarantined | recovery_uncertain | prior_wait_targets
+                        or (
+                            item.get("status") == "uncertain"
+                            and item.get("stage") in {"act", "reconcile"}
+                        )
+                    ):
                         item["recovery_excluded"] = True
                     elif item.get("status") not in {"uncertain", "pending"}:
                         item.update(status="queued", stage="prepare")
