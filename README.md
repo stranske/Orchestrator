@@ -571,6 +571,10 @@ Live execution is observable only after the normal manual mirror sync.
   expiry/rollback validation. `repo_knowledge.py` preserves user-authored `AGENTS.md` content,
   reports managed blocks as `absent`, `stale`, `mismatched`, or `current`, and can merge the hashed
   rule into an optional Workflows capability bundle without replacing unrelated bundle content.
+  The writable registry defaults to `$ORCH_LOCAL_RUNTIME/experiments/repo_knowledge.json`
+  (`~/.codex/orchestrator/experiments/repo_knowledge.json` without that override).
+  `ORCH_REPO_KNOWLEDGE_PATH` still selects an explicit registry. Loading may seed or migrate
+  operational state; it never defaults to writing beside code in a verified mirror generation.
   Matches, injections, acceptances, counterfactual rejections, and downstream outcomes reuse the
   existing completion-event and capability-influence planes.
 
