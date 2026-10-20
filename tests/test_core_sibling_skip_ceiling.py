@@ -55,3 +55,30 @@ def test_core_sibling_ceiling_breach_names_categories():
     )
     assert "skipped test(s) 21/21 via `mirror_skipped_max`" in over[0]
     assert "CLOSER_CORE_SOURCE" in over[0]
+
+
+def test_core_sibling_skips_uncountable_without_verdicts():
+    """Skips with no junit verdicts must not invent a Core count of zero.
+
+    Otherwise 20 Core-sibling skips pass both `mirror_skipped_max=21` and
+    `mirror_core_sibling_skipped_max=19` because every skip is charged to neither ceiling.
+    """
+    assert verify.core_sibling_skips({"skipped": 20}) is None
+    assert verify.core_sibling_skips({"skipped": 0}) == 0
+    assert verify.core_sibling_skips({"skipped": 0, "verdicts": {}}) == 0
+    floor = {"mirror_skipped_max": 21, "mirror_core_sibling_skipped_max": 19}
+    over = verify._ceiling_problems(
+        floor,
+        {
+            "skipped_max": None,
+            "core_sibling_skipped_max": None,
+            "selftest_skipped_max": 0,
+            "gate_skipped_max": 0,
+            "mypy_exempt_max": 0,
+        },
+        shape=verify.EXEC_MIRROR,
+    )
+    assert len(over) == 2
+    assert all("CEILING UNCHECKABLE" in msg for msg in over)
+    assert any("mirror_skipped_max" in msg for msg in over)
+    assert any("mirror_core_sibling_skipped_max" in msg for msg in over)

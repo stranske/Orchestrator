@@ -1271,8 +1271,14 @@ def drainable_skips(
     }
 
 
-def core_sibling_skips(py: dict) -> int:
-    """Pytest skips that carry env_prereq.CORE_SIBLING_ABSENT_MARK (bounded separately)."""
+def core_sibling_skips(py: dict) -> int | None:
+    """Pytest skips that carry env_prereq.CORE_SIBLING_ABSENT_MARK (bounded separately).
+
+    None means the Core population could not be counted: pytest reported skips but left no
+    per-test verdicts to partition. Treating that as 0 would charge every skip to the general
+    ceiling AND clear the Core ceiling by being blind — so both derived counts stay None and
+    `_ceiling_problems` fails any set Core/general skip ceiling (same rule as mypy exempt).
+    """
     try:
         import env_prereq
 
@@ -1281,7 +1287,7 @@ def core_sibling_skips(py: dict) -> int:
         return 0
     tests = [v for by_name in (py.get("verdicts") or {}).values() for v in by_name.values()]
     if not tests and py.get("skipped"):
-        return 0
+        return None
     return sum(
         1 for v in tests if v.get("outcome") == "skipped" and mark in (v.get("message") or "")
     )
@@ -1474,8 +1480,11 @@ def verify(
     # both numbers — `24/24` alone reads as "fine", `24/24 (ceiling)` reads as "at the limit".
     exempt = mypy_exempt_modules()
     core_skipped = core_sibling_skips(py)
+    # Partition only when Core skips are countable. An unknown Core population makes BOTH
+    # derived skip counts uncountable — never invent a zero that clears a set ceiling.
+    other_skipped = None if core_skipped is None else py["skipped"] - core_skipped
     actual = {
-        "skipped_max": py["skipped"] - core_skipped,
+        "skipped_max": other_skipped,
         "core_sibling_skipped_max": core_skipped,
         "selftest_skipped_max": len(st["skipped"]),
         "gate_skipped_max": sum(1 for r in gates.values() if r["skipped"]),
@@ -2368,6 +2377,9 @@ def _selftest() -> None:
         },
     }
     assert core_sibling_skips(_py_core) == 1
+    # Skips without per-test verdicts: Core count is unknown, never zero (blind pass).
+    assert core_sibling_skips({"skipped": 20}) is None
+    assert core_sibling_skips({"skipped": 0}) == 0
     _floor_core = {"mirror_skipped_max": 21, "mirror_core_sibling_skipped_max": 1}
     _actual_core = {**{k: 0 for k, _ in CEILINGS}, "skipped_max": 2, "core_sibling_skipped_max": 1}
     assert _ceiling_problems(_floor_core, _actual_core, shape=EXEC_MIRROR) == []
@@ -2385,6 +2397,16 @@ def _selftest() -> None:
     assert "CLOSER_CORE_SOURCE" in _over_core[0]
     assert "Skip categories:" in _over_core[0], _over_core
     assert "git family" in _over_core[0], _over_core
+    # Missing verdicts must not clear both ceilings with invented zeros (#817 / review).
+    _blind_core = _ceiling_problems(
+        {"mirror_skipped_max": 21, "mirror_core_sibling_skipped_max": 19},
+        {**{k: 0 for k, _ in CEILINGS}, "skipped_max": None, "core_sibling_skipped_max": None},
+        shape=EXEC_MIRROR,
+    )
+    assert len(_blind_core) == 2, _blind_core
+    assert all("CEILING UNCHECKABLE" in p for p in _blind_core), _blind_core
+    assert any("`mirror_skipped_max`" in p for p in _blind_core), _blind_core
+    assert any("`mirror_core_sibling_skipped_max`" in p for p in _blind_core), _blind_core
     for _count, _says in ((0, "None of them skipped only"), (None, "NOT COUNTED")):
         _over_c = _ceiling_problems(
             {"skipped_max": 1}, {**_z_d, "skipped_max": 2}, drainable={"skipped_max": _count}
