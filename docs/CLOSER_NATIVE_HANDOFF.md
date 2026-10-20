@@ -43,3 +43,55 @@ The signed pre-launch handoff binds its worker to that exact context. Its effect
 Default finite campaigns remain finite. With explicit `continue_on_assignment_change=true`, a known successful standing round may become pending only when the current canonical assignment hash differs. The actual B0/C0 boundary must have a signed exact named-round proof recording global stop valid at that boundary. Rearming revalidates that immutable receipt, exact original run IDs and row hashes, and the signed worker/context binding. Unrelated later quarantine does not revoke this old known completion; changes to its own rows or proof hold it. The transition preserves old workers and phase, appends a durable assignment transition and advances the generation. A human hold, completed phase, release operation, live/unknown/denied worker or missing completion proof cannot be resurrected. It never claims issue acceptance. Each newly admitted callback still passes the current native, Core, pause and quarantine fences.
 
 Before each native B submission, the pinned hook retains an immutable, signed census of existing round receipt identities in that invocation's observation directory; C accepts only a newly produced receipt bound to that submission, never a prior successful same-assignment round, and an unknown submission cannot refresh this watermark.
+
+## Exact cleanup and pre-dispatch no-start evidence
+
+The rendered postrun adapter requests a structured receipt from the pinned lease
+module. A receipt attests an actual removal of the matching original lease under
+its coordinator lock. It records the credential and metadata hashes, canonical
+lane path, lease inode and removal time; it does not expose the credential.
+An already-absent lane is still an idempotent success for the legacy release API,
+but cannot produce an exact cleanup receipt. A successor token, malformed lane
+or concurrent unrecognized files are retained.
+
+Native postrun emits nonce-bound machine-readable markers for exact cleanup and
+for a missing terminal named round. Its EXIT trap preserves the body status and
+propagates cleanup refusal. The worker records separate A/B/C timestamps and
+whether B was submitted, so setup, request execution and cleanup are distinguishable.
+
+A new positive pre-dispatch refusal can remain pending only when the pinned worker
+observed no B submission, an ordinary admitted A, the expected typed C refusal,
+and exact cleanup within that invocation. The Runtime writes a create-only signed
+`native-pre-dispatch-no-start/v1` boundary tied to the original admission, worker,
+result identity, campaign generation, assignment and package. Campaign consumption
+revalidates that boundary and the complete execution report. A missing, changed,
+replayed or contradictory report remains unknown. A possible B call, timeout,
+denial or arbitrary C result cannot borrow this proof. It records no accepted work.
+
+Older unknown results have no new proof and retain their original meaning. Neither
+lane absence nor a plaintext “not started” message supplies the missing historical
+cleanup identity.
+
+## Pinned execution workspaces
+
+Native campaign configuration may provide `workspaces` as an exact canonical
+`path`/`sha256` file pin. Admission freezes the bytes in the invocation directory;
+worker execution and result readback use that immutable copy. The dispatcher
+validates the versioned mapping and repository identity before selecting a checkout.
+An exact-target execution selection takes precedence over repository fallback;
+unused fallback paths are not silently added to that new candidate's resource set.
+The full native coordinator capability is validated before projecting its storage
+fields for the scoped storage implementation.
+
+`closer-workspace-bindings/v1` separates `historical` scope hints from prospective
+exact-target `execution` choices. Neither mapping is evidence of an old callback's
+working directory. An old local prepared snapshot without an immutable original
+execution binding retains conservative repository fallback. Explicit original
+worktree, intent, PR, source and branch keys remain fences. Physical aliases and
+parent/child writable checkout overlaps are checked as shared resources. New
+configuration never moves an old unknown onto the newly selected checkout.
+Native admission requires the versioned envelope and canonical physical paths for
+every selected checkout; a pinned flat map or a path alias is refused before effects.
+Shared ancestor and exclusive checkout locks cover admission through intent
+publication and effects, excluding parent/child writers while allowing sibling
+checkouts to run concurrently; retained unresolved intents continue to fence overlaps.
