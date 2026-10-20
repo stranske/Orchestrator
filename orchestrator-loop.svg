@@ -154,4 +154,5 @@ Measured recovery closes the drift issue; capabilities are never blocked or paus
 <text class="ts" x="68" y="735">λ=2/day · cap 4/UTC day · 21-day expiry · dispatch stays OFF</text>
 <text class="ts" x="68" y="753">coverage → two neutral judges + local_verify → winner ready PR; no synthesis</text>
 <path class="arrow" d="M56,724 L44,724 L44,290 L56,290" marker-end="url(#ah)"/>
+<g id="native-handoff-contract"><title>Native wrapper handoff capability</title><desc>Reviewed Cursor wrapper invokes pinned Runtime with distinct configured policy and owned process lifecycle proof. Desktop scheduler proof remains separate; exact admitted-domain continuation preserves historical quarantines and global stop false.</desc></g>
 </svg>

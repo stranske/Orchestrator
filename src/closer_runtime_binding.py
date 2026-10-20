@@ -155,8 +155,14 @@ def policy_problem(
     must bind its readback to hashes of the currently configured worker TOMLs.
     Self-reported JSON does not register an observer or grant authorization.
     """
-    if mechanism not in (None, "desktop-scheduler/v1", "cli-offload/v1"):
+    if mechanism not in (None, "desktop-scheduler/v1", "cli-offload/v1", "native-handoff/v1"):
         return "scheduled writes held: execution mechanism has no supported policy reader"
+    if mechanism == "native-handoff/v1":
+        from closer_native_observer import policy_problem as native_policy_problem
+
+        return native_policy_problem(policy)
+    if policy.get("schema") == "native-configured-policy/v1":
+        return "scheduled writes held: native policy cannot authorize another mechanism"
     if policy.get("schema") == "cli-configured-policy/v1":
         if mechanism != "cli-offload/v1":
             return "scheduled writes held: CLI policy cannot authorize another mechanism"
@@ -869,7 +875,74 @@ class PinnedNativeHooks:
             check=False,
             timeout=max(0.001, deadline - self.now()),
         )
+        self.postrun_result = {
+            "code": result.returncode,
+            "stdout": getattr(result, "stdout", ""),
+            "stderr": getattr(result, "stderr", ""),
+            "dependencies_valid": self._dependencies_match(),
+        }
         return result.returncode
+
+
+def scoped_continuation_proof(cfg, candidate):
+    """Revalidate one known terminal admitted domain, never certify global stop."""
+    import closer_resources
+    from closer_dispatcher import targets_from_assignment
+
+    if cfg.get("mechanism") != "native-handoff/v1" or not isinstance(candidate, dict):
+        return None
+    try:
+        assignment = Path(cfg["assignment"])
+        expected = cfg["native_hooks"]["postrun_dependencies"]["assignment"]
+        if (
+            str(assignment) != expected["path"]
+            or assignment.is_symlink()
+            or _hash(assignment) != expected["sha256"]
+        ):
+            return None
+        round_id = candidate["round_id"]
+        if not isinstance(round_id, str) or not re.fullmatch(r"[0-9a-f]{16,64}", round_id):
+            return None
+        pipeline = Path(str(cfg["dispatch_state"]) + ".pipeline.json")
+        receipt = closer_resources.scoped_root(pipeline) / "rounds" / (round_id + ".json")
+        if receipt.is_symlink() or candidate["receipt_path"] != str(receipt):
+            return None
+        receipt_hash = _hash(receipt)
+        if candidate.get("receipt_sha256", receipt_hash) != receipt_hash:
+            return None
+        targets = targets_from_assignment(assignment)
+        verdict = closer_resources.validate_stop(pipeline, round_id, targets)
+        if (
+            verdict.get("round_id") != round_id
+            or verdict.get("admitted_domain_valid") is not True
+            or not verdict.get("run_ids")
+            or verdict.get("admitted_domain_reasons")
+            or verdict.get("global_stop_valid") is not False
+        ):
+            return None
+        if candidate.get("run_ids", verdict["run_ids"]) != verdict["run_ids"]:
+            return None
+        handoff = Path(
+            cfg.get("handoff_dir")
+            or os.environ.get("HANDOFF_DIR")
+            or Path.home() / ".codex/handoff"
+        )
+        lane = handoff / ".lane-closer.lock"
+        if lane.exists() or lane.is_symlink():
+            return None
+        return {
+            "schema": "native-scoped-continuation/v1",
+            "round_id": round_id,
+            "receipt_path": str(receipt),
+            "receipt_sha256": receipt_hash,
+            "assignment_sha256": expected["sha256"],
+            "run_ids": verdict["run_ids"],
+            "held_targets": verdict.get("held_targets", []),
+            "global_stop_valid": False,
+            "accepted": False,
+        }
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+        return None
 
 
 def run_native_round(
@@ -909,6 +982,7 @@ def run_native_round(
             return "unavailable", "native B requires pinned Runtime Python interpreter"
         command = [str(interpreter), *command[1:]]
     token = None
+    terminal_b = None
     outcome, detail = "unknown", "native prerun outcome unknown"
     try:
         code, token = hooks.prerun(deadline - reserve)
@@ -957,6 +1031,7 @@ def run_native_round(
                         else {}
                     ),
                 )
+                terminal_b = done
                 outcome = "ok" if done.returncode == 0 else "unknown"
                 detail = f"dispatcher exit {done.returncode}"
             except subprocess.TimeoutExpired:
@@ -979,6 +1054,43 @@ def run_native_round(
             if code != 0:
                 outcome = "unknown"
                 detail += f"; ACTION C{code}; preserve no_matching_pipeline_run and ledger"
+    if (
+        cfg.get("mechanism") == "native-handoff/v1"
+        and isinstance(hooks, PinnedNativeHooks)
+        and hooks.bounded
+        and token
+        and terminal_b is not None
+        and terminal_b.returncode in {0, 78}
+        and outcome != "denied"
+    ):
+        c = getattr(hooks, "postrun_result", {})
+        stderr = c.get("stderr", "")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        # Only the reviewed normal global stop gate refusal is eligible. Missing
+        # dependencies, arbitrary C failures, live lanes and unknown B stay held.
+        if (
+            c.get("code") == 65
+            and c.get("dependencies_valid") is True
+            and stderr.strip()
+            == "handoff-postrun: closer stop rejected; preserve ledger and resume actionable work"
+        ):
+            try:
+                raw = terminal_b.stdout
+                candidate = json.loads(raw)
+            except (ValueError, TypeError):
+                candidate = None
+            proof = scoped_continuation_proof(cfg, candidate)
+            if proof:
+                return "scoped_continuation", json.dumps(
+                    {
+                        "proof": proof,
+                        "actual_detail": detail,
+                        "action_b_exit": terminal_b.returncode,
+                        "action_c_exit": 65,
+                    },
+                    sort_keys=True,
+                )
     return outcome, detail
 
 
@@ -1013,7 +1125,7 @@ def selftest() -> None:
 
     outcome, detail = run_native_round(["offline-test"], {}, runner=timeout, hooks=Hooks())
     assert outcome == "unknown" and events == ["A", "B", "C"] and "C65" in detail
-    print("closer_runtime_binding selftest: PASS (offline; desktop/native adapter unsupported)")
+    print("closer_runtime_binding selftest: PASS (offline; no host qualification attempted)")
 
 
 if __name__ == "__main__":

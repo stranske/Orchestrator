@@ -258,6 +258,7 @@ def pinned_dir(tmp_path, dispatcher="import sys\nif __name__ == '__main__': sys.
         "closer_campaign.py",
         "closer_runtime_binding.py",
         "closer_mechanisms.py",
+        "closer_native_observer.py",
         "closer_operational_capacity.py",
         "closer_native_lease.py",
         "closer_launcher.py",

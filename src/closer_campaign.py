@@ -51,6 +51,7 @@ MANIFEST_SCHEMA = 1
 CONTRACT = "closer-operation/v1"
 MAX_WORKERS_CAP = 4
 OUTCOMES = {"ok", "unavailable", "denied", "unknown"}
+WORKER_OUTCOMES = OUTCOMES | {"scoped_continuation"}
 RUNNER_PHASES = ("startup", "handoff", "crash_restart", "result_recording")
 _UNPROVEN_KINDS = {"unit_test", "fixture", "simulated"}
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -286,13 +287,27 @@ def reconcile(
                 if not isinstance(result, dict):
                     result = {}
                 outcome = result.get("outcome")
-                if outcome not in OUTCOMES:
+                if outcome not in WORKER_OUTCOMES:
                     outcome = "unknown"
+                if outcome == "scoped_continuation":
+                    from closer_runtime_binding import scoped_continuation_proof
+
+                    try:
+                        candidate = json.loads(result["detail"])["proof"]
+                    except (KeyError, TypeError, ValueError):
+                        candidate = None
+                    if (
+                        result.get("mechanism") != "native-handoff/v1"
+                        or scoped_continuation_proof(doc.get("worker_config") or {}, candidate)
+                        != candidate
+                    ):
+                        outcome = "unknown"
                 worker.update(state="terminal", outcome=outcome, detail=result.get("detail"))
                 doc["targets"][worker["target"]] = {
                     "ok": "done",
                     "unknown": "reconcile",
                     "unavailable": "pending",
+                    "scoped_continuation": "pending",
                     "denied": "denied",
                 }[outcome]
                 if outcome == "denied":
@@ -1169,6 +1184,15 @@ def delegate_target(
                 )
         except (KeyError, OSError, ValueError, RuntimeError):
             return "unavailable", "CLI delegate manifest is unavailable"
+    if cfg.get("mechanism") == "native-handoff/v1":
+        try:
+            pin = load_manifest(cfg["runtime_manifest"])
+            if cfg.get("policy") != pin.get("policy") or qualify(
+                pin, Path(cfg["runtime_manifest"]).parent
+            ):
+                return "unavailable", "native delegate pinned qualification/policy differs"
+        except (KeyError, OSError, ValueError, RuntimeError):
+            return "unavailable", "native delegate manifest is unavailable"
     spec = cfg.get("delegate") or {}
     if not TARGET.fullmatch(target) or not spec.get("lane") or not spec.get("prompt"):
         return "denied", "per-target granularity needs a real target and a delegate lane+prompt"
@@ -1267,13 +1291,25 @@ def run_worker(
                 "mechanism", "desktop-scheduler/v1"
             ) != actual_mechanism:
                 return finish("unavailable", "worker mechanism differs from campaign")
-            if actual_mechanism == "cli-offload/v1" and configured.get(
+            if actual_mechanism in {"cli-offload/v1", "native-handoff/v1"} and configured.get(
                 "policy"
             ) != pinned_worker.get("policy"):
                 return finish(
                     "unavailable", "worker configured policy differs from pinned host policy"
                 )
-            if actual_mechanism == "cli-offload/v1" and qualify(
+            if actual_mechanism == "native-handoff/v1":
+                from closer_native_observer import accept_worker
+
+                accept_worker(
+                    pinned_worker,
+                    state=state,
+                    target=target,
+                    owner=owner,
+                    generation=generation,
+                    result=result,
+                    manifest_path=runtime_manifest,
+                )
+            if actual_mechanism in {"cli-offload/v1", "native-handoff/v1"} and qualify(
                 pinned_worker, Path(runtime_manifest).parent
             ):
                 return finish("unavailable", "worker execution mechanism is not qualified")
@@ -1995,8 +2031,12 @@ def qualify(manifest: dict[str, Any], root: str | Path) -> list[str]:
     selected = mechanism(manifest)
     if selected == CLI:
         problems += qualification_problems(manifest)
+    elif selected == "native-handoff/v1":
+        from closer_native_observer import qualification_problems as native_qualification_problems
+
+        problems += native_qualification_problems(manifest)
     elif selected != DESKTOP:
-        problems.append("native handoff observer unsupported; mechanism remains held")
+        problems.append("unknown execution mechanism remains held")
     else:
         try:
             promotion = _load(str(Path(root) / "promotion.json"))
@@ -2047,6 +2087,11 @@ def tick(
         return [{"kind": "skipped", "reason": f"pin unusable: {exc}"}]
     from closer_runtime_binding import policy_for_mechanism as policy_problem
 
+    if execution_mechanism == "native-handoff/v1":
+        from closer_native_observer import entry_active
+
+        if not entry_active(manifest):
+            return [{"kind": "held", "reason": "native tick requires observed wrapper entry"}]
     policy = policy_problem(manifest.get("policy") or {}, mechanism=execution_mechanism)
     if policy:
         return [{"kind": "held", "reason": policy}]
@@ -2054,6 +2099,10 @@ def tick(
     if unqualified:  # before ANY effect, reconcile included: an unqualified pin is inert
         return [{"kind": "held", "reason": "version not qualified", "problems": unqualified}]
     py, module = manifest["runtime"]["python"], manifest["module_path"]
+    if execution_mechanism == "native-handoff/v1":
+        from closer_native_observer import contract as native_contract
+
+        py = str(native_contract(manifest)[2])
     report = []
     for path in sorted(Path(root).glob("*.campaign.json")):
         campaign = Campaign(path)
@@ -2079,7 +2128,9 @@ def tick(
                 }
             )
             continue
-        if execution_mechanism == "cli-offload/v1" and cfg.get("policy") != manifest.get("policy"):
+        if execution_mechanism in {"cli-offload/v1", "native-handoff/v1"} and cfg.get(
+            "policy"
+        ) != manifest.get("policy"):
             report.append(
                 {
                     "campaign": path.name,
@@ -2135,6 +2186,13 @@ def tick(
                 *extra,
             ]
 
+        def observed_launcher(argv, log_path):
+            if execution_mechanism == "native-handoff/v1":
+                from closer_native_observer import authorize_worker
+
+                authorize_worker(manifest, argv)
+            return launcher(argv, log_path)
+
         for _ in range(max_steps):
             if doc is None:
                 report.append(
@@ -2149,7 +2207,7 @@ def tick(
             action = step(
                 campaign,
                 worker_command=command,
-                launcher=launcher,
+                launcher=observed_launcher,
                 capacity_ok=capacity_ok,
                 release=release,
                 pid_alive=pid_alive,

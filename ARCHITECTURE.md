@@ -2493,3 +2493,5 @@ monitor supplies the same accepted, non-counterfactual edge classifier through
 cannot repair a missed admission deadline, and timely evidence remains creditable after it leaves
 the weekly view. Missing Brain evidence remains unmeasured. Reads are cached per Brain path,
 hour, and first-invocation binding; this change does not activate the installed mirror.
+
+Native wrapper capability: `closer_native_observer.py` implements the separately versioned native-handoff mechanism, with canonical configured pause policy, owned-process observations, signed durable worker handoffs, and no-effect qualification. It never substitutes wrapper provenance for Desktop scheduler events. The preview exporter and deployment contract are documented in `docs/CLOSER_NATIVE_HANDOFF.md`. Exact admitted-domain continuation retains global stop and acceptance as false.

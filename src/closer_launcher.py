@@ -13,6 +13,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -161,6 +162,22 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--manifest", required=True)
     run.add_argument("--root", required=True)
     run.add_argument("--mechanism")
+    native_status = sub.add_parser("native-status", help="read-only native qualification export")
+    native_status.add_argument("--manifest", required=True)
+    native = sub.add_parser("native-entry", help="observed pinned native wrapper handoff")
+    native.add_argument("--manifest", required=True)
+    native.add_argument("--root", required=True)
+    native_supervisor = sub.add_parser(
+        "qualify-native", help="supervise opted-in native wrapper; no providers"
+    )
+    native_supervisor.add_argument("--manifest", required=True)
+    native_supervisor.add_argument("--budget-seconds", type=int, required=True)
+    native_child = sub.add_parser(
+        "native-noeffect-child", help="owned native lifecycle qualification child"
+    )
+    native_child.add_argument("--manifest", required=True)
+    native_child.add_argument("--request", required=True)
+    native_child.add_argument("--role", choices=["first", "restart"], required=True)
     observation = sub.add_parser(
         "cli-supervision-status", help="read-only retained CLI qualification evidence"
     )
@@ -227,6 +244,32 @@ def main(argv: list[str] | None = None) -> int:
     except RuntimeError as exc:
         print(json.dumps({"launcher": "refused", "problems": [str(exc)]}))
         return 78
+    if args.command in {"native-entry", "qualify-native", "native-noeffect-child", "native-status"}:
+        if selected != "native-handoff/v1":
+            print(
+                json.dumps(
+                    {"launcher": "refused", "problems": ["native command needs its own mechanism"]}
+                )
+            )
+            return 78
+        import closer_native_observer as native_observer
+
+        try:
+            if args.command == "native-status":
+                print(json.dumps(native_observer.status(manifest), sort_keys=True))
+                return 0
+            if args.command == "native-entry":
+                return native_observer.native_entry(manifest, args.manifest, args.root)
+            if args.command == "native-noeffect-child":
+                return native_observer._native_child(manifest, args.request, args.role)
+            result = native_observer.supervise_native(
+                manifest, args.manifest, budget_seconds=args.budget_seconds
+            )
+            print(json.dumps(result, sort_keys=True))
+            return 0 if result.get("passed") else 78
+        except (MechanismError, OSError, ValueError, subprocess.SubprocessError) as exc:
+            print(json.dumps({"launcher": "refused", "problems": [str(exc)]}))
+            return 78
     if args.command == "cli-supervision-status":
         from closer_mechanisms import supervision_status
 
