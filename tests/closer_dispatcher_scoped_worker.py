@@ -57,7 +57,7 @@ def main():
                 "head": "a" * 40,
                 "base": "b" * 40,
                 "head_branch": spec.get("branch", name),
-                "head_repository": "o/r",
+                "head_repository": spec.get("head_repository", name.split("#")[0]),
                 "sources": [
                     {
                         "target": spec.get("source", name.split("#")[0] + "#900"),

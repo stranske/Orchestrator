@@ -63,6 +63,14 @@ class ResourceBlocked(RuntimeError):
     """A mutation reservation or pool slot was not obtained; the effect was NOT started."""
 
 
+class ScopeBlocked(ResourceBlocked):
+    """A fresh scope proof refused the callback before any provider or effect started."""
+
+    def __init__(self, reason, proof):
+        super().__init__(reason)
+        self.proof = proof
+
+
 def resolve_mode(mode: str | None, environ: Mapping[str, str] | None = None) -> str:
     chosen = mode if mode is not None else (environ or os.environ).get(MODE_ENV, "legacy")
     chosen = chosen or "legacy"
@@ -167,7 +175,32 @@ def default_resource_keys(target: str) -> list[str]:
     return [f"pr:{owner}/{repo}#{int(match.group(3))}", f"repo:{owner}/{repo}"]
 
 
-def open_root(
+@contextlib.contextmanager
+def inventory_lock(root, *, exclusive=False):
+    """Bind short metadata/state commits to a census; never held across target work."""
+    root = Path(root)
+    lock = root.with_name(root.name + ".inventory.lock")
+    if not exclusive and not lock.exists():
+        # Pure inventory of an old/absent root creates nothing. New writers
+        # publish this lock before exposing any new shard directory.
+        yield
+        return
+    if exclusive:
+        root.parent.mkdir(parents=True, exist_ok=True)
+    with lock.open("a+" if exclusive else "r") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def open_root(state_path, *, pipeline_schema, pin=None):
+    with inventory_lock(scoped_root(state_path), exclusive=True):
+        return _open_root(state_path, pipeline_schema=pipeline_schema, pin=pin)
+
+
+def _open_root(
     state_path: str | Path, *, pipeline_schema: str, pin: Mapping[str, Any] | None = None
 ) -> Path:
     """Create the scoped root on first use, or refuse an incompatible one.
@@ -238,6 +271,10 @@ class Lease:
             raise StaleLease(f"{self.target}: lease superseded by {doc.get('owner')!r}")
 
     def release(self) -> None:
+        with inventory_lock(self.directory.parents[1], exclusive=True):
+            self._release()
+
+    def _release(self) -> None:
         handle, self._handle = self._handle, None
         if handle is not None and not handle.closed:
             with contextlib.suppress(OSError):
@@ -245,7 +282,12 @@ class Lease:
             handle.close()
 
 
-def acquire(
+def acquire(root, target, *, owner, expires_at, now=time.time):
+    with inventory_lock(root, exclusive=True):
+        return _acquire(root, target, owner=owner, expires_at=expires_at, now=now)
+
+
+def _acquire(
     root: Path,
     target: str,
     *,
@@ -307,12 +349,19 @@ def acquire(
 # per-shard paths and a shard is only ever fenced by its flock holder, so entries never collide;
 # registration under a mutex refuses a duplicate instead of overwriting another thread's fence.
 SAVE_FENCES: dict[str, Callable[[], None]] = {}
+FENCE_IDENTITIES: dict[str, dict[str, Any]] = {}
 _FENCE_GUARD = threading.Lock()
 
 
 def fence_for(path: str | Path) -> Callable[[], None] | None:
     with _FENCE_GUARD:
         return SAVE_FENCES.get(str(path))
+
+
+def fence_identity(path):
+    with _FENCE_GUARD:
+        identity = FENCE_IDENTITIES.get(str(path))
+        return dict(identity) if identity is not None else None
 
 
 @contextlib.contextmanager
@@ -322,11 +371,17 @@ def fenced(lease: Lease, now: Callable[[], float] = time.time):
         if key in SAVE_FENCES:
             raise StaleLease(f"{lease.target}: shard already fenced by another holder")
         SAVE_FENCES[key] = lambda: lease.check(now)
+        FENCE_IDENTITIES[key] = {
+            "target": canonical_target(lease.target),
+            "owner": lease.owner,
+            "epoch": lease.epoch,
+        }
     try:
         yield
     finally:
         with _FENCE_GUARD:
             SAVE_FENCES.pop(key, None)
+            FENCE_IDENTITIES.pop(key, None)
 
 
 _UNRESOLVED = {"running", "uncertain"}
@@ -336,6 +391,8 @@ def _unresolved_effect(path: Path, target: str, row: Mapping[str, Any]) -> str |
     """Mode switches cannot turn an explicit unknown effect into fresh authority."""
     if row.get("status") in _UNRESOLVED:
         return f"{row['status']}_outcome"
+    if row.get("status") == "queued" and row.get("stage") == "exception":
+        return "unverified_exception_outcome"
     # A scheduler stage/status change cannot discharge an explicitly retained
     # quarantine or a provider's unknown outcome. Both mode directions use this
     # same per-target predicate before admitting any callback.
@@ -608,7 +665,9 @@ def admission_gate(admission, state_path, target, *, mode="resource_scoped"):
 
 
 @contextlib.contextmanager
-def mutation_reservation(state_path, target, context, resource_keys, *, owner, deadline, now):
+def mutation_reservation(
+    state_path, target, context, resource_keys, *, owner, deadline, now, scope_check=None
+):
     """Same mutation keys in either mode; unresolved aliases never disappear on rollback."""
     root = scoped_root(state_path)
     keys = default_resource_keys(target)
@@ -626,7 +685,15 @@ def mutation_reservation(state_path, target, context, resource_keys, *, owner, d
                 and key.split(":", 1)[-1].split("#")[0].split("@")[0] == repo
             ):
                 raise ResourceBlocked("unknown resource aliases require prepared operation keys")
-    with reserve(root, keys, target=target, owner=owner, deadline=deadline, now=now):
+    with reserve(
+        root,
+        keys,
+        target=target,
+        owner=owner,
+        deadline=deadline,
+        now=now,
+        scope_check=scope_check,
+    ):
         yield
 
 
@@ -690,6 +757,52 @@ def _read_intent(path: Path) -> dict[str, Any] | None:
     return doc
 
 
+def _scope_keys(target, context, resource_keys, workspaces=None):
+    keys = default_resource_keys(target)
+    if resource_keys is not None:
+        extra = resource_keys(target, context)
+        if extra is None or isinstance(extra, (str, bytes)):
+            raise ResourceBlocked("resource_keys must return an iterable of keys")
+        keys.extend(extra)
+    normalized = {normalize_key(k) for k in keys}
+    # A retained item with incomplete history conservatively fences its repository,
+    # including references reached through another PR's source/branch aliases.
+    for key in list(normalized):
+        kind, value = key.split(":", 1)
+        if kind in {"pr", "issue", "branch"}:
+            normalized.add(normalize_key("repo:" + value.split("#")[0].split("@")[0]))
+    mapping = {str(k).lower(): v for k, v in (workspaces or {}).items()}
+    for key in list(normalized):
+        kind, value = key.split(":", 1)
+        if kind in {"pr", "issue", "repo", "branch"}:
+            workspace = mapping.get(value.lower()) or mapping.get(
+                value.split("#")[0].split("@")[0].lower()
+            )
+            if workspace:
+                normalized.add(normalize_key("worktree:" + str(Path(workspace).resolve())))
+    return sorted(normalized)
+
+
+@contextlib.contextmanager
+def scope_locks(root, keys, *, deadline, now):
+    """Use the effect locks for read admission without advertising a fictitious effect."""
+    handles = []
+    try:
+        for key in sorted(set(keys)):
+            directory = _key_dir(root, normalize_key(key))
+            directory.mkdir(parents=True, exist_ok=True)
+            handle = (directory / "lock").open("a+")
+            if not _poll_lock(handle, deadline, now):
+                handle.close()
+                raise ResourceBlocked(f"resource {key} held by another callback")
+            handles.append(handle)
+        yield
+    finally:
+        for handle in reversed(handles):
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            handle.close()
+
+
 @contextlib.contextmanager
 def reserve(
     root: Path,
@@ -699,6 +812,7 @@ def reserve(
     owner: str,
     deadline: float,
     now: Callable[[], float] = time.time,
+    scope_check=None,
 ):
     """Short exclusive claims on ``keys`` around ONE effect, taken in lexical order.
 
@@ -720,9 +834,12 @@ def reserve(
                 handle.close()
                 raise ResourceBlocked(f"resource {key} held by another effect")
             held.append((key, handle, directory / "intent.json"))
+        if scope_check is not None:
+            scope_check(ordered)
+        for key, _handle, path in held:
             for base in _reservation_bases(root):
                 for filename in ("intent.json", "legacy-intent.json"):
-                    intent = _read_intent(base / directory.name / filename)
+                    intent = _read_intent(base / path.parent.name / filename)
                     if intent is not None:
                         raise ResourceBlocked(
                             f"resource {key} carries an unresolved effect of {intent.get('target')!r}"
@@ -997,6 +1114,57 @@ def _round_dir(root: Path) -> Path:
     return root / "rounds"
 
 
+def valid_scope_refusal(state_path, target, item, run_id):
+    """Validate a named, immutable pre-callback refusal, never a provider outcome."""
+    try:
+        state = Path(state_path).resolve()
+        ref = item["scope_proof"]
+        path = Path(ref["path"])
+        # Scoped shards have a fixed root/targets/<identity>/state.json layout.
+        base = state.parents[2] / "scope-admissions"
+        if path.is_symlink() or not path.resolve().is_relative_to(base):
+            return False
+        raw = path.read_bytes()
+        if len(raw) > 4 * 1024 * 1024 or hashlib.sha256(raw).hexdigest() != ref["sha256"]:
+            return False
+        proof = json.loads(raw)
+        binding = proof["binding"]
+        snapshot = proof["snapshot"]
+        expected_hash = snapshot["snapshot_sha256"]
+        value = {k: v for k, v in snapshot.items() if k != "snapshot_sha256"}
+        actual_hash = hashlib.sha256(
+            json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        ).hexdigest()
+        return (
+            proof.get("schema") == "closer-scoped-admission/v1"
+            and proof.get("admitted") is False
+            and proof.get("callback_started") is False
+            and proof.get("legacy_stop_authority") is False
+            and bool(proof.get("reason"))
+            and proof.get("target") == target
+            and proof.get("stage") == item.get("stage")
+            and Path(binding.get("state_path", "")).resolve() == state
+            and binding.get("pipeline_run_id") == run_id
+            and all(binding.get(k) == item.get(k) for k in ("revision", "identity", "work_key"))
+            and snapshot.get("schema") == "closer-quarantine-scope/v1"
+            and expected_hash == actual_hash
+            and proof.get("input_sha256")
+            == hashlib.sha256(
+                json.dumps(
+                    item.get("results", {}),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode()
+            ).hexdigest()
+            and item.get("recovery_barrier") is None
+            and item.get("provider_outcome_uncertain") in (None, False)
+            and item.get("stage") != "reconcile"
+        )
+    except (OSError, ValueError, TypeError, KeyError, IndexError, AttributeError):
+        return False
+
+
 def write_round_receipt(root: Path, receipt: Mapping[str, Any]) -> Path:
     """Immutable create-only aggregate receipt, one file per round id."""
     directory = _round_dir(root)
@@ -1050,6 +1218,12 @@ def validate_stop(
         if not isinstance(contract, dict) or any(contract.get(k) != v for k, v in expected.items()):
             raise ValueError("incompatible scoped staging capability")
         receipt = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            receipt.get("schema") != "closer-pipeline-receipt/v1"
+            or receipt.get("mode") != "resource_scoped"
+            or receipt.get("round_id") != round_id
+        ):
+            raise ValueError("round identity mismatch")
         assignment = receipt["assignment"]
         run_ids = receipt["run_ids"]
         rows = receipt["targets"]
@@ -1063,36 +1237,63 @@ def validate_stop(
     if set(rows) != set(assignment):
         reasons.append("assignment_not_fully_accounted")
     continuation = False
+    admitted_reasons = []
+    held_targets = []
     for target in assignment:
         run_id = run_ids.get(target)
         if not run_id:
             row = rows.get(target) or {}
             reasons.append(f"fenced_target:{target}:{row.get('deferred_reason', 'no_run')}")
+            held_targets.append(target)
             continuation = True
             continue
         shard_state = shard_dir(root, target) / "state.json"
         try:
             doc = cp._load(shard_state)
-            doc["runs"][run_id]
+            admitted_row = doc["runs"][run_id]["targets"][target]
         except (OSError, ValueError, KeyError, TypeError) as exc:
             reasons.append(f"unreadable_shard_run:{target}:{type(exc).__name__}")
+            admitted_reasons.append(reasons[-1])
             continue
+        unresolved = _unresolved_effect(shard_state, target, admitted_row)
+        if unresolved:
+            admitted_reasons.append(f"unresolved_admitted_outcome:{target}:{unresolved}")
         # Native receipts bind their original shard location. Select this exact
         # recorded run in place, never relocate its proof or substitute latest.
         verdict = cp._validate_stop_legacy(shard_state, [target], now=now, expected_run_id=run_id)
         if verdict.get("run_id") != run_id:
             reasons.append(f"run_binding_lost:{target}")
+            admitted_reasons.append(reasons[-1])
         if not verdict.get("valid"):
-            reasons.extend(f"{target}:{r}" for r in verdict.get("reasons", ["invalid"]))
+            invalid = [f"{target}:{r}" for r in verdict.get("reasons", ["invalid"])]
+            reasons.extend(invalid)
+            admitted_reasons.extend(invalid)
         continuation = continuation or bool(verdict.get("continuation_required"))
+    scoped_completion_valid = not reasons
     unknown = unknown_reservations(root)
     if unknown:
         reasons.append("unresolved_resource_reservations")
+        continuation = True
+    import closer_quarantine
+
+    retained = closer_quarantine.scope_snapshot(state_path)
+    if retained.get("global_reasons") or retained.get("quarantine_keys"):
+        reasons.append("retained_historical_quarantine")
         continuation = True
     valid = not reasons
     return {
         "valid": valid,
         "stop_valid": valid,
+        "global_stop_valid": valid,
+        "scoped_completion_valid": scoped_completion_valid,
+        "admitted_domain_valid": bool(run_ids)
+        and not admitted_reasons
+        and set(rows) == set(assignment)
+        and set(run_ids) == set(assignment) - set(held_targets)
+        and (assignment_targets is None or sorted(assignment_targets) == sorted(assignment)),
+        "admitted_domain_reasons": admitted_reasons,
+        "held_targets": held_targets,
+        "historical_quarantine": retained,
         "round_id": round_id,
         "run_ids": dict(run_ids),
         "continuation_required": continuation,
@@ -1125,6 +1326,7 @@ def run_scoped(
     resource_keys=None,
     pool_lease=None,
     coordination_admission=None,
+    quarantine_workspaces=None,
     now: Callable[[], float] = time.time,
 ) -> dict[str, Any]:
     """Resource-scoped coordinator: one lease and one state shard per target.
@@ -1133,8 +1335,9 @@ def run_scoped(
     The whole-target lease is held across agent work; callbacks run with no shared lock held.
     ``resource_keys(target, context) -> iterable of 'kind:value'`` names what ``act`` mutates
     (the PR, its source issue, branch, worktree); the target's own PR key and its repository's
-    short serialisation key are always added. Only ``act`` takes reservations, so prepare,
-    interpret and exception reasoning never wait on them. ``pool_lease(lane, target, context)``
+    short serialisation key are always added. Reasoning takes the same alias locks and a
+    fresh quarantine proof, without writing effect intents. Only ``act`` writes intents.
+    ``pool_lease(lane, target, context)``
     may return a context manager (the root's profile-pool reservation); without it the lane
     bounds are enforced across processes by ``pool_slot``.
     """
@@ -1164,6 +1367,91 @@ def run_scoped(
         json.dumps([sorted(canonical), started, owner], sort_keys=True).encode()
     ).hexdigest()[:32]
 
+    def check_scope(target, stage, keys, context=None, refusal=None):
+        with inventory_lock(root):
+            return check_scope_locked(target, stage, keys, context, refusal)
+
+    def check_scope_locked(target, stage, keys, context=None, refusal=None):
+        import closer_quarantine
+
+        snapshot = closer_quarantine.scope_snapshot(state_path, workspaces=quarantine_workspaces)
+        problem = closer_quarantine.scope_problem(snapshot, target, keys)
+        # Unrelated shards can commit while we hold our aliases. Retry only the
+        # read-only census, never a callback, when that invalidates its hash.
+        for _ in range(2):
+            if problem != "scope_sources_changed":
+                break
+            snapshot = closer_quarantine.scope_snapshot(
+                state_path, workspaces=quarantine_workspaces
+            )
+            problem = closer_quarantine.scope_problem(snapshot, target, keys)
+        problem = refusal or problem
+        if (
+            problem is None
+            and resource_keys is None
+            and stage not in {"prepare", "target_admission"}
+            and snapshot.get("quarantine_keys")
+        ):
+            problem = "complete_prepared_resource_inventory_required"
+        # Retain the exact source census independently of the legacy ledger. A
+        # disjoint admission never changes that ledger's stop verdict or deadline.
+        directory = root / "scope-admissions" / round_id
+        directory.mkdir(parents=True, exist_ok=True)
+        proof = {
+            "schema": "closer-scoped-admission/v1",
+            "target": target,
+            "stage": stage,
+            "keys": keys,
+            "snapshot": snapshot,
+            "admitted": problem is None,
+            "reason": problem,
+            "observed_at": now(),
+            "legacy_stop_authority": False,
+            "callback_started": False,
+            "input_sha256": hashlib.sha256(
+                json.dumps(
+                    {k: (context or {})[k] for k in cp.STAGES if k in (context or {})},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode()
+            ).hexdigest(),
+            "binding": {
+                k: (context or {}).get(k)
+                for k in ("state_path", "pipeline_run_id", "revision", "identity", "work_key")
+            },
+        }
+        name = hashlib.sha256(json.dumps(proof, sort_keys=True).encode()).hexdigest()
+        _atomic_write(directory / (name + ".json"), proof)
+        if problem:
+            raise ScopeBlocked(
+                problem,
+                {
+                    "path": str(directory / (name + ".json")),
+                    "sha256": hashlib.sha256(
+                        (directory / (name + ".json")).read_bytes()
+                    ).hexdigest(),
+                },
+            )
+
+    def scope_guard(fn, stage):
+        def call(target, ctx):
+            # Preparation is native read-only discovery. Its initial gate fences
+            # the target/repository; its returned immutable packet supplies all
+            # aliases before any model, effect, or reconciliation callback.
+            keys = _scope_keys(
+                target, ctx, None if stage == "prepare" else resource_keys, quarantine_workspaces
+            )
+            with contextlib.ExitStack() as stack:
+                try:
+                    stack.enter_context(scope_locks(root, keys, deadline=deadline, now=now))
+                except ResourceBlocked as exc:
+                    check_scope(target, stage, keys, ctx, refusal=str(exc))
+                check_scope(target, stage, keys, ctx)
+                return fn(target, ctx)
+
+        return call
+
     def gated(fn, lane):
         def call(target, ctx):
             if pool_lease is not None:
@@ -1176,9 +1464,25 @@ def run_scoped(
         return call
 
     def guarded_act(target, ctx):
-        with mutation_reservation(
-            state_path, target, ctx, resource_keys, owner=owner, deadline=deadline, now=now
-        ):
+        keys = _scope_keys(target, ctx, resource_keys, quarantine_workspaces)
+        with contextlib.ExitStack() as stack:
+            try:
+                stack.enter_context(
+                    mutation_reservation(
+                        state_path,
+                        target,
+                        ctx,
+                        lambda _t, _c: keys,
+                        owner=owner,
+                        deadline=deadline,
+                        now=now,
+                        scope_check=lambda ordered: check_scope(target, "act", ordered, ctx),
+                    )
+                )
+            except ScopeBlocked:
+                raise
+            except ResourceBlocked as exc:
+                check_scope(target, "act", keys, ctx, refusal=str(exc))
             return act(target, ctx)
 
     results: dict[str, dict[str, Any]] = {}
@@ -1196,13 +1500,15 @@ def run_scoped(
                 results[target] = _fenced_row("resource_contested", str(exc))
 
     def work_locked(target: str) -> None:
-        legacy_rows, legacy_error = legacy_unresolved(state_path)
         began = now()
-        key = canonical_target(target)
-        if legacy_error is not None:
-            row = _fenced_row("legacy_state_unreadable", legacy_error)
-        elif key in legacy_rows:
-            row = _fenced_row(legacy_rows[key])
+        row: dict[str, Any] | None
+        try:
+            check_scope(
+                target, "target_admission", _scope_keys(target, {}, None, quarantine_workspaces)
+            )
+        except ScopeBlocked as exc:
+            row = _fenced_row("scope_quarantined", str(exc))
+            row["scope_proof"] = exc.proof
         else:
             try:
                 lease = acquire(
@@ -1228,17 +1534,21 @@ def run_scoped(
                         _release_known_shard_boundary(
                             root, lease.state_path, target, owner=owner, now=now, progress=True
                         )
-                        return prepare(name, context)
+                        return scope_guard(prepare, "prepare")(name, context)
 
                     with fenced(lease, now):
                         receipt = cp._run_pipeline_legacy(
                             lease.state_path,
                             [target],
                             prepare=gated(known_progress_prepare, "io"),
-                            interpret=gated(interpret, "low"),
+                            interpret=gated(scope_guard(interpret, "interpret"), "low"),
                             act=gated(guarded_act, "io"),
-                            exception=gated(exception, "exception"),
-                            reconcile=gated(reconcile, "io") if reconcile else None,
+                            exception=gated(scope_guard(exception, "exception"), "exception"),
+                            reconcile=(
+                                gated(scope_guard(reconcile, "reconcile"), "io")
+                                if reconcile
+                                else None
+                            ),
                             capacity_fn=capacity_fn,
                             deadline=deadline,
                             priority_targets=[target] if target in priority else (),

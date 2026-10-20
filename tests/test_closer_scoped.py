@@ -132,15 +132,15 @@ def test_stale_or_expired_lease_cannot_commit(tmp_path):
 def test_crash_mid_act_keeps_unknown_fenced_without_blocking_disjoint(tmp_path):
     state, log = tmp_path / "s.json", tmp_path / "log"
     base = {"state": str(state), "mode": "resource_scoped", "log": str(log)}
-    crashed = spawn({**base, "targets": ["o/r#X"], "crash_in_act": ["o/r#X"]})
+    crashed = spawn({**base, "targets": ["o/r#1"], "crash_in_act": ["o/r#1"]})
     crashed.communicate(timeout=30)
     assert crashed.returncode == 9
-    assert closer_resources.scoped_unresolved(state) == {"o/r#X": "running"}
-    receipt = finish(spawn({**base, "targets": ["o/r#X", "o/r#Y"]}))
-    assert receipt["targets"]["o/r#Y"]["status"] == "completed"
-    assert receipt["targets"]["o/r#X"]["status"] != "completed"
-    assert acts(log).count("o/r#X") == 1  # the interrupted action is never blindly repeated
-    assert closer_resources.scoped_unresolved(state).get("o/r#X") in {"running", "uncertain"}
+    assert closer_resources.scoped_unresolved(state) == {"o/r#1": "running"}
+    receipt = finish(spawn({**base, "targets": ["o/r#1", "other/repo#2"]}))
+    assert receipt["targets"]["other/repo#2"]["status"] == "completed"
+    assert receipt["targets"]["o/r#1"]["status"] != "completed"
+    assert acts(log).count("o/r#1") == 1  # the interrupted action is never blindly repeated
+    assert closer_resources.scoped_unresolved(state).get("o/r#1") in {"running", "uncertain"}
 
 
 def test_github_outage_on_act_still_leaves_local_preparation_and_disjoint_progress(tmp_path):
@@ -150,16 +150,16 @@ def test_github_outage_on_act_still_leaves_local_preparation_and_disjoint_progre
             {
                 "state": str(state),
                 "mode": "resource_scoped",
-                "targets": ["o/r#out", "o/r#ok"],
-                "outage_act": ["o/r#out"],
+                "targets": ["o/r#1", "other/repo#2"],
+                "outage_act": ["o/r#1"],
             }
         )
     )
-    assert receipt["targets"]["o/r#ok"]["status"] == "completed"
-    out = receipt["targets"]["o/r#out"]
+    assert receipt["targets"]["other/repo#2"]["status"] == "completed"
+    out = receipt["targets"]["o/r#1"]
     assert out["status"] != "completed"
-    assert out["results"]["prepare"]["identity"] == "o/r#out"
-    shard = closer_resources.shard_dir(closer_resources.scoped_root(state), "o/r#out")
+    assert out["results"]["prepare"]["identity"] == "o/r#1"
+    shard = closer_resources.shard_dir(closer_resources.scoped_root(state), "o/r#1")
     saved = json.loads((shard / "state.json").read_text())
     assert any(
         "prepare" in row.get("results", {})
@@ -171,7 +171,7 @@ def test_github_outage_on_act_still_leaves_local_preparation_and_disjoint_progre
 def test_legacy_ledger_is_untouched_and_its_unknowns_stay_fenced(tmp_path):
     state, log = tmp_path / "s.json", tmp_path / "log"
     crashed = spawn(
-        {"state": str(state), "targets": ["o/r#L"], "crash_in_act": ["o/r#L"], "log": str(log)}
+        {"state": str(state), "targets": ["o/r#1"], "crash_in_act": ["o/r#1"], "log": str(log)}
     )
     crashed.communicate(timeout=30)
     ledger = state.read_bytes()
@@ -181,24 +181,22 @@ def test_legacy_ledger_is_untouched_and_its_unknowns_stay_fenced(tmp_path):
             {
                 "state": str(state),
                 "mode": "resource_scoped",
-                "targets": ["o/r#L", "o/r#M"],
+                "targets": ["o/r#1", "other/repo#2"],
                 "log": str(log),
             }
         )
     )
-    assert receipt["targets"]["o/r#L"]["deferred_reason"] == "legacy_running_outcome"
-    assert receipt["targets"]["o/r#M"]["status"] == "completed"
+    assert receipt["targets"]["o/r#1"]["deferred_reason"] == "scope_quarantined"
+    assert receipt["targets"]["other/repo#2"]["status"] == "completed"
     assert state.read_bytes() == ledger  # byte-for-byte, no cleared unknown
-    assert acts(log).count("o/r#L") == 1
+    assert acts(log).count("o/r#1") == 1
 
 
 def test_unreadable_legacy_ledger_fences_everything(tmp_path):
     state = tmp_path / "s.json"
     state.write_text("{not json")
     receipt = finish(spawn({"state": str(state), "mode": "resource_scoped", "targets": ["a", "b"]}))
-    assert {r["deferred_reason"] for r in receipt["targets"].values()} == {
-        "legacy_state_unreadable"
-    }
+    assert {r["deferred_reason"] for r in receipt["targets"].values()} == {"scope_quarantined"}
     assert state.read_text() == "{not json"
 
 
@@ -330,24 +328,29 @@ def test_same_repo_acts_serialise_by_default_but_reasoning_is_not_blocked(tmp_pa
     state, log = tmp_path / "s.json", tmp_path / "log"
     common = {"state": str(state), "mode": "resource_scoped", "log": str(log), "act_sleep": 0.3}
     procs = [spawn({**common, "targets": [f"o/r#{n}"]}) for n in (11, 12)]
-    assert all(finish(p)["targets"] for p in procs)
+    receipts = [finish(p) for p in procs]
+    for receipt in receipts:
+        for target, row in receipt["targets"].items():
+            if row["status"] == "deferred":
+                retry = finish(spawn({**common, "targets": [target]}))
+                assert retry["targets"][target]["status"] == "completed"
     a, b = sorted(intervals(log), key=lambda i: i[1])
     assert a[2] <= b[1]
     prepares = [json.loads(x)["at"] for x in log.read_text().splitlines() if '"prepare"' in x]
-    assert len(prepares) == 2
+    assert len(prepares) >= 2
 
 
 def test_crash_leaves_durable_unknown_blocking_only_that_resource(tmp_path):
     state, log = tmp_path / "s.json", tmp_path / "log"
     base = {"state": str(state), "mode": "resource_scoped", "log": str(log)}
-    keys = {"o/r#1": ["branch:o/r@feat"], "o/r#2": ["branch:o/r@feat"], "o/r#3": []}
+    keys = {"o/r#1": ["branch:o/r@feat"], "o/r#2": ["branch:o/r@feat"], "other/repo#3": []}
     spawn({**base, "targets": ["o/r#1"], "keys": keys, "crash_in_act": ["o/r#1"]}).communicate(
         timeout=30
     )
     root = closer_resources.scoped_root(state)
     assert "branch:o/r@feat" in closer_resources.unknown_reservations(root)
-    receipt = finish(spawn({**base, "targets": ["o/r#2", "o/r#3"], "keys": keys}))
-    assert receipt["targets"]["o/r#3"]["status"] == "completed"
+    receipt = finish(spawn({**base, "targets": ["o/r#2", "other/repo#3"], "keys": keys}))
+    assert receipt["targets"]["other/repo#3"]["status"] == "completed"
     assert receipt["targets"]["o/r#2"]["status"] != "completed"
     assert acts(log).count("o/r#2") == 0  # blocked at the guard: the effect never started
     assert [t for t, *_ in intervals_safe(log)].count("o/r#2") == 0
@@ -436,7 +439,7 @@ def test_scoped_validate_stop_binds_each_round_and_rejects_empty_or_fenced(tmp_p
     assert (
         not v4["valid"]
         and v4["continuation_required"]
-        and "fenced_target:o/r#9:corrupt_shard" in v4["reasons"]
+        and "fenced_target:o/r#9:scope_quarantined" in v4["reasons"]
     )
 
 
@@ -674,7 +677,9 @@ def test_mode_switch_retains_captured_failed_act_unknown_and_disjoint_progress(
         )
     )
     prefix = "legacy" if direction == "forward" else "scoped"
-    assert result["targets"][target]["deferred_reason"] == prefix + "_unverified_act_outcome"
+    assert result["targets"][target]["deferred_reason"] == (
+        "scope_quarantined" if direction == "forward" else prefix + "_unverified_act_outcome"
+    )
     assert result["targets"][other]["status"] == "completed"
     assert retained.read_bytes() == before
     assert acts(log) == [other]
@@ -734,9 +739,7 @@ def test_forward_malformed_legacy_row_holds_unknown_inventory(tmp_path, location
             }
         )
     )
-    assert {row["deferred_reason"] for row in result["targets"].values()} == {
-        "legacy_state_unreadable"
-    }
+    assert {row["deferred_reason"] for row in result["targets"].values()} == {"scope_quarantined"}
     assert state.read_bytes() == before and not log.exists()
 
 
@@ -803,7 +806,9 @@ def test_read_quarantines_fence_mode_switch_without_blocking_disjoint(
     )
     prefix = "legacy" if direction == "forward" else "scoped"
     for target in rows:
-        assert result["targets"][target]["deferred_reason"] == prefix + "_unverified_read_outcome"
+        assert result["targets"][target]["deferred_reason"] == (
+            "scope_quarantined" if direction == "forward" else prefix + "_unverified_read_outcome"
+        )
         assert result["targets"][target]["scoped_fence"] is True
     assert result["targets"][other]["status"] == "completed"
     assert retained.read_bytes() == before

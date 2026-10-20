@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src" if (ROOT / "src").is_dir() else ROOT))
 
 from closer_pipeline import run_pipeline  # noqa: E402
+from closer_resources import default_resource_keys  # noqa: E402
 
 
 def main() -> None:
@@ -56,8 +57,12 @@ def main() -> None:
         kwargs["coordinator_mode"] = spec["mode"]
     if spec.get("pin"):
         kwargs["coordinator_contract_pin"] = spec["pin"]
-    if spec.get("keys") is not None:
-        kwargs["resource_keys"] = lambda target, ctx: spec["keys"].get(target, [])
+    # This synthetic backend has no hidden linked aliases: its complete inventory
+    # is the own target/repository plus the explicit fixture aliases.
+    kwargs["resource_keys"] = lambda target, ctx: [
+        *default_resource_keys(target),
+        *spec.get("keys", {}).get(target, []),
+    ]
     for name, arg in (("max_io", "max_io_workers"), ("max_low", "max_low_workers")):
         if spec.get(name):
             kwargs[arg] = spec[name]

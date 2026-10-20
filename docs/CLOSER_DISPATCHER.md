@@ -52,7 +52,30 @@ An interrupted receipt-less queued or running action/reconciliation boundary
 retains its original row in the audit and projects only to reconciliation in a
 successor. A missing callback return, absent action ledger or old not-started
 claim never authorizes replay. Other unsupported continuation facts and unresolved
-resource reservations still hold global admission.
+resource reservations retain their global invalid-stop verdict.
+
+The opt-in `resource_scoped` coordinator separately admits demonstrably disjoint
+work. A hash-bound, read-only census retains exact legacy rows, raw queue records,
+audit references, shard identities and reservation bytes. An anchored incomplete
+item fences its repository and known PR, source, branch and configured worktree
+aliases; corrupt shared state whose reach cannot be bounded holds all work with
+an explicit reconciliation reason. A queued exception with an unknown original
+outcome remains quarantined and is never converted into a retry.
+
+Read-only preparation discovers the complete aliases. Before low/exception work,
+actions and reconciliation, the coordinator holds those aliases' existing locks
+and rechecks a fresh census. Reasoning writes no effect intent. Action intents
+and exact-head, claim, provider, pause and acceptance checks retain their existing
+authority. Short inventory locking binds shard identity publication and state
+commits to the census and is released before callbacks. An immutable refusal receipt proves only that its
+named callback did not start; a refused reconciliation retains the earlier unknown
+action. Source changes invalidate admission and never replay a provider call.
+
+A disjoint shard may use its own bounded invocation window without renewing the
+legacy round. Interrupted shards retain their original deadlines. Named round
+validation reports `scoped_completion_valid` separately from `global_stop_valid`;
+retained historical quarantines keep the latter false. This does not authorize
+retiring advertisements, accepting model output or declaring aggregate success.
 
 A later CLI invocation starts a new budget only after the persisted round has a
 finished receipt that passes the queue's normal locked stop validation against the
