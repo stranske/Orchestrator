@@ -74,6 +74,7 @@ def test_redirect_apply_must_not_run_tripwire_body(monkeypatch) -> None:
     monkeypatch.setattr(ra, "authorize", force_first_dry_mutate)
     with pytest.raises(AssertionError, match="apply_plan was reached when it must not be"):
         ra._selftest()
+    assert forced["n"] == 1
 
 
 def test_redirect_apply_must_not_apply_tripwire_body(monkeypatch, tmp_path) -> None:
@@ -99,6 +100,7 @@ def test_redirect_apply_must_not_apply_tripwire_body(monkeypatch, tmp_path) -> N
     monkeypatch.setattr(ra, "authorize", force_refused_mutate)
     with pytest.raises(AssertionError, match="apply_plan was reached when it must not be"):
         ra._selftest_prescreen(tmp_path)
+    assert forced["n"] == 1
 
 
 def test_redirect_apply_brain_tripwire_body(monkeypatch, tmp_path) -> None:

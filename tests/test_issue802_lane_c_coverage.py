@@ -11,7 +11,39 @@ import pytest
 import evidence_acquisition as ea
 import execution_profiles as ep
 import exploration_backfill as eb
+import feedback
 import redirect_apply as ra
+import redirect_plan
+
+
+@pytest.fixture(autouse=True)
+def isolated_runtime(tmp_path, monkeypatch):
+    """Keep imported state paths private and fail if any external work starts."""
+    state = tmp_path / "state"
+    runtime = tmp_path / "runtime"
+    state.mkdir()
+    runtime.mkdir()
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(runtime))
+    monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
+    monkeypatch.setattr(ra.capabilities, "REG", runtime / "capabilities.json")
+    monkeypatch.setattr(redirect_plan, "PROMPT_DIR", tmp_path / "redirect-prompts")
+    db = runtime / "feedback" / "orchestrator.db"
+    db.parent.mkdir(parents=True)
+    monkeypatch.setenv("ORCH_FEEDBACK_DB", str(db))
+    monkeypatch.setattr(feedback, "DB_PATH", db)
+    started = []
+
+    def forbid(*args, **kwargs):
+        started.append((args, kwargs))
+        raise AssertionError("coverage tests must not start external work")
+
+    monkeypatch.setattr("subprocess.run", forbid)
+    monkeypatch.setattr("subprocess.Popen", forbid)
+    monkeypatch.setattr("socket.create_connection", forbid)
+    monkeypatch.setattr("socket.socket.connect", forbid)
+    yield
+    assert started == []
 
 
 def _cap(**over):
@@ -175,7 +207,13 @@ def test_redirect_apply_reports_on_disk_and_format_status(tmp_path: Path) -> Non
     (report_dir / "broken.keepalive-supervisor-report.json").write_text("{", encoding="utf-8")
     rows = ra._reports_on_disk(report_dir)
     assert len(rows) == 2
-    status = ra.status(corpus_path=tmp_path / "empty.jsonl")
+    status = ra.status(
+        corpus_path=tmp_path / "empty.jsonl",
+        env={},
+        report_dir=report_dir,
+        plan_path=tmp_path / "absent-plan.json",
+        sweep_path=tmp_path / "absent-sweep.json",
+    )
     lines = ra.format_status(status)
     assert lines and "deficits" in lines[0].lower() or "bootstrap" in " ".join(lines).lower()
 
