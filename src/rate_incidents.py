@@ -10,6 +10,7 @@ import math
 import os
 import re
 import shutil
+import sqlite3
 import sys
 import tempfile
 import time
@@ -170,8 +171,8 @@ def record_lane_round(
     """Persist every relay exit and shed only on a nonzero authoritative failure."""
     import feedback
 
-    if agent not in {"codex", "claude"}:
-        raise ValueError("agent must be codex or claude")
+    if agent not in {"codex", "claude", "cursor", "muse"}:
+        raise ValueError("agent must be codex, claude, cursor or muse")
     if not surface.strip():
         raise ValueError("surface must be nonempty")
     if not output_file.is_file() or output_file.stat().st_size > 128 * 1024:
@@ -184,6 +185,14 @@ def record_lane_round(
     decision_id = feedback.record_lane_round(
         agent, lane, receiver_reason, exit_status, error_class, timestamp
     )
+    # The installed relay already invokes this exit hook. Mirror sync activates the join
+    # without editing a host-owned launcher. Telemetry failure must not hide a provider incident.
+    try:
+        pacing = feedback.ingest_relay_pacing(
+            Path(os.environ.get("HANDOFF_PACING_LOG", HANDOFF / "relay-pacing.log")), now=timestamp
+        )
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        pacing = {"status": "unavailable", "reason": str(exc)}
     incident = None
     if authoritative:
         incident = record_incident(
@@ -198,6 +207,7 @@ def record_lane_round(
         )
     return {
         "decision_id": decision_id,
+        "relay_pacing": pacing,
         "error_class": error_class,
         "incident_id": incident.get("incident_id") if incident else None,
         "shed": bool(incident and incident.get("shed")),
@@ -704,7 +714,9 @@ def main(argv: list[str]) -> int:
     lane_parser = subparsers.add_parser(
         "record-lane-round", help="record a detached handoff relay round"
     )
-    lane_parser.add_argument("--agent", choices=("codex", "claude"), required=True)
+    lane_parser.add_argument(
+        "--agent", choices=("codex", "claude", "cursor", "muse"), required=True
+    )
     lane_parser.add_argument("--surface", required=True)
     lane_parser.add_argument("--lane", choices=("opener", "closer"), required=True)
     lane_parser.add_argument("--receiver-reason")

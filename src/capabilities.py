@@ -1863,7 +1863,8 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         ),
     },
     "windowed-capacity-policy": {
-        "downstream_consumer": "router.py:select_agent; range_lane_rollout.py:build_rollout",
+        "downstream_consumer": "router.py:select_agent; range_lane_rollout.py:build_rollout; "
+        "rate_incidents.py:record_lane_round",
         "kill_switch_category": "compute_only",
         "control_point": "ORCH_DISABLE_STEPS",
         "kill_switch_rationale": (

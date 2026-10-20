@@ -12,7 +12,9 @@ edge onto a role run is not acted on; it is counted beside `acted_on`. Only a te
 outcome is the `outcome` step, and a learning-excluded one, one awaiting the sweep, one that never
 merges and an open one are counted beside it. A run that never merges is scored by verdict in
 `capability_effectiveness` (owner decision 2026-10-12), never at this merges-only step. `works` needs a durable
-success (`outcome_success`). The tick writes the readable section to
+success (`outcome_success`). Relay-pacing edges in windowed-capacity-policy instead count the
+observed lane-round terminal result; they never earn durable-delivery success.
+The tick writes the readable section to
 `switch-review.md`, the file a capability verdict cites (CLAUDE.md §6).
 """
 
@@ -278,13 +280,23 @@ def outcome_counts(cid: str, own_edges: list[dict] | None) -> dict[str, int | No
     set aside beside `acted_on`. `outcome` counts acted-on runs whose outcome is TERMINAL, good or
     bad, and `outcome_success` those of them that are a durable success
     (`feedback.outcome_is_durable_success`, the lifecycle's predicate). Every class has its own
-    field, so nothing set aside is hidden in a smaller count. None when the edges are unread:
+    field, so nothing set aside is hidden in a smaller count. The capacity row also counts
+    version-exact relay round completions (including failure) without inventing PR outcomes.
+    None when the edges are unread:
     unmeasured, never zero.
     """
     fields = ("acted_on", *CLASS_FIELDS.values(), "outcome_success")
     if own_edges is None:
         return {field: None for field in fields}
     accepted = [e for e in own_edges if e.get("accepted") == 1]
+    relay = [
+        e
+        for e in accepted
+        if cid == feedback.RELAY_PACING_CAPABILITY
+        and e.get("capability_version_id") == feedback.RELAY_PACING_VERSION
+        and e.get("relay_round_status") in {"completed", "failed", "rate-limited"}
+    ]
+    accepted_delivery = [e for e in accepted if e not in relay]
     classified = [
         (
             capability_effectiveness._classify(
@@ -301,12 +313,15 @@ def outcome_counts(cid: str, own_edges: list[dict] | None) -> dict[str, int | No
             ),
             e,
         )
-        for e in accepted
+        for e in accepted_delivery
     ]
     classes = Counter(c for c, _ in classified)
     return {
         "acted_on": len(accepted) - sum(classes[c] for c in ACTED_ON_SET_ASIDE),
-        **{field: classes[c] for c, field in CLASS_FIELDS.items()},
+        **{
+            field: classes[c] + (len(relay) if c == "terminal" else 0)
+            for c, field in CLASS_FIELDS.items()
+        },
         "outcome_success": sum(
             c == "terminal"
             and feedback.outcome_is_durable_success(**capability_effectiveness._outcome_fields(e))
@@ -466,11 +481,19 @@ def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
                 "o.durability_checked_ts AS outcome_recorded_ts, "
                 "r.role_name AS target_role_name, r.mode AS target_mode, "
                 "r.pr_number AS target_pr_number, "
-                "r.routing_metadata AS target_routing_metadata FROM influence_edges ie "
+                "r.routing_metadata AS target_routing_metadata, "
+                "CASE WHEN ce.producer='feedback.relay_pacing' "
+                "AND ce.validation_status='accepted' AND ce.created_ts<=? "
+                "AND ce.run_id=ie.target_run_id "
+                "AND ce.capability_id=ie.capability_id "
+                "AND ce.capability_version_id=ie.capability_version_id THEN "
+                "json_extract(ce.payload_json,'$.relay_pacing.status') END AS relay_round_status "
+                "FROM influence_edges ie "
                 "LEFT JOIN outcomes o ON o.run_id = ie.target_run_id "
                 "LEFT JOIN runs r ON r.run_id = ie.target_run_id "
+                "LEFT JOIN completion_events ce ON ce.event_id = ie.target_event_id "
                 "WHERE ie.created_ts BETWEEN ? AND ?",
-                (since, now),
+                (now, since, now),
             ):
                 edge = dict(r)
                 adjudicated = edge["adjudicated_verdict"] = edge.pop("outcome_adjudicated")
