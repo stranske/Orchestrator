@@ -6692,21 +6692,13 @@ def ingest_relay_pacing(log: Path, *, now: int | None = None) -> dict:
 
         # A known pre-fix orphan is terminal telemetry, not an observed outcome. Save its
         # disposition on the decision once so it cannot keep extending the legacy scan.
+        # Retire after the join attempt above: any still-unbound pre-cutoff legacy decision
+        # is proven unmatched, including ones that follow an earlier exit on the same lane.
         retired_before = len(retired)
-        first_exits = dict(
-            c.execute(
-                "SELECT lane,MIN(ts) FROM routing_decisions_v2 "
-                "WHERE record_kind='lane_round' AND ts<=? GROUP BY lane",
-                (end,),
-            )
-        )
         for key, (stamp, facts) in decisions.items():
             if key in bound or key in retired or facts.get("decision_id"):
                 continue
-            first_exit = first_exits.get(facts["lane"])
             if end < RELAY_PACING_BACKLOG_CUTOFF or stamp >= RELAY_PACING_BACKLOG_CUTOFF:
-                continue
-            if first_exit is not None and stamp >= first_exit:
                 continue
             _record_completion_event_in_conn(
                 c,

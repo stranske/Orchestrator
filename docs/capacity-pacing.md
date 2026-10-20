@@ -317,13 +317,14 @@ lanes and same-second exits. Unknown or mismatched IDs earn no temporal fallback
 Legacy decisions and rounds without IDs retain the conservative serial-adjacency
 join. Reimporting or rotating the log preserves settled bindings.
 
-Unmatched pre-2026-10-20T11:58Z legacy decisions before their lane's first recorded
-exit are marked once as `status=unjoined` with
-`unjoined_reason=no round recorded (pre-2026-10-20T11:58Z relay subshell bug)`.
-Decisions with IDs and already joined decisions are preserved.
-The importer reports `unjoined` separately from `joined`. These terminal orphans
-stop extending the legacy scan and create neither outcome events nor acted-on
-credit. A pending modern decision remains eligible after log rotation.
+Unmatched pre-2026-10-20T11:58Z legacy decisions (no `decision_id`, still unbound
+after explicit and adjacency join) are marked once as `status=unjoined` with
+`unjoined_reason=no round recorded (pre-2026-10-20T11:58Z relay subshell bug)`,
+including decisions that follow an earlier exit on the same lane. Decisions with
+IDs and already joined decisions are preserved. The importer reports `unjoined`
+separately from `joined`. These terminal orphans stop extending the legacy scan
+and create neither outcome events nor acted-on credit. A pending modern decision
+remains eligible after log rotation.
 
 Acceptance after merge and the relay update: within 24 hours, inspect
 `record-lane-round` / relay.log `lane-round:` output for `joined` matching the

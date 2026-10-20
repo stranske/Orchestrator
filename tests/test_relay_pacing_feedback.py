@@ -423,15 +423,43 @@ def test_pre_fix_orphans_retire_once_without_credit_or_rescan(tmp_path, monkeypa
         )
 
 
-def test_backlog_cutoff_does_not_retire_matching_or_later_decisions(tmp_path, monkeypatch):
+def test_backlog_cutoff_retires_unmatched_pre_cutoff_keeps_cutoff_and_joined(tmp_path, monkeypatch):
     log = _setup(tmp_path, monkeypatch)
     cutoff = feedback.RELAY_PACING_BACKLOG_CUTOFF
     log.write_text(_line(cutoff - 90) + _line(cutoff - 30) + _line(cutoff))
     feedback.record_lane_round("claude", "opener", None, 0, "none", cutoff - 60)
-    # The first decision has an observed match. The second is AFTER the first exit;
-    # the third is at the cutoff. Neither is proven to be a subshell-bug orphan.
+    # First decision joins the observed exit. The second is still unbound after that
+    # join and is pre-cutoff, so it retires even though it follows the first exit.
+    # The third is at the cutoff and stays pending.
     result = feedback.ingest_relay_pacing(log, now=cutoff + 60)
-    assert (result["joined"], result["unjoined"]) == (1, 0)
+    assert (result["joined"], result["unjoined"]) == (1, 1)
+
+
+def test_pre_cutoff_orphan_after_earlier_exit_retires_and_unblocks_later_legacy(
+    tmp_path, monkeypatch
+):
+    log = _setup(tmp_path, monkeypatch)
+    cutoff = feedback.RELAY_PACING_BACKLOG_CUTOFF
+    # Earlier exit, then an unmatched pre-cutoff decision, then a later legacy
+    # decision/exit pair that adjacency can join only once the orphan retires.
+    log.write_text(_line(cutoff - 80) + _line(cutoff + 10))
+    feedback.record_lane_round("claude", "opener", None, 0, "none", cutoff - 100)
+    feedback.record_lane_round("claude", "opener", None, 0, "none", cutoff + 20)
+    result = feedback.ingest_relay_pacing(log, now=cutoff + 30)
+    assert result == {"status": "recorded", "decisions": 2, "joined": 1, "unjoined": 1}
+    with feedback._conn() as c:
+        retired = c.execute(
+            "SELECT payload_json FROM completion_events WHERE status='skipped'"
+        ).fetchall()
+        assert len(retired) == 1
+        payload = json.loads(retired[0][0])["relay_pacing"]
+        assert payload["status"] == "unjoined"
+        assert payload["unjoined_reason"] == feedback.RELAY_PACING_UNJOINED_REASON
+        assert c.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 1
+    assert (_counts(now=cutoff + 30)["acted_on"], _counts(now=cutoff + 30)["outcome"]) == (
+        1,
+        1,
+    )
 
 
 def test_pre_fix_id_decision_survives_rotation_until_exact_exit(tmp_path, monkeypatch):
