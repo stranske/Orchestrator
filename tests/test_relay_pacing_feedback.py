@@ -13,10 +13,12 @@ import value_chain_monitor as monitor
 NOW = 1792476000
 
 
-def _line(ts=NOW - 60, *, chosen="claude_code", fallback="no", lane="opener"):
+def _line(ts=NOW - 60, *, chosen="claude_code", fallback="no", lane="opener", decision_id=None):
     stamp = datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     return (
-        f"{stamp} source=codex lane={lane} candidates=claude_code,cursor,muse "
+        f"{stamp} "
+        + (f"decision_id={decision_id} " if decision_id is not None else "")
+        + f"source=codex lane={lane} candidates=claude_code,cursor,muse "
         f"chosen={chosen} weights=claude_code:1,cursor:1,muse:1 "
         f"states=codex:shed,claude_code:ok,cursor:ok,muse:ok fallback={fallback}\n"
     )
@@ -68,7 +70,12 @@ def test_existing_exit_hook_credits_capacity_row(
         output_file=tail,
         ts=NOW,
     )
-    assert result["relay_pacing"] == {"status": "recorded", "decisions": 1, "joined": 1}
+    assert result["relay_pacing"] == {
+        "status": "recorded",
+        "decisions": 1,
+        "joined": 1,
+        "unjoined": 0,
+    }
     counts = _counts()
     assert (counts["acted_on"], counts["outcome"], counts["outcome_success"]) == (1, 1, 0)
     with feedback._conn() as c:
@@ -238,3 +245,195 @@ def test_incremental_join_keeps_preceding_exit_boundary(tmp_path, monkeypatch):
     feedback.record_lane_round("muse", "opener", None, 0, "none", NOW)
     assert feedback.ingest_relay_pacing(log, now=NOW)["joined"] == 2
     assert (_counts()["acted_on"], _counts()["outcome"]) == (2, 2)
+
+
+@pytest.mark.parametrize("explicit", [True, False])
+def test_cli_id_selects_one_interleaved_decision(tmp_path, monkeypatch, capsys, explicit):
+    log = _setup(tmp_path, monkeypatch)
+    log.write_text(
+        _line(NOW - 90, decision_id="opener-one" if explicit else None)
+        + _line(NOW - 80, chosen="cursor", lane="closer", decision_id="closer-one")
+        + (_line(NOW - 70, decision_id="opener-two") if explicit else "")
+    )
+    tail = tmp_path / "tail"
+    tail.write_text("finished")
+    argv = [
+        "record-lane-round",
+        "--agent",
+        "claude",
+        "--surface",
+        "handoff-relay",
+        "--lane",
+        "opener",
+        "--exit",
+        "0",
+        "--output-file",
+        str(tail),
+        "--ts",
+        str(NOW),
+    ]
+    if explicit:
+        argv += ["--relay-decision-id", "opener-two"]
+    assert rate_incidents.main(argv) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["relay_pacing"]["joined"] == 1
+    assert (_counts()["acted_on"], _counts()["outcome"]) == (1, 1)
+    with feedback._conn() as c:
+        outcome = json.loads(
+            c.execute(
+                "SELECT payload_json FROM completion_events WHERE phase='outcome'"
+            ).fetchone()[0]
+        )["relay_pacing"]
+        assert outcome.get("decision_id") == ("opener-two" if explicit else None)
+    if explicit:
+        # Same-second exits are distinct with IDs; no timing inference is needed.
+        first = feedback.record_lane_round(
+            "claude", "opener", None, 0, "none", NOW, relay_decision_id="opener-one"
+        )
+        assert first != result["decision_id"]
+        feedback.record_lane_round(
+            "cursor", "closer", None, 0, "none", NOW, relay_decision_id="closer-one"
+        )
+        assert feedback.ingest_relay_pacing(log, now=NOW)["joined"] == 3
+    # Retrying the CLI does not create a second round or rewrite settled evidence.
+    assert rate_incidents.main(argv) == 0
+    capsys.readouterr()
+    log.unlink()
+    assert feedback.ingest_relay_pacing(log, now=NOW + 86400)["joined"] == (3 if explicit else 1)
+    with feedback._conn() as c:
+        assert c.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == (
+            3 if explicit else 1
+        )
+
+
+@pytest.mark.parametrize("kind", ["unknown", "no_round_id", "lane", "agent", "future", "duplicate"])
+def test_explicit_id_never_falls_back_or_guesses(tmp_path, monkeypatch, kind):
+    log = _setup(tmp_path, monkeypatch)
+    log.write_text(_line(decision_id="one"))
+    feedback.record_lane_round(
+        "cursor" if kind == "agent" else "claude",
+        "closer" if kind == "lane" else "opener",
+        None,
+        0,
+        "none",
+        NOW - 70 if kind == "future" else NOW,
+        relay_decision_id=(
+            None if kind == "no_round_id" else "other" if kind == "unknown" else "one"
+        ),
+    )
+    if kind == "duplicate":
+        feedback.record_lane_round(
+            "claude", "opener", None, 0, "none", NOW - 1, relay_decision_id="one"
+        )
+    assert feedback.ingest_relay_pacing(log, now=NOW)["joined"] == 0
+    assert _counts()["acted_on"] == 0
+
+
+def test_legacy_decision_cannot_bind_explicit_round(tmp_path, monkeypatch):
+    log = _setup(tmp_path, monkeypatch)
+    log.write_text(_line())
+    feedback.record_lane_round(
+        "claude", "opener", None, 0, "none", NOW, relay_decision_id="missing-from-log"
+    )
+    assert feedback.ingest_relay_pacing(log, now=NOW)["joined"] == 0
+
+
+def test_pre_fix_orphans_retire_once_without_credit_or_rescan(tmp_path, monkeypatch):
+    log = _setup(tmp_path, monkeypatch)
+    cutoff = feedback.RELAY_PACING_BACKLOG_CUTOFF
+    log.write_text(
+        _line(cutoff - 120)
+        + _line(cutoff - 60)
+        + _line(cutoff + 1)
+        + _line(cutoff + 2, decision_id="unfinished")
+        + _line(cutoff + 40)
+    )
+    assert feedback.ingest_relay_pacing(log, now=cutoff - 1)["unjoined"] == 0
+    feedback.record_lane_round("claude", "opener", None, 0, "none", cutoff + 30)
+    result = feedback.ingest_relay_pacing(log, now=cutoff + 50)
+    assert result == {"status": "recorded", "decisions": 5, "joined": 1, "unjoined": 2}
+    with feedback._conn() as c:
+        rows = c.execute(
+            "SELECT status,payload_json,updated_ts FROM completion_events ORDER BY event_id"
+        ).fetchall()
+        retired = [json.loads(row[1])["relay_pacing"] for row in rows if row[0] == "skipped"]
+        assert len(retired) == 2
+        assert all(f["status"] == "unjoined" for f in retired)
+        assert all(f["unjoined_reason"] == feedback.RELAY_PACING_UNJOINED_REASON for f in retired)
+        assert c.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 1
+        assert (
+            c.execute("SELECT COUNT(*) FROM completion_events WHERE phase='outcome'").fetchone()[0]
+            == 1
+        )
+
+    original_conn = feedback._conn
+    scans = []
+
+    def traced_conn():
+        c = original_conn()
+        c.set_trace_callback(scans.append)
+        return c
+
+    def unexpected_write(*args, **kwargs):
+        pytest.fail("reread rewrote settled backlog")
+
+    monkeypatch.setattr(feedback, "_conn", traced_conn)
+    monkeypatch.setattr(feedback, "_record_completion_event_in_conn", unexpected_write)
+    # Retirement survives both rereading the old log and losing it to rotation.
+    assert feedback.ingest_relay_pacing(log, now=cutoff + 60) == result
+    log.unlink()
+    assert feedback.ingest_relay_pacing(log, now=cutoff + 120) == result
+    assert any(f"ts>={cutoff + 40}" in sql for sql in scans)
+    assert not any(f"ts>={cutoff - 120}" in sql for sql in scans)
+    with original_conn() as c:
+        assert (
+            c.execute(
+                "SELECT status,payload_json,updated_ts FROM completion_events ORDER BY event_id"
+            ).fetchall()
+            == rows
+        )
+
+
+def test_backlog_cutoff_does_not_retire_matching_or_later_decisions(tmp_path, monkeypatch):
+    log = _setup(tmp_path, monkeypatch)
+    cutoff = feedback.RELAY_PACING_BACKLOG_CUTOFF
+    log.write_text(_line(cutoff - 90) + _line(cutoff - 30) + _line(cutoff))
+    feedback.record_lane_round("claude", "opener", None, 0, "none", cutoff - 60)
+    # The first decision has an observed match. The second is AFTER the first exit;
+    # the third is at the cutoff. Neither is proven to be a subshell-bug orphan.
+    result = feedback.ingest_relay_pacing(log, now=cutoff + 60)
+    assert (result["joined"], result["unjoined"]) == (1, 0)
+
+
+def test_pre_fix_id_decision_survives_rotation_until_exact_exit(tmp_path, monkeypatch):
+    log = _setup(tmp_path, monkeypatch)
+    cutoff = feedback.RELAY_PACING_BACKLOG_CUTOFF
+    log.write_text(_line(cutoff - 60, decision_id="explicit"))
+    assert feedback.ingest_relay_pacing(log, now=cutoff)["unjoined"] == 0
+    log.unlink()
+    feedback.record_lane_round(
+        "claude", "opener", None, 0, "none", cutoff + 1, relay_decision_id="explicit"
+    )
+    result = feedback.ingest_relay_pacing(log, now=cutoff + 1)
+    assert (result["joined"], result["unjoined"]) == (1, 0)
+
+
+@pytest.mark.parametrize("bad_id", ["", "with space", "x" * 401])
+def test_invalid_explicit_id_is_rejected(tmp_path, monkeypatch, bad_id):
+    _setup(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="relay_decision_id"):
+        feedback.record_lane_round(
+            "claude", "opener", None, 0, "none", NOW, relay_decision_id=bad_id
+        )
+
+
+def test_backlog_without_any_exit_is_terminal_without_outcome(tmp_path, monkeypatch):
+    log = _setup(tmp_path, monkeypatch)
+    log.write_text(_line())
+    end = feedback.RELAY_PACING_BACKLOG_CUTOFF
+    result = feedback.ingest_relay_pacing(log, now=end)
+    assert (result["joined"], result["unjoined"]) == (0, 1)
+    log.unlink()
+    feedback.record_lane_round("claude", "opener", None, 0, "none", end + 60)
+    assert feedback.ingest_relay_pacing(log, now=end + 60) == result
+    assert (_counts(now=end + 60)["acted_on"], _counts(now=end + 60)["outcome"]) == (0, 0)

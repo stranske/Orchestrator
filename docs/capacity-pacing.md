@@ -296,3 +296,34 @@ registration after merge; compare the count with damped state flips in the tick 
 record other immediate triggers separately. Export start/end UTC times and duration in
 that log make cadence skips measurable. The hourly due threshold is 30 minutes after the
 previous success stamp, allowing for tick jitter and export duration.
+
+## Relay decision identity and backlog (#825)
+
+The coordinator-owned relay must generate a unique token for each pacing decision,
+write `decision_id=<id>` in that decision's `relay-pacing.log` line, and pass the same
+value to `python3 src/rate_incidents.py record-lane-round --relay-decision-id <id>`
+alongside the existing agent, surface, lane, exit and output-file arguments. This
+repository supplies the importer and CLI; the coordinator updates
+`~/.codex/bin/handoff-relay.sh` after merge.
+
+The round persists the token as `relay_decision_id` in its routing record's
+`causal_context_json`; the decision and outcome telemetry retain `decision_id`.
+Exactly one round with that ID, the same lane and chosen agent, and an exit at or
+after the decision earns an accepted influence edge. IDs disambiguate concurrent
+lanes and same-second exits. Unknown or mismatched IDs earn no temporal fallback.
+Legacy decisions and rounds without IDs retain the conservative serial-adjacency
+join. Reimporting or rotating the log preserves settled bindings.
+
+Unmatched pre-2026-10-20T11:58Z legacy decisions before their lane's first recorded
+exit are marked once as `status=unjoined` with
+`unjoined_reason=no round recorded (pre-2026-10-20T11:58Z relay subshell bug)`.
+Decisions with IDs and already joined decisions are preserved.
+The importer reports `unjoined` separately from `joined`. These terminal orphans
+stop extending the legacy scan and create neither outcome events nor acted-on
+credit. A pending modern decision remains eligible after log rotation.
+
+Acceptance after merge and the relay update: within 24 hours, inspect
+`record-lane-round` / relay.log `lane-round:` output for `joined` matching the
+decisions with recorded exits, and the `switch_review.py --text-out` monitor row
+for `windowed-capacity-policy` with `acted_on > 0` and `outcome > 0`. This live
+check is separate from the repository's offline tests.

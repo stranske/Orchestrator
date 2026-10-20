@@ -167,6 +167,7 @@ def record_lane_round(
     exit_status: int,
     output_file: Path,
     ts: int | None = None,
+    relay_decision_id: str | None = None,
 ) -> dict[str, Any]:
     """Persist every relay exit and shed only on a nonzero authoritative failure."""
     import feedback
@@ -183,7 +184,13 @@ def record_lane_round(
     authoritative = exit_status != 0 and confidence == "high"
     error_class = subcategory if authoritative else ("none" if exit_status == 0 else "unknown")
     decision_id = feedback.record_lane_round(
-        agent, lane, receiver_reason, exit_status, error_class, timestamp
+        agent,
+        lane,
+        receiver_reason,
+        exit_status,
+        error_class,
+        timestamp,
+        relay_decision_id=relay_decision_id,
     )
     # The installed relay already invokes this exit hook. Mirror sync activates the join
     # without editing a host-owned launcher. Telemetry failure must not hide a provider incident.
@@ -723,6 +730,7 @@ def main(argv: list[str]) -> int:
     lane_parser.add_argument("--exit", dest="exit_status", type=int, required=True)
     lane_parser.add_argument("--output-file", type=Path, required=True)
     lane_parser.add_argument("--ts", type=int)
+    lane_parser.add_argument("--relay-decision-id")
     subparsers.add_parser("summary", help="summarize the append-only incident ledger")
     args = parser.parse_args(argv)
     if args.selftest:
@@ -768,6 +776,7 @@ def main(argv: list[str]) -> int:
                 exit_status=args.exit_status,
                 output_file=args.output_file,
                 ts=args.ts,
+                relay_decision_id=args.relay_decision_id,
             )
         except (OSError, ValueError) as exc:
             parser.error(str(exc))
