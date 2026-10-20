@@ -90,44 +90,35 @@ def test_command_report_timeout_without_stderr(monkeypatch, tmp_path):
 
 
 def test_coverage_check_json_success_and_non_empty_data_failure(monkeypatch, tmp_path):
-    good_json = tmp_path / "candidate.json"
+    json_commands = []
+    read_paths = []
 
     def fake_command(name, argv, cwd, timeout):
         if name.endswith("_coverage_run"):
             return {"ok": True, "exit_code": 0, "stdout_tail": "", "stderr_tail": ""}
         if name.endswith("_coverage_json"):
-            good_json.write_text(
-                json.dumps(
-                    {
-                        "totals": {
-                            "covered_lines": 4,
-                            "num_statements": 10,
-                            "percent_covered": 40.0,
-                        },
-                        "files": {"pkg/mod.py": {"summary": {"covered_lines": 4}}},
-                    }
-                ),
-                encoding="utf-8",
-            )
-            # Point the gate at our written file by matching its expected path.
+            json_commands.append(argv)
             return {"ok": True, "exit_code": 0, "stdout_tail": "", "stderr_tail": ""}
         raise AssertionError(name)
 
-    monkeypatch.setattr(gate, "command_report", fake_command)
-    # coverage_check builds its own json path under temp_dir; rewrite read to use our payload.
-    monkeypatch.setattr(
-        gate,
-        "read_coverage_json",
-        lambda path: (
+    def fake_read(path):
+        read_paths.append(path)
+        return (
             {"covered_lines": 4, "num_statements": 10, "percent_covered": 40.0},
             ["pkg/mod.py"],
             None,
-        ),
-    )
+        )
+
+    monkeypatch.setattr(gate, "command_report", fake_command)
+    monkeypatch.setattr(gate, "read_coverage_json", fake_read)
     ok = gate.coverage_check("candidate", tmp_path, ["pkg"], ["tests"], tmp_path, 4)
     assert ok["ok"] is True
     assert ok["coverage"]["covered_lines"] == 4
     assert ok["measured_files"] == ["pkg/mod.py"]
+    assert read_paths == [tmp_path / "candidate.json"]
+    assert len(json_commands) == 1
+    argv = json_commands[0]
+    assert argv[argv.index("-o") + 1] == str(read_paths[0])
 
     def failing_json(name, argv, cwd, timeout):
         if name.endswith("_coverage_run"):
@@ -264,11 +255,14 @@ def test_hollow_and_verdict_rows_name_blind_and_hollow_cases():
 
 
 def test_main_requires_live_mode_arguments():
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as exc:
         gate.main([])
-    with pytest.raises(SystemExit):
+    assert exc.value.code == 2
+    with pytest.raises(SystemExit) as exc:
         gate.main(["--source", "pkg"])
-    with pytest.raises(SystemExit):
+    assert exc.value.code == 2
+    with pytest.raises(SystemExit) as exc:
         gate.main(["--source", "pkg", "--baseline-pytest-args", "tests"])
+    assert exc.value.code == 2
     # Selftest path is exercised without spawning agents.
     assert gate.main(["--selftest"]) == 0

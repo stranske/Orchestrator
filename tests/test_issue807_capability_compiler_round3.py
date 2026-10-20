@@ -535,7 +535,8 @@ def test_role_compile_rejection_arms():
     with pytest.raises(compiler.RoleCompileError) as exc:
         compiler.compile_role_capability(raw)
     joined = " ".join(exc.value.reasons)
-    assert "three independent durable" in joined or "three effective" in joined
+    assert "three independent durable" in joined
+    assert "three effective" in joined
 
     # Counterexamples after IR construction: mutate the live object before compile.
     live = _role_candidate()
@@ -612,7 +613,10 @@ def test_role_compile_rejection_arms():
     with pytest.raises(compiler.RoleCompileError) as exc:
         compiler.compile_role_capability(raw)
     joined = " ".join(exc.value.reasons)
-    assert "prompt protocol is unsupported" in joined or "purpose is unbounded" in joined
+    assert "prompt protocol is unsupported" in joined
+    assert "prompt purpose is unbounded" in joined
+    assert "prompt instructions are unbounded" in joined
+    assert "prompt context bound is invalid" in joined
 
     raw = _role_candidate().to_dict()
     raw["graph"]["role_contract"]["expires_at"] = NOW - 10
@@ -812,7 +816,9 @@ def test_playbook_compile_export_and_invocation_edges(tmp_path):
     with pytest.raises(compiler.PlaybookCompileError) as exc:
         compiler.compile_playbook_capability(raw, repo_root=repo_root, registry_path=registry)
     joined = " ".join(exc.value.reasons)
-    assert "selector repo mismatch" in joined or "task types" in joined or "lanes" in joined
+    assert "selector repo mismatch" in joined
+    assert "task types" in joined
+    assert "lanes" in joined
 
     raw = candidate.to_dict()
     raw["graph"]["playbook_contract"]["negative_examples"] = []
@@ -872,19 +878,24 @@ def test_playbook_compile_export_and_invocation_edges(tmp_path):
     with pytest.raises(ValueError, match="different playbook rule"):
         compiler._register_playbook_capability(other, ledger)
 
-    # Export with stale refs fails.
-    stale = copy.deepcopy(manifest)
-    stale["current_refs"] = [{"path": "docs/ci/MISSING.md", "symbol": "x"}]
-    # Fix content/manifest hashes so validate_playbook_manifest can reach refs check.
-    # Use a deliberately invalid export path after validating shape is skipped by patching.
-    with pytest.raises((compiler.PlaybookCompileError, AssertionError)):
-        compiler.export_playbook_canary(
-            stale,
-            repo_root=repo_root,
-            registry_path=registry,
-            ledger_path=ledger,
-            apply=False,
-        )
+    # Export with stale refs fails while the manifest itself remains valid.
+    referenced = repo_root / "docs" / "ci" / "WORKFLOWS.md"
+    moved = referenced.with_name("MOVED.md")
+    referenced.rename(moved)
+    try:
+        with pytest.raises(
+            compiler.PlaybookCompileError,
+            match=r"^stale current path: docs/ci/WORKFLOWS\.md$",
+        ):
+            compiler.export_playbook_canary(
+                manifest,
+                repo_root=repo_root,
+                registry_path=registry,
+                ledger_path=ledger,
+                apply=False,
+            )
+    finally:
+        moved.rename(referenced)
 
     # Manifest hash mismatch guard.
     broken = copy.deepcopy(manifest)

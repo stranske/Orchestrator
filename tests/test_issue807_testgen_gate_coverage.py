@@ -86,10 +86,11 @@ def test_measurement_and_hollow_probes_name_unmeasured_inputs(monkeypatch, tmp_p
     assert no_base["measured"] is False
     assert "no --base-ref" in no_base["reason"]
 
-    monkeypatch.setattr(
-        gate.subprocess,
-        "run",
-        lambda *args, **kwargs: SimpleNamespace(
+    probe_calls = []
+
+    def fake_probe(argv, **kwargs):
+        probe_calls.append(argv)
+        return SimpleNamespace(
             stdout=json.dumps(
                 {
                     "node_analysis": {"counts": {"nodes": 2}},
@@ -97,9 +98,14 @@ def test_measurement_and_hollow_probes_name_unmeasured_inputs(monkeypatch, tmp_p
                     "node_verdict": "PASS",
                 }
             )
-        ),
-    )
+        )
+
+    monkeypatch.setattr(gate.subprocess, "run", fake_probe)
     graded = gate.hollow_check(tmp_path, "HEAD~1", ["tests"], "tests/test_new.py", 3)
+    assert len(probe_calls) == 1
+    argv = probe_calls[0]
+    assert argv[argv.index("--base-ref") + 1] == "HEAD~1"
+    assert argv[argv.index("--test-path") + 1] == "tests/test_new.py"
     assert graded == {
         "measured": True,
         "reason": None,

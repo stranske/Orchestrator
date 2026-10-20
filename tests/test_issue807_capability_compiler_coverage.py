@@ -164,9 +164,8 @@ def test_safe_resource_rejects_malformed_and_accepts_valid(tmp_path):
         2,
     )
     assert none is None
-    assert any(
-        "unsupported" in e or "does not exist" in e or "must stay under" in e for e in errors
-    )
+    assert "resources[2].source_path does not exist" in errors
+    assert "resources[2].target must stay under scripts/" in errors
 
 
 def test_compile_skill_package_and_candidate_success(tmp_path):
@@ -388,18 +387,19 @@ def test_reference_role_candidate_and_main_cli(tmp_path, monkeypatch, capsys):
     assert role.capability_id.endswith("evidence-gap-prioritizer-reference")
     assert len(role.source_occurrences) == 3
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as exc:
         compiler.main([])
-    with pytest.raises(SystemExit):
+    assert exc.value.code == 2
+    with pytest.raises(SystemExit) as exc:
         compiler.main(["reference"])
+    assert exc.value.code == 2
 
-    # `reference` without the skill resource still exercises the workflow path.
     ledger = tmp_path / "ledger.json"
-    # Stub skill compile inside selftest by avoiding selftest; call reference workflow via main.
+    # Stub the workflow to test argument parsing and JSON output hermetically.
     monkeypatch.setattr(
         compiler,
         "run_reference_workflow",
         lambda ledger_path: {"ok": True, "ledger": str(ledger_path)},
     )
     assert compiler.main(["reference", "--ledger", str(ledger)]) == 0
-    assert json.loads(capsys.readouterr().out)["ok"] is True
+    assert json.loads(capsys.readouterr().out) == {"ok": True, "ledger": str(ledger)}

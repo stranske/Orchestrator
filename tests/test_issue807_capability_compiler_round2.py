@@ -9,6 +9,7 @@ package integrity, role/playbook schema guards, and workflow dry-run consumers.
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 
 import pytest
@@ -295,7 +296,7 @@ def test_validate_skill_package_integrity_edges(tmp_path):
     md = clean2_dir / "SKILL.md"
     text = md.read_text(encoding="utf-8")
     md.write_text(text.replace("(scripts/helper.sh)", "(scripts/gone.sh)"), encoding="utf-8")
-    with pytest.raises(AssertionError, match="not referenced|content hash mismatch"):
+    with pytest.raises(AssertionError, match="^skill resource is not referenced by SKILL.md$"):
         compiler.validate_skill_package(clean2_dir)
 
     clean3 = compiler.compile_skill_package(
@@ -305,7 +306,13 @@ def test_validate_skill_package_integrity_edges(tmp_path):
     clean3_dir = Path(clean3["package_path"])
     md = clean3_dir / "SKILL.md"
     md.write_text(md.read_text(encoding="utf-8") + "\ntoken=supersecretvalue\n", encoding="utf-8")
-    with pytest.raises(AssertionError, match="secret detected|content hash mismatch"):
+    manifest_path = clean3_dir / ".orchestrator" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["content_hash"] = compiler.stable_hash(
+        "skill-package-content", compiler._package_file_hashes(clean3_dir)
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(AssertionError, match="^secret detected in generated skill$"):
         compiler.validate_skill_package(clean3_dir)
 
 
