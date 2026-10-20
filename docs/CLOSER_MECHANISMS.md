@@ -45,7 +45,7 @@ provider relay** is suppressed, at its launch boundary, when the explicit Runtim
 global helper files are unchanged. No mutex-only mode is appropriate for a real round.
 In this mode A emits a fresh per-invocation nonce-bound verdict at its canonical check-
 stop branch boundary before resume memory. Only its exact ordinary record admits B;
-peer-review, missing, wrong or ambiguous records refuse even on exit0. Historical memory
+peer-review, missing, wrong or ambiguous records refuse even on exit 0. Historical memory
 strings have no admission authority. The cleared-review race reaches the ordinary
 verdict. Unbounded legacy artifacts retain conservative marker compatibility; an
 acquired token still receives one C attempt. Unknown stop outcomes remain unknown and
@@ -60,7 +60,7 @@ controller assignment; its hash must still equal canonical bytes at A admission.
 original admitted snapshot, not a later controller generation; a changed canonical
 source is reported explicitly. The logical mirror anchor must still resolve to that same
 physical generation. Rechecks happen before A/B/C. A post-admission dependency change
-invokes cleanup-only C (exit65), retaining the original stop/effect uncertainty while
+invokes cleanup-only C (exit 65), retaining the original stop/effect uncertainty while
 the exact-token EXIT cleanup attempts release. Changed helper or lease-module pins
 refuse execution and retain ownership for reconciliation. These are host-local pins, not
 public package paths or fictional native events. CLI lifecycle qualification still does
@@ -72,4 +72,4 @@ The bounded lease helper and B argv also use the physically pinned Python, not
 a later resolution of a lexical symlink. The original Python anchor must still
 resolve to that physical interpreter. Changed interpreter bytes or retargeting
 fence execution; cleanup cannot invoke an untrusted binary merely to release a
-lease. C returns65 and retains the lease and uncertainty for reconciliation.
+lease. C returns 65 and retains the lease and uncertainty for reconciliation.

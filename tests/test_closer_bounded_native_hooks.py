@@ -270,11 +270,32 @@ def test_renderer_default_unchanged_and_unknown_body_refused():
     default = renderer.patch_postrun(canonical_postrun().encode())
     assert b"CLOSER_BOUNDED_NO_RELAY_V1" not in default
     assert b'if "$RELAY_BIN" "$relay_lane"; then' in default
-    with pytest.raises(ValueError, match="anchors"):
+
+
+@pytest.mark.parametrize(
+    "anchor",
+    [
+        "# BEGIN CLOSER STATUS DISPATCHER STOP GATE v1",
+        '"$HANDOFF_BIN" end-round "$outcome"',
+        'python3 "$_closer_dispatcher" validate-stop --state "$CLOSER_ROUND_STATE" --assignment "$HOME/.codex/automations/reviewed-repo-automation-controller/closer-assignment.json"',
+        'if "$RELAY_BIN" "$relay_lane"; then',
+    ],
+)
+def test_bounded_renderer_requires_each_standard_validation_anchor(anchor):
+    with pytest.raises(
+        ValueError, match="^bounded round requires exact standard validation/end-round anchors$"
+    ):
         renderer.patch_postrun(
-            canonical_postrun().replace('"$HANDOFF_BIN" end-round "$outcome"', ":").encode(),
-            bounded_round=True,
+            canonical_postrun().replace(anchor, ":").encode(), bounded_round=True
         )
+
+
+def test_bounded_renderer_refuses_previously_unbounded_patched_input():
+    patched = renderer.patch_postrun(canonical_postrun().encode())
+    with pytest.raises(
+        ValueError, match="^bounded mode requires original canonical postrun input$"
+    ):
+        renderer.patch_postrun(patched, bounded_round=True)
 
 
 def test_generation_symlink_is_expected_but_retarget_never_authoritative(hooks):

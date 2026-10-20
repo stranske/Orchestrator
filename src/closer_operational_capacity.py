@@ -157,7 +157,16 @@ def evaluate(config: dict, *, now: float | None = None) -> dict:
                 )
             )
             denied = agent == "codex" and raw.get("ordinary_usage_allowed") is False
-            exhausted = used == 1 or short == 1
+            exhausted = (
+                used == 1
+                or short == 1
+                or any(
+                    isinstance(window, dict)
+                    and _number(window.get("used_percent"))
+                    and window["used_percent"] >= 100
+                    for window in (weekly, short_window)
+                )
+            )
             # Known restrictions stay authoritative even if the last poll is stale.
             if denied or exhausted:
                 state, reason = "shed", "provider poll denies ordinary usage or reports exhaustion"

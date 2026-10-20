@@ -136,7 +136,9 @@ def test_contradictory_metrics_cannot_gain_trial_permission(host, value):
     data = poll()
     data["weekly"]["used_percent"] = value
     (polls / "claude-usage.json").write_text(json.dumps(data))
-    assert scoped.evaluate(cfg, now=NOW)["agents"]["claude"]["state"] == "unknown"
+    assert scoped.evaluate(cfg, now=NOW)["agents"]["claude"]["state"] == (
+        "shed" if value == 101 else "unknown"
+    )
 
 
 @pytest.mark.parametrize(
@@ -247,3 +249,18 @@ def test_trial_policy_follows_accounting_capability_not_permanent_agent_category
     assert scoped.evaluate(cfg, now=NOW)["agents"]["gemini"]["state"] == "warn"
     monkeypatch.setitem(capacity.AGENTS, "claude", {"model": "ccusage", "block_token_limit": 100})
     assert scoped.evaluate(cfg, now=NOW)["agents"]["claude"]["state"] == "unknown"
+
+
+@pytest.mark.parametrize("window", ["weekly", "session"])
+@pytest.mark.parametrize("percent", [100, 101])
+def test_expired_claude_exhaustion_still_blocks_explicit_trial(host, window, percent):
+    cfg, polls, _ = host
+    data = poll(NOW - 4000)
+    data[window]["used_percent"] = percent
+    data["weekly"]["resets_at"] = NOW - 1
+    data["session"]["resets_at"] = NOW - 1
+    (polls / "claude-usage.json").write_text(json.dumps(data))
+    report = scoped.evaluate(cfg, now=NOW)
+    assert report["agents"]["claude"]["state"] == "shed"
+    assert report["profiles"][PROFILE]["state"] == "shed"
+    assert report["agents"]["claude"]["bounded_trial"] is False
