@@ -47,7 +47,7 @@ composes the separately owned supervisor actor when deployed and explicitly enab
 this coordinator does not enable it. Deployment uses the existing mirror sync and
 canonical local prompt renderers, preserving demand scheduling and safety gates.
 The resource rail records causal run/revision/identity/work-key bindings before
-legacy actions. Exact-plan reconciliation independently validates a completed
+staged-pipeline legacy actions. Exact-plan reconciliation independently validates a completed
 no-operation evidence wait under the original locks and archives its evidence
 before retiring only matching advertisements. Historical records without causal
 binding and all uncertain operations remain held; no acceptance or global-stop
