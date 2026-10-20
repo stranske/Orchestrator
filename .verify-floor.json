@@ -3,6 +3,8 @@
  "passed": 6688,
  "skipped_max": 31,
  "mirror_skipped_max": 21,
+ "core_sibling_skipped_max": 19,
+ "mirror_core_sibling_skipped_max": 19,
  "bare_mirror_skipped_max": 52,
  "bare_mirror_selftest_skipped_max": 7,
  "bare_mirror_gate_skipped_max": 2,
