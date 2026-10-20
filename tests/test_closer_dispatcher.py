@@ -28,6 +28,14 @@ MERGE = "b" * 40
 @pytest.fixture(autouse=True)
 def no_live_state_or_provider(monkeypatch, tmp_path):
     monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "private-handoff"))
+
+    def semantic_route(route, invoke, *, load, **_kwargs):
+        try:
+            return invoke(route), route
+        finally:
+            adapter._release_route_load(route, load)
+
+    monkeypatch.setattr(adapter, "_execute_profile_route", semantic_route)
     monkeypatch.setattr(claims, "claim", lambda *a, **kw: True)
     monkeypatch.setattr(claims, "release", lambda *a, **kw: True)
     monkeypatch.setattr(claims, "update_metadata", lambda *a, **kw: True)
@@ -48,6 +56,8 @@ def snapshot(**overrides):
         "kind": "pr",
         "state": "OPEN",
         "head": HEAD,
+        "head_branch": "feature",
+        "head_repository": "o/r",
         "merge": None,
         "body": "Delivery",
         "draft": False,
@@ -651,6 +661,7 @@ def assert_nonpass_accounting_prompt_contract(prompt):
 def test_luna_result_is_advisory_and_cannot_supply_completion_disposition(tmp_path, monkeypatch):
     current = snapshot()
     calls = []
+    _seed_exception_capacity(adapter.os.environ["HANDOFF_DIR"])
     monkeypatch.setitem(sys.modules, "capacity", SimpleNamespace(shed_marker=lambda agent: None))
     monkeypatch.setitem(sys.modules, "dispatcher", SimpleNamespace())
 
@@ -678,6 +689,7 @@ def test_selective_exception_prompt_accounts_for_nonpass_without_pass_authority(
     tmp_path, monkeypatch
 ):
     current, prompts = snapshot(), []
+    _seed_exception_capacity(adapter.os.environ["HANDOFF_DIR"])
     monkeypatch.setitem(sys.modules, "capacity", SimpleNamespace(shed_marker=lambda agent: None))
     monkeypatch.setitem(sys.modules, "dispatcher", SimpleNamespace())
 
@@ -1448,8 +1460,46 @@ def test_bounded_runner_owns_session_and_kills_only_its_process_group(monkeypatc
     assert created[0][1]["stdout"] == adapter.subprocess.PIPE
 
 
+def _seed_exception_capacity(
+    handoff_dir,
+    *,
+    profile_ids=("codex-6-luna-low", "codex-5.6-terra-medium"),
+):
+    import execution_profiles
+
+    handoff = Path(handoff_dir)
+    handoff.mkdir(parents=True, exist_ok=True)
+    profiles = {}
+    pools = {}
+    for profile_id in profile_ids:
+        row = execution_profiles.get_profile(profile_id)
+        profiles[profile_id] = {
+            "state": "ok",
+            "capacity_pool_ids": row["capacity_pool_ids"],
+        }
+        for pool in row["capacity_pool_ids"]:
+            pools[pool] = {"state": "ok"}
+    (handoff / "capacity.json").write_text(
+        json.dumps(
+            {
+                "generated_at": time.time(),
+                "agents": {
+                    agent: {"state": "ok"}
+                    for agent in ("codex", "claude", "gemini", "cursor", "vibe", "muse")
+                },
+                "profiles": profiles,
+                "pools": pools,
+            }
+        )
+    )
+
+
 def _private_worker(tmp_path, monkeypatch, *, decision=None, result=None, real_admission=False):
     calls = []
+    if real_admission:
+        pass
+    else:
+        _seed_exception_capacity(adapter.os.environ["HANDOFF_DIR"])
     monkeypatch.setitem(sys.modules, "capacity", SimpleNamespace(shed_marker=lambda agent: None))
 
     def offload(*args, **kwargs):
@@ -1508,7 +1558,7 @@ def test_repair_uses_readonly_luna_until_scoped_plan_then_supported_terra(
     assert kwargs["profile_id"] == (
         "codex-5.6-terra-medium" if trusted_plan else "codex-6-luna-low"
     )
-    assert kwargs["isolate"] is trusted_plan
+    assert kwargs["isolate"] is True
     assert kwargs["mode"] == ("mid" if trusted_plan else "assess")
     assert backend.dispositions.get(TARGET) == decision
 
@@ -1547,11 +1597,8 @@ def test_existing_campaign_guard_is_reused_and_caps_worker_timeout(tmp_path, mon
     )
     monkeypatch.setattr(adapter.Path, "home", lambda: fake_home)
     handoff = adapter.Path(adapter.os.environ["HANDOFF_DIR"])
-    handoff.mkdir(parents=True)
+    _seed_exception_capacity(handoff)
     capacity = handoff / "capacity.json"
-    capacity.write_text(
-        json.dumps({"generated_at": time.time(), "agents": {"codex": {"state": "ok"}}})
-    )
     before = capacity.read_bytes()
     backend, calls = _private_worker(tmp_path, monkeypatch, real_admission=True)
     result = backend.worker(TARGET, "collect_evidence", snapshot(), operation("collect_evidence"))
@@ -2733,7 +2780,12 @@ def test_pipeline_low_route_uses_any_live_low_profile_not_luna_assumption(tmp_pa
 
     def choose(task_type, capacity, **kwargs):
         selected["only"] = kwargs.get("only")
-        return {"agent": "gemini", "mode": "cheap", "state": "ok"}
+        return {
+            "agent": "gemini",
+            "mode": "cheap",
+            "state": "ok",
+            "selected_profile_id": "gemini-flash-low",
+        }
 
     monkeypatch.setattr(router, "select_agent", choose)
     route = adapter._pipeline_low_route()
@@ -2788,6 +2840,24 @@ def test_busy_shared_exception_pool_returns_valid_fresh_capacity_proof(tmp_path,
         )
 
     monkeypatch.setattr(adapter, "_pipeline_low_route", reserve_low_route)
+
+    def reserve_exception_route(**kwargs):
+        load = kwargs["load"]
+        if load.get("pool:codex-subscription", 0):
+            return (None, "busy")
+        load["codex"] = load.get("codex", 0) + 1
+        load["pool:codex-subscription"] = load.get("pool:codex-subscription", 0) + 1
+        return (
+            {
+                "agent": "codex",
+                "profile_id": "codex-strong",
+                "pools": ["codex-subscription"],
+                "mode": "assess",
+            },
+            "available",
+        )
+
+    monkeypatch.setattr(adapter, "_exception_route", reserve_exception_route)
     monkeypatch.setattr(execution_profiles, "default_codex_profile", lambda _task: "codex-strong")
     monkeypatch.setattr(
         execution_profiles,
@@ -2807,6 +2877,8 @@ def test_busy_shared_exception_pool_returns_valid_fresh_capacity_proof(tmp_path,
             "pools": {"codex-subscription": {"state": "ok"}},
         },
     )
+    # Routing is stubbed in this semantic test; the execution-pool suite uses real profiles.
+    monkeypatch.setattr(execution_profiles, "profiles_for_agent", lambda *a, **kw: [])
     entered = threading.Event()
     release = threading.Event()
 
@@ -4076,3 +4148,119 @@ def test_pipeline_budget_proof_exception_is_diagnosed_without_renewal(tmp_path, 
         state["round"]["deadline"],
         f"pipeline_adoption_unverifiable:{type(error).__name__}",
     )
+
+
+@pytest.mark.parametrize(
+    "stage,status",
+    [
+        ("prepare", "queued"),
+        ("prepare", "running"),
+        ("interpret", "queued"),
+        ("interpret", "running"),
+        ("exception", "running"),
+    ],
+)
+def test_expired_interrupted_read_can_receive_independent_cli_budget(tmp_path, stage, status):
+    import closer_pipeline
+
+    legacy = _terminal_queue_state(tmp_path)
+    legacy["items"][TARGET]["revision"] = "later-assessment"
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(legacy))
+    path = _adopted_pipeline(tmp_path)
+    state = closer_pipeline._load(path)
+    previous = next(iter(state["runs"].values()))
+    previous.pop("receipt_summary")
+    previous["targets"][TARGET] = {
+        "status": status,
+        "stage": stage,
+        "results": {},
+        "metrics": {"waits": 0, "errors": 0},
+    }
+    closer_pipeline._save(path, state)
+    before = state_path.read_bytes(), path.read_bytes()
+    requested = time.time() + 310
+    assert adapter._deadline_with_pipeline_round(requested, legacy, state_path) == (
+        requested,
+        "expired_pipeline_recovery",
+    )
+    assert before == (state_path.read_bytes(), path.read_bytes())
+
+
+@pytest.mark.parametrize("changed", [None, "head", "branch", "source"])
+def test_scoped_native_operation_seam_rechecks_prepared_head_and_aliases(
+    tmp_path, monkeypatch, changed
+):
+    import closer_resources
+
+    current = snapshot(head_branch="feature", head_repository="o/r")
+    gh = FakeGitHub(current)
+    monkeypatch.setattr(adapter, "GitHub", lambda **kw: gh)
+    monkeypatch.setattr(
+        closer_evidence,
+        "collect_evidence",
+        lambda *a, **kw: {
+            "schema": "closer-evidence/v1",
+            "sections": {},
+            "manifest": {"packet_sha256": "x"},
+        },
+    )
+    monkeypatch.setattr(closer_evidence, "validate_packet", lambda *a: False)
+    calls = []
+    # Only the native effect is synthetic; the dispatcher's head/resource binding stays real.
+    monkeypatch.setattr(
+        adapter.Closer, "execute", lambda *a: calls.append(a) or {"status": "completed"}
+    )
+
+    def native_queue_stub(_path, targets, observe, execute, **kw):
+        observed = observe(TARGET)
+        execute(
+            TARGET, observed["action"], observed, {"id": "offline", "deadline": time.time() + 20}
+        )
+        return {"stop_valid": True, "accounting": [{"target": TARGET, "status": "complete"}]}
+
+    monkeypatch.setattr(closer_queue, "run_round", native_queue_stub)
+
+    def pipeline_stub(_path, _targets, **callbacks):
+        prep = callbacks["prepare"](TARGET, {"deadline": time.time() + 30})
+        callbacks["resource_keys"](TARGET, {"prepare": prep})
+        if changed == "head":
+            gh.current["head"] = "f" * 40
+        elif changed == "branch":
+            gh.current["head_branch"] = "other"
+        elif changed == "source":
+            gh.current["sources"] = [
+                {
+                    "target": "o/r#99",
+                    "body": "## Acceptance criteria\n- Preserve behavior",
+                    "state": "open",
+                }
+            ]
+        gh.current["revision"] = adapter.digest(gh.current)
+        context = {
+            "prepare": prep,
+            "interpret": {},
+            "deadline": time.time() + 30,
+            "revision": prep["revision"],
+            "state_path": str(_path),
+            "action_state_path": str(tmp_path / "action.json"),
+        }
+        if changed:
+            with pytest.raises(closer_resources.ResourceBlocked, match="actual operation changed"):
+                callbacks["act"](TARGET, context)
+            assert not calls
+        else:
+            assert callbacks["act"](TARGET, context)["target_complete"] is True
+            assert calls
+        return {}
+
+    monkeypatch.setattr(closer_pipeline, "run_pipeline", pipeline_stub)
+    backend = closer(tmp_path, current, apply=True, workers=True)
+    args = SimpleNamespace(
+        state=str(tmp_path / "state"),
+        shadow=False,
+        max_workers=1,
+        coordinator_mode="resource_scoped",
+        coordinator_contract_pin=None,
+    )
+    adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 330)

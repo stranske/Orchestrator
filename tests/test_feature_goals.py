@@ -53,10 +53,10 @@ def test_drained_ledger_prints_zero_drifting(monkeypatch):
         NOW,
     )
     assert drained["drifting"] == 0
-    assert drained["features"] == 5
+    assert drained["features"] == 6
     assert all(row["state"] == "ok" for row in drained["goals"])
     rendered = "\n".join(fg.format_lines(drained))
-    assert "feature goals: 5 features, 0 drifting" in rendered
+    assert "feature goals: 6 features, 0 drifting" in rendered
     assert len(drained["goals"]) == len(fg.FEATURES)
     # Actual weekly formatter, including the drained state, immediately after value chain.
     monkeypatch.setattr(switch_review, "profile_trial_summary_line", lambda: "")
@@ -74,7 +74,7 @@ def test_drained_ledger_prints_zero_drifting(monkeypatch):
     }
     text = switch_review.format_report(report)
     assert "## Feature goals" in text
-    assert "5 features, 0 drifting" in text
+    assert "6 features, 0 drifting" in text
 
 
 def test_check_exits_3_after_14_days_silence_and_0_before(monkeypatch, capsys):

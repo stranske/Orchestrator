@@ -14,10 +14,13 @@ import json
 import math
 import os
 import tempfile
+import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
+
+import closer_resources
 
 SCHEMA = "closer-pipeline/v1"
 UNBOUND_UNCERTAIN_PROVIDER_ERROR = "provider_outcome_uncertainty_without_valid_bound_run"
@@ -35,7 +38,19 @@ NONPASS_WAIT_PREFIX = "ordinary NON_PASS disposition retained: "
 READ_BARRIER_SCHEMA = "closer-unverified-read-barrier/v1"
 READ_BARRIER_ERROR = "expired read deferral lacks a verified terminal resource boundary"
 READ_ORIGIN_BARRIER_ERROR = "expired read retained a historical wait from another revision"
+READ_INTERRUPTED_BARRIER_ERROR = "interrupted read lacks a verified terminal boundary"
 READ_BARRIER_TRIGGER = "reconcile_retained_read_before_retry"
+
+
+def _interrupted_read(previous: Mapping[str, Any], item: Mapping[str, Any]) -> bool:
+    """Recognize receipt-less reads without treating queued exception work as proven."""
+    return previous.get("receipt_summary") is None and (
+        (
+            item.get("status") in {"queued", "running"}
+            and item.get("stage") in {"prepare", "interpret"}
+        )
+        or (item.get("status") == "running" and item.get("stage") == "exception")
+    )
 
 
 def _canonical(value: Any) -> bytes:
@@ -489,6 +504,7 @@ def _bounded(value: Any, *, limit: int = 128 * 1024) -> Any:
 
 
 AUDIT_ARCHIVE_SCHEMA = "closer-invalid-stop-audit-archive/v1"
+NATIVE_WAIT_AUDIT_SCHEMA = "closer-native-wait-continuation-audit/v1"
 
 
 def _audit_archive_dir(path: Path) -> Path:
@@ -559,7 +575,9 @@ def _resolved_audit_history(path: Path, previous: Mapping[str, Any]) -> list[dic
         raise ValueError("invalid pipeline audit history")
     archived = _archived_history(path, previous.get("invalid_stop_archive"))
     if archived and (
-        not local or local[0].get("schema") != "closer-expired-invalid-round-recovery/v1"
+        not local
+        or local[0].get("schema")
+        not in {"closer-expired-invalid-round-recovery/v1", NATIVE_WAIT_AUDIT_SCHEMA}
     ):
         raise ValueError("pipeline audit archive lost its origin")
     return local[:1] + archived + local[1:] if archived else local
@@ -720,6 +738,90 @@ def _legacy_failed_act_wait_proof(path: Path, target: str, item: Mapping[str, An
     )
 
 
+def _validated_wait_audit_origin(history, target, item):
+    """Find the immutable origin for an already native-validated retained wait."""
+    results = item.get("results")
+    act = results.get("act") if isinstance(results, Mapping) else None
+    if (
+        not isinstance(act, Mapping)
+        or not isinstance(item.get("identity"), str)
+        or not item["identity"].strip()
+        or not isinstance(item.get("revision"), str)
+        or not item["revision"]
+    ):
+        return None
+    for record in history:
+        if not isinstance(record, Mapping):
+            continue
+        if record.get("schema") not in {
+            "closer-expired-invalid-round-recovery/v1",
+            NATIVE_WAIT_AUDIT_SCHEMA,
+        }:
+            continue
+        source = record.get("source_run_id")
+        rows = record.get("targets")
+        row = rows.get(target) if isinstance(rows, Mapping) else None
+        digest = row.get("item_sha256") if isinstance(row, Mapping) else None
+        if (
+            isinstance(source, str)
+            and bool(source.strip())
+            and isinstance(digest, str)
+            and len(digest) == 64
+            and all(char in "0123456789abcdef" for char in digest)
+            and row.get("recovery") == "validated_inner_wait"
+            and row.get("act_result") == act
+            and row.get("revision") == item.get("revision")
+            and row.get("identity") == item.get("identity")
+        ):
+            return {"previous_run_id": source, "previous_item_sha256": digest}
+    return None
+
+
+def _native_wait_origin_record(path, target, item, previous, source_run_id, prior_stop, now):
+    """Record a current observed no-operation boundary; never label it expired."""
+    if (
+        item.get("known_completed_action") is True
+        or item.get("provider_outcome_uncertain")
+        or item.get("recovery_barrier") is not None
+        or not _legacy_failed_act_wait_proof(path, target, item)
+    ):
+        return None
+    try:
+        act = _bounded(item["results"]["act"], limit=32 * 1024)
+        row = {
+            "item_sha256": _digest(item),
+            "status": item.get("status"),
+            "stage": item.get("stage"),
+            "revision": item.get("revision"),
+            "identity": item.get("identity"),
+            "work_key": item.get("work_key"),
+            "error": item.get("error"),
+            "resource_evidence": item.get("resource_evidence"),
+            "provider_outcome_uncertain": item.get("provider_outcome_uncertain"),
+            "recovery_barrier": item.get("recovery_barrier"),
+            "act_result": act,
+            "act_receipt_sha256": _digest(act["queue_receipt"]),
+            "recovery": "validated_inner_wait",
+        }
+        return _bounded(
+            {
+                "schema": NATIVE_WAIT_AUDIT_SCHEMA,
+                "boundary": "validated_nonmutating_native_wait",
+                "acceptance_authority": False,
+                "source_run_id": source_run_id,
+                "source_created": previous.get("created"),
+                "source_deadline": previous.get("deadline"),
+                "source_assignment": list(previous.get("assignment", [])),
+                "recorded_at": now(),
+                "prior_stop": prior_stop,
+                "targets": {target: row},
+            },
+            limit=512 * 1024,
+        )
+    except (ValueError, TypeError, KeyError):
+        return None
+
+
 def _historical_validated_wait_result(
     previous: Mapping[str, Any],
     target: str,
@@ -817,6 +919,7 @@ def _audited_retained_wait(
                 and item.get("error") == PRELAUNCH_ROUTE_BUSY_ERROR
                 and failed_read_terminal_proven
             )
+            or _interrupted_read(previous, item)
         )
         or item.get("known_completed_action") is True
         or item.get("provider_outcome_uncertain")
@@ -1325,15 +1428,19 @@ def _audited_prior_revision_wait(
     }.get(pending_kind if isinstance(pending_kind, str) else "")
     pending_evidence = item.get("pending_evidence")
     recognized_read = (
-        status == "deferred"
-        and reason
-        in {"deadline_exhausted", "worker_capacity", "provider_failure", "github_capacity"}
-    ) or (
-        status == "pending"
-        and pending_field is not None
-        and isinstance(pending_evidence, Mapping)
-        and isinstance(pending_evidence.get(pending_field), str)
-        and bool(pending_evidence[pending_field])
+        _interrupted_read(previous, item)
+        or (
+            status == "deferred"
+            and reason
+            in {"deadline_exhausted", "worker_capacity", "provider_failure", "github_capacity"}
+        )
+        or (
+            status == "pending"
+            and pending_field is not None
+            and isinstance(pending_evidence, Mapping)
+            and isinstance(pending_evidence.get(pending_field), str)
+            and bool(pending_evidence[pending_field])
+        )
     )
     if (
         not recognized_read
@@ -1396,7 +1503,9 @@ def _valid_read_recovery_barrier(
     expected_error = (
         READ_ORIGIN_BARRIER_ERROR
         if reason == "historical_wait_revision_changed"
-        else READ_BARRIER_ERROR
+        else (
+            READ_INTERRUPTED_BARRIER_ERROR if reason == "interrupted_read" else READ_BARRIER_ERROR
+        )
     )
     if (
         item.get("status") != "failed"
@@ -1409,7 +1518,12 @@ def _valid_read_recovery_barrier(
         or not isinstance(barrier, Mapping)
         or barrier.get("schema") != READ_BARRIER_SCHEMA
         or reason
-        not in (None, "terminal_resource_boundary_invalid", "historical_wait_revision_changed")
+        not in (
+            None,
+            "terminal_resource_boundary_invalid",
+            "historical_wait_revision_changed",
+            "interrupted_read",
+        )
         or not isinstance(barrier.get("source_run_id"), str)
         or not barrier["source_run_id"]
         or any(
@@ -1431,14 +1545,22 @@ def _valid_read_recovery_barrier(
             and row.get("recovery") == "quarantine_read"
             and row.get("status")
             in (
-                {"deferred", "pending"}
-                if reason == "historical_wait_revision_changed"
-                else {"deferred"}
+                {"queued", "running"}
+                if reason == "interrupted_read"
+                else (
+                    {"deferred", "pending", "queued", "running"}
+                    if reason == "historical_wait_revision_changed"
+                    else {"deferred"}
+                )
+            )
+            and (
+                row.get("status") not in {"queued", "running"}
+                or record.get("source_receipt_missing") is True
             )
             and row.get("stage") == item.get("stage")
             and row.get("deferred_reason") == item.get("deferred_reason")
             and (
-                reason == "historical_wait_revision_changed"
+                reason in {"historical_wait_revision_changed", "interrupted_read"}
                 or row.get("deferred_reason") == "deadline_exhausted"
             )
             and row.get("pending_kind") == item.get("pending_kind")
@@ -1456,6 +1578,43 @@ def _valid_read_recovery_barrier(
         ):
             return True
     return False
+
+
+def _completed_prepare_capacity_observation(
+    previous: Mapping[str, Any], item: Any, run_id: str, now_value: float
+) -> bool:
+    """Bind a result-free read deferral to its terminal scheduling receipt only."""
+    if not isinstance(item, Mapping):
+        return False
+    summary = previous.get("receipt_summary")
+    resource = item.get("resource_evidence")
+    capacity = resource.get("github_capacity") if isinstance(resource, Mapping) else None
+    observed = capacity.get("observed_at") if isinstance(capacity, Mapping) else None
+    finished = summary.get("finished_at") if isinstance(summary, Mapping) else None
+    return (
+        item.get("status") == "deferred"
+        and item.get("stage") == "prepare"
+        and item.get("deferred_reason") == "github_capacity"
+        and item.get("results") == {}
+        and item.get("known_completed_action") is not True
+        and not item.get("provider_outcome_uncertain")
+        and item.get("recovery_barrier") is None
+        and isinstance(summary, Mapping)
+        and summary.get("schema") == "closer-pipeline-receipt/v1"
+        and summary.get("run_id") == run_id
+        and summary.get("deadline") == previous["deadline"]
+        and isinstance(finished, (int, float))
+        and not isinstance(finished, bool)
+        and math.isfinite(float(finished))
+        and float(previous["created"]) <= finished <= now_value
+        and isinstance(observed, (int, float))
+        and not isinstance(observed, bool)
+        and float(previous["created"]) <= observed <= min(finished, float(previous["deadline"]))
+        and isinstance(capacity, Mapping)
+        and _valid_github_capacity_evidence(resource, observed)
+        and item.get("deferred_next_trigger")
+        == f"retry_after_github_reset:{float(capacity['reset_at_epoch']):.3f}"
+    )
 
 
 def _expired_invalid_round_recovery(
@@ -1495,7 +1654,17 @@ def _expired_invalid_round_recovery(
         or not math.isfinite(float(previous["created"]))
         or float(previous["created"]) > float(previous["deadline"])
         or not isinstance(previous.get("invalid_stop_history", []), list)
-        or (previous.get("receipt_summary") and not previous.get("invalid_stop_history"))
+        or (
+            previous.get("receipt_summary")
+            and not previous.get("invalid_stop_history")
+            and not (
+                rows
+                and all(
+                    _completed_prepare_capacity_observation(previous, item, run_id, now_value)
+                    for item in rows.values()
+                )
+            )
+        )
     ):
         return False, set(), set(), set(), set(), {}
 
@@ -1548,6 +1717,8 @@ def _expired_invalid_round_recovery(
             )
         )
         if prior_revision_wait:
+            if previous.get("receipt_summary") is None and status in {"queued", "running"}:
+                expected.add(f"actionable_pipeline_work:{target}:{stage}")
             # Quarantine the exact current read; an immutable old no-operation
             # wait cannot authorize any callback after its revision changes.
             expected.update(
@@ -1571,7 +1742,8 @@ def _expired_invalid_round_recovery(
             and stage in {"prepare", "interpret", "exception"}
             and (
                 item.get("recovery_barrier") is not None
-                or item.get("error") in {READ_BARRIER_ERROR, READ_ORIGIN_BARRIER_ERROR}
+                or item.get("error")
+                in {READ_BARRIER_ERROR, READ_ORIGIN_BARRIER_ERROR, READ_INTERRUPTED_BARRIER_ERROR}
             )
         ):
             if not _valid_read_recovery_barrier(target, item, history):
@@ -1580,6 +1752,23 @@ def _expired_invalid_round_recovery(
             quarantined.add(target)
         elif status == "completed":
             pass
+        elif (
+            _interrupted_read(previous, item)
+            and (no_action or retained_read_wait)
+            and not item.get("provider_outcome_uncertain")
+            and _valid_retained_act_barrier(
+                item.get("recovery_barrier"), history, item.get("identity"), target
+            )
+        ):
+            expected.add(f"actionable_pipeline_work:{target}:{stage}")
+            if item.get("recovery_barrier") is not None or (
+                status == "running" and stage in {"interpret", "exception"}
+            ):
+                # A missing return is not proof that its provider finished. Keep
+                # the exact assessment non-runnable while disjoint reads advance.
+                quarantined.add(target)
+            else:
+                retryable.add(target)
         elif (
             status == "deferred"
             and stage in {"prepare", "interpret", "exception"}
@@ -1655,7 +1844,28 @@ def _expired_invalid_round_recovery(
         ):
             resource = item.get("resource_evidence")
             if not _valid_github_capacity_evidence(resource, historical_now):
-                return False, set(), set(), set(), set(), {}
+                # A throttle can expire before a terminal receipt is written.
+                # Its original observation proves only read scheduling, never
+                # today's stop or an action. Completed rounds additionally need
+                # an exact receipt binding and a wholly unstarted prepare row.
+                capacity = (
+                    resource.get("github_capacity") if isinstance(resource, Mapping) else None
+                )
+                observed = capacity.get("observed_at") if isinstance(capacity, Mapping) else None
+                completed_unstarted_prepare = _completed_prepare_capacity_observation(
+                    previous, item, run_id, now_value
+                )
+                if not (
+                    (summary is None or completed_unstarted_prepare)
+                    and isinstance(observed, (int, float))
+                    and not isinstance(observed, bool)
+                    and float(previous["created"]) <= observed <= float(previous["deadline"])
+                    and _valid_github_capacity_evidence(resource, observed)
+                ):
+                    return False, set(), set(), set(), set(), {}
+                invalid_reason = f"unverified_github_capacity_deferral:{target}"
+                if invalid_reason in reasons:
+                    expected.add(invalid_reason)
             capacity = resource["github_capacity"]
             expected_trigger = f"retry_after_github_reset:{float(capacity['reset_at_epoch']):.3f}"
             if item.get("deferred_next_trigger") != expected_trigger:
@@ -1929,8 +2139,14 @@ def _expired_invalid_round_recovery(
                     "read_barrier_reason": (
                         "historical_wait_revision_changed"
                         if target in changed_wait_origins
-                        else (item.get("recovery_barrier") or {}).get("reason")
-                        or "terminal_resource_boundary_invalid"
+                        else (
+                            "interrupted_read"
+                            if previous.get("receipt_summary") is None
+                            and status in {"queued", "running"}
+                            and stage in {"prepare", "interpret", "exception"}
+                            else (item.get("recovery_barrier") or {}).get("reason")
+                            or "terminal_resource_boundary_invalid"
+                        )
                     ),
                 }
                 if target in quarantined and stage in {"prepare", "interpret", "exception"}
@@ -1966,6 +2182,7 @@ def _expired_invalid_round_recovery(
                 "schema": "closer-expired-invalid-round-recovery/v1",
                 "source_run_id": run_id,
                 "source_deadline": previous.get("deadline"),
+                "source_receipt_missing": previous.get("receipt_summary") is None,
                 "source_assignment": list(assignment),
                 "prior_stop": prior_stop,
                 "targets": audited,
@@ -1988,7 +2205,10 @@ def _expired_invalid_round_recovery(
             )
             # A newly created read barrier pins this exact source run and row.
             # Older identical material cannot satisfy that new origin pointer.
-            or (row["recovery"] == "quarantine_read" and row["status"] in {"deferred", "pending"})
+            or (
+                row["recovery"] == "quarantine_read"
+                and row["status"] in {"deferred", "pending", "queued", "running"}
+            )
         }
         history_entry = (
             dict(audit)
@@ -2041,6 +2261,9 @@ def _load(path: Path) -> dict[str, Any]:
 
 
 def _save(path: Path, doc: Mapping[str, Any]) -> None:
+    fence = closer_resources.fence_for(path)
+    if fence is not None:
+        fence()  # scoped mode: a stale or expired lease holder must not commit
     encoded = json.dumps(doc, ensure_ascii=False, allow_nan=False)
     if len(encoded.encode()) > 8 * 1024 * 1024:
         raise ValueError("pipeline state exceeds 8 MiB; retain large evidence externally")
@@ -2051,6 +2274,8 @@ def _save(path: Path, doc: Mapping[str, Any]) -> None:
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
+        if fence is not None:
+            fence()  # serialization/fsync may have crossed the lease deadline
         os.replace(temp, path)
         dfd = os.open(path.parent, os.O_RDONLY)
         try:
@@ -2194,6 +2419,15 @@ def _run_pipeline_impl(
                 previous_assignment = previous.get("assignment", [])
                 if float(previous.get("deadline", 0)) <= now():
                     for old_item in previous.get("targets", {}).values():
+                        if (
+                            previous.get("receipt_summary") is None
+                            and old_item.get("stage") in {"prepare", "interpret", "exception"}
+                            and old_item.get("status") in {"queued", "running"}
+                        ):
+                            # Preserve the interrupted read's actual boundary
+                            # for recovery: a running assessment is not an
+                            # unstarted deadline deferral.
+                            continue
                         if old_item.get("status") == "queued":
                             old_item.update(
                                 status="deferred",
@@ -2293,6 +2527,11 @@ def _run_pipeline_impl(
                     "metrics": {"capacity_samples": [], "peak_active": {}},
                 },
             )
+            try:
+                origin_history = _resolved_audit_history(path, previous) if previous else []
+            except (ValueError, OSError):
+                # Unavailable immutable history cannot establish a wait origin.
+                origin_history = []
             if prior_invalid_stop_evidence is not None:
                 run["prior_invalid_stop_evidence"] = prior_invalid_stop_evidence
                 if recovered_wait_targets and previous is not None:
@@ -2321,8 +2560,47 @@ def _run_pipeline_impl(
                                 else None
                             )
                         )
+                        available_origins = []
+                        if isinstance(recovery_audit, Mapping) and isinstance(
+                            recovery_audit.get("history_entry"), Mapping
+                        ):
+                            available_origins.append(recovery_audit["history_entry"])
+                        available_origins.extend(origin_history)
+                        origin = _validated_wait_audit_origin(available_origins, target, old_item)
+                        if origin is None and (
+                            not recovery_audit or recovery_audit.get("native_wait_provenance_only")
+                        ):
+                            observed = _native_wait_origin_record(
+                                path, target, old_item, previous, previous_run_id, prior_stop, now
+                            )
+                            if observed is not None:
+                                if recovery_audit:
+                                    recovery_audit["history_entry"]["targets"].update(
+                                        observed["targets"]
+                                    )
+                                else:
+                                    recovery_audit = {
+                                        "history_entry": observed,
+                                        "native_wait_provenance_only": True,
+                                    }
+                                origin = _validated_wait_audit_origin(
+                                    [recovery_audit["history_entry"]], target, old_item
+                                )
+                        if origin is None:
+                            return {
+                                "schema": "closer-pipeline-receipt/v1",
+                                "authority": False,
+                                "status": "blocked",
+                                "reason": "validated_wait_audit_origin_unavailable",
+                                "target": target,
+                                "continuation_required": True,
+                                "finished_at": now(),
+                                "targets": {},
+                            }
+                        if origin["previous_run_id"] == previous_run_id:
+                            origin = {"previous_item_sha256": origin["previous_item_sha256"]}
                         wait_records[target] = {
-                            "previous_item_sha256": _digest(previous["targets"][target]),
+                            **origin,
                             "restored_wait_view": old_item is not previous["targets"][target],
                             "previous_error": old_item.get("error"),
                             "revision": old_item.get("revision"),
@@ -2343,12 +2621,6 @@ def _run_pipeline_impl(
                         "targets": wait_records,
                     }
             if previous is not None:
-                try:
-                    origin_history = _resolved_audit_history(path, previous)
-                except (ValueError, OSError):
-                    # The ordinary archive-staging error path below reports the
-                    # unavailable history; it cannot authorize origin reuse.
-                    origin_history = []
                 retained_read_targets = {
                     target
                     for target, item in previous.get("targets", {}).items()
@@ -2491,7 +2763,11 @@ def _run_pipeline_impl(
                                 READ_ORIGIN_BARRIER_ERROR
                                 if item["recovery_barrier"].get("reason")
                                 == "historical_wait_revision_changed"
-                                else READ_BARRIER_ERROR
+                                else (
+                                    READ_INTERRUPTED_BARRIER_ERROR
+                                    if item["recovery_barrier"].get("reason") == "interrupted_read"
+                                    else READ_BARRIER_ERROR
+                                )
                             ),
                             deferred_next_trigger=READ_BARRIER_TRIGGER,
                         )
@@ -3400,7 +3676,7 @@ def _run_pipeline_impl(
         return receipt
 
 
-def run_pipeline(
+def _run_pipeline_legacy(
     state_path: str | Path,
     targets: Iterable[str],
     *,
@@ -3418,11 +3694,12 @@ def run_pipeline(
     round_deadline_exception: type[BaseException] | None = None,
     round_capacity_exception: type[BaseException] | None = None,
     now: Callable[[], float] = time.time,
+    _terminal_boundary: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run the scheduler while guaranteeing its process lease is always released."""
     held: list[Any] = []
     try:
-        return _run_pipeline_impl(
+        receipt = _run_pipeline_impl(
             state_path,
             targets,
             prepare=prepare,
@@ -3441,6 +3718,12 @@ def run_pipeline(
             now=now,
             _run_lock_ref=held,
         )
+        # Keep the process runlock across durable stop validation and this owner's
+        # alias cleanup. A successor must not observe a completed run while its
+        # still-live predecessor is between receipt persistence and advertisement release.
+        if _terminal_boundary is not None and held and not held[0].closed:
+            _terminal_boundary(receipt)
+        return receipt
     finally:
         if held:
             run_lock = held[0]
@@ -3450,21 +3733,142 @@ def run_pipeline(
                 run_lock.close()
 
 
+def run_pipeline(state_path: str | Path, targets: Iterable[str], **kwargs: Any) -> dict[str, Any]:
+    """Run the scheduler. ``coordinator_mode`` is ``legacy`` (default; one round lock and one
+    shared ledger) or ``resource_scoped`` (opt-in; per-target leases and shards, see
+    ``closer_resources.run_scoped``). Unset, it reads ``ORCH_CLOSER_COORDINATOR_MODE``."""
+    mode = closer_resources.resolve_mode(kwargs.pop("coordinator_mode", None))
+    contract_pin = kwargs.pop("coordinator_contract_pin", None)
+    admission = kwargs.pop("coordination_admission", None)
+    if mode == "legacy":
+        if contract_pin is not None:
+            raise ValueError("coordinator_contract_pin applies to resource_scoped mode only")
+        assigned = list(targets)
+        canonical = [closer_resources.canonical_target(t) for t in assigned]
+        if len(set(canonical)) != len(canonical):
+            raise ValueError("targets must be unique when compared canonically")
+        resource_keys = kwargs.pop("resource_keys", None)
+        kwargs.pop("pool_lease", None)
+        now = kwargs.get("now", time.time)
+        owner = f"legacy:{os.getpid()}:{threading.get_ident()}:{now()}"
+        with contextlib.ExitStack() as gates:
+            held_rows = {}
+            gated_targets = []
+            for target in sorted(assigned, key=closer_resources.canonical_target):
+                try:
+                    gates.enter_context(
+                        closer_resources.admission_gate(
+                            admission, state_path, target, mode="legacy"
+                        )
+                    )
+                    gated_targets.append(target)
+                except closer_resources.ResourceBlocked:
+                    held_rows[target] = closer_resources._fenced_row("resource_contested")
+            fenced_rows, runnable = closer_resources.rollback_fence(state_path, gated_targets)
+            fenced_rows.update(held_rows)
+            if not runnable:
+                return closer_resources.legacy_refusal_receipt(
+                    state_path, assigned, fenced_rows, float(kwargs.get("deadline", 0)), now
+                )
+            original_act = kwargs["act"]
+
+            def guarded_act(target, ctx):
+                if (
+                    resource_keys is None
+                    and not closer_resources.scoped_root(state_path).exists()
+                    and not closer_resources.unknown_reservations(
+                        closer_resources.scoped_root(state_path)
+                    )
+                ):
+                    return original_act(target, ctx)
+                if resource_keys is None:
+                    with closer_resources.mutation_reservation(
+                        state_path,
+                        target,
+                        ctx,
+                        None,
+                        owner=owner,
+                        deadline=kwargs["deadline"],
+                        now=now,
+                    ):
+                        return original_act(target, ctx)
+                keys = [
+                    *closer_resources.default_resource_keys(target),
+                    *resource_keys(target, ctx),
+                ]
+                with closer_resources.legacy_reserve(
+                    closer_resources.scoped_root(state_path),
+                    keys,
+                    target=target,
+                    owner=owner,
+                    deadline=kwargs["deadline"],
+                    now=now,
+                ):
+                    return original_act(target, ctx)
+
+            kwargs["act"] = guarded_act
+
+            def terminal_boundary(receipt):
+                # Preserve legacy's existing known asynchronous waits. Its advertisement
+                # ends only after the durable ledger validates those native continuation
+                # proofs. Scoped Core intents still require their COMPLETE receipt.
+                if resource_keys is not None and _validate_stop_legacy(
+                    state_path, runnable, now=now
+                ).get("valid"):
+                    closer_resources.release_legacy_boundary(
+                        closer_resources.scoped_root(state_path), owner
+                    )
+                for target, row in receipt.get("targets", {}).items():
+                    if row.get("status") == "completed":
+                        closer_resources.release_target(
+                            closer_resources.scoped_root(state_path), target, owner=owner
+                        )
+
+            receipt = _run_pipeline_legacy(
+                state_path, runnable, _terminal_boundary=terminal_boundary, **kwargs
+            )
+            if fenced_rows:
+                receipt["targets"] = {**receipt.get("targets", {}), **fenced_rows}
+                receipt["scoped_rollback"] = {"fenced_targets": sorted(fenced_rows), "drainable": 0}
+            return receipt
+    return closer_resources.run_scoped(
+        state_path, targets, contract_pin=contract_pin, coordination_admission=admission, **kwargs
+    )
+
+
+def validate_stop_scoped(
+    state_path: str | Path,
+    round_id: str,
+    assignment_targets: Iterable[str] | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """``validate_stop`` for one named resource-scoped round (see closer_resources.validate_stop)."""
+    return closer_resources.validate_stop(state_path, round_id, assignment_targets, **kwargs)
+
+
+def scoped_capability() -> dict[str, Any]:
+    """Version-pin capability for a release installer (integration unproved here)."""
+    return closer_resources.capability(SCHEMA)
+
+
 def _save_state_locked(path: Path, state: Mapping[str, Any]) -> None:
     """Persist a state already read while holding the coordinator lock."""
     _save(path, state)
 
 
-def validate_stop(
+def _validate_stop_legacy(
     state_path: str | Path,
     assignment_targets: Iterable[str] | None = None,
     *,
     now: Callable[[], float] = time.time,
+    expected_run_id: str | None = None,
 ) -> dict[str, Any]:
     """Validate outer pipeline accounting and whether continuation is due.
 
     This deliberately accepts only ``closer-pipeline/v1``. Legacy
     ``closer-queue/v1`` state remains owned by closer_queue.validate_stop.
+    A supplied expected_run_id selects only that exact existing assignment/run;
+    native proof still validates at its original path with no latest fallback.
     """
     path = Path(state_path)
     reasons: list[str] = []
@@ -3482,6 +3886,7 @@ def validate_stop(
         for key, value in state["runs"].items()
         if isinstance(value, Mapping)
         and (supplied is None or value.get("assignment") == sorted(supplied))
+        and (expected_run_id is None or key == expected_run_id)
     ]
     if not matches:
         return {
@@ -3671,3 +4076,19 @@ def validate_stop(
         "deadline": float(deadline),
         "reasons": reasons,
     }
+
+
+def validate_stop(state_path, assignment_targets=None, **kwargs):
+    """Legacy accounting plus the common mutation-intent fence (never ignore unknowns)."""
+    result = _validate_stop_legacy(state_path, assignment_targets, **kwargs)
+    unknown = closer_resources.unknown_reservations(closer_resources.scoped_root(state_path))
+    if unknown:
+        result = {
+            **result,
+            "valid": False,
+            "stop_valid": False,
+            "continuation_required": True,
+            "reasons": [*result.get("reasons", []), "unresolved_resource_reservations"],
+            "unknown_reservations": unknown,
+        }
+    return result
