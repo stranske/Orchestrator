@@ -1,9 +1,28 @@
 import json
+import socket
+import subprocess
 
 import pytest
 
 import feedback
 import issue_quality as quality
+
+
+@pytest.fixture(autouse=True)
+def isolated_issue_quality(monkeypatch, tmp_path):
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    attempted = []
+
+    def forbid_external(*args, **kwargs):
+        attempted.append(args)
+        raise AssertionError("issue quality tests must not start processes or network calls")
+
+    monkeypatch.setattr(subprocess, "Popen", forbid_external)
+    monkeypatch.setattr(socket, "create_connection", forbid_external)
+    yield
+    assert attempted == []
 
 
 def _record(run_id, target, durability, *, ts=1000):
@@ -85,9 +104,10 @@ def test_resolution_features_analysis_and_rendering_cover_failure_boundaries():
     rows = [
         quality.RunRow("a", 1, "o/r#1", 1, "durable"),
         quality.RunRow("b", 1, "o/r#2", 2, "reverted"),
-        quality.RunRow("broken", 1, "bad", 3, "durable"),
+        quality.RunRow("broken", 1, "bad", None, "durable"),
+        quality.RunRow("unlinked", 1, "o/r#3", 3, "durable"),
     ]
-    linked = {1: [11, 12], 2: [21]}
+    linked = {1: [11, 12], 2: [21], 3: []}
     payloads = {
         11: {
             "body": "## Repro steps\nRun pytest\n\n## Acceptance criteria\n- [ ] verify pass\n"
@@ -106,9 +126,10 @@ def test_resolution_features_analysis_and_rendering_cover_failure_boundaries():
     )
 
     assert [(r.issue_number, r.durability) for r in records] == [(11, "durable"), (21, "reverted")]
-    assert {item["reason"] for item in skipped} == {
-        "could not fetch issue body",
-        "no closingIssuesReferences",
+    assert {item["run_id"]: item["reason"] for item in skipped} == {
+        "a": "could not fetch issue body",
+        "broken": "could not parse repo/pr",
+        "unlinked": "no closingIssuesReferences",
     }
     features = quality.extract_issue_features(records[0].body)
     assert features["has_repro_steps"] and features["has_acceptance_criteria"]
@@ -122,11 +143,11 @@ def test_resolution_features_analysis_and_rendering_cover_failure_boundaries():
     assert report["baseline"] == {"n": 2, "durable": 1, "durable_rate": 0.5}
     assert report["issues"][0]["score"] >= report["issues"][1]["score"]
     report.update(
-        {"lookback_days": 90, "runs_selected": 3, "issues_analyzed": 2, "skipped": skipped}
+        {"lookback_days": 90, "runs_selected": 4, "issues_analyzed": 2, "skipped": skipped}
     )
     human = quality.format_human(report)
     assert "Issue quality -> durability associations" in human
-    assert "Skipped linked issue/body lookups: 2" in human
+    assert "Skipped linked issue/body lookups: 3" in human
     assert quality._pct(None) == "n/a" and quality._num(None) == "n/a"
 
 
@@ -141,6 +162,13 @@ def test_build_report_and_main_use_injected_offline_readers(monkeypatch, capsys)
         now=2,
     )
     assert report["runs_selected"] == report["issues_analyzed"] == 1
-    monkeypatch.setattr(quality, "build_report", lambda **kwargs: {"answer": 42})
+    report_options = {}
+
+    def build_report(**kwargs):
+        report_options.update(kwargs)
+        return {"answer": 42}
+
+    monkeypatch.setattr(quality, "build_report", build_report)
     assert quality.main(["--json", "--lookback-days", "7", "--workers", "1"]) == 0
     assert json.loads(capsys.readouterr().out) == {"answer": 42}
+    assert report_options == {"lookback_days": 7, "min_cell_n": 10, "max_workers": 1}
