@@ -10,7 +10,8 @@ import sys
 from pathlib import Path
 
 sys.dont_write_bytecode = True
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_root / "src" if (_root / "src").is_dir() else _root))
 from closer_native_observer import render_cursor_wrapper  # noqa: E402
 
 

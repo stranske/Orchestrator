@@ -908,7 +908,7 @@ def scoped_continuation_proof(cfg, candidate):
         if receipt.is_symlink() or candidate["receipt_path"] != str(receipt):
             return None
         receipt_hash = _hash(receipt)
-        if candidate.get("receipt_sha256", receipt_hash) != receipt_hash:
+        if candidate.get("receipt_sha256") != receipt_hash:
             return None
         targets = targets_from_assignment(assignment)
         verdict = closer_resources.validate_stop(pipeline, round_id, targets)
@@ -920,7 +920,7 @@ def scoped_continuation_proof(cfg, candidate):
             or verdict.get("global_stop_valid") is not False
         ):
             return None
-        if candidate.get("run_ids", verdict["run_ids"]) != verdict["run_ids"]:
+        if candidate.get("run_ids") != verdict["run_ids"]:
             return None
         handoff = Path(
             cfg.get("handoff_dir")

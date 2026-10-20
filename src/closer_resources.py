@@ -1617,7 +1617,9 @@ def run_scoped(
             "unknown_reservations_drainable": sum(1 for v in unknown.values() if v in owners),
         },
     }
-    aggregate["receipt_path"] = str(write_round_receipt(root, aggregate))
+    receipt_path = write_round_receipt(root, aggregate)
+    aggregate["receipt_path"] = str(receipt_path)
+    aggregate["receipt_sha256"] = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
     return aggregate
 
 

@@ -268,7 +268,17 @@ def scoped_receipt(tmp_path, monkeypatch):
         return verdict
 
     monkeypatch.setattr(closer_resources, "validate_stop", validate)
-    return cfg, {"round_id": round_id, "receipt_path": str(receipt)}, verdict, calls
+    return (
+        cfg,
+        {
+            "round_id": round_id,
+            "receipt_path": str(receipt),
+            "receipt_sha256": native._hash(receipt),
+            "run_ids": dict(verdict["run_ids"]),
+        },
+        verdict,
+        calls,
+    )
 
 
 def test_scoped_continuation_revalidates_named_domain_and_never_global_stop(scoped_receipt):
