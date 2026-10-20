@@ -1165,6 +1165,48 @@ def valid_scope_refusal(state_path, target, item, run_id):
         return False
 
 
+def valid_initial_scope_refusal(state_path, target, item, round_id):
+    """Positive gate evidence that this target never entered a pipeline shard."""
+    try:
+        ref = item["scope_proof"]
+        path = Path(ref["path"])
+        base = scoped_root(Path(state_path).resolve()) / "scope-admissions" / round_id
+        if path.is_symlink() or path.resolve().parent != base:
+            return False
+        raw = path.read_bytes()
+        if len(raw) > 4 * 1024 * 1024 or hashlib.sha256(raw).hexdigest() != ref["sha256"]:
+            return False
+        proof = json.loads(raw)
+        snapshot = proof["snapshot"]
+        digest = hashlib.sha256(
+            json.dumps(
+                {k: v for k, v in snapshot.items() if k != "snapshot_sha256"},
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+        return (
+            item.get("scoped_fence") is True
+            and item.get("deferred_reason") == "scope_quarantined"
+            and item.get("results") == {}
+            and proof.get("schema") == "closer-scoped-admission/v1"
+            and proof.get("round_id") == round_id
+            and proof.get("target") == target
+            and proof.get("stage") == "target_admission"
+            and proof.get("callback_started") is False
+            and proof.get("admitted") is False
+            and bool(proof.get("reason"))
+            and proof.get("legacy_stop_authority") is False
+            and snapshot.get("snapshot_sha256") == digest
+            and snapshot.get("acceptance_authority") is False
+            and snapshot.get("global_stop_authority") is False
+            and Path(snapshot["state_path"]).resolve() == Path(state_path).resolve()
+        )
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return False
+
+
 def write_round_receipt(root: Path, receipt: Mapping[str, Any]) -> Path:
     """Immutable create-only aggregate receipt, one file per round id."""
     directory = _round_dir(root)
@@ -1292,6 +1334,13 @@ def validate_stop(
         and set(run_ids) == set(assignment) - set(held_targets)
         and (assignment_targets is None or sorted(assignment_targets) == sorted(assignment)),
         "admitted_domain_reasons": admitted_reasons,
+        "not_started_domain_valid": not run_ids
+        and set(rows) == set(assignment)
+        and (assignment_targets is None or sorted(assignment_targets) == sorted(assignment))
+        and all(
+            valid_initial_scope_refusal(state_path, target, rows[target], round_id)
+            for target in assignment
+        ),
         "held_targets": held_targets,
         "historical_quarantine": retained,
         "round_id": round_id,
@@ -1399,6 +1448,7 @@ def run_scoped(
         directory.mkdir(parents=True, exist_ok=True)
         proof = {
             "schema": "closer-scoped-admission/v1",
+            "round_id": round_id,
             "target": target,
             "stage": stage,
             "keys": keys,

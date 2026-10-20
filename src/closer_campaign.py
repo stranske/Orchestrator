@@ -1099,6 +1099,23 @@ def dispatch_command(cfg: dict[str, Any], python: str, module_dir: Path) -> list
         "--max-workers",
         str(min(MAX_WORKERS_CAP, max(1, int(cfg.get("dispatch_workers", 1))))),
     ]
+    mode = cfg.get("coordinator_mode", "legacy")
+    if mode not in {"legacy", "resource_scoped"}:
+        raise ValueError("unsupported pinned coordinator mode")
+    if mode == "resource_scoped":
+        import closer_pipeline
+
+        pin = cfg.get("coordinator_contract_pin")
+        if pin != closer_pipeline.scoped_capability():
+            raise ValueError("scoped native dispatch requires the exact current coordinator pin")
+        command.extend(
+            [
+                "--coordinator-mode",
+                mode,
+                "--coordinator-contract-pin",
+                json.dumps(pin, sort_keys=True, allow_nan=False),
+            ]
+        )
     if cfg.get("apply"):
         command.extend(["--apply", "--workers", "--pipeline"])
         # New launch paths always opt in; absent binding holds instead of legacy fallback.
@@ -2026,9 +2043,12 @@ def qualify(manifest: dict[str, Any], root: str | Path) -> list[str]:
     understands the recorded state schema, and (4) the pinned Core loadable as an adapter.
     Any failure holds; nothing falls back to another action path."""
     problems = validate_manifest(manifest) + verify_modules(manifest)
-    from closer_mechanisms import CLI, DESKTOP, mechanism, qualification_problems
+    from closer_mechanisms import CLI, DESKTOP, MechanismError, mechanism, qualification_problems
 
-    selected = mechanism(manifest)
+    try:
+        selected = mechanism(manifest)
+    except MechanismError as exc:
+        return problems + [f"execution mechanism remains held: {exc}"]
     if selected == CLI:
         problems += qualification_problems(manifest)
     elif selected == "native-handoff/v1":

@@ -401,7 +401,8 @@ def test_native_preview_cannot_overwrite_host_wrapper(host, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "failure", [None, "timeout", "denied", "arbitrary_c", "cleanup_denied", "missing_api"]
+    "failure",
+    [None, "not_started", "timeout", "denied", "arbitrary_c", "cleanup_denied", "missing_api"],
 )
 def test_round_continuation_needs_terminal_b_and_exact_known_c_boundary(scoped_receipt, failure):
     import json
@@ -446,6 +447,9 @@ def test_round_continuation_needs_terminal_b_and_exact_known_c_boundary(scoped_r
 
     if failure == "missing_api":
         verdict.pop("admitted_domain_valid")
+    if failure == "not_started":
+        verdict.update(admitted_domain_valid=False, not_started_domain_valid=True, run_ids={})
+        candidate["run_ids"] = {}
     result, detail = runtime_binding.run_native_round(
         [sys.executable, "dispatcher.py", "--assignment", cfg["assignment"]],
         cfg,
@@ -453,7 +457,10 @@ def test_round_continuation_needs_terminal_b_and_exact_known_c_boundary(scoped_r
         hooks=hooks,
     )
     assert events == ["B", ("C", "exact-token")]
-    if failure is None:
+    if failure == "not_started":
+        assert result == "unavailable"
+        assert json.loads(detail)["proof"]["domain_outcome"] == "not_started"
+    elif failure is None:
         assert result == "scoped_continuation"
         receipt = json.loads(detail)
         assert receipt["action_b_exit"] == 78 and receipt["action_c_exit"] == 65

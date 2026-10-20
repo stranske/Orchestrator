@@ -12,6 +12,8 @@ from pathlib import Path
 import pytest
 import test_closer_quarantine_integration as fixture
 
+import closer_campaign as campaign
+import closer_pipeline as pipeline_module
 import closer_resources as resources
 import closer_runtime_binding as binding
 
@@ -116,3 +118,75 @@ def test_wrapper_exporter_runs_from_flat_package_without_pythonpath(tmp_path):
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["installed"] is False
     assert "CLOSER PINNED NATIVE ENTRY v1" in preview.read_text()
+
+
+def test_native_dispatch_selects_exact_reviewed_scoped_contract_before_action_a(tmp_path):
+    pin = pipeline_module.scoped_capability()
+    cfg = {
+        "assignment": str(tmp_path / "assignment.json"),
+        "dispatch_state": str(tmp_path / "queue.json"),
+        "apply": True,
+        "runtime_manifest": str(tmp_path / "manifest.json"),
+        "coordinator_mode": "resource_scoped",
+        "coordinator_contract_pin": pin,
+    }
+    command = campaign.dispatch_command(cfg, sys.executable, tmp_path)
+    assert command[command.index("--coordinator-mode") + 1] == "resource_scoped"
+    assert json.loads(command[command.index("--coordinator-contract-pin") + 1]) == pin
+    for malformed in (None, {**pin, "layout": 999}):
+        with pytest.raises(ValueError, match="exact current coordinator pin"):
+            campaign.dispatch_command(
+                {**cfg, "coordinator_contract_pin": malformed}, sys.executable, tmp_path
+            )
+
+
+@pytest.mark.parametrize("damage", [None, "missing", "callback_started"])
+def test_fully_fenced_round_requires_positive_no_callback_proof(tmp_path, damage):
+    raw, state, held = fixture.original_state(tmp_path)
+    original = {p: p.read_bytes() for p in (raw, state)}
+    target = held[0]
+    assignment = tmp_path / "assignment.json"
+    fixture.write(assignment, {"targets": [{"target": target}]})
+    events = Counter()
+    candidate = fixture.run(
+        state, [target], fixture.callbacks(events), lambda t, _c: fixture.inventory(t)
+    )
+    assert events == Counter() and candidate["run_ids"] == {}
+    cfg = {
+        "mechanism": "native-handoff/v1",
+        "dispatch_state": str(raw),
+        "assignment": str(assignment),
+        "handoff_dir": str(tmp_path / "handoff"),
+        "native_hooks": {
+            "postrun_dependencies": {
+                "assignment": {
+                    "path": str(assignment),
+                    "sha256": hashlib.sha256(assignment.read_bytes()).hexdigest(),
+                }
+            }
+        },
+    }
+    gate = candidate["targets"][target]["scope_proof"]
+    if damage == "missing":
+        Path(gate["path"]).unlink()
+    elif damage == "callback_started":
+        proof = json.loads(Path(gate["path"]).read_bytes())
+        proof["callback_started"] = True
+        fixture.write(Path(gate["path"]), proof)
+        recorded = json.loads(Path(candidate["receipt_path"]).read_bytes())
+        recorded["targets"][target]["scope_proof"]["sha256"] = hashlib.sha256(
+            Path(gate["path"]).read_bytes()
+        ).hexdigest()
+        fixture.write(Path(candidate["receipt_path"]), recorded)
+        candidate["receipt_sha256"] = hashlib.sha256(
+            Path(candidate["receipt_path"]).read_bytes()
+        ).hexdigest()
+    verdict = resources.validate_stop(state, candidate["round_id"], [target])
+    assert verdict["admitted_domain_valid"] is False and verdict["global_stop_valid"] is False
+    proof = binding.scoped_continuation_proof(cfg, candidate)
+    if damage is None:
+        assert verdict["not_started_domain_valid"] is True
+        assert proof["domain_outcome"] == "not_started" and proof["accepted"] is False
+    else:
+        assert verdict["not_started_domain_valid"] is False and proof is None
+    assert {p: p.read_bytes() for p in original} == original

@@ -912,13 +912,17 @@ def scoped_continuation_proof(cfg, candidate):
             return None
         targets = targets_from_assignment(assignment)
         verdict = closer_resources.validate_stop(pipeline, round_id, targets)
+        if verdict.get("round_id") != round_id or verdict.get("global_stop_valid") is not False:
+            return None
         if (
-            verdict.get("round_id") != round_id
-            or verdict.get("admitted_domain_valid") is not True
-            or not verdict.get("run_ids")
-            or verdict.get("admitted_domain_reasons")
-            or verdict.get("global_stop_valid") is not False
+            verdict.get("admitted_domain_valid") is True
+            and verdict.get("run_ids")
+            and not verdict.get("admitted_domain_reasons")
         ):
+            domain_outcome = "known"
+        elif verdict.get("not_started_domain_valid") is True and verdict.get("run_ids") == {}:
+            domain_outcome = "not_started"
+        else:
             return None
         if candidate.get("run_ids") != verdict["run_ids"]:
             return None
@@ -940,6 +944,7 @@ def scoped_continuation_proof(cfg, candidate):
             "held_targets": verdict.get("held_targets", []),
             "global_stop_valid": False,
             "accepted": False,
+            "domain_outcome": domain_outcome,
         }
     except (OSError, ValueError, KeyError, TypeError, RuntimeError):
         return None
@@ -1082,7 +1087,11 @@ def run_native_round(
                 candidate = None
             proof = scoped_continuation_proof(cfg, candidate)
             if proof:
-                return "scoped_continuation", json.dumps(
+                return (
+                    "unavailable"
+                    if proof["domain_outcome"] == "not_started"
+                    else "scoped_continuation"
+                ), json.dumps(
                     {
                         "proof": proof,
                         "actual_detail": detail,
