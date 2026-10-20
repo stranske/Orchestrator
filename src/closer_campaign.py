@@ -296,10 +296,22 @@ def reconcile(
                         candidate = json.loads(result["detail"])["proof"]
                     except (KeyError, TypeError, ValueError):
                         candidate = None
+                    cfg = doc.get("worker_config") or {}
+                    if result.get("mechanism") == "native-handoff/v1" and isinstance(
+                        candidate, dict
+                    ):
+                        handoff = Path(
+                            cfg.get("handoff_dir")
+                            or os.environ.get("HANDOFF_DIR")
+                            or Path.home() / ".codex/handoff"
+                        )
+                        lane = handoff / ".lane-closer.lock"
+                        if lane.exists() or lane.is_symlink():
+                            continue  # Live ownership defers observation; it is not an outcome.
                     if (
                         result.get("mechanism") != "native-handoff/v1"
-                        or scoped_continuation_proof(doc.get("worker_config") or {}, candidate)
-                        != candidate
+                        or not isinstance(candidate, dict)
+                        or scoped_continuation_proof(cfg, candidate) != candidate
                     ):
                         outcome = "unknown"
                 worker.update(state="terminal", outcome=outcome, detail=result.get("detail"))

@@ -539,3 +539,61 @@ def test_normal_entry_cannot_replace_active_supervisor_intent(host, monkeypatch)
         with pytest.raises(mechanisms.MechanismError, match="already active"):
             native.native_entry(manifest, path, manifest["mechanism_contract"]["campaign_root"])
     assert native._read(root / "native-active.json") == original
+
+
+def test_supervisor_relative_manifest_matches_canonical_wrapper_entry(host, monkeypatch):
+    manifest, path, _ = host
+    monkeypatch.chdir(path.parent)
+    monkeypatch.setattr(native.subprocess, "Popen", lambda *_a, **_k: pytest.fail("no launch"))
+    # Reaching the budget check proves the canonical wrapper block matched.
+    with pytest.raises(mechanisms.MechanismError, match="budget must be"):
+        native.supervise_native(manifest, Path(path.name), budget_seconds=0)
+
+
+def test_preview_uses_pinned_launcher_and_interpreter_not_runtime_alias(host, tmp_path):
+    import importlib.util
+    import json
+
+    manifest, path, wrapper = host
+    alias = tmp_path / "module-alias"
+    alias.symlink_to(Path(manifest["module_path"]).parent, target_is_directory=True)
+    manifest["launcher"]["path"] = str(alias / "closer_launcher.py")
+    runtime_alias = tmp_path / "runtime-python"
+    runtime_alias.symlink_to(manifest["mechanism_contract"]["interpreter"]["path"])
+    manifest["runtime"]["python"] = str(runtime_alias)
+    path.write_text(json.dumps(manifest))
+    raw = wrapper.read_text()
+    source = tmp_path / "original-wrapper.sh"
+    source.write_text(
+        raw[: raw.index(native.MARKER)]
+        + raw[raw.index(native.END_MARKER) + len(native.END_MARKER) :].lstrip("\n")
+    )
+    output = tmp_path / "preview.sh"
+    script = Path(__file__).parents[1] / "scripts/render_closer_native_entry.py"
+    spec = importlib.util.spec_from_file_location("native_preview_pins", script)
+    renderer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(renderer)
+    assert (
+        renderer.main(
+            [
+                "--source",
+                str(source),
+                "--manifest",
+                str(path),
+                "--campaign-root",
+                manifest["mechanism_contract"]["campaign_root"],
+                "--out",
+                str(output),
+            ]
+        )
+        == 0
+    )
+    expected = native.wrapper_block(
+        path.resolve(),
+        manifest["mechanism_contract"]["campaign_root"],
+        manifest["mechanism_contract"]["interpreter"]["path"],
+        manifest["launcher"]["path"],
+    )
+    assert output.read_text().count(expected) == 1
+    assert str(alias / "closer_launcher.py") in output.read_text()
+    assert str(runtime_alias) not in output.read_text()

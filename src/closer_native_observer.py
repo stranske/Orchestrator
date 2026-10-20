@@ -571,6 +571,7 @@ def _native_entry(manifest, manifest_path, campaign_root):
 
 def supervise_native(manifest, manifest_path, *, budget_seconds):
     """Actually invoke the opted-in reviewed wrapper, with no provider/queue path."""
+    manifest_path = Path(manifest_path).resolve()
     value, wrapper, _python, root = _check_wrapper_entry(manifest, manifest_path)
     if (
         not isinstance(budget_seconds, (int, float))

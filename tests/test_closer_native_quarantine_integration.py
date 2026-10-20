@@ -92,7 +92,12 @@ def test_wrapper_exporter_runs_from_flat_package_without_pythonpath(tmp_path):
     )
     fixture.write(
         manifest,
-        {"runtime": {"python": sys.executable}, "module_path": str(flat / "closer_campaign.py")},
+        {
+            "runtime": {"python": sys.executable},
+            "module_path": str(flat / "closer_campaign.py"),
+            "mechanism_contract": {"interpreter": {"path": str(Path(sys.executable).resolve())}},
+            "launcher": {"path": str(flat / "closer_launcher.py")},
+        },
     )
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
     env.update(HOME=str(tmp_path), PYTHONDONTWRITEBYTECODE="1")

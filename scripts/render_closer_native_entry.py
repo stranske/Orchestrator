@@ -31,8 +31,8 @@ def main(argv=None):
         source.read_text(),
         manifest_path=Path(args.manifest).resolve(),
         campaign_root=Path(args.campaign_root).resolve(),
-        interpreter=Path(manifest["runtime"]["python"]).resolve(),
-        launcher=Path(manifest["module_path"]).parent / "closer_launcher.py",
+        interpreter=Path(manifest["mechanism_contract"]["interpreter"]["path"]),
+        launcher=Path(manifest["launcher"]["path"]),
     )
     with output.open("x") as stream:
         stream.write(rendered)
