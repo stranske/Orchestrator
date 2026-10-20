@@ -91,6 +91,35 @@ def _ledger() -> dict:
 # which counts those skips as drainable beside the ceiling they push against.
 DECLARED_UNREGISTERED_MARK = "declared by this tree, not yet registered here"
 
+# Closer-runtime conformance tests skip when the independently pinned Workflows Core tree is absent.
+# verify.py counts these separately from mirror git-family skips (`mirror_skipped_max`).
+CORE_SIBLING_ABSENT_MARK = "CLOSER CORE SIBLING ABSENT:"
+
+
+def closer_core_source_path() -> Path:
+    """Default sibling path for Workflows Closer Core sources (overridable via CLOSER_CORE_SOURCE)."""
+    configured = os.environ.get("CLOSER_CORE_SOURCE")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    import paths
+
+    module_dir = Path(__file__).resolve().parent
+    checkout = paths.checkout_root(module_dir)
+    return (checkout.parent / "portable").resolve()
+
+
+def core_sibling_absent() -> str | None:
+    """Reason string when Closer Core sibling sources are not present, else None."""
+    path = closer_core_source_path()
+    runtime = path / "scripts/closer_runtime.py"
+    if runtime.is_file():
+        return None
+    return (
+        f"{CORE_SIBLING_ABSENT_MARK} independent Closer Core source unavailable at {path} — "
+        "place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing "
+        "scripts/closer_runtime.py"
+    )
+
 
 def ledger_rows_absent(*capability_ids: str) -> str | None:
     """Reason string when any named capability has no row in the ledger at all.

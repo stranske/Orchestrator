@@ -16,8 +16,10 @@ from test_closer_campaign_exec import Port, manifest_for, pinned_dir
 
 import claims
 import closer_campaign as cc
+import env_prereq
 
 DRAFT = core_source() / "scripts/closer_runtime.py"
+_CORE_SIBLING_ABSENT = env_prereq.core_sibling_absent()
 
 
 @pytest.fixture(autouse=True)
@@ -110,7 +112,10 @@ def test_pinned_core_must_match_digest_and_contract(tmp_path):
         pinned.operation_adapter(tmp_path / "ops")
 
 
-@pytest.mark.skipif(not DRAFT.is_file(), reason="Core draft not present at the sibling path")
+@pytest.mark.skipif(
+    _CORE_SIBLING_ABSENT is not None,
+    reason=_CORE_SIBLING_ABSENT or "Closer Core sibling absent",
+)
 def test_adapter_over_digest_pinned_core_copy(tmp_path, monkeypatch):
     """Compatibility of the adapter with a digest-pinned COPY of the Core draft (not deployed)."""
     # Core reads fixtures/closer-operation/v1/operation.schema.json relative to itself: that
