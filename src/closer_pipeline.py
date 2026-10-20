@@ -2029,6 +2029,23 @@ def _expired_invalid_round_recovery(
                 return False, set(), set(), set(), set(), {}
             uncertain.add(target)
         elif (
+            previous.get("receipt_summary") is None
+            and status in {"queued", "running"}
+            and stage in {"act", "reconcile"}
+            and not item.get("provider_outcome_uncertain")
+            and item.get("recovery_barrier") is None
+            and item.get("known_completed_action") is not True
+            and all(
+                isinstance(item.get(key), str) and item[key]
+                for key in ("revision", "identity", "work_key")
+            )
+        ):
+            # A missing callback return is an unknown effect, never a retry.
+            # Retain its exact running row in the audit; only the successor's
+            # projection enters the existing original-operation reconciliation.
+            uncertain.add(target)
+            expected.add(f"actionable_pipeline_work:{target}:{stage}")
+        elif (
             status == "uncertain"
             and stage in {"act", "reconcile"}
             and (
@@ -2419,6 +2436,14 @@ def _run_pipeline_impl(
                 previous_assignment = previous.get("assignment", [])
                 if float(previous.get("deadline", 0)) <= now():
                     for old_item in previous.get("targets", {}).values():
+                        if (
+                            previous.get("receipt_summary") is None
+                            and old_item.get("status") in {"queued", "running"}
+                            and old_item.get("stage") in {"act", "reconcile"}
+                        ):
+                            # Recovery records the actual interrupted boundary;
+                            # mutate only the successor's reconciliation view.
+                            continue
                         if (
                             previous.get("receipt_summary") is None
                             and old_item.get("stage") in {"prepare", "interpret", "exception"}
@@ -3456,6 +3481,7 @@ def _run_pipeline_impl(
                         "identity": item.get("identity", target),
                         "deadline": active_deadline,
                         "state_path": str(path),
+                        "pipeline_run_id": run_id,
                         "action_state_path": str(
                             path.parent / f"{path.stem}.actions" / f"{_digest(target)}.json"
                         ),
@@ -3799,6 +3825,12 @@ def run_pipeline(state_path: str | Path, targets: Iterable[str], **kwargs: Any) 
                     owner=owner,
                     deadline=kwargs["deadline"],
                     now=now,
+                    causal_binding={
+                        "pipeline_run_id": ctx["pipeline_run_id"],
+                        "revision": ctx["revision"],
+                        "identity": ctx["identity"],
+                        "work_key": ctx["work_key"],
+                    },
                 ):
                     return original_act(target, ctx)
 

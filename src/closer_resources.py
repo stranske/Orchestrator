@@ -767,7 +767,7 @@ def reserve(
 
 
 @contextlib.contextmanager
-def legacy_reserve(root, keys, *, target, owner, deadline, now=time.time):
+def legacy_reserve(root, keys, *, target, owner, deadline, now=time.time, causal_binding=None):
     """Advertise a cooperating legacy executor under its existing JSON/runlock protocol.
 
     This is not a Core operation intent. The same live legacy executor may perform its
@@ -803,6 +803,7 @@ def legacy_reserve(root, keys, *, target, owner, deadline, now=time.time):
                         "target": canonical_target(target),
                         "state": "legacy_executor",
                         "at": now(),
+                        **({"causal_binding": dict(causal_binding)} if causal_binding else {}),
                     },
                 )
         yield
@@ -1308,3 +1309,381 @@ def run_scoped(
     }
     aggregate["receipt_path"] = str(write_round_receipt(root, aggregate))
     return aggregate
+
+
+LEGACY_RECONCILIATION_SCHEMA = "closer-legacy-advertisement-reconciliation/v1"
+
+
+def _reconciliation_bytes(path):
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"missing_or_aliased_file:{path}")
+    return path.read_bytes()
+
+
+def _reconciliation_record(path):
+    raw = _reconciliation_bytes(path)
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError(f"invalid_record:{path}")
+    return raw, value
+
+
+def _reconciliation_digest(value):
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    ).hexdigest()
+
+
+def _no_operation_wait(path, target, row):
+    """Pure, deliberately narrow subset of the native inner-wait contract.
+
+    No holder lookup, provider inspection, claim adoption, or native ledger write.
+    Only evidence-refusal waits with no operation history can retire an advertisement.
+    """
+    import closer_pipeline as pipeline
+    import closer_queue as queue
+
+    act = row["results"]["act"]
+    snapshot = row["results"]["prepare"]["snapshot"]
+    proof = act["resource_evidence"]["inner_wait"]
+    native_path = path.parent / f"{path.stem}.actions" / f"{pipeline._digest(target)}.json"
+    raw, native = _reconciliation_record(native_path)
+    round_state = native["round"]
+    receipt = round_state["receipt"]
+    item = native["items"][target]
+    reason, trigger = proof["reason"], proof["next_trigger"]
+    expected_proof = {
+        "schema": pipeline.INNER_WAIT_SCHEMA,
+        "target": target,
+        "revision": row["revision"],
+        "head": snapshot.get("head"),
+        "reason": reason,
+        "next_trigger": trigger,
+        "inner_path": str(native_path),
+        "receipt_sha256": pipeline._digest(receipt),
+    }
+    if (
+        row.get("status") != "deferred"
+        or row.get("stage") != "act"
+        or row.get("error") is not None
+        or row.get("recovery_barrier") is not None
+        or row.get("provider_outcome_uncertain")
+        or row.get("known_completed_action") is True
+        or not isinstance(row.get("revision"), str)
+        or not row["revision"]
+        or (snapshot.get("head") is None and snapshot.get("kind") != "issue")
+        or (
+            snapshot.get("head") is not None
+            and (
+                not isinstance(snapshot["head"], str)
+                or not re.fullmatch(r"[0-9a-f]{40}", snapshot["head"])
+            )
+        )
+        or native_path.parent.is_symlink()
+        or snapshot.get("target") != target
+        or snapshot.get("revision") != row["revision"]
+        or row.get("identity")
+        != hashlib.sha256(
+            json.dumps(
+                [target, snapshot.get("head"), snapshot.get("merge")], sort_keys=True
+            ).encode()
+        ).hexdigest()
+        or proof != expected_proof
+        or act.get("status") != "deferred"
+        or act.get("reason") != "validated_inner_wait"
+        or act.get("acceptance_authority") is not False
+        or act.get("next_trigger") != trigger
+        or act.get("queue_receipt") != receipt
+        or reason not in pipeline.EVIDENCE_REFUSAL_REASONS
+        or trigger != pipeline.EVIDENCE_REFUSAL_TRIGGER
+        or native.get("schema") != queue.SCHEMA
+        or set(native["items"]) != {target}
+        or round_state.get("status") != "finished"
+        or round_state.get("assignment_targets") != [target]
+        or round_state.get("source_revisions", {}).get(target) != row["revision"]
+        or receipt.get("schema") != queue.RECEIPT_SCHEMA
+        or receipt.get("valid") is not True
+        or receipt.get("stop_valid") is not True
+        or receipt.get("progress") != []
+        or receipt.get("eligible_remaining") != []
+        or item.get("operation") is not None
+        or item.get("operation_history") != []
+        or item.get("evidence", {}).get("head") != snapshot.get("head")
+        or receipt.get("accounting") != [queue._account_row(target, item)]
+    ):
+        raise ValueError("native_no_operation_wait_proof_mismatch")
+    accounting = receipt["accounting"][0]
+    if any(
+        accounting.get(key) != value
+        for key, value in {
+            "target": target,
+            "revision": row["revision"],
+            "action": "wait",
+            "eligible": False,
+            "requires_coordinator": False,
+            "reason": reason,
+            "next_trigger": trigger,
+            "observation_freshness": "fresh",
+            "operation_id": None,
+            "operation_status": None,
+        }.items()
+    ) or accounting.get("status") not in {"deferred", "ineligible"}:
+        raise ValueError("native_accounting_mismatch")
+
+    def forbidden_holder(_key):
+        raise ValueError("unexpected_claim_lookup")
+
+    checked = queue._validate_data(
+        native,
+        receipt,
+        assignment_targets=[target],
+        now_value=receipt["finished_at"],
+        holder_fn=forbidden_holder,
+    )
+    if not checked.get("valid") or not checked.get("stop_valid"):
+        raise ValueError("invalid_native_receipt")
+    return native_path, raw
+
+
+def plan_legacy_reconciliation(state_path, *, run_id, owner, target):
+    """Read-only plan; historical advertisements lacking causal IDs remain held.
+
+    A plan is not a global stop, acceptance proof, or permission to retry an effect.
+    Apply rechecks the exact plan under all original locks before archiving any bytes.
+    """
+    path = Path(state_path).absolute()
+    plan = {
+        "schema": LEGACY_RECONCILIATION_SCHEMA,
+        "state_path": str(path),
+        "run_id": run_id,
+        "owner": owner,
+        "target": target,
+        "acceptance_authority": False,
+        "global_stop_authority": False,
+        "reasons": [],
+        "advertisements": [],
+    }
+    try:
+        import closer_pipeline as pipeline
+
+        raw, state = _reconciliation_record(path)
+        if state.get("schema") != pipeline.SCHEMA:
+            raise ValueError("unsupported_pipeline_schema")
+        run = state["runs"][run_id]
+        if target not in run["assignment"]:
+            raise ValueError("target_not_in_original_run")
+        row = run["targets"][target]
+        native_path, native_raw = _no_operation_wait(path, target, row)
+        plan["pipeline_bytes"] = raw.decode()
+        plan["native_path"] = str(native_path)
+        plan["native_bytes"] = native_raw.decode()
+        binding = {
+            "pipeline_run_id": run_id,
+            "revision": row["revision"],
+            "identity": row["identity"],
+            "work_key": row["work_key"],
+        }
+        if any(not isinstance(v, str) or not v for v in binding.values()):
+            raise ValueError("invalid_causal_run_binding")
+        root = scoped_root(path)
+        for base in _reservation_bases(root):
+            if base.is_symlink() or base.parent.is_symlink():
+                raise ValueError("aliased_reservation_base")
+            for directory in sorted(base.iterdir()) if base.is_dir() else []:
+                intent_path = directory / "legacy-intent.json"
+                if not intent_path.exists():
+                    continue
+                intent_raw, intent = _reconciliation_record(intent_path)
+                if intent.get("owner") != owner or intent.get("target") != canonical_target(target):
+                    continue
+                key = intent["key"]
+                if (
+                    normalize_key(key) != key
+                    or key.split(":", 1)[0] not in DURABLE_KINDS
+                    or directory.name != hashlib.sha256(key.encode()).hexdigest()[:24]
+                    or directory.is_symlink()
+                    or intent.get("state") != "legacy_executor"
+                ):
+                    raise ValueError("advertisement_identity_mismatch")
+                if intent.get("causal_binding") != binding:
+                    plan["reasons"].append("missing_or_mismatched_causal_run_binding")
+                for candidate_base in _reservation_bases(root):
+                    if (candidate_base / directory.name / "intent.json").exists():
+                        raise ValueError("core_intent_retained")
+                    other = candidate_base / directory.name / "legacy-intent.json"
+                    if other != intent_path and other.exists():
+                        raise ValueError("other_resource_advertisement_retained")
+                plan["advertisements"].append(
+                    {"path": str(intent_path), "bytes": intent_raw.decode(), "key": key}
+                )
+        if not plan["advertisements"]:
+            raise ValueError("no_matching_advertisements")
+        keys = [item["key"] for item in plan["advertisements"]]
+        if len(set(keys)) != len(keys):
+            raise ValueError("duplicate_resource_advertisements")
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        plan["reasons"].append(str(exc))
+    plan["reasons"] = sorted(set(plan["reasons"]))
+    plan["eligible"] = not plan["reasons"]
+    return {**plan, "plan_sha256": _reconciliation_digest(plan)}
+
+
+def _exact_reconciliation_plan(path, run_id, owner, target, expected_hash):
+    """Resume only the same immutable audit, with every retired byte still present."""
+    current = plan_legacy_reconciliation(path, run_id=run_id, owner=owner, target=target)
+    if current["eligible"] and current["plan_sha256"] == expected_hash:
+        return current
+    audit_dir = _reservation_base(scoped_root(path)).parent / "reconciliation-audit"
+    if audit_dir.is_symlink() or not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+        raise ResourceBlocked("invalid_reconciliation_audit_identity")
+    audit_path = audit_dir / f"{expected_hash}.json"
+    try:
+        _, prior = _reconciliation_record(audit_path)
+        content = {k: v for k, v in prior.items() if k != "plan_sha256"}
+        if (
+            prior.get("plan_sha256") != expected_hash
+            or _reconciliation_digest(content) != expected_hash
+            or prior.get("eligible") is not True
+            or current["reasons"] not in ([], ["no_matching_advertisements"])
+            or any(
+                current.get(k) != v
+                for k, v in prior.items()
+                if k not in {"advertisements", "reasons", "eligible", "plan_sha256"}
+            )
+        ):
+            raise ValueError("reconciliation_audit_binding_changed")
+        remaining = []
+        for index, ad in enumerate(prior["advertisements"]):
+            source = Path(ad["path"])
+            allowed = {
+                base / hashlib.sha256(ad["key"].encode()).hexdigest()[:24] / "legacy-intent.json"
+                for base in _reservation_bases(scoped_root(path))
+            }
+            if source not in allowed or source.parent.is_symlink() or source.is_symlink():
+                raise ValueError("invalid_audited_advertisement_path")
+            for base in _reservation_bases(scoped_root(path)):
+                if (base / source.parent.name / "intent.json").exists():
+                    raise ValueError("core_intent_retained")
+                other = base / source.parent.name / "legacy-intent.json"
+                if other != source and other.exists():
+                    raise ValueError("other_resource_advertisement_retained")
+            destination = audit_dir / f"{expected_hash}-{index}.retired"
+            if source.exists():
+                if destination.exists() or _reconciliation_bytes(source) != ad["bytes"].encode():
+                    raise ValueError("advertisement_changed_since_audit")
+                remaining.append(ad)
+            elif _reconciliation_bytes(destination) != ad["bytes"].encode():
+                raise ValueError("retired_advertisement_changed")
+        if remaining != current["advertisements"]:
+            raise ValueError("advertisement_set_changed_since_audit")
+        return prior
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise ResourceBlocked("reconciliation_plan_held_or_changed") from exc
+
+
+def apply_legacy_reconciliation(state_path, *, run_id, owner, target, expected_plan_sha256):
+    """Explicit exact-plan CAS: archive before retiring only proven no-operation ads.
+
+    Lock contention is a refusal, never evidence that a holder is dead. No locks
+    are created by this API. A crash after an archive rename leaves immutable
+    evidence. An exact-hash restart resumes only while all original queue/native
+    bytes and every still-present or archived advertisement remain unchanged.
+    """
+    path = Path(state_path).absolute()
+    initial = _exact_reconciliation_plan(path, run_id, owner, target, expected_plan_sha256)
+    lock_paths = [path.with_name(path.name + ".runlock"), path.with_name(path.name + ".lock")]
+    lock_paths += [
+        Path(ad["path"]).parent / "lock"
+        for ad in sorted(initial["advertisements"], key=lambda ad: ad["key"])
+    ]
+    lock_paths += [Path(initial["native_path"] + ".lock")]
+    with contextlib.ExitStack() as stack:
+        for lock_path in lock_paths:
+            if lock_path.is_symlink():
+                raise ResourceBlocked("aliased_reconciliation_lock")
+            handle = stack.enter_context(lock_path.open("r+"))
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise ResourceBlocked(f"live_reconciliation_holder:{lock_path}") from exc
+        current = _exact_reconciliation_plan(path, run_id, owner, target, expected_plan_sha256)
+        if current != initial:
+            raise ResourceBlocked("reconciliation_plan_changed_under_locks")
+        audit_dir = _reservation_base(scoped_root(path)).parent / "reconciliation-audit"
+        audit_dir.mkdir(exist_ok=True)
+        if audit_dir.is_symlink():
+            raise ResourceBlocked("aliased_reconciliation_audit")
+        audit_path = audit_dir / f"{expected_plan_sha256}.json"
+        encoded = (json.dumps(current, sort_keys=True, indent=2, allow_nan=False) + "\n").encode()
+        try:
+            fd = os.open(audit_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
+        except FileExistsError:
+            if _reconciliation_bytes(audit_path) != encoded:
+                raise ResourceBlocked("reconciliation_audit_mismatch") from None
+        else:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+        with audit_path.open("rb") as stream:
+            os.fsync(stream.fileno())
+        _fsync_dir(audit_dir)
+        # Audit is durable before the first removal. Each exact original file is
+        # retired by atomic rename, retaining its bytes even after a partial crash.
+        retired = []
+        for index, ad in enumerate(current["advertisements"]):
+            source = Path(ad["path"])
+            destination = audit_dir / f"{expected_plan_sha256}-{index}.retired"
+            if not source.exists() and _reconciliation_bytes(destination) == ad["bytes"].encode():
+                retired.append(str(destination))
+                continue
+            if _reconciliation_bytes(source) != ad["bytes"].encode():
+                raise ResourceBlocked("advertisement_changed_before_retirement")
+            if destination.exists() or destination.is_symlink():
+                raise ResourceBlocked("retirement_destination_exists")
+            os.rename(source, destination)
+            _fsync_dir(source.parent)
+            _fsync_dir(audit_dir)
+            retired.append(str(destination))
+        return {
+            "status": "retired",
+            "audit_path": str(audit_path),
+            "retired": retired,
+            "acceptance_authority": False,
+            "global_stop_authority": False,
+        }
+
+
+def _reconciliation_main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Plan exact no-operation legacy advertisement reconciliation"
+    )
+    parser.add_argument("--state", required=True)
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--owner", required=True)
+    parser.add_argument("--target", required=True)
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--expected-plan-sha256")
+    args = parser.parse_args(argv)
+    if args.apply and not args.expected_plan_sha256:
+        parser.error("--apply requires --expected-plan-sha256")
+    try:
+        common = {"run_id": args.run_id, "owner": args.owner, "target": args.target}
+        result = (
+            apply_legacy_reconciliation(
+                args.state, **common, expected_plan_sha256=args.expected_plan_sha256
+            )
+            if args.apply
+            else plan_legacy_reconciliation(args.state, **common)
+        )
+        print(json.dumps(result, sort_keys=True))
+        return 0 if result.get("eligible", result.get("status") == "retired") else 78
+    except (OSError, ValueError, ResourceBlocked) as exc:
+        print(json.dumps({"status": "held", "reason": str(exc), "acceptance_authority": False}))
+        return 78
+
+
+if __name__ == "__main__":
+    raise SystemExit(_reconciliation_main())

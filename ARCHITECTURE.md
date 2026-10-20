@@ -46,6 +46,15 @@ invalidate prior evidence, and verifier requests are deduplicated. Source closur
 composes the separately owned supervisor actor when deployed and explicitly enabled;
 this coordinator does not enable it. Deployment uses the existing mirror sync and
 canonical local prompt renderers, preserving demand scheduling and safety gates.
+The resource rail records causal run/revision/identity/work-key bindings before
+staged-pipeline legacy actions. Exact-plan reconciliation independently validates a completed
+no-operation evidence wait under the original locks and archives its evidence
+before retiring only matching advertisements. Historical records without causal
+binding and all uncertain operations remain held; no acceptance or global-stop
+authority is added. Interrupted action boundaries preserve original audit rows
+and project only to reconciliation; unsupported continuation facts and unresolved
+reservations continue to hold global admission.
+
 **Runtime ownership and the campaign layer (`src/closer_campaign.py`, 2026-10-19).** The Orchestrator
 owns the closer *runtime*: capacity routing, parallel bounded workers, handoffs, recovery, release
 management and desktop adapters, and it distributes that runtime by pinned manifest. Workflows owns
