@@ -10,14 +10,13 @@ import sys
 import time
 
 import pytest
-
-import env_prereq
 from closer_core_support import core_source
 from test_closer_campaign import DIGEST
 from test_closer_campaign_exec import Port, manifest_for, pinned_dir
 
 import claims
 import closer_campaign as cc
+import env_prereq
 
 DRAFT = core_source() / "scripts/closer_runtime.py"
 _CORE_SIBLING_ABSENT = env_prereq.core_sibling_absent()

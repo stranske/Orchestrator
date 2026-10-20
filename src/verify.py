@@ -1246,9 +1246,7 @@ def core_sibling_skips(py: dict) -> int:
     if not tests and py.get("skipped"):
         return 0
     return sum(
-        1
-        for v in tests
-        if v.get("outcome") == "skipped" and mark in (v.get("message") or "")
+        1 for v in tests if v.get("outcome") == "skipped" and mark in (v.get("message") or "")
     )
 
 
@@ -1381,8 +1379,7 @@ def _ceiling_problems(
                 # that does not exist. The label already names WHICH population overflowed.
                 f"CEILING exceeded{where}: {observed} {label} > agreed maximum {limit}. "
                 f"This is bounded on purpose — either the new one is wrong, or raise "
-                f"`{in_force}` in .verify-floor.json deliberately and say why."
-                + extra
+                f"`{in_force}` in .verify-floor.json deliberately and say why." + extra
             )
     return problems
 

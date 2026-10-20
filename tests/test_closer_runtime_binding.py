@@ -12,11 +12,10 @@ from types import SimpleNamespace
 
 import pytest
 
-import env_prereq
-
 import closer_campaign as cc
 import closer_dispatcher as cd
 import closer_runtime_binding as rb
+import env_prereq
 
 
 @pytest.fixture
