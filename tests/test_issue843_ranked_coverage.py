@@ -606,6 +606,43 @@ def test_effectiveness_lift_and_main_cli(monkeypatch, tmp_path, capsys):
     # never called while the code is correct — noted as uncoverable without a prod change.
 
 
+def test_effectiveness_closes_only_connections_it_opened(monkeypatch):
+    """AC pin for capability_effectiveness 910/925: caller-supplied conns stay open.
+
+    `_edge_rows` sets `close = conn is None` and only then calls `c.close()`. The selftest's
+    FakeConn.close / EmptyConn.close therefore never run while that contract holds.
+    """
+    owned_closed: list[str] = []
+    borrowed_closed: list[str] = []
+
+    class _Cursor:
+        def fetchall(self):
+            return []
+
+    class OwnedConn:
+        def execute(self, *_a, **_k):
+            return _Cursor()
+
+        def close(self):
+            owned_closed.append("owned")
+
+    class BorrowedConn:
+        def execute(self, *_a, **_k):
+            return _Cursor()
+
+        def close(self):
+            borrowed_closed.append("borrowed")
+
+    monkeypatch.setattr(feedback, "_conn", OwnedConn)
+    assert effectiveness._edge_rows(conn=None) == []
+    assert owned_closed == ["owned"]
+    assert borrowed_closed == []
+
+    assert effectiveness._edge_rows(conn=BorrowedConn()) == []
+    assert borrowed_closed == [], "caller-supplied conn must not be closed"
+    assert owned_closed == ["owned"]
+
+
 # ----- redirect_shadow (1) --------------------------------------------------
 
 
@@ -624,7 +661,30 @@ def test_redirect_record_without_proposal_source_raises(monkeypatch, tmp_path):
         )
 
 
+def test_redirect_bare_report_rejection_keeps_else_assert_unreachable(tmp_path):
+    """AC pin for redirect_shadow 1383: correct code never reaches the selftest else.
+
+    The selftest's `else: raise AssertionError(...)` only fires if record_redirect accepts a
+    bare report. Pin the raise path so a silent acceptance would fail this suite first.
+    """
+    report = {"run_id": "bare", "target": "owner/repo#9", "agent": "codex"}
+    corpus = tmp_path / "unused-issue843.jsonl"
+    with pytest.raises(ValueError, match="--dispatch or --proposal-json") as caught:
+        shadow.record_redirect(report, "AC", corpus_path=corpus)
+    assert "--dispatch or --proposal-json" in str(caught.value)
+    assert not corpus.exists(), "rejection must not write a corpus event"
+
+
 # ----- strategy_experiment (116) --------------------------------------------
+
+
+def test_strategy_invalid_single_arm_raises_before_selftest_assert_false():
+    """AC pin for strategy_experiment 1037: invalid single arm raises ValueError.
+
+    The selftest's `assert False` after that call only runs if normalize_arm fails to raise.
+    """
+    with pytest.raises(ValueError, match="single strategy"):
+        strategy.normalize_arm({"strategy": "single", "agents": ["claude", "cursor"]})
 
 
 def test_strategy_coerce_and_normalize_arms_edges():
