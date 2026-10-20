@@ -1184,6 +1184,43 @@ def _carried_forward(floor: dict) -> dict:
 # of its skips registration alone drains: the blocking and the drainable number in one message.
 SKIP_CEILINGS = ("skipped_max", "selftest_skipped_max", "gate_skipped_max")
 
+# What clears each skip population. Named beside the count so a latched ceiling breach names the
+# category that is new and the action that drains it — not only the integer to raise (#817).
+SKIP_CATEGORY_CLEARS = {
+    "skipped_max": (
+        "clear by restoring the named missing prerequisite under SKIPPED "
+        "(git family on the exec mirror), or raise the shape key deliberately"
+    ),
+    "core_sibling_skipped_max": (
+        "clear when CLOSER_CORE_SOURCE points at a checkout with scripts/closer_runtime.py "
+        "or Core is placed at the sibling portable path"
+    ),
+    "selftest_skipped_max": (
+        "clear by restoring the named missing selftest prerequisite, or raise the shape key "
+        "deliberately"
+    ),
+    "gate_skipped_max": (
+        "clear by restoring the named missing gate prerequisite, or raise the shape key deliberately"
+    ),
+}
+
+
+def _skip_category_breakdown(floor: dict, actual: dict, *, shape: str) -> str:
+    """Name every skip category with observed/limit and the action that clears it. Pure."""
+    parts = []
+    for key, label in CEILINGS:
+        if key not in SKIP_CATEGORY_CLEARS:
+            continue
+        limit, in_force = ceiling_limit(floor, key, shape=shape)
+        observed = actual.get(key)
+        if observed is None:
+            count = "UNCERTAIN"
+        else:
+            count = str(int(observed))
+        bound = "unset" if limit is None else f"{limit} via `{in_force}`"
+        parts.append(f"{label} {count}/{bound} — {SKIP_CATEGORY_CLEARS[key]}")
+    return " Skip categories: " + "; ".join(parts) + "."
+
 
 def declared_rows_at_start(ledger: pathlib.Path | None = None) -> dict:
     """Which rows this tree declares are absent from the ledger the run is ABOUT to judge.
@@ -1368,11 +1405,11 @@ def _ceiling_problems(
             extra = ""
             if drainable is not None and key in SKIP_CEILINGS:
                 extra = _drainable_clause(drainable.get(key), in_force)
-            elif key == "core_sibling_skipped_max":
-                extra = (
-                    " These skips clear when CLOSER_CORE_SOURCE points at a checkout with "
-                    "scripts/closer_runtime.py or Core is placed at the sibling portable path."
-                )
+            if key in SKIP_CATEGORY_CLEARS:
+                # Every skip-ceiling breach names ALL skip categories with counts and clear
+                # actions. The pre-#817 latch printed only "40 > 21" and left the reader guessing
+                # which population was new.
+                extra += _skip_category_breakdown(floor, actual, shape=shape)
             problems.append(
                 # `CEILING`, not `SKIP CEILING`: the mypy exempt list is bounded by this same
                 # machinery and is not a skip, so the old wording sent a reader hunting for a skip
@@ -2337,10 +2374,17 @@ def _selftest() -> None:
     _actual_core["skipped_max"] = 22
     _over_git = _ceiling_problems(_floor_core, _actual_core, shape=EXEC_MIRROR)
     assert len(_over_git) == 1 and "`mirror_skipped_max`" in _over_git[0], _over_git
+    assert "Skip categories:" in _over_git[0], _over_git
+    assert "Closer Core sibling skipped test(s) 1/1 via `mirror_core_sibling_skipped_max`" in (
+        _over_git[0]
+    ), _over_git
+    assert "skipped test(s) 22/21 via `mirror_skipped_max`" in _over_git[0], _over_git
     _actual_core = {**{k: 0 for k, _ in CEILINGS}, "skipped_max": 1, "core_sibling_skipped_max": 2}
     _over_core = _ceiling_problems(_floor_core, _actual_core, shape=EXEC_MIRROR)
     assert len(_over_core) == 1 and "`mirror_core_sibling_skipped_max`" in _over_core[0], _over_core
     assert "CLOSER_CORE_SOURCE" in _over_core[0]
+    assert "Skip categories:" in _over_core[0], _over_core
+    assert "git family" in _over_core[0], _over_core
     for _count, _says in ((0, "None of them skipped only"), (None, "NOT COUNTED")):
         _over_c = _ceiling_problems(
             {"skipped_max": 1}, {**_z_d, "skipped_max": 2}, drainable={"skipped_max": _count}
