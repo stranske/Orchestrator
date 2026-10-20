@@ -304,10 +304,11 @@ The coordinator-owned relay must generate a unique token for each pacing decisio
 write `decision_id=<id>` in that decision's `relay-pacing.log` line, and pass the same
 value to `python3 "$ORCH/rate_incidents.py" record-lane-round --relay-decision-id <id>`
 alongside the existing agent, surface, lane, exit and output-file arguments. Tokens are
-capped at 192 characters so join keys remain valid completion identifiers. This
-repository supplies the generator CLI, importer and record hook; the coordinator updates
-`~/.codex/bin/handoff-relay.sh` after merge. Omit `--relay-decision-id` when generation
-fails rather than passing an empty token.
+capped at 176 characters so the `relay-pacing:id:<token>` join key stays within the
+192-character completion-identifier limit. This repository supplies the generator CLI,
+importer and record hook; the coordinator updates `~/.codex/bin/handoff-relay.sh` after
+merge. Omit `--relay-decision-id` when generation fails rather than passing an empty
+token.
 
 The round persists the token as `relay_decision_id` in its routing record's
 `causal_context_json`; the decision and outcome telemetry retain `decision_id`.

@@ -166,9 +166,10 @@ def generate_relay_decision_id(
 
     Compact UTC (no ``:``) keeps the token a single log field. The importer and
     ``record-lane-round --relay-decision-id`` accept any nonempty no-whitespace
-    token up to ``feedback.RELAY_DECISION_ID_MAX_CHARS`` (192); this helper is the
-    documented production form. Prefer the ``generate-relay-decision-id`` CLI so
-    the relay does not need ``$ORCH`` on ``PYTHONPATH``.
+    token up to ``feedback.RELAY_DECISION_ID_MAX_CHARS`` (176 after the
+    ``relay-pacing:id:`` run-id prefix); this helper is the documented production
+    form. Prefer the ``generate-relay-decision-id`` CLI so the relay does not need
+    ``$ORCH`` on ``PYTHONPATH``.
     """
     stamp = (when or datetime.now(timezone.utc)).astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     token = random_hex if random_hex is not None else secrets.token_hex(4)

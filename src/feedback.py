@@ -6468,9 +6468,11 @@ RELAY_PACING_CAPABILITY = "windowed-capacity-policy"
 RELAY_PACING_VERSION = "relay-pacing-v1"
 RELAY_PACING_BACKLOG_CUTOFF = int(datetime(2026, 10, 20, 11, 58, tzinfo=timezone.utc).timestamp())
 RELAY_PACING_UNJOINED_REASON = "no round recorded (pre-2026-10-20T11:58Z relay subshell bug)"
-# Match `_safe_identifier` (192) so join keys stay valid completion identifiers under
-# MAX_COMPLETION_STRING_CHARS (256), including the `relay-pacing:id:` prefix.
-RELAY_DECISION_ID_MAX_CHARS = 192
+# Explicit-join run_ids are ``{prefix}{token}``. `_safe_identifier` allows at most 192
+# characters, so the token budget is the remainder after the prefix (payload strings
+# still clear MAX_COMPLETION_STRING_CHARS=256).
+RELAY_PACING_ID_RUN_PREFIX = "relay-pacing:id:"
+RELAY_DECISION_ID_MAX_CHARS = 192 - len(RELAY_PACING_ID_RUN_PREFIX)
 
 
 def ingest_relay_pacing(log: Path, *, now: int | None = None) -> dict:
@@ -6516,7 +6518,7 @@ def ingest_relay_pacing(log: Path, *, now: int | None = None) -> dict:
                     or any(char.isspace() for char in relay_id)
                 ):
                     continue
-                decision_id = "relay-pacing:id:" + relay_id
+                decision_id = RELAY_PACING_ID_RUN_PREFIX + relay_id
             facts = {key: facts[key] for key in required}
             if relay_id is not None:
                 facts["decision_id"] = relay_id

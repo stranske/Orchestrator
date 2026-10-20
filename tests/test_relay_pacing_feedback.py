@@ -490,9 +490,16 @@ def test_invalid_explicit_id_is_rejected(tmp_path, monkeypatch, bad_id):
 def test_max_length_explicit_id_is_accepted(tmp_path, monkeypatch):
     log = _setup(tmp_path, monkeypatch)
     token = "x" * feedback.RELAY_DECISION_ID_MAX_CHARS
+    run_id = feedback.RELAY_PACING_ID_RUN_PREFIX + token
+    assert len(run_id) == 192
     log.write_text(_line(decision_id=token))
     feedback.record_lane_round("claude", "opener", None, 0, "none", NOW, relay_decision_id=token)
     assert feedback.ingest_relay_pacing(log, now=NOW)["joined"] == 1
+    with feedback._conn() as c:
+        row = c.execute(
+            "SELECT run_id,validation_status FROM completion_events WHERE phase='decision'"
+        ).fetchone()
+        assert row == (run_id, "accepted")
 
 
 @pytest.mark.parametrize("bad_id", ["", "x" * (feedback.RELAY_DECISION_ID_MAX_CHARS + 1)])
@@ -514,3 +521,64 @@ def test_backlog_without_any_exit_is_terminal_without_outcome(tmp_path, monkeypa
     feedback.record_lane_round("claude", "opener", None, 0, "none", end + 60)
     assert feedback.ingest_relay_pacing(log, now=end + 60) == result
     assert (_counts(now=end + 60)["acted_on"], _counts(now=end + 60)["outcome"]) == (0, 0)
+
+
+def test_issue825_interleaved_backlog_explicit_join_credits_monitor(tmp_path, monkeypatch):
+    """#825 production shape: 24 interleaved legacy decisions stay unjoined; one ID joins."""
+    log = _setup(tmp_path, monkeypatch)
+    cutoff = feedback.RELAY_PACING_BACKLOG_CUTOFF
+    parts: list[str] = []
+    stamp = cutoff + 60
+    for _ in range(12):
+        parts.append(_line(stamp, lane="opener"))
+        stamp += 30
+        parts.append(_line(stamp, chosen="cursor", lane="closer"))
+        stamp += 30
+    token = rate_incidents.generate_relay_decision_id(
+        when=datetime.fromtimestamp(stamp, timezone.utc), pid=825, random_hex="ac01"
+    )
+    parts.append(_line(stamp, decision_id=token))
+    exit_ts = stamp + 60
+    log.write_text("".join(parts))
+    # Concurrent-lane exits cannot join the legacy backlog by adjacency.
+    feedback.record_lane_round("claude", "opener", None, 0, "none", cutoff + 200)
+    feedback.record_lane_round("cursor", "closer", None, 0, "none", cutoff + 400)
+    assert feedback.ingest_relay_pacing(log, now=exit_ts - 1) == {
+        "status": "recorded",
+        "decisions": 25,
+        "joined": 0,
+        "unjoined": 0,
+    }
+    tail = tmp_path / "tail"
+    tail.write_text("all checks passed")
+    result = rate_incidents.record_lane_round(
+        agent="claude",
+        lane="opener",
+        receiver_reason=None,
+        exit_status=0,
+        output_file=tail,
+        ts=exit_ts,
+        relay_decision_id=token,
+    )
+    assert result["relay_pacing"] == {
+        "status": "recorded",
+        "decisions": 25,
+        "joined": 1,
+        "unjoined": 0,
+    }
+    counts = _counts(now=exit_ts)
+    assert (counts["acted_on"], counts["outcome"]) == (1, 1)
+    ledger = tmp_path / "capabilities.json"
+    capabilities.register(feedback.RELAY_PACING_CAPABILITY, {"status": "wired"}, ledger)
+    rep = monitor.report(
+        now=exit_ts,
+        path=ledger,
+        env={},
+        inputs=monitor._brain(feedback.DB_PATH, cutoff, exit_ts),
+    )
+    row = next(r for r in rep["rows"] if r["capability"] == feedback.RELAY_PACING_CAPABILITY)
+    assert (row["acted_on"], row["outcome"]) == (1, 1)
+    text = "\n".join(monitor.format_lines(rep))
+    assert "windowed-capacity-policy" in text
+    assert "acted_on 1" in text
+    assert re.search(r"outcome 1\b", text)
