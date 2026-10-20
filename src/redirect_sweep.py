@@ -181,8 +181,13 @@ def _existing_sweep_fingerprints(corpus_path: Path, *, since_ts: int | None) -> 
             continue
         if not isinstance(entry, dict) or entry.get("kind") != "redirect_proposal":
             continue
-        if since_ts is not None and int(entry.get("ts") or 0) < since_ts:
-            continue
+        if since_ts is not None:
+            try:
+                ts = int(entry.get("ts") or 0)
+            except (TypeError, ValueError):
+                continue
+            if ts < since_ts:
+                continue
         report_raw = entry.get("report")
         report_summary: dict[str, Any] = report_raw if isinstance(report_raw, dict) else {}
         fp = entry.get("sweep_fingerprint") or report_summary.get("sweep_fingerprint")
@@ -563,10 +568,14 @@ def _read_report_status(path: Path, *, now: float | None = None) -> dict:
         out["load_error"] = str(exc)
         return out
     generated = data.get("generated_at")
+    try:
+        age_seconds = int(now - int(generated)) if generated else None
+    except (TypeError, ValueError):
+        age_seconds = None
     out.update(
         {
             "generated_at": generated,
-            "age_seconds": int(now - int(generated)) if generated else None,
+            "age_seconds": age_seconds,
             "active_claim_count": data.get("active_claim_count"),
             "watched_count": data.get("watched_count"),
             "actionable_count": data.get("actionable_count"),
