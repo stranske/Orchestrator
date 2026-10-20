@@ -146,13 +146,25 @@ def desktop_problems(
     return []
 
 
-def policy_problem(policy: dict[str, Any], *, now: float | None = None) -> str | None:
+def policy_problem(
+    policy: dict[str, Any], *, now: float | None = None, mechanism: str | None = None
+) -> str | None:
     """Configured worker pause wins over controller ACTIVE; unknown always holds.
 
     A fresh registered app reader can reuse an existing controller readback. It
     must bind its readback to hashes of the currently configured worker TOMLs.
     Self-reported JSON does not register an observer or grant authorization.
     """
+    if mechanism not in (None, "desktop-scheduler/v1", "cli-offload/v1"):
+        return "scheduled writes held: execution mechanism has no supported policy reader"
+    if policy.get("schema") == "cli-configured-policy/v1":
+        if mechanism != "cli-offload/v1":
+            return "scheduled writes held: CLI policy cannot authorize another mechanism"
+        from closer_mechanisms import configured_policy_problem
+
+        return configured_policy_problem(policy)
+    if mechanism == "cli-offload/v1":
+        return "scheduled writes held: CLI configured policy contract missing"
     paths = policy.get("worker_tomls")
     if not isinstance(paths, list) or not paths:
         return "scheduled writes held: worker pause policy missing"
@@ -184,6 +196,13 @@ def policy_problem(policy: dict[str, Any], *, now: float | None = None) -> str |
     except Exception:
         return "scheduled writes held: app policy readback unavailable"
     return None
+
+
+def policy_for_mechanism(policy: dict[str, Any], *, mechanism: str | None = None) -> str | None:
+    """Keep the original Desktop reader call unchanged; explicit CLI is separate."""
+    if mechanism in (None, "desktop-scheduler/v1"):
+        return policy_problem(policy)
+    return policy_problem(policy, mechanism=mechanism)
 
 
 def dependency_problems() -> list[str]:
@@ -308,8 +327,16 @@ class CoreBundle:
 
 
 class RuntimeBinding:
-    def __init__(self, bundle: CoreBundle, policy: dict[str, Any], *, transport=None):
+    def __init__(
+        self,
+        bundle: CoreBundle,
+        policy: dict[str, Any],
+        *,
+        transport=None,
+        mechanism: str | None = None,
+    ):
         self.bundle, self.policy = bundle, policy
+        self.mechanism = mechanism
         self.transport = transport
         self.adapters: dict[str, Any] = {}
 
@@ -419,7 +446,7 @@ class RuntimeBinding:
         The operation's retained original binding is checked against the Core intent.
         Readback can drain an expired attempt; it never grants execution time or resets denial.
         """
-        problem = policy_problem(self.policy)
+        problem = policy_for_mechanism(self.policy, mechanism=self.mechanism)
         if problem:
             return {"status": "blocked", "reason": problem}
         action = operation.get("action")
@@ -491,7 +518,7 @@ class RuntimeBinding:
                 "status": "blocked",
                 "reason": "original native action deadline missing or exhausted",
             }
-        reason = policy_problem(self.policy)
+        reason = policy_for_mechanism(self.policy, mechanism=self.mechanism)
         if reason:
             return {"status": "blocked", "reason": reason}
         canonical = {
@@ -588,7 +615,13 @@ def binding_from_manifest(path: str | Path) -> RuntimeBinding | None:
 
         if qualify(manifest, Path(path).parent):
             return None
-        return RuntimeBinding(CoreBundle(manifest["portable"]), manifest.get("policy") or {})
+        from closer_mechanisms import mechanism
+
+        return RuntimeBinding(
+            CoreBundle(manifest["portable"]),
+            manifest.get("policy") or {},
+            mechanism=mechanism(manifest),
+        )
     except (OSError, ValueError, KeyError, TypeError, BindingError):
         return None  # caller requires binding and holds remote actions; local work continues
 

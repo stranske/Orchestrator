@@ -507,10 +507,14 @@ def step(
     """Reconcile, then perform at most one next action. Returns the action taken.
 
     A caller that holds an older generation is fenced before any effect."""
-    from closer_runtime_binding import policy_problem
+    from closer_runtime_binding import policy_for_mechanism as policy_problem
 
     initial = campaign.read()
-    reason = policy_problem(((initial or {}).get("worker_config") or {}).get("policy") or {})
+    configured = (initial or {}).get("worker_config") or {}
+    reason = policy_problem(
+        configured.get("policy") or {},
+        mechanism=configured.get("mechanism", "desktop-scheduler/v1"),
+    )
     if reason:
         return {"kind": "held", "reason": reason}
     doc = reconcile(campaign, pid_alive=pid_alive)
@@ -1110,17 +1114,25 @@ def run_dispatcher(
     return ("unknown" if apply else "unavailable"), f"dispatcher exit {code}"
 
 
-def write_result(path: str | Path, worker_id: str, target: str, outcome: str, detail: str) -> None:
-    _atomic_write(
-        Path(path),
-        {
-            "worker_id": worker_id,
-            "target": target,
-            "outcome": outcome,
-            "detail": detail,
-            "finished": _now(),
-        },
-    )
+def write_result(
+    path: str | Path,
+    worker_id: str,
+    target: str,
+    outcome: str,
+    detail: str,
+    *,
+    mechanism: str | None = None,
+) -> None:
+    record = {
+        "worker_id": worker_id,
+        "target": target,
+        "outcome": outcome,
+        "detail": detail,
+        "finished": _now(),
+    }
+    if mechanism is not None:
+        record["mechanism"] = mechanism
+    _atomic_write(Path(path), record)
 
 
 def delegate_target(
@@ -1128,11 +1140,35 @@ def delegate_target(
 ) -> tuple[str, str]:
     """Per-target repair through the existing `dispatcher.delegate`, which makes the exact
     real-target claim itself. A foreign owner of that claim is a barrier, not a race."""
-    from closer_runtime_binding import policy_problem
+    from closer_runtime_binding import policy_for_mechanism as policy_problem
 
-    reason = policy_problem(cfg.get("policy") or {})
+    reason = policy_problem(
+        cfg.get("policy") or {}, mechanism=cfg.get("mechanism", "desktop-scheduler/v1")
+    )
     if reason:
         return "unavailable", reason
+    if cfg.get("mechanism") == "cli-offload/v1":
+        try:
+            pin = load_manifest(cfg["runtime_manifest"])
+            contract = pin["mechanism_contract"]
+            if cfg.get("policy") != pin.get("policy") or policy_problem(
+                pin.get("policy") or {}, mechanism="cli-offload/v1"
+            ):
+                return (
+                    "unavailable",
+                    "CLI delegate configured policy differs from fresh pinned policy",
+                )
+            if (
+                contract.get("mechanism") != "cli-offload/v1"
+                or (agent, profile_id) != (contract["agent"], contract["profile_id"])
+                or qualify(pin, Path(cfg["runtime_manifest"]).parent)
+            ):
+                return (
+                    "unavailable",
+                    "CLI delegate profile/mechanism is not independently qualified",
+                )
+        except (KeyError, OSError, ValueError, RuntimeError):
+            return "unavailable", "CLI delegate manifest is unavailable"
     spec = cfg.get("delegate") or {}
     if not TARGET.fullmatch(target) or not spec.get("lane") or not spec.get("prompt"):
         return "denied", "per-target granularity needs a real target and a delegate lane+prompt"
@@ -1176,6 +1212,7 @@ def run_worker(
     delegate=None,
     native_probe: Callable[[dict[str, Any]], str | None] = native_barrier,
     runtime_manifest: str | None = None,
+    mechanism: str | None = None,
 ) -> str:
     """One bounded work unit. Fences BEFORE any effect, then writes exactly one durable result.
 
@@ -1183,10 +1220,11 @@ def run_worker(
     `target-delegate`: the unit is one real target, handed to `dispatcher.delegate` on the
     provider the router currently selects. Any other granularity is refused."""
     worker_id = Path(result).stem
+    result_mechanism = None
     module_dir = module_dir or Path(__file__).resolve().parent
 
     def finish(outcome, detail):
-        write_result(result, worker_id, target, outcome, detail)
+        write_result(result, worker_id, target, outcome, detail, mechanism=result_mechanism)
         return outcome
 
     try:
@@ -1211,15 +1249,40 @@ def run_worker(
         return finish("denied", f"unsupported work-unit granularity {mode!r}")
     if (mode == "round") != (target == ROUND_UNIT) or target not in doc["targets"]:
         return finish("denied", f"target {target!r} is not a {mode} work unit")
-    from closer_runtime_binding import policy_problem
+    from closer_runtime_binding import policy_for_mechanism as policy_problem
 
-    worker_policy = (doc.get("worker_config") or {}).get("policy") or {}
+    configured = doc.get("worker_config") or {}
+    worker_policy = configured.get("policy") or {}
+    actual_mechanism = configured.get("mechanism", "desktop-scheduler/v1")
+    if mechanism is not None and not runtime_manifest:
+        return finish("unavailable", "explicit worker mechanism requires pinned manifest")
     if runtime_manifest:
         try:
-            worker_policy = load_manifest(runtime_manifest).get("policy") or {}
-        except (OSError, ValueError, CampaignError):
+            pinned_worker = load_manifest(runtime_manifest)
+            from closer_mechanisms import mechanism as selected_mechanism
+
+            actual_mechanism = selected_mechanism(pinned_worker, mechanism)
+            result_mechanism = actual_mechanism
+            if (doc.get("worker_config") or {}).get(
+                "mechanism", "desktop-scheduler/v1"
+            ) != actual_mechanism:
+                return finish("unavailable", "worker mechanism differs from campaign")
+            if actual_mechanism == "cli-offload/v1" and configured.get(
+                "policy"
+            ) != pinned_worker.get("policy"):
+                return finish(
+                    "unavailable", "worker configured policy differs from pinned host policy"
+                )
+            if actual_mechanism == "cli-offload/v1" and qualify(
+                pinned_worker, Path(runtime_manifest).parent
+            ):
+                return finish("unavailable", "worker execution mechanism is not qualified")
+            worker_policy = pinned_worker.get("policy") or {}
+        except (OSError, ValueError, RuntimeError):
             return finish("unavailable", "pinned worker policy unreadable")
-    policy = policy_problem(worker_policy)
+    if actual_mechanism != "desktop-scheduler/v1" and not runtime_manifest:
+        return finish("unavailable", "explicit worker mechanism requires pinned manifest")
+    policy = policy_problem(worker_policy, mechanism=actual_mechanism)
     if policy:
         return finish("unavailable", policy)
     barrier = native_probe(
@@ -1361,6 +1424,7 @@ LAUNCHER_VERSION = "1"
 PINNED_MODULES = (
     "closer_campaign.py",
     "closer_runtime_binding.py",
+    "closer_mechanisms.py",
     "closer_native_lease.py",
     "closer_launcher.py",
     "closer_release.py",
@@ -1907,6 +1971,12 @@ def load_manifest(path: str | Path) -> dict[str, Any]:
     problems = validate_manifest(manifest) + verify_modules(manifest)
     if problems:
         raise CampaignError("; ".join(problems))
+    from closer_mechanisms import mechanism
+
+    try:
+        mechanism(manifest)
+    except RuntimeError as exc:
+        raise CampaignError(str(exc)) from exc
     return manifest
 
 
@@ -1919,14 +1989,24 @@ def qualify(manifest: dict[str, Any], root: str | Path) -> list[str]:
     understands the recorded state schema, and (4) the pinned Core loadable as an adapter.
     Any failure holds; nothing falls back to another action path."""
     problems = validate_manifest(manifest) + verify_modules(manifest)
-    try:
-        promotion = _load(str(Path(root) / "promotion.json"))
-        verdict = check_promotion(
-            manifest, list(promotion.get("runners") or []), list(promotion.get("receipts") or [])
-        )
-        problems += verdict["problems"]
-    except (OSError, ValueError, AttributeError) as exc:
-        problems.append(f"promotion receipts unreadable: {exc}")
+    from closer_mechanisms import CLI, DESKTOP, mechanism, qualification_problems
+
+    selected = mechanism(manifest)
+    if selected == CLI:
+        problems += qualification_problems(manifest)
+    elif selected != DESKTOP:
+        problems.append("native handoff observer unsupported; mechanism remains held")
+    else:
+        try:
+            promotion = _load(str(Path(root) / "promotion.json"))
+            verdict = check_promotion(
+                manifest,
+                list(promotion.get("runners") or []),
+                list(promotion.get("receipts") or []),
+            )
+            problems += verdict["problems"]
+        except (OSError, ValueError, AttributeError) as exc:
+            problems.append(f"promotion receipts unreadable: {exc}")
     recorded = (manifest.get("state_versions") or {}).get("campaign")
     if not isinstance(recorded, int) or recorded != STATE_SCHEMA:
         problems.append(f"state version {recorded!r} is not the runner's schema {STATE_SCHEMA}")
@@ -1952,17 +2032,21 @@ def tick(
     pid_alive=claims._pid_alive,
     qualifier: Callable[[dict[str, Any], str | Path], list[str]] = qualify,
     native_probe: Callable[[dict[str, Any]], str | None] = native_barrier,
+    mechanism: str | None = None,
 ) -> list[dict[str, Any]]:
     """Discover every `*.campaign.json` under `root` and advance each by at most
     `max_steps`. Needs only the files: a second process after worker death resumes here.
     Reconcile always runs; launches need a fresh cached capacity report (fail closed)."""
     try:
         manifest = load_manifest(manifest_path)
-    except (OSError, ValueError, CampaignError) as exc:
-        return [{"kind": "skipped", "reason": f"pin unusable: {exc}"}]
-    from closer_runtime_binding import policy_problem
+        from closer_mechanisms import mechanism as selected_mechanism
 
-    policy = policy_problem(manifest.get("policy") or {})
+        execution_mechanism = selected_mechanism(manifest, mechanism)
+    except (OSError, ValueError, CampaignError, RuntimeError) as exc:
+        return [{"kind": "skipped", "reason": f"pin unusable: {exc}"}]
+    from closer_runtime_binding import policy_for_mechanism as policy_problem
+
+    policy = policy_problem(manifest.get("policy") or {}, mechanism=execution_mechanism)
     if policy:
         return [{"kind": "held", "reason": policy}]
     unqualified = qualifier(manifest, root)
@@ -1985,9 +2069,44 @@ def tick(
             report.append({"campaign": path.name, "kind": "skipped", "reason": "not ours to write"})
             continue
         cfg = doc.get("worker_config") or {}
+        if cfg.get("mechanism", "desktop-scheduler/v1") != execution_mechanism:
+            report.append(
+                {
+                    "campaign": path.name,
+                    "kind": "held",
+                    "reason": "campaign mechanism differs from pin",
+                }
+            )
+            continue
+        if execution_mechanism == "cli-offload/v1" and cfg.get("policy") != manifest.get("policy"):
+            report.append(
+                {
+                    "campaign": path.name,
+                    "kind": "held",
+                    "reason": "campaign policy differs from pinned host policy",
+                }
+            )
+            continue
         capacity = capacity_json or cfg.get("capacity_json")
         route = route_fn(capacity)
         capacity_ok = bool(route.get("agent"))
+        if (
+            execution_mechanism == "cli-offload/v1"
+            and capacity_ok
+            and (route.get("agent"), route.get("profile_id"))
+            != (
+                manifest["mechanism_contract"]["agent"],
+                manifest["mechanism_contract"]["profile_id"],
+            )
+        ):
+            report.append(
+                {
+                    "campaign": path.name,
+                    "kind": "held",
+                    "reason": "capacity route differs from qualified CLI profile",
+                }
+            )
+            continue
         generation = doc.get("generation", 1)
 
         def command(target, _doc=doc, _gen=generation, _state=str(path), _route=route):
@@ -2010,6 +2129,8 @@ def tick(
                 str(_gen),
                 "--runtime-manifest",
                 str(manifest_path),
+                "--mechanism",
+                execution_mechanism,
                 *extra,
             ]
 
@@ -2110,6 +2231,7 @@ def main(argv: list[str] | None = None) -> int:
     wk.add_argument("--generation", type=int, required=True)
     wk.add_argument("--result", required=True)
     wk.add_argument("--runtime-manifest")
+    wk.add_argument("--mechanism")
     wk.add_argument("--agent")
     wk.add_argument("--profile-id")
     rw = sub.add_parser("release-worker", help="detached verify_and_install worker")
@@ -2156,6 +2278,7 @@ def main(argv: list[str] | None = None) -> int:
             agent=args.agent,
             profile_id=args.profile_id,
             runtime_manifest=args.runtime_manifest,
+            mechanism=args.mechanism,
         )
         return 0
     if args.command == "release-worker":

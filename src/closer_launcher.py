@@ -160,6 +160,24 @@ def main(argv: list[str] | None = None) -> int:
     run = sub.add_parser("run", help="verify the pin, then one bounded campaign tick")
     run.add_argument("--manifest", required=True)
     run.add_argument("--root", required=True)
+    run.add_argument("--mechanism")
+    observation = sub.add_parser(
+        "cli-supervision-status", help="read-only retained CLI qualification evidence"
+    )
+    observation.add_argument("--manifest", required=True)
+    supervisor = sub.add_parser("qualify-cli", help="bounded actual CLI no-effect qualification")
+    supervisor.add_argument("--manifest", required=True)
+    supervisor.add_argument("--agent", required=True)
+    supervisor.add_argument("--profile-id", required=True)
+    supervisor.add_argument("--timeout", type=int, default=60)
+    supervisor.add_argument("--budget-seconds", type=int, required=True)
+    qualification = sub.add_parser(
+        "qualification-child", help="no-effect CLI lifecycle observation"
+    )
+    qualification.add_argument("--manifest", required=True)
+    qualification.add_argument("--mechanism", required=True)
+    qualification.add_argument("--request", required=True)
+    qualification.add_argument("--role", choices=["first", "restart"], required=True)
     child = sub.add_parser("compat-child", help="bounded compatibility process (producer)")
     child.add_argument("--dir", required=True)
     child.add_argument("--role", required=True)
@@ -202,8 +220,46 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"launcher": "refused", "problems": problems}))
         return 78
     runtime = load_runtime(manifest)
+    from closer_mechanisms import CLI, MechanismError, mechanism, qualification_child
+
+    try:
+        selected = mechanism(manifest, getattr(args, "mechanism", None))
+    except RuntimeError as exc:
+        print(json.dumps({"launcher": "refused", "problems": [str(exc)]}))
+        return 78
+    if args.command == "cli-supervision-status":
+        from closer_mechanisms import supervision_status
+
+        try:
+            status = supervision_status(args.manifest)
+        except (MechanismError, FileNotFoundError) as exc:
+            print(json.dumps({"launcher": "refused", "problems": [str(exc)]}))
+            return 78
+        print(json.dumps(status, sort_keys=True))
+        return 0
+    if args.command == "qualify-cli":
+        from closer_mechanisms import supervise_cli
+
+        try:
+            result = supervise_cli(
+                args.manifest,
+                args.agent,
+                args.profile_id,
+                timeout=args.timeout,
+                budget_seconds=args.budget_seconds,
+            )
+        except MechanismError as exc:
+            print(json.dumps({"launcher": "refused", "problems": [str(exc)]}))
+            return 78
+        print(json.dumps(result, sort_keys=True))
+        return 0 if result.get("passed") else 78
+    if args.command == "qualification-child":
+        if selected != CLI:
+            return 78
+        return qualification_child(manifest, args.request, args.role)
     if args.command == "run":
-        print(json.dumps(runtime.tick(args.root, args.manifest), sort_keys=True))
+        keywords = {} if selected == "desktop-scheduler/v1" else {"mechanism": selected}
+        print(json.dumps(runtime.tick(args.root, args.manifest, **keywords), sort_keys=True))
         return 0
     return runtime.harness_child(args.dir, args.role, args.manifest)
 
