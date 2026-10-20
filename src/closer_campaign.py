@@ -1425,6 +1425,7 @@ PINNED_MODULES = (
     "closer_campaign.py",
     "closer_runtime_binding.py",
     "closer_mechanisms.py",
+    "closer_operational_capacity.py",
     "closer_native_lease.py",
     "closer_launcher.py",
     "closer_release.py",

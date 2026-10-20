@@ -152,9 +152,11 @@ trap '_finish_lane_postrun "$?"' EXIT
 {MARKER_END}"""
 
 
-def patch_prerun(original: bytes) -> bytes:
+def patch_prerun(original: bytes, *, bounded_round: bool = False) -> bytes:
     text = original.decode("utf-8")
     if MARKER_START in text:
+        if bounded_round and "CLOSER_NATIVE_ADMISSION_V1" not in text:
+            _fail("bounded mode requires original canonical prerun input")
         return original
     if text.count(PRERUN_MUTEX_START) != 1:
         _fail("prerun mutex start anchor missing or ambiguous")
@@ -173,12 +175,29 @@ def patch_prerun(original: bytes) -> bytes:
         _fail("prerun still references _release_lane_mutex")
     if 'rm -rf "$LANE_MUTEX_DIR"' in patched:
         _fail("prerun must not retain lane mutex rm -rf")
+    if bounded_round:
+        ordinary = '\n"$HANDOFF_BIN" pickup >/dev/null'
+        review = '      "$HANDOFF_BIN" read-resume "$lane"\n      exit 0'
+        if patched.count(ordinary) != 1 or patched.count(review) != 1:
+            _fail("bounded mode requires exact canonical check-stop admission anchors")
+
+        def verdict(state):
+            return (
+                "printf 'CLOSER_NATIVE_ADMISSION_V1 %s "
+                + state
+                + '\\n\' "${CLOSER_ADMISSION_NONCE:?}"\n'
+            )
+
+        patched = patched.replace(ordinary, "\n" + verdict("ordinary") + ordinary, 1)
+        patched = patched.replace(review, "      " + verdict("review") + review, 1)
     return patched.encode("utf-8")
 
 
-def patch_postrun(original: bytes) -> bytes:
+def patch_postrun(original: bytes, *, bounded_round: bool = False) -> bytes:
     text = original.decode("utf-8")
     if MARKER_START in text:
+        if bounded_round and "CLOSER_BOUNDED_NO_RELAY_V1" not in text:
+            _fail("bounded mode requires original canonical postrun input")
         return original
     matches = [anchor for anchor in POSTRUN_TRAP_ANCHORS if text.count(anchor) == 1]
     if len(matches) != 1:
@@ -193,6 +212,40 @@ def patch_postrun(original: bytes) -> bytes:
     )
     if 'rm -rf "$LANE_MUTEX_DIR"' in patched:
         _fail("postrun must not retain lane mutex rm -rf trap")
+    if bounded_round:
+        gate = "# BEGIN CLOSER STATUS DISPATCHER STOP GATE v1"
+        end = '"$HANDOFF_BIN" end-round "$outcome"'
+        relay = 'if "$RELAY_BIN" "$relay_lane"; then'
+        invocation = 'python3 "$_closer_dispatcher" validate-stop --state "$CLOSER_ROUND_STATE" --assignment "$HOME/.codex/automations/reviewed-repo-automation-controller/closer-assignment.json"'
+        if any(patched.count(anchor) != 1 for anchor in (gate, end, invocation, relay)):
+            _fail("bounded round requires exact standard validation/end-round anchors")
+        patched = patched.replace(
+            gate,
+            """# CLOSER_BOUNDED_NO_RELAY_V1
+# Dependency refusal still reaches the original exact-token EXIT cleanup.
+if [[ "${CLOSER_POSTRUN_DEPENDENCIES_VALID:-0}" != "1" ]]; then
+  echo "handoff-postrun: physical dependency pins changed; cleanup only" >&2
+  exit 65
+fi
+""" + gate,
+            1,
+        )
+        patched = patched.replace(
+            invocation,
+            '"${CLOSER_POSTRUN_PYTHON:?}" "${CLOSER_POSTRUN_DISPATCHER:?}" validate-stop --state "$CLOSER_ROUND_STATE" --assignment "${CLOSER_POSTRUN_ASSIGNMENT:?}"',
+            1,
+        )
+        patched = patched.replace(
+            relay,
+            """
+# Explicit one-round policy: normal stop validation and end-round ran above.
+if [[ "${CLOSER_NO_NEW_RELAY:-0}" == "1" ]]; then
+  echo "handoff-postrun: bounded round finalized; scheduled continuation retained"
+  exit 0
+fi
+""" + relay,
+            1,
+        )
     return patched.encode("utf-8")
 
 
@@ -200,11 +253,13 @@ def render(
     prerun_src: Path,
     postrun_src: Path,
     output_dir: Path,
+    *,
+    bounded_round: bool = False,
 ) -> dict:
     prerun_bytes = prerun_src.read_bytes()
     postrun_bytes = postrun_src.read_bytes()
-    out_prerun = patch_prerun(prerun_bytes)
-    out_postrun = patch_postrun(postrun_bytes)
+    out_prerun = patch_prerun(prerun_bytes, bounded_round=bounded_round)
+    out_postrun = patch_postrun(postrun_bytes, bounded_round=bounded_round)
     output_dir.mkdir(parents=True, exist_ok=True)
     prerun_out = output_dir / "handoff-prerun.sh"
     postrun_out = output_dir / "handoff-postrun.sh"
@@ -214,6 +269,7 @@ def render(
     postrun_out.chmod(postrun_src.stat().st_mode)
     manifest = {
         "protocol": "HANDOFF_EXACT_TOKEN_V1",
+        "bounded_no_new_relay": bounded_round,
         "pinned_native_hooks": {
             "lease_module": str(LEASE_MODULE),
             "lease_module_sha256": _sha(LEASE_MODULE.read_bytes()),
@@ -260,12 +316,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--prerun-source", type=Path, required=True)
     parser.add_argument("--postrun-source", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--bounded-round", action="store_true")
     args = parser.parse_args(argv)
     for path in (args.prerun_source, args.postrun_source, LEASE_MODULE):
         if not path.is_file():
             print(f"missing source: {path}", file=sys.stderr)
             return 2
-    manifest = render(args.prerun_source, args.postrun_source, args.output_dir)
+    manifest = render(
+        args.prerun_source, args.postrun_source, args.output_dir, bounded_round=args.bounded_round
+    )
     print(json.dumps(manifest["outputs"], sort_keys=True))
     return 0
 
