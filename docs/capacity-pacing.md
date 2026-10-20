@@ -299,15 +299,17 @@ previous success stamp, allowing for tick jitter and export duration.
 
 ## Relay decision identity and backlog (#825)
 
-The coordinator-owned relay must generate a unique token for each pacing decision
-(`python3 "$ORCH/rate_incidents.py" generate-relay-decision-id` → `<utc>-<pid>-<random>`),
-write `decision_id=<id>` in that decision's `relay-pacing.log` line, and pass the same
-value to `python3 "$ORCH/rate_incidents.py" record-lane-round --relay-decision-id <id>`
+The coordinator-owned relay must emit a unique token for each pacing decision and pass
+it through to the exit hook. Prefer
+`python3 "$ORCH/rate_incidents.py" append-relay-pacing-decision ...` (prints
+`<utc>-<pid>-<random>`, appends `decision_id=<id>` to `relay-pacing.log`); or generate
+with `generate-relay-decision-id` and write the field yourself. Pass the same value to
+`python3 "$ORCH/rate_incidents.py" record-lane-round --relay-decision-id <id>`
 alongside the existing agent, surface, lane, exit and output-file arguments. Tokens are
 capped at 176 characters so the `relay-pacing:id:<token>` join key stays within the
-192-character completion-identifier limit. This repository supplies the generator CLI,
-importer and record hook; the coordinator updates `~/.codex/bin/handoff-relay.sh` after
-merge. Omit `--relay-decision-id` when generation fails rather than passing an empty
+192-character completion-identifier limit. This repository supplies the append/generator
+CLIs, importer and record hook; the coordinator updates `~/.codex/bin/handoff-relay.sh`
+after merge. Omit `--relay-decision-id` when generation fails rather than passing an empty
 token.
 
 The round persists the token as `relay_decision_id` in its routing record's

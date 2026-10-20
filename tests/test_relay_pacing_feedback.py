@@ -267,6 +267,76 @@ def test_cli_generate_relay_decision_id_prints_one_token(capsys):
     assert len(token) <= feedback.RELAY_DECISION_ID_MAX_CHARS
 
 
+def test_append_relay_pacing_decision_writes_joinable_line(tmp_path, monkeypatch, capsys):
+    log = _setup(tmp_path, monkeypatch)
+    when = datetime.fromtimestamp(NOW - 30, timezone.utc)
+    token = rate_incidents.append_relay_pacing_decision(
+        source="codex",
+        lane="opener",
+        candidates="claude_code,cursor,muse",
+        chosen="claude_code",
+        weights="claude_code:1,cursor:1,muse:1",
+        states="codex:shed,claude_code:ok,cursor:ok,muse:ok",
+        fallback="no",
+        when=when,
+        log=log,
+    )
+    assert _DECISION_ID_RE.fullmatch(token)
+    assert f"decision_id={token}" in log.read_text(encoding="utf-8")
+    tail = tmp_path / "tail"
+    tail.write_text("all checks passed")
+    assert (
+        rate_incidents.main(
+            [
+                "append-relay-pacing-decision",
+                "--source",
+                "codex",
+                "--lane",
+                "closer",
+                "--candidates",
+                "claude_code,cursor",
+                "--chosen",
+                "cursor",
+                "--weights",
+                "claude_code:1,cursor:1",
+                "--states",
+                "codex:ok,claude_code:ok,cursor:ok",
+                "--fallback",
+                "yes",
+                "--log",
+                str(log),
+                "--ts",
+                str(NOW - 20),
+            ]
+        )
+        == 0
+    )
+    closer_id = capsys.readouterr().out.strip()
+    assert _DECISION_ID_RE.fullmatch(closer_id)
+    result = rate_incidents.record_lane_round(
+        agent="claude",
+        lane="opener",
+        receiver_reason=None,
+        exit_status=0,
+        output_file=tail,
+        ts=NOW,
+        relay_decision_id=token,
+    )
+    assert result["relay_pacing"]["joined"] == 1
+    assert (_counts()["acted_on"], _counts()["outcome"]) == (1, 1)
+    with pytest.raises(ValueError, match="candidates"):
+        rate_incidents.append_relay_pacing_decision(
+            source="codex",
+            lane="opener",
+            candidates="claude_code",
+            chosen="cursor",
+            weights="claude_code:1",
+            states="codex:ok",
+            fallback="no",
+            log=log,
+        )
+
+
 @pytest.mark.parametrize("explicit", [True, False])
 def test_cli_id_selects_one_interleaved_decision(tmp_path, monkeypatch, capsys, explicit):
     log = _setup(tmp_path, monkeypatch)

@@ -12,10 +12,13 @@ outside this repository and is not changed by this PR. With `$relay_log`,
 `$status`, `$next_lane`, `$other_agent` and `$ORCH` set by the relay, the hook is:
 
 ```bash
-# At decision time (before dispatch): emit decision_id=<id> on the pacing log line.
+# At decision time (before dispatch): append an importer-valid line with decision_id=<id>.
 # Invoke the script by path (same as record-lane-round) so $ORCH need not be on PYTHONPATH.
 # On failure leave decision_id empty and omit --relay-decision-id rather than aborting.
-decision_id="$(python3 "$ORCH/rate_incidents.py" generate-relay-decision-id)" || decision_id=""
+decision_id="$(python3 "$ORCH/rate_incidents.py" append-relay-pacing-decision \
+  --source "$source" --lane "$next_lane" \
+  --candidates "$candidates" --chosen "$chosen" \
+  --weights "$weights" --states "$states" --fallback "$fallback")" || decision_id=""
 # After the receiver exits:
 tail -n 40 "$relay_log" > "$tail"
 python3 "$ORCH/rate_incidents.py" record-lane-round \
@@ -23,6 +26,11 @@ python3 "$ORCH/rate_incidents.py" record-lane-round \
   --exit "$status" --output-file "$tail" \
   ${decision_id:+--relay-decision-id "$decision_id"}
 ```
+
+Prefer `append-relay-pacing-decision` over hand-editing the pacing log: it generates the
+token, writes `decision_id=<id>` in the field order the importer accepts, and prints the
+same token for the exit hook. `generate-relay-decision-id` remains available when the
+relay must emit the id into an existing log writer.
 
 Set `$tail` to a private temporary file and remove it after the call. Pass
 `--receiver-reason "$reason"` when the relay has retained its actual routing
