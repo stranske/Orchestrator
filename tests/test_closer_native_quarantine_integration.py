@@ -18,6 +18,73 @@ import closer_resources as resources
 import closer_runtime_binding as binding
 
 
+def test_scoped_receipt_producer_never_uses_unbounded_file_read(tmp_path, monkeypatch):
+    _raw, pipeline, _held = fixture.original_state(tmp_path)
+    original_read = Path.read_bytes
+
+    def no_unbounded_round_read(path):
+        assert path.parent.name != "rounds", "producer must not read an unbounded receipt"
+        return original_read(path)
+
+    monkeypatch.setattr(Path, "read_bytes", no_unbounded_round_read)
+    candidate = fixture.run(
+        pipeline,
+        ["owner/disjoint#7"],
+        fixture.callbacks(Counter()),
+        lambda t, _c: fixture.inventory(t),
+    )
+    _receipt, digest = resources.read_round_receipt(Path(candidate["receipt_path"]))
+    assert candidate["receipt_sha256"] == digest
+
+
+@pytest.mark.parametrize("damage", ["oversize", "symlink", "fifo"])
+def test_native_receipt_reader_is_bounded_and_never_follows_special_files(
+    tmp_path, monkeypatch, damage
+):
+    raw, pipeline, _held = fixture.original_state(tmp_path)
+    target = "owner/disjoint#7"
+    assignment = tmp_path / "assignment.json"
+    fixture.write(assignment, {"targets": [{"target": target}]})
+    candidate = fixture.run(
+        pipeline, [target], fixture.callbacks(Counter()), lambda t, _c: fixture.inventory(t)
+    )
+    receipt = Path(candidate["receipt_path"])
+    if damage == "oversize":
+        with receipt.open("r+b") as stream:
+            stream.truncate(resources.ROUND_RECEIPT_MAX_BYTES + 1)
+    else:
+        receipt.unlink()
+        if damage == "symlink":
+            receipt.symlink_to(assignment)
+        else:
+            os.mkfifo(receipt)
+    original_read = Path.read_bytes
+
+    def no_unbounded_read(path):
+        assert path != receipt, "receipt must not use unbounded read_bytes"
+        return original_read(path)
+
+    monkeypatch.setattr(Path, "read_bytes", no_unbounded_read)
+    verdict = resources.validate_stop(pipeline, candidate["round_id"], [target])
+    assert verdict["valid"] is False
+    assert verdict["reasons"][0].startswith("invalid_round_receipt:")
+    cfg = {
+        "mechanism": "native-handoff/v1",
+        "dispatch_state": str(raw),
+        "assignment": str(assignment),
+        "handoff_dir": str(tmp_path / "handoff"),
+        "native_hooks": {
+            "postrun_dependencies": {
+                "assignment": {
+                    "path": str(assignment),
+                    "sha256": hashlib.sha256(assignment.read_bytes()).hexdigest(),
+                }
+            }
+        },
+    }
+    assert binding.scoped_continuation_proof(cfg, candidate) is None
+
+
 @pytest.mark.parametrize("damage", [None, "unknown", "receipt", "assignment", "lane"])
 def test_native_continuation_consumes_real_scoped_validation(tmp_path, damage):
     raw, pipeline, held = fixture.original_state(tmp_path)

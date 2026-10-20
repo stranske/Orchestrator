@@ -669,11 +669,29 @@ class PinnedNativeHooks:
         self.dispatcher_anchor = Path.home() / ".codex/orchestrator-mirror/closer_dispatcher.py"
         if self.bounded:
             dependencies = pin.get("postrun_dependencies") or {}
+            admitted_assignment = (
+                Path(cfg["dispatch_state"]).parent / "native-assignment-snapshot.json"
+            )
+            if cfg.get("native_admission") is not None:
+                from closer_campaign import load_manifest
+                from closer_native_observer import validate_admission
+
+                manifest = load_manifest(cfg["runtime_manifest"])
+                context = validate_admission(manifest, cfg["native_admission"], for_effects=True)
+                if (
+                    cfg.get("mechanism") != "native-handoff/v1"
+                    or str(Path(cfg["runtime_manifest"]).resolve()) != context["runtime_manifest"]
+                    or cfg.get("original_deadline") != context["original_deadline"]
+                    or cfg.get("capacity_report") != context["report"]["path"]
+                    or dependencies.get("assignment")
+                    != {key: context["assignment"][key] for key in ("path", "sha256")}
+                ):
+                    raise BindingError("native admission cfg differs from signed invocation")
+                admitted_assignment = Path(context["assignment"]["path"])
             canonical = {
                 "interpreter": self.interpreter_anchor.resolve(),
                 "dispatcher": self.dispatcher_anchor.resolve(),
-                "assignment": Path(cfg["dispatch_state"]).parent
-                / "native-assignment-snapshot.json",
+                "assignment": admitted_assignment,
             }
             for name, expected in canonical.items():
                 entry = dependencies.get(name) or {}
@@ -720,7 +738,16 @@ class PinnedNativeHooks:
                 or (
                     self.bounded
                     and (
-                        (phase == "postrun" and b"CLOSER_BOUNDED_NO_RELAY_V1" not in data)
+                        (
+                            phase == "postrun"
+                            and (
+                                b"CLOSER_BOUNDED_NO_RELAY_V1" not in data
+                                or (
+                                    cfg.get("native_admission") is not None
+                                    and b"CLOSER_NAMED_ROUND_V1" not in data
+                                )
+                            )
+                        )
                         or (phase == "prerun" and b"CLOSER_NATIVE_ADMISSION_V1" not in data)
                     )
                 )
@@ -741,6 +768,10 @@ class PinnedNativeHooks:
             "HANDOFF_REFUSE_EXISTING_LANE": "1",
             "CLOSER_ROUND_STATE": str(cfg["dispatch_state"]),
         }
+        self.env.pop("CLOSER_POSTRUN_ROUND_ID", None)
+        self.env["CLOSER_POSTRUN_REQUIRE_NAMED_ROUND"] = (
+            "1" if cfg.get("native_admission") is not None else "0"
+        )
         handoff = Path(
             cfg.get("handoff_dir")
             or os.environ.get("HANDOFF_DIR")
@@ -848,6 +879,140 @@ class PinnedNativeHooks:
         except OSError:
             return False
 
+    def begin_terminal_receipt(self, cfg: dict[str, Any]) -> None:
+        """Freeze prior immutable round identities immediately before this B submission.
+
+        The exact-token lane excludes another normal B. This census never deletes
+        history and cannot be refreshed after an unknown submission/restart.
+        """
+        import stat
+
+        import closer_mechanisms as mechanisms
+        import closer_native_observer as native
+        import closer_resources
+        from closer_campaign import load_manifest
+
+        self.terminal_watermark = None
+        manifest = load_manifest(cfg["runtime_manifest"])
+        context = native.validate_admission(manifest, cfg["native_admission"], for_effects=True)
+        pipeline = Path(str(cfg["dispatch_state"]) + ".pipeline.json")
+        directory = closer_resources.scoped_root(pipeline) / "rounds"
+        names: list[str] = []
+        try:
+            fd = os.open(directory, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_DIRECTORY)
+        except FileNotFoundError:
+            pass  # No prior scoped rounds; B may create the original directory.
+        else:
+            try:
+                with os.scandir(fd) as entries:
+                    for entry in entries:
+                        if len(names) >= 10000:
+                            raise BindingError("prior scoped receipt census exceeds bound")
+                        if not re.fullmatch(
+                            r"[0-9a-f]{16,64}\.json", entry.name
+                        ) or not stat.S_ISREG(entry.stat(follow_symlinks=False).st_mode):
+                            raise BindingError(
+                                "prior scoped receipt identity is not immutable/regular"
+                            )
+                        names.append(entry.name[:-5])
+            finally:
+                os.close(fd)
+        record = {
+            "schema": "native-b-receipt-watermark/v1",
+            "admission_nonce": context["nonce"],
+            "dispatch_state": str(cfg["dispatch_state"]),
+            "assignment_sha256": context["assignment"]["sha256"],
+            "prior_round_ids": sorted(names),
+        }
+        root = native.contract(manifest)[3]
+        path = root / context["nonce"] / "action-b-receipt-watermark.json"
+        signed = {
+            "record": record,
+            "signature": mechanisms._signature(record, mechanisms._key(root)),
+        }
+        raw = json.dumps(signed, sort_keys=True, separators=(",", ":")).encode()
+        # O_EXCL forbids reuse, including dangling symlinks, after any prior B.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
+        self.terminal_watermark = (path, raw, frozenset(names))
+
+    def set_terminal_receipt(self, done, cfg: dict[str, Any]) -> bool:
+        """Bind C to independently validated terminal B bytes, never a latest round."""
+        import closer_resources
+        from closer_dispatcher import targets_from_assignment
+        from closer_native_observer import _bounded_bytes
+
+        self.env = getattr(self, "env", {})
+        self.env.pop("CLOSER_POSTRUN_ROUND_ID", None)
+        self.terminal_receipt_problem = None
+        try:
+            if done.returncode not in {0, 78}:
+                raise ValueError("ACTION B did not return a supported terminal receipt")
+            raw = done.stdout
+            if not isinstance(raw, (str, bytes)) or len(raw) > 32 * 1024 * 1024:
+                raise ValueError("terminal receipt missing or oversized")
+            candidate = json.loads(raw)
+            if not isinstance(candidate, dict):
+                raise ValueError("terminal receipt is not an object")
+            round_id = candidate.get("round_id")
+            if (
+                candidate.get("schema") != "closer-pipeline-receipt/v1"
+                or candidate.get("mode") != "resource_scoped"
+                or not isinstance(round_id, str)
+                or not re.fullmatch(r"[0-9a-f]{16,64}", round_id)
+            ):
+                raise ValueError("terminal receipt schema/mode/round identity mismatch")
+            watermark = getattr(self, "terminal_watermark", None)
+            if watermark is None or _bounded_bytes(watermark[0], 2 * 1024 * 1024) != watermark[1]:
+                raise ValueError("ACTION B immutable pre-submission receipt watermark unavailable")
+            if round_id in watermark[2]:
+                raise ValueError("terminal receipt predates this ACTION B")
+            assignment = Path(cfg["assignment"])
+            expected = cfg["native_hooks"]["postrun_dependencies"]["assignment"]
+            if (
+                str(assignment) != expected["path"]
+                or assignment.is_symlink()
+                or _hash(assignment) != expected["sha256"]
+            ):
+                raise ValueError("terminal receipt assignment pin mismatch")
+            pipeline = Path(str(cfg["dispatch_state"]) + ".pipeline.json")
+            path = closer_resources.scoped_root(pipeline) / "rounds" / (round_id + ".json")
+            if candidate.get("receipt_path") != str(path):
+                raise ValueError("terminal receipt path mismatch")
+            receipt, digest = closer_resources.read_round_receipt(path)
+            targets = targets_from_assignment(assignment)
+            verdict = closer_resources.validate_stop(pipeline, round_id, targets)
+            if (
+                receipt.get("schema") != candidate["schema"]
+                or receipt.get("mode") != candidate["mode"]
+                or receipt.get("round_id") != round_id
+                or candidate.get("receipt_sha256") != digest
+                or verdict.get("receipt_sha256") != digest
+                or verdict.get("round_id") != round_id
+                or sorted(receipt.get("assignment", [])) != sorted(targets)
+                or candidate.get("assignment") != receipt.get("assignment")
+                or candidate.get("run_ids") != receipt.get("run_ids")
+                or verdict.get("run_ids") != receipt.get("run_ids")
+            ):
+                raise ValueError("terminal receipt bytes/assignment/run binding mismatch")
+            self.env["CLOSER_POSTRUN_ROUND_ID"] = round_id
+            return True
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            self.terminal_receipt_problem = {
+                "type": type(exc).__name__,
+                "errno": getattr(exc, "errno", None),
+                "reason": str(exc)[:512],
+            }
+            return False
+
     def postrun(self, token: str, deadline: float) -> int:
         if not self._pins_match():
             return 65
@@ -885,7 +1050,7 @@ class PinnedNativeHooks:
 
 
 def scoped_continuation_proof(cfg, candidate):
-    """Revalidate one known terminal admitted domain, never certify global stop."""
+    """Revalidate a terminal round's known/no-start/contained domain, never global stop."""
     import closer_resources
     from closer_dispatcher import targets_from_assignment
 
@@ -907,11 +1072,15 @@ def scoped_continuation_proof(cfg, candidate):
         receipt = closer_resources.scoped_root(pipeline) / "rounds" / (round_id + ".json")
         if receipt.is_symlink() or candidate["receipt_path"] != str(receipt):
             return None
-        receipt_hash = _hash(receipt)
-        if candidate.get("receipt_sha256") != receipt_hash:
-            return None
         targets = targets_from_assignment(assignment)
         verdict = closer_resources.validate_stop(pipeline, round_id, targets)
+        receipt_hash = verdict.get("receipt_sha256")
+        if (
+            not isinstance(receipt_hash, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", receipt_hash)
+            or candidate.get("receipt_sha256") != receipt_hash
+        ):
+            return None
         if verdict.get("round_id") != round_id or verdict.get("global_stop_valid") is not False:
             return None
         if (
@@ -922,6 +1091,12 @@ def scoped_continuation_proof(cfg, candidate):
             domain_outcome = "known"
         elif verdict.get("not_started_domain_valid") is True and verdict.get("run_ids") == {}:
             domain_outcome = "not_started"
+        elif (
+            verdict.get("scoped_containment_valid") is True
+            and verdict.get("quarantined_admitted_items")
+            and verdict.get("run_ids")
+        ):
+            domain_outcome = "quarantined"
         else:
             return None
         if candidate.get("run_ids") != verdict["run_ids"]:
@@ -934,7 +1109,7 @@ def scoped_continuation_proof(cfg, candidate):
         lane = handoff / ".lane-closer.lock"
         if lane.exists() or lane.is_symlink():
             return None
-        return {
+        proof = {
             "schema": "native-scoped-continuation/v1",
             "round_id": round_id,
             "receipt_path": str(receipt),
@@ -946,6 +1121,9 @@ def scoped_continuation_proof(cfg, candidate):
             "accepted": False,
             "domain_outcome": domain_outcome,
         }
+        if domain_outcome == "quarantined":
+            proof["quarantined_admitted_items"] = verdict["quarantined_admitted_items"]
+        return proof
     except (OSError, ValueError, KeyError, TypeError, RuntimeError):
         return None
 
@@ -986,8 +1164,15 @@ def run_native_round(
         if not command or Path(command[0]) not in {hooks.interpreter_anchor, interpreter}:
             return "unavailable", "native B requires pinned Runtime Python interpreter"
         command = [str(interpreter), *command[1:]]
+    if isinstance(hooks, PinnedNativeHooks):
+        hooks.env = getattr(hooks, "env", {})
+        hooks.env.pop("CLOSER_POSTRUN_ROUND_ID", None)
+        hooks.env["CLOSER_POSTRUN_REQUIRE_NAMED_ROUND"] = (
+            "1" if cfg.get("native_admission") is not None else "0"
+        )
     token = None
     terminal_b = None
+    receipt_bound = False
     outcome, detail = "unknown", "native prerun outcome unknown"
     try:
         code, token = hooks.prerun(deadline - reserve)
@@ -1020,6 +1205,21 @@ def run_native_round(
         else:
             # B owns only its original safe action deadline, never a fresh budget.
             try:
+                if cfg.get("native_admission") is not None:
+                    import math
+
+                    if command.count("--budget-seconds") != 1:
+                        raise BindingError("native original B budget argument missing or ambiguous")
+                    index = command.index("--budget-seconds") + 1
+                    inner = math.floor(deadline - reserve - now() - 300 - 15)
+                    if inner <= 0:
+                        raise BindingError("native original budget exhausted during ACTION A")
+                    command = [*command]
+                    command[index] = str(min(int(command[index]), inner))
+                if cfg.get("native_admission") is not None:
+                    if not isinstance(hooks, PinnedNativeHooks):
+                        raise BindingError("native B receipt watermark requires pinned hooks")
+                    hooks.begin_terminal_receipt(cfg)
                 done = runner(
                     command,
                     capture_output=True,
@@ -1039,6 +1239,17 @@ def run_native_round(
                 terminal_b = done
                 outcome = "ok" if done.returncode == 0 else "unknown"
                 detail = f"dispatcher exit {done.returncode}"
+                if cfg.get("native_admission") is not None:
+                    receipt_bound = isinstance(
+                        hooks, PinnedNativeHooks
+                    ) and hooks.set_terminal_receipt(done, cfg)
+                    if not receipt_bound:
+                        outcome = "unknown"
+                        detail += "; terminal named receipt refused: " + json.dumps(
+                            getattr(hooks, "terminal_receipt_problem", None), sort_keys=True
+                        )
+            except BindingError as exc:
+                outcome, detail = "unavailable", f"dispatcher not started: {exc}"
             except subprocess.TimeoutExpired:
                 outcome, detail = "unknown", "dispatcher timeout; effect outcome unknown"
             except PermissionError as exc:
@@ -1066,6 +1277,7 @@ def run_native_round(
         and token
         and terminal_b is not None
         and terminal_b.returncode in {0, 78}
+        and (cfg.get("native_admission") is None or receipt_bound)
         and outcome != "denied"
     ):
         c = getattr(hooks, "postrun_result", {})
@@ -1100,6 +1312,39 @@ def run_native_round(
                     },
                     sort_keys=True,
                 )
+    if cfg.get("native_admission") is not None and outcome == "ok":
+        from closer_campaign import load_manifest
+        from closer_native_observer import completed_round_proof
+
+        c = getattr(hooks, "postrun_result", {})
+        try:
+            candidate = json.loads(terminal_b.stdout) if terminal_b is not None else None
+            proof = (
+                completed_round_proof(
+                    load_manifest(cfg["runtime_manifest"]), cfg, candidate, record_boundary=True
+                )
+                if isinstance(hooks, PinnedNativeHooks)
+                and hooks.bounded
+                and token
+                and terminal_b is not None
+                and terminal_b.returncode == 0
+                and c.get("code") == 0
+                and c.get("dependencies_valid") is True
+                else None
+            )
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+            proof = None
+        if proof is None:
+            return "unknown", detail + "; native exact successful-round proof unavailable"
+        return "ok", json.dumps(
+            {
+                "completed_round": proof,
+                "actual_detail": detail,
+                "action_b_exit": 0,
+                "action_c_exit": 0,
+            },
+            sort_keys=True,
+        )
     return outcome, detail
 
 

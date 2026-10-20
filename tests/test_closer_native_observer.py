@@ -265,6 +265,7 @@ def scoped_receipt(tmp_path, monkeypatch):
 
     def validate(path, named, targets):
         calls.append((path, named, targets))
+        verdict["receipt_sha256"] = native._hash(receipt)
         return verdict
 
     monkeypatch.setattr(closer_resources, "validate_stop", validate)

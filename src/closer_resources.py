@@ -26,6 +26,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import tempfile
 import threading
 import time
@@ -1228,6 +1229,36 @@ def write_round_receipt(root: Path, receipt: Mapping[str, Any]) -> Path:
     return path
 
 
+ROUND_RECEIPT_MAX_BYTES = 32 * 1024 * 1024
+
+
+def read_round_receipt(path: Path) -> tuple[dict[str, Any], str]:
+    """Read one regular immutable receipt, hashing exactly the bounded parsed bytes."""
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise ValueError("no-follow receipt reads unavailable")
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as stream:
+        before = os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode) or before.st_size > ROUND_RECEIPT_MAX_BYTES:
+            raise ValueError("round receipt exceeds regular-file bound")
+        raw = stream.read(ROUND_RECEIPT_MAX_BYTES + 1)
+        after = os.fstat(stream.fileno())
+        current = path.stat(follow_symlinks=False)
+    fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if (
+        len(raw) > ROUND_RECEIPT_MAX_BYTES
+        or len(raw) != before.st_size
+        or any(getattr(before, key) != getattr(after, key) for key in fields)
+        or any(getattr(after, key) != getattr(current, key) for key in fields)
+        or not stat.S_ISREG(current.st_mode)
+    ):
+        raise ValueError("round receipt changed during bounded read")
+    receipt = json.loads(raw)
+    if not isinstance(receipt, dict):
+        raise ValueError("round receipt is not an object")
+    return receipt, hashlib.sha256(raw).hexdigest()
+
+
 def validate_stop(
     state_path: str | Path,
     round_id: str,
@@ -1259,7 +1290,7 @@ def validate_stop(
         }
         if not isinstance(contract, dict) or any(contract.get(k) != v for k, v in expected.items()):
             raise ValueError("incompatible scoped staging capability")
-        receipt = json.loads(path.read_text(encoding="utf-8"))
+        receipt, receipt_hash = read_round_receipt(path)
         if (
             receipt.get("schema") != "closer-pipeline-receipt/v1"
             or receipt.get("mode") != "resource_scoped"
@@ -1269,7 +1300,14 @@ def validate_stop(
         assignment = receipt["assignment"]
         run_ids = receipt["run_ids"]
         rows = receipt["targets"]
-        if not isinstance(assignment, list) or not assignment or not isinstance(run_ids, dict):
+        if (
+            not isinstance(assignment, list)
+            or not assignment
+            or not isinstance(run_ids, dict)
+            or not isinstance(rows, dict)
+            or any(not isinstance(target, str) for target in assignment)
+            or len(set(assignment)) != len(assignment)
+        ):
             raise ValueError("empty or malformed assignment accounting")
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return {"valid": False, "stop_valid": False, "reasons": [f"invalid_round_receipt:{exc}"]}
@@ -1281,6 +1319,12 @@ def validate_stop(
     continuation = False
     admitted_reasons = []
     held_targets = []
+    unsettled_rows = []
+    containment_accounted = (
+        set(rows) == set(assignment)
+        and set(run_ids).issubset(set(assignment))
+        and (assignment_targets is None or sorted(assignment_targets) == sorted(assignment))
+    )
     for target in assignment:
         run_id = run_ids.get(target)
         if not run_id:
@@ -1288,6 +1332,9 @@ def validate_stop(
             reasons.append(f"fenced_target:{target}:{row.get('deferred_reason', 'no_run')}")
             held_targets.append(target)
             continuation = True
+            containment_accounted = containment_accounted and valid_initial_scope_refusal(
+                state_path, target, row, round_id
+            )
             continue
         shard_state = shard_dir(root, target) / "state.json"
         try:
@@ -1296,6 +1343,7 @@ def validate_stop(
         except (OSError, ValueError, KeyError, TypeError) as exc:
             reasons.append(f"unreadable_shard_run:{target}:{type(exc).__name__}")
             admitted_reasons.append(reasons[-1])
+            containment_accounted = False
             continue
         unresolved = _unresolved_effect(shard_state, target, admitted_row)
         if unresolved:
@@ -1310,6 +1358,13 @@ def validate_stop(
             invalid = [f"{target}:{r}" for r in verdict.get("reasons", ["invalid"])]
             reasons.extend(invalid)
             admitted_reasons.extend(invalid)
+        if unresolved or verdict.get("run_id") != run_id or not verdict.get("valid"):
+            # A later mutation of a formerly known result is not evidence that
+            # this named terminal round contained its effects. Bind the exact
+            # row captured by the immutable aggregate, then require independent
+            # census coverage below; no uncertainty is discharged here.
+            containment_accounted = containment_accounted and rows.get(target) == admitted_row
+            unsettled_rows.append((target, shard_state, run_id, admitted_row))
         continuation = continuation or bool(verdict.get("continuation_required"))
     scoped_completion_valid = not reasons
     unknown = unknown_reservations(root)
@@ -1322,6 +1377,34 @@ def validate_stop(
     if retained.get("global_reasons") or retained.get("quarantine_keys"):
         reasons.append("retained_historical_quarantine")
         continuation = True
+    quarantined_admitted_items = []
+    for target, source, run_id, row in unsettled_rows:
+        try:
+            item_hash = closer_quarantine._digest(row)
+            matches = [
+                item
+                for item in retained.get("items", [])
+                if item.get("source_path") == str(source)
+                and item.get("run_id") == run_id
+                and item.get("target") == canonical_target(target).lower()
+                and item.get("item_sha256") == item_hash
+                and item.get("keys")
+            ]
+        except (TypeError, ValueError):
+            matches = []
+        if len(matches) != 1:
+            containment_accounted = False
+        else:
+            item = matches[0]
+            # File hashes may change when disjoint rows are committed. The
+            # regenerated census still verifies those files; the stable proof
+            # binds this exact retained row and its conflict closure instead.
+            quarantined_admitted_items.append(
+                {
+                    key: item[key]
+                    for key in ("source_path", "run_id", "target", "item_sha256", "keys")
+                }
+            )
     valid = not reasons
     return {
         "valid": valid,
@@ -1334,6 +1417,11 @@ def validate_stop(
         and set(run_ids) == set(assignment) - set(held_targets)
         and (assignment_targets is None or sorted(assignment_targets) == sorted(assignment)),
         "admitted_domain_reasons": admitted_reasons,
+        "scoped_containment_valid": bool(unsettled_rows)
+        and containment_accounted
+        and not retained.get("global_reasons")
+        and len(quarantined_admitted_items) == len(unsettled_rows),
+        "quarantined_admitted_items": quarantined_admitted_items,
         "not_started_domain_valid": not run_ids
         and set(rows) == set(assignment)
         and (assignment_targets is None or sorted(assignment_targets) == sorted(assignment))
@@ -1344,6 +1432,7 @@ def validate_stop(
         "held_targets": held_targets,
         "historical_quarantine": retained,
         "round_id": round_id,
+        "receipt_sha256": receipt_hash,
         "run_ids": dict(run_ids),
         "continuation_required": continuation,
         "deadline": receipt.get("deadline"),
@@ -1669,7 +1758,7 @@ def run_scoped(
     }
     receipt_path = write_round_receipt(root, aggregate)
     aggregate["receipt_path"] = str(receipt_path)
-    aggregate["receipt_sha256"] = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+    _stored_receipt, aggregate["receipt_sha256"] = read_round_receipt(receipt_path)
     return aggregate
 
 

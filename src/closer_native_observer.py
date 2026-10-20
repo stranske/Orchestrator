@@ -10,12 +10,14 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import hmac
+import json
 import math
 import os
 import re
 import secrets
 import shlex
 import signal
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -28,12 +30,37 @@ REQUEST = "native-wrapper-qualification-request/v1"
 MARKER = "# BEGIN CLOSER PINNED NATIVE ENTRY v1"
 END_MARKER = "# END CLOSER PINNED NATIVE ENTRY v1"
 _CURRENT_ENTRY: dict[str, str] = {}
+_CURRENT_ADMISSION: dict[str, dict] = {}
 
 
 def _hash(path):
     if Path(path).is_symlink():
         raise mechanisms.MechanismError("native pinned artifact is symlinked")
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _bounded_bytes(path, limit):
+    path = Path(path)
+    if path.resolve() != path or path.is_symlink():
+        raise mechanisms.MechanismError("native bounded input is aliased")
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as stream:
+        before = os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
+            raise mechanisms.MechanismError("native bounded input exceeds regular-file limit")
+        raw = stream.read(limit + 1)
+        after = os.fstat(stream.fileno())
+        current = path.stat(follow_symlinks=False)
+    fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if (
+        len(raw) > limit
+        or len(raw) != before.st_size
+        or not stat.S_ISREG(current.st_mode)
+        or any(getattr(before, key) != getattr(after, key) for key in fields)
+        or any(getattr(after, key) != getattr(current, key) for key in fields)
+    ):
+        raise mechanisms.MechanismError("native bounded input changed during read")
+    return raw
 
 
 def policy_problem(policy):
@@ -80,7 +107,474 @@ def contract(manifest):
     problem = policy_problem(manifest.get("policy") or {})
     if problem:
         raise mechanisms.MechanismError(problem)
+    capacity_contract(manifest)
     return value, wrapper, interpreter, root
+
+
+def capacity_contract(manifest):
+    """Explicit host opt-in; never infer quota or profile scope from the wrapper actor."""
+    import execution_profiles
+    from closer_agent_launchers import APPROVED_AGENTS
+
+    value = (manifest.get("mechanism_contract") or {}).get("capacity_publication")
+    if value is None:
+        return None
+    if not isinstance(value, dict) or value.get("schema") != "native-scoped-capacity/v1":
+        raise mechanisms.MechanismError("native capacity publication contract missing")
+    seconds = value.get("admission_seconds")
+    if (
+        isinstance(seconds, bool)
+        or not isinstance(seconds, (int, float))
+        or not math.isfinite(seconds)
+        or not 1 <= seconds <= 900
+    ):
+        raise mechanisms.MechanismError("native admission window must be bounded by 900 seconds")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", str(value.get("owner", ""))):
+        raise mechanisms.MechanismError("native capacity publication owner missing")
+    if type(value.get("continue_on_assignment_change", False)) is not bool:
+        raise mechanisms.MechanismError("native standing continuation flag must be boolean")
+    profiles, trials = value.get("profile_ids"), value.get("bounded_trial_agents")
+    if (
+        not isinstance(profiles, list)
+        or not profiles
+        or any(not isinstance(p, str) for p in profiles)
+        or len(set(profiles)) != len(profiles)
+        or not isinstance(trials, list)
+        or any(not isinstance(a, str) or a not in APPROVED_AGENTS for a in trials)
+    ):
+        raise mechanisms.MechanismError("native capacity exact profile/trial scope missing")
+    for key in profiles:
+        profile = execution_profiles.get_profile(key)
+        if (
+            not profile
+            or profile.get("agent") not in APPROVED_AGENTS
+            or profile.get("lifecycle_status") != "active"
+            or "offload" not in profile.get("transport_support", [])
+            or profile.get("reasoning_effort") not in {"none", "minimal", "low"}
+        ):
+            raise mechanisms.MechanismError(
+                "native capacity profile is not approved active low offload"
+            )
+    return value
+
+
+def _immutable(path, raw):
+    """Create once and fsync; existing bytes are never replaced on restart."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+    descriptor = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def publish_admission(manifest, manifest_path, state_path, doc):
+    """Publish only for a genuinely pending new round; never renew an old worker."""
+    import closer_operational_capacity as scoped
+
+    policy = capacity_contract(manifest)
+    if policy is None:
+        return None
+    if not entry_active(manifest):
+        raise mechanisms.MechanismError("native publication requires observed entry")
+    cfg = doc.get("worker_config") or {}
+    state_path = Path(state_path)
+    if (
+        state_path.resolve() != state_path
+        or state_path.is_symlink()
+        or state_path.parent != Path(manifest["mechanism_contract"]["campaign_root"])
+        or not state_path.name.endswith(".campaign.json")
+    ):
+        raise mechanisms.MechanismError("native publication campaign path is outside pinned root")
+    if (
+        doc.get("hold")
+        or doc.get("phase") != "work"
+        or cfg.get("granularity", "round") != "round"
+        or cfg.get("coordinator_mode") != "resource_scoped"
+        or cfg.get("apply") is not True
+        or doc.get("targets") != {"*round*": "pending"}
+        or any(
+            w.get("state") != "terminal"
+            or w.get("outcome") not in {"ok", "unavailable", "scoped_continuation"}
+            for w in doc.get("workers", [])
+        )
+    ):
+        raise mechanisms.MechanismError("native publication requires a new pending scoped round")
+    root = contract(manifest)[3]
+    invocation = _CURRENT_ADMISSION.get(str(root))
+    nonce = _CURRENT_ENTRY[str(root)]
+    if not invocation or invocation.get("nonce") != nonce:
+        raise mechanisms.MechanismError("native original invocation admission is unavailable")
+    if invocation.get("context") is not None:
+        context = invocation["context"]
+        if context["campaign"] != _campaign_identity(state_path, doc):
+            raise mechanisms.MechanismError("native invocation already bound to another campaign")
+        validate_admission(manifest, context, for_effects=True)
+        return context
+    directory = root / nonce
+    assignment_source = (
+        Path.home()
+        / ".codex/automations/reviewed-repo-automation-controller/closer-assignment.json"
+    )
+    if assignment_source.resolve() != assignment_source or assignment_source.is_symlink():
+        raise mechanisms.MechanismError("native canonical assignment is aliased")
+    raw = _bounded_bytes(assignment_source, 2 * 1024 * 1024)
+    if not raw:
+        raise mechanisms.MechanismError("native assignment missing or exceeds bound")
+    assignment = directory / "assignment.json"
+    _immutable(assignment, raw)
+    from closer_dispatcher import targets_from_assignment
+
+    if not targets_from_assignment(assignment):
+        raise mechanisms.MechanismError("native canonical assignment has no eligible targets")
+    # The producer's public API reserves the global capacity.json basename.
+    report_path = directory / "scoped-capacity.json"
+    producer_cfg = {
+        "schema": scoped.SCHEMA,
+        "owner": policy["owner"],
+        "profile_ids": policy["profile_ids"],
+        "bounded_trial_agents": policy["bounded_trial_agents"],
+        "original_deadline": invocation["original_deadline"],
+        "runtime_manifest": str(Path(manifest_path).resolve()),
+        "runtime_manifest_sha256": _hash(Path(manifest_path).resolve()),
+    }
+    report = scoped.publish(producer_cfg, report_path, expected_sha256=None)
+    if not scoped.validate_report(report, now=time.time()):
+        raise mechanisms.MechanismError("native scoped capacity readback is not current")
+    context = {
+        "schema": "native-invocation-admission/v1",
+        "nonce": nonce,
+        "started_at": invocation["started_at"],
+        "original_deadline": invocation["original_deadline"],
+        "campaign": _campaign_identity(state_path, doc),
+        "assignment": {
+            "path": str(assignment),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "source_path": str(assignment_source),
+        },
+        "report": {"path": str(report_path), "sha256": _hash(report_path)},
+        "runtime_manifest": producer_cfg["runtime_manifest"],
+        "runtime_manifest_sha256": producer_cfg["runtime_manifest_sha256"],
+    }
+    path = directory / "admission.json"
+    if path.exists() or path.is_symlink():
+        raise mechanisms.MechanismError("native admission already exists; no replacement")
+    _signed(path, {"binding": binding(manifest), "context": context}, root)
+    invocation["context"] = context
+    return context
+
+
+def _campaign_identity(state_path, doc):
+    return {
+        "state": str(Path(state_path).resolve()),
+        "campaign_id": doc["campaign_id"],
+        "owner": doc["owner"],
+        "generation": doc.get("generation", 1),
+    }
+
+
+def validate_admission(manifest, context, *, for_effects):
+    import closer_operational_capacity as scoped
+
+    policy = capacity_contract(manifest)
+    root = contract(manifest)[3]
+    if not policy or not isinstance(context, dict):
+        raise mechanisms.MechanismError("native signed admission missing")
+    nonce = context.get("nonce", "")
+    if not isinstance(nonce, str) or not re.fullmatch(r"[0-9a-f]{32}", nonce):
+        raise mechanisms.MechanismError("native admission nonce invalid")
+    directory = root / nonce
+    if directory.resolve() != directory or directory.is_symlink():
+        raise mechanisms.MechanismError("native admission path escaped")
+    signed = _read(directory / "admission.json")
+    if (
+        signed.get("record") != {"binding": binding(manifest), "context": context}
+        or not hmac.compare_digest(
+            signed["signature"], mechanisms._signature(signed["record"], mechanisms._key(root))
+        )
+        or context.get("schema") != "native-invocation-admission/v1"
+    ):
+        raise mechanisms.MechanismError("native admission signature/binding differs")
+    start, deadline = context.get("started_at"), context.get("original_deadline")
+    if (
+        isinstance(start, bool)
+        or not isinstance(start, (int, float))
+        or not math.isfinite(start)
+        or isinstance(deadline, bool)
+        or not isinstance(deadline, (int, float))
+        or not math.isfinite(deadline)
+        or deadline != start + policy["admission_seconds"]
+    ):
+        raise mechanisms.MechanismError("native original admission deadline differs")
+    source = (
+        Path.home()
+        / ".codex/automations/reviewed-repo-automation-controller/closer-assignment.json"
+    )
+    for key, name in (("assignment", "assignment.json"), ("report", "scoped-capacity.json")):
+        pin = context[key]
+        path = directory / name
+        if pin.get("path") != str(path) or path.is_symlink() or _hash(path) != pin.get("sha256"):
+            raise mechanisms.MechanismError("native immutable admission artifact differs")
+    if context["assignment"].get("source_path") != str(source):
+        raise mechanisms.MechanismError("native assignment source differs")
+    manifest_path = Path(context["runtime_manifest"])
+    if (
+        manifest_path.resolve() != manifest_path
+        or _hash(manifest_path) != context["runtime_manifest_sha256"]
+    ):
+        raise mechanisms.MechanismError("native admission manifest bytes differ")
+    if for_effects and (
+        not time.time() < deadline
+        or not scoped.validate_report(_read(directory / "scoped-capacity.json"), now=time.time())
+    ):
+        raise mechanisms.MechanismError("native admission expired or operational inputs changed")
+    return context
+
+
+def admission_config(manifest, cfg, context, *, for_effects=True):
+    """Derive only this worker's immutable cfg; never rewrite campaign history."""
+    import copy
+
+    validate_admission(manifest, context, for_effects=for_effects)
+    result = copy.deepcopy(cfg)
+    result["assignment"] = context["assignment"]["path"]
+    result["capacity_json"] = result["capacity_report"] = context["report"]["path"]
+    result["original_deadline"] = context["original_deadline"]
+    remaining = (
+        context["original_deadline"] - time.time()
+        if for_effects
+        else context["original_deadline"] - context["started_at"]
+    )
+    reserve = max(15.0, float(cfg.get("receipt_reserve_seconds", 300)))
+    inner = math.floor(remaining - reserve - 300 - 15)
+    if for_effects and inner <= 0:
+        raise mechanisms.MechanismError("native original admission has no B/C/inner receipt budget")
+    result["budget_seconds"] = remaining
+    result["dispatch_budget_seconds"] = inner
+    result["native_hooks"]["postrun_dependencies"]["assignment"] = {
+        key: context["assignment"][key] for key in ("path", "sha256")
+    }
+    result["native_admission"] = context
+    return result
+
+
+def result_admission_config(cfg, context, state_path, doc, worker):
+    """Recover a completed worker's original context, not the latest invocation."""
+    from closer_campaign import load_manifest
+
+    manifest = load_manifest(context["runtime_manifest"])
+    validate_admission(manifest, context, for_effects=False)
+    if (
+        doc.get("release_pin") != manifest["package_digest"]
+        or context["campaign"] != _campaign_identity(state_path, doc)
+        or (
+            cfg.get("runtime_manifest") is not None
+            and str(Path(cfg["runtime_manifest"]).resolve()) != context["runtime_manifest"]
+        )
+    ):
+        raise mechanisms.MechanismError("native result admission belongs to another campaign/pin")
+    root = contract(manifest)[3]
+    signed = _read(root / context["nonce"] / ("worker-" + worker["worker_id"] + ".json"))
+    record = signed["record"]
+    expected = {
+        "state": str(state_path),
+        "target": worker["target"],
+        "owner": doc["owner"],
+        "generation": str(doc.get("generation", 1)),
+        "result": str(Path(str(state_path) + ".results") / (worker["worker_id"] + ".json")),
+        "runtime-manifest": context["runtime_manifest"],
+        "mechanism": mechanisms.NATIVE,
+    }
+    if (
+        not hmac.compare_digest(
+            signed["signature"], mechanisms._signature(record, mechanisms._key(root))
+        )
+        or record.get("binding") != binding(manifest)
+        or record.get("admission") != context
+        or record.get("fields") != expected
+    ):
+        raise mechanisms.MechanismError("native result admission lacks exact pre-launch handoff")
+    return admission_config(manifest, cfg, context, for_effects=False)
+
+
+def completed_round_proof(manifest, cfg, candidate, *, record_boundary=False):
+    """Seal real B0/C0 completion, then revalidate only that exact known domain."""
+    import closer_pipeline
+    import closer_resources
+    from closer_dispatcher import targets_from_assignment
+
+    try:
+        context = cfg["native_admission"]
+        validate_admission(manifest, context, for_effects=False)
+        if not isinstance(candidate, dict) or cfg["assignment"] != context["assignment"]["path"]:
+            return None
+        round_id = candidate.get("round_id")
+        if not isinstance(round_id, str) or not re.fullmatch(r"[0-9a-f]{16,64}", round_id):
+            return None
+        state = Path(str(cfg["dispatch_state"]) + ".pipeline.json")
+        root = closer_resources.scoped_root(state)
+        receipt = root / "rounds" / (round_id + ".json")
+        if (
+            receipt.resolve() != receipt
+            or receipt.is_symlink()
+            or candidate.get("receipt_path") != str(receipt)
+        ):
+            return None
+        raw = _bounded_bytes(receipt, 32 * 1024 * 1024)
+        digest = hashlib.sha256(raw).hexdigest()
+        if candidate.get("receipt_sha256", digest) != digest:
+            return None
+        aggregate = json.loads(raw)
+        targets = targets_from_assignment(Path(cfg["assignment"]))
+        verdict = closer_resources.validate_stop(state, round_id, targets)
+        if (
+            verdict.get("round_id") != round_id
+            or verdict.get("receipt_sha256") != digest
+            or verdict.get("scoped_completion_valid") is not True
+            or verdict.get("admitted_domain_valid") is not True
+            or verdict.get("admitted_domain_reasons")
+            or set(verdict.get("run_ids", {})) != set(targets)
+        ):
+            return None
+        row_hashes = {}
+        for target, run_id in verdict["run_ids"].items():
+            shard = closer_resources.shard_dir(root, target) / "state.json"
+            row = closer_pipeline._load(shard)["runs"][run_id]["targets"][target]
+            if aggregate["targets"][target] != row or aggregate["run_ids"][target] != run_id:
+                return None
+            row_hashes[target] = mechanisms.digest(row)
+        handoff = Path(
+            cfg.get("handoff_dir")
+            or os.environ.get("HANDOFF_DIR")
+            or Path.home() / ".codex/handoff"
+        )
+        lane = handoff / ".lane-closer.lock"
+        if lane.exists() or lane.is_symlink():
+            return None
+        proof = {
+            "schema": "native-completed-round/v1",
+            "round_id": round_id,
+            "receipt_path": str(receipt),
+            "receipt_sha256": digest,
+            "run_ids": verdict["run_ids"],
+            "row_sha256": row_hashes,
+            "assignment_sha256": context["assignment"]["sha256"],
+            "admission_nonce": context["nonce"],
+            "boundary_global_stop_valid": True,
+            "accepted": False,
+        }
+        directory = contract(manifest)[3]
+        boundary = directory / context["nonce"] / ("completed-round-" + round_id + ".json")
+        record = {"binding": binding(manifest), "proof": proof}
+        if record_boundary:
+            if verdict.get("global_stop_valid") is not True or verdict.get("valid") is not True:
+                return None
+            if boundary.exists() or boundary.is_symlink():
+                return None
+            _signed(boundary, record, directory)
+        else:
+            signed = _read(boundary)
+            if (
+                signed.get("record") != record
+                or candidate != proof
+                or not hmac.compare_digest(
+                    signed["signature"], mechanisms._signature(record, mechanisms._key(directory))
+                )
+            ):
+                return None
+        return proof
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+        return None
+
+
+def rearm_on_assignment_change(campaign, doc, manifest):
+    """Standing mode only: a different assignment may follow a proven completed round."""
+    policy = capacity_contract(manifest)
+    if not policy or policy.get("continue_on_assignment_change") is not True:
+        return doc
+    if (
+        doc.get("phase") != "work"
+        or doc.get("hold")
+        or doc.get("release_record")
+        or doc.get("targets") != {"*round*": "done"}
+    ):
+        return doc
+    workers = doc.get("workers") or []
+    if (
+        not workers
+        or any(
+            w.get("state") != "terminal"
+            or w.get("outcome") not in {"ok", "unavailable", "scoped_continuation"}
+            for w in workers
+        )
+        or workers[-1].get("outcome") != "ok"
+    ):
+        return doc
+    last = workers[-1]
+    result_path = campaign.path.with_name(campaign.path.name + ".results") / (
+        last["worker_id"] + ".json"
+    )
+    result = _read(result_path)
+    if (
+        result.get("worker_id") != last["worker_id"]
+        or result.get("target") != "*round*"
+        or result.get("mechanism") != mechanisms.NATIVE
+        or result.get("outcome") != "ok"
+    ):
+        raise mechanisms.MechanismError("native standing completion identity is unavailable")
+    context = result["native_admission"]
+    cfg = result_admission_config(doc["worker_config"], context, campaign.path, doc, last)
+    candidate = json.loads(result["detail"])["completed_round"]
+    if (
+        not isinstance(candidate, dict)
+        or completed_round_proof(manifest, cfg, candidate) != candidate
+    ):
+        raise mechanisms.MechanismError(
+            "native standing original completion no longer proves known outcomes"
+        )
+    source = Path(context["assignment"]["source_path"])
+    if source.resolve() != source or source.is_symlink():
+        raise mechanisms.MechanismError("native standing controller assignment is aliased")
+    observed = hashlib.sha256(_bounded_bytes(source, 2 * 1024 * 1024)).hexdigest()
+    if observed == context["assignment"]["sha256"]:
+        return doc
+    expected_revision = doc["revision"]
+
+    def mutate(current):
+        if (
+            current["revision"] != expected_revision
+            or current.get("hold")
+            or current.get("targets") != {"*round*": "done"}
+            or current.get("phase") != "work"
+            or current.get("release_record")
+            or current.get("workers") != workers
+            or hashlib.sha256(_bounded_bytes(source, 2 * 1024 * 1024)).hexdigest() != observed
+            or completed_round_proof(manifest, cfg, candidate) != candidate
+        ):
+            raise mechanisms.MechanismError("native standing state/proof changed before transition")
+        previous_generation = current.get("generation", 1)
+        current.setdefault("assignment_transitions", []).append(
+            {
+                "schema": "native-assignment-transition/v1",
+                "previous_worker_id": last["worker_id"],
+                "previous_admission_nonce": context["nonce"],
+                "completed_round": candidate,
+                "previous_assignment_sha256": context["assignment"]["sha256"],
+                "observed_assignment_sha256": observed,
+                "source_path": str(source),
+                "previous_generation": previous_generation,
+                "next_generation": previous_generation + 1,
+                "accepted": False,
+            }
+        )
+        current["generation"] = previous_generation + 1
+        current["targets"]["*round*"] = "pending"
+
+    return campaign.update(mutate)
 
 
 def binding(manifest):
@@ -399,12 +893,19 @@ def authorize_worker(manifest, argv):
             "nonce": nonce,
             "fields": fields,
             "argv_sha256": mechanisms.digest(argv),
+            **(
+                {"admission": _CURRENT_ADMISSION[str(root)]["context"]}
+                if capacity_contract(manifest) is not None
+                else {}
+            ),
         },
         root,
     )
 
 
-def accept_worker(manifest, *, state, target, owner, generation, result, manifest_path):
+def accept_worker(
+    manifest, *, state, target, owner, generation, result, manifest_path, campaign_id=None
+):
     """Reconstitute only a handoff issued before this exact durable worker launch."""
     _value, _wrapper, _python, root = contract(manifest)
     worker_id = Path(result).stem
@@ -439,7 +940,18 @@ def accept_worker(manifest, *, state, target, owner, generation, result, manifes
     # This process already passed campaign owner/generation/claim/worker fences.
     # Its signed pre-launch handoff permits qualification during the entry's
     # short submitted-to-terminal transition; arbitrary JSON never does.
+    context = record.get("admission")
+    if capacity_contract(manifest) is not None:
+        validate_admission(manifest, context, for_effects=True)
+        if context["campaign"] != {
+            "state": str(Path(state).resolve()),
+            "campaign_id": campaign_id,
+            "owner": owner,
+            "generation": generation,
+        }:
+            raise mechanisms.MechanismError("native worker admission belongs to another campaign")
     _CURRENT_ENTRY[str(root)] = nonce
+    return context
 
 
 def native_entry(manifest, manifest_path, campaign_root):
@@ -542,10 +1054,19 @@ def _native_entry(manifest, manifest_path, campaign_root):
                 # qualification while its own submission is in progress. JSON
                 # alone never issues that capability to another worker process.
                 _CURRENT_ENTRY[str(root)] = nonce
+                capacity_policy = capacity_contract(manifest)
+                if capacity_policy is not None:
+                    started = time.time()
+                    _CURRENT_ADMISSION[str(root)] = {
+                        "nonce": nonce,
+                        "started_at": started,
+                        "original_deadline": started + capacity_policy["admission_seconds"],
+                    }
                 try:
                     result = tick(campaign_root, str(manifest_path), mechanism=mechanisms.NATIVE)
                 finally:
                     _CURRENT_ENTRY.pop(str(root), None)
+                    _CURRENT_ADMISSION.pop(str(root), None)
                 observation.update(
                     kind="native-wrapper-invocation", passed=True, tick_result=result
                 )
