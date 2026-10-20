@@ -1389,7 +1389,7 @@ def run_native_round(
                 code = 65
                 outcome = "denied"
                 phases["C"]["denial"] = str(exc)
-                detail += f"; ACTION C denied: {exc}"
+                detail += f"; ACTION C denied: {type(exc).__name__}: {exc}"
             except Exception as exc:
                 code = 65
                 phases["C"]["error"] = type(exc).__name__
