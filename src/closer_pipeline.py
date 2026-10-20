@@ -3100,6 +3100,40 @@ def _run_pipeline_impl(
                         }
                     item.pop("error", None)
                     item["status"] = "queued"
+                    # Admission guards may stop before any provider call. Preserve
+                    # that exact event dependency instead of escalating it to the
+                    # strong-worker lane or advancing to an action.
+                    if (
+                        stage in {"interpret", "exception"}
+                        and value.get("status") == "pending"
+                        and value.get("pending_kind") in {"ci", "async_operation", "external_event"}
+                        and isinstance(value.get("next_trigger"), str)
+                        and isinstance(value.get("pending_evidence"), Mapping)
+                    ):
+                        evidence_value = value.get("pending_evidence")
+                        kind_value = value.get("pending_kind")
+                        evidence = evidence_value if isinstance(evidence_value, Mapping) else None
+                        kind = kind_value if isinstance(kind_value, str) else ""
+                        id_fields = {
+                            "ci": "check_run_id",
+                            "async_operation": "operation_id",
+                            "external_event": "event_id",
+                        }
+                        has_id = id_fields.get(kind)
+                        event_id = evidence.get(has_id) if evidence is not None and has_id else None
+                        if evidence is not None and isinstance(event_id, str) and event_id:
+                            # A pending interpretation is a wake-up point,
+                            # not a reusable semantic decision. The next
+                            # invocation must rerun the admission check.
+                            if cache_key:
+                                doc.get("cache", {}).pop(cache_key, None)
+                            item.update(
+                                status="pending",
+                                pending_kind=kind,
+                                deferred_next_trigger=value["next_trigger"],
+                                pending_evidence=dict(evidence),
+                            )
+                            return
                     if stage == "prepare":
                         prior_revision = item.get("revision")
                         item["revision"] = value.get("revision")
@@ -3141,44 +3175,6 @@ def _run_pipeline_impl(
                                     deferred_next_trigger="fresh_capacity_report",
                                 )
                             return
-                        # Admission guards may stop before any provider call. Preserve
-                        # that exact event dependency instead of escalating it to the
-                        # strong-worker lane or advancing to an action.
-                        if (
-                            value.get("status") == "pending"
-                            and value.get("pending_kind")
-                            in {"ci", "async_operation", "external_event"}
-                            and isinstance(value.get("next_trigger"), str)
-                            and isinstance(value.get("pending_evidence"), Mapping)
-                        ):
-                            evidence_value = value.get("pending_evidence")
-                            kind_value = value.get("pending_kind")
-                            evidence = (
-                                evidence_value if isinstance(evidence_value, Mapping) else None
-                            )
-                            kind = kind_value if isinstance(kind_value, str) else ""
-                            id_fields = {
-                                "ci": "check_run_id",
-                                "async_operation": "operation_id",
-                                "external_event": "event_id",
-                            }
-                            has_id = id_fields.get(kind)
-                            event_id = (
-                                evidence.get(has_id) if evidence is not None and has_id else None
-                            )
-                            if evidence is not None and isinstance(event_id, str) and event_id:
-                                # A pending interpretation is a wake-up point,
-                                # not a reusable semantic decision. The next
-                                # invocation must rerun the admission check.
-                                if cache_key:
-                                    doc.get("cache", {}).pop(cache_key, None)
-                                item.update(
-                                    status="pending",
-                                    pending_kind=kind,
-                                    deferred_next_trigger=value["next_trigger"],
-                                    pending_evidence=dict(evidence),
-                                )
-                                return
                         if (
                             value.get("status") == "deferred"
                             and value.get("reason") == "provider_failure"

@@ -658,6 +658,110 @@ class RoundCapacityDeferred(RuntimeError, closer_evidence.RoundControlException)
         super().__init__(f"GitHub {self.resource} capacity is deferred by the rate ledger")
 
 
+def resolve_delivery_candidates(repo, nodes, *, complete, compare):
+    """Choose collection identity only from a complete, bounded delivery chain.
+
+    Ancestry proves inclusion of earlier delivery merges, never Tasks/AC coverage.
+    Every comparison is a read of immutable commit identifiers under the caller's
+    existing deadline. An unreadable comparison cannot authorize another choice.
+    """
+    inventory = {
+        "status": "missing" if not nodes else "ambiguous",
+        "source": "closedByPullRequestsReferences",
+        "complete": complete is True,
+        "candidates": [],
+        "candidate_metadata": [],
+        "ancestry_proofs": [],
+        "acceptance_authority": False,
+    }
+    for node in nodes:
+        target = f"{(node.get('repository') or {}).get('nameWithOwner')}#{node.get('number')}"
+        inventory["candidates"].append(target)
+        inventory["candidate_metadata"].append(
+            {
+                "target": target,
+                "state": node.get("state"),
+                "head": node.get("headRefOid"),
+                "base": node.get("baseRefOid"),
+                "merge": (node.get("mergeCommit") or {}).get("oid"),
+                "merged_at": node.get("mergedAt"),
+            }
+        )
+    if not complete:
+        inventory.update(status="failed", reason="delivery link inventory incomplete")
+        return inventory
+    if len(nodes) == 1:
+        inventory.update(
+            status="resolved", selected=inventory["candidates"][0], method="unique_link"
+        )
+        return inventory
+    if not nodes:
+        inventory["reason"] = "original source has no identified delivery PR"
+        return inventory
+    if len(nodes) > 8:
+        inventory["reason"] = "delivery candidate bound exceeded"
+        return inventory
+    candidates = inventory["candidate_metadata"]
+    if len(set(inventory["candidates"])) != len(nodes) or any(
+        row["target"].split("#")[0].lower() != repo.lower()
+        or row["state"] != "MERGED"
+        or any(
+            not isinstance(row[key], str) or not SHA.fullmatch(row[key])
+            for key in ("head", "base", "merge")
+        )
+        for row in candidates
+    ):
+        inventory["reason"] = (
+            "delivery candidates are not distinct exact same-repository merged PRs"
+        )
+        return inventory
+    terminal = []
+    for candidate in candidates:
+        includes_all = True
+        for earlier in candidates:
+            if earlier is candidate:
+                continue
+            endpoint = f"repos/{repo}/compare/{earlier['merge']}...{candidate['head']}"
+            try:
+                doc = compare(endpoint)
+                proof = {
+                    "candidate": candidate["target"],
+                    "earlier": earlier["target"],
+                    "earlier_merge": earlier["merge"],
+                    "candidate_head": candidate["head"],
+                    "endpoint": endpoint,
+                    "status": doc.get("status"),
+                    "behind_by": doc.get("behind_by"),
+                    "ahead_by": doc.get("ahead_by"),
+                    "base_commit": (doc.get("base_commit") or {}).get("sha"),
+                    "merge_base": (doc.get("merge_base_commit") or {}).get("sha"),
+                }
+                proven = (
+                    proof["status"] in {"ahead", "identical"}
+                    and type(proof["behind_by"]) is int
+                    and proof["behind_by"] == 0
+                    and proof["base_commit"] == proof["merge_base"] == earlier["merge"]
+                )
+                inventory["ancestry_proofs"].append({**proof, "contains_merge": proven})
+                includes_all = includes_all and proven
+            except Exception as exc:
+                if isinstance(exc, closer_evidence.RoundControlException):
+                    raise
+                inventory.update(
+                    status="failed",
+                    reason="delivery ancestry read failed",
+                    error_type=type(exc).__name__,
+                )
+                return inventory
+        if includes_all:
+            terminal.append(candidate["target"])
+    if len(terminal) != 1:
+        inventory["reason"] = "delivery ancestry has no unique terminal candidate"
+        return inventory
+    inventory.update(status="resolved", selected=terminal[0], method="unique_merged_chain")
+    return inventory
+
+
 class GitHub:
     def __init__(self, *, deadline, api_fn=None):
         self.deadline = deadline
@@ -697,23 +801,72 @@ class GitHub:
                 + json.dumps(name)
                 + "){issue(number:"
                 + num
-                + "){closedByPullRequestsReferences(first:100){nodes{number repository{nameWithOwner}} pageInfo{hasNextPage}}}}}"
+                + "){closedByPullRequestsReferences(first:100){nodes{number state headRefOid baseRefOid mergeCommit{oid} mergedAt repository{nameWithOwner}} pageInfo{hasNextPage}}}}}"
             )
-            doc = self.api("graphql", method="POST", fields={"query": query}, resource="graphql")
-            links = doc["data"]["repository"]["issue"]["closedByPullRequestsReferences"]
-            if links["pageInfo"].get("hasNextPage"):
-                raise RuntimeError("source delivery link inventory incomplete")
-            if len(links["nodes"]) == 1:
-                pr = links["nodes"][0]
-                pr_target = f"{pr['repository']['nameWithOwner']}#{pr['number']}"
-                snapshot = self.snapshot(pr_target)
-                if target not in {x["target"] for x in snapshot.get("sources", [])}:
-                    raise RuntimeError("delivery PR does not retain exact source linkage")
-                snapshot.update(target=target, pr_target=pr_target)
-                snapshot["revision"] = digest(
-                    {k: v for k, v in snapshot.items() if k != "observed_at"}
+            try:
+                doc = self.api(
+                    "graphql", method="POST", fields={"query": query}, resource="graphql"
                 )
-                return snapshot
+                links = doc["data"]["repository"]["issue"]["closedByPullRequestsReferences"]
+                delivery_links = resolve_delivery_candidates(
+                    repo,
+                    links["nodes"],
+                    complete=links["pageInfo"].get("hasNextPage") is False,
+                    compare=self.api,
+                )
+            except Exception as exc:
+                if isinstance(exc, closer_evidence.RoundControlException):
+                    raise
+                delivery_links = {
+                    "status": "failed",
+                    "source": "closedByPullRequestsReferences",
+                    "complete": False,
+                    "candidates": [],
+                    "candidate_metadata": [],
+                    "ancestry_proofs": [],
+                    "acceptance_authority": False,
+                    "reason": "delivery inventory read failed",
+                    "error_type": type(exc).__name__,
+                }
+            if delivery_links["status"] == "resolved":
+                pr_target = delivery_links["selected"]
+                try:
+                    snapshot = self.snapshot(pr_target)
+                    if target not in {x["target"] for x in snapshot.get("sources", [])}:
+                        raise RuntimeError("delivery PR does not retain exact source linkage")
+                    if delivery_links["method"] == "unique_merged_chain":
+                        selected = next(
+                            row
+                            for row in delivery_links["candidate_metadata"]
+                            if row["target"] == pr_target
+                        )
+                        if any(
+                            snapshot.get(key) != selected[key]
+                            for key in ("state", "head", "base", "merge")
+                        ):
+                            raise RuntimeError(
+                                "selected delivery metadata changed after ancestry observation"
+                            )
+                        original = next(
+                            row for row in snapshot["sources"] if row["target"] == target
+                        )
+                        if original["body"] != (issue.get("body") or ""):
+                            raise RuntimeError("original source changed during delivery collection")
+                    snapshot.update(
+                        target=target, pr_target=pr_target, delivery_links=delivery_links
+                    )
+                    snapshot["revision"] = digest(
+                        {k: v for k, v in snapshot.items() if k != "observed_at"}
+                    )
+                    return snapshot
+                except Exception as exc:
+                    if isinstance(exc, closer_evidence.RoundControlException):
+                        raise
+                    delivery_links.update(
+                        status="failed",
+                        reason="selected delivery revalidation failed",
+                        error_type=type(exc).__name__,
+                    )
             source = {
                 "target": target,
                 "body": issue.get("body") or "",
@@ -726,7 +879,14 @@ class GitHub:
                 "sources": [source],
                 "state": issue["state"].upper(),
                 "body": issue.get("body") or "",
-                "revision": digest({"source": source, "updated": issue.get("updated_at")}),
+                "delivery_links": delivery_links,
+                "revision": digest(
+                    {
+                        "source": source,
+                        "updated": issue.get("updated_at"),
+                        "delivery_links": delivery_links,
+                    }
+                ),
                 "observed_at": time.time(),
             }
         owner, name = repo.split("/")
@@ -2507,6 +2667,13 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             snap["base"] = packet.get("base")
         return snap, packet
 
+    def packet_evidence_root(prep):
+        # load_packet verifies this immutable manifest reference first. Match
+        # integrate_ordinary's imported/restart packet root; raw proof reads
+        # remain confined beneath it by the existing _safe_raw contract.
+        name = (prep.get("packet_ref") or {}).get("path")
+        return Path(name).parent.parent if isinstance(name, str) and name else None
+
     def resource_keys(target, context):
         import closer_resources
 
@@ -3003,6 +3170,9 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "end_cursor": cursor,
             }
 
+        action, reason, eligible, trigger = backend.select(snap)
+        if packet is not None and packet.get("collection_action") != action:
+            packet = None
         if packet is None:
             packet = closer_evidence.collect_evidence(
                 snap,
@@ -3013,8 +3183,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 dispositions=backend.dispositions.get(target, {}),
                 artifact_fetch=artifact_fetch,
                 review_threads_fetch=review_threads_fetch,
+                action=action,
             )
-        action, reason, eligible, trigger = backend.select(snap)
         snapshot_bytes = json.dumps(
             snap, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         ).encode()
@@ -3033,6 +3203,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             "path": str(manifest_path),
             "sha256": hashlib.sha256(manifest_bytes).hexdigest(),
         }
+        collection_result = closer_evidence.collection_summary(packet, packet_ref)
         if backend.local_first and not snap.get("_local_cached"):
             import closer_change_feed
 
@@ -3102,6 +3273,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             "remote_fresh": not snap.get("_local_cached", False),
             "packet_ref": packet_ref,
             "snapshot_ref": snapshot_ref,
+            "collection_result": collection_result,
             "evidence_summary": {
                 "schema": packet.get("schema"),
                 "head": packet.get("head"),
@@ -3110,6 +3282,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "packet_ref": packet_ref,
                 "drift_sample": drift,
                 "sections": compact_sections,
+                "collection_result": collection_result,
             },
             "proposal": {
                 "action": action,
@@ -3117,6 +3290,51 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "eligible": eligible,
                 "next_trigger": trigger,
             },
+        }
+
+    def evidence_pending(target, prep, readiness):
+        action = (prep.get("proposal") or {}).get("action")
+        inventory_ref = (
+            ((prep.get("evidence_summary") or {}).get("sections") or {}).get("delivery_inventory")
+            or {}
+        ).get("retained")
+        readiness = closer_evidence.readiness_summary(
+            readiness, packet_ref=prep.get("packet_ref"), inventory_ref=inventory_ref
+        )
+        dependency = readiness.get("dependency") or {}
+        source_transform = dependency.get("schema") == "closer-source-transform-dependency/v1"
+        ambiguous = (readiness.get("delivery_links") or {}).get("status") == "ambiguous"
+        return {
+            "status": "pending",
+            "pending_kind": "external_event",
+            "classification": (
+                "source_transform_pending" if source_transform else "evidence_pending"
+            ),
+            "reason": (
+                "source_transform_requires_senior_resolution"
+                if source_transform
+                else "action_evidence_not_ready"
+            ),
+            "next_trigger": (
+                dependency["next_trigger"]
+                if source_transform
+                else (
+                    "explicit guarded source-to-delivery resolution binds all listed candidate PRs to original criteria and exact delivery heads"
+                    if ambiguous
+                    else "fresh identified delivery and retained action evidence resolves the named gaps"
+                )
+            ),
+            "pending_evidence": {
+                "event_id": "evidence-readiness:"
+                + digest([target, prep.get("revision"), prep.get("packet_ref"), action, readiness]),
+                "target": target,
+                "revision": prep.get("revision"),
+                "packet_ref": prep.get("packet_ref"),
+                "action": action,
+                "readiness": readiness,
+            },
+            "substantive_needs": [],
+            "authority": False,
         }
 
     def interpret(target, context):
@@ -3188,6 +3406,16 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "reason": (prep.get("proposal") or {}).get("reason"),
                 "next_trigger": (prep.get("proposal") or {}).get("next_trigger"),
             }
+        prior_wait = durable_prior_inner_wait(target, prep, context)
+        if prior_wait is None:
+            readiness = closer_evidence.action_evidence_readiness(
+                admitted_snapshot,
+                raw_packet,
+                deterministic_action,
+                retained_dir=packet_evidence_root(prep),
+            )
+            if not readiness["ready"]:
+                return evidence_pending(target, prep, readiness)
         admission = backend.campaign_admission(
             target, admitted_snapshot, max(0, min(120, int(context["deadline"] - time.time())))
         )
@@ -3207,7 +3435,6 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "substantive_needs": [],
                 "authority": False,
             }
-        prior_wait = durable_prior_inner_wait(target, prep, context)
         if prior_wait is not None:
             return {
                 "classification": "deterministic_inner_wait",
@@ -3692,6 +3919,22 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         except CompletedResponseReadError as error:
             return readback_hold(error, target, prep, context)
         exception_snapshot, _packet = full_snapshot(prep)
+        readiness = closer_evidence.action_evidence_readiness(
+            exception_snapshot,
+            _packet,
+            (prep.get("proposal") or {}).get("action"),
+            retained_dir=packet_evidence_root(prep),
+        )
+        if not readiness["ready"]:
+            return evidence_pending(target, prep, readiness)
+        if readiness["mode"] == "deterministic":
+            return {
+                "classification": "deterministic_" + str(readiness["action"]),
+                "substantive_needs": [],
+                "authority": False,
+                "reason": (prep.get("proposal") or {}).get("reason"),
+                "next_trigger": (prep.get("proposal") or {}).get("next_trigger"),
+            }
         proposal = {
             "interpretation": interpreted.get("proposal"),
             "substantive_needs": interpreted.get("substantive_needs", []),

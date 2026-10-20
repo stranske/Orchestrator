@@ -247,7 +247,14 @@ class TestExceptionCallbackIdentity:
     """Pipeline exception callback must preserve router-selected provider identity."""
 
     def test_non_codex_exception_callback_identity(self, tmp_path, monkeypatch):
-        from test_closer_dispatcher import TARGET, FakeGitHub, snapshot
+        from test_closer_dispatcher import (
+            TARGET,
+            FakeGitHub,
+            snapshot,
+            stub_action_readiness_for_transport_test,
+        )
+
+        stub_action_readiness_for_transport_test(monkeypatch)
 
         import closer_pipeline
 
@@ -323,7 +330,14 @@ class TestExceptionCallbackIdentity:
 
 class TestInterpretationCapacityDeferral:
     def test_route_reservation_exhaustion_is_a_capacity_deferral(self, tmp_path, monkeypatch):
-        from test_closer_dispatcher import TARGET, FakeGitHub, snapshot
+        from test_closer_dispatcher import (
+            TARGET,
+            FakeGitHub,
+            snapshot,
+            stub_action_readiness_for_transport_test,
+        )
+
+        stub_action_readiness_for_transport_test(monkeypatch)
 
         import closer_pipeline
         import closer_resources

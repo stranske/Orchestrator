@@ -50,6 +50,21 @@ def no_live_state_or_provider(monkeypatch, tmp_path):
     monkeypatch.setattr(adapter.gh_capacity, "gh_run", forbidden)
 
 
+def stub_action_readiness_for_transport_test(monkeypatch):
+    """These transport units start after admission; real collector admission is tested separately."""
+    monkeypatch.setattr(
+        closer_evidence,
+        "action_evidence_readiness",
+        lambda *_a, **_k: {
+            "schema": "closer-action-evidence-readiness/v1",
+            "action": _a[2],
+            "ready": True,
+            "mode": "acceptance",
+            "gaps": [],
+        },
+    )
+
+
 def snapshot(**overrides):
     result = {
         "target": TARGET,
@@ -175,6 +190,7 @@ def test_staged_prepare_reuses_retained_packet_during_github_outage(
     state = tmp_path / "state.json"
     packet = {
         "schema": "closer-evidence/v1",
+        "collection_action": "collect_evidence",
         "head": HEAD,
         "base": MERGE,
         "bindings": {
@@ -1832,6 +1848,7 @@ def test_staged_prepare_runs_before_pending_ci_wait_selection(tmp_path, monkeypa
         "closer_evidence",
         SimpleNamespace(
             collect_evidence=lambda snap, api, retained_dir, **kwargs: packet,
+            collection_summary=closer_evidence.collection_summary,
             validate_packet=lambda value: False,
             _atomic_write=lambda path, data: (
                 Path(path).parent.mkdir(parents=True, exist_ok=True),
@@ -2642,15 +2659,16 @@ def test_same_head_inner_wait_requires_fresh_admission_and_matching_producer(tmp
         old_interpret = callbacks["interpret"](TARGET, old_context)
         assert old_interpret["classification"] == "deterministic_inner_wait"
         assert admissions == [True]
-        old_act = callbacks["act"](TARGET, {**old_context, "interpret": old_interpret})
-        assert old_act["status"] == "deferred"
+        # Check fresh permission while the persisted wait proof is still current.
         admission_allowed[0] = False
         denied = callbacks["interpret"](TARGET, old_context)
         assert denied["classification"] == "admission_deferred"
         admission_allowed[0] = True
+        old_act = callbacks["act"](TARGET, {**old_context, "interpret": old_interpret})
+        assert old_act["status"] == "deferred"
         changed_producer = {**old_context, "prepare": {**old_prepare, "producer_sha256": "3" * 64}}
         producer_interpret = callbacks["interpret"](TARGET, changed_producer)
-        assert producer_interpret["classification"] == "capacity_deferred"
+        assert producer_interpret["classification"] == "evidence_pending"
         changed = snapshot(head="b" * 40)
         changed_context = {
             **old_context,
@@ -2658,8 +2676,8 @@ def test_same_head_inner_wait_requires_fresh_admission_and_matching_producer(tmp
             "prepare": {**old_prepare, "revision": changed["revision"], "snapshot": changed},
         }
         changed_interpret = callbacks["interpret"](TARGET, changed_context)
-        assert changed_interpret["classification"] == "capacity_deferred"
-        assert len(admissions) == 4
+        assert changed_interpret["classification"] == "evidence_pending"
+        assert len(admissions) == 2
         seen["result"] = old_act
         return {"targets": {TARGET: old_act}}
 
@@ -2797,6 +2815,7 @@ def test_pipeline_low_route_uses_any_live_low_profile_not_luna_assumption(tmp_pa
 
 
 def test_busy_shared_exception_pool_returns_valid_fresh_capacity_proof(tmp_path, monkeypatch):
+    stub_action_readiness_for_transport_test(monkeypatch)
     import threading
     from concurrent.futures import ThreadPoolExecutor
 
@@ -3100,6 +3119,7 @@ def test_low_proposal_accepts_only_one_complete_json_document():
 def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(
     tmp_path, monkeypatch, fenced
 ):
+    stub_action_readiness_for_transport_test(monkeypatch)
     from subprocess import CompletedProcess
 
     import closer_disposition
@@ -3571,6 +3591,7 @@ def test_deterministic_dispatcher_states_skip_low_provider_stage(tmp_path, monke
 def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
     tmp_path, monkeypatch, failure_kind
 ):
+    stub_action_readiness_for_transport_test(monkeypatch)
     import closer_disposition
     import closer_evidence
     import dispatcher
@@ -3815,6 +3836,7 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
 def test_uncertain_provider_result_stops_before_fallback_exception_or_action(
     tmp_path, monkeypatch, accounting_pending
 ):
+    stub_action_readiness_for_transport_test(monkeypatch)
     import closer_evidence
     import dispatcher
 

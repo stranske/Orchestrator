@@ -109,6 +109,26 @@ current-head receipt.
 | Verifier NON_PASS | Collect/adjudicate findings; never close source automatically |
 | Merge-bound PASS and accepted original source evidence | Call the existing supervisor source-closure actor |
 
+Before either model lane runs, action-specific evidence readiness checks the retained
+packet, exact PR/head/base, complete original sources and usable raw inputs. A
+known collection gap returns a pending dependency naming its input and trigger;
+it does not spend a model call to rediscover that gap. Issue snapshots retain
+missing versus ambiguous delivery links and all candidate identities. Multiple
+links resolve automatically only when a bounded exact commit comparison proves
+one merged candidate head contains every other candidate merge. Open, unrelated,
+unreadable or unproved candidates remain explicit collection failures. All source
+criteria, PR/head/base identities and ancestry records are retained; lineage does
+not certify task completion. The producer emits a hash-bound ready or pending
+collection result after raw evidence retrieval. Unsupported verifier verdicts and
+run-attempt mismatches remain uncertainty barriers. Integrity
+validation still permits incomplete packets for collection and diagnosis; it is
+not model admission or acceptance. Substantive review and bound NON_PASS triage
+retain their narrower input contracts, including usable partial optional evidence.
+Stable redaction or truncation of original source criteria creates a typed senior
+source dependency; refreshing the same source is not a resolution. Review bodies
+may be redacted only when all thread and comment pages are complete, no content
+was truncated, and retained displayed bytes still match their hashes.
+
 `--dispositions` is a **trusted coordinator input**, never a private-worker output
 file. Each target's acceptance disposition names `reviewer`, exact `head`, current
 `review_revision`, `source_digest` from `source_digest(snapshot["sources"])`, and
