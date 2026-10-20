@@ -33,8 +33,11 @@ import re
 import sqlite3
 import sys
 import time
+from bisect import bisect_left, bisect_right
+from collections import Counter
 from collections.abc import Callable
 from contextlib import nullcontext
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -537,6 +540,7 @@ MAX_COMPLETION_STRING_CHARS = 256
 MAX_COMPLETION_ARTIFACTS = 16
 COMPLETION_PAYLOAD_FIELDS = {
     "closer_stage",
+    "relay_pacing",
     "changed_path_classes",
     "command_ids",
     "test_ids",
@@ -605,6 +609,7 @@ VALID_COMPLETION_PRODUCERS = {
     "closer_disposition.integrate_ordinary",
     "closer_dispatcher.response_binding",
     "closer_dispatcher.worker",
+    "feedback.relay_pacing",
     "feedback.record_run",
     "feedback.execution_attempt",
     "feedback.record_outcome",
@@ -654,6 +659,19 @@ VALID_COMPLETION_STATUSES = {
     "unknown",
 }
 COMPLETION_NESTED_FIELDS = {
+    "relay_pacing": {
+        "source",
+        "chosen",
+        "candidates",
+        "states",
+        "weights",
+        "fallback",
+        "lane",
+        "round_id",
+        "exit_status",
+        "error_class",
+        "status",
+    },
     "closer_stage": {
         "validation_status",
         "task_category",
@@ -2374,6 +2392,7 @@ def _record_influence_edge_in_conn(
     acceptance_gate_id: str | None = None,
     metadata: dict | None = None,
     allow_unlinked: bool = False,
+    timestamp: int | None = None,
 ) -> dict:
     kind = str(influence_type or "").strip().lower()
     if kind not in VALID_INFLUENCE_TYPES:
@@ -2419,7 +2438,7 @@ def _record_influence_edge_in_conn(
     edge_id = "edge:" + hashlib.sha256(edge_identity.encode()).hexdigest()[:32]
     safe_meta, _, _ = _sanitize_completion_payload({"result": metadata or {}})
     metadata_hash = _completion_hash(safe_meta)
-    now = int(time.time())
+    now = int(timestamp if timestamp is not None else time.time())
     c.execute(
         "INSERT INTO influence_edges "
         "(edge_id,schema_version,source_event_id,source_run_id,target_event_id,target_run_id,"
@@ -6405,7 +6424,7 @@ def record_lane_round(
     ts: int,
 ) -> str:
     """Record observed relay facts in the v2 decision plane, without a fake profile."""
-    if agent not in {"codex", "claude"} or not lane or not error_class:
+    if agent not in {"codex", "claude", "cursor", "muse"} or not lane or not error_class:
         raise ValueError("agent, lane and error_class must describe a lane round")
     facts = [agent, lane, receiver_reason, int(exit_status), error_class, int(ts)]
     decision_id = (
@@ -6420,6 +6439,184 @@ def record_lane_round(
             (decision_id, int(ts), agent, lane, receiver_reason, int(exit_status), error_class),
         )
     return decision_id
+
+
+RELAY_PACING_CAPABILITY = "windowed-capacity-policy"
+RELAY_PACING_VERSION = "relay-pacing-v1"
+
+
+def ingest_relay_pacing(log: Path, *, now: int | None = None) -> dict:
+    """Join legacy serial relay decisions to observed lane exits, never guess across retries.
+
+    The installed hook supplies no decision ID. A legacy join therefore requires exactly one
+    decision in the interval between consecutive exits for that lane, matching the chosen agent.
+    Same-second exits, multiple decisions (including preflight retries), mismatches and unfinished
+    rounds retain their decision event but earn no accepted edge. Re-reading is idempotent.
+    """
+    end = int(time.time()) if now is None else now
+    log_exists = log.exists()
+    decisions: dict[str, tuple[int, dict[str, Any]]] = {}
+    for line in log.read_text(encoding="utf-8").splitlines() if log_exists else []:
+        try:
+            raw_stamp, *parts = line.split()
+            facts: dict[str, Any] = dict(part.split("=", 1) for part in parts)
+            ts = int(
+                datetime.strptime(raw_stamp, "%Y-%m-%dT%H:%M:%SZ")
+                .replace(tzinfo=timezone.utc)
+                .timestamp()
+            )
+            required = {"source", "lane", "candidates", "chosen", "weights", "states", "fallback"}
+            if not required <= facts.keys() or ts > end:
+                continue
+            agents = {"codex", "claude", "claude_code", "cursor", "muse"}
+            candidates = facts["candidates"].split(",")
+            if (
+                facts["source"] not in agents
+                or facts["chosen"] not in candidates
+                or not set(candidates) <= agents
+                or facts["lane"] not in {"opener", "closer"}
+                or facts["fallback"] not in {"yes", "no"}
+            ):
+                continue
+            decision_id = "relay-pacing:" + hashlib.sha256(line.strip().encode()).hexdigest()[:24]
+            facts = {key: facts[key] for key in required}
+            facts["candidates"] = candidates
+            facts["fallback"] = facts["fallback"] == "yes"
+            decisions[decision_id] = (ts, facts)
+        except (ValueError, OverflowError):
+            continue  # incomplete trailing lines and unrelated log prose are not evidence
+    with _conn() as c:
+        # Serialize binding even when the decision event was saved by an earlier invocation.
+        c.execute("BEGIN IMMEDIATE")
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_relay_lane_round "
+            "ON routing_decisions_v2(record_kind,lane,ts)"
+        )
+        events = {}
+        for key, event_id, ts, payload in c.execute(
+            "SELECT run_id,event_id,created_ts,payload_json FROM completion_events "
+            "WHERE capability_id=? AND capability_version_id=? AND phase='decision' "
+            "AND producer='feedback.relay_pacing' AND validation_status='accepted' "
+            "AND created_ts<=?",
+            (RELAY_PACING_CAPABILITY, RELAY_PACING_VERSION, end),
+        ):
+            events[key] = event_id
+            # A saved but unbound decision can outlive a rotated/missing log.
+            decisions.setdefault(key, (ts, json.loads(payload)["relay_pacing"]))
+        bound = dict(
+            c.execute(
+                "SELECT source_run_id,target_run_id FROM influence_edges "
+                "WHERE capability_id=? AND capability_version_id=? AND accepted=1",
+                (RELAY_PACING_CAPABILITY, RELAY_PACING_VERSION),
+            )
+        )
+        bound_targets = set(bound.values())
+        joined = len(set(bound) & decisions.keys())
+        for decision_id, (ts, facts) in decisions.items():
+            if decision_id not in events:
+                events[decision_id] = _record_completion_event_in_conn(
+                    c,
+                    decision_id,
+                    event_type="decision",
+                    phase="decision",
+                    producer="feedback.relay_pacing",
+                    capability_id=RELAY_PACING_CAPABILITY,
+                    capability_version_id=RELAY_PACING_VERSION,
+                    status="recorded",
+                    payload={"relay_pacing": facts},
+                    timestamp=ts,
+                )["event_id"]
+        for lane in ("opener", "closer"):
+            unbound = [
+                ts
+                for key, (ts, facts) in decisions.items()
+                if key not in bound and facts["lane"] == lane
+            ]
+            if not unbound:
+                continue
+            oldest = min(unbound)
+            previous = c.execute(
+                "SELECT MAX(ts) FROM routing_decisions_v2 "
+                "WHERE record_kind='lane_round' AND lane=? AND ts<?",
+                (lane, oldest),
+            ).fetchone()[0]
+            previous = -1 if previous is None else previous
+            lane_rounds = c.execute(
+                "SELECT decision_id,ts,agent,lane,exit_status,error_class "
+                "FROM routing_decisions_v2 WHERE record_kind='lane_round' "
+                "AND lane=? AND ts>=? AND ts<=? ORDER BY ts,decision_id",
+                (lane, oldest, end),
+            ).fetchall()
+            ties = Counter(r[1] for r in lane_rounds)
+            lane_decisions = sorted(
+                (ts, key, facts) for key, (ts, facts) in decisions.items() if facts["lane"] == lane
+            )
+            stamps = [item[0] for item in lane_decisions]
+            for round_id, ts, agent, _, exit_status, error_class in lane_rounds:
+                lo, hi = bisect_right(stamps, previous), bisect_left(stamps, ts)
+                previous = ts
+                if ties[ts] != 1 or hi - lo != 1:
+                    continue
+                stamp, key, facts = lane_decisions[lo]
+                if key in bound or round_id in bound_targets:
+                    continue
+                if facts["chosen"].replace("claude_code", "claude") != agent:
+                    continue
+                status = (
+                    "completed"
+                    if exit_status == 0
+                    else (
+                        "rate-limited"
+                        if error_class
+                        in {
+                            "quota_exhausted",
+                            "resource_exhausted",
+                            "http_429",
+                            "rate_limit_exhausted",
+                        }
+                        else "failed"
+                    )
+                )
+                outcome = {
+                    **facts,
+                    "round_id": round_id,
+                    "exit_status": exit_status,
+                    "error_class": error_class,
+                    "status": status,
+                }
+                target = _record_completion_event_in_conn(
+                    c,
+                    round_id,
+                    event_type="completion",
+                    phase="outcome",
+                    producer="feedback.relay_pacing",
+                    capability_id=RELAY_PACING_CAPABILITY,
+                    capability_version_id=RELAY_PACING_VERSION,
+                    status="succeeded" if exit_status == 0 else "failed",
+                    payload={"relay_pacing": outcome},
+                    timestamp=ts,
+                )
+                _record_influence_edge_in_conn(
+                    c,
+                    source_event_id=events[key],
+                    source_run_id=key,
+                    target_event_id=target["event_id"],
+                    target_run_id=round_id,
+                    capability_id=RELAY_PACING_CAPABILITY,
+                    capability_version_id=RELAY_PACING_VERSION,
+                    influence_type="capability",
+                    influence_id=RELAY_PACING_VERSION,
+                    accepted=True,
+                    timestamp=stamp,
+                )
+                bound[key] = round_id
+                bound_targets.add(round_id)
+                joined += 1
+    return {
+        "status": "recorded" if log_exists or decisions else "absent",
+        "decisions": len(decisions),
+        "joined": joined,
+    }
 
 
 def attach_profile_attempt_to_decision(decision_id: str, attempt_id: str) -> list[str]:

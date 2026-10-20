@@ -1731,6 +1731,24 @@ back to zero-weight warn pools, then pacing-shed pools with
 `fail-toward-motion`; auth/model/manual holds retain authority. The plan and persisted dispatch
 metadata carry all candidate weights and projections. `capacity.py pick-agent` exposes that same
 selection for the separate relay follow-up; it prints the agent on stdout and evidence on stderr.
+The relay's existing `rate_incidents.py record-lane-round` exit hook imports
+`$HANDOFF_PACING_LOG` (default `$HANDOFF_DIR/relay-pacing.log`) through
+`feedback.ingest_relay_pacing`. **`windowed-capacity-policy` owns this consumption**; there is
+no second relay-pacing capability or grading row. Version `relay-pacing-v1` stores source,
+chosen, candidates, states, weights and fallback in sanitized Brain decision events. The log
+has no run ID: only one decision between consecutive exits of the same lane, matching the
+observed receiver, can join its `routing_decisions_v2` lane-round ID. Multiple decisions,
+same-second exits, receiver changes after preflight, unfinished rounds and missing evidence
+remain uncredited; they must not be called acted on merely because selection was logged.
+The source event and accepted influence edge retain the decision time, so rereading or delayed
+import does not move evidence into another monitor window. One-to-one binding prevents late
+exits from reassigning a decision. The existing hook accepts Codex, Claude, Cursor and Muse.
+A joined round records completed / failed / rate-limited and the chosen agent; the existing
+value-chain row counts the observed terminal round as `outcome`. Process success never creates
+a PR verdict, merge, or durable success (`outcome_success`). Mirror sync activates this hook;
+no host launcher edit or routing-policy change is needed. The 2026-10-27 check must compare
+identical windows and report any unjoined decisions explicitly rather than claiming the 5%
+pass threshold from fixture evidence. See `docs/LANE_ROUND_FEEDBACK.md`.
 `capacity.py pacing-report` queries completed-period usage, incidents with another pool ok, and
 non-Codex dispatch share in constrained versus ok hours; missing populations stay unmeasured.
 `switch_review` prints that weekly check. Reset inventory and calibration are local runtime data;
