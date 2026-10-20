@@ -293,6 +293,12 @@ def test_execution_profiles_schema_migration_rollback_and_provider_prior() -> No
 
     with pytest.raises(sqlite3.OperationalError, match="forced migration"):
         ep.ensure_schema(_FlakyConn(raw), now=1_700_000_000)  # type: ignore[arg-type]
+    tables = {
+        r[0] for r in raw.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    }
+    assert "routing_decisions_v2_migrated" not in tables
+    legacy_cols = {r[1] for r in raw.execute("PRAGMA table_info(routing_decisions_v2)").fetchall()}
+    assert legacy_cols == {"decision_id", "ts", "task_type"}
 
 
 def test_execution_profiles_relearn_skips_unweighted_experiment_runs(monkeypatch) -> None:
@@ -351,6 +357,25 @@ def test_execution_profiles_relearn_skips_unweighted_experiment_runs(monkeypatch
     )
     n = ep.relearn_route_weights_v2(conn, {"implement": {agent: 0.5}}, now=1_700_000_000)
     assert n >= 1
+    row = conn.execute(
+        "SELECT n_obs FROM route_weights_v2 WHERE task_type='implement' AND profile_id=? "
+        "ORDER BY version DESC LIMIT 1",
+        (pid,),
+    ).fetchone()
+    assert row is not None and row[0] == 0
+
+    monkeypatch.setattr(
+        research_subjects,
+        "effective_evidence_weights",
+        lambda **k: {"r-skip": 1.0},
+    )
+    ep.relearn_route_weights_v2(conn, {"implement": {agent: 0.5}}, now=1_700_000_001)
+    row_pos = conn.execute(
+        "SELECT n_obs FROM route_weights_v2 WHERE task_type='implement' AND profile_id=? "
+        "ORDER BY version DESC LIMIT 1",
+        (pid,),
+    ).fetchone()
+    assert row_pos is not None and row_pos[0] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -454,7 +479,7 @@ def test_exploration_backfill_build_jobs_capacity_and_max_jobs(monkeypatch) -> N
     )
     assert len(jobs2) == 1
     assert len(jobs2[0]["agents"]) <= eb.MAX_ARMS_PER_JOB
-    assert blocked2 == [] or True  # may be empty when job built
+    assert len(set(jobs2[0]["agents"])) == len(jobs2[0]["agents"])
 
 
 def test_exploration_backfill_build_plan_status_variants(monkeypatch) -> None:

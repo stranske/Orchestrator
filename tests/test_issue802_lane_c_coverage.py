@@ -46,12 +46,13 @@ def _cap(**over):
 
 def test_evidence_acquisition_feedable_orders_by_remaining_debt() -> None:
     now = 1_700_000_000
+    # Distinct durable-subject counts → distinct evidence_debt remaining (not id tie-break).
     ledger = {
         "capabilities": {
             "high-debt": _cap(
                 causal_evidence={
                     "readiness": {
-                        "durable_subjects": ["a"],
+                        "durable_subjects": [],  # remaining = threshold 3
                         "terminal_outcomes": 0,
                         "failures": 0,
                         "rework": 0,
@@ -60,11 +61,25 @@ def test_evidence_acquisition_feedable_orders_by_remaining_debt() -> None:
                     }
                 }
             ),
-            "low-debt": _cap(),
+            "low-debt": _cap(
+                causal_evidence={
+                    "readiness": {
+                        "durable_subjects": ["a", "b"],  # remaining = 1
+                        "terminal_outcomes": 0,
+                        "failures": 0,
+                        "rework": 0,
+                        "latest_evidence_ts": now,
+                        "ready": False,
+                    }
+                }
+            ),
         }
     }
     rows = ea.feedable(ledger, now=now)
-    assert [r["capability_id"] for r in rows] == ["high-debt", "low-debt"]
+    assert [(r["capability_id"], r["remaining"]) for r in rows] == [
+        ("low-debt", 1),
+        ("high-debt", 3),
+    ]
 
 
 def test_evidence_acquisition_plan_no_matching_work_state(tmp_path: Path) -> None:
@@ -101,7 +116,10 @@ def test_evidence_acquisition_run_live_routes_planned_assignments(
     assert ea.render_tick_line(tmp_path / "plan.json").endswith("[LIVE]")
 
 
-def test_evidence_acquisition_main_tick_line_and_json(capsys, tmp_path: Path) -> None:
+def test_evidence_acquisition_main_tick_line_and_json(
+    capsys, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ea.capabilities, "production_heartbeat", lambda *a, **k: False)
     plan = tmp_path / "p.json"
     plan.write_text(
         json.dumps(
