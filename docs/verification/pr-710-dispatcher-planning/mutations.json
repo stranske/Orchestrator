@@ -1,0 +1,70 @@
+{
+  "source_sha256": "8ef9a6299cea4249fed815d1aa04306b4d03fb91093f85bbfaf5da2b3b053fbe",
+  "mutations": [
+    {
+      "test": "test_role_failure_keeps_deterministic_tags_and_original_assignment",
+      "red_exit": 1,
+      "mutation": [
+        "role_activation = {\"error\": str(exc), \"prompt\": prompt}",
+        "role_activation = {\"error\": str(exc), \"prompt\": \"\"}"
+      ]
+    },
+    {
+      "test": "test_accepted_and_rejected_lineage_deduplicates_without_mutating_input",
+      "red_exit": 1,
+      "mutation": [
+        "dict.fromkeys(\n                list(assignment.get(\"influenced_by_role_run_ids\") or [])",
+        "list(\n                list(assignment.get(\"influenced_by_role_run_ids\") or [])"
+      ]
+    },
+    {
+      "test": "test_profile_overrides_and_commit_boundary_reach_command_builder",
+      "red_exit": 1,
+      "mutation": [
+        "permission_mode=assignment.get(\"permission_mode\"),",
+        "permission_mode=None,"
+      ]
+    },
+    {
+      "test": "test_unbuildable_command_skips_instead_of_returning_a_spawnable_plan",
+      "red_exit": 1,
+      "mutation": [
+        "return None  # unknown agent",
+        "return {}  # unknown agent"
+      ]
+    },
+    {
+      "test": "test_unexpected_command_failure_is_not_disguised_as_an_unknown_agent",
+      "red_exit": 1,
+      "mutation": [
+        "except ValueError:",
+        "except (ValueError, OSError):"
+      ]
+    },
+    {
+      "test": "test_dry_run_predicts_missing_worktree_without_provisioning",
+      "red_exit": 1,
+      "mutation": [
+        "worktree_missing = not (cwd / \".git\").exists()",
+        "worktree_missing = False"
+      ]
+    },
+    {
+      "test": "test_existing_git_file_is_a_present_worktree_in_dry_run",
+      "red_exit": 1,
+      "mutation": [
+        "worktree_missing = not (cwd / \".git\").exists()",
+        "worktree_missing = True"
+      ]
+    },
+    {
+      "test": "test_gemini_receives_the_resolved_workspace_after_role_activation",
+      "red_exit": 1,
+      "mutation": [
+        "cwd = adapters.workspace_path(cwd)",
+        "cwd = Path(cwd)"
+      ]
+    }
+  ],
+  "restored_exit": 0
+}
