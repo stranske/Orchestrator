@@ -506,7 +506,8 @@ def test_issue_quality_parse_edges_parallel_fetch_and_human_main(monkeypatch, ca
     assert records == []
     reasons = {item["reason"] for item in skipped}
     assert "no closingIssuesReferences" in reasons
-    assert "could not fetch issue body" in reasons or "invalid linked issue number" in reasons
+    assert "could not fetch issue body" in reasons
+    assert "invalid linked issue number" in reasons
 
     report = {
         "baseline": {"n": 1, "durable": 1, "durable_rate": 1.0},
@@ -617,37 +618,35 @@ def test_experiment_recovery_git_spec_unevaluated_and_main(tmp_path, monkeypatch
 
 def test_research_usage_guard_report_main_and_config_alert(tmp_path, monkeypatch, capsys) -> None:
     db = sqlite3.connect(tmp_path / "rug.db")
-    rug.ensure_schema(db)
-    monkeypatch.setattr(
-        rug.capabilities,
-        "production_heartbeat",
-        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("ignore")),
-    )
-    report_path = tmp_path / "report.json"
-    written = rug.write_usage_report(report_path, conn=db)
-    assert report_path.exists()
-    assert written["health_status"] in {
-        "OK",
-        "WARN",
-        "ALERT",
-        "UNKNOWN",
-        "OBSERVABILITY_UNAVAILABLE",
-    }
+    try:
+        rug.ensure_schema(db)
+        monkeypatch.setattr(
+            rug.capabilities,
+            "production_heartbeat",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("ignore")),
+        )
+        report_path = tmp_path / "report.json"
+        written = rug.write_usage_report(report_path, conn=db)
+        # Empty guard ledger + missing feedback.runs → observability alert, not OK.
+        assert written["health_status"] == "OBSERVABILITY_UNAVAILABLE"
+        assert json.loads(report_path.read_text(encoding="utf-8")) == written
 
-    monkeypatch.setenv("ORCH_GUARD_MAX_CONSECUTIVE_SUBJECT", "not-an-int")
-    result = rug.assess_and_record_opportunity(
-        exp_id="tick-1-subj",
-        repo="owner/repo",
-        subject="subj",
-        spec_text="spec",
-        base_sha="abc",
-        candidate_diffs={"codex": "diff"},
-        env={"ORCH_RESEARCH_ARM": "1", "ORCH_GUARD_MAX_CONSECUTIVE_SUBJECT": "bad"},
-        conn=db,
-        now=1_700_000_000,
-    )
-    assert result["decision"] == "blocked_by_anomaly"
-    assert result["reason"] == "guard_config_invalid"
+        monkeypatch.setenv("ORCH_GUARD_MAX_CONSECUTIVE_SUBJECT", "not-an-int")
+        result = rug.assess_and_record_opportunity(
+            exp_id="tick-1-subj",
+            repo="owner/repo",
+            subject="subj",
+            spec_text="spec",
+            base_sha="abc",
+            candidate_diffs={"codex": "diff"},
+            env={"ORCH_RESEARCH_ARM": "1", "ORCH_GUARD_MAX_CONSECUTIVE_SUBJECT": "bad"},
+            conn=db,
+            now=1_700_000_000,
+        )
+        assert result["decision"] == "blocked_by_anomaly"
+        assert result["reason"] == "guard_config_invalid"
+    finally:
+        db.close()
 
     monkeypatch.setattr(
         rug,

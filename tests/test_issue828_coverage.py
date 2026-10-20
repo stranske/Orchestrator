@@ -128,6 +128,14 @@ def test_recovery_plan_applies_limit_and_reports_subject_correlation(monkeypatch
     assert report["counts"] == {"recoverable": 1}
     assert report["subject_histogram"] == [("owner-repo-1", 1)]
 
+    restored.clear()
+    report_all = experiment_recovery.plan()
+    assert restored == ["tick-1-owner-repo-1", "tick-2-owner-repo-1"]
+    assert report_all["experiments"] == 2
+    assert report_all["distinct_subjects"] == 1
+    assert report_all["counts"] == {"recoverable": 2}
+    assert report_all["subject_histogram"] == [("owner-repo-1", 2)]
+
 
 def test_rail_break_result_requires_a_failure_or_explicit_check() -> None:
     passed, reason = rail_exercise._break_ok({}, [{"rc": 0, "output": ""}], [])
