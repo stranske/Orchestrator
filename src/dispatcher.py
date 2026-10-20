@@ -2258,6 +2258,118 @@ def _offload_subject(
     return (caller, "caller") if caller else (None, None)
 
 
+class ObservedOffloadFailure(RuntimeError):
+    """A transport was spawned before trusted observation failed; never prelaunch."""
+
+    def __init__(self, reason, observation, returncode, stdout, stderr):
+        super().__init__(reason)
+        self.observation, self.returncode = observation, returncode
+        self.stdout, self.stderr = stdout, stderr
+
+
+def run_observed_offload(command, *, callback, observation, cwd, timeout, stdin):
+    """Optional observed transport; default offloads retain subprocess.run.
+
+    The Popen handle names the transport shell, not a claimed provider process.
+    Its private process group permits bounded cleanup without signalling outsiders.
+    """
+    started = time.monotonic()
+    child = subprocess.Popen(
+        command,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        stdin=stdin,
+        start_new_session=True,
+    )
+    observed = {
+        **observation,
+        "source": "trusted-popen-transport/v1",
+        "pid": child.pid,
+        "transport_argv": list(command),
+    }
+
+    def stop_known_group():
+        try:
+            # The trusted spawn observer can veto cleanup after an exact denial
+            # elsewhere in this same supervision. Never route around that denial.
+            if observed.get("cleanup_veto") is not None:
+                veto = observed["cleanup_veto"]
+                observed["cleanup_error"] = {
+                    **veto,
+                    "process_group": child.pid,
+                    "source": "trusted-supervisor-cleanup-veto/v1",
+                }
+            else:
+                os.killpg(child.pid, 9)
+        except OSError as exc:
+            observed["cleanup_error"] = {
+                "type": type(exc).__name__,
+                "errno": exc.errno,
+                "reason": str(exc),
+                "process_group": child.pid,
+            }
+        try:
+            result = child.communicate(timeout=2)
+            observed["cleanup_terminal"] = "cleanup_error" not in observed
+            observed["transport_returncode"] = child.returncode
+            return result
+        except subprocess.TimeoutExpired as pending:
+            observed["cleanup_terminal"] = False
+            observed["transport_returncode"] = child.poll()
+
+            def decoded(value):
+                return value.decode(errors="replace") if isinstance(value, bytes) else value or ""
+
+            return decoded(pending.output), decoded(pending.stderr)
+
+    try:
+        try:
+            birth_timeout = 5 if timeout is None else min(5, timeout - (time.monotonic() - started))
+            if birth_timeout <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            birth = subprocess.run(
+                ["ps", "-p", str(child.pid), "-o", "lstart="],
+                capture_output=True,
+                text=True,
+                timeout=birth_timeout,
+                check=True,
+            )
+            observed["os_started"] = birth.stdout.strip()
+            if not observed["os_started"]:
+                raise RuntimeError("transport birth identity unavailable")
+            callback(observed)
+        except BaseException as exc:
+            stdout, stderr = stop_known_group()
+            if not isinstance(exc, Exception):
+                raise
+            raise ObservedOffloadFailure(
+                f"trusted process observation failed after spawn: {type(exc).__name__}: {exc}",
+                observed,
+                child.poll(),
+                stdout,
+                stderr,
+            ) from exc
+        try:
+            remaining = None if timeout is None else max(0, timeout - (time.monotonic() - started))
+            stdout, stderr = child.communicate(timeout=remaining)
+        except subprocess.TimeoutExpired as exc:
+            stdout, stderr = stop_known_group()
+            expired = subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr)
+            expired.observation = observed
+            expired.raw_exit = child.poll()
+            raise expired from exc
+        except BaseException:
+            stop_known_group()
+            raise
+        return subprocess.CompletedProcess(command, child.returncode, stdout, stderr)
+    finally:
+        for pipe in (child.stdout, child.stderr):
+            if pipe is not None:
+                pipe.close()
+
+
 def offload(
     agent: str,
     prompt: str,
@@ -2273,6 +2385,7 @@ def offload(
     attempt_receipt_callback=None,
     max_network_retries: int | None = None,
     attempt_started_callback=None,
+    process_started_callback=None,
 ) -> dict:
     """SYNCHRONOUS offload for token conservation.
 
@@ -2838,25 +2951,64 @@ def offload(
             _cleanup_stream()
             raise
         try:
-            proc = subprocess.run(
-                [
-                    "bash",
-                    "-lc",
-                    (
-                        f"{attempt_wrapped} < {shlex.quote(str(stream_path))}"
-                        if stream_path is not None
-                        else attempt_wrapped
-                    ),
-                ],
-                cwd=str(proc_cwd),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                # The shell redirection above replaces this with the private NDJSON file for a
-                # large Gemini packet. Every other adapter must still never inherit a caller TTY.
-                stdin=subprocess.DEVNULL,
-            )
-        except subprocess.TimeoutExpired:
+            if process_started_callback is None:
+                proc = subprocess.run(
+                    [
+                        "bash",
+                        "-lc",
+                        (
+                            f"{attempt_wrapped} < {shlex.quote(str(stream_path))}"
+                            if stream_path is not None
+                            else attempt_wrapped
+                        ),
+                    ],
+                    cwd=str(proc_cwd),
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    # The shell redirection above replaces this with the private NDJSON file for a
+                    # large Gemini packet. Every other adapter must still never inherit a caller TTY.
+                    stdin=subprocess.DEVNULL,
+                )
+            else:
+                proc = run_observed_offload(
+                    [
+                        "bash",
+                        "-lc",
+                        (
+                            f"{attempt_wrapped} < {shlex.quote(str(stream_path))}"
+                            if stream_path is not None
+                            else attempt_wrapped
+                        ),
+                    ],
+                    callback=process_started_callback,
+                    observation={
+                        "run_id": run_id,
+                        "agent": agent,
+                        "profile_id": profile_id,
+                        "provider_argv": list(argv),
+                    },
+                    cwd=str(proc_cwd),
+                    timeout=timeout,
+                    stdin=subprocess.DEVNULL,
+                )
+        except ObservedOffloadFailure as exc:
+            return {
+                "agent": agent,
+                "exit": 70,
+                "raw_exit": exc.returncode,
+                "output": credential_redaction.redact(exc.stdout or ""),
+                "stderr_tail": credential_redaction.redact(exc.stderr or "")[-800:],
+                "error": credential_redaction.redact(str(exc)),
+                "run_id": run_id,
+                "log": str(logf),
+                "process_started": True,
+                "process_observation": exc.observation,
+                "outcome_uncertain": True,
+                "outcome_status": "uncertain",
+                "retry_safe": False,
+            }
+        except subprocess.TimeoutExpired as timeout_error:
             # A 0-byte timeout is the env-induced-hang signature; surface the ambient network env so the
             # cause is legible (proxy is scrubbed by default — if one shows here, ORCH_KEEP_PROXY=1 is set).
             suspicious = _suspicious_net_env()
@@ -2907,6 +3059,23 @@ def offload(
                         "outcome_uncertain": True,
                         "retry_safe": False,
                     }
+                )
+            if process_started_callback is not None:
+
+                def safe_partial(value):
+                    if isinstance(value, bytes):
+                        value = value.decode(errors="replace")
+                    return credential_redaction.redact(value or "")
+
+                out.update(
+                    process_started=True,
+                    outcome_uncertain=True,
+                    outcome_status="uncertain",
+                    retry_safe=False,
+                    partial_stdout=safe_partial(timeout_error.output),
+                    partial_stderr=safe_partial(timeout_error.stderr),
+                    raw_exit=getattr(timeout_error, "raw_exit", None),
+                    process_observation=getattr(timeout_error, "observation", None),
                 )
             if agent_log_tail:
                 out["agent_log_tail"] = agent_log_tail

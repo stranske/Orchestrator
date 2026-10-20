@@ -240,6 +240,7 @@ def host_binding_from_public(
     core_binding: Mapping[str, Any] | None = None,
     python: str | None = None,
     policy: Mapping[str, Any] | None = None,
+    mechanism_contract: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Convert a public runtime descriptor into a campaign-style host manifest."""
     problems = validate_public_runtime_descriptor(public)
@@ -311,6 +312,13 @@ def host_binding_from_public(
         "created_at": _now(),
         "public_runtime_descriptor": "closer-runtime-package.json",
     }
+    if mechanism_contract is not None:
+        manifest["mechanism_contract"] = dict(mechanism_contract)
+        from closer_mechanisms import CLI, mechanism
+
+        if mechanism(manifest) == CLI:
+            manifest["command"].extend(["--mechanism", CLI])
+            manifest["command_digest"] = host_digest(manifest["command"])
     return manifest
 
 

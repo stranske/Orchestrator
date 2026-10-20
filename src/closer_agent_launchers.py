@@ -312,7 +312,7 @@ def expected_host_launcher_command(
         raise ValueError("manifest launcher.path missing")
     mp = Path(manifest_path).expanduser().resolve()
     rt = Path(root).expanduser().resolve()
-    return [
+    command = [
         python,
         str(Path(launcher_path).expanduser().resolve()),
         HOST_LAUNCHER_ENTRY,
@@ -321,6 +321,12 @@ def expected_host_launcher_command(
         "--root",
         str(rt),
     ]
+    from closer_mechanisms import CLI, mechanism
+
+    selected = mechanism(dict(manifest))
+    if selected == CLI:
+        command.extend(["--mechanism", CLI])
+    return command
 
 
 def _legacy_direct_tick_command(manifest: Mapping[str, Any]) -> list[str]:
@@ -456,11 +462,16 @@ def preflight_runtime(
     if problems:
         return loaded, problems
     import closer_campaign as campaign
+    from closer_mechanisms import mechanism
     from closer_runtime_binding import policy_problem
 
-    policy = policy_fn or policy_problem
     try:
-        hold = policy(loaded.get("policy") or {})
+        selected_mechanism = mechanism(loaded)
+        hold = (
+            policy_fn(loaded.get("policy") or {})
+            if policy_fn
+            else policy_problem(loaded.get("policy") or {}, mechanism=selected_mechanism)
+        )
     except Exception as exc:
         hold = f"policy check failed: {exc}"
     if hold:
@@ -531,6 +542,13 @@ def plan_cli_run(
     )
     if preflight:
         return None, preflight
+    from closer_mechanisms import CLI, mechanism
+
+    if mechanism(loaded) == CLI and (
+        _normalize_agent(agent) != loaded["mechanism_contract"]["agent"]
+        or profile_id != loaded["mechanism_contract"]["profile_id"]
+    ):
+        return None, ["selected agent/profile differs from CLI-qualified execution contract"]
     profile = execution_profiles.get_profile(profile_id)
     mode = profile_offload_mode(profile)
     bound_cmd = expected_host_launcher_command(loaded, manifest_path=manifest_path, root=root)
@@ -555,7 +573,7 @@ def plan_cli_run(
     plan = LaunchPlan(
         agent=profile["agent"],
         profile_id=profile["profile_id"],
-        mechanism=MECHANISM_CLI_OFFLOAD,
+        mechanism="cli-offload/v1",
         mode=mode,
         argv_preview=argv,
         manifest_checks=[],
