@@ -180,6 +180,24 @@ def test_offline_selftest_exercises_guarded_planner_without_a_dispatch(monkeypat
     assert __import__("os").environ.get("ORCH_EXPLORATION_RATE") == "0.25"
 
 
+def test_offline_selftest_restores_prior_handoff_and_clears_added_rate(monkeypatch, tmp_path):
+    """The selftest must restore both environment variables to their prior states."""
+    monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "prior-handoff"))
+    monkeypatch.delenv("ORCH_EXPLORATION_RATE", raising=False)
+    monkeypatch.setattr(
+        rollout.dispatcher,
+        "run",
+        lambda decision, **_kwargs: {
+            "launched": [{"target": item["target"]} for item in decision["assignments"]]
+        },
+    )
+
+    rollout._selftest()
+
+    assert __import__("os").environ["HANDOFF_DIR"] == str(tmp_path / "prior-handoff")
+    assert "ORCH_EXPLORATION_RATE" not in __import__("os").environ
+
+
 def test_live_loader_and_rejected_claim_release_are_isolated(monkeypatch):
     monkeypatch.setattr(rollout.backlog, "SUPPORTED_REPOS", ["o/r"])
     monkeypatch.setattr(rollout.backlog, "live_fetch_issues", object())
