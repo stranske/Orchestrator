@@ -8,18 +8,41 @@ counts only `profile_selection` rows.
 
 The relay hook belongs in `~/.codex/bin/handoff-relay.sh`, after the receiver
 process exits and before it prints the `RELAY exit=` trailer. That script is
-outside this repository and is not changed by this PR. With `$relay_log`,
-`$status`, `$next_lane`, `$other_agent` and `$ORCH` set by the relay, the hook is:
+outside this repository and is not changed by this PR. The relay supplies
+`$relay_log`, `$status`, `$next_lane`, `$other_agent` and `$ORCH`, plus `$source`,
+`$candidates`, `$chosen`, `$weights`, `$states` and `$fallback` from the pacing
+decision. The append helper replaces the relay's existing `relay-pacing.log`
+writer; do not also emit a legacy pacing line for the same decision. The hook is:
 
 ```bash
+# At decision time (before dispatch): append an importer-valid line with decision_id=<id>.
+# Replace the existing pacing-log writer with this call; do not also write a legacy line.
+# Requires $source, $candidates, $chosen, $weights, $states and $fallback from the decision.
+# Invoke the script by path (same as record-lane-round) so $ORCH need not be on PYTHONPATH.
+# On failure leave decision_id empty and omit --relay-decision-id rather than aborting.
+decision_id="$(python3 "$ORCH/rate_incidents.py" append-relay-pacing-decision \
+  --source "$source" --lane "$next_lane" \
+  --candidates "$candidates" --chosen "$chosen" \
+  --weights "$weights" --states "$states" --fallback "$fallback")" || decision_id=""
+# After the receiver exits:
 tail -n 40 "$relay_log" > "$tail"
-python3 "$ORCH/rate_incidents.py" record-lane-round --agent "${other_agent/claude_code/claude}" --surface handoff-relay --lane "$next_lane" --exit "$status" --output-file "$tail"
+python3 "$ORCH/rate_incidents.py" record-lane-round \
+  --agent "${other_agent/claude_code/claude}" --surface handoff-relay --lane "$next_lane" \
+  --exit "$status" --output-file "$tail" \
+  ${decision_id:+--relay-decision-id "$decision_id"}
 ```
+
+Prefer `append-relay-pacing-decision` over hand-editing the pacing log: it generates the
+token, writes `decision_id=<id>` in the field order the importer accepts, and prints the
+same token for the exit hook. `generate-relay-decision-id` remains available when the
+relay must emit the id into an existing log writer.
 
 Set `$tail` to a private temporary file and remove it after the call. Pass
 `--receiver-reason "$reason"` when the relay has retained its actual routing
 reason; otherwise the stored value is NULL. The optional `--ts` accepts a UTC
-epoch second for replay or testing.
+epoch second for replay or testing. Prefer `--relay-decision-id` so interleaved
+opener/closer rounds join by explicit ID; omit it when generation failed or for
+legacy lines (empty tokens are rejected and would drop the round).
 
 Every exit writes a decision row. Exit zero writes no incident, even if a
 successful summary quotes a rate-limit message. A nonzero exit creates an

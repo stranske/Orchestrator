@@ -296,3 +296,41 @@ registration after merge; compare the count with damped state flips in the tick 
 record other immediate triggers separately. Export start/end UTC times and duration in
 that log make cadence skips measurable. The hourly due threshold is 30 minutes after the
 previous success stamp, allowing for tick jitter and export duration.
+
+## Relay decision identity and backlog (#825)
+
+The coordinator-owned relay must emit a unique token for each pacing decision and pass
+it through to the exit hook. Prefer
+`python3 "$ORCH/rate_incidents.py" append-relay-pacing-decision ...` (prints
+`<utc>-<pid>-<random>`, appends `decision_id=<id>` to `relay-pacing.log`); or generate
+with `generate-relay-decision-id` and write the field yourself. Pass the same value to
+`python3 "$ORCH/rate_incidents.py" record-lane-round --relay-decision-id <id>`
+alongside the existing agent, surface, lane, exit and output-file arguments. Tokens are
+capped at 176 characters so the `relay-pacing:id:<token>` join key stays within the
+192-character completion-identifier limit. This repository supplies the append/generator
+CLIs, importer and record hook; the coordinator updates `~/.codex/bin/handoff-relay.sh`
+after merge. Omit `--relay-decision-id` when generation fails rather than passing an empty
+token.
+
+The round persists the token as `relay_decision_id` in its routing record's
+`causal_context_json`; the decision and outcome telemetry retain `decision_id`.
+Exactly one round with that ID, the same lane and chosen agent, and an exit at or
+after the decision earns an accepted influence edge. IDs disambiguate concurrent
+lanes and same-second exits. Unknown or mismatched IDs earn no temporal fallback.
+Legacy decisions and rounds without IDs retain the conservative serial-adjacency
+join. Reimporting or rotating the log preserves settled bindings.
+
+Unmatched pre-2026-10-20T11:58Z legacy decisions (no `decision_id`, still unbound
+after explicit and adjacency join) are marked once as `status=unjoined` with
+`unjoined_reason=no round recorded (pre-2026-10-20T11:58Z relay subshell bug)`,
+including decisions that follow an earlier exit on the same lane. Decisions with
+IDs and already joined decisions are preserved. The importer reports `unjoined`
+separately from `joined`. These terminal orphans stop extending the legacy scan
+and create neither outcome events nor acted-on credit. A pending modern decision
+remains eligible after log rotation.
+
+Acceptance after merge and the relay update: within 24 hours, inspect
+`record-lane-round` / relay.log `lane-round:` output for `joined` matching the
+decisions with recorded exits, and the `switch_review.py --text-out` monitor row
+for `windowed-capacity-policy` with `acted_on > 0` and `outcome > 0`. This live
+check is separate from the repository's offline tests.
