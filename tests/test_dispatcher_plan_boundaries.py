@@ -16,7 +16,7 @@ import roles
 class DispatchPlanBoundaries(unittest.TestCase):
     def setUp(self):
         temporary = self.enterContext(tempfile.TemporaryDirectory(prefix="dispatcher-plan-"))
-        self.root = Path(temporary)
+        self.root = Path(temporary).resolve()
         self.enterContext(
             patch.dict(
                 os.environ,
@@ -85,16 +85,17 @@ class DispatchPlanBoundaries(unittest.TestCase):
 
         result = self.plan()
 
-        self.assertEqual(
-            result["role_activation"],
-            {"error": "role store unavailable", "prompt": "repo prompt"},
-        )
+        self.assertEqual(result["role_activation"]["error"], "role store unavailable")
+        fallback_prompt = result["role_activation"]["prompt"]
+        self.assertTrue(fallback_prompt.startswith("repo prompt\n\n"))
+        self.assertIn("`cursor/issue-7`", fallback_prompt)
+        self.assertEqual(self.activate.call_args.args[1], fallback_prompt)
         self.assertEqual(result["capability_ids"], ["rail", "new-rail"])
         self.assertEqual(result["influenced_by_role_run_ids"], ["prior"])
         self.assertEqual(result["rejected_role_run_ids"], ["prior-rejected"])
         self.command.assert_called_once_with(
             "cursor",
-            "persona\n\nrepo prompt",
+            "persona\n\n" + fallback_prompt,
             None,
             cwd=self.cwd,
             reasoning_effort=None,
@@ -167,9 +168,12 @@ class DispatchPlanBoundaries(unittest.TestCase):
         self.worktree_path.assert_called_once_with("fixture/repo#7", "opener")
         self.assertTrue(result["worktree_missing"])
         self.assertEqual(result["cwd"], str(self.cwd))
-        self.activate.assert_called_once_with(
-            self.assignment, "repo prompt", cwd=str(self.cwd), dry_run=True
-        )
+        self.activate.assert_called_once()
+        self.assertEqual(self.activate.call_args.args[0], self.assignment)
+        supplied_prompt = self.activate.call_args.args[1]
+        self.assertTrue(supplied_prompt.startswith("repo prompt\n\n"))
+        self.assertIn("`cursor/issue-7`", supplied_prompt)
+        self.assertEqual(self.activate.call_args.kwargs, {"cwd": str(self.cwd), "dry_run": True})
 
     def test_existing_git_file_is_a_present_worktree_in_dry_run(self):
         (self.cwd / ".git").write_text("gitdir: fixture\n")
