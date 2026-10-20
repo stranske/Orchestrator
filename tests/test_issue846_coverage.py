@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import socket
 import subprocess
@@ -116,10 +117,10 @@ def test_langsmith_direct_http_fallback_and_record_edges(monkeypatch: pytest.Mon
     assert record and record["github_issue"] == "owner/repo#7" and record["total_tokens"] == 12
 
     def bad_open(request, timeout):
-        raise HTTPError(request.full_url, 403, "no", {}, None)
+        raise HTTPError(request.full_url, 403, "no", {}, io.BytesIO(b"forbidden-detail"))
 
     monkeypatch.setattr(langsmith_direct.urlrequest, "urlopen", bad_open)
-    with pytest.raises(RuntimeError, match="LangSmith HTTP 403"):
+    with pytest.raises(RuntimeError, match=r"LangSmith HTTP 403 for GET /nope: forbidden-detail"):
         client._request_json("GET", "/nope")
 
 
