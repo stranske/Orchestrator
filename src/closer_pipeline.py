@@ -3456,6 +3456,7 @@ def _run_pipeline_impl(
                         "identity": item.get("identity", target),
                         "deadline": active_deadline,
                         "state_path": str(path),
+                        "pipeline_run_id": run_id,
                         "action_state_path": str(
                             path.parent / f"{path.stem}.actions" / f"{_digest(target)}.json"
                         ),
@@ -3799,6 +3800,12 @@ def run_pipeline(state_path: str | Path, targets: Iterable[str], **kwargs: Any) 
                     owner=owner,
                     deadline=kwargs["deadline"],
                     now=now,
+                    causal_binding={
+                        "pipeline_run_id": ctx["pipeline_run_id"],
+                        "revision": ctx["revision"],
+                        "identity": ctx["identity"],
+                        "work_key": ctx["work_key"],
+                    },
                 ):
                     return original_act(target, ctx)
 

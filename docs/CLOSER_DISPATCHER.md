@@ -34,6 +34,18 @@ command returned an error. A pass bound prevents a zero-progress spin, but does
 not authorize a valid stop while actionable work and usable time remain. An
 expired recovery records its overrun honestly and launches no new actions.
 
+Legacy resource advertisements record the actual pipeline run, revision, target
+identity and work key before an action starts. A separate read-only plan is
+available through `python3 src/closer_resources.py --state <pipeline-state>
+--run-id <run> --owner <owner> --target <target>`. Explicit `--apply` also requires
+`--expected-plan-sha256`. It rechecks the exact plan under the original run, state,
+native queue and resource locks, independently validates a completed evidence-refusal
+wait with no operation history, and durably archives the original bytes before
+retiring matching advertisements. Partial retirement can resume only from its
+unchanged audit and evidence. Historical advertisements without causal binding,
+Core intents and uncertain operations remain held. Reconciliation grants neither
+acceptance nor a valid global stop, and never resets an execution deadline.
+
 A later CLI invocation starts a new budget only after the persisted round has a
 finished receipt that passes the queue's normal locked stop validation against the
 current state and claim ledger. Running rounds, invalid receipts and unreadable
