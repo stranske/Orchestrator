@@ -207,15 +207,35 @@ override only if it reports 3.13 or 3.14; other versions are ignored. The existi
 3.13/3.14; unsupported or unavailable legacy overrides are ignored with a
 diagnostic. If no standard interpreter is available, the wrapper fails explicitly.
 
-For the Claude poll only, the wrapper sources
-`~/.codex/handoff/.claude-oauth-token` in a subshell for headless authentication;
-the token must be exported there as `CLAUDE_CODE_OAUTH_TOKEN`. Keep that file
-outside the repository and never print its contents. Both output streams from
-sourcing the file are suppressed, and inherited token state is cleared before
-polling. If the file is absent, the Claude
-poll falls back to the CLI login and may fail intermittently, returning the
-API-billing “Total cost” view instead of subscription usage. Neither the Codex
-poll nor the stale-alert helper sources the token file.
+The Claude poll owns a dedicated CLI login. The owner signs in once:
+
+```bash
+CLAUDE_CONFIG_DIR=~/.codex/claude-poll claude auth login --email <owner>
+```
+
+For the Claude poll only, the wrapper unsets `CLAUDE_CODE_OAUTH_TOKEN` and
+`CLAUDECODE` and sets `CLAUDE_CONFIG_DIR` to `$HOME/.codex/claude-poll`.
+`CLAUDE_POLL_CONFIG_DIR` overrides that directory; use the same directory for
+the one-off login. Codex's environment is unchanged. The setup-token is not used:
+user-filed claude-code issues #24200, #22450 and #28935 report that it is
+inference-only and lacks the `user:profile` scope needed by `/usage` (request
+#81015). Issues #54443 and #88583 report refresh-token rotation races and
+credential wipes when the default login is shared with other sessions. These are
+user reports, not official authentication guarantees; the dedicated directory
+isolates the poller's login from the desktop app and other CLI sessions.
+
+If this login lapses, the poll goes stale and the stale alert fires
+(`usage-poll: claude STALE`). Recover with one re-login in the same directory.
+The seven-day check-in passes when Claude poll age is at most 30 minutes on at
+least 95% of ticks over seven days; this is an acceptance target, not a measured
+result of installing these files.
+
+`prune-claude-keychain-slots.py` is an optional manual maintenance helper, dry-run
+by default. It reads item metadata only and always keeps the default credential
+slot and the dedicated poller slot. `--apply` deletes only other slots untouched
+for more than 30 days (`--days` may increase that threshold); `--keep` preserves
+additional slot suffixes. Deleting a slot requires that config directory to log
+in again. Review the dry-run selection before applying it.
 
 The wrapper attempts both providers even when one fails and returns
 non-zero for any failure. After both polls it checks each latest file's own `ts`.

@@ -1,4 +1,4 @@
-"""Hermetic bash entrypoint checks: fake interpreters and fake headless credentials."""
+"""Hermetic bash entrypoint checks: fake interpreters and isolated Claude login."""
 
 import json
 import shutil
@@ -111,17 +111,16 @@ def test_standard_refuses_system_and_anaconda_versions(shell_home):
     assert not result.stdout
 
 
-@pytest.mark.parametrize("token_present", [False, True])
 @pytest.mark.parametrize("codex_rc", [0, 1])
-@pytest.mark.parametrize("inherited_token", [False, True])
-def test_token_is_claude_only_and_never_logged(
-    shell_home, token_present, codex_rc, inherited_token
-):
+@pytest.mark.parametrize("inherited_auth", [False, True])
+@pytest.mark.parametrize("override", [False, True])
+def test_dedicated_claude_login_environment(shell_home, codex_rc, inherited_auth, override):
     home, installed = shell_home
-    # The fake interpreter records presence only, never the value of the fake token.
+    # The fake poller records auth variable presence only, never credential values.
     body = """name="${1##*/}"
-if [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then present=true; else present=false; fi
-printf '{"name":"%s","token":%s}\\n' "$name" "$present" >> "$HOME/observed.jsonl"
+if [[ "${CLAUDE_CODE_OAUTH_TOKEN+x}" == x ]]; then token=true; else token=false; fi
+if [[ "${CLAUDECODE+x}" == x ]]; then nested=true; else nested=false; fi
+printf '{"name":"%s","token":%s,"nested":%s,"config":"%s"}\\n' "$name" "$token" "$nested" "${CLAUDE_CONFIG_DIR:-}" >> "$HOME/observed.jsonl"
 if [[ "$name" == codex-usage-poll.py ]]; then exit "$CODEX_RC"; fi
 exit 0
 """
@@ -130,28 +129,37 @@ exit 0
     (home / "path").mkdir()
     (home / "path/date").symlink_to("/bin/date")
     sentinel = "FAKE_ONLY_TOKEN_MUST_NOT_APPEAR"
-    if token_present:
-        token_file = home / ".codex/handoff/.claude-oauth-token"
-        token_file.parent.mkdir(parents=True)
-        token_file.write_text(
-            f"export CLAUDE_CODE_OAUTH_TOKEN='{sentinel}'\n"
-            'printf "%s\\n" "$CLAUDE_CODE_OAUTH_TOKEN"\n'
-            'printf "%s\\n" "$CLAUDE_CODE_OAUTH_TOKEN" >&2\n'
-        )
-    extra = {"CLAUDE_CODE_OAUTH_TOKEN": sentinel} if inherited_token else {}
+    extra = {"CLAUDE_CODE_OAUTH_TOKEN": sentinel, "CLAUDECODE": sentinel} if inherited_auth else {}
+    config = str(home / "custom-poller") if override else str(home / ".codex/claude-poll")
+    if override:
+        extra["CLAUDE_POLL_CONFIG_DIR"] = config
     result = run_shell(
         home, f'/bin/bash "{installed}/usage-poll.sh"', CODEX_RC=str(codex_rc), **extra
     )
     assert result.returncode == codex_rc, result.stderr
     rows = [json.loads(line) for line in (home / "observed.jsonl").read_text().splitlines()]
     assert rows == [
-        {"name": "codex-usage-poll.py", "token": False},
-        {"name": "claude-usage-poll.py", "token": token_present},
-        {"name": "usage_alerts.py", "token": False},
+        {
+            "name": "codex-usage-poll.py",
+            "token": inherited_auth,
+            "nested": inherited_auth,
+            "config": "",
+        },
+        {"name": "claude-usage-poll.py", "token": False, "nested": False, "config": config},
+        {
+            "name": "usage_alerts.py",
+            "token": inherited_auth,
+            "nested": inherited_auth,
+            "config": "",
+        },
     ]
     assert sentinel not in result.stdout + result.stderr
     assert f"codex rc={codex_rc}" in result.stdout
     assert "claude rc=0" in result.stdout
+
+
+def test_wrapper_never_reads_setup_token_file():
+    assert ".claude-oauth-token" not in (SCRIPTS / "usage-poll.sh").read_text()
 
 
 @pytest.mark.parametrize("version", ["3.9", "3.12", "3.13", "3.14", "missing"])

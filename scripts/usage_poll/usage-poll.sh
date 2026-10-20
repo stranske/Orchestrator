@@ -17,13 +17,12 @@ fi
 # Mirrors pacing.STALE_AFTER_SECONDS; parity is enforced by a test.
 STALE_AFTER_SECONDS=1800
 usage_poll_failed=0
-# Only the Claude subshell may receive headless credentials from the token file.
-unset CLAUDE_CODE_OAUTH_TOKEN
 for p in codex claude; do
-  if [[ "$p" == claude && -f "$HOME/.codex/handoff/.claude-oauth-token" ]]; then
-    # Headless auth: the long-lived setup-token the relay also uses (the interactive CLI login drops
-    # intermittently and then /usage prints the API-billing view). Sourced in a subshell, never printed.
-    out=$( source "$HOME/.codex/handoff/.claude-oauth-token" >/dev/null 2>&1; "$usage_poll_python" "$HOME/.codex/bin/${p}-usage-poll.py" 2>&1 ); rc=$?
+  if [[ "$p" == claude ]]; then
+    # Dedicated login (2026-10-22): the poller owns its own CLI credential slot so the desktop app and other
+    # sessions cannot rotate its refresh token (claude-code issues 54443, 88583). The setup-token is NOT used:
+    # it lacks the user:profile scope that /usage needs (issues 24200, 22450, 28935).
+    out=$( unset CLAUDE_CODE_OAUTH_TOKEN CLAUDECODE; export CLAUDE_CONFIG_DIR="${CLAUDE_POLL_CONFIG_DIR:-$HOME/.codex/claude-poll}"; "$usage_poll_python" "$HOME/.codex/bin/${p}-usage-poll.py" 2>&1 ); rc=$?
   else
     out=$("$usage_poll_python" "$HOME/.codex/bin/${p}-usage-poll.py" 2>&1); rc=$?
   fi
