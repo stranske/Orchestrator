@@ -69,6 +69,9 @@ class _Census:
         self.items: list[dict[str, Any]] = []
         self.keys: set[str] = set()
         self.bytes = 0
+        self.preparations: dict[tuple[str, Any], list[tuple[dict, Any]]] = {}
+        self.observations: list[dict[str, Any]] = []
+        self.raw_records: dict[str, Any] = {}
         self.workspaces = {}
         try:
             if workspaces is not None:
@@ -93,18 +96,266 @@ class _Census:
                 names.add(value.split("@")[0])
         return {"worktree:" + self.workspaces[name] for name in names if name in self.workspaces}
 
+    def evidence_root(self):
+        suffix = ".pipeline.json"
+        if not str(self.path).endswith(suffix):
+            raise ValueError("unbound_evidence_root")
+        return Path(str(self.path)[: -len(suffix)] + ".evidence")
+
+    def retained(self, ref, kind):
+        if (
+            not isinstance(ref, dict)
+            or not isinstance(ref.get("sha256"), str)
+            or not SHA.fullmatch(ref["sha256"])
+        ):
+            raise ValueError("unverified_retained_reference")
+        path = Path(ref["path"])
+        directory = self.evidence_root() / kind
+        if path.parent != directory or path.suffix != ".json" or path.is_symlink():
+            raise ValueError("unconfined_retained_reference")
+        if kind == "snapshots" and path.name != ref["sha256"] + ".json":
+            raise ValueError("unbound_snapshot_name")
+        doc = self.read(path)
+        if self.sources[str(path)] != ref["sha256"]:
+            raise ValueError("retained_reference_hash_mismatch")
+        return doc
+
+    def verified_snapshot(self, target, row):
+        """Recover only actual producer files; a compact summary is insufficient."""
+        import closer_evidence as evidence
+
+        revision = row.get("revision")
+        prepared = (
+            row.get("results", {}).get("prepare", {})
+            if isinstance(row.get("results"), dict)
+            else {}
+        )
+        candidates = []
+        if isinstance(prepared, dict) and prepared.get("snapshot_ref"):
+            candidates.append((prepared["snapshot_ref"], prepared.get("packet_ref")))
+        candidates.extend(self.preparations.get((target, revision), []))
+        cache_row = (
+            row if isinstance(row.get("evidence"), dict) else self.raw_records.get(target, {})
+        )
+        cached = (
+            cache_row.get("evidence")
+            if isinstance(cache_row, dict) and cache_row.get("revision") == revision
+            else None
+        )
+        if isinstance(cached, dict) and cache_row.get("packet_ref"):
+            # record_snapshot removes only these transport/cache flags. Probe
+            # bounded actual content-addressed files, never invent a snapshot.
+            variants = [cached]
+            if "_local_cached" not in cached:
+                variants.extend({**cached, "_local_cached": flag} for flag in (True, False, None))
+            for value in variants:
+                raw = json.dumps(
+                    value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                ).encode()
+                sha = hashlib.sha256(raw).hexdigest()
+                candidates.append(
+                    (
+                        {
+                            "path": str(self.evidence_root() / "snapshots" / (sha + ".json")),
+                            "sha256": sha,
+                        },
+                        cache_row["packet_ref"],
+                    )
+                )
+        for snapshot_ref, packet_ref in candidates:
+            try:
+                snap = self.retained(snapshot_ref, "snapshots")
+                packet = self.retained(packet_ref, "manifests")
+                if (
+                    not isinstance(snap, dict)
+                    or _target(snap.get("target")) != target
+                    or not isinstance(revision, str)
+                    or not revision
+                    or snap.get("revision") != revision
+                    or not evidence.validate_packet(packet)
+                    or _target(packet["target"]) != target
+                    or packet.get("head") != snap.get("head")
+                    or packet.get("base") != snap.get("base")
+                    or packet.get("subject_pr")
+                    != (
+                        snap.get("pr_target")
+                        or (snap.get("target") if snap.get("kind") == "pr" else None)
+                    )
+                    or packet["bindings"].get("source") != evidence._hash(snap.get("sources"))
+                ):
+                    continue
+                if isinstance(cached, dict) and any(
+                    cached.get(key) != snap.get(key)
+                    for key in (
+                        "target",
+                        "revision",
+                        "pr_target",
+                        "head",
+                        "base",
+                        "merge",
+                        "head_branch",
+                        "head_repository",
+                        "sources",
+                    )
+                ):
+                    continue
+                return snap, {
+                    "snapshot_ref": snapshot_ref,
+                    "packet_ref": packet_ref,
+                    "producer_version": packet["producer_version"],
+                    "producer_sha256": packet["producer_sha256"],
+                }
+            except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                continue
+        raise ValueError("complete_immutable_snapshot_unavailable")
+
+    def exact_closure(self, target, row, *, native_queue=False, observation_only=False):
+        """Return complete declared aliases, without changing the unknown outcome."""
+        snap, proof = self.verified_snapshot(target, row)
+        if row.get("provider_outcome_uncertain") not in (None, False):
+            raise ValueError("original_provider_scope_unavailable")
+        if snap.get("kind") != "pr" or any(
+            not isinstance(snap.get(key), str) or not re.fullmatch(r"[0-9a-f]{40}", snap[key])
+            for key in ("head", "base")
+        ):
+            raise ValueError("delivery_scope_incomplete")
+        pr = _target(snap.get("pr_target"))
+        sources = snap.get("sources")
+        if not isinstance(sources, list) or not sources or len(sources) > MAX_ENTRIES:
+            raise ValueError("source_scope_incomplete")
+        if any(
+            not isinstance(source, dict) or not isinstance(source.get("body"), str)
+            for source in sources
+        ):
+            raise ValueError("source_scope_incomplete")
+        if any(
+            not isinstance(snap.get(key), str) or not snap[key] or snap[key] != snap[key].strip()
+            for key in ("head_repository", "head_branch")
+        ):
+            raise ValueError("branch_scope_incomplete")
+        source_targets = [_target(source["target"]) for source in sources]
+        if len(set(source_targets)) != len(source_targets):
+            raise ValueError("source_scope_ambiguous")
+        keys = {
+            "pr:" + target,
+            "issue:" + target,
+            "pr:" + pr,
+            _key(f"branch:{snap['head_repository']}@{snap['head_branch']}"),
+        }
+        keys.update("issue:" + source for source in source_targets)
+        operation = row.get("operation")
+        remote = False
+        if isinstance(operation, dict):
+            from closer_queue import ACTION_NAMES
+
+            if operation.get("action") not in ACTION_NAMES:
+                raise ValueError("original_operation_action_unknown")
+            binding = operation.get("binding")
+            if (
+                not isinstance(binding, dict)
+                or any(
+                    binding.get(key) != value
+                    for key, value in {
+                        "pr_target": snap["pr_target"],
+                        "head": snap["head"],
+                        "merge": snap.get("merge"),
+                    }.items()
+                )
+                or {_target(t) for t in binding.get("source_targets", [])} != set(source_targets)
+            ):
+                raise ValueError("original_operation_scope_mismatch")
+            remote = operation.get("action") in {
+                "merge",
+                "initiate_verify",
+                "post_merge_verify",
+                "respond_review",
+                "close_source",
+            }
+            # Unknown history with another binding cannot borrow the current observation.
+            for prior in row.get("operation_history", []):
+                if not isinstance(prior, dict) or prior.get("binding") != binding:
+                    raise ValueError("historical_operation_scope_mismatch")
+                if prior.get("action") not in {
+                    "merge",
+                    "initiate_verify",
+                    "post_merge_verify",
+                    "respond_review",
+                    "close_source",
+                }:
+                    remote = False
+        elif native_queue or row.get("stage") in {"act", "reconcile"}:
+            raise ValueError("original_action_scope_unavailable")
+        barrier = row.get("recovery_barrier")
+        while isinstance(barrier, dict):
+            if barrier.get("revision") != row.get("revision") or barrier.get("identity") != row.get(
+                "identity"
+            ):
+                raise ValueError("historical_scope_identity_mismatch")
+            barrier = barrier.get("prior_recovery_barrier")
+        allowed_targets = {target, pr, *source_targets}
+        allowed_repos = {name.split("#")[0] for name in allowed_targets}
+        allowed_repos.add(snap["head_repository"].lower())
+        for record in (row, operation):
+            if not isinstance(record, dict):
+                continue
+            if "claim_targets" in record and (
+                not isinstance(record["claim_targets"], list)
+                or not {_target(name) for name in record["claim_targets"]}.issubset(allowed_targets)
+            ):
+                raise ValueError("original_claim_scope_mismatch")
+            if "repo_keys" in record and (
+                not isinstance(record["repo_keys"], list)
+                or not {_key("repo:" + name)[5:] for name in record["repo_keys"]}.issubset(
+                    allowed_repos
+                )
+            ):
+                raise ValueError("original_repository_scope_mismatch")
+        if not remote and not observation_only:
+            execution_workspaces = {
+                self.workspaces[name]
+                for name in (target, target.split("#")[0])
+                if name in self.workspaces
+            }
+            if len(execution_workspaces) != 1:
+                raise ValueError("original_execution_workspace_unavailable")
+            keys.update(self.mapped_keys(target, keys))
+        proof["action_contract"] = (
+            "record_snapshot_observation_only"
+            if observation_only
+            else "bound_remote_github_operation" if remote else "bound_prepared_scope"
+        )
+        proof["filesystem_scope"] = (
+            "excluded_by_record_snapshot_contract"
+            if observation_only
+            else "excluded_by_remote_action_contract" if remote else "authorized_workspace_mapping"
+        )
+        return keys, proof
+
     def read(self, path: Path) -> Any:
         if path.is_symlink() or path.resolve() != path:
             raise ValueError("aliased_source:" + str(path))
         if not path.exists():
+            if str(path) in self.sources and self.sources[str(path)] is not None:
+                self.reasons.append("source_changed_during_census:" + str(path))
+                raise ValueError("source_changed_during_census")
             self.sources[str(path)] = None
             return None
         with path.open("rb") as stream:
             raw = stream.read(MAX_FILE_BYTES + 1)
-        self.bytes += len(raw)
-        if len(raw) > MAX_FILE_BYTES or self.bytes > MAX_BYTES or len(self.sources) >= MAX_ENTRIES:
+        sha = hashlib.sha256(raw).hexdigest()
+        if str(path) in self.sources and self.sources[str(path)] != sha:
+            self.reasons.append("source_changed_during_census:" + str(path))
+            raise ValueError("source_changed_during_census")
+        if str(path) not in self.sources:
+            self.bytes += len(raw)
+        if (
+            len(raw) > MAX_FILE_BYTES
+            or self.bytes > MAX_BYTES
+            or (str(path) not in self.sources and len(self.sources) >= MAX_ENTRIES)
+        ):
+            self.reasons.append("census_bound_exceeded")
             raise ValueError("census_bound_exceeded")
-        self.sources[str(path)] = hashlib.sha256(raw).hexdigest()
+        self.sources[str(path)] = sha
         return json.loads(raw)
 
     def directory(self, path: Path) -> list[Path]:
@@ -119,10 +370,19 @@ class _Census:
     def quarantine(self, target, row, source, run_id, reason):
         target = _target(target)
         repo = target.split("#")[0]
-        keys = {"repo:" + repo, "pr:" + target, "issue:" + target}
+        closure, closure_reason = "repository_fallback", None
+        try:
+            keys, closure_proof = self.exact_closure(
+                target, row, native_queue=run_id == "native_queue"
+            )
+            closure = "complete_immutable_snapshot"
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            keys = {"repo:" + repo, "pr:" + target, "issue:" + target}
+            closure_proof = None
+            closure_reason = str(exc)
         # A repository fallback is intentional when a row's historical metadata
         # is missing. Known cross-repository aliases are retained as well.
-        if isinstance(row, dict):
+        if closure == "repository_fallback" and isinstance(row, dict):
             results = row.get("results")
             prepared = results.get("prepare") if isinstance(results, dict) else None
             snapshot = prepared.get("snapshot") if isinstance(prepared, dict) else None
@@ -140,11 +400,12 @@ class _Census:
                         keys.add(_key("worktree:" + snapshot[name]))
             for value in row.get("resource_keys") or []:
                 keys.add(_key(value))
-        for key in list(keys):
-            kind, value = key.split(":", 1)
-            if kind in {"pr", "issue", "branch"}:
-                keys.add("repo:" + value.split("@")[0].split("#")[0])
-        keys.update(self.mapped_keys(target, keys))
+        if closure == "repository_fallback":
+            for key in list(keys):
+                kind, value = key.split(":", 1)
+                if kind in {"pr", "issue", "branch"}:
+                    keys.add("repo:" + value.split("@")[0].split("#")[0])
+            keys.update(self.mapped_keys(target, keys))
         self.keys.update(keys)
         self.items.append(
             {
@@ -155,6 +416,9 @@ class _Census:
                 "item_sha256": _digest(row),
                 "reason": reason,
                 "keys": sorted(keys),
+                "closure": closure,
+                "closure_proof": closure_proof,
+                "closure_reason": closure_reason,
             }
         )
         if len(self.items) > MAX_ENTRIES:
@@ -244,6 +508,12 @@ class _Census:
             self.history(run)
             for target, row in rows.items():
                 canonical_target(target)
+                if isinstance(row, dict) and isinstance(row.get("results"), dict):
+                    prepared = row["results"].get("prepare")
+                    if isinstance(prepared, dict) and prepared.get("snapshot_ref"):
+                        self.preparations.setdefault(
+                            (canonical_target(target), row.get("revision")), []
+                        ).append((prepared["snapshot_ref"], prepared.get("packet_ref")))
                 reason = self.row_problem(self.path, run_id, target, row, doc)
                 if reason:
                     self.quarantine(target, row, self.path, run_id, reason)
@@ -313,6 +583,45 @@ class _Census:
             raise ValueError("unbounded_raw_queue")
         for target, row in doc["items"].items():
             canonical_target(target)
+            if (
+                isinstance(row, dict)
+                and set(row) == {"evidence", "revision", "observation_freshness", "packet_ref"}
+                and row["observation_freshness"] == "remote_snapshot"
+            ):
+                try:
+                    snap, proof = self.verified_snapshot(_target(target), row)
+                    if snap.get("kind") == "pr":
+                        _, proof = self.exact_closure(_target(target), row, observation_only=True)
+                    elif not (
+                        snap.get("kind") == "issue"
+                        and snap.get("head") is None
+                        and snap.get("base") is None
+                        and snap.get("pr_target") is None
+                        and isinstance(snap.get("sources"), list)
+                        and bool(snap["sources"])
+                        and all(
+                            isinstance(item, dict)
+                            and isinstance(item.get("body"), str)
+                            and _target(item.get("target")) == _target(target)
+                            for item in snap["sources"]
+                        )
+                    ):
+                        raise ValueError("unsupported_observation_scope")
+                except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                    pass
+                else:
+                    self.observations.append(
+                        {
+                            "target": _target(target),
+                            "source_path": str(source),
+                            "source_sha256": self.sources[str(source)],
+                            "item_sha256": _digest(row),
+                            "producer_contract": "record_snapshot_preserves_operation_and_history",
+                            "closure_proof": proof,
+                            "acceptance_authority": False,
+                        }
+                    )
+                    continue
             safe = False
             if isinstance(row, dict):
                 history = row.get("operation_history", [])
@@ -342,20 +651,43 @@ class _Census:
                     aliases = set()
                     for claim in row.get("claim_targets") or []:
                         aliases.add("issue:" + _target(claim))
-                    for repo in row.get("repo_keys") or []:
-                        aliases.add(_key("repo:" + repo))
+                    if self.items[-1]["closure"] == "repository_fallback":
+                        for repo in row.get("repo_keys") or []:
+                            aliases.add(_key("repo:" + repo))
                     operation = row.get("operation")
                     if isinstance(operation, dict):
                         binding = operation.get("binding") or {}
                         for claim in binding.get("source_targets") or []:
                             aliases.add("issue:" + _target(claim))
-                    for key in list(aliases):
-                        kind, value = key.split(":", 1)
-                        if kind in {"pr", "issue", "branch"}:
-                            aliases.add("repo:" + value.split("@")[0].split("#")[0])
-                    aliases.update(self.mapped_keys(_target(target), aliases))
+                    if self.items[-1]["closure"] == "repository_fallback":
+                        for key in list(aliases):
+                            kind, value = key.split(":", 1)
+                            if kind in {"pr", "issue", "branch"}:
+                                aliases.add("repo:" + value.split("@")[0].split("#")[0])
+                        aliases.update(self.mapped_keys(_target(target), aliases))
                     self.keys.update(aliases)
                     self.items[-1]["keys"] = sorted(set(self.items[-1]["keys"]) | aliases)
+
+    def raw_index(self):
+        """Index exact sibling observations before recovering compact item scope."""
+        suffix = ".pipeline.json"
+        if not str(self.path).endswith(suffix) or str(self.path).endswith(".shadow.pipeline.json"):
+            return
+        source = Path(str(self.path)[: -len(suffix)])
+        doc = self.read(source)
+        if self.sources.get(str(source)) is None:
+            return
+        from closer_queue import SCHEMA as QUEUE_SCHEMA
+        from closer_resources import canonical_target
+
+        if (
+            not isinstance(doc, dict)
+            or doc.get("schema") != QUEUE_SCHEMA
+            or not isinstance(doc.get("items"), dict)
+            or not isinstance(doc.get("round"), dict)
+        ):
+            raise ValueError("unbounded_raw_queue")
+        self.raw_records = {canonical_target(target): row for target, row in doc["items"].items()}
 
     def reservations(self):
         from closer_resources import DURABLE_KINDS, _reservation_bases, scoped_root
@@ -558,7 +890,13 @@ def scope_snapshot(state_path: str | Path, *, workspaces=None) -> dict:
         if not path.parent.is_dir():
             raise ValueError("missing_source_parent")
         with inventory_lock(scoped_root(path)):
-            for collect in (census.ledger, census.raw_queue, census.reservations, census.shards):
+            for collect in (
+                census.raw_index,
+                census.ledger,
+                census.raw_queue,
+                census.reservations,
+                census.shards,
+            ):
                 try:
                     collect()
                 except (
@@ -578,6 +916,7 @@ def scope_snapshot(state_path: str | Path, *, workspaces=None) -> dict:
         "quarantine_keys": sorted(census.keys),
         "global_reasons": sorted(set(census.reasons)),
         "items": census.items,
+        "observations": census.observations,
         "source_hashes": dict(sorted(census.sources.items())),
         "workspaces": dict(sorted(census.workspaces.items())),
         "acceptance_authority": False,

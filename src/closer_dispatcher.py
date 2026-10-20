@@ -2036,11 +2036,22 @@ def known_workspaces(targets):
         )
     )
     found = {}
+    try:
+        named = {}
+        for entry in root.iterdir():
+            named.setdefault(entry.name.casefold(), []).append(entry)
+    except OSError:
+        named = {}
     for repo in sorted({t.split("#")[0] for t in targets}):
         name = repo.split("/")[1]
-        for candidate in (
-            [root / "Workflows-steward", root / name] if name == "Workflows" else [root / name]
-        ):
+        names = ["Workflows-steward", name] if name.casefold() == "workflows" else [name]
+        candidates = []
+        for checkout_name in names:
+            matches = named.get(checkout_name.casefold(), [])
+            # Ambiguous case-sensitive checkouts cannot establish one canonical workspace.
+            if len(matches) == 1:
+                candidates.append(matches[0])
+        for candidate in candidates:
             if not candidate.is_dir():
                 continue
             try:
@@ -2053,11 +2064,11 @@ def known_workspaces(targets):
             except subprocess.TimeoutExpired:
                 continue
             remote = proc.stdout.strip().removesuffix(".git")
-            if proc.returncode == 0 and remote in {
-                f"https://github.com/{repo}",
-                f"git@github.com:{repo}",
+            if proc.returncode == 0 and remote.casefold() in {
+                f"https://github.com/{repo.casefold()}",
+                f"git@github.com:{repo.casefold()}",
             }:
-                found[repo] = str(candidate)
+                found[repo] = str(candidate.resolve())
                 break
     return found
 
