@@ -184,7 +184,7 @@ def _existing_sweep_fingerprints(corpus_path: Path, *, since_ts: int | None) -> 
         if since_ts is not None:
             try:
                 ts = int(entry.get("ts") or 0)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 continue
             if ts < since_ts:
                 continue
@@ -570,7 +570,7 @@ def _read_report_status(path: Path, *, now: float | None = None) -> dict:
     generated = data.get("generated_at")
     try:
         age_seconds = int(now - int(generated)) if generated else None
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         age_seconds = None
     out.update(
         {

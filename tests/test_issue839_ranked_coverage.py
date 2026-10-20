@@ -23,7 +23,7 @@ def isolated_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path))
     monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
-    redirect_sweep.HANDOFF = tmp_path / "handoff"
+    monkeypatch.setattr(redirect_sweep, "HANDOFF", tmp_path / "handoff")
     attempted: list[object] = []
 
     def forbidden(*args, **kwargs):
@@ -234,8 +234,9 @@ def test_sweep_and_recording_are_advisory_and_count_every_skip(tmp_path: Path, m
         dedupe_hours=0,
     )
     reasons = {row["reason"] for row in recorded["skipped"]}
-    assert "duplicate-within-window" in reasons or "max-records-reached" in reasons
-    assert recorded["errors"] or recorded["recorded_count"] >= 0
+    assert "duplicate-within-window" in reasons
+    assert any("o/r#boom" in json.dumps(err) for err in recorded["errors"])
+    assert recorded["recorded_count"] == 1
     assert any(row.get("reason") == "action-not-selected" for row in recorded["skipped"])
     assert any(row.get("reason") == "max-records-reached" for row in recorded["skipped"])
     written = redirect_sweep.write_report({"ok": True}, tmp_path / "out" / "report.json")
@@ -622,3 +623,25 @@ def test_redirect_sweep_main_cli_paths_are_advisory(
     assert redirect_sweep.main([]) == 0
     human = capsys.readouterr().out
     assert "redirect_sweep: active=1" in human and "o/r#1" in human
+
+
+@pytest.mark.parametrize("timestamp", [float("inf"), float("-inf")])
+def test_nonfinite_corpus_timestamp_is_skipped(tmp_path: Path, timestamp: float) -> None:
+    corpus = tmp_path / "nonfinite.jsonl"
+    corpus.write_text(
+        json.dumps({"kind": "redirect_proposal", "ts": timestamp, "sweep_fingerprint": "bad"})
+        + "\n"
+        + json.dumps({"kind": "redirect_proposal", "ts": 100, "sweep_fingerprint": "valid"})
+        + "\n"
+    )
+    assert redirect_sweep._existing_sweep_fingerprints(corpus, since_ts=50) == {"valid"}
+
+
+@pytest.mark.parametrize("timestamp", [float("inf"), float("-inf")])
+def test_nonfinite_report_timestamp_has_unknown_age(tmp_path: Path, timestamp: float) -> None:
+    report = tmp_path / "report.json"
+    report.write_text(json.dumps({"generated_at": timestamp, "watched_count": 3}))
+    status = redirect_sweep._read_report_status(report, now=100)
+    assert status["exists"] is True
+    assert status["age_seconds"] is None
+    assert status["watched_count"] == 3
