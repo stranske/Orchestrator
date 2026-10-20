@@ -1483,11 +1483,14 @@ def verify(
     # Partition only when Core skips are countable. An unknown Core population makes BOTH
     # derived skip counts uncountable — never invent a zero that clears a set ceiling.
     other_skipped = None if core_skipped is None else py["skipped"] - core_skipped
+    # Local int: `actual` also holds uncountable Nones, so indexing it widens to int|None
+    # and mypy rejects `len(gates) - actual["gate_skipped_max"]` in the VERIFIED line.
+    gate_skipped = sum(1 for r in gates.values() if r["skipped"])
     actual = {
         "skipped_max": other_skipped,
         "core_sibling_skipped_max": core_skipped,
         "selftest_skipped_max": len(st["skipped"]),
-        "gate_skipped_max": sum(1 for r in gates.values() if r["skipped"]),
+        "gate_skipped_max": gate_skipped,
         # None (uncountable) must not read as 0 — that would let the ceiling pass by being
         # blind. The rule lives in `_exempt_ceiling_input` rather than inline here, because
         # inline it was untestable and therefore wrong for as long as it existed.
@@ -1569,7 +1572,7 @@ def verify(
     for name, res in gates.items():
         state = "SKIP" if res["skipped"] else ("ok " if res["ok"] else "FAIL")
         lines.append(f"  {name:<18} {state} {res['line']}")
-    if actual["gate_skipped_max"]:
+    if gate_skipped:
         lines.append(f"  gates:      {_cap('gate_skipped_max')} skipped")
     # ALWAYS printed, like `tree:`: whether the ledger judged lacks a row this tree registers itself.
     lines.append(_format_declared_line(declared_rows, drainable))
@@ -1584,7 +1587,7 @@ def verify(
 
     # WHAT DID NOT RUN, always — under a green verdict as much as a red one. A number of skips
     # with no reasons beside it is how "green" quietly stops meaning "checked".
-    if py["skips"] or st["skipped"] or actual["gate_skipped_max"]:
+    if py["skips"] or st["skipped"] or gate_skipped:
         lines.append("")
         lines.append("  SKIPPED (prerequisite absent on this machine — nothing here was checked):")
         for ln in py["skips"]:
@@ -1612,12 +1615,12 @@ def verify(
         lines.append(
             f"  VERIFIED — {py['passed']} tests actually executed and passed, "
             f"{len(st['ok'])} selftests spoke, "
-            f"{len(gates) - actual['gate_skipped_max']} of {len(gates)} gates green"
+            f"{len(gates) - gate_skipped} of {len(gates)} gates green"
             + (
                 f"; {py['skipped']} test(s), {actual['selftest_skipped_max']} selftest(s) "
-                f"and {actual['gate_skipped_max']} gate(s) SKIPPED for a named missing "
+                f"and {gate_skipped} gate(s) SKIPPED for a named missing "
                 f"prerequisite, listed above"
-                if (py["skipped"] or actual["selftest_skipped_max"] or actual["gate_skipped_max"])
+                if (py["skipped"] or actual["selftest_skipped_max"] or gate_skipped)
                 else ""
             )
         )
