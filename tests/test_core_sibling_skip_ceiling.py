@@ -24,17 +24,23 @@ def test_core_sibling_mark_partitions_mirror_skip_ceiling():
             "tests.test_x": {
                 "a": {"outcome": "skipped", "message": f"{mark} missing sibling"},
                 "b": {"outcome": "skipped", "message": "not a git repository"},
-                "c": {"outcome": "skipped", "message": f"{mark} missing packager"},
+                "c": {"outcome": "skipped", "message": f"{mark} missing runtime"},
                 "d": {"outcome": "passed", "message": ""},
+                "e": {"outcome": "skipped", "message": "another unrelated skip"},
             }
         },
     }
     assert verify.core_sibling_skips(py) == 2
     floor = {"mirror_skipped_max": 2, "mirror_core_sibling_skipped_max": 2}
-    actual = _actual(other=2, core=2)
+    core_skips = verify.core_sibling_skips(py)
+    actual = _actual(other=py["skipped"] - core_skips, core=core_skips)
     assert verify._ceiling_problems(floor, actual, shape=verify.EXEC_MIRROR) == []
     # One unrelated new skip still trips the general mirror ceiling; core stays in its bucket.
-    over = verify._ceiling_problems(floor, _actual(other=3, core=2), shape=verify.EXEC_MIRROR)
+    py["verdicts"]["tests.test_x"]["f"] = {"outcome": "skipped", "message": "new unrelated skip"}
+    py["skipped"] += 1
+    core_skips = verify.core_sibling_skips(py)
+    actual = _actual(other=py["skipped"] - core_skips, core=core_skips)
+    over = verify._ceiling_problems(floor, actual, shape=verify.EXEC_MIRROR)
     assert len(over) == 1 and "mirror_skipped_max" in over[0]
     assert "Skip categories:" in over[0]
     assert (
@@ -82,3 +88,43 @@ def test_core_sibling_skips_uncountable_without_verdicts():
     assert all("CEILING UNCHECKABLE" in msg for msg in over)
     assert any("mirror_skipped_max" in msg for msg in over)
     assert any("mirror_core_sibling_skipped_max" in msg for msg in over)
+
+
+def test_junit_core_skips_survive_duplicate_class_and_method(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    mark = env_prereq.CORE_SIBLING_ABSENT_MARK
+    junit = tmp_path / "pytest.xml"
+    junit.write_text(
+        "<testsuites><testsuite>"
+        '<testcase classname="tests.test_a.TestShared" name="test_same">'
+        '<skipped message="unrelated"/></testcase>'
+        '<testcase classname="tests.test_b.TestShared" name="test_same">'
+        f'<skipped message="{mark} missing runtime"/></testcase>'
+        '<testcase classname="tests.test_c.TestExpected" name="test_same">'
+        '<skipped type="pytest.xfail" message="expected failure"/></testcase>'
+        "</testsuite></testsuites>",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        verify.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout="2 skipped, 1 xfailed in 0.01s", stderr="", returncode=0
+        ),
+    )
+    py = verify.run_pytest(junit=junit)
+    # Gate replay keeps its existing deduplication and xfail exclusion.
+    assert py["verdicts"] == {
+        "TestShared": {"test_same": {"outcome": "skipped", "message": "unrelated"}},
+        "TestExpected": {},
+    }
+    core_skips = verify.core_sibling_skips(py)
+    assert core_skips == 1
+    actual = _actual(other=py["skipped"] - core_skips, core=core_skips)
+    over = verify._ceiling_problems(
+        {"mirror_skipped_max": 1, "mirror_core_sibling_skipped_max": 0},
+        actual,
+        shape=verify.EXEC_MIRROR,
+    )
+    assert len(over) == 1 and "mirror_core_sibling_skipped_max" in over[0]

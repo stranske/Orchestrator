@@ -350,7 +350,7 @@ def test_real_packager_relocates_actual_runtime_core_and_launcher(bundle, tmp_pa
     source = core_source() / "scripts/closer_core_package.py"
     if not source.is_file():
         pytest.skip(
-            f"{env_prereq.CORE_SIBLING_ABSENT_MARK} independent Core packager source unavailable "
+            f"{env_prereq.PREREQ_ABSENT_MARK} independent Core packager source unavailable "
             f"at {source}"
         )
     copied = tmp_path / "core_packager.py"

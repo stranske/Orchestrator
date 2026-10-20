@@ -418,6 +418,8 @@ def run_pytest(*, extra: list[str] | None = None, junit: pathlib.Path | None = N
         if ln.startswith(("FAILED ", "ERROR ")) or ln.lstrip().startswith(("FAILED ", "ERROR "))
     ]
     skips = [ln.strip() for ln in lines if ln.lstrip().startswith("SKIPPED ")]
+    skip_records: list[dict[str, str]] = []
+    verdicts = read_junit(junit, skip_records=skip_records) if junit is not None else {}
     return {
         "counts": counts,
         "collected": collected,
@@ -429,7 +431,8 @@ def run_pytest(*, extra: list[str] | None = None, junit: pathlib.Path | None = N
         "failures": failures,
         "skips": skips,
         "tail": lines[-12:],
-        "verdicts": read_junit(junit) if junit is not None else {},
+        "verdicts": verdicts,
+        "skip_records": skip_records,
     }
 
 
@@ -437,8 +440,13 @@ def run_pytest(*, extra: list[str] | None = None, junit: pathlib.Path | None = N
 _VERDICT_RANK = {"passed": 0, "skipped": 1, "failed": 2}
 
 
-def read_junit(path: pathlib.Path) -> dict[str, dict[str, dict[str, str]]]:
+def read_junit(
+    path: pathlib.Path, *, skip_records: list[dict[str, str]] | None = None
+) -> dict[str, dict[str, dict[str, str]]]:
     """pytest's verdict on each test: {module stem: {test name: {"outcome", "message"}}}.
+
+    Optional skip_records receives every non-xfail skipped case before replay deduplication,
+    so ceiling accounting does not lose skips with colliding class/method names.
 
     Kept only where a check can be REPLAYED from it — passed, failed (a failure or an error in any
     phase) and skipped. An xfail is left out, and so is everything in an absent or unreadable file:
@@ -454,6 +462,15 @@ def read_junit(path: pathlib.Path) -> dict[str, dict[str, dict[str, str]]]:
     out: dict[str, dict[str, dict[str, str]]] = {}
     unreplayable: set[tuple[str, str]] = set()
     for case in root.iter("testcase"):
+        if skip_records is not None:
+            for child in case:
+                if child.tag == "skipped" and child.get("type") != "pytest.xfail":
+                    skip_records.append(
+                        {
+                            "outcome": "skipped",
+                            "message": child.get("message") or "",
+                        }
+                    )
         module = (case.get("classname") or "").rsplit(".", 1)[-1]
         name = case.get("name") or ""
         if not module or not name:
@@ -1275,7 +1292,7 @@ def core_sibling_skips(py: dict) -> int | None:
     """Pytest skips that carry env_prereq.CORE_SIBLING_ABSENT_MARK (bounded separately).
 
     None means the Core population could not be counted: pytest reported skips but left no
-    per-test verdicts to partition. Treating that as 0 would charge every skip to the general
+    per-case records to partition. Treating that as 0 would charge every skip to the general
     ceiling AND clear the Core ceiling by being blind — so both derived counts stay None and
     `_ceiling_problems` fails any set Core/general skip ceiling (same rule as mypy exempt).
     """
@@ -1285,7 +1302,10 @@ def core_sibling_skips(py: dict) -> int | None:
         mark = env_prereq.CORE_SIBLING_ABSENT_MARK
     except Exception:  # noqa: BLE001
         return 0
-    tests = [v for by_name in (py.get("verdicts") or {}).values() for v in by_name.values()]
+    # Legacy callers can still supply verdicts; run_pytest always provides per-case records.
+    tests = py.get("skip_records")
+    if tests is None:
+        tests = [v for by_name in (py.get("verdicts") or {}).values() for v in by_name.values()]
     if not tests and py.get("skipped"):
         return None
     return sum(
