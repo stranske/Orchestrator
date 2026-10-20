@@ -15,6 +15,7 @@ import pytest
 import closer_campaign as cc
 import closer_dispatcher as cd
 import closer_runtime_binding as rb
+import env_prereq
 
 
 @pytest.fixture
@@ -42,9 +43,10 @@ def bundle(tmp_path, monkeypatch):
     # Snapshot every closed owned source/schema before executing; no import from draft.
     from closer_core_support import core_source
 
+    reason = env_prereq.core_sibling_absent()
+    if reason:
+        pytest.skip(reason)
     source = core_source()
-    if not source.is_dir():
-        pytest.skip("independent Core source unavailable for snapshot")
     root = tmp_path / "core"
     for name in rb.CORE_FILES:
         dest = root / name
@@ -342,9 +344,15 @@ def test_real_packager_relocates_actual_runtime_core_and_launcher(bundle, tmp_pa
 
     import closer_distribution_package as package
 
+    reason = env_prereq.core_sibling_absent()
+    if reason:
+        pytest.skip(reason)
     source = core_source() / "scripts/closer_core_package.py"
     if not source.is_file():
-        pytest.skip("independent Core packager source unavailable")
+        pytest.skip(
+            f"{env_prereq.PREREQ_ABSENT_MARK} independent Core packager source unavailable "
+            f"at {source}"
+        )
     copied = tmp_path / "core_packager.py"
     shutil.copyfile(source, copied)
     loader = importlib.util.spec_from_file_location("_core_packager_test", copied)
