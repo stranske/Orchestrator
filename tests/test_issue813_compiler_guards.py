@@ -7,13 +7,15 @@ optional lets a minimal checkout verify the compiler's pure validation paths.
 from __future__ import annotations
 
 import copy
+import io
 import os
 import socket
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import adapters
 import capability_compiler as compiler
@@ -245,3 +247,125 @@ class TestWorkflowCompilerGuards(unittest.TestCase):
                         },
                     ],
                 )
+
+    def test_reference_cli_without_ledger_rejects_before_running_workflow(self):
+        error = io.StringIO()
+        with (
+            patch.object(compiler, "run_reference_workflow") as run,
+            redirect_stderr(error),
+        ):
+            with self.assertRaises(SystemExit) as caught:
+                compiler.main(["reference"])
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("reference requires --ledger", error.getvalue())
+        run.assert_not_called()
+
+    def test_reference_workflow_records_receipt_lineage_and_all_four_probes(self):
+        ledger = self.root / "ledger.json"
+        with (
+            patch.object(compiler, "_register_shadow") as register,
+            patch.object(compiler.capabilities, "heartbeat") as heartbeat,
+            patch.object(compiler, "_probe_once") as probe,
+        ):
+            output = compiler.run_reference_workflow(ledger_path=ledger)
+        plan = output["plan"]
+        result = output["result"]
+        receipt = output["consumer_receipt"]
+        capability_id = plan["capability_id"]
+        prefix = plan["plan_id"]
+        register.assert_called_once_with(plan, ledger)
+        self.assertEqual(result["side_effects"], [])
+        self.assertTrue(receipt["consumed"])
+        self.assertEqual(receipt["result_id"], result["result_id"])
+        expected_events = [
+            ("match", prefix),
+            ("invocation", prefix),
+            ("output", result["result_id"]),
+            ("consumer", receipt["receipt_id"]),
+            ("success", receipt["receipt_id"]),
+            ("outcome", f"shadow:{receipt['receipt_id']}"),
+        ]
+        self.assertEqual(
+            heartbeat.call_args_list,
+            [
+                call(
+                    capability_id,
+                    event,
+                    ref=ref,
+                    path=ledger,
+                    idempotency_key=f"{prefix}:{event}",
+                )
+                for event, ref in expected_events
+            ],
+        )
+        self.assertEqual(
+            probe.call_args_list,
+            [
+                call(capability_id, "producer_probe", result["result_id"], ledger),
+                call(capability_id, "consumer_probe", receipt["receipt_id"], ledger),
+                call(capability_id, "outcome_probe", f"shadow:{receipt['receipt_id']}", ledger),
+                call(
+                    capability_id,
+                    "rollback_probe",
+                    compiler.stable_hash("workflow-rollback", plan["rollback_order"]),
+                    ledger,
+                ),
+            ],
+        )
+
+    def test_dry_run_failure_records_no_output_success_or_probes(self):
+        ledger = self.root / "ledger.json"
+        failure = RuntimeError("bounded dry-run fixture failure")
+        plan = compiler.compile_workflow_rail(self.source)
+        with (
+            patch.object(compiler, "_register_shadow"),
+            patch.object(compiler, "dry_run_workflow_rail", side_effect=failure),
+            patch.object(compiler.capabilities, "heartbeat") as heartbeat,
+            patch.object(compiler, "_probe_once") as probe,
+        ):
+            with self.assertRaises(RuntimeError) as caught:
+                compiler.run_reference_workflow(ledger_path=ledger)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(
+            [entry.args[1] for entry in heartbeat.call_args_list],
+            ["match", "invocation", "failure"],
+        )
+        error_ref = compiler.stable_hash(
+            "workflow-shadow-failure",
+            {"plan_id": plan["plan_id"], "error_type": "RuntimeError"},
+        )
+        self.assertEqual(
+            heartbeat.call_args_list[-1],
+            call(
+                plan["capability_id"],
+                "failure",
+                ref=error_ref,
+                path=ledger,
+                idempotency_key=f"{plan['plan_id']}:failure:{error_ref}",
+            ),
+        )
+        probe.assert_not_called()
+
+    def test_consumer_failure_keeps_output_but_records_no_success_or_probes(self):
+        ledger = self.root / "ledger.json"
+        failure = ValueError("bounded consumer fixture failure")
+        with (
+            patch.object(compiler, "_register_shadow"),
+            patch.object(compiler.capabilities, "heartbeat") as heartbeat,
+            patch.object(compiler, "_probe_once") as probe,
+            patch.object(compiler, "consume_workflow_output", side_effect=failure) as consumer,
+        ):
+            with self.assertRaises(ValueError) as caught:
+                compiler.run_reference_workflow(ledger_path=ledger, consumer=consumer)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(
+            [entry.args[1] for entry in heartbeat.call_args_list],
+            ["match", "invocation", "output", "failure"],
+        )
+        consumer.assert_called_once()
+        result = consumer.call_args.args[0]
+        self.assertEqual(result["status"], "shadow_pass")
+        self.assertEqual(result["side_effects"], [])
+        self.assertEqual(heartbeat.call_args_list[2].kwargs["ref"], result["result_id"])
+        self.assertNotIn(str(failure), str(heartbeat.call_args_list))
+        probe.assert_not_called()
