@@ -1090,6 +1090,7 @@ class Closer:
         workers=False,
         worker_timeout=120,
         workspaces=None,
+        workspace_bindings=None,
         offload_fn=None,
         blockers=None,
         blocker_fn=None,
@@ -1108,6 +1109,7 @@ class Closer:
         self.workers = workers
         self.worker_timeout = worker_timeout
         self.workspaces = workspaces or {}
+        self.workspace_bindings = workspace_bindings
         self.offload_fn = offload_fn
         self.advisory = {}
         self.advisory_reasons = {}
@@ -1690,7 +1692,7 @@ class Closer:
 
         pipeline_reserved = profile_id is not None and action == "disposition"
         repair_action = action == "repair"
-        workspace = self.workspaces.get(target) or self.workspaces.get(target.split("#")[0])
+        workspace = selected_workspace(self.workspaces, target)
         if not workspace or not Path(workspace).is_dir():
             return {"status": "blocked", "reason": "no explicit authorized repository workspace"}
         repair_plan = self.dispositions.get(target, {}).get("repair", {})
@@ -2026,6 +2028,104 @@ class Closer:
             "reason": "inspect retained operation outcome before retry",
             "evidence": s,
         }
+
+
+def selected_workspace(workspaces, target):
+    mapping = {str(k).casefold(): v for k, v in workspaces.items()}
+    return mapping.get(target.casefold()) or mapping.get(target.split("#")[0].casefold())
+
+
+def load_workspace_config(path, expected_sha256=None, *, require_pin=False, targets=None):
+    """Read exactly the native-pinned mapping, without networking or changing it."""
+    import closer_quarantine
+
+    original = Path(path).expanduser().absolute()
+    if original.is_symlink() or original.resolve() != original or not original.is_file():
+        raise ValueError("workspace config must be a canonical regular file")
+    from closer_native_observer import _bounded_bytes
+
+    try:
+        raw = _bounded_bytes(original, 1024 * 1024)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("workspace config is not a stable bounded regular file") from exc
+    if require_pin and not expected_sha256:
+        raise ValueError("native workspace config requires its exact SHA256 pin")
+    if expected_sha256 is not None and (
+        not isinstance(expected_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256)
+        or hashlib.sha256(raw).hexdigest() != expected_sha256
+    ):
+        raise ValueError("workspace config SHA256 differs from admitted pin")
+
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("workspace config contains duplicate keys")
+            result[key] = value
+        return result
+
+    value = json.loads(raw, object_pairs_hook=unique)
+    historical, execution, envelope = closer_quarantine.workspace_bindings(value)
+    if require_pin and not envelope:
+        raise ValueError(
+            "native workspace config requires the explicit versioned bindings envelope"
+        )
+    if require_pin and targets is None:
+        raise ValueError("native workspace config requires its frozen assignment targets")
+    effective = {**historical, **execution}
+    selected = {} if require_pin else dict(execution)
+    if require_pin:
+        if not isinstance(targets, (list, tuple)) or any(
+            not isinstance(target, str) or not TARGET.fullmatch(target) for target in targets
+        ):
+            raise ValueError("native workspace config assignment targets are invalid")
+        raw_effective = {**value["historical"], **value["execution"]}
+        for target in targets:
+            workspace = selected_workspace(effective, target)
+            if workspace is None:
+                continue
+            raw_workspace = selected_workspace(raw_effective, target)
+            if raw_workspace != workspace:
+                raise ValueError(
+                    "native execution workspace must be a canonical physical directory"
+                )
+            selected[target.casefold()] = workspace
+    for target, workspace in selected.items():
+        directory = Path(workspace)
+        if not directory.is_dir():
+            raise ValueError("execution workspace is unavailable")
+        result = subprocess.run(
+            ["git", "-C", str(directory), "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        repo = target.split("#")[0]
+        remote = result.stdout.strip().removesuffix(".git").casefold()
+        if result.returncode != 0 or remote not in {
+            "https://github.com/" + repo,
+            "git@github.com:" + repo,
+        }:
+            raise ValueError("execution workspace GitHub repository identity differs")
+        root = subprocess.run(
+            ["git", "-C", str(directory), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if root.returncode != 0 or Path(root.stdout.strip()).resolve() != directory:
+            raise ValueError("execution workspace must identify its actual Git worktree root")
+    binding = (
+        {
+            "schema": closer_quarantine.WORKSPACE_SCHEMA,
+            "historical": historical,
+            "execution": execution,
+        }
+        if envelope
+        else historical
+    )
+    return {**historical, **execution}, binding
 
 
 def known_workspaces(targets):
@@ -2454,7 +2554,30 @@ def _execute_profile_route(
     raise closer_resources.ResourceBlocked("no qualified unreserved execution profile pool")
 
 
-def _prepared_resource_keys(target, prep, snapshot, workspaces):
+def _workspace_snapshot_binding(target, workspaces, bindings):
+    import closer_quarantine
+
+    if (
+        not isinstance(bindings, dict)
+        or bindings.get("schema") != closer_quarantine.WORKSPACE_SCHEMA
+    ):
+        return None
+    return {
+        "schema": "closer-execution-workspace/v1",
+        "target": target.casefold(),
+        "path": selected_workspace(workspaces, target),
+        "config_sha256": hashlib.sha256(
+            json.dumps(
+                bindings,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode()
+        ).hexdigest(),
+    }
+
+
+def _prepared_resource_keys(target, prep, snapshot, workspaces, *, workspace_bindings=None):
     """Bind mutation aliases to retained prepared evidence and authorized workspace mapping.
 
     These keys confer no authority. The native queue still refreshes actual head, assignment,
@@ -2464,6 +2587,11 @@ def _prepared_resource_keys(target, prep, snapshot, workspaces):
 
     if snapshot.get("target") != target or snapshot.get("revision") != prep.get("revision"):
         raise closer_resources.ResourceBlocked("prepared snapshot identity mismatch")
+    expected_workspace = _workspace_snapshot_binding(target, workspaces, workspace_bindings)
+    if expected_workspace is not None and snapshot.get("execution_workspace") != expected_workspace:
+        raise closer_resources.ResourceBlocked(
+            "prepared execution workspace differs from admitted mapping"
+        )
     keys = []
     pr_target = snapshot.get("pr_target") or target
     if snapshot.get("kind") != "issue":
@@ -2484,7 +2612,7 @@ def _prepared_resource_keys(target, prep, snapshot, workspaces):
         if not isinstance(source, dict) or not TARGET.fullmatch(source.get("target") or ""):
             raise closer_resources.ResourceBlocked("prepared source identity is missing")
         keys.append("issue:" + source["target"])
-    workspace = workspaces.get(target) or workspaces.get(target.split("#")[0])
+    workspace = selected_workspace(workspaces, target)
     if workspace:
         keys.append("worktree:" + str(Path(workspace).resolve()))
     return keys
@@ -2733,7 +2861,13 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             raise closer_resources.ResourceBlocked(
                 "retained operation snapshot unavailable"
             ) from exc
-        return _prepared_resource_keys(target, prep, snapshot, backend.workspaces)
+        return _prepared_resource_keys(
+            target,
+            prep,
+            snapshot,
+            backend.workspaces,
+            workspace_bindings=getattr(backend, "workspace_bindings", None),
+        )
 
     def completed_retention_hold(
         result, target, prep, context, error, agent, profile, retained_evidence=None
@@ -3037,6 +3171,16 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 and local.get("target") == target
                 and local.get("head") == prior.get("head")
                 and local.get("base") == prior.get("base")
+                and (
+                    _workspace_snapshot_binding(
+                        target, backend.workspaces, getattr(backend, "workspace_bindings", None)
+                    )
+                    is None
+                    or local.get("execution_workspace")
+                    == _workspace_snapshot_binding(
+                        target, backend.workspaces, getattr(backend, "workspace_bindings", None)
+                    )
+                )
                 and prior.get("bindings", {}).get("source")
                 == closer_evidence._hash(local.get("sources") or [])
                 and prior.get("bindings", {}).get("reviews")
@@ -3061,6 +3205,12 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     pass
         if snap is None:
             snap = gh.snapshot(target)
+        workspace_binding = _workspace_snapshot_binding(
+            target, backend.workspaces, getattr(backend, "workspace_bindings", None)
+        )
+        if workspace_binding is not None:
+            # This is prospective preparation metadata, never a backfilled old cwd.
+            snap = {**snap, "execution_workspace": workspace_binding}
         assignment_row = backend.assignment_rows.get(target, {})
 
         def artifact_fetch(artifact, *, deadline, max_bytes):
@@ -4394,7 +4544,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 import closer_resources
 
                 actual = _prepared_resource_keys(
-                    name, {"revision": observed.get("revision")}, observed, backend.workspaces
+                    name,
+                    {"revision": observed.get("revision")},
+                    observed,
+                    backend.workspaces,
                 )
                 if observed.get("head") != prepared_full.get("head") or not set(actual).issubset(
                     reserved_keys
@@ -4809,7 +4962,18 @@ def _run_staged_pipeline(args, targets, backend, deadline):
 
         census = closer_quarantine.scope_snapshot(pipeline_path)
         held_targets = [row["target"] for row in census["items"] if TARGET.fullmatch(row["target"])]
-        quarantine_workspaces = {**known_workspaces(held_targets), **backend.workspaces}
+        bindings = getattr(backend, "workspace_bindings", None)
+        if (
+            isinstance(bindings, dict)
+            and bindings.get("schema") == closer_quarantine.WORKSPACE_SCHEMA
+        ):
+            quarantine_workspaces = {
+                "schema": closer_quarantine.WORKSPACE_SCHEMA,
+                "historical": {**known_workspaces(held_targets), **bindings["historical"]},
+                "execution": bindings["execution"],
+            }
+        else:
+            quarantine_workspaces = {**known_workspaces(held_targets), **backend.workspaces}
     pipeline = closer_pipeline.run_pipeline(
         pipeline_path,
         targets,
@@ -4893,7 +5057,8 @@ def main(argv=None):
         help="JSON object pinning scoped schema/layout/pipeline_schema",
     )
     run.add_argument("--dispositions")
-    run.add_argument("--workspaces", help="JSON mapping repo to authorized local workspace")
+    run.add_argument("--workspaces", help="pinned prospective/historical workspace bindings JSON")
+    run.add_argument("--workspaces-sha256", help="exact workspace config bytes admitted by caller")
     validate = sub.add_parser("validate-stop")
     validate.add_argument("--state", required=True)
     validate.add_argument("--assignment")
@@ -4965,12 +5130,18 @@ def main(argv=None):
             "pipeline_schema": closer_pipeline.SCHEMA,
             "coordination_gates": 1,
         }
-        if json.dumps(args.coordinator_contract_pin, sort_keys=True) != json.dumps(
+        capability_pin = closer_pipeline.scoped_capability()
+        encoded_pin = json.dumps(args.coordinator_contract_pin, sort_keys=True, allow_nan=False)
+        if encoded_pin == json.dumps(capability_pin, sort_keys=True, allow_nan=False):
+            # New native callers pin the complete code capability. Only after
+            # exact validation project its on-disk contract for open_root.
+            args.coordinator_contract_pin = required_pin
+        elif args.runtime_manifest is not None or encoded_pin != json.dumps(
             required_pin, sort_keys=True
         ):
             p.error(
                 "resource_scoped requires the complete current --coordinator-contract-pin: "
-                + json.dumps(required_pin)
+                + json.dumps(capability_pin if args.runtime_manifest is not None else required_pin)
             )
     assignment_rows = assignment_rows_from_file(args.assignment)
     targets = list(assignment_rows)
@@ -5045,6 +5216,20 @@ def _main_admitted(args, p, assignment_rows, targets):
         from closer_runtime_binding import binding_from_manifest
 
         runtime_binding = binding_from_manifest(args.runtime_manifest)
+    workspace_bindings = None
+    workspaces = known_workspaces(targets)
+    if args.workspaces:
+        try:
+            workspaces, workspace_bindings = load_workspace_config(
+                args.workspaces,
+                getattr(args, "workspaces_sha256", None),
+                require_pin=args.runtime_manifest is not None,
+                targets=targets,
+            )
+        except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+            p.error(str(exc))
+    elif getattr(args, "workspaces_sha256", None):
+        p.error("workspace pin requires --workspaces")
     backend = Closer(
         GitHub(deadline=deadline),
         runtime_binding=runtime_binding,
@@ -5062,11 +5247,8 @@ def _main_admitted(args, p, assignment_rows, targets):
             target,
             expected_fingerprint=assignment_rows.get(target, {}).get("fingerprint"),
         ),
-        workspaces=(
-            json.loads(Path(args.workspaces).read_text())
-            if args.workspaces
-            else known_workspaces(targets)
-        ),
+        workspaces=workspaces,
+        workspace_bindings=workspace_bindings,
         local_first=bool(args.pipeline),
     )
     if args.pipeline and args.shadow:
@@ -5140,7 +5322,10 @@ def _main_admitted(args, p, assignment_rows, targets):
             keys = [
                 *closer_resources.default_resource_keys(target),
                 *_prepared_resource_keys(
-                    target, {"revision": observed.get("revision")}, observed, backend.workspaces
+                    target,
+                    {"revision": observed.get("revision")},
+                    observed,
+                    backend.workspaces,
                 ),
             ]
             with closer_resources.legacy_reserve(

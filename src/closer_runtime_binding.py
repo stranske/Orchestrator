@@ -10,6 +10,7 @@ from __future__ import annotations
 import builtins
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -650,7 +651,8 @@ class PinnedNativeHooks:
 
     Both helper artifacts must implement HANDOFF_EXACT_TOKEN_V1: prerun refuses
     any existing lane (no age-based reaping), and postrun compares the complete
-    expected meta token inside cleanup. Current installed helpers lack it.
+    expected meta token inside cleanup. Structured cleanup additionally requires
+    the pinned renderer protocol and this invocation's nonce and credential.
     Paths, hashes and actor identity are private, independently provisioned config.
     """
 
@@ -1046,7 +1048,61 @@ class PinnedNativeHooks:
             "stderr": getattr(result, "stderr", ""),
             "dependencies_valid": self._dependencies_match(),
         }
+        self.postrun_result["cleanup"] = (
+            self.cleanup_receipt(token, result) if self._pins_match() else None
+        )
+        self.postrun_result["refusal"] = self.postrun_refusal(result)
         return result.returncode
+
+    def postrun_refusal(self, result):
+        output = getattr(result, "stdout", "")
+        if isinstance(output, bytes):
+            output = output.decode("utf-8", errors="replace")
+        nonce = self.env.get("CLOSER_ADMISSION_NONCE", "")
+        if not re.fullmatch(r"[0-9a-f]{48}", nonce) or not isinstance(output, str):
+            return None
+        prefix = "CLOSER_NATIVE_POSTRUN_REFUSAL_V1 "
+        markers = [line for line in output.splitlines() if line.startswith(prefix)]
+        expected = prefix + nonce + " terminal_named_receipt_unavailable"
+        return "terminal_named_receipt_unavailable" if markers == [expected] else None
+
+    def cleanup_receipt(self, token, result):
+        """Accept only one nonce-bound exact-credential removal from pinned C."""
+        output = getattr(result, "stdout", "")
+        if isinstance(output, bytes):
+            output = output.decode("utf-8", errors="replace")
+        nonce = self.env.get("CLOSER_ADMISSION_NONCE", "")
+        if not re.fullmatch(r"[0-9a-f]{48}", nonce) or not isinstance(output, str):
+            return None
+        prefix = "CLOSER_NATIVE_CLEANUP_V1 " + nonce + " "
+        markers = [
+            line for line in output.splitlines() if line.startswith("CLOSER_NATIVE_CLEANUP_V1 ")
+        ]
+        if len(markers) != 1 or not markers[0].startswith(prefix):
+            return None
+        try:
+            receipt = json.loads(markers[0][len(prefix) :])
+            digest = hashlib.sha256(token.encode()).hexdigest()
+            inode = int(token.split()[-1].rsplit(":", 1)[1])
+            if (
+                receipt.get("schema") != "closer-native-lease-cleanup/v1"
+                or receipt.get("lane") != "closer"
+                or receipt.get("lane_dir") != str(self.lane)
+                or receipt.get("expected_token_sha256") != digest
+                or receipt.get("meta_sha256") != digest
+                or receipt.get("released") is not True
+                or receipt.get("exact_token_matched") is not True
+                or type(receipt.get("released_lease_inode")) is not int
+                or receipt["released_lease_inode"] != inode
+                or inode <= 0
+                or isinstance(receipt.get("released_at"), bool)
+                or not isinstance(receipt.get("released_at"), (int, float))
+                or not math.isfinite(receipt["released_at"])
+            ):
+                return None
+            return receipt
+        except (ValueError, TypeError, AttributeError, IndexError):
+            return None
 
 
 def scoped_continuation_proof(cfg, candidate):
@@ -1138,12 +1194,13 @@ def run_native_round(
 ) -> tuple[str, str]:
     """One A/B/C with receipt reserve. No helper fallback and no lease reaping.
 
-    The installed native helpers currently lack token-safe cleanup. Until a
-    supported adapter is supplied by the owning native runtime, hold explicitly.
+    Only exact pinned native adapters may supply cleanup and no-start evidence.
+    Missing, stale, or unsupported proof stays unknown after possible effects.
     Test doubles exercise timeout/lease-loss behavior without a native run.
     """
     import subprocess
 
+    entered = now()
     if hooks is None:
         try:
             hooks = PinnedNativeHooks(cfg, runner=runner, now=now)
@@ -1173,9 +1230,49 @@ def run_native_round(
     token = None
     terminal_b = None
     receipt_bound = False
+    dispatcher_started = False
+    pre_dispatch_refusal = False
+    postrun_completed = False
+    phases: dict[str, dict[str, Any]] = {
+        "A": {"attempted": True, "started_at": None, "finished_at": None},
+        "B": {"started": False, "started_at": None, "finished_at": None},
+        "C": {"attempted": False, "started_at": None, "finished_at": None},
+    }
+
+    def execution_report():
+        return {
+            "schema": "native-round-execution/v1",
+            "admission_nonce": cfg["native_admission"]["nonce"],
+            "worker": cfg.get("native_worker"),
+            "admission_started_at": cfg["native_admission"]["started_at"],
+            "runtime_binding_entered_at": entered,
+            "runtime_binding_ready_at": started,
+            "phases": phases,
+        }
+
+    def reported(text):
+        if cfg.get("native_admission") is None:
+            return text
+        try:
+            value = json.loads(text)
+            if not isinstance(value, dict):
+                raise ValueError
+        except (ValueError, TypeError):
+            value = {"actual_detail": text}
+        value["native_execution"] = execution_report()
+        return json.dumps(value, sort_keys=True)
+
     outcome, detail = "unknown", "native prerun outcome unknown"
     try:
+        phases["A"]["started_at"] = now()
         code, token = hooks.prerun(deadline - reserve)
+        phases["A"].update(exit_code=code, admitted=code == 0 and bool(token), finished_at=now())
+        if token:
+            phases["A"]["token_sha256"] = hashlib.sha256(token.encode()).hexdigest()
+            try:
+                phases["A"]["lease_inode"] = int(token.split()[-1].rsplit(":", 1)[1])
+            except (ValueError, IndexError):
+                phases["A"]["lease_inode"] = None
         if code != 0 or not token:
             outcome = "unknown" if token else "unavailable"
             detail = f"ACTION A refused ({code}); no dispatcher started"
@@ -1220,6 +1317,8 @@ def run_native_round(
                     if not isinstance(hooks, PinnedNativeHooks):
                         raise BindingError("native B receipt watermark requires pinned hooks")
                     hooks.begin_terminal_receipt(cfg)
+                dispatcher_started = True
+                phases["B"].update(started=True, started_at=now())
                 done = runner(
                     command,
                     capture_output=True,
@@ -1237,6 +1336,7 @@ def run_native_round(
                     ),
                 )
                 terminal_b = done
+                phases["B"].update(exit_code=done.returncode, finished_at=now())
                 outcome = "ok" if done.returncode == 0 else "unknown"
                 detail = f"dispatcher exit {done.returncode}"
                 if cfg.get("native_admission") is not None:
@@ -1249,27 +1349,95 @@ def run_native_round(
                             getattr(hooks, "terminal_receipt_problem", None), sort_keys=True
                         )
             except BindingError as exc:
-                outcome, detail = "unavailable", f"dispatcher not started: {exc}"
+                phases["B"]["checked_at"] = now()
+                pre_dispatch_refusal = not dispatcher_started
+                outcome, detail = (
+                    ("unavailable", f"dispatcher not started: {exc}")
+                    if pre_dispatch_refusal
+                    else (
+                        "unknown",
+                        "dispatcher binding failure after submission; effect outcome unknown",
+                    )
+                )
             except subprocess.TimeoutExpired:
                 outcome, detail = "unknown", "dispatcher timeout; effect outcome unknown"
             except PermissionError as exc:
                 outcome, detail = "denied", str(exc)
             except Exception as exc:
                 outcome, detail = "unknown", f"dispatcher outcome unknown: {type(exc).__name__}"
+            finally:
+                if dispatcher_started and phases["B"]["finished_at"] is None:
+                    phases["B"]["finished_at"] = now()
+    except PermissionError as exc:
+        outcome, detail = "denied", str(exc)
+        phases["A" if "exit_code" not in phases["A"] else "B"]["denial"] = str(exc)
+    except Exception as exc:
+        outcome, detail = "unknown", f"native phase outcome unknown: {type(exc).__name__}"
+        phases["A" if "exit_code" not in phases["A"] else "B"]["error"] = type(exc).__name__
     finally:
+        if phases["A"]["finished_at"] is None:
+            phases["A"]["finished_at"] = now()
         if token:
             # C gets one attempt, even after B timeout. The hook itself must check
             # exact token at cleanup; a caller-side check alone is insufficient.
             try:
+                phases["C"]["attempted"] = True
+                phases["C"]["started_at"] = now()
                 code = hooks.postrun(token, deadline)
+                postrun_completed = True
+            except PermissionError as exc:
+                code = 65
+                outcome = "denied"
+                phases["C"]["denial"] = str(exc)
+                detail += f"; ACTION C denied: {exc}"
             except Exception as exc:
                 code = 65
+                phases["C"]["error"] = type(exc).__name__
                 detail += f"; ACTION C unknown: {type(exc).__name__}"
             if getattr(hooks, "assignment_source_changed", False):
                 detail += "; controller assignment changed; validation bound to admitted snapshot"
             if code != 0:
-                outcome = "unknown"
+                if outcome != "denied":
+                    outcome = "unknown"
                 detail += f"; ACTION C{code}; preserve no_matching_pipeline_run and ledger"
+            postrun = getattr(hooks, "postrun_result", {})
+            phases["C"].update(
+                exit_code=code,
+                dependencies_valid=postrun.get("dependencies_valid") is True,
+                cleanup=postrun.get("cleanup"),
+                finished_at=now(),
+            )
+            if postrun.get("refusal") == "terminal_named_receipt_unavailable":
+                phases["C"]["refusal"] = postrun["refusal"]
+    if (
+        cfg.get("native_admission") is not None
+        and isinstance(hooks, PinnedNativeHooks)
+        and hooks.bounded
+        and pre_dispatch_refusal
+        and not dispatcher_started
+        and terminal_b is None
+        and postrun_completed
+        and outcome != "denied"
+    ):
+        from closer_campaign import load_manifest
+        from closer_native_observer import pre_dispatch_no_start_proof
+
+        phases["B"].update(reason="pre_dispatch_binding_refusal")
+        try:
+            proof = pre_dispatch_no_start_proof(
+                load_manifest(cfg["runtime_manifest"]),
+                cfg,
+                {"phases": phases, "execution": execution_report()},
+                record_boundary=True,
+            )
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+            proof = None
+        if proof:
+            return "unavailable", reported(
+                json.dumps({"native_no_start": proof, "actual_detail": detail})
+            )
+        if outcome != "denied":
+            outcome = "unknown"
     if (
         cfg.get("mechanism") == "native-handoff/v1"
         and isinstance(hooks, PinnedNativeHooks)
@@ -1303,14 +1471,16 @@ def run_native_round(
                     "unavailable"
                     if proof["domain_outcome"] == "not_started"
                     else "scoped_continuation"
-                ), json.dumps(
-                    {
-                        "proof": proof,
-                        "actual_detail": detail,
-                        "action_b_exit": terminal_b.returncode,
-                        "action_c_exit": 65,
-                    },
-                    sort_keys=True,
+                ), reported(
+                    json.dumps(
+                        {
+                            "proof": proof,
+                            "actual_detail": detail,
+                            "action_b_exit": terminal_b.returncode,
+                            "action_c_exit": 65,
+                        },
+                        sort_keys=True,
+                    )
                 )
     if cfg.get("native_admission") is not None and outcome == "ok":
         from closer_campaign import load_manifest
@@ -1335,17 +1505,27 @@ def run_native_round(
         except (OSError, ValueError, RuntimeError, KeyError, TypeError):
             proof = None
         if proof is None:
-            return "unknown", detail + "; native exact successful-round proof unavailable"
-        return "ok", json.dumps(
-            {
-                "completed_round": proof,
-                "actual_detail": detail,
-                "action_b_exit": 0,
-                "action_c_exit": 0,
-            },
-            sort_keys=True,
+            return "unknown", reported(detail + "; native exact successful-round proof unavailable")
+        return "ok", reported(
+            json.dumps(
+                {
+                    "completed_round": proof,
+                    "actual_detail": detail,
+                    "action_b_exit": 0,
+                    "action_c_exit": 0,
+                },
+                sort_keys=True,
+            )
         )
-    return outcome, detail
+    if (
+        cfg.get("native_admission") is not None
+        and phases["A"].get("admitted") is True
+        and phases["B"].get("started") is False
+        and phases["C"].get("attempted") is True
+        and outcome == "unavailable"
+    ):
+        outcome = "unknown"  # No submitted B does not itself prove native cleanup.
+    return outcome, reported(detail)
 
 
 def selftest() -> None:

@@ -196,7 +196,10 @@ def test_round_worker_runs_the_whole_assignment_once_and_refuses_a_target(tmp_pa
         return subprocess.CompletedProcess(command, 0, b"", b"")
 
     out_path = str(cc.result_path(c.path, wid))
-    refused = cc.run_worker(str(c.path), out_path, "o/r#1", "o", 1, runner=runner)
+    # A refused invocation has its own durable result; the real worker must never
+    # overwrite an earlier receipt (including one bound to a different target).
+    refused_path = str(tmp_path / "invalid-invocation" / f"{wid}.json")
+    refused = cc.run_worker(str(c.path), refused_path, "o/r#1", "o", 1, runner=runner)
     assert refused in {"denied", "unavailable"}
     assert run == []  # a per-target worker on a round campaign is refused
     assert cc.run_worker(str(c.path), out_path, cc.ROUND_UNIT, "o", 1, runner=runner) == "ok"

@@ -32,13 +32,14 @@ import fcntl
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Protocol, cast
 
 # Published packages remain immutable, including their Python import artifacts.
 if (Path(__file__).resolve().parent / "closer-runtime-package.json").is_file():
@@ -280,6 +281,7 @@ def reconcile(
         for worker in doc["workers"]:
             kind = classify_worker(worker, state_path, pid_alive=pid_alive)
             if kind == "terminal" and worker["state"] != "terminal":
+                native_detail = None
                 try:
                     result = json.loads(result_path(state_path, worker["worker_id"]).read_text())
                 except ValueError:
@@ -289,6 +291,71 @@ def reconcile(
                 outcome = result.get("outcome")
                 if outcome not in WORKER_OUTCOMES:
                     outcome = "unknown"
+                # Only newly produced signed no-start evidence can settle this
+                # native C65 case. Older UNKNOWN/plaintext records remain held.
+                try:
+                    native_detail = json.loads(result.get("detail", ""))
+                    no_start = native_detail.get("native_no_start")
+                    execution = native_detail.get("native_execution") or {}
+                    phases = execution.get("phases") or {}
+                    requires_no_start = execution.get("schema") == "native-round-execution/v1" and (
+                        phases.get("C", {}).get("exit_code") == 65
+                        or (
+                            phases.get("A", {}).get("admitted") is True
+                            and phases.get("B", {}).get("started") is False
+                            and phases.get("C", {}).get("attempted") is True
+                        )
+                    )
+                except (ValueError, TypeError, AttributeError):
+                    no_start = None
+                    requires_no_start = (
+                        isinstance(native_detail, dict) and "native_execution" in native_detail
+                    )
+                if no_start is not None or (outcome == "unavailable" and requires_no_start):
+                    from closer_native_observer import (
+                        pre_dispatch_no_start_proof,
+                        result_admission_config,
+                    )
+
+                    try:
+                        cfg = result_admission_config(
+                            doc.get("worker_config") or {},
+                            result["native_admission"],
+                            state_path,
+                            doc,
+                            worker,
+                        )
+                        if no_start is not None:
+                            valid = pre_dispatch_no_start_proof(
+                                load_manifest(cfg["runtime_manifest"]), cfg, no_start
+                            )
+                            if (
+                                valid is not None
+                                and native_detail.get("native_execution") != valid["execution"]
+                            ):
+                                valid = None
+                        else:
+                            # A terminal B can separately prove a no-start scoped
+                            # domain. Keep that existing proof path intact.
+                            from closer_runtime_binding import scoped_continuation_proof
+
+                            candidate = native_detail.get("proof")
+                            valid = scoped_continuation_proof(cfg, candidate)
+                            if (
+                                not isinstance(valid, dict)
+                                or valid.get("domain_outcome") != "not_started"
+                            ):
+                                valid = None
+                    except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+                        valid = None
+                    if (
+                        outcome != "unavailable"
+                        or result.get("mechanism") != "native-handoff/v1"
+                        or valid is None
+                        or valid
+                        != (no_start if no_start is not None else native_detail.get("proof"))
+                    ):
+                        outcome = "unknown"
                 if outcome == "scoped_continuation":
                     from closer_runtime_binding import scoped_continuation_proof
 
@@ -893,7 +960,7 @@ def submit_effect(
     return outcome
 
 
-def _atomic_write(path: Path, doc: dict[str, Any]) -> None:
+def _atomic_write(path: Path, doc: dict[str, Any], *, create_only: bool = False) -> None:
     payload = (json.dumps(doc, sort_keys=True, separators=(",", ":")) + "\n").encode()
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -902,7 +969,16 @@ def _atomic_write(path: Path, doc: dict[str, Any]) -> None:
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(name, path)
+        if create_only:
+            # Link only a complete, fsynced file; an existing result is never replaced.
+            os.link(name, path)
+            parent_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(parent_fd)
+            finally:
+                os.close(parent_fd)
+        else:
+            os.replace(name, path)
     finally:
         Path(name).unlink(missing_ok=True)
 
@@ -1127,6 +1203,25 @@ def dispatch_command(cfg: dict[str, Any], python: str, module_dir: Path) -> list
         "--max-workers",
         str(min(MAX_WORKERS_CAP, max(1, int(cfg.get("dispatch_workers", 1))))),
     ]
+    workspace_pin = cfg.get("workspaces")
+    if workspace_pin is not None:
+        if not isinstance(workspace_pin, dict) or set(workspace_pin) != {"path", "sha256"}:
+            raise ValueError("workspace config requires an exact path/SHA256 pin")
+        import hashlib
+
+        from closer_native_observer import _bounded_bytes
+
+        path = Path(workspace_pin["path"]).expanduser().absolute()
+        if (
+            path.is_symlink()
+            or path.resolve() != path
+            or not path.is_file()
+            or not _DIGEST.fullmatch(str(workspace_pin["sha256"]))
+            or hashlib.sha256(_bounded_bytes(path, 1024 * 1024)).hexdigest()
+            != workspace_pin["sha256"]
+        ):
+            raise ValueError("workspace config differs from admitted path/SHA256 pin")
+        command.extend(["--workspaces", str(path), "--workspaces-sha256", workspace_pin["sha256"]])
     mode = cfg.get("coordinator_mode", "legacy")
     if mode not in {"legacy", "resource_scoped"}:
         raise ValueError("unsupported pinned coordinator mode")
@@ -1134,7 +1229,9 @@ def dispatch_command(cfg: dict[str, Any], python: str, module_dir: Path) -> list
         import closer_pipeline
 
         pin = cfg.get("coordinator_contract_pin")
-        if pin != closer_pipeline.scoped_capability():
+        if json.dumps(pin, sort_keys=True, allow_nan=False) != json.dumps(
+            closer_pipeline.scoped_capability(), sort_keys=True, allow_nan=False
+        ):
             raise ValueError("scoped native dispatch requires the exact current coordinator pin")
         command.extend(
             [
@@ -1183,6 +1280,7 @@ def write_result(
     *,
     mechanism: str | None = None,
     native_admission: dict[str, Any] | None = None,
+    create_only: bool = False,
 ) -> None:
     record = {
         "worker_id": worker_id,
@@ -1195,7 +1293,58 @@ def write_result(
         record["mechanism"] = mechanism
     if native_admission is not None:
         record["native_admission"] = native_admission
-    _atomic_write(Path(path), record)
+    _atomic_write(Path(path), record, create_only=create_only)
+
+
+def _existing_worker_result(path: Path, worker_id: str, target: str) -> str | None:
+    """Return an existing result without following links or trusting unstable bytes.
+
+    None means absent. Every unsafe or contradictory existing result is an UNKNOWN
+    barrier, including a dangling symlink; callers must never repair it in place.
+    """
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return "unknown" if path.is_symlink() else None
+    except OSError:
+        return "unknown"
+    try:
+        with os.fdopen(descriptor, "rb") as stream:
+            before = os.fstat(stream.fileno())
+            if not stat.S_ISREG(before.st_mode) or before.st_size > 1024 * 1024:
+                return "unknown"
+            raw = stream.read(1024 * 1024 + 1)
+            after = os.fstat(stream.fileno())
+            current = path.stat(follow_symlinks=False)
+        fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        if (
+            len(raw) != before.st_size
+            or len(raw) > 1024 * 1024
+            or not stat.S_ISREG(current.st_mode)
+            or any(getattr(before, k) != getattr(after, k) for k in fields)
+            or any(getattr(after, k) != getattr(current, k) for k in fields)
+        ):
+            return "unknown"
+
+        def unique_object(pairs):
+            record = {}
+            for key, value in pairs:
+                if key in record:
+                    raise ValueError("duplicate worker-result field")
+                record[key] = value
+            return record
+
+        record = json.loads(raw, object_pairs_hook=unique_object)
+        if (
+            not isinstance(record, dict)
+            or record.get("worker_id") != worker_id
+            or record.get("target") != target
+            or record.get("outcome") not in WORKER_OUTCOMES
+        ):
+            return "unknown"
+        return record["outcome"]
+    except (OSError, ValueError, TypeError, RecursionError):
+        return "unknown"
 
 
 def delegate_target(
@@ -1297,16 +1446,24 @@ def run_worker(
     module_dir = module_dir or Path(__file__).resolve().parent
 
     def finish(outcome, detail):
-        write_result(
-            result,
-            worker_id,
-            target,
-            outcome,
-            detail,
-            mechanism=result_mechanism,
-            native_admission=worker_admission,
-        )
+        try:
+            write_result(
+                result,
+                worker_id,
+                target,
+                outcome,
+                detail,
+                mechanism=result_mechanism,
+                native_admission=worker_admission,
+                create_only=True,
+            )
+        except FileExistsError:
+            return _existing_worker_result(Path(result), worker_id, target) or "unknown"
         return outcome
+
+    existing = _existing_worker_result(Path(result), worker_id, target)
+    if existing is not None:
+        return existing
 
     try:
         doc = Campaign(state).read()
@@ -1392,6 +1549,15 @@ def run_worker(
 
         try:
             cfg = admission_config(pinned_worker, cfg, worker_admission)
+            cfg["native_worker"] = {
+                "state": str(Path(state).resolve()),
+                "target": target,
+                "owner": owner,
+                "generation": str(generation),
+                "result": str(Path(result).resolve()),
+                "runtime-manifest": str(Path(cast(str, runtime_manifest)).resolve()),
+                "mechanism": actual_mechanism,
+            }
         except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
             return finish("unavailable", f"native original admission held: {exc}")
     if mode == "target-delegate":
