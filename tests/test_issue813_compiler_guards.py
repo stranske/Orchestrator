@@ -6,6 +6,7 @@ optional lets a minimal checkout verify the compiler's pure validation paths.
 
 from __future__ import annotations
 
+import copy
 import os
 import socket
 import subprocess
@@ -135,3 +136,112 @@ class TestWorkflowCompilerGuards(unittest.TestCase):
         record.assert_called_once_with(
             "capability:test", "producer_probe", passed=True, ref="result-1", path=ledger
         )
+
+    def test_successful_probe_with_same_reference_is_not_recorded_again(self):
+        ledger = self.root / "ledger.json"
+        existing = {
+            "capability:test": {
+                "activation_evidence": {"producer_probe": {"passed": True, "ref": "result-1"}}
+            }
+        }
+        with (
+            patch.object(compiler.capabilities, "load", return_value=existing) as load,
+            patch.object(compiler.capabilities, "record_probe") as record,
+        ):
+            compiler._probe_once("capability:test", "producer_probe", "result-1", ledger)
+        load.assert_called_once_with(ledger, create=False)
+        record.assert_not_called()
+
+    def test_successful_probe_for_an_old_reference_does_not_suppress_new_evidence(self):
+        ledger = self.root / "ledger.json"
+        existing = {
+            "capability:test": {
+                "activation_evidence": {"producer_probe": {"passed": True, "ref": "result-1"}}
+            }
+        }
+        with (
+            patch.object(compiler.capabilities, "load", return_value=existing) as load,
+            patch.object(compiler.capabilities, "record_probe") as record,
+        ):
+            compiler._probe_once("capability:test", "producer_probe", "result-2", ledger)
+        load.assert_called_once_with(ledger, create=False)
+        record.assert_called_once_with(
+            "capability:test", "producer_probe", passed=True, ref="result-2", path=ledger
+        )
+
+    def test_existing_active_capability_with_same_plan_is_not_modified(self):
+        ledger = self.root / "ledger.json"
+        plan = compiler.compile_workflow_rail(self.source)
+        existing = {
+            plan["capability_id"]: {
+                "status": "active",
+                "activation_evidence": {"workflow_plan_id": plan["plan_id"]},
+            }
+        }
+        before = copy.deepcopy(existing)
+        with (
+            patch.object(compiler.capabilities, "load", return_value=existing) as load,
+            patch.object(compiler.capabilities, "save") as save,
+            patch.object(compiler.capabilities, "register") as register,
+            patch.object(compiler.capabilities, "validate_capability") as validate,
+        ):
+            compiler._register_shadow(plan, ledger)
+        load.assert_called_once_with(ledger, create=False)
+        save.assert_not_called()
+        register.assert_not_called()
+        validate.assert_not_called()
+        self.assertEqual(existing, before)
+
+    def test_shadow_plan_replacement_preserves_unique_history_and_updates_contract(self):
+        ledger = self.root / "ledger.json"
+        plan = compiler.compile_workflow_rail(self.source)
+        for prior_id, history, expected_history in (
+            ("previous-plan", ["older-plan"], ["older-plan", "previous-plan"]),
+            ("previous-plan", ["previous-plan"], ["previous-plan"]),
+            (None, ["older-plan"], ["older-plan"]),
+        ):
+            with self.subTest(prior_id=prior_id, history=history):
+                earlier_event = {"type": "registered", "timestamp": 10}
+                cap = {
+                    "status": "shadow",
+                    "activation_evidence": {
+                        "workflow_plan_id": prior_id,
+                        "workflow_plan_previous_ids": history,
+                    },
+                    "matcher": {"field": "repository", "operator": "equals", "value": "old/repo"},
+                    "rollback": {"steps": []},
+                    "event_history": [earlier_event],
+                }
+                existing = {plan["capability_id"]: cap}
+                with (
+                    patch.object(compiler.capabilities, "load", return_value=existing) as load,
+                    patch.object(compiler.capabilities, "save") as save,
+                    patch.object(compiler.capabilities, "register") as register,
+                    patch.object(compiler.capabilities, "validate_capability") as validate,
+                    patch.object(compiler.time, "time", return_value=1234),
+                ):
+                    compiler._register_shadow(plan, ledger)
+                load.assert_called_once_with(ledger, create=False)
+                validate.assert_called_once_with(cap)
+                save.assert_called_once_with(existing, ledger)
+                register.assert_not_called()
+                self.assertEqual(cap["status"], "shadow")
+                self.assertEqual(cap["activation_evidence"]["workflow_plan_id"], plan["plan_id"])
+                self.assertEqual(
+                    cap["activation_evidence"]["workflow_plan_previous_ids"], expected_history
+                )
+                self.assertEqual(cap["matcher"], plan["selector"])
+                self.assertEqual(cap["rollback"], {"steps": plan["rollback_order"]})
+                self.assertEqual(
+                    cap["event_history"],
+                    [
+                        earlier_event,
+                        {
+                            "timestamp": 1234,
+                            "type": "workflow_plan_extended",
+                            "from": prior_id,
+                            "to": plan["plan_id"],
+                            "reason": "typed consumer-sync shadow step added",
+                        },
+                    ],
+                )
