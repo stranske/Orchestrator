@@ -878,6 +878,7 @@ def _appended_note(prior: str | None, collected: int, passed: int, today: str) -
 # disagree about which number they mean.
 CEILINGS = (
     ("skipped_max", "skipped test(s)"),
+    ("core_sibling_skipped_max", "Closer Core sibling skipped test(s)"),
     ("selftest_skipped_max", "skipped selftest(s)"),
     ("gate_skipped_max", "skipped gate(s)"),
     # The mypy exempt list is bounded exactly like skipping, and for the same reason: a list of
@@ -1233,6 +1234,24 @@ def drainable_skips(
     }
 
 
+def core_sibling_skips(py: dict) -> int:
+    """Pytest skips that carry env_prereq.CORE_SIBLING_ABSENT_MARK (bounded separately)."""
+    try:
+        import env_prereq
+
+        mark = env_prereq.CORE_SIBLING_ABSENT_MARK
+    except Exception:  # noqa: BLE001
+        return 0
+    tests = [v for by_name in (py.get("verdicts") or {}).values() for v in by_name.values()]
+    if not tests and py.get("skipped"):
+        return 0
+    return sum(
+        1
+        for v in tests
+        if v.get("outcome") == "skipped" and mark in (v.get("message") or "")
+    )
+
+
 def _format_declared_line(rows: dict, drainable: dict[str, int | None]) -> str:
     """The `declared:` summary line, printed on every run. Pure."""
     if rows.get("state") == "unreadable":
@@ -1348,6 +1367,14 @@ def _ceiling_problems(
             )
             continue
         if observed > int(limit):
+            extra = ""
+            if drainable is not None and key in SKIP_CEILINGS:
+                extra = _drainable_clause(drainable.get(key), in_force)
+            elif key == "core_sibling_skipped_max":
+                extra = (
+                    " These skips clear when CLOSER_CORE_SOURCE points at a checkout with "
+                    "scripts/closer_runtime.py or Core is placed at the sibling portable path."
+                )
             problems.append(
                 # `CEILING`, not `SKIP CEILING`: the mypy exempt list is bounded by this same
                 # machinery and is not a skip, so the old wording sent a reader hunting for a skip
@@ -1355,11 +1382,7 @@ def _ceiling_problems(
                 f"CEILING exceeded{where}: {observed} {label} > agreed maximum {limit}. "
                 f"This is bounded on purpose — either the new one is wrong, or raise "
                 f"`{in_force}` in .verify-floor.json deliberately and say why."
-                + (
-                    _drainable_clause(drainable.get(key), in_force)
-                    if drainable is not None and key in SKIP_CEILINGS
-                    else ""
-                )
+                + extra
             )
     return problems
 
@@ -1416,8 +1439,10 @@ def verify(
     # value against the limit in the same breath, per the house rule that a gate must always say
     # both numbers — `24/24` alone reads as "fine", `24/24 (ceiling)` reads as "at the limit".
     exempt = mypy_exempt_modules()
+    core_skipped = core_sibling_skips(py)
     actual = {
-        "skipped_max": py["skipped"],
+        "skipped_max": py["skipped"] - core_skipped,
+        "core_sibling_skipped_max": core_skipped,
         "selftest_skipped_max": len(st["skipped"]),
         "gate_skipped_max": sum(1 for r in gates.values() if r["skipped"]),
         # None (uncountable) must not read as 0 — that would let the ceiling pass by being
@@ -1483,9 +1508,15 @@ def verify(
         f"  time:       pytest {_duration(took['pytest'])}, selftests "
         f"{_duration(took['selftests'])} ({jobs_said}), gates {_duration(took['gates'])}"
     )
+    skip_detail = _cap("skipped_max")
+    if core_skipped:
+        skip_detail = (
+            f"{py['skipped']} skipped total "
+            f"({_cap('core_sibling_skipped_max')} core-sibling; {skip_detail} other)"
+        )
     lines.append(
         f"  pytest:     {py['passed']} passed, {py['failed']} failed, "
-        f"{_cap('skipped_max')} skipped "
+        f"{skip_detail} "
         f"({py['collected']} collected; floor {floor_state})"
     )
     lines.append(
@@ -2291,6 +2322,28 @@ def _selftest() -> None:
     assert len(_over_d) == 1 and "22 skipped test(s) > agreed maximum 21" in _over_d[0], _over_d
     assert "1 of them skipped only for a row this tree declares" in _over_d[0], _over_d
     assert "never a reason to raise `mirror_skipped_max`" in _over_d[0], _over_d
+    _mark = "CLOSER CORE SIBLING ABSENT:"
+    _py_core = {
+        "skipped": 3,
+        "verdicts": {
+            "test_core": {
+                "t1": {"outcome": "skipped", "message": f"{_mark} no sibling"},
+                "t2": {"outcome": "skipped", "message": "git absent"},
+                "t3": {"outcome": "passed", "message": ""},
+            }
+        },
+    }
+    assert core_sibling_skips(_py_core) == 1
+    _floor_core = {"mirror_skipped_max": 21, "mirror_core_sibling_skipped_max": 1}
+    _actual_core = {**{k: 0 for k, _ in CEILINGS}, "skipped_max": 2, "core_sibling_skipped_max": 1}
+    assert _ceiling_problems(_floor_core, _actual_core, shape=EXEC_MIRROR) == []
+    _actual_core["skipped_max"] = 22
+    _over_git = _ceiling_problems(_floor_core, _actual_core, shape=EXEC_MIRROR)
+    assert len(_over_git) == 1 and "`mirror_skipped_max`" in _over_git[0], _over_git
+    _actual_core = {**{k: 0 for k, _ in CEILINGS}, "skipped_max": 1, "core_sibling_skipped_max": 2}
+    _over_core = _ceiling_problems(_floor_core, _actual_core, shape=EXEC_MIRROR)
+    assert len(_over_core) == 1 and "`mirror_core_sibling_skipped_max`" in _over_core[0], _over_core
+    assert "CLOSER_CORE_SOURCE" in _over_core[0]
     for _count, _says in ((0, "None of them skipped only"), (None, "NOT COUNTED")):
         _over_c = _ceiling_problems(
             {"skipped_max": 1}, {**_z_d, "skipped_max": 2}, drainable={"skipped_max": _count}
