@@ -1904,11 +1904,23 @@ def known_workspaces(targets):
 
 def _fresh_capacity_report():
     """Read the existing capacity snapshot; stale or partial reports mean no workers."""
+    explicit = os.environ.get("CLOSER_CAPACITY_REPORT")
     report_path = (
-        Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex/handoff")) / "capacity.json"
+        Path(explicit)
+        if explicit
+        else (Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex/handoff")) / "capacity.json")
     )
     try:
         report = json.loads(report_path.read_text())
+        if explicit:
+            from closer_operational_capacity import validate_report
+
+            if (
+                not report_path.is_absolute()
+                or report_path.is_symlink()
+                or not validate_report(report, now=time.time())
+            ):
+                return None
         age = time.time() - float(report["generated_at"])
         if age < -30 or age > 1800:
             return None

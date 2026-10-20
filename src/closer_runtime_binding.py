@@ -653,6 +653,40 @@ class PinnedNativeHooks:
     def __init__(self, cfg: dict[str, Any], *, runner, now=time.time):
         pin = cfg.get("native_hooks") or {}
         self.cfg, self.runner, self.now = cfg, runner, now
+        self.bounded = pin.get("bounded_no_new_relay") is True
+        self.dependencies = {}
+        self.assignment_source = (
+            Path.home()
+            / ".codex/automations/reviewed-repo-automation-controller/closer-assignment.json"
+        )
+        self.interpreter_anchor = Path(sys.executable)
+        self.dispatcher_anchor = Path.home() / ".codex/orchestrator-mirror/closer_dispatcher.py"
+        if self.bounded:
+            dependencies = pin.get("postrun_dependencies") or {}
+            canonical = {
+                "interpreter": self.interpreter_anchor.resolve(),
+                "dispatcher": self.dispatcher_anchor.resolve(),
+                "assignment": Path(cfg["dispatch_state"]).parent
+                / "native-assignment-snapshot.json",
+            }
+            for name, expected in canonical.items():
+                entry = dependencies.get(name) or {}
+                path = Path(entry.get("path", ""))
+                if (
+                    path != expected
+                    or path.resolve() != expected
+                    or path.is_symlink()
+                    or not path.is_file()
+                    or _hash(path) != entry.get("sha256")
+                ):
+                    raise BindingError("native postrun physical dependency pin mismatch: " + name)
+                self.dependencies[name] = (path, entry["sha256"])
+            if _hash(canonical["dispatcher"]) != _hash(
+                Path(__file__).with_name("closer_dispatcher.py")
+            ):
+                raise BindingError("native installed dispatcher differs from pinned Runtime")
+            if cfg.get("assignment") != str(canonical["assignment"]):
+                raise BindingError("native B/C must share immutable admitted assignment snapshot")
         self.scripts = {}
         module_pin = pin.get("lease_module") or {}
         self.lease_module = Path(module_pin.get("path", ""))
@@ -677,6 +711,13 @@ class PinnedNativeHooks:
             if (
                 hashlib.sha256(data).hexdigest() != entry.get("sha256")
                 or self.CAPABILITY.encode() not in data
+                or (
+                    self.bounded
+                    and (
+                        (phase == "postrun" and b"CLOSER_BOUNDED_NO_RELAY_V1" not in data)
+                        or (phase == "prerun" and b"CLOSER_NATIVE_ADMISSION_V1" not in data)
+                    )
+                )
             ):
                 raise BindingError(
                     "native ACTION A/C adapter unsupported: installed helpers are not pinned "
@@ -703,21 +744,67 @@ class PinnedNativeHooks:
         self.env["HANDOFF_LANE_MUTEX_DIR"] = str(self.lane)
         self.env["HANDOFF_HANDOFF_ROOT"] = str(handoff)
         self.env["CLOSER_NATIVE_LEASE_PY"] = str(self.lease_module)
-        self.env["CLOSER_NATIVE_LEASE_INTERPRETER"] = sys.executable
+        self.env["CLOSER_NATIVE_LEASE_INTERPRETER"] = (
+            str(self.dependencies["interpreter"][0]) if self.bounded else sys.executable
+        )
+        if cfg.get("capacity_report"):
+            self.env["CLOSER_CAPACITY_REPORT"] = str(cfg["capacity_report"])
+        if self.bounded:
+            self.env.update(
+                CLOSER_NO_NEW_RELAY="1",
+                CLOSER_POSTRUN_PYTHON=str(self.dependencies["interpreter"][0]),
+                CLOSER_POSTRUN_DISPATCHER=str(self.dependencies["dispatcher"][0]),
+                CLOSER_POSTRUN_ASSIGNMENT=str(self.dependencies["assignment"][0]),
+            )
 
     def _pins_match(self) -> bool:
         try:
+            if self.bounded:
+                path, digest = self.dependencies["interpreter"]
+                if (
+                    self.interpreter_anchor.resolve() != path
+                    or path.is_symlink()
+                    or _hash(path) != digest
+                ):
+                    return False
             return _hash(self.lease_module) == self.lease_digest and all(
                 _hash(path) == self.script_digests[phase] for phase, path in self.scripts.items()
             )
         except OSError:
             return False
 
+    def _dependencies_match(self, *, admission=False):
+        try:
+            valid = all(
+                not path.is_symlink() and path.resolve() == path and _hash(path) == digest
+                for path, digest in self.dependencies.values()
+            )
+            if self.bounded:
+                valid = (
+                    valid
+                    and self.dispatcher_anchor.resolve() == self.dependencies["dispatcher"][0]
+                    and self.interpreter_anchor.resolve() == self.dependencies["interpreter"][0]
+                )
+            if admission and self.bounded:
+                valid = (
+                    valid
+                    and not self.assignment_source.is_symlink()
+                    and self.assignment_source.resolve() == self.assignment_source
+                    and _hash(self.assignment_source) == self.dependencies["assignment"][1]
+                )
+            return valid
+        except OSError:
+            return False
+
     def prerun(self, deadline: float) -> tuple[int, str | None]:
-        if not self._pins_match():
+        if not self._pins_match() or not self._dependencies_match(admission=True):
             return 65, None
         if self.lane.exists():
             return 65, None  # unknown or expired owner is still an owner
+        if self.bounded:
+            import secrets
+
+            self.env["CLOSER_ADMISSION_NONCE"] = secrets.token_hex(24)
         result = self.runner(
             [str(self.scripts["prerun"]), "closer"],
             env=self.env,
@@ -731,6 +818,22 @@ class PinnedNativeHooks:
             token = (self.lane / "meta").read_text()
         except OSError:
             return 65, None
+
+        def decoded(value):
+            return (
+                value.decode("utf-8", errors="replace")
+                if isinstance(value, bytes)
+                else str(value or "")
+            )
+
+        output = decoded(getattr(result, "stdout", None)) + decoded(getattr(result, "stderr", None))
+        if self.bounded:
+            prefix = "CLOSER_NATIVE_ADMISSION_V1 " + self.env["CLOSER_ADMISSION_NONCE"] + " "
+            records = [line for line in output.splitlines() if line.startswith(prefix)]
+            if records != [prefix + "ordinary"]:
+                return 78, token
+        elif any(marker in output for marker in ("RELAY-REVIEW:", "RELAY-HALTED:")):
+            return 78, token  # still owned: run_native_round must attempt C exactly once
         return (0, token) if token else (65, None)
 
     def owns(self, token: str) -> bool:
@@ -744,9 +847,24 @@ class PinnedNativeHooks:
             return 65
         if not self.owns(token):
             return 65  # C attempt refuses before launching cleanup against a successor
+        self.assignment_source_changed = False
+        if self.bounded:
+            try:
+                self.assignment_source_changed = (
+                    _hash(self.assignment_source) != self.dependencies["assignment"][1]
+                )
+            except OSError:
+                self.assignment_source_changed = True
         result = self.runner(
             [str(self.scripts["postrun"]), "closer", "no_op", "campaign_round"],
-            env={**self.env, "HANDOFF_EXPECTED_LANE_TOKEN": token},
+            env={
+                **self.env,
+                "HANDOFF_EXPECTED_LANE_TOKEN": token,
+                "CLOSER_POSTRUN_DEPENDENCIES_VALID": "1" if self._dependencies_match() else "0",
+                "CLOSER_POSTRUN_ASSIGNMENT_SOURCE_CHANGED": (
+                    "1" if self.assignment_source_changed else "0"
+                ),
+            },
             capture_output=True,
             check=False,
             timeout=max(0.001, deadline - self.now()),
@@ -780,9 +898,16 @@ def run_native_round(
         started + float(cfg.get("budget_seconds", 600)),
         float(cfg.get("original_deadline", started + 600)),
     )
+    if isinstance(hooks, PinnedNativeHooks) and hooks.bounded and deadline - started > 900:
+        return "unavailable", "bounded native hook policy exceeds original 900-second limit"
     reserve = max(15.0, float(cfg.get("receipt_reserve_seconds", 300)))
     if deadline - started <= reserve:
         return "unavailable", "native round has no action budget after receipt reserve"
+    if isinstance(hooks, PinnedNativeHooks) and hooks.bounded:
+        interpreter = hooks.dependencies["interpreter"][0]
+        if not command or Path(command[0]) not in {hooks.interpreter_anchor, interpreter}:
+            return "unavailable", "native B requires pinned Runtime Python interpreter"
+        command = [str(interpreter), *command[1:]]
     token = None
     outcome, detail = "unknown", "native prerun outcome unknown"
     try:
@@ -790,6 +915,27 @@ def run_native_round(
         if code != 0 or not token:
             outcome = "unknown" if token else "unavailable"
             detail = f"ACTION A refused ({code}); no dispatcher started"
+        elif (
+            isinstance(hooks, PinnedNativeHooks)
+            and hooks.bounded
+            and (
+                command.count("--assignment") != 1
+                or any(
+                    arg != "--assignment"
+                    and arg.startswith("--")
+                    and "--assignment".startswith(arg.partition("=")[0])
+                    for arg in command
+                )
+                or command[command.index("--assignment") + 1 : command.index("--assignment") + 2]
+                != [cfg["assignment"]]
+            )
+        ):
+            outcome, detail = "unavailable", "ACTION B assignment differs from admitted snapshot"
+        elif isinstance(hooks, PinnedNativeHooks) and not hooks._dependencies_match():
+            outcome, detail = (
+                "unknown",
+                "native dependency pins changed after ACTION A; cleanup only",
+            )
         elif not hooks.owns(token):
             outcome, detail = "unknown", "native lease lost before dispatcher"
         else:
@@ -800,6 +946,16 @@ def run_native_round(
                     capture_output=True,
                     check=False,
                     timeout=max(0.001, deadline - reserve - now()),
+                    **(
+                        {
+                            "env": {
+                                **os.environ,
+                                "CLOSER_CAPACITY_REPORT": str(cfg["capacity_report"]),
+                            }
+                        }
+                        if cfg.get("capacity_report")
+                        else {}
+                    ),
                 )
                 outcome = "ok" if done.returncode == 0 else "unknown"
                 detail = f"dispatcher exit {done.returncode}"
@@ -818,6 +974,8 @@ def run_native_round(
             except Exception as exc:
                 code = 65
                 detail += f"; ACTION C unknown: {type(exc).__name__}"
+            if getattr(hooks, "assignment_source_changed", False):
+                detail += "; controller assignment changed; validation bound to admitted snapshot"
             if code != 0:
                 outcome = "unknown"
                 detail += f"; ACTION C{code}; preserve no_matching_pipeline_run and ledger"
