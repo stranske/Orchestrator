@@ -34,8 +34,8 @@ POLICY = "cli-configured-policy/v1"
 OBSERVATION = "cli-supervised-lifecycle/v1"
 MECHANISMS = (DESKTOP, NATIVE, CLI)
 AUTOMATIONS = Path.home() / ".codex" / "automations"
-# Initial supported lane: the existing Codex closer. Other actors require their
-# own independently reviewed canonical mapping, never a caller-chosen TOML.
+# Canonical supervising lane ownership is separate from the offload provider.
+# Only this reviewed owner mapping can select policy TOMLs; no provider inference.
 WORKERS = {("closer", "codex"): "imi-merge-verify-closer"}
 CONTROLLER = "reviewed-repo-automation-controller"
 PHASES = ("startup", "handoff", "crash_restart", "result_recording")
@@ -110,6 +110,11 @@ def mechanism(manifest: dict, requested: str | None = None) -> str:
             raise MechanismError("CLI qualification must pin exactly one agent/profile")
         if policy.get("schema") != POLICY or policy.get("mechanism") != CLI:
             raise MechanismError("CLI mechanism lacks its explicit configured policy")
+        _policy_worker(policy)
+        from closer_agent_launchers import validate_profile
+
+        if validate_profile(contract["agent"], contract["profile_id"]):
+            raise MechanismError("CLI qualification profile differs from approved provider")
         if "closer_mechanisms.py" not in (manifest.get("modules") or {}):
             raise MechanismError("mechanism reader is outside pinned package closure")
     elif policy.get("schema") == POLICY:
@@ -117,17 +122,26 @@ def mechanism(manifest: dict, requested: str | None = None) -> str:
     return selected
 
 
+def _policy_worker(policy: dict) -> str:
+    from closer_agent_launchers import APPROVED_AGENTS
+
+    lane, owner, agent = policy.get("lane"), policy.get("worker_owner"), policy.get("agent")
+    if not isinstance(lane, str) or not isinstance(owner, str):
+        raise MechanismError("configured supervising lane and worker_owner missing")
+    if not isinstance(agent, str) or agent not in APPROVED_AGENTS:
+        raise MechanismError("configured offload provider is outside approved pool")
+    worker = WORKERS.get((lane, owner))
+    if worker is None:
+        raise MechanismError("configured supervising lane/owner has no canonical reader")
+    return worker
+
+
 def configured_policy_problem(policy: dict) -> str | None:
     """Read only the reviewed lane/controller TOMLs, now; never app readback."""
     try:
         if policy.get("schema") != POLICY or policy.get("mechanism") != CLI:
             raise MechanismError("wrong policy mechanism")
-        lane, agent = policy.get("lane"), policy.get("agent")
-        if not isinstance(lane, str) or not isinstance(agent, str):
-            raise MechanismError("configured lane and agent missing")
-        worker = WORKERS.get((lane, agent))
-        if worker is None:
-            raise MechanismError("configured CLI lane/agent has no canonical reader")
+        worker = _policy_worker(policy)
         expected = [AUTOMATIONS / name / "automation.toml" for name in (CONTROLLER, worker)]
         pins = policy.get("toml_sha256")
         if not isinstance(pins, dict) or set(pins) != {str(p) for p in expected}:

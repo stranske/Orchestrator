@@ -37,6 +37,7 @@ def configured(tmp_path, monkeypatch):
         "schema": mechanisms.POLICY,
         "mechanism": mechanisms.CLI,
         "lane": "closer",
+        "worker_owner": "codex",
         "agent": "codex",
         "toml_sha256": {},
     }
@@ -602,3 +603,91 @@ def test_slow_ancestry_probe_cannot_renew_original_budget(monkeypatch):
         mechanisms._lineage(10, deadline=10.5)
     assert len(calls) == 1
     assert calls[0]["timeout"] == 0.5
+
+
+def test_claude_offload_uses_codex_supervising_policy_with_own_receipt(configured):
+    manifest, path, _root, _installed, codex_profile = configured
+    pins = dict(manifest["policy"]["toml_sha256"])
+    claude_profile = agents.offload_profiles("claude")[0]["profile_id"]
+    manifest["policy"]["agent"] = "claude"
+    manifest["mechanism_contract"].update(agent="claude", profile_id=claude_profile)
+    path.write_text(json.dumps(manifest))
+    assert manifest["policy"]["worker_owner"] == "codex"
+    assert mechanisms.configured_policy_problem(manifest["policy"]) is None
+    assert manifest["policy"]["toml_sha256"] == pins
+    # Admission of the configured policy is not qualification of its provider.
+    assert mechanisms.qualification_problems(manifest)
+    calls = []
+    result = mechanisms.supervise_cli(
+        str(path),
+        "claude",
+        claude_profile,
+        timeout=8,
+        budget_seconds=21,
+        offload=transport_boundary(calls),
+    )
+    assert result["passed"], result
+    assert result["agent"] == "claude" and result["profile_id"] == claude_profile
+    assert len(calls) == 2
+    assert mechanisms.qualification_problems(manifest) == []
+    assert not result["desktop_qualified"] and not result["queue_action_accepted"]
+    other = json.loads(json.dumps(manifest))
+    other["policy"]["agent"] = "codex"
+    other["mechanism_contract"].update(agent="codex", profile_id=codex_profile)
+    assert mechanisms.configured_policy_problem(other["policy"]) is None
+    assert mechanisms.qualification_problems(other)
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missing_owner",
+        "null_owner",
+        "unknown_owner",
+        "provider_as_owner",
+        "missing_provider",
+        "excluded_provider",
+        "unknown_provider",
+        "contract_provider_mismatch",
+        "profile_provider_mismatch",
+    ],
+)
+def test_supervising_owner_provider_roles_fail_closed_before_submission(configured, fault):
+    manifest, path, _root, _installed, profile = configured
+    policy = manifest["policy"]
+    if fault == "missing_owner":
+        policy.pop("worker_owner")
+    elif fault == "null_owner":
+        policy["worker_owner"] = None
+    elif fault == "unknown_owner":
+        policy["worker_owner"] = "unknown"
+    elif fault == "provider_as_owner":
+        policy["worker_owner"] = "claude"
+        policy["agent"] = "claude"
+    elif fault == "missing_provider":
+        policy.pop("agent")
+    elif fault == "excluded_provider":
+        policy["agent"] = "aider"
+        manifest["mechanism_contract"]["agent"] = "aider"
+    elif fault == "unknown_provider":
+        policy["agent"] = "unknown"
+        manifest["mechanism_contract"]["agent"] = "unknown"
+    elif fault == "contract_provider_mismatch":
+        policy["agent"] = "claude"
+    else:
+        policy["agent"] = "claude"
+        manifest["mechanism_contract"]["agent"] = "claude"
+        # Original Codex profile must not follow a different provider.
+        assert manifest["mechanism_contract"]["profile_id"] == profile
+    path.write_text(json.dumps(manifest))
+    calls = []
+    with pytest.raises((mechanisms.MechanismError, campaign.CampaignError)):
+        mechanisms.supervise_cli(
+            str(path),
+            policy.get("agent", "codex"),
+            profile,
+            timeout=2,
+            budget_seconds=9,
+            offload=transport_boundary(calls),
+        )
+    assert not calls

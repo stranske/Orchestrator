@@ -9,12 +9,20 @@ An explicit host-only `closer-mechanism/v1` binding can select `cli-offload/v1`.
 one agent/profile and a canonical private observation directory. The public package contains the
 reader/supervisor code and its hash closure, never machine paths or policy readbacks.
 
-`cli-configured-policy/v1` reads the canonical controller and selected worker TOMLs afresh. Its
-initial reviewed mapping is Codex's existing `imi-merge-verify-closer` lane plus
-`reviewed-repo-automation-controller`. Both must be ACTIVE and match the exact host-pinned bytes.
-Sync is excluded. This policy states configured CLI pause intent; it asserts no Desktop app state.
-Changing policy bytes requires a new host binding and qualification. Other agents remain held until
-an exact canonical mapping and actual agent/profile qualification exist.
+`cli-configured-policy/v1` reads the canonical supervising controller and worker TOMLs afresh.
+The required `worker_owner=codex` and `lane=closer` select the existing
+`imi-merge-verify-closer` lane plus `reviewed-repo-automation-controller`. Both must be ACTIVE and
+match the exact host-pinned bytes. Sync is excluded. The separate `agent` field names the actual
+offload provider from the approved Codex, Claude, Gemini, Muse, Cursor or Vibe pool; it must match
+the mechanism contract and its exact approved profile. Aider is excluded. The saved TOML model
+names the outer supervising seat, not the delegated provider. No provider-specific worker TOML
+or Desktop app state is inferred from this policy.
+
+This policy states configured CLI pause intent. Changing policy bytes, provider or profile requires
+a new host binding and that provider/profile's own actual supervised qualification receipt. A
+Codex receipt cannot qualify Claude or any other provider. Other supervising owners remain held
+until an exact canonical mapping is reviewed. Provider quota and capacity guards remain separate;
+this binding never grants a quota override or promotes an unqualified member of the approved pool.
 
 The pinned launcher's `qualify-cli` command starts two bounded submissions through the existing CLI
 offloader, with no provider retries. It first persists intent, exact command/profile/nonce and the
