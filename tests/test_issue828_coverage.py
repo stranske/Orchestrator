@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import socket
+import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -13,10 +16,24 @@ import rail_exercise
 
 
 @pytest.fixture(autouse=True)
-def isolated_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def isolated_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """New coverage tests must never reach the real runtime or launch a process."""
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path))
+    monkeypatch.setenv("ORCH_FEEDBACK_DB", str(tmp_path / "feedback.db"))
+    monkeypatch.setenv("ORCH_CAPABILITIES_PATH", str(tmp_path / "capabilities.json"))
+    attempted = []
+
+    def forbidden(*args, **kwargs):
+        attempted.append((args, kwargs))
+        raise AssertionError("coverage test attempted an external process or network call")
+
+    for name in ("run", "Popen", "call", "check_call", "check_output"):
+        monkeypatch.setattr(subprocess, name, forbidden)
+    for name in ("connect", "connect_ex", "sendto"):
+        monkeypatch.setattr(socket.socket, name, forbidden)
+    yield
+    assert attempted == []
 
 
 def test_arm_diff_uses_merge_base_and_refuses_missing_branch(tmp_path: Path, monkeypatch) -> None:
@@ -93,17 +110,20 @@ def test_recovery_plan_applies_limit_and_reports_subject_correlation(monkeypatch
         {"exp_id": "tick-2-owner-repo-1"},
     ]
     monkeypatch.setattr(experiment_recovery, "unevaluated_experiments", lambda _conn: rows)
-    monkeypatch.setattr(
-        experiment_recovery,
-        "restore_experiment",
-        lambda row, **_kwargs: {
+    restored = []
+
+    def fake_restore(row, **_kwargs):
+        restored.append(row["exp_id"])
+        return {
             "status": "recoverable",
             "subject": experiment_recovery.subject_of(row["exp_id"]),
             "arms_recovered": ["codex"],
             "arms_missing": [],
-        },
-    )
+        }
+
+    monkeypatch.setattr(experiment_recovery, "restore_experiment", fake_restore)
     report = experiment_recovery.plan(limit=1)
+    assert restored == ["tick-1-owner-repo-1"]
     assert report["experiments"] == report["distinct_subjects"] == 1
     assert report["counts"] == {"recoverable": 1}
     assert report["subject_histogram"] == [("owner-repo-1", 1)]
@@ -116,6 +136,10 @@ def test_rail_break_result_requires_a_failure_or_explicit_check() -> None:
         {"break_case": {"run": "false"}}, [{"rc": 0, "output": ""}], [{"rc": 0, "output": ""}]
     )
     assert (passed, reason) == (True, "break check rc=0")
+    passed, reason = rail_exercise._break_ok(
+        {"break_case": {"run": "false"}}, [{"rc": 0, "output": ""}], [{"rc": 1, "output": "failed"}]
+    )
+    assert (passed, reason) == (False, "break check rc=1")
 
 
 def test_recovery_does_not_launch_processes_when_all_dependencies_are_injected(
