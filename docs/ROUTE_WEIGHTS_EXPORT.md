@@ -34,9 +34,13 @@ consumer (`agent_delegation_policy.js`, which accepts only `orchestrator.route-w
 reading posteriors. The block has one entry per configured agent in `capacity.AGENTS`, with `state`
 copied verbatim from that tick's `capacity.build()` snapshot (`ok`, `warn`, `shed`, or `unknown`),
 the agent's configured `window`, and `observed_at` set to the capacity snapshot's `generated_at`
-(not the export's `generated_at`). Publish change detection compares `state` and `window` but
-ignores `observed_at` alone so an unchanged pool state does not republish. Token counts, costs, and
-account identifiers are intentionally omitted. v1 routing keys are byte-identical with or without
+(not the export's `generated_at`). Immediate capacity triggers are the damped `state`, a
+`period_end` movement greater than 3600 seconds against the published baseline, and `resets_available`. `window` is static
+configuration and is silent, as are `observed_at`, usage/weight/burn diagnostics, and
+comparative/lambda fields. These values ship with the next meaningful trigger or the 24 h
+refresh floor; a quiet artifact refreshes when its age exceeds 24 h (or is unmeasured).
+See [capacity pacing](capacity-pacing.md#capacity-publication-cadence) for the full trigger
+contract. Token counts, costs, and account identifiers are intentionally omitted. v1 routing keys are byte-identical with or without
 the capacity block; `exploration.policy_version` is likewise unchanged when only capacity is added.
 
 Only the latest `route_weights` version is read. The public `task_types` keys are the consumer
@@ -52,8 +56,8 @@ is not a zero score or an instruction to choose a fallback agent.
 Publishing is deliberately double-gated. `--publish` has no remote effect unless
 `ORCH_ROUTE_WEIGHTS_PUBLISH=1`; then the exporter uses `provision.ensure_canonical` for
 `stranske/Orchestrator`, commits only `config/route-weights.json` on `exports/route-weights`, and
-pushes that branch. It never modifies `main`. A semantic no-op prints `unchanged` and creates no
-commit. Disable its daily shadow cadence with `ORCH_DISABLE_STEPS=route-weights-export`.
+pushes that branch. It never modifies `main`. A semantic no-op before the 24 h refresh floor
+prints `unchanged` and creates no commit. Disable its hourly cadence with `ORCH_DISABLE_STEPS=route-weights-export`.
 
 The exporter uses `feedback.resolve_db_path()` and logs `db=<absolute path> source_version=<n>`
 before writing the shadow artifact. Selection precedence is `--feedback-db`, `ORCH_FEEDBACK_DB`,

@@ -23,10 +23,12 @@ import os
 import re
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +40,41 @@ import feedback
 import provision
 import repo_knowledge
 import worktree_git
+
+
+class _CompletionPersistencePending(RuntimeError):
+    """The provider finished, but its exact profile completion still needs accounting."""
+
+    def __init__(self, completion: dict):
+        super().__init__("completed offload profile accounting is pending")
+        self.completion = completion
+
+
+def _persist_profile_completion(write, run_id: str, **fields) -> None:
+    """Retry only one idempotent UPDATE, never a provider or completion ledger append."""
+    deadline = time.monotonic() + 2.0
+    for attempt in range(8):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            write(run_id, **fields, lock_timeout_s=min(0.2, remaining))
+            return
+        except sqlite3.OperationalError as exc:
+            code = getattr(exc, "sqlite_errorcode", None)
+            locked = (
+                isinstance(code, int)
+                and (code & 255) in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+            ) or str(exc).lower() in {"database is locked", "database table is locked"}
+            if not locked:
+                raise
+        remaining = deadline - time.monotonic()
+        if attempt < 7 and remaining > 0:
+            time.sleep(min(0.05, remaining))
+    raise _CompletionPersistencePending(
+        {"operation": write.__name__, "run_id": run_id, "fields": fields, "reason": "sqlite_busy"}
+    )
+
 
 ORCH_DIR = Path(__file__).resolve().parent
 REAL_HOME = Path.home()
@@ -51,6 +88,17 @@ OFFLOAD_DIR = Path(
     os.environ.get("ORCH_OFFLOAD_DIR", Path.home() / ".codex" / "orchestrator" / "offloads")
 )
 AGENT_RUNTIME_DIR = Path(os.environ.get("ORCH_AGENT_RUNTIME_DIR", LOCAL_RUNTIME / "agent-runtime"))
+# Infrastructure delegates must not consume the registry-prefix opener slots.
+INFRA_REPOS = {"stranske/Workflows", "stranske/Orchestrator"}
+
+
+def _dispatch_branch(target: str, lane: str, agent: str, prefix: str | None) -> str:
+    repo, num = provision.parse_target(target)
+    prefix = prefix if prefix is not None else ("orch" if repo in INFRA_REPOS else agent)
+    prefix = prefix.rstrip("/")
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_-]*(?:/[A-Za-z0-9_][A-Za-z0-9_-]*)*", prefix):
+        raise ValueError("branch prefix must contain nonempty alphanumeric, '_' or '-' segments")
+    return f"{prefix}/issue-{num}" if num is not None else f"{prefix}/{lane}"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -902,6 +950,8 @@ def _routing_metadata(assignment: dict) -> dict | None:
         "selected_profile_id",
         "profile_decision",
         "requested_profile_id",
+        "selected_capability_id",
+        "selected_capability_version_id",
     }
     if not any(key in assignment for key in keys):
         return None
@@ -932,6 +982,7 @@ def _routing_metadata(assignment: dict) -> dict | None:
         "capability_assignment_probability": assignment.get("capability_assignment_probability"),
         "capability_rng_seed": assignment.get("capability_rng_seed"),
         "capability_fallback": assignment.get("capability_fallback"),
+        "capability_dispatch_result": assignment.get("capability_dispatch_result"),
         "requested_profile_id": assignment.get("requested_profile_id"),
     }
     return {key: value for key, value in metadata.items() if value not in (None, "", [], {})}
@@ -948,6 +999,12 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
     agent, mode = assignment["agent"], assignment.get("mode")
     target, task_type = assignment["target"], assignment["task_type"]
     lane = assignment.get("lane") or "opener"
+    branch = None
+    if lane != "closer":
+        try:
+            branch = _dispatch_branch(target, lane, agent, assignment.get("branch_prefix"))
+        except ValueError as exc:
+            return {"error": str(exc), "target": target, "agent": agent}
     # An assessing orchestrator passes its OWN crafted prompt; fall back to the template only
     # when none is given (the deterministic/router path).
     if assignment.get("prompt"):
@@ -967,6 +1024,13 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
             "Independent exact-head review runs after your writer exits; ordinary CI and "
             "review gates still apply."
         )
+    if branch:
+        prompt += (
+            f"\n\nBRANCH POLICY: Use the provisioned branch (default `{branch}`) for this work "
+            "and its PR; retain this prefix "
+            "if adding a descriptive slug. This dispatch policy overrides branch naming in "
+            "the task brief. Do not switch to another agent prefix."
+        )
     profile_id = assignment.get("selected_profile_id")
     selected_profile = execution_profiles.get_profile(profile_id) if profile_id else None
     model = adapters.model_identity(agent, mode, selected_profile)
@@ -975,7 +1039,11 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
         worktree_missing = not (cwd / ".git").exists()
     else:
         try:
-            cwd = provision.provision(target, lane)
+            cwd = (
+                provision.provision(target, lane, branch)
+                if branch
+                else provision.provision(target, lane)
+            )
             worktree_missing = False
         except Exception as exc:  # clone/worktree/gh failure — skip this assignment
             return {"error": f"provision failed: {exc}", "target": target, "agent": agent}
@@ -1025,6 +1093,13 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
     # and must not be lost because the optional role layer raised. `assignment` may still be the
     # caller's dict here, so copy before mutating.
     assignment = dict(assignment)
+    if assignment.get("selected_capability_id"):
+        assignment["capability_fallback"] = "baseline"
+        assignment["capability_dispatch_result"] = {
+            "invoked": False,
+            "accepted": False,
+            "reason": "dry_run" if dry_run else "not_executed",
+        }
     assignment["capability_ids"] = list(
         dict.fromkeys(
             list(assignment.get("capability_ids") or [])
@@ -1082,6 +1157,7 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
         "mode": mode,
         "target": target,
         "lane": lane,
+        "branch": branch,
         "task_type": task_type,
         "model": model,
         "cwd": str(cwd),
@@ -1117,6 +1193,112 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
 # capability's own heartbeat fires on, so a tag means "this ran" for exactly the reason the ledger
 # already records. Without the tag the capability records that it RAN and never how the work turned
 # out, which is what put both of these in `invoked_without_outcomes` with zero edges. (2026-08-21)
+def _invoke_selected_compiled_capability(d: dict) -> dict | None:
+    """Invoke supported selections after recording the run; keep refusal metadata explicit."""
+    routing = dict(d.get("routing_metadata") or {})
+    cap_id = routing.get("selected_capability_id")
+    if not cap_id:
+        return None
+    version_id = routing.get("selected_capability_version_id")
+    # Older or external callers may still forward a selection as exercised.
+    # Remove it before invocation; only a successful receipt can add it back.
+    ids = list(d.get("capability_ids") or [])
+    versions = list(d.get("capability_version_ids") or [])
+    if cap_id in ids:
+        if versions and len(ids) != len(versions):
+            raise ValueError("capability identity/version lineage length mismatch")
+        d["capability_ids"] = [cid for cid in ids if cid != cap_id]
+        d["capability_version_ids"] = [
+            version for cid, version in zip(ids, versions) if cid != cap_id
+        ]
+
+    def fallback(reason: str, *, invoked: bool = False) -> dict:
+        result = {"invoked": invoked, "accepted": False, "reason": reason}
+        routing["capability_dispatch_result"] = result
+        routing["capability_fallback"] = "baseline"
+        d["routing_metadata"] = routing
+        return result
+
+    try:
+        import capabilities
+        import capability_lifecycle
+        import capability_targets
+
+        ledger = capabilities.load(capabilities.REG, create=False)
+        cap = ledger.get(cap_id)
+        if not cap:
+            return fallback("unknown_capability")
+        if not version_id or cap.get("capability_version_id") != version_id:
+            return fallback("selected_version_mismatch")
+        binding = capability_targets.get_binding(
+            version_id, registry_path=capability_lifecycle.DEFAULT_TARGET_REGISTRY
+        )
+        if not binding:
+            return fallback("target_binding_missing")
+        # Workflow rails have a bounded producer and typed output consumer. Other
+        # target kinds need their own dispatch inputs and consumption seams.
+        if binding.get("kind") != "workflow":
+            return fallback("unsupported_target_kind")
+    except Exception as exc:
+        return fallback(f"target_lookup_failed:{type(exc).__name__}")
+    target = str(d.get("target") or "")
+    # Fail before any producer runs or consumption edge is written: a missing
+    # infrastructure version must not leave an accepted compiled edge for a
+    # run that never starts (issue #639).
+    ids = list(d.get("capability_ids") or [])
+    versions = list(d.get("capability_version_ids") or [])
+    if not versions:
+        versions = [str((ledger.get(cid) or {}).get("capability_version_id") or "") for cid in ids]
+    if len(ids) != len(versions):
+        raise ValueError("capability identity/version lineage length mismatch")
+    missing_versions = [cid for cid, version in zip(ids, versions) if cid != cap_id and not version]
+    if missing_versions:
+        raise ValueError(f"missing capability versions for {missing_versions}")
+    trigger = {
+        "target": target,
+        "task_type": d.get("task_type"),
+        "repository": target.split("#")[0] if "#" in target else target,
+        "lane": d.get("lane") or "opener",
+    }
+    try:
+        result = capability_lifecycle.invoke_compiled_target(
+            str(cap_id),
+            trigger=trigger,
+            target_run_id=str(d["run_id"]),
+            ledger_path=capabilities.REG,
+            target_registry_path=capability_lifecycle.DEFAULT_TARGET_REGISTRY,
+            inputs={},
+            expected_version_id=str(version_id),
+        )
+    except Exception as exc:
+        return fallback(f"invoke_failed:{type(exc).__name__}")
+    if not result.get("invoked") or not result.get("accepted"):
+        return fallback(
+            str(result.get("reason") or "output_not_consumed"),
+            invoked=bool(result.get("invoked")),
+        )
+    edge = result.get("causal_edge") or {}
+    if not result.get("consumer_ref") or not edge.get("source_event_id"):
+        return fallback("consumption_receipt_missing", invoked=True)
+    # Append the compiled pair only after a successful receipt.
+    pairs = [(cid, version) for cid, version in zip(ids, versions) if cid != cap_id]
+    pairs.append((str(cap_id), str(version_id)))
+    d["capability_ids"] = [cid for cid, _ in pairs]
+    d["capability_version_ids"] = [version for _, version in pairs]
+    routing.pop("capability_fallback", None)
+    routing["capability_dispatch_result"] = {
+        "invoked": True,
+        "accepted": True,
+        "capability_id": cap_id,
+        "capability_version_id": version_id,
+        "invocation_id": result["invocation_id"],
+        "consumer_ref": result["consumer_ref"],
+        **edge,
+    }
+    d["routing_metadata"] = routing
+    return result
+
+
 def _exercised_capability_ids(assignment: dict, agent: str) -> list[str]:
     out: list[str] = []
     # adapters.build_command: "The agy seat's runtime isolation (--gemini_dir + absolute
@@ -1240,12 +1422,34 @@ def _spawn(d: dict) -> int:
         # or leave an orphan execution_attempt.
         try:
             feedback.record_run(*run_args, **run_kwargs)
+            _invoke_selected_compiled_capability(d)
+            if (d.get("routing_metadata") or {}).get("selected_capability_id"):
+                feedback.record_run(
+                    *run_args,
+                    **{
+                        **run_kwargs,
+                        "routing_metadata": d["routing_metadata"],
+                        "capability_ids": d.get("capability_ids"),
+                        "capability_version_ids": d.get("capability_version_ids"),
+                    },
+                )
         except Exception:
             claims.release(d["target"], d["agent"])
             raise
     else:
         try:
             feedback.record_run(*run_args, **run_kwargs)
+            _invoke_selected_compiled_capability(d)
+            if (d.get("routing_metadata") or {}).get("selected_capability_id"):
+                feedback.record_run(
+                    *run_args,
+                    **{
+                        **run_kwargs,
+                        "routing_metadata": d["routing_metadata"],
+                        "capability_ids": d.get("capability_ids"),
+                        "capability_version_ids": d.get("capability_version_ids"),
+                    },
+                )
         except Exception as exc:
             adapters.record_ledger(
                 d["agent"],
@@ -1500,6 +1704,132 @@ def run(decision: dict, *, dry_run: bool = False, heartbeat: bool = True) -> dic
     return {"dry_run": dry_run, "launched": launched, "skipped": skipped, "count": len(launched)}
 
 
+_linked_pr_read_error: ContextVar[str] = ContextVar("linked_pr_read_error", default="")
+LINKED_PR_READ_TIMEOUT_S = 30
+
+
+def linked_open_prs(target: str) -> list[int] | None:
+    """Read all open PR links before a local claim; incomplete evidence is unknown.
+
+    One paginated REST listing supplies bodies/branches and one paginated GraphQL
+    operation supplies closing references. Never fall back to a GraphQL PR list.
+    The diagnostic is context-local so concurrent delegates cannot swap reasons.
+    """
+    _linked_pr_read_error.set("")
+    match = re.fullmatch(r"([^/\s]+)/([^/#\s]+)#([1-9][0-9]*)", target)
+    if not match:
+        _linked_pr_read_error.set("expected owner/repo#N")
+        return None
+    owner, name, number = match.groups()
+    repo = f"{owner}/{name}"
+
+    def read(args: list[str]) -> list:
+        result = subprocess.run(
+            ["gh", "api", *args, "--paginate", "--slurp"],
+            capture_output=True,
+            text=True,
+            timeout=LINKED_PR_READ_TIMEOUT_S,
+            check=False,
+        )
+        if result.returncode:
+            raise ValueError(f"gh exit {result.returncode}: {result.stderr.strip()}")
+        pages = json.loads(result.stdout)
+        if not isinstance(pages, list) or not pages:
+            raise ValueError("missing GitHub response pages")
+        return pages
+
+    def pr_number(value: Any) -> int:
+        if type(value) is not int or value <= 0:
+            raise ValueError("invalid PR/issue number")
+        return value
+
+    try:
+        rest_pages = read([f"repos/{repo}/pulls?state=open&per_page=100"])
+        linked = set()
+        rest_numbers = set()
+        closing = re.compile(
+            r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*"
+            rf"(?:#|{re.escape(repo)}#|https://github\.com/{re.escape(repo)}/issues/)"
+            rf"{number}\b",
+            re.IGNORECASE,
+        )
+        prefixes = "|".join(
+            re.escape(prefix)
+            for prefix in sorted({*AGENT_PERSONAS, "claude", "orch", "orchestrator"})
+        )
+        branch = re.compile(rf"^(?:{prefixes})/issue-{number}(-.*)?$")
+        for page in rest_pages:
+            if not isinstance(page, list):
+                raise ValueError("invalid REST PR page")
+            for pr in page:
+                n = pr_number(pr["number"])
+                body, head = pr["body"], pr["head"]["ref"]
+                if (body is not None and not isinstance(body, str)) or not isinstance(head, str):
+                    raise ValueError("invalid PR body or head branch")
+                rest_numbers.add(n)
+                if closing.search(body or "") or branch.fullmatch(head):
+                    linked.add(n)
+        query = """query($owner:String!,$name:String!,$endCursor:String){
+          repository(owner:$owner,name:$name){
+            pullRequests(states:OPEN,first:100,after:$endCursor){
+              pageInfo{hasNextPage endCursor}
+              nodes{number closingIssuesReferences(first:100){
+                pageInfo{hasNextPage} nodes{number repository{nameWithOwner}}
+              }}
+            }
+          }
+        }"""
+        graph_pages = read(
+            ["graphql", "-f", "query=" + query, "-f", "owner=" + owner, "-f", "name=" + name]
+        )
+        graph_numbers = set()
+        cursors = set()
+        for index, page in enumerate(graph_pages):
+            if page.get("errors"):
+                raise ValueError(f"GraphQL errors: {page['errors']}")
+            connection = page["data"]["repository"]["pullRequests"]
+            info = connection["pageInfo"]
+            if type(info["hasNextPage"]) is not bool:
+                raise ValueError("invalid GraphQL pagination")
+            if info["hasNextPage"] != (index < len(graph_pages) - 1):
+                raise ValueError("incomplete GraphQL PR pagination")
+            if info["hasNextPage"]:
+                cursor = info["endCursor"]
+                if not isinstance(cursor, str) or not cursor or cursor in cursors:
+                    raise ValueError("invalid GraphQL cursor")
+                cursors.add(cursor)
+            if not isinstance(connection["nodes"], list):
+                raise ValueError("invalid GraphQL PR nodes")
+            for pr in connection["nodes"]:
+                n = pr_number(pr["number"])
+                graph_numbers.add(n)
+                refs = pr["closingIssuesReferences"]
+                if refs["pageInfo"]["hasNextPage"] is not False:
+                    raise ValueError(f"incomplete closingIssuesReferences for PR #{n}")
+                if not isinstance(refs["nodes"], list):
+                    raise ValueError("invalid closing reference nodes")
+                for ref in refs["nodes"]:
+                    ref_number = pr_number(ref["number"])
+                    ref_repo = ref["repository"]["nameWithOwner"]
+                    if not isinstance(ref_repo, str):
+                        raise ValueError("invalid closing reference repository")
+                    if ref_number == int(number) and ref_repo.casefold() == repo.casefold():
+                        linked.add(n)
+        if rest_numbers != graph_numbers:
+            raise ValueError("open PR population changed between REST and GraphQL; retry")
+        return sorted(linked)
+    except (
+        OSError,
+        subprocess.SubprocessError,
+        ValueError,
+        KeyError,
+        TypeError,
+        AttributeError,
+    ) as exc:
+        _linked_pr_read_error.set(str(exc))
+        return None
+
+
 def delegate(
     agent: str,
     target: str,
@@ -1509,6 +1839,7 @@ def delegate(
     task_type: str = "implement",
     profile_id: str | None = None,
     *,
+    branch_prefix: str | None = None,
     influenced_by_role_run_ids=None,
     influenced_by_skill_event_ids=None,
     influenced_by_workflow_ids=None,
@@ -1518,6 +1849,7 @@ def delegate(
     review_loop: bool = False,
     review_round: int = 1,
     review_run_id: str | None = None,
+    continue_pr: int | None = None,
 ) -> dict:
     """One ad-hoc delegation for the assessing orchestrator seat: claim + provision + spawn
     ONE cheap agent with the orchestrator's OWN crafted prompt (detached, PATH+auth+release
@@ -1558,6 +1890,22 @@ def delegate(
             return {"error": str(exc)}
         if requested_profile["agent"] != agent:
             return {"error": f"profile {profile_id} does not belong to {agent}"}
+    linked = linked_open_prs(target)
+    if linked is None:
+        reason = _linked_pr_read_error.get() or "GitHub linked-PR read failed"
+        return {"error": f"linked: unknown ({reason}); retry when GitHub access recovers"}
+    if (linked or continue_pr is not None) and (
+        type(continue_pr) is not int or continue_pr not in linked
+    ):
+        if not linked:
+            return {
+                "error": f"linked: continue_pr={continue_pr!r} is not an open PR linked to {target}"
+            }
+        names = ", ".join(f"#{n}" for n in linked)
+        return {
+            "error": f"linked: open PR {names or '(none)'} close {target}; "
+            "pass continue_pr=<N> to work on one of them"
+        }
     claims.reap_stale()
     if not claims.claim(target, agent):
         h = claims.holder(target)
@@ -1570,6 +1918,7 @@ def delegate(
         "mode": mode,
         "prompt": prompt,
         "feedback_mode": "local",
+        "branch_prefix": branch_prefix,
         "influenced_by_role_run_ids": list(influenced_by_role_run_ids or []),
         "influenced_by_skill_event_ids": list(influenced_by_skill_event_ids or []),
         "influenced_by_workflow_ids": list(influenced_by_workflow_ids or []),
@@ -1610,7 +1959,8 @@ def delegate(
     _delegate_lane_heartbeat(d)
     # Close the feedback loop for LOCAL delegations: re-record the decision keyed by mode='local'
     # (so outcomes.ingest_outcomes(mode='local') discovers it and resolves the resulting PR by the
-    # deterministic orchestrator/issue-N branch) with the REAL task_type; keep the agent-mode in
+    # recorded pushed branch, with deterministic candidates as fallback) with the REAL task_type;
+    # keep the agent-mode in
     # reasoning_level. INSERT OR REPLACE overwrites the generic row _spawn just wrote. Without this,
     # local-agent delegations never get a success/failure signal — only remote ones did.
     if not profile_id:
@@ -1908,6 +2258,138 @@ def _offload_subject(
     return (caller, "caller") if caller else (None, None)
 
 
+def _public_process_observation(observation):
+    """Preserve process evidence without persisting raw prompt-bearing argv."""
+    if not isinstance(observation, dict):
+        return None
+    public = {k: v for k, v in observation.items() if k not in {"provider_argv", "transport_argv"}}
+    for name in ("provider_argv", "transport_argv"):
+        argv = observation.get(name)
+        if isinstance(argv, list) and all(isinstance(arg, str) for arg in argv):
+            public[name + "_argc"] = len(argv)
+            public[name + "_sha256"] = hashlib.sha256(
+                b"".join(os.fsencode(arg) + b"\0" for arg in argv)
+            ).hexdigest()
+    return public
+
+
+class ObservedOffloadFailure(RuntimeError):
+    """A transport was spawned before trusted observation failed; never prelaunch."""
+
+    def __init__(self, reason, observation, returncode, stdout, stderr):
+        super().__init__(reason)
+        self.observation, self.returncode = observation, returncode
+        self.stdout, self.stderr = stdout, stderr
+
+
+def run_observed_offload(command, *, callback, observation, cwd, timeout, stdin):
+    """Optional observed transport; default offloads retain subprocess.run.
+
+    The Popen handle names the transport shell, not a claimed provider process.
+    Its private process group permits bounded cleanup without signalling outsiders.
+    """
+    started = time.monotonic()
+    child = subprocess.Popen(
+        command,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        stdin=stdin,
+        start_new_session=True,
+    )
+    observed = {
+        **observation,
+        "source": "trusted-popen-transport/v1",
+        "pid": child.pid,
+        "transport_argv": list(command),
+    }
+
+    def stop_known_group():
+        try:
+            # The trusted spawn observer can veto cleanup after an exact denial
+            # elsewhere in this same supervision. Never route around that denial.
+            if observed.get("cleanup_veto") is not None:
+                veto = observed["cleanup_veto"]
+                observed["cleanup_error"] = {
+                    **veto,
+                    "process_group": child.pid,
+                    "source": "trusted-supervisor-cleanup-veto/v1",
+                }
+            else:
+                os.killpg(child.pid, 9)
+        except OSError as exc:
+            observed["cleanup_error"] = {
+                "type": type(exc).__name__,
+                "errno": exc.errno,
+                "reason": str(exc),
+                "process_group": child.pid,
+            }
+        try:
+            result = child.communicate(timeout=2)
+            observed["cleanup_terminal"] = "cleanup_error" not in observed
+            observed["transport_returncode"] = child.returncode
+            return result
+        except subprocess.TimeoutExpired as pending:
+            observed["cleanup_terminal"] = False
+            observed["transport_returncode"] = child.poll()
+
+            def decoded(value):
+                return value.decode(errors="replace") if isinstance(value, bytes) else value or ""
+
+            return decoded(pending.output), decoded(pending.stderr)
+
+    try:
+        try:
+            birth_timeout = 5 if timeout is None else min(5, timeout - (time.monotonic() - started))
+            if birth_timeout <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            birth = subprocess.run(
+                ["ps", "-p", str(child.pid), "-o", "lstart="],
+                capture_output=True,
+                text=True,
+                timeout=birth_timeout,
+                check=True,
+            )
+            observed["os_started"] = birth.stdout.strip()
+            if not observed["os_started"]:
+                raise RuntimeError("transport birth identity unavailable")
+            callback(observed)
+        except BaseException as exc:
+            stdout, stderr = stop_known_group()
+            if not isinstance(exc, Exception):
+                raise
+            detail = (
+                "original observation timeout exhausted"
+                if isinstance(exc, subprocess.TimeoutExpired)
+                else str(exc)
+            )
+            raise ObservedOffloadFailure(
+                f"trusted process observation failed after spawn: {type(exc).__name__}: {detail}",
+                observed,
+                child.poll(),
+                stdout,
+                stderr,
+            ) from exc
+        try:
+            remaining = None if timeout is None else max(0, timeout - (time.monotonic() - started))
+            stdout, stderr = child.communicate(timeout=remaining)
+        except subprocess.TimeoutExpired as exc:
+            stdout, stderr = stop_known_group()
+            expired = subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr)
+            expired.observation = observed
+            expired.raw_exit = child.poll()
+            raise expired from exc
+        except BaseException:
+            stop_known_group()
+            raise
+        return subprocess.CompletedProcess(command, child.returncode, stdout, stderr)
+    finally:
+        for pipe in (child.stdout, child.stderr):
+            if pipe is not None:
+                pipe.close()
+
+
 def offload(
     agent: str,
     prompt: str,
@@ -1923,6 +2405,7 @@ def offload(
     attempt_receipt_callback=None,
     max_network_retries: int | None = None,
     attempt_started_callback=None,
+    process_started_callback=None,
 ) -> dict:
     """SYNCHRONOUS offload for token conservation.
 
@@ -2394,22 +2877,25 @@ def offload(
                 )
             )
             resolved_model = probe.get("model")
+            completed_ts = int(time.time())
             if resolved_model:
-                feedback.complete_profile_attempt(
+                _persist_profile_completion(
+                    feedback.complete_profile_attempt,
                     run_id,
                     selected_profile_id=profile["profile_id"],
                     resolved_provider=profile["provider"],
                     resolved_model=resolved_model,
-                    completed_ts=int(time.time()),
+                    completed_ts=completed_ts,
                 )
             else:
-                feedback.complete_profile_attempt_unresolved(
+                _persist_profile_completion(
+                    feedback.complete_profile_attempt_unresolved,
                     run_id,
                     selected_profile_id=profile["profile_id"],
                     fallback_reason=(
                         f"resolved_model_not_reported_by_offload:{probe.get('reason') or 'unknown'}"
                     )[:200],
-                    completed_ts=int(time.time()),
+                    completed_ts=completed_ts,
                 )
         # Instant meter (2026-07-03 audit F2): don't wait a day for ledger_reconcile to pair the
         # ndjson events — the offload runs synchronously, so latency is known RIGHT NOW. Muse is an
@@ -2485,25 +2971,64 @@ def offload(
             _cleanup_stream()
             raise
         try:
-            proc = subprocess.run(
-                [
-                    "bash",
-                    "-lc",
-                    (
-                        f"{attempt_wrapped} < {shlex.quote(str(stream_path))}"
-                        if stream_path is not None
-                        else attempt_wrapped
-                    ),
-                ],
-                cwd=str(proc_cwd),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                # The shell redirection above replaces this with the private NDJSON file for a
-                # large Gemini packet. Every other adapter must still never inherit a caller TTY.
-                stdin=subprocess.DEVNULL,
-            )
-        except subprocess.TimeoutExpired:
+            if process_started_callback is None:
+                proc = subprocess.run(
+                    [
+                        "bash",
+                        "-lc",
+                        (
+                            f"{attempt_wrapped} < {shlex.quote(str(stream_path))}"
+                            if stream_path is not None
+                            else attempt_wrapped
+                        ),
+                    ],
+                    cwd=str(proc_cwd),
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    # The shell redirection above replaces this with the private NDJSON file for a
+                    # large Gemini packet. Every other adapter must still never inherit a caller TTY.
+                    stdin=subprocess.DEVNULL,
+                )
+            else:
+                proc = run_observed_offload(
+                    [
+                        "bash",
+                        "-lc",
+                        (
+                            f"{attempt_wrapped} < {shlex.quote(str(stream_path))}"
+                            if stream_path is not None
+                            else attempt_wrapped
+                        ),
+                    ],
+                    callback=process_started_callback,
+                    observation={
+                        "run_id": run_id,
+                        "agent": agent,
+                        "profile_id": profile_id,
+                        "provider_argv": list(argv),
+                    },
+                    cwd=str(proc_cwd),
+                    timeout=timeout,
+                    stdin=subprocess.DEVNULL,
+                )
+        except ObservedOffloadFailure as exc:
+            return {
+                "agent": agent,
+                "exit": 70,
+                "raw_exit": exc.returncode,
+                "output": credential_redaction.redact(exc.stdout or ""),
+                "stderr_tail": credential_redaction.redact(exc.stderr or "")[-800:],
+                "error": credential_redaction.redact(str(exc)),
+                "run_id": run_id,
+                "log": str(logf),
+                "process_started": True,
+                "process_observation": _public_process_observation(exc.observation),
+                "outcome_uncertain": True,
+                "outcome_status": "uncertain",
+                "retry_safe": False,
+            }
+        except subprocess.TimeoutExpired as timeout_error:
             # A 0-byte timeout is the env-induced-hang signature; surface the ambient network env so the
             # cause is legible (proxy is scrubbed by default — if one shows here, ORCH_KEEP_PROXY=1 is set).
             suspicious = _suspicious_net_env()
@@ -2554,6 +3079,25 @@ def offload(
                         "outcome_uncertain": True,
                         "retry_safe": False,
                     }
+                )
+            if process_started_callback is not None:
+
+                def safe_partial(value):
+                    if isinstance(value, bytes):
+                        value = value.decode(errors="replace")
+                    return credential_redaction.redact(value or "")
+
+                out.update(
+                    process_started=True,
+                    outcome_uncertain=True,
+                    outcome_status="uncertain",
+                    retry_safe=False,
+                    partial_stdout=safe_partial(timeout_error.output),
+                    partial_stderr=safe_partial(timeout_error.stderr),
+                    raw_exit=getattr(timeout_error, "raw_exit", None),
+                    process_observation=_public_process_observation(
+                        getattr(timeout_error, "observation", None)
+                    ),
                 )
             if agent_log_tail:
                 out["agent_log_tail"] = agent_log_tail
@@ -2883,19 +3427,75 @@ def offload(
             fh.write(f"[orchestrator] {redaction_note}\n")
     if muse_prompt is not None:
         muse_prompt.unlink(missing_ok=True)
-    _record_complete(exit_code=out.get("exit"), error=out.get("error"))
+    provider_result = dict(out)
+    try:
+        _record_complete(exit_code=out.get("exit"), error=out.get("error"))
+    except _CompletionPersistencePending as exc:
+        # Preserve the already-redacted actual result before handing a conservative
+        # accounting barrier to callers. This branch is outside the provider loop.
+        actual_exit = out.get("raw_exit", out.get("exit"))
+        provider_completed = (
+            type(actual_exit) is int
+            and actual_exit == 0
+            and out.get("outcome_uncertain") is not True
+        )
+        pending = {
+            "schema": "offload-completion-persistence/v1",
+            "status": "pending",
+            "provider_completed": provider_completed,
+            **exc.completion,
+        }
+        raw = json.dumps({"result": out, "completion": pending}, sort_keys=True).encode()
+        receipt_path = logf.with_suffix(".completion-pending.json")
+        temporary = None
+        try:
+            fd, temporary = tempfile.mkstemp(prefix=".completion-", dir=logf.parent)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, receipt_path)
+            pending["receipt"] = {
+                "path": str(receipt_path),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "bytes": len(raw),
+            }
+        except OSError as retention_error:
+            # The native redacted log already exists. Accounting/retention failure
+            # must still return a barrier rather than lose the run identity.
+            pending["receipt_error"] = type(retention_error).__name__
+        finally:
+            if temporary is not None:
+                try:
+                    Path(temporary).unlink(missing_ok=True)
+                except OSError:
+                    pass
+        out.update(
+            raw_exit=out.get("raw_exit", out.get("exit")),
+            exit=70,
+            error="offload profile completion persistence is pending",
+            completion_persistence=pending,
+            provider_completed=provider_completed,
+            outcome_status="uncertain",
+            outcome_uncertain=True,
+            retry_safe=False,
+        )
     # Telemetry is fail-open. Classify the actual result, stderr, and per-run agent log.
     evidence_result = None
     reset_at = None
     try:
         import rate_incidents
 
-        failure_parts = [out.get("error"), out.get("stderr_tail"), out.get("agent_log_tail")]
-        stdout = str(out.get("output") or "")
+        failure_parts = [
+            provider_result.get("error"),
+            provider_result.get("stderr_tail"),
+            provider_result.get("agent_log_tail"),
+        ]
+        stdout = str(provider_result.get("output") or "")
         # A FAILED run's stdout is error evidence less codex's own record of its work: two codex
         # offloads that printed a doc about quotas became quota incidents and shed the seat
         # (2026-09-19, 09-20). A successful run's stdout counts only through the strict envelope.
-        if out.get("exit") != 0:
+        if provider_result.get("exit") != 0:
             failure_parts.insert(0, rate_incidents.failed_stdout_evidence(agent, stdout))
         elif rate_incidents.stdout_carries_capacity_evidence(stdout):
             failure_parts.insert(0, stdout)
@@ -2911,7 +3511,8 @@ def offload(
         # The provider's stated reset, from codex's harness events alone. Without it the two
         # refusals of 2026-09-25 that named Sep 28 shed for the 6 h cooldown, and this record, the
         # first of a run's two observers, is the one whose shed stands.
-        reset_at = rate_incidents.provider_reset_at(agent, stdout.splitlines())
+        reset_lines = combined_output.splitlines() if agent == "gemini" else stdout.splitlines()
+        reset_at = rate_incidents.provider_reset_at(agent, reset_lines)
     except Exception as exc:
         print(f"warn: rate-incident classification failed for {agent}: {exc}", file=sys.stderr)
     if evidence_result and evidence_result.get("is_authoritative"):
@@ -2927,7 +3528,7 @@ def offload(
                 reset_at=reset_at,
                 extra={
                     "subcategory": evidence_result["subcategory"],
-                    "exit_code": out.get("exit"),
+                    "exit_code": provider_result.get("exit"),
                     "attempts": attempts,
                 },
             )
@@ -3171,10 +3772,125 @@ def _selftest_gemini_refusal() -> None:
         assert result["exit"] == 2 and result["run_id"] is None, result
 
 
+def _selftest_capability_dispatch(root: Path) -> None:
+    """Exercise real spawn and writer seams with offline producer/process doubles."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    import capabilities
+    import capability_lifecycle
+    import capability_targets
+
+    cap_id, version = "selftest-compiled", "cv:selftest-compiled"
+    ledger = {
+        cap_id: {"capability_version_id": version},
+        "thompson-hybrid-routing": {"capability_version_id": "cv:infra"},
+    }
+    receipt = {
+        "invoked": True,
+        "accepted": True,
+        "consumer_ref": "receipt:selftest",
+        "invocation_id": "invoke:selftest",
+        "causal_edge": {"source_event_id": "event:selftest"},
+    }
+    plan: dict = {
+        "run_id": "selftest-capability",
+        "target": "owner/repo#639",
+        "task_type": "implement",
+        "agent": "codex",
+        "mode": "full",
+        "cwd": str(root),
+        "wrapped": "true",
+        "capability_ids": ["thompson-hybrid-routing"],
+        "capability_version_ids": ["cv:infra"],
+        "routing_metadata": {
+            "selected_capability_id": cap_id,
+            "selected_capability_version_id": version,
+        },
+    }
+    with (
+        patch.object(capabilities, "load", return_value=ledger),
+        patch.object(capability_targets, "get_binding", return_value={"kind": "workflow"}),
+        patch.object(
+            capability_lifecycle, "invoke_compiled_target", return_value=receipt
+        ) as invoke,
+        patch.object(subprocess, "Popen", return_value=SimpleNamespace(pid=639)),
+        patch.object(claims, "update_metadata", return_value=True),
+        patch.object(sys.modules[__name__], "_agent_runtime_prelude", return_value=""),
+    ):
+        assert _spawn(plan) == 639
+        invoke.assert_called_once()
+        assert plan["capability_ids"] == ["thompson-hybrid-routing", cap_id], plan
+        assert plan["capability_version_ids"] == ["cv:infra", version], plan
+        with feedback._conn() as conn:
+            payloads = conn.execute(
+                "SELECT phase,payload_json FROM completion_events WHERE run_id=? AND event_type='decision'",
+                (plan["run_id"],),
+            ).fetchall()
+        # The pre-invocation envelopes remain immutable history. Both subsequent
+        # decision phases must carry the exercised pair.
+        assert {row[0] for row in payloads if cap_id in json.loads(row[1])["capability_ids"]} == {
+            "trigger",
+            "decision",
+        }, payloads
+        fallback_plan = {
+            **plan,
+            "run_id": "selftest-capability-fallback",
+            "routing_metadata": dict(plan["routing_metadata"]),
+        }
+        with patch.object(capability_targets, "get_binding", return_value=None):
+            assert _spawn(fallback_plan) == 639
+        assert cap_id not in fallback_plan["capability_ids"], fallback_plan
+        assert (
+            fallback_plan["routing_metadata"]["capability_dispatch_result"]["reason"]
+            == "target_binding_missing"
+        )
+        invoke.assert_called_once()
+        invoke.reset_mock()
+        bad = {**plan, "capability_ids": ["missing-infra"], "capability_version_ids": []}
+        try:
+            _invoke_selected_compiled_capability(bad)
+        except ValueError as exc:
+            assert "missing capability versions" in str(exc), exc
+        else:
+            raise AssertionError("missing infrastructure version was silently dropped")
+        invoke.assert_not_called()
+
+
+def _selftest_delegate_linked_pr() -> None:
+    from unittest.mock import patch
+
+    # Exercise the pre-claim edge without GitHub, state cleanup or a worker.
+    with (
+        patch.object(sys.modules[__name__], "linked_open_prs", return_value=[734, 736]),
+        patch.object(claims, "reap_stale") as reap,
+        patch.object(claims, "claim", return_value=False) as claim,
+        patch.object(claims, "holder", return_value={"agent": "incumbent"}),
+    ):
+        refused = delegate("cursor", "o/r#731", "opener", "bounded")
+        assert "open PR #734, #736" in refused["error"], refused
+        claim.assert_not_called()
+        reap.assert_not_called()
+        continued = delegate("cursor", "o/r#731", "opener", "fix", continue_pr=736)
+        assert "already claimed" in continued["error"], continued
+        claim.assert_called_once_with("o/r#731", "cursor")
+
+
 def _selftest() -> None:
+    import inspect
+
+    # Wiring pin; behavioral stderr/log reset coverage also exercises offload in pytest.
+    assert "combined_output.splitlines()" in inspect.getsource(offload)
     import tempfile
 
+    for repo in INFRA_REPOS:
+        assert _dispatch_branch(f"{repo}#7", "opener", "codex", None) == "orch/issue-7"
+    assert _dispatch_branch("o/product#7", "opener", "gemini", None) == "gemini/issue-7"
+    assert (
+        _dispatch_branch("stranske/Workflows#7", "opener", "codex", "custom/") == "custom/issue-7"
+    )
     _selftest_gemini_refusal()
+    _selftest_delegate_linked_pr()
 
     tmp = tempfile.mkdtemp(prefix="dispatcher-selftest-")
     os.environ["HANDOFF_DIR"] = tmp
@@ -3199,6 +3915,7 @@ def _selftest() -> None:
         _selftest_muse_login, auth_dst
     )
     try:
+        _selftest_capability_dispatch(HANDOFF)
         for agent, persona in AGENT_PERSONAS.items():
             preamble = _agent_preamble(agent)
             assert persona in preamble and CRITICAL_EVALUATOR_DIRECTIVE in preamble, preamble
@@ -4703,9 +5420,13 @@ def main(argv: list[str]) -> int:
         p.add_argument("--agent", required=True)
         p.add_argument("--target", required=True)
         p.add_argument("--lane", default="opener")
+        p.add_argument(
+            "--branch-prefix", help="override opener prefix (infra: orch/; otherwise agent/)"
+        )
         p.add_argument("--mode")
         p.add_argument("--profile-id", help="explicit immutable execution profile")
         p.add_argument("--task-type", default="implement")
+        p.add_argument("--continue-pr", type=int, help="continue this confirmed linked open PR")
         p.add_argument(
             "--review-loop",
             action="store_true",
@@ -4736,8 +5457,10 @@ def main(argv: list[str]) -> int:
             ns.mode,
             task_type=ns.task_type,
             profile_id=ns.profile_id,
+            continue_pr=ns.continue_pr,
             influenced_by_role_run_ids=ns.influenced_by_role_run_id,
             **review_kwargs,
+            **({"branch_prefix": ns.branch_prefix} if ns.branch_prefix is not None else {}),
         )
         print(json.dumps(out, default=str))
         return 0 if "error" not in out else 1

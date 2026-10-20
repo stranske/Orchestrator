@@ -2033,10 +2033,10 @@ def comparative_routing_line(rep: dict) -> str:
         for agent, value in sorted({"codex": None, "claude": None, **result["lambda"]}.items())
     )
     line = (
-        f"comparative routing: classes_differing {result['classes_differing']} "
+        f"comparative routing: classes_differing {result['classes_differing'] if result['status'] == 'optimal' else 'unmeasured'} "
         f"(window {result['window_days']}d), λ {prices or 'unmeasured'}, status {result['status']}"
     )
-    if result["status"] in {"partial", "inputs_unmeasured"}:
+    if result["status"] != "optimal":
         line += " — unmeasured; " + "; ".join(result["reasons"])
     return line
 
@@ -2055,6 +2055,16 @@ def experiment_producer_line():
         else experiment_producer.COVERAGE_DAYS
     )
     reasons = ", ".join(f"{k}={v}" for k, v in sorted(m["skips"].items())) or "none"
+    classes = m.get("no_named_test_classes", {})
+    test_metrics = (
+        f"no_named_test={m['skips'].get('no_named_test', 0)} "
+        f"(file-only={classes.get('file-only', 0)}, ci-only={classes.get('ci-only', 0)}, "
+        f"none={classes.get('none', 0)}), derived_tests={m.get('derived_tests', 0)}, "
+        f"derive_failed={m.get('derive_failed', 0)}"
+    )
+    legacy_classes = max(0, m["skips"].get("no_named_test", 0) - sum(classes.values()))
+    if legacy_classes:
+        test_metrics += f", UNKNOWN historical_test_class={legacy_classes}"
     unknown = "; UNKNOWN " + ", ".join(m["unknowns"]) if m["unknowns"] else ""
     if verdict == "pending" and state.get("pending_since"):
         verdict += f" since {state['pending_since']}, resolves fail on {state.get('resolves_on')}"
@@ -2065,7 +2075,7 @@ def experiment_producer_line():
         f"winner_prs {m['winner_prs']}, winner_merged {m['winner_merged']}, "
         f"post_window_launches={m.get('post_window_launches', 0)}, "
         f"cells_fresh {m['cells_fresh']}/{m['cells_total']}, "
-        f"skipped {sum(m['skips'].values())} ({reasons}){unknown}; "
+        f"skipped {sum(m['skips'].values())} ({reasons}); {test_metrics}{unknown}; "
         f"trial_end {end}, verdict {verdict}, days_left {days_left}; "
         f"winner merge grace {experiment_producer.WINNER_MERGE_GRACE_DAYS}d"
     )
@@ -2953,13 +2963,16 @@ def _selftest_review(gh_calls: list) -> None:
                     "window_days": 14,
                     "lambda": {},
                     "status": "not_testable_slack",
-                    "reasons": [],
+                    "reasons": ["capacity constraints are slack"],
                 },
             }
         )
         assert "ON but not triggering" in text and "range-lane failure mode" in text
         # The complete report carries the comparative line once (integration, not the helper).
-        assert text.count("comparative routing: classes_differing 0") == 1, text
+        assert text.count("comparative routing: classes_differing unmeasured") == 1, text
+        assert (
+            "status not_testable_slack — unmeasured; capacity constraints are slack" in text
+        ), text
         # ...and the three reviews above were REPORTS: none wrote the ledger. It lacks every
         # declared gate row, so the writing loader would have seeded them all into it on the first.
         assert reg.read_bytes() == saved_ledger, "review() wrote the capability ledger it reads"

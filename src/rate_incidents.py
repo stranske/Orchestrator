@@ -10,6 +10,7 @@ import math
 import os
 import re
 import shutil
+import sqlite3
 import sys
 import tempfile
 import time
@@ -56,6 +57,18 @@ def _hash_evidence(text: str) -> str:
     return hashlib.sha256(str(text).encode("utf-8")).hexdigest()[:16]
 
 
+def _has_provider_error_context(line: str) -> bool:
+    """Require an error envelope, including Gemini's glog error prefix."""
+    return bool(
+        re.match(
+            r"\s*(?:E\d{4}\s+\d{2}:\d{2}:\d{2}\.\d+\s+\d+\s+[^\]\n]+\]\s*)?"
+            r"(?:agent\s+executor\s+error|provider\s+error|error|ActionRequiredError)\s*:",
+            line,
+            re.I,
+        )
+    )
+
+
 def _contains_explicit_resource_exhausted(text: str) -> bool:
     """Recognize provider-shaped exhaustion, not implementation/review prose."""
     return bool(
@@ -63,9 +76,12 @@ def _contains_explicit_resource_exhausted(text: str) -> bool:
             r"(?im)^\s*(?:\[resource_exhausted\]|resource_exhausted)\s*$"
             r"|^\s*(?:error|status|code|response|provider\s+error)\b[^\n]{0,120}"
             r"\bresource_exhausted\b"
-            r'|\{[^\n]{0,120}"(?:status|code)"\s*:\s*"RESOURCE_EXHAUSTED"',
+            r'|^\s*\{[^\n]{0,120}"(?:status|code)"\s*:\s*"RESOURCE_EXHAUSTED"',
             text,
         )
+    ) or any(
+        _has_provider_error_context(line) and re.search(r"\bRESOURCE_EXHAUSTED\b", line, re.I)
+        for line in text.splitlines()
     )
 
 
@@ -73,16 +89,20 @@ def classify_provider_failure(text: str) -> tuple[str, str, str]:
     """Return an authoritative category only for explicit capacity evidence."""
     if not isinstance(text, str) or not text:
         return "unknown", "non_authoritative", "none"
-    if _contains_explicit_resource_exhausted(text):
-        return "capacity", "resource_exhausted", "high"
     if re.search(
         r"(?:out of usage|usage exhausted|quota exhausted|capacity exhausted)"
         r"|(?:you(?:'|’)ve hit your usage limit)"
         r"|(?:credit(?:s| balance)? (?:exhausted|depleted|used up|too low))",
         text,
         re.I,
+    ) or any(
+        _has_provider_error_context(line)
+        and re.search(r"\b(?:individual\s+)?quota\s+reached\b", line, re.I)
+        for line in text.splitlines()
     ):
         return "quota", "quota_exhausted", "high"
+    if _contains_explicit_resource_exhausted(text):
+        return "capacity", "resource_exhausted", "high"
     # A bare number is ordinary task prose (issue 429, 429 lines, 429 tests).
     # Require either the provider's standard phrase or an error/status/code
     # anchor immediately before the numeric status.
@@ -151,8 +171,8 @@ def record_lane_round(
     """Persist every relay exit and shed only on a nonzero authoritative failure."""
     import feedback
 
-    if agent not in {"codex", "claude"}:
-        raise ValueError("agent must be codex or claude")
+    if agent not in {"codex", "claude", "cursor", "muse"}:
+        raise ValueError("agent must be codex, claude, cursor or muse")
     if not surface.strip():
         raise ValueError("surface must be nonempty")
     if not output_file.is_file() or output_file.stat().st_size > 128 * 1024:
@@ -165,6 +185,14 @@ def record_lane_round(
     decision_id = feedback.record_lane_round(
         agent, lane, receiver_reason, exit_status, error_class, timestamp
     )
+    # The installed relay already invokes this exit hook. Mirror sync activates the join
+    # without editing a host-owned launcher. Telemetry failure must not hide a provider incident.
+    try:
+        pacing = feedback.ingest_relay_pacing(
+            Path(os.environ.get("HANDOFF_PACING_LOG", HANDOFF / "relay-pacing.log")), now=timestamp
+        )
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        pacing = {"status": "unavailable", "reason": str(exc)}
     incident = None
     if authoritative:
         incident = record_incident(
@@ -179,6 +207,7 @@ def record_lane_round(
         )
     return {
         "decision_id": decision_id,
+        "relay_pacing": pacing,
         "error_class": error_class,
         "incident_id": incident.get("incident_id") if incident else None,
         "shed": bool(incident and incident.get("shed")),
@@ -285,16 +314,33 @@ def _harness_error_messages(event: dict) -> list[str]:
     return [message] if isinstance(message, str) else []
 
 
-def provider_reset_at(agent: str, lines: list[str], *, now: int | None = None) -> int | None:
-    """When the provider says it will serve again, from codex's own harness events, or None.
+def parse_resets_in_duration(text: str, *, now: int | None = None) -> int | None:
+    """Parse provider copy like ``Resets in 140h5m6s`` into an absolute unix time."""
+    match = re.search(
+        r"Resets\s+in\s+(\d+)h(\d+)m(\d+)s",
+        text,
+        re.I,
+    )
+    if not match:
+        return None
+    hours, minutes, seconds = (int(match.group(i)) for i in range(1, 4))
+    base = now if now is not None else int(time.time())
+    return base + hours * 3600 + minutes * 60 + seconds
 
-    The reset is the provider's clock ("try again at Sep 28th, 2026 8:26 PM"), and it may come only
-    from the provider's text: the messages of the harness's `error` and `turn.failed` events among
-    the lines `failure_evidence` keeps. A plain line is never read. A codex run without `--json`
-    (`assess`) prints its transcript as text, and stderr can carry the agent's commands too, so a
-    plain line may be the agent's own work, and a reset read from it would hold the seat until
-    whatever date that work happened to mention. Every other agent's output is plain text; for
-    them the answer is None, and the seat sheds for the cooldown.
+
+def provider_reset_at(agent: str, lines: list[str], *, now: int | None = None) -> int | None:
+    """When the provider says it will serve again, or None for the default cooldown.
+
+    Codex: the reset is the provider's clock ("try again at Sep 28th, 2026 8:26 PM"), and it may
+    come only from the provider's text: the messages of the harness's `error` and `turn.failed`
+    events among the lines `failure_evidence` keeps. A plain line is never read for codex. A codex
+    run without `--json` (`assess`) prints its transcript as text, and stderr can carry the agent's
+    commands too, so a plain line may be the agent's own work, and a reset read from it would hold
+    the seat until whatever date that work happened to mention.
+
+    Gemini: output is plain text (glog-prefixed agent-executor lines). Parse ``Resets in NhNmNs``
+    from those lines so shed lasts until the provider's stated window rather than DEFAULT_COOLDOWN_S.
+    Every other agent's answer is None, and the seat sheds for the cooldown.
 
     One reading for every observer of a run: the synchronous offload, `adapters.dispatch` and the
     completion reconciler. They share one incident (`_idempotency_key`), and the first to record it
@@ -303,6 +349,15 @@ def provider_reset_at(agent: str, lines: list[str], *, now: int | None = None) -
     (offload:codex:1790322148167312000 and 1790322306091352000) named Sep 28 and shed for the 6 h
     cooldown. Several stated resets in one run: the latest is the one that binds.
     """
+    if agent == "gemini":
+        resets = []
+        for line in failure_evidence(lines):
+            if not _has_provider_error_context(line) or not is_authoritative_error(line):
+                continue
+            reset = parse_resets_in_duration(line, now=now)
+            if reset is not None:
+                resets.append(reset)
+        return max(resets) if resets else None
     if agent != "codex":
         return None
     resets = []
@@ -586,12 +641,30 @@ def _selftest() -> int:
             evidence="quota exhausted",
         )["deduped"]
         assert first["incident_id"]
-        # A reset comes from codex's harness error events only, never a plain line or another agent.
+        # Codex: reset from harness error events only, never a plain line.
         refusal = "You've hit your usage limit. Try again at Jan 5th, 2099 3:11 AM."
         event = json.dumps({"type": "turn.failed", "error": {"message": refusal}})
         assert provider_reset_at("codex", [event]) == parse_relay_reset_at(refusal) is not None
         assert provider_reset_at("codex", [refusal]) is None
         assert provider_reset_at("claude", [event]) is None
+        # Gemini: glog agent-executor Individual quota line is authoritative quota + Resets-in.
+        gemini_line = (
+            "E1018 01:42:33.766065 697 errorreport.go:224] agent executor error: generating and "
+            "executing: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade "
+            "your subscription to increase your limits. Resets in 140h5m6s."
+        )
+        assert classify_provider_failure(gemini_line) == ("quota", "quota_exhausted", "high")
+        assert not is_authoritative_error("handle RESOURCE_EXHAUSTED errors")
+        for prose in ("handle RESOURCE_EXHAUSTED (code 429) errors", "handle quota reached errors"):
+            assert not is_authoritative_error(prose)
+            assert not stdout_carries_capacity_evidence(prose)
+        base = 1_700_000_000
+        assert (
+            provider_reset_at("gemini", [gemini_line], now=base) == base + 140 * 3600 + 5 * 60 + 6
+        )
+        assert provider_reset_at(
+            "gemini", ["Document Resets in 999h0m0s", gemini_line], now=base
+        ) == provider_reset_at("gemini", [gemini_line], now=base)
         print("rate_incidents.py selftest: OK")
         return 0
     finally:
@@ -641,7 +714,9 @@ def main(argv: list[str]) -> int:
     lane_parser = subparsers.add_parser(
         "record-lane-round", help="record a detached handoff relay round"
     )
-    lane_parser.add_argument("--agent", choices=("codex", "claude"), required=True)
+    lane_parser.add_argument(
+        "--agent", choices=("codex", "claude", "cursor", "muse"), required=True
+    )
     lane_parser.add_argument("--surface", required=True)
     lane_parser.add_argument("--lane", choices=("opener", "closer"), required=True)
     lane_parser.add_argument("--receiver-reason")

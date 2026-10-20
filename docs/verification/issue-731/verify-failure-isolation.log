@@ -1,0 +1,325 @@
+..FFFF....FFFFFF...FFFF..FFFFFFFFFF..                                    [100%]
+=================================== FAILURES ===================================
+____________ test_the_documented_copier_builds_through_the_builder _____________
+tests/test_build_exec_mirror.py:348: in test_the_documented_copier_builds_through_the_builder
+    assert proc.returncode == 0, proc.stderr
+E   AssertionError: mktemp: mkstemp failed on /var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/tmp.OGY5yFfK1a: Operation not permitted
+E     ERR: orch-sync-mirror.sh aborted at line 33 (rc 1): /private/tmp/pytest-of-teacher/pytest-187/test_the_documented_copier_bui0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.
+E     
+E   assert 1 == 0
+E    +  where 1 = CompletedProcess(args=['bash', '/private/tmp/pytest-of-teacher/pytest-187/test_the_documented_copier_bui0/orch-sync-mi...the_documented_copier_bui0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.\n').returncode
+____________ test_the_390_guard_composes_with_the_documented_copier ____________
+tests/test_build_exec_mirror.py:417: in test_the_390_guard_composes_with_the_documented_copier
+    assert staged.returncode == 0, staged.stderr
+E   AssertionError: mktemp: mkstemp failed on /var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/tmp.RSN8K9YWyY: Operation not permitted
+E     ERR: orch-sync-mirror.sh aborted at line 38 (rc 1): /private/tmp/pytest-of-teacher/pytest-187/test_the_390_guard_composes_wi0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.
+E     
+E   assert 1 == 0
+E    +  where 1 = CompletedProcess(args=['bash', '/private/tmp/pytest-of-teacher/pytest-187/test_the_390_guard_composes_wi0/orch-sync-mi...the_390_guard_composes_wi0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.\n').returncode
+______ test_presync_says_whether_ci_verified_the_shipped_tree[documented] ______
+tests/test_build_exec_mirror.py:488: in test_presync_says_whether_ci_verified_the_shipped_tree
+    assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
+E   AssertionError: == scratch mirror of /private/tmp/pytest-of-teacher/pytest-187/test_presync_says_whether_ci_v0/source @ 943f868 (0 uncommitted) -> /private/tmp/pytest-of-teacher/pytest-187/test_presync_says_whether_ci_v0/verify-before-sync.UQZAbg/mirror
+E     tests/ shipped from git HEAD 943f868 (2 files) — uncommitted test edits are NOT shipped
+E     scripts/ shipped from git HEAD (4 entries)
+E     .github/ shipped from git HEAD (1 files) with .gitignore ruff.toml
+E     docs/ shipped from git HEAD (1 files, merged beside run-time output)
+E     built 3 .py (from /private/tmp/pytest-of-teacher/pytest-187/test_presync_says_whether_ci_v0/source/src) + orchestrate.sh + 1 test file(s) + 11 data/config entries -> /private/tmp/pytest-of-teacher/pytest-187/test_presync_says_whether_ci_v0/verify-before-sync.UQZAbg/mirror
+E     mktemp: mkstemp failed on /var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/tmp.RHCVNTY2IU: Operation not permitted
+E     ERR: orch-sync-mirror.sh aborted at line 33 (rc 1): /private/tmp/pytest-of-teacher/pytest-187/test_presync_says_whether_ci_v0/verify-before-sync.UQZAbg/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.
+E     verify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched
+E     
+E   assert 2 == 0
+E    +  where 2 = CompletedProcess(args=['bash', '/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__731__opener/scrip...verify.\nverify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched\n').returncode
+_______ test_presync_says_whether_ci_verified_the_shipped_tree[drifted] ________
+tests/test_build_exec_mirror.py:488: in test_presync_says_whether_ci_verified_the_shipped_tree
+    assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
+E   AssertionError: == scratch mirror of /private/tmp/pytest-of-teacher/pytest-187/test_presync_says_whether_ci_v1/source @ ee37cdb (0 uncommitted) -> /private/tmp/pytest-of-teacher/pytest-187/test_presync_says_whether_ci_v1/verify-before-sync.ZxgJKL/mirror
+E     tests/ shipped from git HEAD ee37cdb (2 files) — uncommitted test edits are NOT shipped
+E     scripts/ shipped from git HEAD (4 entries)
+E     .github/ shipped from git HEAD (1 files) with .gitignore ruff.toml
+E     docs/ shipped from git HEAD (1 files, merged beside run-time output)
+E     built 3 .py (from /private/tmp/pytest-of-teacher/pytest-187/test_presync_says_whether_ci_v1/source/src) + orchestrate.sh + 1 test file(s) + 11 data/config entries -> /private/tmp/pytest-of-teacher/pytest-187/test_presync_says_whether_ci_v1/verify-before-sync.ZxgJKL/mirror
+E     mktemp: mkstemp failed on /var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/tmp.1MQ3mpRtWg: Operation not permitted
+E     ERR: orch-sync-mirror.sh aborted at line 33 (rc 1): /private/tmp/pytest-of-teacher/pytest-187/test_presync_says_whether_ci_v1/verify-before-sync.ZxgJKL/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.
+E     verify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched
+E     
+E   assert 2 == 0
+E    +  where 2 = CompletedProcess(args=['bash', '/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__731__opener/scrip...verify.\nverify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched\n').returncode
+_____________ test_three_profiles_create_distinct_worker_attempts ______________
+tests/test_model_profile_trial.py:115: in test_three_profiles_create_distinct_worker_attempts
+    state = model_profile_trial.finalize_trial(
+src/model_profile_trial.py:822: in finalize_trial
+    _write_capability_program_trial_summary(
+src/model_profile_trial.py:757: in _write_capability_program_trial_summary
+    _atomic_json(out_dir / "profile-trial.json", payload)
+src/model_profile_trial.py:202: in _atomic_json
+    fd, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/tempfile.py:357: in mkstemp
+    return _mkstemp_inner(dir, prefix, suffix, flags, output_type)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/tempfile.py:256: in _mkstemp_inner
+    fd = _os.open(file, flags, 0o600)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/capability-program/profile-trial.json.hz9s9q20.tmp'
+_____________________ test_evaluator_trace_stays_separate ______________________
+tests/test_model_profile_trial.py:156: in test_evaluator_trace_stays_separate
+    model_profile_trial.finalize_trial(
+src/model_profile_trial.py:822: in finalize_trial
+    _write_capability_program_trial_summary(
+src/model_profile_trial.py:757: in _write_capability_program_trial_summary
+    _atomic_json(out_dir / "profile-trial.json", payload)
+src/model_profile_trial.py:202: in _atomic_json
+    fd, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/tempfile.py:357: in mkstemp
+    return _mkstemp_inner(dir, prefix, suffix, flags, output_type)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/tempfile.py:256: in _mkstemp_inner
+    fd = _os.open(file, flags, 0o600)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/capability-program/profile-trial.json.j2f4bfux.tmp'
+____________ test_trial_readiness_surfaces_in_reports_and_lifecycle ____________
+tests/test_model_profile_trial.py:287: in test_trial_readiness_surfaces_in_reports_and_lifecycle
+    model_profile_trial.finalize_trial(
+src/model_profile_trial.py:822: in finalize_trial
+    _write_capability_program_trial_summary(
+src/model_profile_trial.py:757: in _write_capability_program_trial_summary
+    _atomic_json(out_dir / "profile-trial.json", payload)
+src/model_profile_trial.py:202: in _atomic_json
+    fd, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/tempfile.py:357: in mkstemp
+    return _mkstemp_inner(dir, prefix, suffix, flags, output_type)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/tempfile.py:256: in _mkstemp_inner
+    fd = _os.open(file, flags, 0o600)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/capability-program/profile-trial.json._e09_1m2.tmp'
+_______________ test_capacity_sheds_seat_when_model_unresolvable _______________
+tests/test_model_tier_resolution.py:420: in test_capacity_sheds_seat_when_model_unresolvable
+    assert meta["availability"] == "unavailable_model_unresolved", meta
+E   AssertionError: {'policy': 'auth-failed', 'availability': 'unavailable_auth_failed', 'next_action': 'Refresh gemini credentials, then re-check with `python3 capacity.py --json`. The fleet reads the credential FILE, not an interactive login session.'}
+E   assert 'unavailable_auth_failed' == 'unavailable_model_unresolved'
+E     
+E     - unavailable_model_unresolved
+E     + unavailable_auth_failed
+__________________ test_capacity_stays_ok_when_model_resolves __________________
+tests/test_model_tier_resolution.py:474: in test_capacity_stays_ok_when_model_resolves
+    assert state != capacity.SHED, state
+E   AssertionError: shed
+E   assert 'shed' != 'shed'
+E    +  where 'shed' = capacity.SHED
+__________________ test_offload_survives_a_heartbeat_failure ___________________
+tests/test_model_tier_resolution.py:853: in test_offload_survives_a_heartbeat_failure
+    out = dispatcher.offload("cursor", "x", cwd="/tmp", timeout=30)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/dispatcher.py:2166: in offload
+    run_id, logf = _claim_offload_log(agent)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+src/dispatcher.py:1870: in _claim_offload_log
+    os.close(os.open(logf, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/handoff/dispatch-logs/offload.cursor.1792311315812044000.log'
+___________________ SeatbeltRegexQuotingTests.test_backslash ___________________
+tests/test_seatbelt_regex_quoting.py:39: in test_backslash
+    self.check_root(r"back\slash")
+tests/test_seatbelt_regex_quoting.py:28: in check_root
+    _assert_native_profile_enforces_unusual_allowed_roots(root, name)
+tests/test_seatbelt_regex_quoting.py:151: in _assert_native_profile_enforces_unusual_allowed_roots
+    assert proc.returncode == 0, f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+E   AssertionError: stdout: 
+E     stderr: sandbox-exec: sandbox_apply: Operation not permitted
+E     
+E   assert 71 == 0
+E    +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath "/private/.../.git/hooks/pre-commit"]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\n').returncode
+___________________ SeatbeltRegexQuotingTests.test_combined ____________________
+tests/test_seatbelt_regex_quoting.py:45: in test_combined
+    self.check_root('mixed"back\\slash.[x]+(a){2}^$|?* space')
+tests/test_seatbelt_regex_quoting.py:28: in check_root
+    _assert_native_profile_enforces_unusual_allowed_roots(root, name)
+tests/test_seatbelt_regex_quoting.py:151: in _assert_native_profile_enforces_unusual_allowed_roots
+    assert proc.returncode == 0, f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+E   AssertionError: stdout: 
+E     stderr: sandbox-exec: sandbox_apply: Operation not permitted
+E     
+E   assert 71 == 0
+E    +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath "/private/.../.git/hooks/pre-commit"]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\n').returncode
+_____________________ SeatbeltRegexQuotingTests.test_quote _____________________
+tests/test_seatbelt_regex_quoting.py:36: in test_quote
+    self.check_root('odd"root')
+tests/test_seatbelt_regex_quoting.py:28: in check_root
+    _assert_native_profile_enforces_unusual_allowed_roots(root, name)
+tests/test_seatbelt_regex_quoting.py:151: in _assert_native_profile_enforces_unusual_allowed_roots
+    assert proc.returncode == 0, f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+E   AssertionError: stdout: 
+E     stderr: sandbox-exec: sandbox_apply: Operation not permitted
+E     
+E   assert 71 == 0
+E    +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath "/private/.../.git/hooks/pre-commit"]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\n').returncode
+_____________ SeatbeltRegexQuotingTests.test_regex_metacharacters ______________
+tests/test_seatbelt_regex_quoting.py:42: in test_regex_metacharacters
+    self.check_root("meta.[x]+(a){2}^$|?*")
+tests/test_seatbelt_regex_quoting.py:28: in check_root
+    _assert_native_profile_enforces_unusual_allowed_roots(root, name)
+tests/test_seatbelt_regex_quoting.py:151: in _assert_native_profile_enforces_unusual_allowed_roots
+    assert proc.returncode == 0, f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+E   AssertionError: stdout: 
+E     stderr: sandbox-exec: sandbox_apply: Operation not permitted
+E     
+E   assert 71 == 0
+E    +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath "/private/.../.git/hooks/pre-commit"]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\n').returncode
+__________ test_a_stuck_tick_is_reported_with_the_kill_that_frees_it ___________
+tests/test_tick_watchdog.py:116: in test_a_stuck_tick_is_reported_with_the_kill_that_frees_it
+    rec = _wait_for(
+tests/test_tick_watchdog.py:59: in _wait_for
+    raise AssertionError(f"timed out after {timeout:.0f}s waiting for {what}{seen}")
+E   AssertionError: timed out after 60s waiting for a drain naming the stuck command; record={}; history=<none>
+_______________ test_the_process_table_keeps_whole_command_lines _______________
+tests/test_tick_watchdog.py:266: in test_the_process_table_keeps_whole_command_lines
+    row = _wait_for(lambda: tick_watchdog.snapshot().get(child.pid), "the child in ps")
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_tick_watchdog.py:48: in _wait_for
+    value = predicate()
+            ^^^^^^^^^^^
+tests/test_tick_watchdog.py:266: in <lambda>
+    row = _wait_for(lambda: tick_watchdog.snapshot().get(child.pid), "the child in ps")
+                            ^^^^^^^^^^^^^^^^^^^^^^^^
+src/tick_watchdog.py:149: in snapshot
+    out = subprocess.run(
+/opt/anaconda3/lib/python3.12/subprocess.py:548: in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/subprocess.py:1026: in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+/opt/anaconda3/lib/python3.12/subprocess.py:1953: in _execute_child
+    raise child_exception_type(errno_num, err_msg, err_filename)
+E   PermissionError: [Errno 1] Operation not permitted: 'ps'
+_________________ test_the_drained_line_is_reachable_and_exact _________________
+tests/test_tick_watchdog.py:313: in test_the_drained_line_is_reachable_and_exact
+    lines = _start(state)
+            ^^^^^^^^^^^^^
+tests/test_tick_watchdog.py:294: in _start
+    assert rc == 0, out.getvalue()
+E   AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E     
+E   assert 2 == 0
+_______________ test_a_tick_that_reaches_no_cadence_step_alerts ________________
+tests/test_tick_watchdog.py:330: in test_a_tick_that_reaches_no_cadence_step_alerts
+    lines = _start(state)
+            ^^^^^^^^^^^^^
+tests/test_tick_watchdog.py:294: in _start
+    assert rc == 0, out.getvalue()
+E   AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E     
+E   assert 2 == 0
+__________ test_a_previous_tick_that_left_no_end_is_unknown_and_kept ___________
+tests/test_tick_watchdog.py:365: in test_a_previous_tick_that_left_no_end_is_unknown_and_kept
+    lines = _start(state)
+            ^^^^^^^^^^^^^
+tests/test_tick_watchdog.py:294: in _start
+    assert rc == 0, out.getvalue()
+E   AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E     
+E   assert 2 == 0
+________________ test_an_unreadable_record_is_unknown_not_clean ________________
+tests/test_tick_watchdog.py:375: in test_an_unreadable_record_is_unknown_not_clean
+    assert "fate is UNKNOWN, not clean" in _start(state)[0]
+                                           ^^^^^^^^^^^^^
+tests/test_tick_watchdog.py:294: in _start
+    assert rc == 0, out.getvalue()
+E   AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E     
+E   assert 2 == 0
+__________ test_the_arming_block_as_written_arms_and_records_the_tick __________
+tests/test_tick_watchdog.py:466: in test_the_arming_block_as_written_arms_and_records_the_tick
+    assert proc.stdout.startswith("  tick-watchdog: armed"), proc.stdout
+E   AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E       WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)
+E     
+E   assert False
+E    +  where False = <built-in method startswith of str object at 0x11248b3c0>('  tick-watchdog: armed')
+E    +    where <built-in method startswith of str object at 0x11248b3c0> = "  WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed\n  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\n".startswith
+E    +      where "  WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed\n  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\n" = CompletedProcess(args=['bash', '-c', 'set -euo pipefail\nORCH=/Users/teacher/.codex/orchestrator/worktrees/stranske__O...s'); not armed\n  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\n", stderr='').stdout
+__________________ test_fleet_summary_carries_the_tick_record __________________
+tests/test_tick_watchdog.py:494: in test_fleet_summary_carries_the_tick_record
+    me = _me()  # a target that IS still the process the record named
+         ^^^^^
+tests/test_tick_watchdog.py:488: in _me
+    return _wait_for(lambda: tick_watchdog.snapshot().get(os.getpid()), "this process in ps")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_tick_watchdog.py:48: in _wait_for
+    value = predicate()
+            ^^^^^^^^^^^
+tests/test_tick_watchdog.py:488: in <lambda>
+    return _wait_for(lambda: tick_watchdog.snapshot().get(os.getpid()), "this process in ps")
+                             ^^^^^^^^^^^^^^^^^^^^^^^^
+src/tick_watchdog.py:149: in snapshot
+    out = subprocess.run(
+/opt/anaconda3/lib/python3.12/subprocess.py:548: in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/subprocess.py:1026: in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+/opt/anaconda3/lib/python3.12/subprocess.py:1953: in _execute_child
+    raise child_exception_type(errno_num, err_msg, err_filename)
+E   PermissionError: [Errno 1] Operation not permitted: 'ps'
+___________ test_a_drain_whose_target_has_exited_is_never_advertised ___________
+tests/test_tick_watchdog.py:527: in test_a_drain_whose_target_has_exited_is_never_advertised
+    me = _me()  # same pid as a live process, but NOT the start time the record named: recycled
+         ^^^^^
+tests/test_tick_watchdog.py:488: in _me
+    return _wait_for(lambda: tick_watchdog.snapshot().get(os.getpid()), "this process in ps")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_tick_watchdog.py:48: in _wait_for
+    value = predicate()
+            ^^^^^^^^^^^
+tests/test_tick_watchdog.py:488: in <lambda>
+    return _wait_for(lambda: tick_watchdog.snapshot().get(os.getpid()), "this process in ps")
+                             ^^^^^^^^^^^^^^^^^^^^^^^^
+src/tick_watchdog.py:149: in snapshot
+    out = subprocess.run(
+/opt/anaconda3/lib/python3.12/subprocess.py:548: in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/subprocess.py:1026: in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+/opt/anaconda3/lib/python3.12/subprocess.py:1953: in _execute_child
+    raise child_exception_type(errno_num, err_msg, err_filename)
+E   PermissionError: [Errno 1] Operation not permitted: 'ps'
+______ test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming ______
+tests/test_tick_watchdog.py:540: in test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming
+    lines = _start(state)
+            ^^^^^^^^^^^^^
+tests/test_tick_watchdog.py:294: in _start
+    assert rc == 0, out.getvalue()
+E   AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E     
+E   assert 2 == 0
+=========================== short test summary info ============================
+FAILED tests/test_build_exec_mirror.py::test_the_documented_copier_builds_through_the_builder
+FAILED tests/test_build_exec_mirror.py::test_the_390_guard_composes_with_the_documented_copier
+FAILED tests/test_build_exec_mirror.py::test_presync_says_whether_ci_verified_the_shipped_tree[documented]
+FAILED tests/test_build_exec_mirror.py::test_presync_says_whether_ci_verified_the_shipped_tree[drifted]
+FAILED tests/test_model_profile_trial.py::test_three_profiles_create_distinct_worker_attempts
+FAILED tests/test_model_profile_trial.py::test_evaluator_trace_stays_separate
+FAILED tests/test_model_profile_trial.py::test_trial_readiness_surfaces_in_reports_and_lifecycle
+FAILED tests/test_model_tier_resolution.py::test_capacity_sheds_seat_when_model_unresolvable
+FAILED tests/test_model_tier_resolution.py::test_capacity_stays_ok_when_model_resolves
+FAILED tests/test_model_tier_resolution.py::test_offload_survives_a_heartbeat_failure
+FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_backslash
+FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_combined
+FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_quote
+FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_regex_metacharacters
+FAILED tests/test_tick_watchdog.py::test_a_stuck_tick_is_reported_with_the_kill_that_frees_it
+FAILED tests/test_tick_watchdog.py::test_the_process_table_keeps_whole_command_lines
+FAILED tests/test_tick_watchdog.py::test_the_drained_line_is_reachable_and_exact
+FAILED tests/test_tick_watchdog.py::test_a_tick_that_reaches_no_cadence_step_alerts
+FAILED tests/test_tick_watchdog.py::test_a_previous_tick_that_left_no_end_is_unknown_and_kept
+FAILED tests/test_tick_watchdog.py::test_an_unreadable_record_is_unknown_not_clean
+FAILED tests/test_tick_watchdog.py::test_the_arming_block_as_written_arms_and_records_the_tick
+FAILED tests/test_tick_watchdog.py::test_fleet_summary_carries_the_tick_record
+FAILED tests/test_tick_watchdog.py::test_a_drain_whose_target_has_exited_is_never_advertised
+FAILED tests/test_tick_watchdog.py::test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming
+24 failed, 13 passed in 66.99s (0:01:06)

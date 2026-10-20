@@ -34,6 +34,49 @@ command returned an error. A pass bound prevents a zero-progress spin, but does
 not authorize a valid stop while actionable work and usable time remain. An
 expired recovery records its overrun honestly and launches no new actions.
 
+Staged-pipeline legacy resource advertisements record the actual run, revision, target
+identity and work key before an action starts. A separate read-only plan is
+available through `python3 src/closer_resources.py --state <pipeline-state>
+--run-id <run> --owner <owner> --target <target>`. Explicit `--apply` also requires
+`--expected-plan-sha256`. It rechecks the exact plan under the original run, state,
+native queue and resource locks, independently validates a completed evidence-refusal
+wait with no operation history, and durably archives the original bytes before
+retiring matching advertisements. Partial retirement can resume only from its
+unchanged audit and evidence. Historical advertisements without causal binding,
+Core intents and uncertain operations remain held. The non-pipeline legacy path
+also remains unbound and held; this API does not infer a pipeline identity for it.
+Reconciliation grants neither
+acceptance nor a valid global stop, and never resets an execution deadline.
+
+An interrupted receipt-less queued or running action/reconciliation boundary
+retains its original row in the audit and projects only to reconciliation in a
+successor. A missing callback return, absent action ledger or old not-started
+claim never authorizes replay. Other unsupported continuation facts and unresolved
+resource reservations retain their global invalid-stop verdict.
+
+The opt-in `resource_scoped` coordinator separately admits demonstrably disjoint
+work. A hash-bound, read-only census retains exact legacy rows, raw queue records,
+audit references, shard identities and reservation bytes. An anchored incomplete
+item fences its repository and known PR, source, branch and configured worktree
+aliases; corrupt shared state whose reach cannot be bounded holds all work with
+an explicit reconciliation reason. A queued exception with an unknown original
+outcome remains quarantined and is never converted into a retry.
+
+Read-only preparation discovers the complete aliases. Before low/exception work,
+actions and reconciliation, the coordinator holds those aliases' existing locks
+and rechecks a fresh census. Reasoning writes no effect intent. Action intents
+and exact-head, claim, provider, pause and acceptance checks retain their existing
+authority. Short inventory locking binds shard identity publication and state
+commits to the census and is released before callbacks. An immutable refusal receipt proves only that its
+named callback did not start; a refused reconciliation retains the earlier unknown
+action. Source changes invalidate admission and never replay a provider call.
+
+A disjoint shard may use its own bounded invocation window without renewing the
+legacy round. Interrupted shards retain their original deadlines. Named round
+validation reports `scoped_completion_valid` separately from `global_stop_valid`;
+retained historical quarantines keep the latter false. This does not authorize
+retiring advertisements, accepting model output or declaring aggregate success.
+
 A later CLI invocation starts a new budget only after the persisted round has a
 finished receipt that passes the queue's normal locked stop validation against the
 current state and claim ledger. Running rounds, invalid receipts and unreadable
@@ -108,6 +151,26 @@ current-head receipt.
 | Verifier running, history incomplete or outcome uncertain | Retain operation/run evidence and continue other targets |
 | Verifier NON_PASS | Collect/adjudicate findings; never close source automatically |
 | Merge-bound PASS and accepted original source evidence | Call the existing supervisor source-closure actor |
+
+Before either model lane runs, action-specific evidence readiness checks the retained
+packet, exact PR/head/base, complete original sources and usable raw inputs. A
+known collection gap returns a pending dependency naming its input and trigger;
+it does not spend a model call to rediscover that gap. Issue snapshots retain
+missing versus ambiguous delivery links and all candidate identities. Multiple
+links resolve automatically only when a bounded exact commit comparison proves
+one merged candidate head contains every other candidate merge. Open, unrelated,
+unreadable or unproved candidates remain explicit collection failures. All source
+criteria, PR/head/base identities and ancestry records are retained; lineage does
+not certify task completion. The producer emits a hash-bound ready or pending
+collection result after raw evidence retrieval. Unsupported verifier verdicts and
+run-attempt mismatches remain uncertainty barriers. Integrity
+validation still permits incomplete packets for collection and diagnosis; it is
+not model admission or acceptance. Substantive review and bound NON_PASS triage
+retain their narrower input contracts, including usable partial optional evidence.
+Stable redaction or truncation of original source criteria creates a typed senior
+source dependency; refreshing the same source is not a resolution. Review bodies
+may be redacted only when all thread and comment pages are complete, no content
+was truncated, and retained displayed bytes still match their hashes.
 
 `--dispositions` is a **trusted coordinator input**, never a private-worker output
 file. Each target's acceptance disposition names `reviewer`, exact `head`, current

@@ -1,0 +1,139 @@
+FFFFF                                                                    [100%]
+=================================== FAILURES ===================================
+______ test_close_requires_lineage_before_any_external_mutation[missing] _______
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-6297/test_close_requires_lineage_be0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10452e6f0>
+failure = 'missing'
+
+    @pytest.mark.parametrize("failure", ["missing", "unreadable"])
+    def test_close_requires_lineage_before_any_external_mutation(tmp_path, monkeypatch, failure):
+        import capabilities
+    
+        pr, issue, calls, recorded, options = closure_fixture(tmp_path)
+        options.pop("lineage", None)
+    
+        def load(*args):
+            if failure == "unreadable":
+                raise OSError("ledger unreadable")
+            return {}
+    
+        monkeypatch.setattr(capabilities, "load_declared", load)
+        result = supervisor.close_verified_issues(**options)
+>       assert result["closed"] == 0 and issue["state"] == "open"
+E       assert (1 == 0)
+
+tests/test_keepalive_supervisor.py:113: AssertionError
+_____ test_close_requires_lineage_before_any_external_mutation[unreadable] _____
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-6297/test_close_requires_lineage_be1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1047a6db0>
+failure = 'unreadable'
+
+    @pytest.mark.parametrize("failure", ["missing", "unreadable"])
+    def test_close_requires_lineage_before_any_external_mutation(tmp_path, monkeypatch, failure):
+        import capabilities
+    
+        pr, issue, calls, recorded, options = closure_fixture(tmp_path)
+        options.pop("lineage", None)
+    
+        def load(*args):
+            if failure == "unreadable":
+                raise OSError("ledger unreadable")
+            return {}
+    
+        monkeypatch.setattr(capabilities, "load_declared", load)
+        result = supervisor.close_verified_issues(**options)
+>       assert result["closed"] == 0 and issue["state"] == "open"
+E       assert (1 == 0)
+
+tests/test_keepalive_supervisor.py:113: AssertionError
+_ test_close_reconciles_confirmed_action_after_receipt_failure[source_marker] __
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-6297/test_close_reconciles_confirme0')
+failure = 'source_marker'
+
+    @pytest.mark.parametrize("failure", ["source_marker", "brain"])
+    def test_close_reconciles_confirmed_action_after_receipt_failure(tmp_path, failure):
+        pr, issue, calls, recorded, options = closure_fixture(tmp_path)
+        original = options["gh"]
+    
+        def gh(args):
+            if (failure == "source_marker" and issue["state"] == "closed"
+                    and args[1].endswith("/issues/7/comments") and "-f" in args):
+                raise OSError("source marker unavailable")
+            return original(args)
+    
+        def record(*args):
+            if failure == "brain":
+                raise OSError("Brain unavailable")
+            recorded.append(args)
+    
+        options.update(gh=gh, record=record)
+        first = supervisor.close_verified_issues(**options)
+>       assert first["closed"] == 1 and first["errors"] == 1
+E       assert (1 == 1 and 0 == 1)
+
+tests/test_keepalive_supervisor.py:135: AssertionError
+_____ test_close_reconciles_confirmed_action_after_receipt_failure[brain] ______
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-6297/test_close_reconciles_confirme1')
+failure = 'brain'
+
+    @pytest.mark.parametrize("failure", ["source_marker", "brain"])
+    def test_close_reconciles_confirmed_action_after_receipt_failure(tmp_path, failure):
+        pr, issue, calls, recorded, options = closure_fixture(tmp_path)
+        original = options["gh"]
+    
+        def gh(args):
+            if (failure == "source_marker" and issue["state"] == "closed"
+                    and args[1].endswith("/issues/7/comments") and "-f" in args):
+                raise OSError("source marker unavailable")
+            return original(args)
+    
+        def record(*args):
+            if failure == "brain":
+                raise OSError("Brain unavailable")
+            recorded.append(args)
+    
+        options.update(gh=gh, record=record)
+        first = supervisor.close_verified_issues(**options)
+        assert first["closed"] == 1 and first["errors"] == 1
+        pending = list((tmp_path / "supervisor-close-operations").glob("*.json"))
+>       assert len(pending) == 1
+E       assert 0 == 1
+E        +  where 0 = len([])
+
+tests/test_keepalive_supervisor.py:137: AssertionError
+_______ test_close_ambiguous_patch_never_infers_actor_from_closed_state ________
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-6297/test_close_ambiguous_patch_nev0')
+
+    def test_close_ambiguous_patch_never_infers_actor_from_closed_state(tmp_path):
+        pr, issue, calls, recorded, options = closure_fixture(tmp_path)
+        original = options["gh"]
+    
+        def gh(args):
+            if "PATCH" in args:
+                original(args)
+                raise OSError("response lost")
+            return original(args)
+    
+        options["gh"] = gh
+        assert supervisor.close_verified_issues(**options)["closed"] == 0
+        options["gh"] = original
+        assert supervisor.close_verified_issues(**options)["closed"] == 0
+        assert not recorded and sum("PATCH" in c for c in calls) == 1
+        pending = list((tmp_path / "supervisor-close-operations").glob("*.json"))
+>       assert len(pending) == 1
+E       assert 0 == 1
+E        +  where 0 = len([])
+
+tests/test_keepalive_supervisor.py:165: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_keepalive_supervisor.py::test_close_requires_lineage_before_any_external_mutation[missing]
+FAILED tests/test_keepalive_supervisor.py::test_close_requires_lineage_before_any_external_mutation[unreadable]
+FAILED tests/test_keepalive_supervisor.py::test_close_reconciles_confirmed_action_after_receipt_failure[source_marker]
+FAILED tests/test_keepalive_supervisor.py::test_close_reconciles_confirmed_action_after_receipt_failure[brain]
+FAILED tests/test_keepalive_supervisor.py::test_close_ambiguous_patch_never_infers_actor_from_closed_state
+5 failed, 49 deselected in 0.17s

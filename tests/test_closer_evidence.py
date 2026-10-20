@@ -178,6 +178,123 @@ def test_current_head_ci_runs_collected_before_verifier_and_progress_refreshes(t
     assert second["sections"]["ci_artifacts"]["content"]["runs"][0]["conclusion"] == "success"
 
 
+def test_unassociated_pull_request_runs_bind_to_unique_exact_head_and_keep_failure(tmp_path):
+    branch = "codex/issue-3"
+    snap = snapshot(head_branch=branch, head_repository="acme/repo")
+    calls = []
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as stream:
+        stream.writestr("junit.xml", '<testsuite tests="1"><testcase name="one"/></testsuite>')
+
+    def api(endpoint, **kwargs):
+        calls.append(endpoint)
+        if "/compare/" in endpoint:
+            return base_api(endpoint)
+        if "/actions/runs?" in endpoint:
+            return {"workflow_runs": [{"id": n, "head_sha": HEAD} for n in (901, 902)]}
+        if "/pulls?" in endpoint:
+            return [
+                {
+                    "number": 12,
+                    "head": {"sha": HEAD, "ref": branch, "repo": {"full_name": "acme/repo"}},
+                }
+            ]
+        if endpoint.endswith("/runs/901") or endpoint.endswith("/runs/902"):
+            run_id = int(endpoint.rsplit("/", 1)[1])
+            return {
+                "id": run_id,
+                "run_attempt": 1,
+                "head_sha": HEAD,
+                "head_branch": branch,
+                "head_repository": {"full_name": "acme/repo"},
+                "repository": {"full_name": "acme/repo"},
+                "pull_requests": [],
+                "event": "pull_request",
+                "status": "completed",
+                "conclusion": "success" if run_id == 901 else "failure",
+            }
+        if endpoint.endswith("/artifacts?per_page=100"):
+            run_id = int(endpoint.split("/runs/", 1)[1].split("/", 1)[0])
+            return {
+                "artifacts": [
+                    {
+                        "id": run_id,
+                        "name": "test-output",
+                        "size_in_bytes": 100,
+                        "expired": False,
+                    }
+                ]
+            }
+        raise AssertionError(endpoint)
+
+    packet = collect(
+        tmp_path, snap, api=api, artifact_fetch=lambda _item, **_kw: archive.getvalue()
+    )
+    ci = packet["sections"]["ci_artifacts"]
+    assert evidence.validate_packet(packet)
+    assert [(row["id"], row["conclusion"]) for row in ci["content"]["runs"]] == [
+        (901, "success"),
+        (902, "failure"),
+    ]
+    assert all(
+        row["association_basis"] == "unique_exact_pr_head"
+        and row["head_branch"] == branch
+        and row["head_repository"] == "acme/repo"
+        for row in ci["content"]["runs"]
+    )
+    assert len(ci["content"]["artifacts"]) == 2
+    assert ci["content"]["proof_status"] == "partial"
+    assert len([call for call in calls if "/pulls?" in call]) == 1
+
+
+@pytest.mark.parametrize("change", ["branch", "head-repo", "base-repo", "event", "ambiguous"])
+def test_unassociated_pull_request_run_rejects_mismatched_or_ambiguous_identity(tmp_path, change):
+    branch = "codex/issue-3"
+    snap = snapshot(head_branch=branch, head_repository="acme/repo")
+    run = {
+        "id": 901,
+        "run_attempt": 1,
+        "head_sha": HEAD,
+        "head_branch": branch,
+        "head_repository": {"full_name": "acme/repo"},
+        "repository": {"full_name": "acme/repo"},
+        "pull_requests": [],
+        "event": "pull_request",
+        "status": "completed",
+        "conclusion": "success",
+    }
+    if change == "branch":
+        run["head_branch"] = "other-branch"
+    elif change == "head-repo":
+        run["head_repository"] = {"full_name": "other/repo"}
+    elif change == "base-repo":
+        run["repository"] = {"full_name": "other/repo"}
+    elif change == "event":
+        run["event"] = "push"
+    candidate = {
+        "number": 12,
+        "head": {"sha": HEAD, "ref": branch, "repo": {"full_name": "acme/repo"}},
+    }
+
+    def api(endpoint, **kwargs):
+        if "/compare/" in endpoint:
+            return base_api(endpoint)
+        if "/actions/runs?" in endpoint:
+            return {"workflow_runs": [{"id": 901, "head_sha": HEAD}]}
+        if "/pulls?" in endpoint:
+            return (
+                [candidate, {**candidate, "number": 13}] if change == "ambiguous" else [candidate]
+            )
+        if endpoint.endswith("/runs/901"):
+            return run
+        raise AssertionError(endpoint)
+
+    packet = collect(tmp_path, snap, api=api)
+    ci = packet["sections"]["ci_artifacts"]
+    assert ci["content"]["runs"] == []
+    assert ci["status"] != "complete"
+
+
 def test_ci_run_and_artifact_identity_provenance_and_junit_raw_retention(tmp_path):
     stream = io.BytesIO()
     with zipfile.ZipFile(stream, "w") as archive:
@@ -881,3 +998,123 @@ def test_only_unavailable_run_detail_produces_unknown_ci_section_but_keeps_packe
     ]
     assert packet["sections"]["source"]["status"] == "complete"
     assert Path(packet["manifest"]["section_files"]["source"]["path"]).exists()
+
+
+def test_bounded_large_receipts_keep_exact_raw_bytes_and_compact_counts(tmp_path):
+    junit = (
+        "<testsuites><testsuite>"
+        + "".join(
+            f'<testcase name="case{i}" classname="' + "x" * 120 + '"><skipped/></testcase>'
+            for i in range(2341)
+        )
+        + "</testsuite></testsuites>"
+    ).encode()
+    coverage = json.dumps(
+        {
+            "meta": {"format": 3, "version": "7.16.2"},
+            "totals": {
+                "num_statements": 100,
+                "covered_lines": 90,
+                "missing_lines": 10,
+                "num_branches": 20,
+                "covered_branches": 15,
+                "missing_branches": 5,
+                "percent_covered": 87.5,
+            },
+            "files": {"large": "x" * 985434},
+        }
+    ).encode()
+    assert len(junit) > evidence.MAX_SECTION_BYTES
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("pytest-junit.xml", junit)
+        archive.writestr("coverage.json", coverage)
+        archive.writestr(
+            "summary.json", json.dumps({"checks": {}, "artifacts": [], "python_version": "3.13"})
+        )
+        archive.writestr("index.ndjson", '{"coverage":91.6}\n{"coverage":92.2}')
+    receipts, omissions, status = evidence._parse_archive(stream.getvalue(), tmp_path)
+    assert status == "partial" and len(omissions) == 2
+    assert len(receipts) == 2
+    tests, cov = receipts
+    assert (tests["tests"], tests["skipped"], tests["failures"], tests["errors"]) == (
+        2341,
+        2341,
+        0,
+        0,
+    )
+    assert (cov["count"], cov["covered"], cov["percent_covered"]) == (100, 90, 90)
+    assert cov["branches"] == {"count": 20, "covered": 15, "missing": 5}
+    for row, raw in zip(receipts, (junit, coverage)):
+        assert Path(row["raw"]["path"]).read_bytes() == raw
+        assert row["raw"]["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert len(json.dumps(receipts).encode()) < evidence.MAX_SECTION_BYTES
+
+
+@pytest.mark.parametrize(
+    "totals",
+    [
+        {"num_statements": 10, "covered_lines": 11, "missing_lines": 0},
+        {"num_statements": 10, "covered_lines": 9, "missing_lines": 0},
+        {"num_statements": True, "covered_lines": 1, "missing_lines": 0},
+        {
+            "num_statements": 10,
+            "covered_lines": 9,
+            "missing_lines": 1,
+            "percent_covered": float("nan"),
+        },
+        {
+            "num_statements": 10,
+            "covered_lines": 9,
+            "missing_lines": 1,
+            "num_branches": 2,
+            "covered_branches": 3,
+            "missing_branches": 0,
+        },
+        {"num_statements": 10, "covered_lines": 9, "missing_lines": 1, "num_branches": 2},
+    ],
+)
+def test_coverage_py_receipt_rejects_inconsistent_counters(totals):
+    assert (
+        evidence._recognized_json({"meta": {"format": 3, "version": "7.16.2"}, "totals": totals})
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b'<!DOCTYPE testsuite [<!ENTITY x "a">]><testsuite><testcase>&x;</testcase></testsuite>',
+        '<!DOCTYPE testsuite [<!ENTITY x "a">]><testsuite/>'.encode("utf-16"),
+        b"<testsuite><testcase>",
+    ],
+)
+def test_unsafe_or_malformed_junit_is_not_evidence(tmp_path, raw):
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w") as archive:
+        archive.writestr("junit.xml", raw)
+    receipts, omissions, status = evidence._parse_archive(stream.getvalue(), tmp_path)
+    assert receipts == [] and status == "truncated"
+    assert "XML" in omissions[0]["reason"]
+
+
+def test_receipt_archive_expansion_and_entry_count_caps_remain(tmp_path, monkeypatch):
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("junit.xml", "<testsuite>" + " " * 5000 + "</testsuite>")
+    monkeypatch.setattr(evidence, "MAX_UNCOMPRESSED_BYTES", 1000)
+    assert evidence._parse_archive(stream.getvalue(), tmp_path)[2] == "truncated"
+    monkeypatch.setattr(evidence, "MAX_UNCOMPRESSED_BYTES", 16000000)
+    monkeypatch.setattr(evidence, "MAX_FILES", 0)
+    assert evidence._parse_archive(stream.getvalue(), tmp_path)[2] == "truncated"
+
+
+def test_namespaced_junit_stream_counts_children_before_clearing(tmp_path):
+    raw = b'<testsuites xmlns="urn:junit"><testsuite><testcase><failure/></testcase><testcase><error/></testcase><testcase><skipped/></testcase></testsuite></testsuites>'
+    assert evidence._junit_receipt(raw) == {
+        "kind": "junit",
+        "tests": 3,
+        "failures": 1,
+        "errors": 1,
+        "skipped": 1,
+    }

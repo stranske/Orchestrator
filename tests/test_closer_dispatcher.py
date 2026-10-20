@@ -15,6 +15,7 @@ import pytest
 
 import claims
 import closer_dispatcher as adapter
+import closer_evidence
 import closer_pipeline
 import closer_queue
 
@@ -27,6 +28,14 @@ MERGE = "b" * 40
 @pytest.fixture(autouse=True)
 def no_live_state_or_provider(monkeypatch, tmp_path):
     monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "private-handoff"))
+
+    def semantic_route(route, invoke, *, load, **_kwargs):
+        try:
+            return invoke(route), route
+        finally:
+            adapter._release_route_load(route, load)
+
+    monkeypatch.setattr(adapter, "_execute_profile_route", semantic_route)
     monkeypatch.setattr(claims, "claim", lambda *a, **kw: True)
     monkeypatch.setattr(claims, "release", lambda *a, **kw: True)
     monkeypatch.setattr(claims, "update_metadata", lambda *a, **kw: True)
@@ -41,12 +50,29 @@ def no_live_state_or_provider(monkeypatch, tmp_path):
     monkeypatch.setattr(adapter.gh_capacity, "gh_run", forbidden)
 
 
+def stub_action_readiness_for_transport_test(monkeypatch):
+    """These transport units start after admission; real collector admission is tested separately."""
+    monkeypatch.setattr(
+        closer_evidence,
+        "action_evidence_readiness",
+        lambda *_a, **_k: {
+            "schema": "closer-action-evidence-readiness/v1",
+            "action": _a[2],
+            "ready": True,
+            "mode": "acceptance",
+            "gaps": [],
+        },
+    )
+
+
 def snapshot(**overrides):
     result = {
         "target": TARGET,
         "kind": "pr",
         "state": "OPEN",
         "head": HEAD,
+        "head_branch": "feature",
+        "head_repository": "o/r",
         "merge": None,
         "body": "Delivery",
         "draft": False,
@@ -68,6 +94,182 @@ def snapshot(**overrides):
     result.update(overrides)
     result["revision"] = adapter.digest(result)
     return result
+
+
+def test_local_packet_progresses_with_github_unavailable_but_remote_action_waits(
+    tmp_path, monkeypatch
+):
+    class OfflineGitHub:
+        deadline = time.time() + 30
+
+        def __init__(self):
+            self.calls = 0
+
+        def snapshot(self, _target):
+            self.calls += 1
+            raise ConnectionError("GitHub unavailable")
+
+    gh = OfflineGitHub()
+    local = snapshot()
+    backend = adapter.Closer(
+        gh,
+        state_path=tmp_path / "queue.json",
+        seed_snapshots={TARGET: local},
+        local_first=True,
+        apply=True,
+        workers=True,
+    )
+    backend.select = lambda _s: ("review", "local review", True, None)
+    backend.worker = lambda *_args, **_kwargs: {"status": "completed", "local_result": True}
+    observed = backend.observe(TARGET)
+    assert observed["action"] == "review" and observed["eligible"]
+    result = backend.execute(TARGET, "review", observed, {"deadline": time.time() + 20})
+    assert result["status"] == "completed" and result["local_result"]
+    assert gh.calls == 0
+
+    backend.select = lambda _s: ("merge", "remote merge", True, None)
+    observed = backend.observe(TARGET)
+    remote = backend.execute(TARGET, "merge", observed, {"deadline": time.time() + 20})
+    assert remote["status"] == "not_started"
+    assert remote["next_trigger"] == "targeted_remote_freshness_recheck"
+    assert gh.calls == 1
+
+
+def test_offline_retained_packet_runs_through_durable_queue(tmp_path):
+    class OfflineGitHub:
+        def __init__(self):
+            self.calls = 0
+
+        def snapshot(self, _target):
+            self.calls += 1
+            raise ConnectionError("offline")
+
+    gh = OfflineGitHub()
+    backend = adapter.Closer(
+        gh,
+        state_path=tmp_path / "queue.json",
+        seed_snapshots={TARGET: snapshot()},
+        local_first=True,
+        apply=True,
+        workers=True,
+    )
+    backend.select = lambda _s: ("review", "local review", True, None)
+    backend.worker = lambda *_args, **_kwargs: {"status": "completed", "local_result": True}
+    receipt = closer_queue.run_round(
+        backend.state_path,
+        [TARGET],
+        backend.observe,
+        backend.execute,
+        reconcile=backend.reconcile,
+        deadline=time.time() + 360,
+        max_workers=1,
+        max_passes=1,
+    )
+    row = next(row for row in receipt["accounting"] if row["target"] == TARGET)
+    assert row["action"] == "review"
+    assert row["operation_status"] == "completed"
+    assert row["status"] == "deferred" and row["reason"] == "no_progress"
+    durable = closer_queue._read_state(backend.state_path)["items"][TARGET]
+    assert durable["operation"]["result"]["local_result"] is True
+    assert gh.calls == 0
+
+
+def test_pipeline_keeps_local_io_capacity_when_github_capacity_is_unavailable(monkeypatch):
+    monkeypatch.setattr(adapter, "_fresh_capacity_report", lambda: None)
+    monkeypatch.setattr(
+        adapter.gh_capacity, "state", lambda *_args: (_ for _ in ()).throw(ConnectionError())
+    )
+    assert adapter._pipeline_capacity() == {"io": 4, "low": 0, "exception": 0}
+
+
+@pytest.mark.parametrize("stale_binding", [None, "source", "reviews", "dispositions"])
+def test_staged_prepare_reuses_retained_packet_during_github_outage(
+    tmp_path, monkeypatch, stale_binding
+):
+    current = snapshot(base=MERGE)
+    state = tmp_path / "state.json"
+    packet = {
+        "schema": "closer-evidence/v1",
+        "collection_action": "collect_evidence",
+        "head": HEAD,
+        "base": MERGE,
+        "bindings": {
+            "source": closer_evidence._hash(current["sources"]),
+            "reviews": closer_evidence._hash(current["review_revision"]),
+            "dispositions": closer_evidence._hash({}),
+        },
+        "manifest": {"packet_sha256": "retained"},
+        "sections": {"source": {"status": "complete", "content": current["sources"]}},
+    }
+    if stale_binding:
+        packet["bindings"][stale_binding] = "stale-binding"
+    packet_path = tmp_path / "packet.json"
+    packet_bytes = json.dumps(packet).encode()
+    packet_path.write_bytes(packet_bytes)
+    snapshot_path = tmp_path / "snapshot.json"
+    snapshot_bytes = json.dumps(current).encode()
+    snapshot_path.write_bytes(snapshot_bytes)
+    prior = {
+        "revision": current["revision"],
+        "snapshot": {"target": TARGET, "revision": current["revision"]},
+        "packet_ref": {
+            "path": str(packet_path),
+            "sha256": hashlib.sha256(packet_bytes).hexdigest(),
+        },
+        "snapshot_ref": {
+            "path": str(snapshot_path),
+            "sha256": hashlib.sha256(snapshot_bytes).hexdigest(),
+        },
+    }
+    adapter._pipeline_state_path(state).write_text(
+        json.dumps({"runs": {"prior": {"targets": {TARGET: {"results": {"prepare": prior}}}}}})
+    )
+
+    class OfflineGitHub:
+        def __init__(self, *, deadline):
+            self.deadline = deadline
+
+        def snapshot(self, _target):
+            raise ConnectionError("offline")
+
+    monkeypatch.setattr(adapter, "GitHub", OfflineGitHub)
+    monkeypatch.setattr(
+        closer_evidence,
+        "validate_packet",
+        lambda p: isinstance(p, dict) and p.get("schema") == "closer-evidence/v1",
+    )
+    monkeypatch.setattr(closer_evidence, "drift_sample", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        closer_evidence,
+        "collect_evidence",
+        lambda *_a, **_k: pytest.fail("retained packet must be reused"),
+    )
+    prepared = {}
+
+    def run_pipeline(_path, targets, **callbacks):
+        prepared.update(callbacks["prepare"](targets[0], {"deadline": time.time() + 30}))
+        return {"valid": True}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "closer_pipeline",
+        SimpleNamespace(
+            run_pipeline=run_pipeline,
+            EVIDENCE_REFUSAL_REASONS=closer_pipeline.EVIDENCE_REFUSAL_REASONS,
+        ),
+    )
+    backend = closer(tmp_path, current)
+    backend.local_first = True
+    args = SimpleNamespace(state=str(state), max_workers=1, shadow=False)
+    if stale_binding:
+        with pytest.raises(ConnectionError, match="offline"):
+            adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 330)
+        assert prepared == {}
+    else:
+        adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 330)
+        assert prepared["snapshot"]["_local_cached"] is True
+        assert prepared["remote_fresh"] is False
+        assert prepared["revision"] == current["revision"]
 
 
 class FakeGitHub:
@@ -452,9 +654,30 @@ def test_disappearing_sources_do_not_confirm_unknown_closure(tmp_path):
     assert backend.reconcile(TARGET, operation("close_source"))["status"] != "completed"
 
 
+def assert_nonpass_accounting_prompt_contract(prompt):
+    for required in (
+        "This path requires at least one supplied nonpass_finding",
+        "Only when ALL supplied nonpass_finding exact finding_id values are confidently accounted for",
+        "wait, collect_evidence, or repair with a validated bound mechanical plan",
+        "substantive_needs [] if there is no OTHER semantic, ownership, security, or routing ambiguity",
+        "missing acceptance proof in each unresolved_missing_evidence resolution's reason",
+        "preserve every raw NON_PASS verdict, and leave decision.criteria empty",
+        "Accounting never grants PASS or acceptance authority",
+        "Resolved duplicate/nonissue claims still require exact raw evidence/proofs",
+        "repair still requires the existing coordinator authorization",
+        "Security/high-risk findings require senior review with classification uncertain and nonempty substantive_needs",
+        "If any finding identity, meaning, ownership, security implication, or safe routing remains uncertain",
+        "return classification uncertain with nonempty substantive_needs",
+        "do not hide uncertainty to fit the accounting path",
+    ):
+        assert required in prompt
+    assert "Otherwise return classification uncertain" not in prompt
+
+
 def test_luna_result_is_advisory_and_cannot_supply_completion_disposition(tmp_path, monkeypatch):
     current = snapshot()
     calls = []
+    _seed_exception_capacity(adapter.os.environ["HANDOFF_DIR"])
     monkeypatch.setitem(sys.modules, "capacity", SimpleNamespace(shed_marker=lambda agent: None))
     monkeypatch.setitem(sys.modules, "dispatcher", SimpleNamespace())
 
@@ -476,6 +699,38 @@ def test_luna_result_is_advisory_and_cannot_supply_completion_disposition(tmp_pa
     assert backend.dispositions == {}
     assert backend.select(current)[0] == "wait"
     assert backend.gh.calls == []
+
+
+def test_selective_exception_prompt_accounts_for_nonpass_without_pass_authority(
+    tmp_path, monkeypatch
+):
+    current, prompts = snapshot(), []
+    _seed_exception_capacity(adapter.os.environ["HANDOFF_DIR"])
+    monkeypatch.setitem(sys.modules, "capacity", SimpleNamespace(shed_marker=lambda agent: None))
+    monkeypatch.setitem(sys.modules, "dispatcher", SimpleNamespace())
+
+    def offload(_agent, prompt, **kwargs):
+        prompts.append(prompt)
+        return {"exit": 0, "output": '{"classification":"uncertain"}'}
+
+    backend = closer(
+        tmp_path,
+        current,
+        apply=True,
+        workers=True,
+        workspaces={"o/r": str(tmp_path)},
+        offload_fn=offload,
+    )
+    backend.worker(
+        TARGET,
+        "collect_evidence",
+        current,
+        operation("collect_evidence"),
+        advisory_context={"nonpass_findings": [{"finding_id": "fixture-finding"}]},
+    )
+    assert_nonpass_accounting_prompt_contract(prompts[0])
+    assert "Never claim PASS for a raw NON_PASS verifier result" in prompts[0]
+    assert backend.dispositions == {} and backend.gh.calls == []
 
 
 def test_senior_acceptance_survives_own_source_state_transition(tmp_path):
@@ -543,6 +798,8 @@ def _graphql_pr():
         "state": "OPEN",
         "isDraft": False,
         "headRefOid": HEAD,
+        "headRefName": "codex/delivery",
+        "headRepository": {"nameWithOwner": "o/r"},
         "mergedAt": None,
         "mergeCommit": None,
         "updatedAt": "2026-10-17T00:00:00Z",
@@ -605,6 +862,8 @@ def test_snapshot_retains_complete_native_label_timeline(monkeypatch):
         "pageInfo": {"hasPreviousPage": False},
     }
     current = _snapshot_from_document(monkeypatch, document)
+    assert current["head_branch"] == "codex/delivery"
+    assert current["head_repository"] == "o/r"
     assert current["label_events_complete"] is True
     assert current["label_events"] == [
         {
@@ -858,7 +1117,14 @@ def test_staged_action_waits_on_confirmed_native_label_after_completed_verify(
         )
         return {"targets": {targets[0]: captured["result"]}}
 
-    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=run_pipeline))
+    monkeypatch.setitem(
+        sys.modules,
+        "closer_pipeline",
+        SimpleNamespace(
+            run_pipeline=run_pipeline,
+            EVIDENCE_REFUSAL_REASONS=closer_pipeline.EVIDENCE_REFUSAL_REASONS,
+        ),
+    )
     backend = closer(tmp_path, current)
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
     adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
@@ -917,7 +1183,14 @@ def test_staged_action_waits_on_pr_linked_active_run_without_provider_or_label(
         )
         return {"targets": {targets[0]: captured["result"]}}
 
-    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=run_pipeline))
+    monkeypatch.setitem(
+        sys.modules,
+        "closer_pipeline",
+        SimpleNamespace(
+            run_pipeline=run_pipeline,
+            EVIDENCE_REFUSAL_REASONS=closer_pipeline.EVIDENCE_REFUSAL_REASONS,
+        ),
+    )
     backend = closer(tmp_path, current)
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
     adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
@@ -1203,8 +1476,46 @@ def test_bounded_runner_owns_session_and_kills_only_its_process_group(monkeypatc
     assert created[0][1]["stdout"] == adapter.subprocess.PIPE
 
 
+def _seed_exception_capacity(
+    handoff_dir,
+    *,
+    profile_ids=("codex-6-luna-low", "codex-5.6-terra-medium"),
+):
+    import execution_profiles
+
+    handoff = Path(handoff_dir)
+    handoff.mkdir(parents=True, exist_ok=True)
+    profiles = {}
+    pools = {}
+    for profile_id in profile_ids:
+        row = execution_profiles.get_profile(profile_id)
+        profiles[profile_id] = {
+            "state": "ok",
+            "capacity_pool_ids": row["capacity_pool_ids"],
+        }
+        for pool in row["capacity_pool_ids"]:
+            pools[pool] = {"state": "ok"}
+    (handoff / "capacity.json").write_text(
+        json.dumps(
+            {
+                "generated_at": time.time(),
+                "agents": {
+                    agent: {"state": "ok"}
+                    for agent in ("codex", "claude", "gemini", "cursor", "vibe", "muse")
+                },
+                "profiles": profiles,
+                "pools": pools,
+            }
+        )
+    )
+
+
 def _private_worker(tmp_path, monkeypatch, *, decision=None, result=None, real_admission=False):
     calls = []
+    if real_admission:
+        pass
+    else:
+        _seed_exception_capacity(adapter.os.environ["HANDOFF_DIR"])
     monkeypatch.setitem(sys.modules, "capacity", SimpleNamespace(shed_marker=lambda agent: None))
 
     def offload(*args, **kwargs):
@@ -1263,7 +1574,7 @@ def test_repair_uses_readonly_luna_until_scoped_plan_then_supported_terra(
     assert kwargs["profile_id"] == (
         "codex-5.6-terra-medium" if trusted_plan else "codex-6-luna-low"
     )
-    assert kwargs["isolate"] is trusted_plan
+    assert kwargs["isolate"] is True
     assert kwargs["mode"] == ("mid" if trusted_plan else "assess")
     assert backend.dispositions.get(TARGET) == decision
 
@@ -1302,11 +1613,8 @@ def test_existing_campaign_guard_is_reused_and_caps_worker_timeout(tmp_path, mon
     )
     monkeypatch.setattr(adapter.Path, "home", lambda: fake_home)
     handoff = adapter.Path(adapter.os.environ["HANDOFF_DIR"])
-    handoff.mkdir(parents=True)
+    _seed_exception_capacity(handoff)
     capacity = handoff / "capacity.json"
-    capacity.write_text(
-        json.dumps({"generated_at": time.time(), "agents": {"codex": {"state": "ok"}}})
-    )
     before = capacity.read_bytes()
     backend, calls = _private_worker(tmp_path, monkeypatch, real_admission=True)
     result = backend.worker(TARGET, "collect_evidence", snapshot(), operation("collect_evidence"))
@@ -1540,6 +1848,7 @@ def test_staged_prepare_runs_before_pending_ci_wait_selection(tmp_path, monkeypa
         "closer_evidence",
         SimpleNamespace(
             collect_evidence=lambda snap, api, retained_dir, **kwargs: packet,
+            collection_summary=closer_evidence.collection_summary,
             validate_packet=lambda value: False,
             _atomic_write=lambda path, data: (
                 Path(path).parent.mkdir(parents=True, exist_ok=True),
@@ -1560,7 +1869,14 @@ def test_staged_prepare_runs_before_pending_ci_wait_selection(tmp_path, monkeypa
         seen["shadow_action"] = kwargs["act"](TARGET, {"prepare": prepared})
         return {"valid": True, "targets": {TARGET: {"status": "parked"}}}
 
-    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=run_pipeline))
+    monkeypatch.setitem(
+        sys.modules,
+        "closer_pipeline",
+        SimpleNamespace(
+            run_pipeline=run_pipeline,
+            EVIDENCE_REFUSAL_REASONS=closer_pipeline.EVIDENCE_REFUSAL_REASONS,
+        ),
+    )
     backend = closer(tmp_path, current, apply=True, workers=True)
     monkeypatch.setattr(
         backend, "execute", lambda *_a, **_k: pytest.fail("shadow mode must never execute")
@@ -1708,7 +2024,14 @@ def test_only_proven_non_ci_waits_become_pipeline_continuations(
         )
         return {"targets": {targets[0]: captured["result"]}}
 
-    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=run_pipeline))
+    monkeypatch.setitem(
+        sys.modules,
+        "closer_pipeline",
+        SimpleNamespace(
+            run_pipeline=run_pipeline,
+            EVIDENCE_REFUSAL_REASONS=closer_pipeline.EVIDENCE_REFUSAL_REASONS,
+        ),
+    )
     backend = closer(tmp_path, snapshot())
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
     adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
@@ -1773,6 +2096,473 @@ def test_staged_adapter_emits_only_durable_validated_inner_wait(tmp_path, monkey
     assert result["queue_receipt"]["stop_valid"] is True
     assert result["resource_evidence"]["inner_wait"]["inner_path"] == str(action_path)
     assert not backend.gh.calls
+
+
+def ordinary_nonpass_wait_fixture(
+    tmp_path, monkeypatch, *, fresh_revision=False, linked_subject=False
+):
+    # Reuse the native input/comparison corpus fixture; do not stub integration.
+    import test_closer_disposition
+
+    import closer_disposition
+
+    if linked_subject:
+        monkeypatch.setattr(test_closer_disposition, "TARGET", "owner/repo#11")
+    current, packet, ref, prepared, interpreted = test_closer_disposition.fixture(
+        tmp_path,
+        native=True,
+        **({"pr_target": "owner/repo#12"} if linked_subject else {}),
+    )
+    current.update(state="MERGED", labels=[], draft=False, active_threads=0, mergeable="MERGEABLE")
+    prepared.update(
+        snapshot=copy.deepcopy(current),
+        packet_ref=ref,
+        identity=current["target"],
+        semantic_cache_key="closer-evidence-semantic/v1:" + "e" * 64,
+    )
+    interpreted["proposal"]["decision"]["criteria"] = []
+    interpreted["proposal"]["resolutions"] = [
+        {
+            "finding_id": row["finding_id"],
+            "status": "unresolved_missing_evidence",
+            "next_guarded_action": "wait",
+            "reason": "Original acceptance proof is missing; source-owned follow-up required",
+        }
+        for row in closer_disposition.pending_nonpass_findings(current, packet)
+    ]
+    interpreted["substantive_needs"] = []
+    if fresh_revision:
+        current["revision"] = "fresh-same-head-revision"
+    monkeypatch.setattr(adapter, "GitHub", lambda **kwargs: FakeGitHub(current))
+    path = adapter._pipeline_state_path(tmp_path / "state.json")
+    captured = {}
+
+    def pipeline_stub(_path, _targets, **callbacks):
+        context = {
+            "state_path": str(path),
+            "action_state_path": str(
+                path.parent
+                / f"{path.stem}.actions"
+                / f"{closer_pipeline._digest(current['target'])}.json"
+            ),
+            "deadline": time.time() + 60,
+            "revision": prepared["revision"],
+            "identity": prepared["identity"],
+            "prepare": prepared,
+            "interpret": interpreted,
+        }
+        captured["act"] = callbacks["act"]
+        captured["context"] = context
+        captured["first"] = callbacks["act"](current["target"], context)
+        return {"targets": {current["target"]: captured["first"]}}
+
+    monkeypatch.setattr(closer_pipeline, "run_pipeline", pipeline_stub)
+    backend = closer(tmp_path, current)
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [current["target"]], backend, time.time() + 360)
+    return current, prepared, interpreted, path, backend, captured
+
+
+@pytest.mark.parametrize("linked_subject", [False, True])
+def test_helper_accounted_native_nonpass_becomes_typed_wait_without_acceptance(
+    tmp_path, monkeypatch, linked_subject
+):
+    native_pipeline = closer_pipeline.run_pipeline
+    current, prep, interpreted, path, backend, captured = ordinary_nonpass_wait_fixture(
+        tmp_path, monkeypatch, linked_subject=linked_subject
+    )
+    result = captured["first"]
+    assert result["status"] == "deferred" and result["reason"] == "validated_inner_wait"
+    proof = result["resource_evidence"]["inner_wait"]
+    record_ref = proof["ordinary_nonpass_ref"]
+    raw = Path(record_ref["path"]).read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == record_ref["sha256"]
+    record = json.loads(raw)
+    assert record["disposition"]["acceptance_authority"] is False
+    assert len(record["disposition"]["raw_verdicts"]) == 4
+    assert interpreted["proposal"]["decision"]["criteria"] == []
+    assert result["queue_receipt"]["stop_valid"] is True
+    assert (
+        closer_queue._read_state(Path(proof["inner_path"]))["items"][current["target"]]["operation"]
+        is None
+    )
+    assert closer_pipeline._valid_inner_wait(
+        path,
+        current["target"],
+        prep["revision"],
+        prep["snapshot"],
+        proof["reason"],
+        result["next_trigger"],
+        proof,
+    )
+    assert backend.dispositions == {} and backend.gh.calls == []
+
+    # A later deterministic read may reuse only this already validated durable proof.
+    context = copy.deepcopy(captured["context"])
+    context["interpret"] = {
+        "classification": "deterministic_inner_wait",
+        "inner_wait_proof": proof,
+        "reason": proof["reason"],
+        "next_trigger": result["next_trigger"],
+    }
+    repeated = captured["act"](current["target"], context)
+    assert repeated["status"] == "deferred"
+    assert repeated["resource_evidence"]["inner_wait"]["ordinary_nonpass_ref"] == record_ref
+    # Exercise the real outer stage handler too: the typed wait must not become
+    # the former "act returned unsupported or missing status" failed-action row.
+    outer = native_pipeline(
+        path,
+        [current["target"]],
+        prepare=lambda *_: copy.deepcopy(prep),
+        interpret=lambda *_: copy.deepcopy(interpreted),
+        exception=lambda *_: pytest.fail("accounted NON_PASS requires no stronger worker"),
+        act=captured["act"],
+        capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+        deadline=time.time() + 10,
+    )
+    row = outer["targets"][current["target"]]
+    assert row["status"] == "deferred" and row["stage"] == "act"
+    assert row.get("known_completed_action") is not True
+    assert closer_pipeline.validate_stop(path)["valid"] is True
+
+
+def test_nonpass_callback_preserves_complete_evidence_without_unused_disposition_duplicate(
+    tmp_path, monkeypatch
+):
+    import test_closer_disposition
+
+    import closer_disposition
+    import dispatcher
+
+    # Large but legitimate retained NON_PASS rows, without private queue data.
+    prior = {
+        "criteria": [
+            {"result": "NON_PASS", "criterion": f"criterion-{index}", "reason": "gap " + "x" * 2100}
+            for index in range(6)
+        ]
+    }
+    current, packet, ref, prep, interpreted = test_closer_disposition.fixture(
+        tmp_path, native=True, dispositions=prior
+    )
+    current.update(state="MERGED", labels=[], draft=False, active_threads=0, mergeable="MERGEABLE")
+    target = current["target"]
+    prepared_snapshot = tmp_path / "prepared-snapshot.json"
+    prepared_snapshot.write_text(json.dumps(current))
+    prep.update(
+        snapshot=copy.deepcopy(current),
+        identity=target,
+        packet_ref=ref,
+        snapshot_ref={
+            "path": str(prepared_snapshot),
+            "sha256": hashlib.sha256(prepared_snapshot.read_bytes()).hexdigest(),
+        },
+    )
+    proposal = interpreted["proposal"]
+    proposal["decision"]["criteria"] = []
+    proposal["findings"] = [{"summary": "Original criterion proof remains missing"}]
+    proposal["resolutions"] = [
+        {
+            "finding_id": row["finding_id"],
+            "status": "unresolved_missing_evidence",
+            "next_guarded_action": "wait",
+            "reason": "Original proof remains unavailable; source-owned follow-up required",
+        }
+        for row in closer_disposition.pending_nonpass_findings(current, packet)
+    ]
+    original_proposal = copy.deepcopy(proposal)
+    actual = {"exit": 0, "run_id": "offline-completed-low", "profile_id": "offline-low"}
+    monkeypatch.setattr(adapter, "GitHub", lambda **_kwargs: FakeGitHub(current))
+    monkeypatch.setattr(
+        adapter,
+        "_pipeline_low_route",
+        lambda **_kwargs: (
+            {"agent": "codex", "profile_id": "offline-low", "pools": []},
+            "available",
+        ),
+    )
+    calls = []
+    monkeypatch.setattr(
+        dispatcher,
+        "offload",
+        lambda *_args, **_kwargs: calls.append(True) or {**actual, "output": json.dumps(proposal)},
+    )
+    integrations = []
+    real_integrate = closer_disposition.integrate_ordinary
+
+    def integrate(*args, **kwargs):
+        result = real_integrate(*args, **kwargs)
+        integrations.append(copy.deepcopy(result))
+        return result
+
+    monkeypatch.setattr(closer_disposition, "integrate_ordinary", integrate)
+    backend = closer(tmp_path, current)
+    backend.campaign_admission = lambda *_args: {"allowed": True}
+    path = adapter._pipeline_state_path(tmp_path / "state.json")
+
+    def pipeline_stub(_path, _targets, **callbacks):
+        context = {
+            "state_path": str(path),
+            "action_state_path": str(
+                path.parent / f"{path.stem}.actions" / f"{closer_pipeline._digest(target)}.json"
+            ),
+            "deadline": time.time() + 60,
+            "revision": prep["revision"],
+            "identity": target,
+            "prepare": prep,
+        }
+        value = callbacks["interpret"](target, context)
+        assert value["integration_status"] == "ordinary_nonpass"
+        assert "integration_disposition" not in value
+        assert value["proposal"] == original_proposal
+        assert value["raw_findings"] == integrations[0]["raw_findings"]
+        assert len(value["raw_findings"]) == len(proposal["resolutions"]) == 10
+        assert closer_pipeline.CALLBACK_RESULT_BYTES == 32768
+        assert closer_pipeline._bounded(value, limit=32768) == value
+        with pytest.raises(ValueError, match="pipeline JSON exceeds 32768 bytes"):
+            closer_pipeline._bounded(
+                {**value, "integration_disposition": integrations[0]["disposition"]}, limit=32768
+            )
+        result = callbacks["act"](target, {**context, "interpret": value})
+        assert len(integrations) == 2  # Native action independently rechecks all original proof.
+        assert integrations[1] == integrations[0]
+        assert result["reason"] == "validated_inner_wait"
+        proof = result["resource_evidence"]["inner_wait"]
+        assert closer_pipeline._valid_inner_wait(
+            path, target, prep["revision"], current, proof["reason"], result["next_trigger"], proof
+        )
+        retained = json.loads(Path(proof["ordinary_nonpass_ref"]["path"]).read_bytes())
+        assert retained["disposition"] == integrations[0]["disposition"]
+        assert retained["disposition"]["acceptance_authority"] is False
+        return {"targets": {target: result}}
+
+    monkeypatch.setattr(closer_pipeline, "run_pipeline", pipeline_stub)
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [target], backend, time.time() + 360)
+    assert calls == [True] and backend.gh.calls == []
+
+
+def test_native_nonpass_wait_survives_real_interpreter_restart(tmp_path, monkeypatch):
+    current, prep, _interpreted, path, _backend, captured = ordinary_nonpass_wait_fixture(
+        tmp_path, monkeypatch
+    )
+    first = captured["first"]
+    proof = first["resource_evidence"]["inner_wait"]
+    prep["producer_sha256"] = "2" * 64
+    prep["proposal"] = {"action": "collect_evidence"}
+    target = current["target"]
+    closer_pipeline._save(
+        path,
+        {
+            "schema": closer_pipeline.SCHEMA,
+            "runs": {
+                "prior": {
+                    "created": time.time() - 10,
+                    "targets": {
+                        target: {
+                            "status": "deferred",
+                            "stage": "act",
+                            "deferred_reason": "validated_inner_wait",
+                            "revision": prep["revision"],
+                            "results": {"prepare": prep},
+                            "resource_evidence": first["resource_evidence"],
+                        }
+                    },
+                }
+            },
+            "carry": {},
+            "cache": {},
+        },
+    )
+    restarted = closer(tmp_path, current)
+    restarted.campaign_admission = lambda *_: {"allowed": True}
+    assert restarted.dispositions == {} and restarted.validated_nonpass_waits == {}
+    monkeypatch.setattr(
+        adapter,
+        "_pipeline_low_route",
+        lambda **_kwargs: pytest.fail("valid retained wait must not dispatch another provider"),
+    )
+    seen = {}
+
+    def pipeline_stub(_path, _targets, **callbacks):
+        context = {**copy.deepcopy(captured["context"]), "prepare": copy.deepcopy(prep)}
+        interpretation = callbacks["interpret"](target, context)
+        assert interpretation["classification"] == "deterministic_inner_wait"
+        assert (
+            interpretation["inner_wait_proof"]["ordinary_nonpass_ref"]
+            == proof["ordinary_nonpass_ref"]
+        )
+        result = callbacks["act"](target, {**context, "interpret": interpretation})
+        seen["result"] = result
+        return {"targets": {target: result}}
+
+    monkeypatch.setattr(closer_pipeline, "run_pipeline", pipeline_stub)
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [target], restarted, time.time() + 360)
+    result = seen["result"]
+    assert result["status"] == "deferred" and result["reason"] == "validated_inner_wait"
+    assert (
+        result["resource_evidence"]["inner_wait"]["ordinary_nonpass_ref"]
+        == proof["ordinary_nonpass_ref"]
+    )
+    assert result["queue_receipt"]["stop_valid"] is True
+    assert restarted.gh.calls == []
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "prefix_only",
+        "authority",
+        "record_revision",
+        "record_target",
+        "disposition_hash",
+        "finding_id",
+        "native_pass",
+        "native_open",
+        "native_head",
+        "operation",
+        "receipt",
+        "missing_record",
+    ],
+)
+def test_nonpass_wait_requires_exact_retained_disposition_and_current_native_proof(
+    tmp_path, monkeypatch, mutation
+):
+    current, prep, _interpreted, path, _backend, captured = ordinary_nonpass_wait_fixture(
+        tmp_path, monkeypatch
+    )
+    result = captured["first"]
+    proof = copy.deepcopy(result["resource_evidence"]["inner_wait"])
+    record_ref = proof["ordinary_nonpass_ref"]
+    record = json.loads(Path(record_ref["path"]).read_bytes())
+    native_path = Path(proof["inner_path"])
+    native = closer_queue._read_state(native_path)
+    item = native["items"][current["target"]]
+    if mutation == "prefix_only":
+        proof.pop("ordinary_nonpass_ref")
+    elif mutation == "missing_record":
+        Path(record_ref["path"]).unlink()
+    elif mutation.startswith("native_"):
+        if mutation == "native_pass":
+            item["evidence"]["verifier"]["verdict"] = "PASS"
+        elif mutation == "native_open":
+            item["evidence"]["state"] = "OPEN"
+        else:
+            item["evidence"]["head"] = "f" * 40
+    elif mutation == "operation":
+        item["operation"] = {"id": "unknown", "status": "uncertain"}
+    elif mutation == "receipt":
+        native["round"]["receipt"]["accounting"][0]["eligible"] = True
+    else:
+        if mutation == "authority":
+            record["disposition"]["acceptance_authority"] = True
+        elif mutation == "record_revision":
+            record["revision"] = "stale"
+        elif mutation == "record_target":
+            record["target"] = "other/repo#1"
+        elif mutation == "finding_id":
+            record["disposition"]["resolutions"][0]["finding_id"] = "wrong"
+        else:
+            record["disposition_sha256"] = "0" * 64
+        if mutation != "disposition_hash":
+            record["disposition_sha256"] = closer_pipeline._digest(record["disposition"])
+        import closer_evidence
+
+        proof["ordinary_nonpass_ref"] = closer_evidence._retain_bytes(
+            closer_pipeline._nonpass_wait_store(path), closer_pipeline._canonical(record), "json"
+        )
+    native_path.write_text(json.dumps(native))
+    assert not closer_pipeline._valid_inner_wait(
+        path,
+        current["target"],
+        prep["revision"],
+        prep["snapshot"],
+        proof["reason"],
+        result["next_trigger"],
+        proof,
+    )
+
+
+def test_nonpass_wait_same_head_new_revision_requires_fresh_preparation(tmp_path, monkeypatch):
+    current, prep, _interpreted, _path, _backend, captured = ordinary_nonpass_wait_fixture(
+        tmp_path, monkeypatch, fresh_revision=True
+    )
+    assert captured["first"]["status"] == "completed"
+    assert captured["first"]["target_complete"] is False
+    context = copy.deepcopy(captured["context"])
+    context["revision"] = current["revision"]
+    context["prepare"]["revision"] = current["revision"]
+    context["prepare"]["snapshot"] = current
+    second = captured["act"](current["target"], context)
+    assert second["status"] == "deferred" and second["reason"] == "validated_inner_wait"
+
+
+def test_fresh_inner_wait_revision_change_reprepares_before_valid_wait(tmp_path, monkeypatch):
+    old = snapshot(labels=["agents:paused"], review_revision="before-fresh-read")
+    fresh = snapshot(labels=["agents:paused"], review_revision="after-fresh-read")
+    assert old["head"] == fresh["head"] and old["revision"] != fresh["revision"]
+    monkeypatch.setattr(adapter, "GitHub", lambda **_kwargs: FakeGitHub(fresh))
+    pipeline_path = adapter._pipeline_state_path(tmp_path / "state.json")
+    action_path = (
+        pipeline_path.parent
+        / f"{pipeline_path.stem}.actions"
+        / f"{closer_pipeline._digest(TARGET)}.json"
+    )
+    reason = "current item-scoped hold: ['agents:paused']"
+    trigger = "hold owner supplies scoped disposition"
+    receipt = closer_queue.run_round(
+        action_path,
+        [TARGET],
+        lambda _target: {
+            "target": TARGET,
+            "revision": fresh["revision"],
+            "action": "wait",
+            "eligible": False,
+            "requires_coordinator": False,
+            "reason": reason,
+            "next_trigger": trigger,
+            "evidence": fresh,
+        },
+        lambda *_: pytest.fail("held wait must not execute"),
+        deadline=time.time() + 30,
+        max_workers=1,
+        max_passes=1,
+    )
+    assert receipt["stop_valid"] is True
+    returned = {"receipt": receipt}
+    monkeypatch.setattr(closer_queue, "run_round", lambda *_a, **_k: returned["receipt"])
+    captured = {}
+
+    def pipeline_stub(_path, _targets, **callbacks):
+        def context(prepared):
+            return {
+                "state_path": str(pipeline_path),
+                "action_state_path": str(action_path),
+                "deadline": time.time() + 60,
+                "revision": prepared["revision"],
+                "prepare": {"snapshot": prepared, "packet_ref": {}},
+                "interpret": {"classification": "deterministic_wait"},
+            }
+
+        captured["first"] = callbacks["act"](TARGET, context(old))
+        captured["second"] = callbacks["act"](TARGET, context(fresh))
+        returned["receipt"] = {**receipt, "stop_valid": False}
+        with pytest.raises(RuntimeError, match="valid continuation boundary"):
+            callbacks["act"](TARGET, context(old))
+        returned["receipt"] = receipt
+        changed_head = {**old, "head": "f" * 40}
+        captured["changed_head"] = callbacks["act"](TARGET, context(changed_head))
+        return {"targets": {TARGET: captured["second"]}}
+
+    monkeypatch.setattr(closer_pipeline, "run_pipeline", pipeline_stub)
+    backend = closer(tmp_path, fresh)
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
+    assert captured["first"]["status"] == "completed"
+    assert captured["first"]["target_complete"] is False
+    assert isinstance(captured["first"]["progress_key"], str)
+    assert captured["second"]["reason"] == "validated_inner_wait"
+    assert captured["changed_head"]["status"] == "blocked"
 
 
 def test_same_head_inner_wait_requires_fresh_admission_and_matching_producer(tmp_path, monkeypatch):
@@ -1847,10 +2637,13 @@ def test_same_head_inner_wait_requires_fresh_admission_and_matching_producer(tmp
     backend = closer(tmp_path, current)
     admissions = []
     admission_allowed = [True]
-    backend.campaign_admission = lambda *_: admissions.append(True) or {
-        "allowed": admission_allowed[0],
-        "reason": "fresh admission required",
-    }
+    backend.campaign_admission = lambda *_: (
+        admissions.append(True)
+        or {
+            "allowed": admission_allowed[0],
+            "reason": "fresh admission required",
+        }
+    )
     monkeypatch.setattr(adapter, "_pipeline_low_route", lambda **_kwargs: (None, "saturated"))
     seen = {}
 
@@ -1866,15 +2659,16 @@ def test_same_head_inner_wait_requires_fresh_admission_and_matching_producer(tmp
         old_interpret = callbacks["interpret"](TARGET, old_context)
         assert old_interpret["classification"] == "deterministic_inner_wait"
         assert admissions == [True]
-        old_act = callbacks["act"](TARGET, {**old_context, "interpret": old_interpret})
-        assert old_act["status"] == "deferred"
+        # Check fresh permission while the persisted wait proof is still current.
         admission_allowed[0] = False
         denied = callbacks["interpret"](TARGET, old_context)
         assert denied["classification"] == "admission_deferred"
         admission_allowed[0] = True
+        old_act = callbacks["act"](TARGET, {**old_context, "interpret": old_interpret})
+        assert old_act["status"] == "deferred"
         changed_producer = {**old_context, "prepare": {**old_prepare, "producer_sha256": "3" * 64}}
         producer_interpret = callbacks["interpret"](TARGET, changed_producer)
-        assert producer_interpret["classification"] == "capacity_deferred"
+        assert producer_interpret["classification"] == "evidence_pending"
         changed = snapshot(head="b" * 40)
         changed_context = {
             **old_context,
@@ -1882,8 +2676,8 @@ def test_same_head_inner_wait_requires_fresh_admission_and_matching_producer(tmp
             "prepare": {**old_prepare, "revision": changed["revision"], "snapshot": changed},
         }
         changed_interpret = callbacks["interpret"](TARGET, changed_context)
-        assert changed_interpret["classification"] == "capacity_deferred"
-        assert len(admissions) == 4
+        assert changed_interpret["classification"] == "evidence_pending"
+        assert len(admissions) == 2
         seen["result"] = old_act
         return {"targets": {TARGET: old_act}}
 
@@ -1949,7 +2743,14 @@ def test_staged_action_emits_pending_only_for_fresh_bound_check_run(
         )
         return {"targets": {TARGET: observed["result"]}}
 
-    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=run_pipeline))
+    monkeypatch.setitem(
+        sys.modules,
+        "closer_pipeline",
+        SimpleNamespace(
+            run_pipeline=run_pipeline,
+            EVIDENCE_REFUSAL_REASONS=closer_pipeline.EVIDENCE_REFUSAL_REASONS,
+        ),
+    )
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
     adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
 
@@ -1997,7 +2798,12 @@ def test_pipeline_low_route_uses_any_live_low_profile_not_luna_assumption(tmp_pa
 
     def choose(task_type, capacity, **kwargs):
         selected["only"] = kwargs.get("only")
-        return {"agent": "gemini", "mode": "cheap", "state": "ok"}
+        return {
+            "agent": "gemini",
+            "mode": "cheap",
+            "state": "ok",
+            "selected_profile_id": "gemini-flash-low",
+        }
 
     monkeypatch.setattr(router, "select_agent", choose)
     route = adapter._pipeline_low_route()
@@ -2009,6 +2815,7 @@ def test_pipeline_low_route_uses_any_live_low_profile_not_luna_assumption(tmp_pa
 
 
 def test_busy_shared_exception_pool_returns_valid_fresh_capacity_proof(tmp_path, monkeypatch):
+    stub_action_readiness_for_transport_test(monkeypatch)
     import threading
     from concurrent.futures import ThreadPoolExecutor
 
@@ -2052,6 +2859,24 @@ def test_busy_shared_exception_pool_returns_valid_fresh_capacity_proof(tmp_path,
         )
 
     monkeypatch.setattr(adapter, "_pipeline_low_route", reserve_low_route)
+
+    def reserve_exception_route(**kwargs):
+        load = kwargs["load"]
+        if load.get("pool:codex-subscription", 0):
+            return (None, "busy")
+        load["codex"] = load.get("codex", 0) + 1
+        load["pool:codex-subscription"] = load.get("pool:codex-subscription", 0) + 1
+        return (
+            {
+                "agent": "codex",
+                "profile_id": "codex-strong",
+                "pools": ["codex-subscription"],
+                "mode": "assess",
+            },
+            "available",
+        )
+
+    monkeypatch.setattr(adapter, "_exception_route", reserve_exception_route)
     monkeypatch.setattr(execution_profiles, "default_codex_profile", lambda _task: "codex-strong")
     monkeypatch.setattr(
         execution_profiles,
@@ -2071,6 +2896,8 @@ def test_busy_shared_exception_pool_returns_valid_fresh_capacity_proof(tmp_path,
             "pools": {"codex-subscription": {"state": "ok"}},
         },
     )
+    # Routing is stubbed in this semantic test; the execution-pool suite uses real profiles.
+    monkeypatch.setattr(execution_profiles, "profiles_for_agent", lambda *a, **kw: [])
     entered = threading.Event()
     release = threading.Event()
 
@@ -2203,7 +3030,96 @@ def test_legacy_uncertain_and_private_integration_need_original_coordinator(tmp_
             adapter._legacy_operation_dependency(legacy_path, TARGET, {"sources": []})
 
 
-def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(tmp_path, monkeypatch):
+@pytest.mark.parametrize("inner_exists", [False, True], ids=["no-inner", "inner-no-operation"])
+@pytest.mark.parametrize(
+    "legacy_uncertain", [False, True], ids=["no-legacy-op", "legacy-uncertain"]
+)
+def test_reconcile_never_requeues_act_while_original_legacy_operation_is_uncertain(
+    tmp_path, monkeypatch, inner_exists, legacy_uncertain
+):
+    current = snapshot()
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema": "closer-queue/v1",
+                "round": {},
+                "items": {
+                    TARGET: (
+                        {
+                            "operation": {
+                                "id": "original-uncertain",
+                                "status": "uncertain",
+                                "repo_keys": ["o/r"],
+                            }
+                        }
+                        if legacy_uncertain
+                        else {}
+                    ),
+                },
+            }
+        )
+    )
+    action_path = tmp_path / "inner.json"
+    if inner_exists:
+        action_path.write_text(
+            json.dumps({"schema": "closer-queue/v1", "round": {}, "items": {TARGET: {}}})
+        )
+    captured = {}
+
+    def pipeline_stub(_path, _targets, **callbacks):
+        captured["result"] = callbacks["reconcile"](
+            TARGET,
+            {
+                "prepare": {"snapshot": current},
+                "revision": current["revision"],
+                "action_state_path": str(action_path),
+            },
+        )
+        return {"targets": {TARGET: captured["result"]}}
+
+    monkeypatch.setattr(closer_pipeline, "run_pipeline", pipeline_stub)
+    monkeypatch.setattr(
+        closer_queue,
+        "run_round",
+        lambda *_a, **_k: pytest.fail("legacy uncertainty must not retry an action"),
+    )
+    backend = closer(tmp_path, current)
+    args = SimpleNamespace(state=str(state_path), max_workers=1, shadow=False)
+    adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
+    assert captured["result"]["outcome"] == (
+        "unknown" if legacy_uncertain else "confirmed_not_started"
+    )
+    if legacy_uncertain:
+        assert "legacy uncertain operation" in captured["result"]["reason"]
+
+
+def test_low_proposal_accepts_only_one_complete_json_document():
+    payload = {"target": TARGET, "head": HEAD, "classification": "uncertain"}
+    raw = json.dumps(payload)
+    assert adapter._parse_low_proposal(raw) == payload
+    assert adapter._parse_low_proposal(f"```json\n{raw}\n```") == payload
+    assert adapter._parse_low_proposal(f"```\n{raw}\n```") == payload
+    for invalid in (
+        f"Here is the result:\n```json\n{raw}\n```",
+        f"```json\n{raw}\n```\n```json\n{raw}\n```",
+        f"```json\n{raw[:-1]}\n```",
+        f"```json\n{raw}\n```\nextra prose",
+    ):
+        assert adapter._parse_low_proposal(invalid) == {}
+    for value in ([], "text", 1, None, True):
+        document = json.dumps(value)
+        assert adapter._parse_low_proposal(document) == {}
+        assert adapter._parse_low_proposal(f"```json\n{document}\n```") == {}
+    wrong = {**payload, "head": "f" * 40}
+    assert adapter._parse_low_proposal(f"```json\n{json.dumps(wrong)}\n```") == wrong
+
+
+@pytest.mark.parametrize("fenced", [False, True], ids=["plain-json", "single-json-fence"])
+def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(
+    tmp_path, monkeypatch, fenced
+):
+    stub_action_readiness_for_transport_test(monkeypatch)
     from subprocess import CompletedProcess
 
     import closer_disposition
@@ -2293,22 +3209,23 @@ def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(tmp_p
 
     def low_worker(_agent, prompt, **_kwargs):
         prompts.append(prompt)
+        payload = json.dumps(
+            {
+                "target": TARGET,
+                "head": HEAD,
+                "base": current["base"],
+                "classification": "relevant",
+                "substantive_needs": [],
+                "findings": [],
+                "decision": {"criteria": []},
+            }
+        )
         return {
             "exit": 0,
             "run_id": "real-run-1",
             "model": "gemini-test",
             "profile_id": "gemini-low",
-            "output": json.dumps(
-                {
-                    "target": TARGET,
-                    "head": HEAD,
-                    "base": current["base"],
-                    "classification": "relevant",
-                    "substantive_needs": [],
-                    "findings": [],
-                    "decision": {"criteria": []},
-                }
-            ),
+            "output": f"```json\n{payload}\n```" if fenced else payload,
         }
 
     monkeypatch.setattr(dispatcher, "offload", low_worker)
@@ -2476,13 +3393,15 @@ def test_assignment_guard_rechecks_immediately_before_action(tmp_path):
         tmp_path,
         current,
         apply=True,
-        assignment_guard_fn=lambda target: calls.append(target)
-        or {
-            "status": "pending",
-            "pending_kind": "external_event",
-            "next_trigger": "Workflows#4057 releases assignment hold",
-            "pending_evidence": {"event_id": "row-fp-1", "target": target},
-        },
+        assignment_guard_fn=lambda target: (
+            calls.append(target)
+            or {
+                "status": "pending",
+                "pending_kind": "external_event",
+                "next_trigger": "Workflows#4057 releases assignment hold",
+                "pending_evidence": {"event_id": "row-fp-1", "target": target},
+            }
+        ),
     )
     result = backend.execute(
         TARGET, "merge", current, {"deadline": time.time() + 30, "id": "unused"}
@@ -2665,9 +3584,14 @@ def test_deterministic_dispatcher_states_skip_low_provider_stage(tmp_path, monke
     assert all("actual" not in result for result in seen.values())
 
 
-def test_low_transport_failure_suppresses_profile_and_other_profile_continues(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize(
+    "failure_kind",
+    ["transport", "refusal", "inspection", "malformed", "quota", "quota_normal_exit"],
+)
+def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
+    tmp_path, monkeypatch, failure_kind
 ):
+    stub_action_readiness_for_transport_test(monkeypatch)
     import closer_disposition
     import closer_evidence
     import dispatcher
@@ -2710,8 +3634,42 @@ def test_low_transport_failure_suppresses_profile_and_other_profile_continues(
     def offload(_agent, _prompt, **kwargs):
         profile = kwargs["profile_id"]
         provider_profiles.append(profile)
-        if profile == "gemini-low":
-            return {"exit": 1, "run_id": "dispatch-unsupported-31", "error": "unsupported model"}
+        assert "honest missing-evidence assessment is a completed deliverable" in _prompt
+        assert "leave decision.criteria empty" in _prompt
+        assert "findings (array of objects, never strings" in _prompt
+        assert "evidence gaps as strings in substantive_needs" in _prompt
+        assert_nonpass_accounting_prompt_contract(_prompt)
+        assert "only when every original body and criterion is fully evidenced" in _prompt
+        assert (
+            "If acceptance proof is incomplete and the known NON_PASS accounting contract below does not apply"
+            in _prompt
+        )
+        assert "read-only commands such as python3 -c" in _prompt
+        if profile == "gemini-low" and kwargs["subject_id"] == first:
+            result = {"exit": 1, "run_id": "dispatch-failed-31", "error": "unsupported model"}
+            if failure_kind in {"refusal", "inspection", "quota_normal_exit"}:
+                result.update(
+                    exit=70,
+                    raw_exit=0,
+                    error="agent reported OFFLOAD_INCOMPLETE",
+                    output=(
+                        "OFFLOAD_INCOMPLETE: Cannot truthfully provide required PASS rows: "
+                        "qualifying evidence is missing and the operational check is future-dated."
+                        if failure_kind == "refusal"
+                        else "OFFLOAD_INCOMPLETE: read-only inspection could not create a temporary file."
+                    ),
+                )
+            if failure_kind == "malformed":
+                result.update(exit=0, output='{"classification": "uncertain",')
+            if failure_kind in {"quota", "quota_normal_exit"}:
+                if failure_kind == "quota":
+                    result.update(exit=3, raw_exit=3)
+                result["rate_incident_evidence"] = {
+                    "category": "quota_exhausted",
+                    "is_authoritative": True,
+                    "evidence_hash": "f" * 64,
+                }
+            return result
         return {
             "exit": 0,
             "run_id": "dispatch-success-32",
@@ -2731,11 +3689,18 @@ def test_low_transport_failure_suppresses_profile_and_other_profile_continues(
         }
 
     monkeypatch.setattr(dispatcher, "offload", offload)
-    # The helper is only reached for the successful alternative provider.
+    integrations = []
+    ordinary_validation = closer_disposition.integrate_ordinary
+
+    def integrate(target, *_a, **_k):
+        integrations.append(target)
+        return {"status": "wait", "reason": "evidence incomplete", "raw_findings": []}
+
+    # Interpretation must not submit a refusal/malformed response for acceptance.
     monkeypatch.setattr(
         closer_disposition,
         "integrate_ordinary",
-        lambda *_a, **_k: {"status": "wait", "reason": "evidence incomplete", "raw_findings": []},
+        integrate,
     )
 
     def packet_for(target):
@@ -2783,16 +3748,43 @@ def test_low_transport_failure_suppresses_profile_and_other_profile_continues(
             values[target] = callbacks["interpret"](
                 target, {"prepare": packet_for(target), "deadline": time.time() + 60}
             )
-        assert values[first]["actual"]["run_id"] == "dispatch-success-32"
-        assert values[first]["prior_provider_failures"][0]["run_id"] == "dispatch-unsupported-31"
+        if failure_kind in {"refusal", "inspection", "malformed"}:
+            assert values[first]["actual"]["run_id"] == "dispatch-failed-31"
+            assert values[first]["classification"] == "uncertain"
+            assert values[first]["substantive_needs"]
+            assert values[first]["integration_status"] == "wait"
+            assert not values[first]["integration_disposition"]
+            assert not values[first]["prior_provider_failures"]
+            if failure_kind != "malformed":
+                assert values[first]["actual"]["exit"] == 70
+                assert values[first]["actual"]["raw_exit"] == 0
+                assert values[first]["substantive_needs"] == ["incomplete_low_assessment"]
+                assert "OFFLOAD_INCOMPLETE" in values[first]["proposal"]["raw_excerpt"]
+                # A later action may validate the original receipt again. It
+                # must still reject its actual exit70, regardless of raw_exit0.
+                guarded = ordinary_validation(first, snapshots[first], {}, {}, values[first])
+                assert guarded["status"] == "wait"
+                assert guarded["reason"] == "worker_execution_unverified"
+                assert not guarded.get("disposition")
+        else:
+            assert values[first]["actual"]["run_id"] == "dispatch-success-32"
+            assert values[first]["prior_provider_failures"][0]["run_id"] == "dispatch-failed-31"
         assert values[second]["actual"]["run_id"] == "dispatch-success-32"
         return {"targets": values}
 
     monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=pipeline_stub))
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
     adapter._run_staged_pipeline(args, [first, second], backend, time.time() + 360)
-    assert route_profiles == ["gemini-low", "claude-low", "claude-low"]
+    if failure_kind in {"refusal", "inspection", "malformed"}:
+        assert route_profiles == ["gemini-low", "gemini-low"]
+        assert integrations == [second]
+    else:
+        assert route_profiles == ["gemini-low", "claude-low", "claude-low"]
+        assert integrations == [first, second]
     assert provider_profiles == route_profiles
+
+    if failure_kind != "transport":
+        return
 
     route_profiles.clear()
     provider_profiles.clear()
@@ -2840,7 +3832,11 @@ def test_low_transport_failure_suppresses_profile_and_other_profile_continues(
     assert provider_profiles == route_profiles
 
 
-def test_uncertain_provider_result_stops_before_fallback_exception_or_action(tmp_path, monkeypatch):
+@pytest.mark.parametrize("accounting_pending", [False, True])
+def test_uncertain_provider_result_stops_before_fallback_exception_or_action(
+    tmp_path, monkeypatch, accounting_pending
+):
+    stub_action_readiness_for_transport_test(monkeypatch)
     import closer_evidence
     import dispatcher
 
@@ -2876,7 +3872,7 @@ def test_uncertain_provider_result_stops_before_fallback_exception_or_action(tmp
 
     def offload(agent, _prompt, **kwargs):
         calls.append((agent, kwargs["profile_id"]))
-        return {
+        result = {
             "exit": 124,
             "run_id": "agy-turn-still-running-41",
             "outcome_status": "uncertain",
@@ -2884,6 +3880,18 @@ def test_uncertain_provider_result_stops_before_fallback_exception_or_action(tmp
             "retry_safe": False,
             "error": "remote turn still in progress",
         }
+        if accounting_pending:
+            result.update(
+                exit=70,
+                raw_exit=0,
+                provider_completed=True,
+                output='{"classification":"relevant","findings":[]}',
+                completion_persistence={
+                    "schema": "offload-completion-persistence/v1",
+                    "status": "pending",
+                },
+            )
+        return result
 
     monkeypatch.setattr(dispatcher, "offload", offload)
     packets = {}
@@ -2936,6 +3944,10 @@ def test_uncertain_provider_result_stops_before_fallback_exception_or_action(tmp
         )
         assert interpreted["status"] == "uncertain"
         assert interpreted["provider_outcome"]["actual"]["run_id"] == ("agy-turn-still-running-41")
+        if accounting_pending:
+            actual = interpreted["provider_outcome"]["actual"]
+            assert actual["provider_completed"] and actual["raw_exit"] == 0
+            assert actual["completion_persistence"]["status"] == "pending"
         assert "substantive_needs" in interpreted
         return {"targets": {target_name: interpreted}}
 
@@ -2945,3 +3957,332 @@ def test_uncertain_provider_result_stops_before_fallback_exception_or_action(tmp
 
     assert chosen == ["gemini-low"]
     assert calls == [("gemini", "gemini-low")]
+
+
+def _adopted_pipeline(tmp_path, *, active=False):
+    import closer_pipeline
+
+    path = adapter._pipeline_state_path(tmp_path / "legacy-queue.json")
+    at = time.time() - 100
+    closer_pipeline.run_pipeline(
+        path,
+        [TARGET],
+        prepare=lambda target, _ctx: {"revision": "read-revision", "snapshot": {"target": target}},
+        interpret=lambda *_: {"substantive_needs": []},
+        exception=lambda *_: pytest.fail("no exception"),
+        act=lambda *_: {"status": "completed", "target_complete": True},
+        capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+        deadline=at + 10,
+        now=lambda: at,
+    )
+    if active:
+        doc = closer_pipeline._load(path)
+        latest = next(iter(doc["runs"].values()))
+        latest["deadline"] = time.time() + 45
+        latest["receipt_summary"]["deadline"] = latest["deadline"]
+        closer_pipeline._save(path, doc)
+    return path
+
+
+def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
+    tmp_path, monkeypatch, capsys
+):
+    start = time.time()
+    monkeypatch.setattr(adapter.time, "time", lambda: start)
+    state = _terminal_queue_state(tmp_path)
+    state_path = tmp_path / "legacy-queue.json"
+    state["items"][TARGET]["revision"] = "later-assessment"
+    state_path.write_text(json.dumps(state))
+    before = state_path.read_bytes()
+    assert adapter._validly_finished_legacy_round(state_path, state) is False
+    _adopted_pipeline(tmp_path)
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": TARGET}]}))
+    monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
+    seen = []
+    monkeypatch.setattr(adapter, "GitHub", lambda *, deadline: SimpleNamespace(deadline=deadline))
+    monkeypatch.setattr(adapter, "Closer", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(adapter, "known_workspaces", lambda _targets: {})
+    monkeypatch.setattr(
+        adapter,
+        "_run_staged_pipeline",
+        lambda _a, _t, _b, deadline: seen.append(deadline) or {"status": "budget-observed"},
+    )
+    assert (
+        adapter.main(
+            [
+                "run",
+                "--assignment",
+                str(assignment),
+                "--state",
+                str(state_path),
+                "--budget-seconds",
+                "10",
+                "--pipeline",
+                "--apply",
+                "--workers",
+            ]
+        )
+        == 0
+    )
+    admission = json.loads(capsys.readouterr().out)["budget_admission"]
+    assert seen == [start + 10 + 300]
+    assert admission == {
+        "reason": "valid_pipeline_stop",
+        "scope": "pipeline",
+        "requested_deadline": start + 310,
+        "selected_deadline": start + 310,
+        "legacy_deadline": state["round"]["deadline"],
+        "legacy_state_digest": adapter.digest(state),
+        "legacy_round_renewed": False,
+    }
+    assert state_path.read_bytes() == before
+    assert (
+        adapter._deadline_with_legacy_round(time.time() + 310, state, state_path)
+        == state["round"]["deadline"]
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing",
+        "empty",
+        "malformed",
+        "unexpired",
+        "missing_receipt",
+        "receipt_type",
+        "receipt_run",
+        "receipt_deadline",
+        "receipt_time",
+        "unrecognized_stop",
+        "archive",
+        "malformed_extra_run",
+    ],
+)
+def test_independent_pipeline_budget_requires_its_own_admission_proof(tmp_path, case):
+    import closer_pipeline
+
+    legacy = _terminal_queue_state(tmp_path)
+    state_path = tmp_path / "legacy-queue.json"
+    legacy["items"][TARGET]["revision"] = "later-assessment"
+    state_path.write_text(json.dumps(legacy))
+    path = _adopted_pipeline(tmp_path, active=case == "unexpired")
+    state = closer_pipeline._load(path)
+    rid, previous = next(iter(state["runs"].items()))
+    if case == "missing":
+        path.unlink()
+    elif case == "empty":
+        closer_pipeline._save(path, closer_pipeline._empty())
+    elif case == "malformed":
+        path.write_text('{"schema":"untrusted"}')
+    else:
+        if case == "missing_receipt":
+            previous.pop("receipt_summary")
+        elif case == "receipt_type":
+            previous["receipt_summary"] = "unbound"
+        elif case == "receipt_run":
+            previous["receipt_summary"]["run_id"] = "unbound"
+        elif case == "receipt_deadline":
+            previous["receipt_summary"]["deadline"] += 1
+        elif case == "receipt_time":
+            previous["receipt_summary"]["finished_at"] = time.time() + 1000
+        elif case == "unrecognized_stop":
+            previous["targets"][TARGET]["status"] = "unrecognized"
+        elif case == "archive":
+            previous["invalid_stop_archive"] = {"schema": "unbound"}
+        elif case == "malformed_extra_run":
+            state["runs"]["unreadable-newer"] = {"created": None}
+        closer_pipeline._save(path, state)
+    legacy_before = state_path.read_bytes()
+    pipeline_before = path.read_bytes() if path.exists() else None
+    selected, reason = adapter._deadline_with_pipeline_round(time.time() + 310, legacy, state_path)
+    assert selected == legacy["round"]["deadline"]
+    assert reason and reason != "valid_pipeline_stop"
+    assert state_path.read_bytes() == legacy_before
+    assert (path.read_bytes() if path.exists() else None) == pipeline_before
+
+
+@pytest.mark.parametrize("status", ["submitted", "running", "uncertain"])
+def test_fresh_pipeline_budget_never_releases_a_legacy_operation_barrier(tmp_path, status):
+    state = _terminal_queue_state(tmp_path)
+    state_path = tmp_path / "legacy-queue.json"
+    state["items"][TARGET]["operation"] = {
+        "id": "original-native-operation",
+        "status": status,
+        "repo_keys": [TARGET.split("#")[0]],
+    }
+    state_path.write_text(json.dumps(state))
+    _adopted_pipeline(tmp_path)
+    before = state_path.read_bytes()
+    requested = time.time() + 310
+    assert adapter._deadline_with_pipeline_round(requested, state, state_path) == (
+        requested,
+        "valid_pipeline_stop",
+    )
+    with pytest.raises(RuntimeError, match="reconcile it in the original closer queue"):
+        adapter._legacy_operation_dependency(state_path, TARGET, snapshot())
+    assert state_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("branch", ["safe_pipeline_continuation", "expired_pipeline_recovery"])
+def test_pipeline_budget_reports_native_admission_branch(tmp_path, monkeypatch, branch):
+    import closer_pipeline
+
+    state = _terminal_queue_state(tmp_path)
+    state["items"][TARGET]["revision"] = "later-assessment"
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(state))
+    _adopted_pipeline(tmp_path)
+    monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_k: {"valid": False})
+    monkeypatch.setattr(
+        closer_pipeline,
+        "_safe_prior_continuation",
+        lambda *_a: (branch == "safe_pipeline_continuation", False, set()),
+    )
+    monkeypatch.setattr(
+        closer_pipeline,
+        "_expired_invalid_round_recovery",
+        lambda *_a: (branch == "expired_pipeline_recovery",),
+    )
+    requested = time.time() + 310
+    assert adapter._deadline_with_pipeline_round(requested, state, state_path) == (
+        requested,
+        branch,
+    )
+
+
+@pytest.mark.parametrize("error", [AttributeError("bad proof"), RuntimeError("unreadable proof")])
+def test_pipeline_budget_proof_exception_is_diagnosed_without_renewal(tmp_path, monkeypatch, error):
+    import closer_pipeline
+
+    state = _terminal_queue_state(tmp_path)
+    state["items"][TARGET]["revision"] = "later-assessment"
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(state))
+    _adopted_pipeline(tmp_path)
+
+    def reject(*_a, **_k):
+        raise error
+
+    monkeypatch.setattr(closer_pipeline, "validate_stop", reject)
+    assert adapter._deadline_with_pipeline_round(time.time() + 310, state, state_path) == (
+        state["round"]["deadline"],
+        f"pipeline_adoption_unverifiable:{type(error).__name__}",
+    )
+
+
+@pytest.mark.parametrize(
+    "stage,status",
+    [
+        ("prepare", "queued"),
+        ("prepare", "running"),
+        ("interpret", "queued"),
+        ("interpret", "running"),
+        ("exception", "running"),
+    ],
+)
+def test_expired_interrupted_read_can_receive_independent_cli_budget(tmp_path, stage, status):
+    import closer_pipeline
+
+    legacy = _terminal_queue_state(tmp_path)
+    legacy["items"][TARGET]["revision"] = "later-assessment"
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(legacy))
+    path = _adopted_pipeline(tmp_path)
+    state = closer_pipeline._load(path)
+    previous = next(iter(state["runs"].values()))
+    previous.pop("receipt_summary")
+    previous["targets"][TARGET] = {
+        "status": status,
+        "stage": stage,
+        "results": {},
+        "metrics": {"waits": 0, "errors": 0},
+    }
+    closer_pipeline._save(path, state)
+    before = state_path.read_bytes(), path.read_bytes()
+    requested = time.time() + 310
+    assert adapter._deadline_with_pipeline_round(requested, legacy, state_path) == (
+        requested,
+        "expired_pipeline_recovery",
+    )
+    assert before == (state_path.read_bytes(), path.read_bytes())
+
+
+@pytest.mark.parametrize("changed", [None, "head", "branch", "source"])
+def test_scoped_native_operation_seam_rechecks_prepared_head_and_aliases(
+    tmp_path, monkeypatch, changed
+):
+    import closer_resources
+
+    current = snapshot(head_branch="feature", head_repository="o/r")
+    gh = FakeGitHub(current)
+    monkeypatch.setattr(adapter, "GitHub", lambda **kw: gh)
+    monkeypatch.setattr(
+        closer_evidence,
+        "collect_evidence",
+        lambda *a, **kw: {
+            "schema": "closer-evidence/v1",
+            "sections": {},
+            "manifest": {"packet_sha256": "x"},
+        },
+    )
+    monkeypatch.setattr(closer_evidence, "validate_packet", lambda *a: False)
+    calls = []
+    # Only the native effect is synthetic; the dispatcher's head/resource binding stays real.
+    monkeypatch.setattr(
+        adapter.Closer, "execute", lambda *a: calls.append(a) or {"status": "completed"}
+    )
+
+    def native_queue_stub(_path, targets, observe, execute, **kw):
+        observed = observe(TARGET)
+        execute(
+            TARGET, observed["action"], observed, {"id": "offline", "deadline": time.time() + 20}
+        )
+        return {"stop_valid": True, "accounting": [{"target": TARGET, "status": "complete"}]}
+
+    monkeypatch.setattr(closer_queue, "run_round", native_queue_stub)
+
+    def pipeline_stub(_path, _targets, **callbacks):
+        prep = callbacks["prepare"](TARGET, {"deadline": time.time() + 30})
+        callbacks["resource_keys"](TARGET, {"prepare": prep})
+        if changed == "head":
+            gh.current["head"] = "f" * 40
+        elif changed == "branch":
+            gh.current["head_branch"] = "other"
+        elif changed == "source":
+            gh.current["sources"] = [
+                {
+                    "target": "o/r#99",
+                    "body": "## Acceptance criteria\n- Preserve behavior",
+                    "state": "open",
+                }
+            ]
+        gh.current["revision"] = adapter.digest(gh.current)
+        context = {
+            "prepare": prep,
+            "interpret": {},
+            "deadline": time.time() + 30,
+            "revision": prep["revision"],
+            "state_path": str(_path),
+            "action_state_path": str(tmp_path / "action.json"),
+        }
+        if changed:
+            with pytest.raises(closer_resources.ResourceBlocked, match="actual operation changed"):
+                callbacks["act"](TARGET, context)
+            assert not calls
+        else:
+            assert callbacks["act"](TARGET, context)["target_complete"] is True
+            assert calls
+        return {}
+
+    monkeypatch.setattr(closer_pipeline, "run_pipeline", pipeline_stub)
+    backend = closer(tmp_path, current, apply=True, workers=True)
+    args = SimpleNamespace(
+        state=str(tmp_path / "state"),
+        shadow=False,
+        max_workers=1,
+        coordinator_mode="resource_scoped",
+        coordinator_contract_pin=None,
+    )
+    adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 330)

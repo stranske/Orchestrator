@@ -272,6 +272,7 @@ def test_the_capability_tally_never_counts_an_unattributed_fail(brain, monkeypat
         target_run_id="work:1",
         accepted=True,
         producer="selftest",
+        receipt_ref="fixture:consumed-output",
     )
     feedback.record_outcome(
         "work:1",

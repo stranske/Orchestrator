@@ -1,0 +1,36 @@
+F.                                                                       [100%]
+=================================== FAILURES ===================================
+_______ test_closure_error_does_not_discard_stage2_plan[--stage2-plan-0] _______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1119dd130>
+capsys = <_pytest.capture.CaptureFixture object at 0x1119dd9d0>
+mode = '--stage2-plan', expected_status = 0
+
+    @pytest.mark.parametrize("mode,expected_status", [("--stage2-plan", 0), ("--close-verified", 1)])
+    def test_closure_error_does_not_discard_stage2_plan(monkeypatch, capsys, mode, expected_status):
+        monkeypatch.setattr(supervisor, "_capability_heartbeat", lambda *args: None)
+        closure = {"closed": 0, "errors": 1, "skips": {"error: issue not found": 1}}
+        monkeypatch.setattr(supervisor, "close_verified_issues", lambda **kwargs: closure)
+        monkeypatch.setattr(supervisor, "stage2_acquisition_plan", lambda **kwargs: {"plans": ["retained"]})
+>       assert supervisor.main([mode, "--json"]) == expected_status
+E       AssertionError: assert 1 == 0
+E        +  where 1 = <function main at 0x111a4a660>(['--stage2-plan', '--json'])
+E        +    where <function main at 0x111a4a660> = supervisor.main
+
+tests/test_keepalive_supervisor.py:562: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{
+  "issue_closure": {
+    "closed": 0,
+    "errors": 1,
+    "skips": {
+      "error: issue not found": 1
+    }
+  },
+  "plans": [
+    "retained"
+  ]
+}
+=========================== short test summary info ============================
+FAILED tests/test_keepalive_supervisor.py::test_closure_error_does_not_discard_stage2_plan[--stage2-plan-0]
+1 failed, 1 passed, 46 deselected in 0.42s

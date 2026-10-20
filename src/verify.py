@@ -418,6 +418,8 @@ def run_pytest(*, extra: list[str] | None = None, junit: pathlib.Path | None = N
         if ln.startswith(("FAILED ", "ERROR ")) or ln.lstrip().startswith(("FAILED ", "ERROR "))
     ]
     skips = [ln.strip() for ln in lines if ln.lstrip().startswith("SKIPPED ")]
+    skip_records: list[dict[str, str]] = []
+    verdicts = read_junit(junit, skip_records=skip_records) if junit is not None else {}
     return {
         "counts": counts,
         "collected": collected,
@@ -429,7 +431,8 @@ def run_pytest(*, extra: list[str] | None = None, junit: pathlib.Path | None = N
         "failures": failures,
         "skips": skips,
         "tail": lines[-12:],
-        "verdicts": read_junit(junit) if junit is not None else {},
+        "verdicts": verdicts,
+        "skip_records": skip_records,
     }
 
 
@@ -437,8 +440,13 @@ def run_pytest(*, extra: list[str] | None = None, junit: pathlib.Path | None = N
 _VERDICT_RANK = {"passed": 0, "skipped": 1, "failed": 2}
 
 
-def read_junit(path: pathlib.Path) -> dict[str, dict[str, dict[str, str]]]:
+def read_junit(
+    path: pathlib.Path, *, skip_records: list[dict[str, str]] | None = None
+) -> dict[str, dict[str, dict[str, str]]]:
     """pytest's verdict on each test: {module stem: {test name: {"outcome", "message"}}}.
+
+    Optional skip_records receives every non-xfail skipped case before replay deduplication,
+    so ceiling accounting does not lose skips with colliding class/method names.
 
     Kept only where a check can be REPLAYED from it — passed, failed (a failure or an error in any
     phase) and skipped. An xfail is left out, and so is everything in an absent or unreadable file:
@@ -454,6 +462,15 @@ def read_junit(path: pathlib.Path) -> dict[str, dict[str, dict[str, str]]]:
     out: dict[str, dict[str, dict[str, str]]] = {}
     unreplayable: set[tuple[str, str]] = set()
     for case in root.iter("testcase"):
+        if skip_records is not None:
+            for child in case:
+                if child.tag == "skipped" and child.get("type") != "pytest.xfail":
+                    skip_records.append(
+                        {
+                            "outcome": "skipped",
+                            "message": child.get("message") or "",
+                        }
+                    )
         module = (case.get("classname") or "").rsplit(".", 1)[-1]
         name = case.get("name") or ""
         if not module or not name:
@@ -878,6 +895,7 @@ def _appended_note(prior: str | None, collected: int, passed: int, today: str) -
 # disagree about which number they mean.
 CEILINGS = (
     ("skipped_max", "skipped test(s)"),
+    ("core_sibling_skipped_max", "Closer Core sibling skipped test(s)"),
     ("selftest_skipped_max", "skipped selftest(s)"),
     ("gate_skipped_max", "skipped gate(s)"),
     # The mypy exempt list is bounded exactly like skipping, and for the same reason: a list of
@@ -1183,6 +1201,43 @@ def _carried_forward(floor: dict) -> dict:
 # of its skips registration alone drains: the blocking and the drainable number in one message.
 SKIP_CEILINGS = ("skipped_max", "selftest_skipped_max", "gate_skipped_max")
 
+# What clears each skip population. Named beside the count so a latched ceiling breach names the
+# category that is new and the action that drains it — not only the integer to raise (#817).
+SKIP_CATEGORY_CLEARS = {
+    "skipped_max": (
+        "clear by restoring the named missing prerequisite under SKIPPED "
+        "(git family on the exec mirror), or raise the shape key deliberately"
+    ),
+    "core_sibling_skipped_max": (
+        "clear when CLOSER_CORE_SOURCE points at a checkout with scripts/closer_runtime.py "
+        "or Core is placed at the sibling portable path"
+    ),
+    "selftest_skipped_max": (
+        "clear by restoring the named missing selftest prerequisite, or raise the shape key "
+        "deliberately"
+    ),
+    "gate_skipped_max": (
+        "clear by restoring the named missing gate prerequisite, or raise the shape key deliberately"
+    ),
+}
+
+
+def _skip_category_breakdown(floor: dict, actual: dict, *, shape: str) -> str:
+    """Name every skip category with observed/limit and the action that clears it. Pure."""
+    parts = []
+    for key, label in CEILINGS:
+        if key not in SKIP_CATEGORY_CLEARS:
+            continue
+        limit, in_force = ceiling_limit(floor, key, shape=shape)
+        observed = actual.get(key)
+        if observed is None:
+            count = "UNCERTAIN"
+        else:
+            count = str(int(observed))
+        bound = "unset" if limit is None else f"{limit} via `{in_force}`"
+        parts.append(f"{label} {count}/{bound} — {SKIP_CATEGORY_CLEARS[key]}")
+    return " Skip categories: " + "; ".join(parts) + "."
+
 
 def declared_rows_at_start(ledger: pathlib.Path | None = None) -> dict:
     """Which rows this tree declares are absent from the ledger the run is ABOUT to judge.
@@ -1231,6 +1286,31 @@ def drainable_skips(
         "selftest_skipped_max": sum(1 for r in st["skipped"].values() if only_declared(r)),
         "gate_skipped_max": sum(1 for g in gates.values() if only_declared(g["skipped"])),
     }
+
+
+def core_sibling_skips(py: dict) -> int | None:
+    """Pytest skips that carry env_prereq.CORE_SIBLING_ABSENT_MARK (bounded separately).
+
+    None means the Core population could not be counted: pytest reported skips but left no
+    per-case records to partition. Treating that as 0 would charge every skip to the general
+    ceiling AND clear the Core ceiling by being blind — so both derived counts stay None and
+    `_ceiling_problems` fails any set Core/general skip ceiling (same rule as mypy exempt).
+    """
+    try:
+        import env_prereq
+
+        mark = env_prereq.CORE_SIBLING_ABSENT_MARK
+    except Exception:  # noqa: BLE001
+        return 0
+    # Legacy callers can still supply verdicts; run_pytest always provides per-case records.
+    tests = py.get("skip_records")
+    if tests is None:
+        tests = [v for by_name in (py.get("verdicts") or {}).values() for v in by_name.values()]
+    if not tests and py.get("skipped"):
+        return None
+    return sum(
+        1 for v in tests if v.get("outcome") == "skipped" and mark in (v.get("message") or "")
+    )
 
 
 def _format_declared_line(rows: dict, drainable: dict[str, int | None]) -> str:
@@ -1348,18 +1428,21 @@ def _ceiling_problems(
             )
             continue
         if observed > int(limit):
+            extra = ""
+            if drainable is not None and key in SKIP_CEILINGS:
+                extra = _drainable_clause(drainable.get(key), in_force)
+            if key in SKIP_CATEGORY_CLEARS:
+                # Every skip-ceiling breach names ALL skip categories with counts and clear
+                # actions. The pre-#817 latch printed only "40 > 21" and left the reader guessing
+                # which population was new.
+                extra += _skip_category_breakdown(floor, actual, shape=shape)
             problems.append(
                 # `CEILING`, not `SKIP CEILING`: the mypy exempt list is bounded by this same
                 # machinery and is not a skip, so the old wording sent a reader hunting for a skip
                 # that does not exist. The label already names WHICH population overflowed.
                 f"CEILING exceeded{where}: {observed} {label} > agreed maximum {limit}. "
                 f"This is bounded on purpose — either the new one is wrong, or raise "
-                f"`{in_force}` in .verify-floor.json deliberately and say why."
-                + (
-                    _drainable_clause(drainable.get(key), in_force)
-                    if drainable is not None and key in SKIP_CEILINGS
-                    else ""
-                )
+                f"`{in_force}` in .verify-floor.json deliberately and say why." + extra
             )
     return problems
 
@@ -1416,10 +1499,18 @@ def verify(
     # value against the limit in the same breath, per the house rule that a gate must always say
     # both numbers — `24/24` alone reads as "fine", `24/24 (ceiling)` reads as "at the limit".
     exempt = mypy_exempt_modules()
+    core_skipped = core_sibling_skips(py)
+    # Partition only when Core skips are countable. An unknown Core population makes BOTH
+    # derived skip counts uncountable — never invent a zero that clears a set ceiling.
+    other_skipped = None if core_skipped is None else py["skipped"] - core_skipped
+    # Local int: `actual` also holds uncountable Nones, so indexing it widens to int|None
+    # and mypy rejects `len(gates) - actual["gate_skipped_max"]` in the VERIFIED line.
+    gate_skipped = sum(1 for r in gates.values() if r["skipped"])
     actual = {
-        "skipped_max": py["skipped"],
+        "skipped_max": other_skipped,
+        "core_sibling_skipped_max": core_skipped,
         "selftest_skipped_max": len(st["skipped"]),
-        "gate_skipped_max": sum(1 for r in gates.values() if r["skipped"]),
+        "gate_skipped_max": gate_skipped,
         # None (uncountable) must not read as 0 — that would let the ceiling pass by being
         # blind. The rule lives in `_exempt_ceiling_input` rather than inline here, because
         # inline it was untestable and therefore wrong for as long as it existed.
@@ -1483,9 +1574,15 @@ def verify(
         f"  time:       pytest {_duration(took['pytest'])}, selftests "
         f"{_duration(took['selftests'])} ({jobs_said}), gates {_duration(took['gates'])}"
     )
+    skip_detail = _cap("skipped_max")
+    if core_skipped:
+        skip_detail = (
+            f"{py['skipped']} skipped total "
+            f"({_cap('core_sibling_skipped_max')} core-sibling; {skip_detail} other)"
+        )
     lines.append(
         f"  pytest:     {py['passed']} passed, {py['failed']} failed, "
-        f"{_cap('skipped_max')} skipped "
+        f"{skip_detail} "
         f"({py['collected']} collected; floor {floor_state})"
     )
     lines.append(
@@ -1495,7 +1592,7 @@ def verify(
     for name, res in gates.items():
         state = "SKIP" if res["skipped"] else ("ok " if res["ok"] else "FAIL")
         lines.append(f"  {name:<18} {state} {res['line']}")
-    if actual["gate_skipped_max"]:
+    if gate_skipped:
         lines.append(f"  gates:      {_cap('gate_skipped_max')} skipped")
     # ALWAYS printed, like `tree:`: whether the ledger judged lacks a row this tree registers itself.
     lines.append(_format_declared_line(declared_rows, drainable))
@@ -1510,7 +1607,7 @@ def verify(
 
     # WHAT DID NOT RUN, always — under a green verdict as much as a red one. A number of skips
     # with no reasons beside it is how "green" quietly stops meaning "checked".
-    if py["skips"] or st["skipped"] or actual["gate_skipped_max"]:
+    if py["skips"] or st["skipped"] or gate_skipped:
         lines.append("")
         lines.append("  SKIPPED (prerequisite absent on this machine — nothing here was checked):")
         for ln in py["skips"]:
@@ -1538,12 +1635,12 @@ def verify(
         lines.append(
             f"  VERIFIED — {py['passed']} tests actually executed and passed, "
             f"{len(st['ok'])} selftests spoke, "
-            f"{len(gates) - actual['gate_skipped_max']} of {len(gates)} gates green"
+            f"{len(gates) - gate_skipped} of {len(gates)} gates green"
             + (
                 f"; {py['skipped']} test(s), {actual['selftest_skipped_max']} selftest(s) "
-                f"and {actual['gate_skipped_max']} gate(s) SKIPPED for a named missing "
+                f"and {gate_skipped} gate(s) SKIPPED for a named missing "
                 f"prerequisite, listed above"
-                if (py["skipped"] or actual["selftest_skipped_max"] or actual["gate_skipped_max"])
+                if (py["skipped"] or actual["selftest_skipped_max"] or gate_skipped)
                 else ""
             )
         )
@@ -2291,6 +2388,48 @@ def _selftest() -> None:
     assert len(_over_d) == 1 and "22 skipped test(s) > agreed maximum 21" in _over_d[0], _over_d
     assert "1 of them skipped only for a row this tree declares" in _over_d[0], _over_d
     assert "never a reason to raise `mirror_skipped_max`" in _over_d[0], _over_d
+    _mark = "CLOSER CORE SIBLING ABSENT:"
+    _py_core = {
+        "skipped": 3,
+        "verdicts": {
+            "test_core": {
+                "t1": {"outcome": "skipped", "message": f"{_mark} no sibling"},
+                "t2": {"outcome": "skipped", "message": "git absent"},
+                "t3": {"outcome": "passed", "message": ""},
+            }
+        },
+    }
+    assert core_sibling_skips(_py_core) == 1
+    # Skips without per-test verdicts: Core count is unknown, never zero (blind pass).
+    assert core_sibling_skips({"skipped": 20}) is None
+    assert core_sibling_skips({"skipped": 0}) == 0
+    _floor_core = {"mirror_skipped_max": 21, "mirror_core_sibling_skipped_max": 1}
+    _actual_core = {**{k: 0 for k, _ in CEILINGS}, "skipped_max": 2, "core_sibling_skipped_max": 1}
+    assert _ceiling_problems(_floor_core, _actual_core, shape=EXEC_MIRROR) == []
+    _actual_core["skipped_max"] = 22
+    _over_git = _ceiling_problems(_floor_core, _actual_core, shape=EXEC_MIRROR)
+    assert len(_over_git) == 1 and "`mirror_skipped_max`" in _over_git[0], _over_git
+    assert "Skip categories:" in _over_git[0], _over_git
+    assert "Closer Core sibling skipped test(s) 1/1 via `mirror_core_sibling_skipped_max`" in (
+        _over_git[0]
+    ), _over_git
+    assert "skipped test(s) 22/21 via `mirror_skipped_max`" in _over_git[0], _over_git
+    _actual_core = {**{k: 0 for k, _ in CEILINGS}, "skipped_max": 1, "core_sibling_skipped_max": 2}
+    _over_core = _ceiling_problems(_floor_core, _actual_core, shape=EXEC_MIRROR)
+    assert len(_over_core) == 1 and "`mirror_core_sibling_skipped_max`" in _over_core[0], _over_core
+    assert "CLOSER_CORE_SOURCE" in _over_core[0]
+    assert "Skip categories:" in _over_core[0], _over_core
+    assert "git family" in _over_core[0], _over_core
+    # Missing verdicts must not clear both ceilings with invented zeros (#817 / review).
+    _blind_core = _ceiling_problems(
+        {"mirror_skipped_max": 21, "mirror_core_sibling_skipped_max": 19},
+        {**{k: 0 for k, _ in CEILINGS}, "skipped_max": None, "core_sibling_skipped_max": None},
+        shape=EXEC_MIRROR,
+    )
+    assert len(_blind_core) == 2, _blind_core
+    assert all("CEILING UNCHECKABLE" in p for p in _blind_core), _blind_core
+    assert any("`mirror_skipped_max`" in p for p in _blind_core), _blind_core
+    assert any("`mirror_core_sibling_skipped_max`" in p for p in _blind_core), _blind_core
     for _count, _says in ((0, "None of them skipped only"), (None, "NOT COUNTED")):
         _over_c = _ceiling_problems(
             {"skipped_max": 1}, {**_z_d, "skipped_max": 2}, drainable={"skipped_max": _count}

@@ -1200,6 +1200,7 @@ def run_round(
                         "blocked",
                         "deferred",
                         "stale",
+                        "not_started",
                     }:
                         raise ValueError("execute returned an unsupported operation status")
                     stored_result = {
@@ -1268,6 +1269,16 @@ def run_round(
                             "operation_uncertain",
                             result.get("next_trigger") or "reconcile_operation",
                         )
+                        stalled.add(target)
+                    elif result_status == "not_started":
+                        # The adapter must return this only before entering a remote
+                        # mutation. Keep the durable intent for a later same-binding
+                        # retry without misclassifying a failed read as an unknown write.
+                        op["status"] = "confirmed_not_started"
+                        op["next_trigger"] = (
+                            result.get("next_trigger") or "refresh_remote_before_action"
+                        )
+                        _defer(item, "remote_action_not_started", op["next_trigger"])
                         stalled.add(target)
                     else:
                         if result_status == "stale":

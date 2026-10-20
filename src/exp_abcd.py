@@ -93,7 +93,13 @@ AGENT_MODE = {
 # and (b) yield more signal on each evaluator's own strengths/weaknesses. Generalizes the docsdrift1
 # N=2 fragility finding (a 2-implementer A/B had no counted neutral judge). Top up in this order:
 # most-reliable-neutral first; gemini last since _winner_and_harvest excludes it from the ranking mean.
-EVALUATOR_TOPUP_ORDER = ("claude", "codex", "cursor", "vibe", "gemini")
+EVALUATOR_TOPUP_ORDER = ("claude", "codex", "cursor", "vibe", "gemini", "muse")
+# Judges with no reliability record yet (gemini after its model change, muse never fielded). A judge is
+# only top-up material when the panel is short, so left alone these two would almost never run and could
+# never earn the record that lets them count: a gate whose drain is the thing it blocks. One probationer
+# rides every DEFAULT panel instead. `_winner_and_harvest` gives a judge without a ready record weight 0
+# (PROBATION_EVALUATORS is also its fallback exclusion), so a probationer can never move a ranking.
+PROBATION_EVALUATORS = ("gemini", "muse")
 MIN_EVALUATORS = 4
 
 AUTH_FILES = {  # same as dispatcher: PATH resolves the binary, auth lets it actually run
@@ -803,7 +809,25 @@ def prepare_arms(
             raise ValueError("unknown producer")
         if not spec.strip() or spec_provenance.is_missing_spec({}, spec):
             raise MissingSpecNotEvaluableError("producer requires frozen issue body")
+        import experiment_producer
+
+        try:
+            frozen = experiment_producer.freeze_test(
+                repo,
+                spec,
+                exp_id,
+                members[0]["agent"],
+                base_sha,
+                root=edir,
+            )
+        except Exception as exc:
+            raise experiment_producer.FrozenTestError(
+                f"could not freeze named test: {exc}"
+            ) from exc
         meta.update(producer_metadata)
+        meta.update(frozen)
+        spec += "\n\nFrozen judging command: `" + frozen["named_test"] + "`\n"
+        (edir / "spec.md").write_text(spec)
         meta["spec_sha256"] = hashlib.sha256(spec.encode()).hexdigest()
     (edir / "meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True))
 
@@ -830,10 +854,22 @@ def prepare_arms(
                     "-b",
                     br,
                     str(wt),
-                    f"origin/{base}",
+                    (
+                        str(meta.get("test_commit") or base_sha)
+                        if producer_metadata
+                        else f"origin/{base}"
+                    ),
                 ]
             )
+        frozen_hashes = meta.get("test_sha256")
+        if isinstance(frozen_hashes, dict):
+            for path, digest in frozen_hashes.items():
+                if hashlib.sha256((wt / path).read_bytes()).hexdigest() != digest:
+                    raise ValueError("frozen test differs in comparison worktree")
         prompt = implement_prompt(spec)
+        if meta.get("test_commit"):
+            prompt += "\nThe committed named test is frozen. Do not edit or remove it."
+
         if brief := next(
             (a.get("brief") for a in normalized_arms if a["arm_id"] == member["arm_id"]), None
         ):
@@ -907,6 +943,7 @@ def prepare_arms(
         "base_sha": base_sha or None,
         "launched": launched,
         "arms": normalized_arms,
+        **({"test_source": meta["test_source"]} if producer_metadata else {}),
     }
 
 
@@ -1396,6 +1433,25 @@ def _eval_command(agent: str, promptfile: str, workspace: str | Path | None = No
         "gemini": f"agy -p {P} --dangerously-skip-permissions --add-dir {gemini_add_dir} --print-timeout 40m",
         "vibe": f"vibe --prompt {P} --auto-approve --output text --trust",
     }
+    if agent == "muse":
+        # An evaluator judges and never acts: the empty preset gives it no tools, contributor mode is
+        # off because the prompt holds diffs, and the JSONL run protocol is reduced to its terminal
+        # text by the same reader the dispatcher uses (fails closed to empty output on a bad stream).
+        rule_file = Path(promptfile).with_suffix(".muse.txt")
+        rule_file.write_text(
+            Path(promptfile).read_text()
+            + f"\n\nREAD-ONLY EVALUATION: {dispatcher.GH_READ_ONLY_RULE}"
+        )
+        reader = (
+            "import sys; sys.path.insert(0, "
+            + repr(str(Path(adapters.__file__).resolve().parent))
+            + "); import adapters; sys.stdout.write(adapters.muse_terminal_text(sys.stdin.read()))"
+        )
+        cmds["muse"] = (
+            "muse exec --json --preset empty --contributor-mode off --no-foreign-personal-context "
+            f"--no-session-log --disable-approval --prompt-file {shlex.quote(str(rule_file))} "
+            f"| python3 -c {shlex.quote(reader)}"
+        )
     cmds["gemini"] = (
         f"agy --gemini_dir {shlex.quote(gemini_dir)}{gemini_model_arg} "
         f"--print {P} --dangerously-skip-permissions --add-dir {gemini_add_dir} "
@@ -1458,6 +1514,33 @@ def _ensure_min_evaluators(
     return out
 
 
+def _unproven_judges(names=PROBATION_EVALUATORS) -> list[str]:
+    """Probation candidates that do not yet have a ready reliability record (all, when unreadable)."""
+    try:
+        judges = judge_reliability.summarize().get("judges") or {}
+    except Exception:
+        judges = {}
+    return [n for n in names if not (judges.get(n) or {}).get("ready")]
+
+
+def _with_probation(agents, *, protected=(), rng=None, unproven=None) -> list[str]:
+    """Make ONE top-up seat of a default panel a probationary judge, keeping the panel size.
+
+    The default panel is pinned at MIN_EVALUATORS (test_evaluator_panel_size_semantics), so the
+    probationer REPLACES the last seat that the caller did not name rather than adding a fifth. A
+    panel that already holds a probationer, or has no top-up seat, is returned unchanged.
+    """
+    out = list(agents)
+    pool = [a for a in (_unproven_judges() if unproven is None else unproven) if a not in out]
+    if not pool or any(a in out for a in PROBATION_EVALUATORS):
+        return out
+    for index in range(len(out) - 1, -1, -1):
+        if out[index] not in protected:
+            out[index] = (rng or random).choice(pool)
+            return out
+    return out
+
+
 def _normalize_evaluator_specs(
     requested: list[Any] | None,
     *,
@@ -1498,6 +1581,8 @@ def _normalize_evaluator_specs(
         capacity=_capacity_map(),
     )
     represented = {spec["agent"] for spec in explicit}
+    if requested is None:
+        topped_agents = _with_probation(topped_agents, protected=represented)
     explicit.extend(
         {"agent": agent, "evaluator_id": agent}
         for agent in topped_agents
@@ -2567,7 +2652,7 @@ def _winner_and_harvest(
     verdicts: dict,
     maps: dict,
     reliability: dict | None = None,
-    fallback_exclude_judges=("gemini",),
+    fallback_exclude_judges=PROBATION_EVALUATORS,
 ) -> dict:
     """Compute weighted ranking and harvest material from per-judge verdicts.
 

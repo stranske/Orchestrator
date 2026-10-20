@@ -504,6 +504,15 @@ def _safe_command(argv: list[str]) -> bool:
         return False
     if argv[:3] == ["git", "diff", "--check"]:
         return True
+    if argv[:2] == ["node", "--test"]:
+        return len(argv) == 3 and argv[2].endswith((".test.js", ".test.cjs", ".test.mjs"))
+    if len(argv) >= 5 and argv[0] in {"npm", "pnpm"} and argv[1] == "--prefix":
+        prefix = Path(argv[2])
+        return (
+            not prefix.is_absolute()
+            and ".." not in prefix.parts
+            and _safe_command([argv[0], *argv[3:]])
+        )
     if argv[0] == "pytest":
         return True
     if argv[:3] == ["python3", "-m", "pytest"]:
@@ -912,7 +921,7 @@ def deliver_producer_winner(exp_dir, meta, evaluation, *, verify_fn=None, gh_fn=
             raise RuntimeError((result.stderr or result.stdout)[-500:])
         return result.stdout.strip()
 
-    command = producer.named_test((root / "spec.md").read_text())
+    command = meta.get("named_test") or producer.named_test((root / "spec.md").read_text())
     members = {m["member_id"]: m for m in exp_abcd.experiment_members(meta)}
     verified = []
     for member_id, score in evaluation.get("ranking") or []:
@@ -923,6 +932,13 @@ def deliver_producer_winner(exp_dir, meta, evaluation, *, verify_fn=None, gh_fn=
             repo, root.name, member["agent"], None if member["legacy"] else member_id
         )
         try:
+            if any(
+                not (wt / path).is_file()
+                or (wt / path).is_symlink()
+                or hashlib.sha256((wt / path).read_bytes()).hexdigest() != digest
+                for path, digest in meta.get("test_sha256", {}).items()
+            ):
+                continue
             head = git(["rev-parse", "HEAD"], wt)
             status_before = git(["status", "--porcelain"], wt)
         except (RuntimeError, OSError, subprocess.TimeoutExpired):
@@ -1842,6 +1858,11 @@ def reconcile(
 
 
 def selftest() -> None:
+    for runner in ("npm", "pnpm"):
+        for prefix in ("/absolute", "../other", "frontend/../../other"):
+            assert not _safe_command([runner, "--prefix", prefix, "test"])
+    assert not _safe_command(["node", "--test", "x.test.ts"])
+    assert _safe_command(["npm", "--prefix", "frontend", "test", "--", "x.test.tsx"])
     import contextlib
     import io
     import shutil

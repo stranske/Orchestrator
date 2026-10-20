@@ -1872,12 +1872,26 @@ def build_command(
         return cmd + [prompt]
     if agent == "claude":
         cmd = ["claude", "-p", prompt, "--dangerously-skip-permissions"]
-        if requested_model:
-            cmd += ["--model", requested_model]
-        else:
-            tiered = _tier_model("claude", mode)
-            if tiered:
-                cmd += ["--model", tiered]
+        model = requested_model or _tier_model("claude", mode)
+        if model:
+            cmd += ["--model", model]
+        if reasoning_effort is not None:
+            # Sonnet 5.5 effort support verified in Claude's model-config docs.
+            # v1 high-profile history is not retroactively evidence of this flag.
+            if (
+                model != "claude-sonnet-5-5"
+                or not isinstance(reasoning_effort, str)
+                or reasoning_effort
+                not in {
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                    "max",
+                }
+            ):
+                raise ValueError("unsupported explicit Claude model/reasoning effort")
+            cmd += ["--effort", reasoning_effort]
         return cmd
     if agent == "cursor":
         # OFFLOADS ASK FOR stream-json SO THE RUN REPORTS ITS OWN MODEL. cursor's `system/init`
@@ -1945,6 +1959,19 @@ def build_command(
         ]
         if requested_model:
             cmd += ["--model", requested_model]
+        if reasoning_effort is not None:
+            if not isinstance(reasoning_effort, str) or reasoning_effort not in {
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra",
+            }:
+                raise ValueError("unsupported explicit Muse reasoning effort")
+            cmd += ["--reasoning-effort", reasoning_effort]
         if prompt_file is not None:
             return cmd + ["--prompt-file", str(prompt_file)]
         return cmd + [prompt]
@@ -2460,7 +2487,8 @@ def dispatch(
             target=str(Path(cwd).expanduser().resolve()),
         )
         # And the same reset: the provider's own clock, from codex's harness events alone.
-        reset_at = rate_incidents.provider_reset_at(agent, stdout.splitlines())
+        reset_lines = combined_output.splitlines() if agent == "gemini" else stdout.splitlines()
+        reset_at = rate_incidents.provider_reset_at(agent, reset_lines)
     except Exception as exc:
         print(f"warn: rate-incident classification failed for {agent}: {exc}", file=sys.stderr)
     if evidence_result and evidence_result.get("is_authoritative"):
@@ -2614,6 +2642,10 @@ def _selftest():
 
 
 def _selftest_inner(*, gaps: list[str] | None = None):
+    import inspect
+
+    # Wiring pin; behavioral stderr reset coverage also exercises dispatch in pytest.
+    assert "combined_output.splitlines()" in inspect.getsource(dispatch)
     assert _auto_resolve("gemini", "mid", "gemini-3.8-flash-high", ["gemini-4-argon-high"]) is None
     assert _auto_resolve("gemini", "full", "gemini-4-argon-high", ["gemini-3.8-flash-high"]) is None
     import env_prereq  # imported here: env_prereq reads this module

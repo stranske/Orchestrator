@@ -1,0 +1,30 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_______________ test_capacity_sheds_seat_when_model_unresolvable _______________
+tests/test_model_tier_resolution.py:420: in test_capacity_sheds_seat_when_model_unresolvable
+    assert meta["availability"] == "unavailable_model_unresolved", meta
+E   AssertionError: {'policy': 'auth-failed', 'availability': 'unavailable_auth_failed', 'next_action': 'Refresh gemini credentials, then re-check with `python3 capacity.py --json`. The fleet reads the credential FILE, not an interactive login session.'}
+E   assert 'unavailable_auth_failed' == 'unavailable_model_unresolved'
+E     
+E     - unavailable_model_unresolved
+E     + unavailable_auth_failed
+__________________ test_capacity_stays_ok_when_model_resolves __________________
+tests/test_model_tier_resolution.py:474: in test_capacity_stays_ok_when_model_resolves
+    assert state != capacity.SHED, state
+E   AssertionError: shed
+E   assert 'shed' != 'shed'
+E    +  where 'shed' = capacity.SHED
+____________ test_the_documented_copier_builds_through_the_builder _____________
+tests/test_build_exec_mirror.py:348: in test_the_documented_copier_builds_through_the_builder
+    assert proc.returncode == 0, proc.stderr
+E   AssertionError: mktemp: mkstemp failed on /var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/tmp.SXBUHnsvBs: Operation not permitted
+E     ERR: orch-sync-mirror.sh aborted at line 33 (rc 1): /private/tmp/pytest-of-teacher/pytest-190/test_the_documented_copier_bui0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.
+E     
+E   assert 1 == 0
+E    +  where 1 = CompletedProcess(args=['bash', '/private/tmp/pytest-of-teacher/pytest-190/test_the_documented_copier_bui0/orch-sync-mi...the_documented_copier_bui0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.\n').returncode
+tracked test inputs: NOT CHECKED -- /private/tmp/issue731-main-baseline.l6AW6r is not a git checkout. In the exec mirror that loses nothing: its tests/ IS `git archive HEAD tests`, so every file in it was tracked
+=========================== short test summary info ============================
+FAILED tests/test_model_tier_resolution.py::test_capacity_sheds_seat_when_model_unresolvable
+FAILED tests/test_model_tier_resolution.py::test_capacity_stays_ok_when_model_resolves
+FAILED tests/test_build_exec_mirror.py::test_the_documented_copier_builds_through_the_builder
+3 failed in 2.41s

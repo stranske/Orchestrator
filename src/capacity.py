@@ -1417,13 +1417,16 @@ def main(argv):
         import pacing_usage
 
         now = time.time()
+        previous = pacing_usage.read_json(HANDOFF / "capacity.json") or {}
         current = {
             "agents": {
                 pool: {"state": "ok", "reason": "pacing report"} for pool in ("codex", "claude")
             }
         }
-        current["pacing_fyi"] = pacing_usage.integrate(current["agents"], now=now, handoff=HANDOFF)
-        print(pacing_usage.report(HANDOFF, now=now, current=current))
+        current["pacing_fyi"] = pacing_usage.integrate(
+            current["agents"], now=now, handoff=HANDOFF, previous=previous
+        )
+        print(pacing_usage.report(HANDOFF, now=now, current=current, previous=previous))
         return 0
     if argv and argv[0] == "pick-agent":
         import argparse
@@ -1461,6 +1464,13 @@ def main(argv):
         print(message, file=sys.stderr)
     print(json.dumps(snap, indent=2))
     return 0
+
+
+def pacing_report(now: float | None = None) -> dict:
+    """The #668 pass numbers as data (read-only; no integrate, no ledger write)."""
+    import pacing_usage
+
+    return pacing_usage.pass_numbers(HANDOFF, time.time() if now is None else now)
 
 
 if __name__ == "__main__":

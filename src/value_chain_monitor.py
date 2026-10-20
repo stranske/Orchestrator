@@ -12,7 +12,9 @@ edge onto a role run is not acted on; it is counted beside `acted_on`. Only a te
 outcome is the `outcome` step, and a learning-excluded one, one awaiting the sweep, one that never
 merges and an open one are counted beside it. A run that never merges is scored by verdict in
 `capability_effectiveness` (owner decision 2026-10-12), never at this merges-only step. `works` needs a durable
-success (`outcome_success`). The tick writes the readable section to
+success (`outcome_success`). Relay-pacing edges in windowed-capacity-policy instead count the
+observed lane-round terminal result; they never earn durable-delivery success.
+The tick writes the readable section to
 `switch-review.md`, the file a capability verdict cites (CLAUDE.md §6).
 """
 
@@ -278,13 +280,23 @@ def outcome_counts(cid: str, own_edges: list[dict] | None) -> dict[str, int | No
     set aside beside `acted_on`. `outcome` counts acted-on runs whose outcome is TERMINAL, good or
     bad, and `outcome_success` those of them that are a durable success
     (`feedback.outcome_is_durable_success`, the lifecycle's predicate). Every class has its own
-    field, so nothing set aside is hidden in a smaller count. None when the edges are unread:
+    field, so nothing set aside is hidden in a smaller count. The capacity row also counts
+    version-exact relay round completions (including failure) without inventing PR outcomes.
+    None when the edges are unread:
     unmeasured, never zero.
     """
     fields = ("acted_on", *CLASS_FIELDS.values(), "outcome_success")
     if own_edges is None:
         return {field: None for field in fields}
     accepted = [e for e in own_edges if e.get("accepted") == 1]
+    relay = [
+        e
+        for e in accepted
+        if cid == feedback.RELAY_PACING_CAPABILITY
+        and e.get("capability_version_id") == feedback.RELAY_PACING_VERSION
+        and e.get("relay_round_status") in {"completed", "failed", "rate-limited"}
+    ]
+    accepted_delivery = [e for e in accepted if e not in relay]
     classified = [
         (
             capability_effectiveness._classify(
@@ -301,12 +313,15 @@ def outcome_counts(cid: str, own_edges: list[dict] | None) -> dict[str, int | No
             ),
             e,
         )
-        for e in accepted
+        for e in accepted_delivery
     ]
     classes = Counter(c for c, _ in classified)
     return {
         "acted_on": len(accepted) - sum(classes[c] for c in ACTED_ON_SET_ASIDE),
-        **{field: classes[c] for c, field in CLASS_FIELDS.items()},
+        **{
+            field: classes[c] + (len(relay) if c == "terminal" else 0)
+            for c, field in CLASS_FIELDS.items()
+        },
         "outcome_success": sum(
             c == "terminal"
             and feedback.outcome_is_durable_success(**capability_effectiveness._outcome_fields(e))
@@ -366,6 +381,57 @@ def acted_on_window_index(
     return index, "value-chain monitor, first-invocation deadline windows"
 
 
+def supervisor_closure_acceptance(
+    enabled_at: int, *, now: int | None = None, db: Path | None = None
+) -> dict[str, Any]:
+    """Read closure credit within 24 hours of an operator-supplied enablement time.
+
+    This does not enable the actor or write evidence. A rolling monitor count alone
+    cannot establish the deadline: both the action edge and its recorded outcome
+    must fall inside the enablement window. Unread evidence remains unmeasured.
+    """
+    now = int(time.time()) if now is None else now
+    if enabled_at <= 0 or enabled_at > now:
+        raise ValueError("enablement time must be positive and no later than now")
+    deadline = enabled_at + 86400
+    end = min(now, deadline)
+    inputs = _brain(db or feedback.DB_PATH, enabled_at, end)
+    return _supervisor_closure_result(enabled_at, now, inputs)
+
+
+def _supervisor_closure_result(enabled_at: int, now: int, inputs: dict) -> dict[str, Any]:
+    deadline = enabled_at + 86400
+    end = min(now, deadline)
+    cid = "live-keepalive-supervisor"
+    own = own_edges_of(inputs["edges"], cid)
+    bounded = (
+        None
+        if own is None
+        else [
+            edge
+            for edge in own
+            if str(edge.get("target_run_id") or "").startswith("supervisor-close:")
+            and enabled_at <= (edge.get("outcome_recorded_ts") or 0) <= end
+        ]
+    )
+    count = outcome_counts(cid, bounded)["outcome"]
+    if count is None:
+        status = "unmeasured"
+    elif count >= 1:
+        status = "met"
+    else:
+        status = "pending" if now < deadline else "deadline_missed"
+    return {
+        "capability": cid,
+        "enabled_at": enabled_at,
+        "deadline": deadline,
+        "generated_at": now,
+        "outcome": count,
+        "status": status,
+        "errors": inputs["errors"],
+    }
+
+
 def _dispute_count(db: Path, now: int) -> int | None:
     """Persisted verifier disputes in the window, from the one definition of a dispute.
 
@@ -412,13 +478,22 @@ def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
                 "SELECT ie.*, o.adjudicated_verdict AS outcome_adjudicated, "
                 "o.verifier_verdict AS outcome_verifier, o.durability AS outcome_durability, "
                 "o.merged AS outcome_merged, o.failure_class AS outcome_failure_class, "
+                "o.durability_checked_ts AS outcome_recorded_ts, "
                 "r.role_name AS target_role_name, r.mode AS target_mode, "
                 "r.pr_number AS target_pr_number, "
-                "r.routing_metadata AS target_routing_metadata FROM influence_edges ie "
+                "r.routing_metadata AS target_routing_metadata, "
+                "CASE WHEN ce.producer='feedback.relay_pacing' "
+                "AND ce.validation_status='accepted' AND ce.created_ts<=? "
+                "AND ce.run_id=ie.target_run_id "
+                "AND ce.capability_id=ie.capability_id "
+                "AND ce.capability_version_id=ie.capability_version_id THEN "
+                "json_extract(ce.payload_json,'$.relay_pacing.status') END AS relay_round_status "
+                "FROM influence_edges ie "
                 "LEFT JOIN outcomes o ON o.run_id = ie.target_run_id "
                 "LEFT JOIN runs r ON r.run_id = ie.target_run_id "
+                "LEFT JOIN completion_events ce ON ce.event_id = ie.target_event_id "
                 "WHERE ie.created_ts BETWEEN ? AND ?",
-                (since, now),
+                (now, since, now),
             ):
                 edge = dict(r)
                 adjudicated = edge["adjudicated_verdict"] = edge.pop("outcome_adjudicated")
@@ -701,13 +776,49 @@ def recurrence_fixture() -> bool:
     row.update(outcome_counts("cap", [{"accepted": 1}]))  # acted on, nothing recorded yet
     assert first_break(row) == "no_outcome"
     assert all(v is None for v in outcome_counts("cap", None).values())
+    # Exercise the same deadline/prefix reducer as the read-only Brain API.
+    enabled = 100
+    deadline = enabled + 86400
+    closure = {
+        **done,
+        "capability_id": "live-keepalive-supervisor",
+        "target_run_id": "supervisor-close:fixture",
+        "outcome_recorded_ts": deadline,
+    }
+    inputs = {"edges": [closure], "errors": []}
+    assert _supervisor_closure_result(enabled, deadline, inputs)["status"] == "met"
+    assert _supervisor_closure_result(enabled, deadline + 1, inputs)["status"] == "met"
+    for excluded in (
+        {**closure, "target_run_id": "ordinary:fixture"},
+        {**closure, "outcome_recorded_ts": enabled - 1},
+        {**closure, "outcome_recorded_ts": deadline + 1},
+    ):
+        inputs = {"edges": [excluded], "errors": []}
+        assert _supervisor_closure_result(enabled, deadline - 1, inputs)["status"] == "pending"
+        assert _supervisor_closure_result(enabled, deadline, inputs)["status"] == "deadline_missed"
+    unknown = _supervisor_closure_result(enabled, deadline, {"edges": None, "errors": ["unread"]})
+    assert unknown["status"] == "unmeasured" and unknown["errors"] == ["unread"]
     return True
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument(
+        "--supervisor-enabled-at",
+        type=int,
+        help="read-only closure acceptance check; enablement time as Unix seconds",
+    )
     args = ap.parse_args(argv)
+    if args.supervisor_enabled_at is not None:
+        if args.selftest:
+            ap.error("--selftest cannot be combined with --supervisor-enabled-at")
+        try:
+            acceptance = supervisor_closure_acceptance(args.supervisor_enabled_at)
+        except ValueError as exc:
+            ap.error(str(exc))
+        print(json.dumps(acceptance, indent=2))
+        return 0 if acceptance["status"] == "met" else 1
     if args.selftest:
         recurrence_fixture()
         print("value_chain_monitor selftest PASS")

@@ -35,3 +35,42 @@ offset suffixes and full month names are accepted. If the time is missing, malfo
 past, the existing six-hour cooldown applies. A later valid reset time extends
 the shed marker through that time. Operators should configure the relay host's
 timezone to match the provider display timezone.
+
+
+## Relay pacing consumption (#812)
+
+The existing exit hook now also reads `HANDOFF_PACING_LOG`, defaulting to
+`$HANDOFF_DIR/relay-pacing.log` (`~/.codex/handoff/relay-pacing.log` without an override).
+After merge and mirror sync, no additional launcher installation is required.
+`feedback.ingest_relay_pacing(path, now=epoch)` also permits offline replays into
+an explicitly selected `ORCH_FEEDBACK_DB`. Do not run replays against the production Brain.
+
+The capability owner is **windowed-capacity-policy**; the value-chain row printed by
+`switch_review.py --text-out PATH` is its only grading surface. No capability is added.
+Each valid log line is a sanitized decision event with source, chosen, candidates,
+states, weights, lane and boolean fallback, including `fallback=yes`. Identical log
+lines share a content-derived ID. Only a single decision between successive observed
+exits in that lane, with a matching chosen agent, earns an accepted edge to the
+lane-round ID. Codex, Claude (`claude_code` in logs), Cursor and Muse are supported.
+Multiple decisions, timestamp ties, a changed receiver, or an absent round never earn
+credit. Binding is one-to-one even when an older round arrives late. The round hook
+commits the lane-round row first; the importer then writes events and edges in its
+own transaction. Rereading does not add counts or change the decision's original window.
+Settled events are not rewritten. Pending decisions survive log rotation, and only
+rounds since the oldest unresolved decision are matched, preserving the preceding
+exit boundary. Sorted timestamp lookup avoids quadratic history scans under the
+Brain write lock.
+
+The target completion event records `completed` (exit zero), `rate-limited`
+(nonzero plus authoritative capacity evidence), or `failed` (other nonzero).
+These observed terminal results count as `outcome` in the capacity row; they are not
+PR acceptance or durable-delivery evidence and do not increment `outcome_success`.
+Import errors are returned as `relay_pacing.status=unavailable` in the hook receipt;
+provider-incident recording still runs. Missing logs report `absent`.
+
+For the 2026-10-27 check, compare decision timestamps in the same UTC window against
+this row's accepted edges (the normal monitor window is 90 days), retaining any
+other capacity-consumer edges separately when comparing to relay log counts.
+Inspect `completion_events` with producer `feedback.relay_pacing` for unjoined
+decisions and chosen-agent outcome payloads. A fixture pass does not establish
+one-day production consumption or the weekly +/-5% acceptance criterion.

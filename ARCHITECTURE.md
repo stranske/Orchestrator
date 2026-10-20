@@ -25,6 +25,20 @@ deduplication and the existing source-closure actor retain authority. Cheap outp
 is advisory and cannot become a trusted disposition. A separate pipeline receipt
 preserves any legacy queue state during migration.
 
+Before low or exception workers run, a deterministic evidence-readiness rail
+checks the retained packet, delivery identity, original sources and the raw inputs
+for the requested action. Known collection gaps become typed pending dependencies
+with their exact missing inputs and retry triggers. Missing and ambiguous delivery
+links remain distinct. A bounded resolver may identify a unique merged delivery
+head only by proving that it contains every other linked delivery merge; all
+candidates and exact ancestry evidence remain bound to the original source.
+The producer publishes an explicit ready or collection-failure result after
+assembling action-specific raw inputs. Packet integrity alone does not admit model work. Substantive current review and
+bound NON_PASS triage may use partial optional evidence; readiness grants no
+acceptance or action authority. Stable source transformations require typed senior
+resolution preserving original criteria. Redacted review bodies require complete
+pagination, no truncation and verified retained displayed bytes.
+
 Postrun validates assignment accounting and actual remaining budget before end-round
 or relay. No pass quota or one-complex-repository limit can authorize early stop.
 Unknown mutation outcomes reconcile before retry, source/review/head changes
@@ -32,6 +46,51 @@ invalidate prior evidence, and verifier requests are deduplicated. Source closur
 composes the separately owned supervisor actor when deployed and explicitly enabled;
 this coordinator does not enable it. Deployment uses the existing mirror sync and
 canonical local prompt renderers, preserving demand scheduling and safety gates.
+The resource rail records causal run/revision/identity/work-key bindings before
+staged-pipeline legacy actions. Exact-plan reconciliation independently validates a completed
+no-operation evidence wait under the original locks and archives its evidence
+before retiring only matching advertisements. Historical records without causal
+binding and all uncertain operations remain held; no acceptance or global-stop
+authority is added. Interrupted action boundaries preserve original audit rows
+and project only to reconciliation; unsupported continuation facts and unresolved
+reservations retain the global invalid-stop verdict. Opt-in scoped continuation
+uses the existing target leases and alias locks with a read-only hash-bound
+quarantine census. Anchored incomplete items fence their repository and known
+PR/source/branch/configured-worktree aliases before model or effect callbacks;
+unbounded shared corruption remains an explicit global hold. Disjoint shards
+receive separate bounded windows while existing shard and legacy deadlines remain
+unchanged. Immutable pre-callback refusal evidence grants no acceptance or
+historical retirement authority. Named scoped completion and global historical
+stop validity remain separate facts.
+
+**Runtime ownership and the campaign layer (`src/closer_campaign.py`, 2026-10-19).** The Orchestrator
+owns the closer *runtime*: capacity routing, parallel bounded workers, handoffs, recovery, release
+management and desktop adapters, and it distributes that runtime by pinned manifest. Workflows owns
+the portable closer *core* (process, evidence, action safeguards, basic runner); the Orchestrator
+loads a closed hash-bound Workflows package through `CoreBundle`. Remote actions use
+`GitHubContentsOperationStore`/`NativeGitHubTransport` through `submit_effect`; a local Core
+store supports offline preparation only. No private alternate action lock exists. Names are descriptive;
+no repository is renamed. A runtime manifest binds module digests, runtime, command, candidate and
+state versions, and declares the Core contract (`closer-operation/v1`). Rails: durable campaign
+record -> `reconcile` -> `next_action` -> bounded `worker` (existing dispatcher, existing `claims`)
+-> durable result; the scheduled controller tick (`controller_entry`, loaded from the pinned path and
+digests by `scripts/install_closer_campaign_hook.py`) resumes every `*.campaign.json` after worker
+death or capacity failure. Uncertain dispatched writes reconcile and are never retried. See
+[the campaign contract](docs/CLOSER_CAMPAIGN.md).
+
+The optional pinned dispatcher binding propagates into each child action backend. Native
+freshness, Tasks/AC, exact-head merge guard and verifier rules still run inside the Core
+intent fence. Core currently supports merge and verify; review responses and source
+closure hold for unsupported capabilities. Old deployed invocations retain their native
+behavior until migration. Worker pauses precede scheduler, delegate and effect entrypoints;
+controller ACTIVE cannot override a paused or unknown worker. Desktop qualification needs
+a registered observer reading native app/run events plus hash-bound phase artifacts.
+Launcher/harness receipts remain insufficient. The native round wrapper reserves its
+original deadline for one A/B/C, but the installed postrun's unconditional cleanup lacks
+a token-safe adapter: new apply rounds remain held rather than risking successor cleanup.
+Source/schema pins and relocatable package checks prove packaging, not desktop acceptance.
+
+
 See [the operating contract](docs/CLOSER_DISPATCHER.md) for trusted disposition input,
 resource bounds, recovery and separate operational acceptance.
 
@@ -112,6 +171,26 @@ The single left arc is the loop closing. What it carries back is the point: `fee
 **both** surfaces — `selection weights` (blue) and `role ↔ backend fit` (amber) — into the next cycle.
 
 ## Rails — deterministic, keep as code
+
+The existing `keepalive_supervisor` cadence also has a post-merge action behind
+`ORCH_SUPERVISOR_CLOSE=1` (default off). It reads up to `min(--limit, 30)` recently updated merged PRs, then selects agent PRs.
+The `--stage2-plan` cadence uses the CLI default limit of 20. It executes at most
+three acceptance gates and closes at most three explicitly linked, still-open source issues per pass.
+It reuses `verifier_evidence` for a trusted exact-head/exact-merge PASS, or the
+existing `runtime_ac` authoring and `runtime_ac_gate.recheck_merged` runner on a
+disposable exact-merge checkout, with all merge-SHA CI green. Non-PASS or malformed
+verifier evidence, missing runnable acceptance commands, changed evidence and scoped
+or human holds refuse closure with counted reasons. The source issue and verifier
+are refreshed before mutation. A PR comment records the rule and merge SHA; only a
+confirmed closure writes an idempotent `supervisor-close` run/outcome and the existing
+capability influence edge. These outcomes measure the closure action, not a new
+implementation or durability judgment. A shared nonblocking state lock preserves
+serial closure; failures leave other candidates available. Unset the flag to stop
+future closures. This extends a deterministic rail, adds no role, and does not enable
+redirect apply. `--stage2-plan` calls it on the existing cadence; `--close-verified`
+provides the same bounded actor for the post-merge live acceptance check. Deployment,
+flag enablement, the first real closure and the seven-day latency measure remain
+separate acceptance evidence; unit tests do not establish those events.
 
 Observer reports and tick-cadence rails retain invocation, fingerprint and finding-delta evidence,
 but cannot earn delivery-usefulness verdicts. The existing selection exemption supplies the
@@ -721,8 +800,14 @@ drift, including the drained count. The daily `feature-goals` cadence independen
 checks `GOAL_SILENCE_DAYS` of observed silence or wrong-direction evidence and
 creates or updates one labelled drift issue per feature; measured recovery closes
 that issue. Unknown remains `unmeasured — would need <query>`, distinct from zero.
-The promotion measure imports the existing switch-review reader; absent comparative,
-pacing, random-cell and completion-comment sources explicitly remain unmeasured.
+The promotion measure imports the existing switch-review reader. Since 2026-10-18 every
+goal has a live source (#756 and this change): comparative reads #676's shadow report
+(measured only when `optimal`), random retest reads the producer's route cells, the three
+pacing goals read `capacity.pacing_report()` (the #668 pass numbers as data, computed by the
+same `pacing_usage.final_usage`/`period_results` helpers the text `pacing-report` renders,
+read-only), and keepalive acceptance reads the `Deterministic gates: P/T passed` line that
+Workflows#3985 writes into merged keepalive PR bodies, counted from the gate's deploy
+(`KEEPALIVE_GATE_LIVE`). Each passes its source's own unmeasured reason through.
 The first observation establishes history unless a measured source proves a complete
 retrospective silence window or dates the last successful promotion; a declaration
 date never fabricates fourteen days of evidence. This feedback rail changes no dispatch, approval or capability
@@ -1139,6 +1224,15 @@ consult actually lands on. It follows the same two rules as binding: it **annota
 (a concealed candidate can never earn the evidence that would clear it), and it is **data, not prose**.
 It is deliberately **repo-scoped rather than surface-scoped**: a demotion learned here would unbind
 the capability for every other repo, which is the wrong granularity for "broken against this one app".
+
+The writable repo-knowledge registry lives under the operational runtime
+(`$ORCH_LOCAL_RUNTIME/experiments/repo_knowledge.json`, defaulting to
+`~/.codex/orchestrator/experiments/repo_knowledge.json`); `ORCH_REPO_KNOWLEDGE_PATH` remains an
+explicit override. Prompt construction can seed or migrate it during a read. That mutable state
+must survive code-generation swaps without writing into the verified mirror. Existing misplaced
+state requires exact-byte preservation and guarded reconciliation; changing the default does not
+silently import or delete a historical generation's registry, and snapshot ownership/digests stay
+enforced.
 
 **And a fifth input, which is NOT that one: the capability's own declared PRECONDITION**
 (`applies_to: self | audited_repo | both`, plus named one-time repo facts —
@@ -1618,14 +1712,25 @@ for redirect linking does not prove an authorised apply. Missing or unreadable e
 UNKNOWN. The snapshot date remains visible; a newer heartbeat marks an old finding as history.
 No alarm is cleared, no regression rule changes, and no owner question or automated action is added.
 Route export (`route_weights_export.py`, schema `orchestrator.route-weights/v1` on branch
-`exports/route-weights`) records invocation on every daily run and success only after an actual
+`exports/route-weights`) runs hourly (weekly `relearn` is unchanged), records invocation on each run and success only after an actual
 publication; the published JSON preserves existing v1 routing values and adds additive
 `capacity_schema` (`orchestrator.route-weights-capacity/v1`) plus a `capacity` block with per-agent
 `state`, `window`, and `observed_at` from the capacity snapshot's own `generated_at`, plus
 an additive `pacing` block for Codex/Claude (fractions, projection, EWMA burn, routing weight,
 period bounds, reset inventory and source freshness; no credentials). `pacing.py` defines the
-weekly window and constants once. The capacity tick appends source-labelled observations and
-snapshots even while shed. Codex weekly percent/reset epochs come from timestamped rollout token-count events;
+weekly window and constants once. States retain their schedule/projection rules; routing weight
+uses a time-aware budget: `C = (1 − r_eff) + n_usable`, counting unconsumed banked resets
+expiring after now (each Codex reset restarts its period; Claude uses its banked count).
+In fractions/hour, `s = max(0, C − u) / max((T1 − t)/1h, 1)` and
+`ḃ_period = u / max((t − T0)/1h, 1)`. With the single `BURN_WINDOW_HOURS = 6`,
+`w = min(1, span_h / BURN_WINDOW_HOURS)` and
+`ḃ_eff = w·ḃ_short + (1−w)·ḃ_period`; undefined short burn uses the period average.
+The target is `clamp(s / ḃ_eff, 0, 1)`, or 1 when effective burn is nonpositive.
+Ticks compute this even at zero weight and limit changes to 0.25; actual exhaustion/latched
+quota failures force zero immediately. A source-only change keeps the prior weight within
+the same pool and period. Reports print budget, usable resets, all hourly rates, target,
+previous/current weight, and the oldest-expiring reset the pace would consume. The capacity tick
+appends source-labelled observations and snapshots even while shed. Codex weekly percent/reset epochs come from timestamped rollout token-count events;
 Claude uses desktop weekly history. Unknown/stale pacing preserves native routability; shared
 ccusage totals never become per-agent percentages. Both burn-rate aliases are retained.
 `router.select_agent` preserves load/late/state/policy/drain tiers and samples tied pools by
@@ -1634,12 +1739,66 @@ back to zero-weight warn pools, then pacing-shed pools with
 `fail-toward-motion`; auth/model/manual holds retain authority. The plan and persisted dispatch
 metadata carry all candidate weights and projections. `capacity.py pick-agent` exposes that same
 selection for the separate relay follow-up; it prints the agent on stdout and evidence on stderr.
+The relay's existing `rate_incidents.py record-lane-round` exit hook imports
+`$HANDOFF_PACING_LOG` (default `$HANDOFF_DIR/relay-pacing.log`) through
+`feedback.ingest_relay_pacing`. **`windowed-capacity-policy` owns this consumption**; there is
+no second relay-pacing capability or grading row. Version `relay-pacing-v1` stores source,
+chosen, candidates, states, weights and fallback in sanitized Brain decision events. The log
+has no run ID: only one decision between consecutive exits of the same lane, matching the
+observed receiver, can join its `routing_decisions_v2` lane-round ID. Multiple decisions,
+same-second exits, receiver changes after preflight, unfinished rounds and missing evidence
+remain uncredited; they must not be called acted on merely because selection was logged.
+The source event and accepted influence edge retain the decision time, so rereading or delayed
+import does not move evidence into another monitor window. One-to-one binding prevents late
+exits from reassigning a decision. The existing hook accepts Codex, Claude, Cursor and Muse.
+A joined round records completed / failed / rate-limited and the chosen agent; the existing
+value-chain row counts the observed terminal round as `outcome`. Process success never creates
+a PR verdict, merge, or durable success (`outcome_success`). Mirror sync activates this hook;
+no host launcher edit or routing-policy change is needed. The 2026-10-27 check must compare
+identical windows and report any unjoined decisions explicitly rather than claiming the 5%
+pass threshold from fixture evidence. See `docs/LANE_ROUND_FEEDBACK.md`.
 `capacity.py pacing-report` queries completed-period usage, incidents with another pool ok, and
 non-Codex dispatch share in constrained versus ok hours; missing populations stay unmeasured.
 `switch_review` prints that weekly check. Reset inventory and calibration are local runtime data;
-see `docs/capacity-pacing.md`. Semantic change detection includes capacity state, weekly usage and reset changes,
-excluding observation clocks, reasons and burn/schedule/projection drift, so a shed or recovered seat republishes without touching posteriors or
-`exploration.policy_version`. Rail exercise records invocation without
+see `docs/capacity-pacing.md`. Semantic change detection includes damped capacity state, period-end moves over one hour and
+usable-reset counts; usage, clocks, burn/schedule/projection drift and diagnostic weights are silent. A capacity
+state change (worsening or recovery) is held until two consecutive tick snapshots show that state.
+`route_weights_export.py --record-capacity-tick` reads local `capacity.json` on every tick, before
+publication due/backoff checks, and persists state/count/observation time in
+`$ORCH_STATE_DIR/route-weights-capacity-ticks.json` beside the cadence stamps. A different state,
+a missing/stale snapshot or an observation gap over two hours resets the count; re-reading the same
+snapshot does not increment it. The second distinct tick is the drain. While held, the complete
+published pool row is retained (including its pacing state), and the tick prints both quantities:
+`[cadence] capacity publish held: <pool> local=<state> published=<state> seen=<n>/2`.
+An initial publication or malformed-capacity repair establishes the baseline. Publication still requires
+`ORCH_ROUTE_WEIGHTS_PUBLISH=1`, preserves evidence gates and failure backoff, and immediately pushes
+damped state, `period_end` moves over `PERIOD_END_TOLERANCE_S=3600` seconds, or
+`resets_available` changes against the
+fetched remote artifact, along with existing non-capacity triggers (including learned weights).
+Usage, routing-weight, burn-rate, measurement and other capacity diagnostics do not trigger pushes;
+they remain in the published block and ride along with a trigger or a refresh once the published
+`generated_at` is over 24 hours old (`PUBLISH_REFRESH_FLOOR_S`), or its age is unmeasured.
+The refresh floor is 24 h for non-state diagnostic diffs; comparative/lambda drift and all
+`comparative_*` ranking/reserve row fields do not trigger pushes. They still ship with the next
+trigger or refresh. Worst-case published `used_fraction`/`observed_at` staleness is about 25 h
+(24 h plus one tick) without another trigger. The 2 h hold bound measures propagation of a
+persistent state change, not absolute diagnostic age: a held row retains its previously
+published numbers, which may already be old. Repeated state flaps can extend that age.
+An accepted state push carries fresh numbers. Workflows uses only capacity state; a consumer
+gating on `observed_at` freshness would be misled by this diagnostic age. Posteriors and
+`exploration.policy_version`
+are untouched by damping. `python3 src/route_weights_export.py --publish-lag` reads the local snapshot
+and fetches the same remote branch into disposable storage, without persistent writes, heartbeats
+or publication. It prints local snapshot age and each pool's local/published state, published
+artifact `generated_at` age (`published_age`), optional pool observation age (`observed_age`)
+and `lag=ok|STALE|held(n/2)` (stale mismatches exceed `PUBLISH_LAG_STALE_S=7200` seconds);
+an unchanged old artifact can still be in sync. Fetch failure
+prints `published=unmeasured`; only a fully measured match prints `all pools in sync`.
+With hourly successful ticks, a persistent state change reaches publication within two ticks
+(default at most two hours). Switch-off, failed/backed-off publication and skipped ticks can extend
+that bound and remain visible as lag. Recheck the live local/published comparison on 2026-10-19;
+merge and offline tests alone do not prove a day of successful production ticks.
+Rail exercise records invocation without
 `--record`, which governs exercise verdicts only.
 The learner and exporter share feedback.py's instance DB selection: explicit DB, DB environment,
 runtime environment, state environment, then shared default (with private `DB_PATH` patches
@@ -1695,9 +1854,10 @@ runs. A missing third agent cannot block this pass number. The window verdict re
 against that share and their reasons print separately. Measured slack prints
 `not_testable_slack`; otherwise the report prints classes_differing N. This is observed-hour
 coverage, not a claim that absent hours were measured. The CLI returns before heartbeat,
-export writes or publication. Comparative republishing compares status, entry ranks, lambda
-rounded to three decimals, and cost-source/imputed provenance, excluding diagnostic drift.
-Switch review reads the same report and prints one summary line.
+export writes or publication. The published comparative block and every `comparative_*`
+ranking/reserve field are shadow diagnostics: none triggers republication. They ride along
+with a meaningful routing/capacity change or the 24 h refresh floor. Switch review computes
+the same report from local snapshot/Brain inputs and prints one summary line.
 The live pass number requires at least one differing class with measured Codex and Claude prices
 over the 14-day pacing-history window, checked no earlier than 2026-11-07 and 14 days after
 the first #668 state. Fixture success does not meet that live pass number or enable consumption.
@@ -2341,3 +2501,5 @@ monitor supplies the same accepted, non-counterfactual edge classifier through
 cannot repair a missed admission deadline, and timely evidence remains creditable after it leaves
 the weekly view. Missing Brain evidence remains unmeasured. Reads are cached per Brain path,
 hour, and first-invocation binding; this change does not activate the installed mirror.
+
+Native wrapper capability: `closer_native_observer.py` implements the separately versioned native-handoff mechanism, with canonical configured pause policy, owned-process observations, signed durable worker handoffs, and no-effect qualification. It never substitutes wrapper provenance for Desktop scheduler events. The preview exporter and deployment contract are documented in `docs/CLOSER_NATIVE_HANDOFF.md`. Exact admitted-domain continuation retains global stop and acceptance as false.
