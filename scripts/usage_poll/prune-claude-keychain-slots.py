@@ -3,13 +3,14 @@
 
 Based on ~/.codex/bin/prune-claude-keychain-slots.py. Always keep the default
 slot, the poller slot, unknown timestamps, and anything named in --keep.
---apply deletes only slots untouched for strictly more than --days (at least 30).
+--apply deletes only slots last written strictly more than --days ago (at least 30).
 A deleted slot's config directory must log in again. Never request token values.
 """
 
 import argparse
 import datetime
 import hashlib
+import os
 import pathlib
 import re
 import subprocess
@@ -32,7 +33,7 @@ def parse_slots(dump):
         if modified:
             try:
                 timestamp = datetime.datetime.strptime(modified.group(1), "%Y%m%d%H%M%S").replace(
-                    tzinfo=datetime.UTC
+                    tzinfo=datetime.timezone.utc
                 )
             except ValueError:
                 pass  # Unknown or malformed metadata must never authorize deletion.
@@ -69,7 +70,7 @@ def select_slots(all_slots, *, now, poller, days=30, keep=()):
 def main(argv=None, *, runner=None, home=None, now=None):
     runner = subprocess.run if runner is None else runner
     home = pathlib.Path.home() if home is None else pathlib.Path(home)
-    now = datetime.datetime.now(datetime.UTC) if now is None else now
+    now = datetime.datetime.now(datetime.timezone.utc) if now is None else now
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--days", type=int, default=30)
     parser.add_argument(
@@ -79,16 +80,21 @@ def main(argv=None, *, runner=None, home=None, now=None):
     args = parser.parse_args(argv)
     if args.days < 30:
         parser.error("--days must be at least 30")
-    poller = hashlib.sha256(str(home / ".codex/claude-poll").encode()).hexdigest()[:8]
+    default_dir = str(home / ".codex/claude-poll")
+    poller_dir = os.environ.get("CLAUDE_POLL_CONFIG_DIR") or default_dir
+    poller = hashlib.sha256(poller_dir.encode()).hexdigest()[:8]
+    default_slot = hashlib.sha256(default_dir.encode()).hexdigest()[:8]
     try:
         all_slots = slots(home, runner)
     except subprocess.CalledProcessError:
         print("Could not read keychain metadata; nothing deleted.", file=sys.stderr)
         return 1
-    doomed, kept = select_slots(all_slots, now=now, poller=poller, days=args.days, keep=args.keep)
+    doomed, kept = select_slots(
+        all_slots, now=now, poller=poller, days=args.days, keep=[default_slot, *args.keep]
+    )
     print(
         f"slots: {len(all_slots)} | keep: {len(kept)} | prune: {len(doomed)} "
-        f"(untouched > {args.days} days)"
+        f"(last written > {args.days} days ago)"
     )
     for name, age in kept:
         print(f"  KEEP  {name}  (last written {age if age is not None else '?'} days ago)")
@@ -102,7 +108,15 @@ def main(argv=None, *, runner=None, home=None, now=None):
     failed = 0
     for name, _ in doomed:
         result = runner(
-            ["security", "delete-generic-password", "-s", name], capture_output=True, text=True
+            [
+                "security",
+                "delete-generic-password",
+                "-s",
+                name,
+                str(home / "Library/Keychains/login.keychain-db"),
+            ],
+            capture_output=True,
+            text=True,
         )
         failed += result.returncode != 0
     print(f"deleted {len(doomed) - failed}, failed {failed}")

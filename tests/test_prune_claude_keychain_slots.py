@@ -88,7 +88,8 @@ def test_larger_threshold_and_minimum_age(prune):
 
 @pytest.mark.parametrize("apply", [False, True])
 @pytest.mark.parametrize("delete_rc", [0, 1])
-def test_cli_uses_only_injected_runner(prune, tmp_path, capsys, apply, delete_rc):
+def test_cli_uses_only_injected_runner(prune, tmp_path, capsys, monkeypatch, apply, delete_rc):
+    monkeypatch.delenv("CLAUDE_POLL_CONFIG_DIR", raising=False)
     poller = hashlib.sha256(str(tmp_path / ".codex/claude-poll").encode()).hexdigest()[:8]
     dump = (
         item("Claude Code-credentials", "20200101000000")
@@ -108,6 +109,7 @@ def test_cli_uses_only_injected_runner(prune, tmp_path, capsys, apply, delete_rc
             "delete-generic-password",
             "-s",
             "Claude Code-credentials-11111111",
+            str(tmp_path / "Library/Keychains/login.keychain-db"),
         ]
         return SimpleNamespace(returncode=delete_rc)
 
@@ -121,6 +123,26 @@ def test_cli_uses_only_injected_runner(prune, tmp_path, capsys, apply, delete_rc
     output = capsys.readouterr().out
     assert "keep: 4 | prune: 1" in output
     assert ("DRY RUN: nothing deleted" in output) is not apply
+
+
+@pytest.mark.parametrize("override", ["", "/fixture/custom poller"])
+def test_cli_protects_configured_and_default_poller(prune, tmp_path, monkeypatch, override):
+    monkeypatch.setenv("CLAUDE_POLL_CONFIG_DIR", override)
+    default_dir = str(tmp_path / ".codex/claude-poll")
+    directories = {default_dir, override or default_dir}
+    dump = item("Claude Code-credentials", "20200101000000")
+    for directory in directories:
+        suffix = hashlib.sha256(directory.encode()).hexdigest()[:8]
+        dump += item(f"Claude Code-credentials-{suffix}", "20200101000000")
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        assert command[1] == "dump-keychain", "protected slot must never be deleted"
+        return SimpleNamespace(stdout=dump, returncode=0)
+
+    assert prune.main(["--apply"], runner=runner, home=tmp_path, now=NOW) == 0
+    assert len(calls) == 1
 
 
 def test_cli_refuses_lower_threshold_before_reading(prune):

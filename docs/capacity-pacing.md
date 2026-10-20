@@ -223,6 +223,9 @@ inference-only and lacks the `user:profile` scope needed by `/usage` (request
 credential wipes when the default login is shared with other sessions. These are
 user reports, not official authentication guarantees; the dedicated directory
 isolates the poller's login from the desktop app and other CLI sessions.
+At the CLI invocation boundary, `claude-usage-poll.py` also removes inherited
+`ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` so API/gateway authentication cannot
+override the subscription login. See [Anthropic's API-key guidance](https://support.claude.com/en/articles/12304248-manage-api-key-environment-variables-in-claude-code).
 
 If this login lapses, the poll goes stale and the stale alert fires
 (`usage-poll: claude STALE`). Recover with one re-login in the same directory.
@@ -232,10 +235,18 @@ result of installing these files.
 
 `prune-claude-keychain-slots.py` is an optional manual maintenance helper, dry-run
 by default. It reads item metadata only and always keeps the default credential
-slot and the dedicated poller slot. `--apply` deletes only other slots untouched
-for more than 30 days (`--days` may increase that threshold); `--keep` preserves
+slot, the default poller slot and any `CLAUDE_POLL_CONFIG_DIR` override's slot.
+`--apply` deletes only other slots last written more than 30 days ago
+(`--days` may increase that threshold); `--keep` preserves
 additional slot suffixes. Deleting a slot requires that config directory to log
-in again. Review the dry-run selection before applying it.
+in again. Selection uses modification metadata, not evidence of last use.
+Deletions are restricted to the inspected `login.keychain-db`.
+Review the dry-run selection before applying it, using the selected Python:
+
+```bash
+source ~/.codex/bin/py-standard.sh
+"$STANDARD_PYTHON" ~/.codex/bin/prune-claude-keychain-slots.py
+```
 
 The wrapper attempts both providers even when one fails and returns
 non-zero for any failure. After both polls it checks each latest file's own `ts`.
