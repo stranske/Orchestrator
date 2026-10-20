@@ -1705,22 +1705,16 @@ def test_pending_advisory_survives_restart_without_another_luna_call(tmp_path, m
     op = operation("collect_evidence")
     result = backend.worker(TARGET, "collect_evidence", current, op)
     assert len(calls) == 1 and backend.observe(TARGET)["requires_coordinator"]
-    backend.state_path.write_text(
-        json.dumps(
-            {
-                "items": {
-                    TARGET: {
-                        "operation": {
-                            **op,
-                            "revision": current["revision"],
-                            "status": "completed",
-                            "result": result,
-                        }
-                    }
-                }
-            }
-        )
-    )
+    persisted = closer_queue._new_state()
+    persisted["items"][TARGET] = {
+        "operation": {
+            **op,
+            "revision": current["revision"],
+            "status": "completed",
+            "result": result,
+        }
+    }
+    backend.state_path.write_text(json.dumps(persisted))
     restarted, new_calls = _private_worker(tmp_path, monkeypatch)
     observed = restarted.observe(TARGET)
     assert observed["requires_coordinator"]

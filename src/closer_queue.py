@@ -202,6 +202,46 @@ def _read_state(path: Path) -> dict[str, Any]:
     return data
 
 
+def state_for_frontier(
+    state: Mapping[str, Any],
+    frontier_id: str,
+    *,
+    expected_policy: Mapping[str, Any] | None = None,
+    allow_missing: bool = False,
+) -> dict[str, Any] | None:
+    """Return the selected finite queue namespace as a validation view.
+
+    This does not mutate the durable document. Missing IDs can be represented as
+    an empty selection only for callers that explicitly request ``allow_missing``;
+    malformed or mismatched existing buckets always fail closed.
+    """
+    if not isinstance(frontier_id, str) or not frontier_id.strip():
+        raise QueueStateError("finite frontier id is invalid")
+    frontiers = state.get("frontiers", {})
+    if not isinstance(frontiers, Mapping):
+        raise QueueStateError("closer queue finite frontier namespace must be an object")
+    if frontier_id not in frontiers:
+        if allow_missing:
+            return None
+        raise QueueStateError("finite frontier is missing")
+    bucket = frontiers[frontier_id]
+    if not isinstance(bucket, Mapping):
+        raise QueueStateError("finite frontier bucket is corrupt")
+    policy = bucket.get("policy")
+    items = bucket.get("items")
+    round_state = bucket.get("round")
+    if not isinstance(policy, Mapping) or policy.get("frontier_id") != frontier_id:
+        raise QueueStateError("finite frontier binding or state namespace is corrupt")
+    if expected_policy is not None and dict(policy) != dict(expected_policy):
+        raise QueueStateError("finite frontier id is already bound to another policy")
+    if not isinstance(items, Mapping) or not isinstance(round_state, Mapping):
+        raise QueueStateError("finite frontier binding or state namespace is corrupt")
+    round_policy = round_state.get("finite_frontier")
+    if round_state and round_policy != policy:
+        raise QueueStateError("finite frontier round policy differs from its bucket")
+    return {**state, "items": items, "round": round_state}
+
+
 def _atomic_write(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
@@ -634,15 +674,29 @@ def validate_stop(
             return {"valid": False, "stop_valid": False, "reasons": ["ledger_lock_busy"]}
         state = _read_state(path)
         if frontier_id is not None:
-            bucket = (state.get("frontiers") or {}).get(frontier_id)
-            if not isinstance(bucket, dict):
-                return {"valid": False, "stop_valid": False, "reasons": ["missing_frontier"]}
-            state = {**state, "items": bucket.get("items", {}), "round": bucket.get("round", {})}
+            try:
+                selected_state = state_for_frontier(state, frontier_id)
+            except QueueStateError as exc:
+                return {
+                    "valid": False,
+                    "stop_valid": False,
+                    "reasons": [f"invalid_frontier:{exc}"],
+                }
+            assert selected_state is not None
+            state = selected_state
         round_state = state.get("round", {})
         stored = round_state.get("receipt") if isinstance(round_state, dict) else None
         selected = receipt if receipt is not None else stored
         if not isinstance(selected, Mapping):
             return {"valid": False, "stop_valid": False, "reasons": ["missing_receipt"]}
+        if frontier_id is not None and (
+            not isinstance(stored, Mapping) or dict(selected) != dict(stored)
+        ):
+            return {
+                "valid": False,
+                "stop_valid": False,
+                "reasons": ["finite_frontier_receipt_mismatch"],
+            }
         supplied = _assignment_list(assignment_targets) if assignment_targets is not None else None
         return _validate_data(
             state,
@@ -904,14 +958,19 @@ def run_round(
             frontiers = state.setdefault("frontiers", {})
             if not isinstance(frontiers, dict):
                 raise QueueStateError("finite frontier namespace is corrupt")
-            frontier_bucket = frontiers.get(frontier["frontier_id"])
-            if frontier_bucket is None:
+            frontier_id = frontier["frontier_id"]
+            if frontier_id not in frontiers:
                 frontier_bucket = {"policy": frontier, "items": {}, "round": {}}
-                frontiers[frontier["frontier_id"]] = frontier_bucket
-            if not isinstance(frontier_bucket, dict) or frontier_bucket.get("policy") != frontier:
-                raise QueueStateError("finite frontier id is already bound to another policy")
-            items = frontier_bucket.get("items")
-            current_round = frontier_bucket.get("round")
+                frontiers[frontier_id] = frontier_bucket
+                items = frontier_bucket["items"]
+                current_round = frontier_bucket["round"]
+            else:
+                selected_state = state_for_frontier(state, frontier_id, expected_policy=frontier)
+                if selected_state is None:
+                    raise QueueStateError("finite frontier is missing")
+                frontier_bucket = frontiers[frontier_id]
+                items = selected_state["items"]
+                current_round = selected_state["round"]
             if not isinstance(items, dict) or not isinstance(current_round, dict):
                 raise QueueStateError("finite frontier state namespace is corrupt")
             if set(items).difference(frontier["targets"]):

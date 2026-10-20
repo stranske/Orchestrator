@@ -268,6 +268,8 @@ def _valid_inner_wait(
     trigger: Any,
     proof: Any,
     *,
+    frontier_id: str | None = None,
+    finite_frontier: Mapping[str, Any] | None = None,
     now: Callable[[], float] = time.time,
 ) -> bool:
     """Bind a terminal inner wait to its durable, current one-target receipt."""
@@ -315,6 +317,28 @@ def _valid_inner_wait(
 
     import closer_queue
 
+    proof_frontier_id = proof.get("frontier_id")
+    proof_frontier = proof.get("finite_frontier")
+    if (
+        frontier_id is not None and (not isinstance(frontier_id, str) or not frontier_id.strip())
+    ) or (
+        proof_frontier_id is not None
+        and (not isinstance(proof_frontier_id, str) or not proof_frontier_id.strip())
+    ):
+        return False
+    if frontier_id is not None and proof_frontier_id not in {None, frontier_id}:
+        return False
+    selected_frontier_id = frontier_id or proof_frontier_id
+    if selected_frontier_id is not None and (
+        not isinstance(selected_frontier_id, str) or not selected_frontier_id.strip()
+    ):
+        return False
+    if selected_frontier_id is not None and (
+        not isinstance(proof_frontier, Mapping)
+        or proof_frontier.get("frontier_id") != selected_frontier_id
+        or (finite_frontier is not None and dict(proof_frontier) != dict(finite_frontier))
+    ):
+        return False
     inner_path = pipeline_path.parent / f"{pipeline_path.stem}.actions" / f"{_digest(target)}.json"
     if proof.get("inner_path") != str(inner_path) or not inner_path.is_file():
         return False
@@ -323,13 +347,27 @@ def _valid_inner_wait(
             if not locked:
                 return False
             state = closer_queue._read_state(inner_path)
-            round_state = state.get("round", {})
+            if selected_frontier_id is None:
+                round_state = state.get("round", {})
+                items = state.get("items", {})
+                validation_state = state
+            else:
+                selected_state = closer_queue.state_for_frontier(
+                    state,
+                    selected_frontier_id,
+                    expected_policy=finite_frontier or proof_frontier,
+                )
+                if selected_state is None:
+                    return False
+                validation_state = selected_state
+                round_state = validation_state["round"]
+                items = validation_state["items"]
             receipt = round_state.get("receipt")
-            item = state.get("items", {}).get(target)
+            item = items.get(target) if isinstance(items, Mapping) else None
             if not isinstance(receipt, Mapping) or not isinstance(item, Mapping):
                 return False
             checked = closer_queue._validate_data(
-                state,
+                validation_state,
                 receipt,
                 assignment_targets=[target],
                 now_value=float(now()),
@@ -1128,6 +1166,7 @@ def _audited_retained_wait(
         proof.get("reason"),
         proof.get("next_trigger"),
         proof,
+        frontier_id=proof.get("frontier_id"),
         now=lambda: historical_now,
     )
 
@@ -2018,6 +2057,7 @@ def _expired_invalid_round_recovery(
                     proof.get("reason") if isinstance(proof, Mapping) else None,
                     item.get("deferred_next_trigger"),
                     proof,
+                    frontier_id=proof.get("frontier_id") if isinstance(proof, Mapping) else None,
                     now=lambda: historical_now,
                 )
             ):
@@ -4412,12 +4452,14 @@ def _run_pipeline_finite(
                                         frontier_id=frontier["frontier_id"],
                                     )
                                     queue_state = closer_queue._read_state(Path(action_state_path))
-                                    queue_bucket = (queue_state.get("frontiers") or {}).get(
-                                        frontier["frontier_id"]
+                                    queue_frontier_state = closer_queue.state_for_frontier(
+                                        queue_state,
+                                        frontier["frontier_id"],
+                                        expected_policy=frontier,
                                     )
                                     queue_item = (
-                                        queue_bucket.get("items", {}).get(target)
-                                        if isinstance(queue_bucket, Mapping)
+                                        queue_frontier_state.get("items", {}).get(target)
+                                        if isinstance(queue_frontier_state, Mapping)
                                         else None
                                     )
                                     accounting = queue_receipt.get("accounting")
@@ -4651,6 +4693,8 @@ def _run_pipeline_finite(
                                                 proof.get("reason"),
                                                 trigger,
                                                 proof,
+                                                frontier_id=frontier["frontier_id"],
+                                                finite_frontier=frontier,
                                             )
                                         )
                                     else:
@@ -4669,6 +4713,10 @@ def _run_pipeline_finite(
                                     deferred_reason=reason or result.get("pending_kind"),
                                     queue_receipt=dict(queue_receipt),
                                 )
+                                if reason == "validated_inner_wait":
+                                    evidence = result.get("resource_evidence")
+                                    if isinstance(evidence, Mapping):
+                                        current["resource_evidence"] = dict(evidence)
                                 current["deferred_next_trigger"] = trigger
                             else:
                                 current.update(
@@ -5139,6 +5187,7 @@ def _validate_stop_legacy(
                     proof.get("reason") if isinstance(proof, Mapping) else None,
                     trigger,
                     proof,
+                    frontier_id=proof.get("frontier_id") if isinstance(proof, Mapping) else None,
                     now=now,
                 ):
                     reasons.append(f"unverified_inner_wait:{target}")
@@ -5208,6 +5257,25 @@ def _validate_stop_finite(
         terminal = status in {"completed", "held", "paused", "cancelled", "capacity_blocked"}
         unknown = status == "unknown"
         valid = terminal and not unknown
+        unverified_inner_wait = False
+        if valid and status == "held" and item.get("deferred_reason") == "validated_inner_wait":
+            resource = item.get("resource_evidence")
+            proof = resource.get("inner_wait") if isinstance(resource, Mapping) else None
+            prepared = item.get("results", {}).get("prepare", {})
+            snapshot = prepared.get("snapshot") if isinstance(prepared, Mapping) else None
+            valid = _valid_inner_wait(
+                Path(state_path),
+                frontier_target,
+                item.get("revision"),
+                snapshot,
+                proof.get("reason") if isinstance(proof, Mapping) else None,
+                item.get("deferred_next_trigger"),
+                proof,
+                frontier_id=frontier["frontier_id"],
+                finite_frontier=frontier,
+                now=now,
+            )
+            unverified_inner_wait = not valid
         return {
             "valid": valid,
             "stop_valid": valid,
@@ -5215,8 +5283,18 @@ def _validate_stop_finite(
             "assignment": [frontier_target],
             "targets": {frontier_target: dict(item)},
             "finite_frontier": frontier,
-            "continuation_required": not terminal,
-            "reasons": [] if valid else [f"finite_frontier_{status or 'unaccounted'}"],
+            "continuation_required": not valid,
+            "reasons": (
+                []
+                if valid
+                else [
+                    (
+                        "finite_frontier_unverified_inner_wait"
+                        if unverified_inner_wait
+                        else f"finite_frontier_{status or 'unaccounted'}"
+                    )
+                ]
+            ),
         }
     except (OSError, ValueError, TypeError, KeyError) as exc:
         return {

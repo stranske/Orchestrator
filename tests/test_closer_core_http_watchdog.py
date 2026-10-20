@@ -1,5 +1,6 @@
 """Real default Core transport in an owned child; external HTTP seam, no network."""
 
+import datetime
 import importlib.util
 import json
 import os
@@ -40,6 +41,7 @@ def http_seam(tmp_path, monkeypatch):
     audit = tmp_path / "http-attempts.jsonl"
     (seam / "sitecustomize.py").write_text("""
 import io,json,os,time,urllib.request,urllib.error
+from http.client import HTTPMessage
 
 def opener(request, *, timeout):
     with open(os.environ["CORE_HTTP_AUDIT"],"a") as stream:
@@ -47,7 +49,10 @@ def opener(request, *, timeout):
     time.sleep(float(os.environ.get("CORE_HTTP_DELAY","0")))
     status=int(os.environ.get("CORE_HTTP_STATUS","200"))
     if status != 200:
-        raise urllib.error.HTTPError(request.full_url,status,os.environ.get("CORE_HTTP_REASON","fixture"),json.loads(os.environ.get("CORE_HTTP_HEADERS",'{"Retry-After":"7","X-RateLimit-Remaining":"0"}')),io.BytesIO(b"secret error body"))
+        headers=HTTPMessage()
+        for key,value in json.loads(os.environ.get("CORE_HTTP_HEADERS",'{"Retry-After":"7","X-RateLimit-Remaining":"0"}')).items():
+            headers[key]=value
+        raise urllib.error.HTTPError(request.full_url,status,os.environ.get("CORE_HTTP_REASON","fixture"),headers,io.BytesIO(b"secret error body"))
     return io.BytesIO(b'{"default_branch":"main"}')
 urllib.request.urlopen=opener
 """)
@@ -347,3 +352,137 @@ def test_http_child_refuses_invalid_or_expired_deadline_without_http(bundle, htt
     assert done.returncode == 0
     assert json.loads(done.stdout)["status"] == "unknown"
     assert not http_seam.exists()
+
+
+@pytest.mark.parametrize(
+    "wire_name,canonical,value",
+    [
+        ("retry-after", "Retry-After", "7"),
+        ("x-ratelimit-remaining", "X-RateLimit-Remaining", "0"),
+    ],
+)
+def test_error_headers_retain_case_insensitive_http_semantics(
+    bundle, http_seam, monkeypatch, wire_name, canonical, value
+):
+    monkeypatch.setenv("CORE_HTTP_STATUS", "403")
+    monkeypatch.setenv("CORE_HTTP_REASON", "fixture refusal")
+    monkeypatch.setenv("CORE_HTTP_HEADERS", json.dumps({wire_name: value}))
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        rb._CoreHTTPTransport(bundle)("GET", "/repos/owner/repo", None)
+    assert caught.value.headers.get(canonical) == value
+    assert caught.value.headers.get(canonical.upper()) == value
+    assert caught.value.headers.get(wire_name) == value
+    assert bundle.github._rate_limited(caught.value) is True
+    assert caught.value.closed
+    assert len(http_seam.read_text().splitlines()) == 1
+
+
+@pytest.mark.parametrize("value", [None, 0, [], {}])
+def test_non_string_header_values_are_rejected(bundle, http_seam, monkeypatch, value):
+    raw = json.dumps(
+        {
+            "schema": "core-http-result/v1",
+            "status": "http_error",
+            "code": 403,
+            "headers": {"retry-after": value},
+            "rate_limited": False,
+        }
+    )
+    monkeypatch.setattr(
+        dispatcher,
+        "run_observed_offload",
+        lambda *a, **k: subprocess.CompletedProcess(a[0], 0, raw, ""),
+    )
+    with pytest.raises(rb.BindingError, match="error protocol invalid"):
+        rb._CoreHTTPTransport(bundle)("GET", "/repos/owner/repo", None)
+    assert not http_seam.exists()
+
+
+@pytest.mark.parametrize(
+    "status,headers,category",
+    [
+        (401, {}, "denied"),
+        (403, {}, "denied"),
+        (403, {"retry-after": "7"}, "capacity"),
+        (403, {"x-ratelimit-remaining": "0"}, "capacity"),
+        (429, {}, "capacity"),
+        (404, {}, "absent"),
+        (500, {}, "unavailable"),
+    ],
+)
+def test_actual_core_read_consumer_matrix(
+    bundle, http_seam, monkeypatch, status, headers, category
+):
+    monkeypatch.setenv("CORE_HTTP_STATUS", str(status))
+    monkeypatch.setenv("CORE_HTTP_HEADERS", json.dumps(headers))
+    store = bundle.github.GitHubContentsOperationStore(rb._CoreHTTPTransport(bundle), "owner/repo")
+    expected = {
+        "denied": bundle.runtime.PolicyDenied,
+        "capacity": bundle.github.RemoteUnavailable,
+        "absent": urllib.error.HTTPError,
+        "unavailable": bundle.github.RemoteUnavailable,
+    }[category]
+    with pytest.raises(expected) as caught:
+        store._get("/repos/owner/repo")
+    if category == "capacity":
+        assert "rate limited" in str(caught.value)
+    if category == "denied":
+        assert "no fallback" in str(caught.value)
+    if category == "absent":
+        assert caught.value.code == 404 and caught.value.closed
+    assert len(http_seam.read_text().splitlines()) == 1
+
+
+@pytest.mark.parametrize(
+    "status,headers,category",
+    [
+        (401, {}, "denied"),
+        (403, {}, "denied"),
+        (403, {"retry-after": "7"}, "capacity"),
+        (403, {"x-ratelimit-remaining": "0"}, "capacity"),
+        (429, {}, "capacity"),
+        (409, {}, "cas"),
+        (422, {}, "cas"),
+        (412, {}, "unknown"),
+    ],
+)
+def test_actual_core_write_consumer_matrix(
+    bundle, http_seam, monkeypatch, status, headers, category
+):
+    monkeypatch.setenv("CORE_HTTP_STATUS", str(status))
+    monkeypatch.setenv("CORE_HTTP_HEADERS", json.dumps(headers))
+    core = bundle.runtime
+    spec = core.OperationSpec(
+        "owner/repo", 1, "verify_request", "a" * 40, None, "b" * 64, "review", {"authority": 2}
+    )
+    owner = core.ExecutorIdentity("orchestrator_local", "fixture-owner")
+    record = core.new_operation_record(
+        spec,
+        owner,
+        lease_deadline=datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=2),
+    )
+    store = bundle.github.GitHubContentsOperationStore(rb._CoreHTTPTransport(bundle), "owner/repo")
+    # Isolate error classification from pre-/post-write observations. Actual
+    # clean-claim schema, authority/CAS validators and default HTTP remain used.
+    monkeypatch.setattr(store, "_read_remote", lambda _: (None, None))
+    expected = {
+        "denied": core.PolicyDenied,
+        "capacity": bundle.github.RemoteUnavailable,
+        "cas": core.CasConflict,
+        "unknown": bundle.github.UnknownOutcome,
+    }[category]
+    with pytest.raises(expected) as caught:
+        store.write_cas(
+            core.canonical_target_fence_key(spec),
+            record,
+            expected_revision=None,
+            authority=core.WriteAuthority("claim", owner, None),
+        )
+    if category == "capacity":
+        assert "rate limited" in str(caught.value)
+    if category == "denied":
+        assert "no fallback" in str(caught.value)
+    if category == "unknown":
+        assert caught.value.no_fallback is False
+    rows = [json.loads(line) for line in http_seam.read_text().splitlines()]
+    assert len(rows) == 1 and rows[0]["method"] == "PUT"

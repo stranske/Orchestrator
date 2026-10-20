@@ -21,6 +21,7 @@ import tomllib
 import types
 import urllib.error
 import uuid
+from http.client import HTTPMessage
 from pathlib import Path
 from typing import Any, Callable, Protocol, cast
 
@@ -556,12 +557,19 @@ class _CoreHTTPTransport:
                 or not 400 <= code <= 599
                 or not isinstance(headers, dict)
                 or type(limited) is not bool
+                or any(
+                    not isinstance(key, str) or not isinstance(value, str)
+                    for key, value in headers.items()
+                )
             ):
                 raise BindingError("Core HTTP error protocol invalid")
+            http_headers = HTTPMessage()
+            for key, value in headers.items():
+                http_headers[key] = value
             reason = (
                 "native Core HTTP rate limit exceeded" if limited else "native Core HTTP refused"
             )
-            error = urllib.error.HTTPError(path, code, reason, headers, None)
+            error = urllib.error.HTTPError(path, code, reason, http_headers, None)
             error.close()
             raise error
         if result.get("status") != "ok":

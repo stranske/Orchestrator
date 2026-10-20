@@ -1339,24 +1339,23 @@ class Closer:
         operation = self.pending_integration.get(target)
         if not operation:
             try:
-                state = json.loads(self.state_path.read_text())
+                import closer_queue
+
+                state = closer_queue._read_state(Path(self.state_path))
                 frontier = getattr(self, "finite_frontier", None)
                 if frontier is None:
                     items = state.get("items", {})
                 else:
-                    frontiers = state.get("frontiers", {})
-                    if not isinstance(frontiers, Mapping):
-                        raise RuntimeError("finite queue frontier namespace is corrupt")
-                    frontier_id = frontier["frontier_id"]
-                    if frontier_id not in frontiers:
+                    selected = closer_queue.state_for_frontier(
+                        state,
+                        frontier["frontier_id"],
+                        expected_policy=frontier,
+                        allow_missing=True,
+                    )
+                    if selected is None:
                         items = {}
                     else:
-                        bucket = frontiers[frontier_id]
-                        if not isinstance(bucket, Mapping) or bucket.get("policy") != frontier:
-                            raise RuntimeError("finite queue frontier binding is corrupt")
-                        items = bucket.get("items")
-                        if not isinstance(items, Mapping):
-                            raise RuntimeError("finite queue frontier items are corrupt")
+                        items = selected.get("items", {})
                 entry = items.get(target, {}) if isinstance(items, Mapping) else {}
                 if target in items and not isinstance(entry, Mapping):
                     raise RuntimeError("finite queue target item is corrupt")
@@ -2964,19 +2963,15 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         state = closer_queue._read_state(Path(path))
         if finite_frontier is None:
             return state
-        frontiers = state.get("frontiers", {})
-        frontier_id = finite_frontier["frontier_id"]
-        if frontier_id not in frontiers:
+        selected = closer_queue.state_for_frontier(
+            state,
+            finite_frontier["frontier_id"],
+            expected_policy=finite_frontier,
+            allow_missing=True,
+        )
+        if selected is None:
             return {**state, "items": {}, "round": {}}
-        bucket = frontiers[frontier_id]
-        if not isinstance(bucket, Mapping) or bucket.get("policy") != finite_frontier:
-            raise closer_queue.QueueStateError(
-                "finite frontier id is already bound to another policy"
-            )
-        items, round_state = bucket.get("items"), bucket.get("round")
-        if not isinstance(items, Mapping) or not isinstance(round_state, Mapping):
-            raise closer_queue.QueueStateError("finite frontier state namespace is corrupt")
-        return {**state, "items": items, "round": round_state}
+        return selected
 
     def queue_item_readback(path, target):
         state = queue_state_readback(path)
@@ -3481,6 +3476,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 old_proof.get("reason"),
                 old_proof.get("next_trigger"),
                 old_proof,
+                finite_frontier=finite_frontier,
             ):
                 return None
             ordinary_nonpass_ref = old_proof.get("ordinary_nonpass_ref")
@@ -3513,6 +3509,14 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "next_trigger": trigger,
                 "inner_path": str(inner_path),
                 "receipt_sha256": receipt_hash,
+                **(
+                    {
+                        "frontier_id": finite_frontier["frontier_id"],
+                        "finite_frontier": finite_frontier,
+                    }
+                    if finite_frontier is not None
+                    else {}
+                ),
             }
             if ordinary_nonpass_ref is not None:
                 proof["ordinary_nonpass_ref"] = ordinary_nonpass_ref
@@ -3526,6 +3530,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 reason,
                 trigger,
                 proof,
+                finite_frontier=finite_frontier,
             ):
                 return proof
         except (OSError, ValueError, TypeError, KeyError, AttributeError):
@@ -4882,6 +4887,12 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 interpreted.get("reason"),
                 interpreted.get("next_trigger"),
                 proof,
+                frontier_id=(
+                    proof.get("frontier_id")
+                    if isinstance(proof, Mapping) and proof.get("frontier_id") is not None
+                    else finite_frontier["frontier_id"] if finite_frontier is not None else None
+                ),
+                finite_frontier=finite_frontier,
             ):
                 raise RuntimeError("prior inner wait no longer matches fresh preparation")
             current.advisory[target] = context.get("revision")
@@ -5284,6 +5295,14 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     "next_trigger": next_trigger,
                     "inner_path": str(action_state),
                     "receipt_sha256": closer_pipeline._digest(receipt),
+                    **(
+                        {
+                            "frontier_id": finite_frontier["frontier_id"],
+                            "finite_frontier": finite_frontier,
+                        }
+                        if finite_frontier is not None
+                        else {}
+                    ),
                 }
                 if nonpass_ref is not None:
                     fresh_proof["ordinary_nonpass_ref"] = nonpass_ref
@@ -5297,6 +5316,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     reason,
                     next_trigger,
                     fresh_proof,
+                    frontier_id=(
+                        finite_frontier["frontier_id"] if finite_frontier is not None else None
+                    ),
+                    finite_frontier=finite_frontier,
                 ):
                     return {
                         "status": "completed",
@@ -5320,6 +5343,14 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "next_trigger": next_trigger,
                 "inner_path": str(action_state),
                 "receipt_sha256": closer_pipeline._digest(receipt),
+                **(
+                    {
+                        "frontier_id": finite_frontier["frontier_id"],
+                        "finite_frontier": finite_frontier,
+                    }
+                    if finite_frontier is not None
+                    else {}
+                ),
             }
             if nonpass_ref is not None:
                 proof["ordinary_nonpass_ref"] = nonpass_ref
@@ -5333,6 +5364,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 reason,
                 next_trigger,
                 proof,
+                frontier_id=(
+                    finite_frontier["frontier_id"] if finite_frontier is not None else None
+                ),
+                finite_frontier=finite_frontier,
             ):
                 return {
                     "status": "deferred",

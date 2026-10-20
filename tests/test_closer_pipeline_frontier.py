@@ -198,6 +198,257 @@ def test_finite_pipeline_rejects_revision_drift_before_interpret(tmp_path):
     assert receipt["targets"][target]["status"] == "held"
 
 
+def test_finite_inner_wait_uses_its_frontier_receipt(tmp_path):
+    target = "acme/repo#inner-wait"
+    revision = "rev-wait"
+    head = "a" * 40
+    trigger = cp.EVIDENCE_REFUSAL_TRIGGER
+    binding = {"pr_target": target, "source_targets": []}
+    frontier = make_frontier(
+        [target],
+        owner="frontier-owner",
+        frontier_id="frontier-inner-wait-test",
+        bindings={
+            target: {
+                "revision": revision,
+                "action_id": action_identity(target, revision, "wait", binding),
+            }
+        },
+    )
+    pipeline_path = tmp_path / "pipeline.json"
+    inner_path = (
+        pipeline_path.parent / f"{pipeline_path.stem}.actions" / f"{cp._digest(target)}.json"
+    )
+    proof_box = {}
+    receipt_box = {}
+
+    def act(_target, context):
+        closer_queue.run_round(
+            inner_path,
+            [target],
+            lambda _item: {
+                "target": target,
+                "revision": revision,
+                "action": "wait",
+                "eligible": False,
+                "requires_coordinator": False,
+                "reason": "worker_json_invalid",
+                "next_trigger": trigger,
+                "evidence": {"head": "c" * 40},
+                "operation_binding": binding,
+            },
+            lambda *_args: pytest.fail("legacy inner wait must not execute"),
+            deadline=time.time() + 10,
+            max_workers=1,
+            max_passes=1,
+        )
+        receipt = closer_queue.run_round(
+            inner_path,
+            [target],
+            lambda _item: {
+                "target": target,
+                "revision": revision,
+                "action": "wait",
+                "eligible": False,
+                "requires_coordinator": False,
+                "reason": "worker_json_invalid",
+                "next_trigger": trigger,
+                "evidence": {"head": head},
+                "operation_binding": binding,
+            },
+            lambda *_args: pytest.fail("finite inner wait must not execute"),
+            deadline=None,
+            receipt_reserve_seconds=0,
+            max_workers=1,
+            max_passes=1,
+            max_operation_retries=0,
+            finite_frontier=frontier,
+            frontier_target=target,
+            request_timeout_seconds=10,
+        )
+        assert receipt["valid"] and receipt["stop_valid"]
+        proof = {
+            "schema": cp.INNER_WAIT_SCHEMA,
+            "target": target,
+            "revision": revision,
+            "head": head,
+            "reason": "worker_json_invalid",
+            "next_trigger": trigger,
+            "inner_path": str(inner_path),
+            "receipt_sha256": cp._digest(receipt),
+            "frontier_id": frontier["frontier_id"],
+            "finite_frontier": frontier,
+        }
+        proof_box["proof"] = proof
+        receipt_box["receipt"] = receipt
+        return {
+            "status": "deferred",
+            "reason": "validated_inner_wait",
+            "next_trigger": trigger,
+            "resource_evidence": {"inner_wait": proof},
+            "queue_receipt": receipt,
+        }
+
+    outer = _run(
+        pipeline_path,
+        target,
+        frontier,
+        now=lambda: 1_000.0,
+        prepare=lambda _target, _context: {
+            "revision": revision,
+            "snapshot": {"target": target, "revision": revision, "head": head, "kind": "pr"},
+        },
+        act=act,
+    )
+    assert outer["targets"][target]["status"] == "held"
+    assert outer["valid"] and outer["stop_valid"]
+    proof = proof_box["proof"]
+    selected_receipt = receipt_box["receipt"]
+    other_frontier = make_frontier(
+        [target],
+        owner="other-frontier-owner",
+        frontier_id="other-inner-wait-test",
+        bindings={
+            target: {
+                "revision": revision,
+                "action_id": action_identity(target, revision, "wait", binding),
+            }
+        },
+    )
+    other_receipt = closer_queue.run_round(
+        inner_path,
+        [target],
+        lambda _item: {
+            "target": target,
+            "revision": revision,
+            "action": "wait",
+            "eligible": False,
+            "requires_coordinator": False,
+            "reason": "worker_json_invalid",
+            "next_trigger": trigger,
+            "evidence": {"head": "b" * 40},
+            "operation_binding": binding,
+        },
+        lambda *_args: pytest.fail("other frontier wait must not execute"),
+        deadline=None,
+        receipt_reserve_seconds=0,
+        max_workers=1,
+        max_passes=1,
+        max_operation_retries=0,
+        finite_frontier=other_frontier,
+        frontier_target=target,
+        request_timeout_seconds=10,
+    )
+    state = closer_queue._read_state(inner_path)
+    # The legacy bucket is a separate decoy created first. It can be budget-
+    # deferred before observation, but it must never supply the finite wait's
+    # receipt or item evidence.
+    assert state["items"][target]["status"] == "deferred"
+    assert state["items"][target]["evidence"] == {}
+    assert (
+        closer_queue.state_for_frontier(state, frontier["frontier_id"], expected_policy=frontier)[
+            "items"
+        ][target]["evidence"]["head"]
+        == head
+    )
+    assert (
+        closer_queue.state_for_frontier(
+            state, other_frontier["frontier_id"], expected_policy=other_frontier
+        )["items"][target]["evidence"]["head"]
+        == "b" * 40
+    )
+    corrupt = dict(state)
+    corrupt["frontiers"] = dict(state["frontiers"])
+    corrupt["frontiers"][frontier["frontier_id"]] = None
+    with pytest.raises(closer_queue.QueueStateError, match="bucket is corrupt"):
+        closer_queue.state_for_frontier(corrupt, frontier["frontier_id"], expected_policy=frontier)
+    assert closer_queue.validate_stop(
+        inner_path,
+        [target],
+        receipt=selected_receipt,
+        frontier_id=frontier["frontier_id"],
+    )["stop_valid"]
+    assert not closer_queue.validate_stop(
+        inner_path,
+        [target],
+        receipt=selected_receipt,
+        frontier_id=other_frontier["frontier_id"],
+    )["stop_valid"]
+    assert other_receipt["stop_valid"]
+    assert cp._valid_inner_wait(
+        pipeline_path,
+        target,
+        revision,
+        {"target": target, "revision": revision, "head": head, "kind": "pr"},
+        proof["reason"],
+        trigger,
+        proof,
+        frontier_id=frontier["frontier_id"],
+    )
+    assert not cp._valid_inner_wait(
+        pipeline_path,
+        target,
+        revision,
+        {"target": target, "revision": revision, "head": head, "kind": "pr"},
+        proof["reason"],
+        trigger,
+        proof,
+        frontier_id=other_frontier["frontier_id"],
+    )
+    same_id_different_policy = {**frontier, "owner": "different-owner"}
+    assert not cp._valid_inner_wait(
+        pipeline_path,
+        target,
+        revision,
+        {"target": target, "revision": revision, "head": head, "kind": "pr"},
+        proof["reason"],
+        trigger,
+        proof,
+        frontier_id=frontier["frontier_id"],
+        finite_frontier=same_id_different_policy,
+    )
+    with pytest.raises(closer_queue.QueueStateError, match="missing"):
+        closer_queue.state_for_frontier(state, "missing-inner-wait-test")
+    assert (
+        closer_queue.state_for_frontier(state, "missing-inner-wait-test", allow_missing=True)
+        is None
+    )
+    restart = closer_queue.run_round(
+        inner_path,
+        [target],
+        lambda *_args: pytest.fail("finished frontier must not reobserve on restart"),
+        lambda *_args: pytest.fail("finished frontier must not replay on restart"),
+        deadline=None,
+        receipt_reserve_seconds=0,
+        max_workers=1,
+        max_passes=1,
+        max_operation_retries=0,
+        finite_frontier=frontier,
+        frontier_target=target,
+        request_timeout_seconds=10,
+    )
+    assert restart == selected_receipt
+    stop = cp.validate_stop(
+        pipeline_path,
+        [target],
+        finite_frontier=frontier,
+        frontier_target=target,
+    )
+    assert stop["stop_valid"]
+    damaged_state = closer_queue._read_state(inner_path)
+    damaged_state["frontiers"] = dict(damaged_state["frontiers"])
+    damaged_state["frontiers"][frontier["frontier_id"]] = None
+    closer_queue._atomic_write(inner_path, damaged_state)
+    damaged_stop = cp.validate_stop(
+        pipeline_path,
+        [target],
+        finite_frontier=frontier,
+        frontier_target=target,
+    )
+    assert not damaged_stop["stop_valid"]
+    assert "finite_frontier_unverified_inner_wait" in damaged_stop["reasons"]
+
+
 def test_finite_interpret_uncertainty_never_advances_to_action(tmp_path):
     target = "acme/repo#5"
     frontier = _frontier(target)
